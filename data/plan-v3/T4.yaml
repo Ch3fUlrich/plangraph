@@ -1,0 +1,130 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: autoos
+    id: T4-HARDEN
+    title: "compose init/pids/mem; opencode tracks latest v2 with weekly update + rollback"
+    kind: lane
+    track: T4
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "recreate -> Init=true; pids < 200 after 24 h of fleet load; update job log with smoke + rollback test"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "STATUS: queued (container already recreated by the router)."
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-HARDEN"
+
+  - project: autoos
+    id: T4-HOST
+    title: "Heartbeat and auto-resume on the HOST (systemd timer)"
+    kind: lane
+    track: T4
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: [T4-HARDEN, "routing:GATE-P0"]
+    corrects: null
+    done_criteria: "kill the container mid-lane -> all orchestrators resume within 10 min, no duplicate orders"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-HOST"
+
+  - project: autoos
+    id: T4-FENCE
+    title: "Permission rules rewritten verb-anchored; push parser as real gate"
+    kind: lane
+    track: T4
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: [T4-HOST, T2-CANARY, "routing:GATE-P0"]
+    corrects: null
+    done_criteria: "fence test corpus: every past false positive allowed, every past bypass denied; canary (T2-CANARY) never appears in transcripts"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "HOOKS H2, D-159."
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-FENCE"
+
+  - project: autoos
+    id: T4-MSG
+    title: "Inter-agent messaging order/ack/reply with delivery verification"
+    kind: lane
+    track: T4
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T4-FENCE]
+    corrects: null
+    done_criteria: "test: 3-level message round trip under load"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-MSG"
+
+  - project: autoos
+    id: T4-ZEN
+    title: "opencode config ships Zen provider with own key and registry limits"
+    kind: lane
+    track: T4
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: [T4-MSG]
+    corrects: null
+    done_criteria: "spawn on a Zen free model OK; no compaction before 65% of the real window"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "Depends on T1-ZEN."
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-ZEN"
+
+  - project: routing
+    id: T4-CERT
+    title: "Certification run: router+L1+2 tracks+L3 inside opencode, 12 h, twice"
+    kind: lane
+    track: T4
+    owner: "routing-00"
+    state: open
+    estimate_h: 8
+    estimate_src: default
+    depends_on: ["autoos:T4-ZEN", "routing:GATE-P2"]
+    corrects: null
+    done_criteria: "scorecard: all scenarios pass, 0 silent stops, 0 unrecovered crashes, >= 2 families per review, 0 paid calls except Sonnet finals; run twice on different days"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "STATUS: not started; after T4-HARDEN/HOST/FENCE/MSG. Certification scenarios TESTING.md 4; C10a route."
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-CERT"
+
+  - project: routing
+    id: T4-SWITCH
+    title: "Fallback switch as a non-agent unit (systemd); Claude-limit takeover"
+    kind: lane
+    track: T4
+    owner: "routing-00"
+    state: open
+    estimate_h: 6
+    estimate_src: default
+    depends_on: ["routing:T4-CERT", "routing:GATE-P2"]
+    corrects: null
+    done_criteria: "drill: simulated limit -> opencode fleet takes over within 15 min and continues the same lane; switch-back drill"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: not started; router drill (D-158)."
+    source: "data/source/plan-v3/T4-opencode-fleet.md#T4-SWITCH"

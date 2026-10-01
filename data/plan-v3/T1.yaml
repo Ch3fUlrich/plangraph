@@ -1,0 +1,238 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: autoos
+    id: T1-COMBO3
+    title: "Implement combo contract C1-C7 + C10 in registry/renderer; rebuild combos v3"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 6
+    estimate_src: default
+    depends_on: [T0-PAID, "routing:GATE-P0"]
+    corrects: null
+    done_criteria: "renderer tests for C1-C7 red-to-green; models-proposed.md generated + --check in CI; apply drift 0; smoke all combos; median t1 wait < 15 s over 50 calls"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-COMBO3"
+
+  - project: autoos
+    id: T1-CTX
+    title: "Live context truth: apply capability overrides; render container/IDE configs from registry"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T1-COMBO3, "routing:GATE-P0"]
+    corrects: null
+    done_criteria: "/v1/models context_length matches registry for every combo; 24 h with 0 exceeds-context-window rejections"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-CTX"
+
+  - project: autoos
+    id: T1-CLEAN
+    title: "Private-safe tier for privacy=sensitive cards (vertex+ovh trial, local GPU last resort)"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: [T0-PAID]
+    corrects: null
+    done_criteria: "evidence URLs + quotes per provider; smoke per clean combo; a sensitive card routes to a clean leg, never to a training provider (test)"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "STATUS: queued, priority after the train; blocks every site-data lane (server T6-*)."
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-CLEAN"
+
+  - project: autoos
+    id: T1-PROV
+    title: "Probe every provider key -> registry rows; add LLM7/Z.AI/Codestral/Ollama Cloud"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 6
+    estimate_src: default
+    depends_on: [T1-COMBO3, "routing:GATE-P1"]
+    corrects: null
+    done_criteria: "probe table committed (key names only); every provider has a registry row; unused-key list empty or justified; auto-sync on; cookie/web providers marked last-resort non-sensitive only"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-PROV"
+
+  - project: autoos
+    id: T1-CREDIT
+    title: "Burn trial credits before expiry (vertex+ovh); daily spend/remaining/days report"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T1-PROV]
+    corrects: null
+    done_criteria: "daily report line in L0 inbox; burn rate on track to use >= 80% before expiry; docs reviewed by 2 families"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: CREDIT-FIX verified (reviews pending)."
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-CREDIT"
+
+  - project: autoos
+    id: T1-ZEN
+    title: "opencode clients use own Zen key directly (opencode provider, no OmniRoute proxy)"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T2-ONEPATH]
+    corrects: null
+    done_criteria: "spawn test: opencode leaf on a Zen free model returns content; OmniRoute's opencode provider removed from combos"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-ZEN"
+
+  - project: autoos
+    id: T1-LITELLM
+    title: "LiteLLM 1.103.x rendered from combos.json; weekly standby test"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: [T1-COMBO3, "routing:GATE-P1"]
+    corrects: null
+    done_criteria: "render --check in CI; standby test log; config older than combos.json fails CI"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-LITELLM"
+
+  - project: autoos
+    id: T1-PEER
+    title: "Workstation OmniRoute peers the server gateway with loop guard"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T1-COMBO3, "workstation:T5-KEYS", "routing:GATE-P1"]
+    corrects: null
+    done_criteria: "workstation call served by server (log on both); server down -> local legs serve; loop test returns 508"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-PEER"
+
+  - project: autoos
+    id: T1-WEBTOOLS
+    title: "Search+fetch tool for every research client: self-hosted SearXNG MCP"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: ["server:T6-OWUI"]
+    corrects: null
+    done_criteria: "research card returns cited, fetchable results on 3 clients"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "STATUS: designed (SearXNG + MCP); waits for the SearXNG deploy (T6-OWUI)."
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-WEBTOOLS"
+
+  - project: autoos
+    id: T1-MM
+    title: "Multimodal inventory + combos (C8): stt/tts/image defaults"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T1-PROV]
+    corrects: null
+    done_criteria: "each combo smoke-tested with a real clip/prompt; registry rows"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-MM"
+
+  - project: autoos
+    id: T1-UPGRADE
+    title: "OmniRoute -> latest (3.8.52+) with patch bundle re-verified"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T1-COMBO3]
+    corrects: null
+    done_criteria: "changelog diff reviewed; patch list shorter; full smoke"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "Before C10a (T1-COMBO3) goes live."
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-UPGRADE"
+
+  - project: autoos
+    id: T1-JEV
+    title: "Experiment: jev-1.13-free infers routing card from free text vs deterministic table"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: [T2-ONEPATH]
+    corrects: null
+    done_criteria: "adopt only if >= 95% agreement and no unsafe upgrade of risk/privacy; report either way"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-JEV"
+
+  - project: autoos
+    id: T1-NOISE
+    title: "Cut connection-test pings (270/day/provider) to what health needs"
+    kind: lane
+    track: T1
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 1
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "log rows/day down >= 50%; health checks still detect a dead provider in <= 15 min"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T1-gateway-models.md#T1-NOISE"
