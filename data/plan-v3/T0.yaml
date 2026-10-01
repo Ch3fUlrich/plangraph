@@ -1,0 +1,166 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: autoos
+    id: T0-PAID
+    title: "Disable deepseek + meta-api paid legs, re-render combos, gateway apply, smoke"
+    kind: lane
+    track: T0
+    owner: "AutoOS L1-main -> L2 gateway lane"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "combos.json has no deepseek/meta leg; live drift 0; smoke 1 call/combo 200; usage report shows 0 new deepseek/meta calls for 24 h"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "STATUS: T0-PAID v1 verified; split into 2a enforcement (running), 2b last-resort tier + deepseek 3-test gate, 2c meta review-only. Writers done, reviews running; merge as one train behind T3-CIGREEN."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-PAID"
+
+  - project: autoos
+    id: T0-CONTAINER
+    title: "Recreate autoos-opencode with init, pids_limit 32768, mem_limit 8g in compose"
+    kind: lane
+    track: T0
+    owner: "OPERATOR runs command; router verifies"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "docker inspect -> Init=true, PidsLimit=32768, Memory set; PID 1 = tini; zombies < 50 after 24 h"
+    evidence_kinds: [run-record, decision]
+    operator: true
+    priority: 0
+    note: "STATUS done: container recreated with init, pids 32768, mem 8g; docker inspect Init=true (D-194). Ambiguous: full DONE (pids/memory) needs T4-HARDEN compose edits, but the lane runs now with init only and again after it lands, so no hard dep wired."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-CONTAINER"
+
+  - project: routing
+    id: T0-HOLD
+    title: "Hold stale 09-28 Claude sessions; close after new L1-main is up"
+    kind: lane
+    track: T0
+    owner: routing-00
+    state: open
+    estimate_h: 1
+    estimate_src: default
+    depends_on: [T0-L1]
+    corrects: null
+    done_criteria: "each session acked HOLD (done 11:3xZ); closed or relaunched"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "STATUS done: stale 09-28 sessions held + stopped (D-180, D-186)."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-HOLD"
+
+  - project: routing
+    id: T0-L1
+    title: "Launch fresh autoos-L1-main (Claude Sonnet high) from new handoff"
+    kind: lane
+    track: T0
+    owner: routing-00
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: ["autoos:T0-SYNC"]
+    corrects: null
+    done_criteria: "session up, ack names plan v3 + its first lane"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "STATUS done: new L1-mains (Sonnet high); sessions 8cd0f9b4, cdd9f6da."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-L1"
+
+  - project: autoos
+    id: T0-SYNC
+    title: "Fast-forward coding.vm orchestrator checkouts; quarantine d8b6e0ef; review stash"
+    kind: lane
+    track: T0
+    owner: "AutoOS L1-main -> L3"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "git log main..origin/main empty on main checkout; quarantine branch listed; no push of it (pre-push hook refuses quarantine/*)"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: SYNC done."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-SYNC"
+
+  - project: autoos
+    id: T0-FREEZE
+    title: "No merge to main until T3-CIGREEN lands (ready-check refuses on red main)"
+    kind: lane
+    track: T0
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "ready-check test: red main -> refuse; the CIGREEN lane flagged fixes-main -> allowed"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: FREEZE needs a fix round; merge as one train behind T3-CIGREEN."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-FREEZE"
+
+  - project: autoos
+    id: T0-KEYS
+    title: "Rotate every key in api-keys.yml; verify per provider; hygiene"
+    kind: lane
+    track: T0
+    owner: "OPERATOR rotates; L3 verifies"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "probe table all providers; python3 yaml.safe_load passes; no duplicate names"
+    evidence_kinds: [commit+ci, decision]
+    operator: true
+    priority: 0
+    note: "OPERATOR OS-31: keys leaked into model transcripts 09-29. Agent side = one probe per provider (names only) + strict-YAML hygiene."
+    source: "data/source/plan-v3/T0-stabilize.md#T0-KEYS"
+
+  - project: workstation
+    id: T0-WSCLONE
+    title: "Workstation agents work only in fleet clones, never the operator checkout"
+    kind: lane
+    track: T0
+    owner: workst-L1-autoos
+    state: open
+    estimate_h: 1
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "opencode/Claude session cwds listed; none in the operator checkout"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T0-stabilize.md#T0-WSCLONE"
+
+  - project: autoos
+    id: T0-ZEN1
+    title: "Remove anonymous second OpenCode Free account from OmniRoute (Zen ToS)"
+    kind: lane
+    track: T0
+    owner: "OPERATOR click; L3 verifies"
+    state: open
+    estimate_h: 1
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "providers page shows one opencode account"
+    evidence_kinds: [decision, run-record]
+    operator: true
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T0-stabilize.md#T0-ZEN1"

@@ -1,0 +1,94 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: routing
+    id: GATE-P0
+    title: "Phase 0 gate: paid legs off, container on init, main CI fix started, sessions held"
+    kind: gate
+    track: P0
+    owner: routing-00
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: ["autoos:T0-PAID", "autoos:T0-CONTAINER", "routing:T0-HOLD", "routing:T0-L1", "autoos:T0-SYNC", "autoos:T0-FREEZE", "autoos:T0-KEYS", "workstation:T0-WSCLONE", "autoos:T0-ZEN1"]
+    corrects: null
+    done_criteria: "paid legs off; container on init; main CI fix lane started; stale sessions held; keys rotation scheduled"
+    evidence_kinds: [any]
+    operator: false
+    priority: 0
+    note: "Gate of phase 0; README Phases and gates."
+    source: "data/source/plan-v3/README.md#phases-and-gates"
+
+  - project: routing
+    id: GATE-P1
+    title: "Phase 1 gate: main green x3, combos v3 live drift 0 + smoke, no forced compaction"
+    kind: gate
+    track: P1
+    owner: routing-00
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: ["autoos:T3-CIGREEN", "autoos:T3-CIMAIN", "autoos:T1-COMBO3", "autoos:T1-CTX", "autoos:T4-HOST", "autoos:T4-FENCE", "autoos:T2-ONEPATH", "autoos:T2-RECORD"]
+    corrects: null
+    done_criteria: "main green 3 pushes in a row; combos v3 live with drift 0 + smoke; no forced compaction in 24 h"
+    evidence_kinds: [any]
+    operator: false
+    priority: 0
+    note: "Gate of phase 1."
+    source: "data/source/plan-v3/README.md#phases-and-gates"
+
+  - project: routing
+    id: GATE-P2
+    title: "Phase 2 gate: every provider row probed, skill v4 merged, workstation on server gateway"
+    kind: gate
+    track: P2
+    owner: routing-00
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: ["autoos:T1-PROV", "autoos:T1-LITELLM", "autoos:T1-PEER", "autoos:T2-RULES", "autoos:T2-SKILL", "workstation:T5-FINISH", "workstation:T5-CLONE", "workstation:T5-BRANCHES", "workstation:T5-KEYS", "workstation:T5-SYNC", "workstation:T5-PROVIDERS", "workstation:T5-SKILLS", "workstation:T5-HANDOFF", "workstation:T5-GRAPH", "workstation:T5-GROK", "server:T6-PILOT", "server:T6-HA"]
+    corrects: null
+    done_criteria: "every provider row probed; skill v4 merged; workstation on server gateway"
+    evidence_kinds: [any]
+    operator: false
+    priority: 0
+    note: "Gate of phase 2. T6-VOICE in the README phase list is not a lane id; mapped to T6-HA."
+    source: "data/source/plan-v3/README.md#phases-and-gates"
+
+  - project: routing
+    id: GATE-P3
+    title: "Phase 3 gate: opencode fleet certified twice, fallback switch drill passed"
+    kind: gate
+    track: P3
+    owner: routing-00
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: ["routing:T4-CERT", "routing:T4-SWITCH", "workstation:T5-CERT", "server:T6-HEAL", "routing:T7-GRAPH-R", "autoos:T7-GRAPH-A", "autoos:T7-GRAPH-USE", "routing:T7-BOARD", "autoos:T7-CONSOLE-MSG", "autoos:T7-CONSOLE"]
+    corrects: null
+    done_criteria: "opencode fleet passes certification twice; fallback switch tested by a forced Claude-limit drill"
+    evidence_kinds: [any]
+    operator: false
+    priority: 0
+    note: "Final phase gate; GOAL depends on it. All lanes not named in the phase list and with no dependent are wired straight into routing:GOAL."
+    source: "data/source/plan-v3/README.md#phases-and-gates"
+
+  - project: routing
+    id: GOAL
+    title: "Plan v3 complete"
+    kind: goal
+    track: goal
+    owner: routing-00
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: ["routing:GATE-P3", "autoos:T1-CREDIT", "autoos:T1-JEV", "autoos:T1-MM", "autoos:T1-NOISE", "autoos:T1-UPGRADE", "autoos:T1-WEBTOOLS", "autoos:T1-ZEN", "autoos:T2-COMPACT", "autoos:T2-ISOLATE", "autoos:T2-LEAN", "autoos:T2-MCPLIFE", "autoos:T2-RESEARCHCARD", "autoos:T2-TASKSESSION", "autoos:T3-CLEAN", "autoos:T3-PRINCIPLES", "autoos:T3-SCRUB", "autoos:T3-SPLIT", "autoos:T3-WIN", "server:T6-DETECT", "server:T6-FIX", "server:T6-GRAPHMOVE", "server:T6-INFRA", "server:T6-IPV6", "server:T6-LEDGER", "server:T6-MEDIA", "server:T6-PHONE", "server:T6-SECRETS", "server:T6-UPDATES"]
+    corrects: null
+    done_criteria: "Plan v3 complete"
+    evidence_kinds: [any]
+    operator: false
+    priority: 0
+    note: "Single global goal routing:GOAL; every non-terminal item reaches it."
+    source: "data/source/plan-v3/README.md#goal"
