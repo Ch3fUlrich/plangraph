@@ -102,7 +102,7 @@ items:
     state: open
     estimate_h: 8
     estimate_src: default
-    depends_on: ["routing:T7-BOARD", "routing:GATE-P2"]
+    depends_on: ["plangraph:PG-M4", "routing:GATE-P2"]
     corrects: null
     done_criteria: "per-phase acceptance tests in FLEETSPEC"
     evidence_kinds: [commit+ci, run-record]

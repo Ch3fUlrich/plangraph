@@ -27,7 +27,7 @@ items:
     kind: lane
     track: T5
     owner: workst-L1-autoos
-    state: in_review
+    state: open
     estimate_h: 2
     estimate_src: default
     depends_on: ["routing:GATE-P1"]
@@ -36,7 +36,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
-    note: "legacy, needs evidence; STATUS: clones on origin/main (D-183, workst reports)."
+    note: "Not done: clones are on origin/main (D-183) but workst-L1 itself still runs in the operator checkout (routing-00 review)."
     source: "data/source/plan-v3/T5-workstation.md#T5-CLONE"
 
   - project: workstation
@@ -45,7 +45,7 @@ items:
     kind: lane
     track: T5
     owner: workst-L1-autoos
-    state: in_review
+    state: claimed
     estimate_h: 4
     estimate_src: default
     depends_on: ["routing:GATE-P1"]
@@ -54,7 +54,7 @@ items:
     evidence_kinds: [commit+ci]
     operator: false
     priority: 0
-    note: "legacy, needs evidence; STATUS: 7 redundant branches deleted (bundle backup) (D-183, workst reports)."
+    note: "In progress, claimed by workst-L1-autoos. Done so far: 7 redundant branches deleted (bundle backup, D-183). Still open: ws-merge-map take, ws-records, ws-mergecheck, ws-scrubgap."
     source: "data/source/plan-v3/T5-workstation.md#T5-BRANCHES"
 
   - project: workstation
