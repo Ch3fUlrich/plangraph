@@ -76,3 +76,7 @@ ORDER: finish M2a path first (X6b -> X7 tiers/none/commit/legacy-state -> 2-seat
 ## routing-00 gen-7 (2026-10-01 20:35): writer leg A qoder if probe works else B muse-spark writer; seat-2 waiver needs its own D-id (ask).
 Batch: leave T0-WSCLONE in_review (no reopen verb; correction = new item); OP-*, GW-MCP-ROLLOUT, SEC-TIER-A keep listed tiers (no none);
 T5-GROK-L2 dep on OP-GROK-STEPS note-only until claim released. Load nothing before OK on formal diff + `pg ready --all --brief`.
+D-206 condition (routing gen-7, 20:40): qoder family is client-reported = NOT evidence (run 145833-takerev3 said qwen, model claimed Claude Sonnet).
+Sonnet seat counts only if the X6c/X7 run records show a RESOLVED qoder model (model_source not client-reported/assumed). Else seats =
+muse-spark (meta) + deepseek when back, both pinned+resolved; seat-2 waiver only after >1 h without deepseek, D-id from routing. Every
+seat record carries model_source for writer and seats.
