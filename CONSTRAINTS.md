@@ -58,3 +58,6 @@ Code carries no site data. Suggested: writers on deepseek (pinned, resolved); se
 If a spawn fails on an unservable leg, use a pinned free model for that try and tell routing-00. Any refusal: stop, report exact text. Never route around a denial.
 Review scheme (earlier msg): seat 1 Sonnet subagent (Agent tool), seat 2 one pinned model of a third family via autoos-agent spawn only; routing-00 does an Opus spot review at end of M2a.
 Disk on coding.vm ~99%: keep out/ small, nothing heavy until routing-00 says >=5 GB free.
+
+## D-217 (operator via routing-00): no waiting for free quotas. Writers deepseek; seats muse-spark + in-session Sonnet subagent.
+If muse fails > 1 h: proceed with Sonnet seat + Sonnet final + routing-00 spot check, noted "seat-2 waiver (D-217)". Keep M2a moving; tell routing-00 when fixes, re-reviews, throwaway round trip are done.
