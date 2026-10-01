@@ -120,13 +120,13 @@ items:
     state: open
     estimate_h: 6
     estimate_src: default
-    depends_on: []
+    depends_on: [T6-HEAL]
     corrects: null
     done_criteria: "3 supervised end-to-end fixes; incident record complete"
     evidence_kinds: [run-record, semaphore-task]
     operator: false
     priority: 0
-    note: "Ambiguous: T6-UPDATES describes HEAL -> FIX runtime chain; build dep not wired."
+    note: "Decision: depends_on T6-HEAL (runtime HEAL -> FIX chain is also build order)."
     source: "data/source/plan-v3/T6-server-ops.md#T6-FIX"
 
   - project: server
@@ -153,7 +153,7 @@ items:
     kind: lane
     track: T6
     owner: prox
-    state: open
+    state: claimed
     estimate_h: 4
     estimate_src: default
     depends_on: []
@@ -162,7 +162,7 @@ items:
     evidence_kinds: [semaphore-task, decision]
     operator: true
     priority: 0
-    note: "STATUS: migrating (playbooks next); rotations in per-application batches with operator approval (D-203). Owner prox (STATUS: T6-SECRETS / T6-IPV6 (prox))."
+    note: "STATUS claimed: 82/83 encrypted + guard + R1; playbooks next, rotations in per-application batches with operator approval (D-203). Owner prox."
     source: "data/source/plan-v3/T6-server-ops.md#T6-SECRETS"
 
   - project: server
@@ -171,7 +171,7 @@ items:
     kind: lane
     track: T6
     owner: prox
-    state: open
+    state: claimed
     estimate_h: 3
     estimate_src: default
     depends_on: []
@@ -180,7 +180,7 @@ items:
     evidence_kinds: [run-record, semaphore-task]
     operator: false
     priority: 0
-    note: "STATUS: approved, Fritzbox user ready; prox applies (prox via API)."
+    note: "STATUS claimed: V1 applied except the deferred Fritzbox share; prox applies (prox via API)."
     source: "data/source/plan-v3/T6-server-ops.md#T6-IPV6"
 
   - project: server
@@ -198,7 +198,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
-    note: "Ambiguous: links to the board (T7-BOARD); dep not wired."
+    note: "Decision: no hard dep on T7-BOARD (links to the board only); priority 0."
     source: "data/source/plan-v3/T6-server-ops.md#T6-LEDGER"
 
   - project: server
@@ -228,13 +228,13 @@ items:
     state: open
     estimate_h: 3
     estimate_src: default
-    depends_on: ["routing:GATE-P1"]
+    depends_on: [T6-OWUI, "routing:GATE-P1"]
     corrects: null
     done_criteria: "Assist round trip < 3 s median, documented"
     evidence_kinds: [run-record]
     operator: false
     priority: 0
-    note: "Phase table names T6-VOICE with no lane-table id; mapped to T6-HA (the voice lane)."
+    note: "Phase table name T6-VOICE maps to both T6-HA and T6-PHONE. Decision: depends_on T6-OWUI (STT/TTS combos)."
     source: "data/source/plan-v3/T6-server-ops.md#T6-HA"
 
   - project: server

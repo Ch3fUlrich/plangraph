@@ -27,7 +27,7 @@ items:
     kind: lane
     track: T0
     owner: "OPERATOR runs command; router verifies"
-    state: open
+    state: in_review
     estimate_h: 2
     estimate_src: default
     depends_on: []
@@ -36,7 +36,7 @@ items:
     evidence_kinds: [run-record, decision]
     operator: true
     priority: 0
-    note: "STATUS done: container recreated with init, pids 32768, mem 8g; docker inspect Init=true (D-194). Ambiguous: full DONE (pids/memory) needs T4-HARDEN compose edits, but the lane runs now with init only and again after it lands, so no hard dep wired."
+    note: "legacy, needs evidence; STATUS: docker inspect Init=true (D-194). Decision: no hard dep on T4-HARDEN; priority 0."
     source: "data/source/plan-v3/T0-stabilize.md#T0-CONTAINER"
 
   - project: routing
@@ -45,7 +45,7 @@ items:
     kind: lane
     track: T0
     owner: routing-00
-    state: open
+    state: in_review
     estimate_h: 1
     estimate_src: default
     depends_on: [T0-L1]
@@ -54,7 +54,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
-    note: "STATUS done: stale 09-28 sessions held + stopped (D-180, D-186)."
+    note: "legacy, needs evidence; STATUS: D-180, D-186; stale sessions held + stopped."
     source: "data/source/plan-v3/T0-stabilize.md#T0-HOLD"
 
   - project: routing
@@ -63,7 +63,7 @@ items:
     kind: lane
     track: T0
     owner: routing-00
-    state: open
+    state: in_review
     estimate_h: 2
     estimate_src: default
     depends_on: ["autoos:T0-SYNC"]
@@ -72,7 +72,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
-    note: "STATUS done: new L1-mains (Sonnet high); sessions 8cd0f9b4, cdd9f6da."
+    note: "legacy, needs evidence; STATUS: sessions 8cd0f9b4, cdd9f6da."
     source: "data/source/plan-v3/T0-stabilize.md#T0-L1"
 
   - project: autoos
@@ -81,7 +81,7 @@ items:
     kind: lane
     track: T0
     owner: "AutoOS L1-main -> L3"
-    state: open
+    state: in_review
     estimate_h: 3
     estimate_src: default
     depends_on: []
@@ -90,7 +90,7 @@ items:
     evidence_kinds: [commit+ci]
     operator: false
     priority: 0
-    note: "STATUS: SYNC done."
+    note: "legacy, needs evidence; STATUS: SYNC done."
     source: "data/source/plan-v3/T0-stabilize.md#T0-SYNC"
 
   - project: autoos
@@ -135,7 +135,7 @@ items:
     kind: lane
     track: T0
     owner: workst-L1-autoos
-    state: open
+    state: in_review
     estimate_h: 1
     estimate_src: default
     depends_on: []
@@ -144,7 +144,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
-    note: ""
+    note: "legacy, needs evidence; STATUS: clones on origin/main (D-183, workst reports)."
     source: "data/source/plan-v3/T0-stabilize.md#T0-WSCLONE"
 
   - project: autoos

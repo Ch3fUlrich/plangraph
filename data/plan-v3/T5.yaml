@@ -27,7 +27,7 @@ items:
     kind: lane
     track: T5
     owner: workst-L1-autoos
-    state: open
+    state: in_review
     estimate_h: 2
     estimate_src: default
     depends_on: ["routing:GATE-P1"]
@@ -36,7 +36,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
-    note: "STATUS: 7 redundant branches deleted (bundle backup); clones on origin/main (D-183)."
+    note: "legacy, needs evidence; STATUS: clones on origin/main (D-183, workst reports)."
     source: "data/source/plan-v3/T5-workstation.md#T5-CLONE"
 
   - project: workstation
@@ -45,7 +45,7 @@ items:
     kind: lane
     track: T5
     owner: workst-L1-autoos
-    state: open
+    state: in_review
     estimate_h: 4
     estimate_src: default
     depends_on: ["routing:GATE-P1"]
@@ -54,7 +54,7 @@ items:
     evidence_kinds: [commit+ci]
     operator: false
     priority: 0
-    note: "STATUS: 7 redundant branches deleted (bundle backup) (D-183)."
+    note: "legacy, needs evidence; STATUS: 7 redundant branches deleted (bundle backup) (D-183, workst reports)."
     source: "data/source/plan-v3/T5-workstation.md#T5-BRANCHES"
 
   - project: workstation
@@ -108,7 +108,7 @@ items:
     evidence_kinds: [run-record, commit+ci]
     operator: false
     priority: 0
-    note: "Ambiguous: DONE references T1-CREDIT report; dep on T1-CREDIT not wired."
+    note: "DONE references the T1-CREDIT report. Decision: no hard dep on T1-CREDIT; priority 0."
     source: "data/source/plan-v3/T5-workstation.md#T5-PROVIDERS"
 
   - project: workstation
@@ -144,7 +144,7 @@ items:
     evidence_kinds: [commit+ci]
     operator: false
     priority: 0
-    note: "Ambiguous: older handoffs archived by T3-CLEAN; dep not wired."
+    note: "Decision: no hard dep on T3-CLEAN (older handoffs archived); priority 0."
     source: "data/source/plan-v3/T5-workstation.md#T5-HANDOFF"
 
   - project: workstation
@@ -177,10 +177,10 @@ items:
     depends_on: ["routing:GATE-P1"]
     corrects: null
     done_criteria: "whoami check (AutoOS CLAUDE.md) returns 1 row on the workstation"
-    evidence_kinds: [run-record]
-    operator: false
+    evidence_kinds: [run-record, decision]
+    operator: true
     priority: 0
-    note: "STATUS: ready; operator runs one line in workst-L1's session (credential, D-201). Not bold OPERATOR so operator:false (judgement call)."
+    note: "STATUS: ready; operator runs one line in workst-L1's session (credential, D-201). Decision: operator true (credential step)."
     source: "data/source/plan-v3/T5-workstation.md#T5-GRAPH"
 
   - project: workstation
@@ -196,7 +196,7 @@ items:
     corrects: null
     done_criteria: "smoke: async job id -> result callback -> job complete; grokbot never in another combo"
     evidence_kinds: [run-record, commit+ci]
-    operator: false
+    operator: true
     priority: 0
-    note: "OPERATOR provides the wrapper code; async only (C9: no fallback, timeouts >= 700 s, retries 0, Protect off). Not bold OPERATOR so operator:false (judgement call)."
+    note: "OPERATOR provides the wrapper code; async only (C9: no fallback, timeouts >= 700 s, retries 0, Protect off). Decision: operator true; trial end date + webhook from the operator."
     source: "data/source/plan-v3/T5-workstation.md#T5-GROK"

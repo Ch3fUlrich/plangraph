@@ -59,20 +59,20 @@ items:
 
   - project: routing
     id: T7-BOARD
-    title: "Board evaluation: Plane/Vikunja/Planka/Focalboard/Vibe Kanban/console"
+    title: "Decide after PG-M4 whether a separate human board is still needed (plan graph is the board store)"
     kind: lane
     track: T7
-    owner: "L2 researcher + 2 reviewers"
+    owner: routing-00
     state: open
     estimate_h: 6
     estimate_src: default
-    depends_on: ["routing:GATE-P2"]
+    depends_on: ["plangraph:PG-M4"]
     corrects: null
-    done_criteria: "scorecard + recommendation -> OPERATOR chooses (taste)"
-    evidence_kinds: [run-record, decision]
+    done_criteria: "Operator decision recorded as a D-id after the plan-graph adoption (PG-M4)."
+    evidence_kinds: [decision]
     operator: true
     priority: 0
-    note: "STATUS: waits for the operator's choice. Ambiguous project: no L1 named (owner L2 researcher); assigned routing."
+    note: "Decision: board evaluation replaced by the plan-graph adoption call; project routing, owner routing-00."
     source: "data/source/plan-v3/T7-memory-console.md#T7-BOARD"
 
   - project: autoos

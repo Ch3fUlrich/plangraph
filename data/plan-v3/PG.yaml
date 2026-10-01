@@ -1,0 +1,76 @@
+meta:
+  source: docs/PROPOSAL.md + docs/KEEPER.md (plan-graph keeper, M2-M4)
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: plangraph
+    id: PG-M2A
+    title: "Keeper core: store, triggers, state machine, validator, views, evidence verifiers, CLI/MCP, import, page"
+    kind: lane
+    track: PG
+    owner: plangraph-L1-main
+    state: open
+    estimate_h: 24
+    estimate_src: plan
+    depends_on: []
+    corrects: null
+    done_criteria: "docs/KEEPER.md M2a verbs + triggers pass the store- and SQL-level attack suites; import of data/plan-v3 round-trips; pg CLI and MCP ready/show/claim/submit/verdict work; page renders the signed snapshot"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "M2a of docs/PROPOSAL.md; docs/KEEPER.md is the contract."
+    source: "docs/KEEPER.md"
+
+  - project: plangraph
+    id: PG-M2B
+    title: "Hardening: run-bound tokens, signed snapshot, outbox replay, hash-chain anchor, off-host keeper"
+    kind: lane
+    track: PG
+    owner: plangraph-L1-main
+    state: open
+    estimate_h: 16
+    estimate_src: plan
+    depends_on: [PG-M2A]
+    corrects: null
+    done_criteria: "run-bound tokens, signed snapshot, outbox replay and hash-chain anchor implemented with tests; keeper runs off-host; signature, rollback and anchor checks refuse tampered state"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "M2b of docs/PROPOSAL.md."
+    source: "docs/PROPOSAL.md#3-c-requirement--mechanism-pd"
+
+  - project: plangraph
+    id: PG-M3
+    title: "Tests + scorecard: attack tests, concurrency, token cost, screenshots, round trip, failure drill"
+    kind: lane
+    track: PG
+    owner: plangraph-L1-main
+    state: open
+    estimate_h: 16
+    estimate_src: plan
+    depends_on: [PG-M2B]
+    corrects: null
+    done_criteria: "attack (1a/1b/1c), concurrency, token-cost, screenshot (desktop+phone), import-export diff and keeper-down drill all pass; scorecard recorded"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "Tests 1-9 of docs/PROPOSAL.md section 6."
+    source: "docs/PROPOSAL.md#6-pilot--tests--cost"
+
+  - project: plangraph
+    id: PG-M4
+    title: "Adoption: operator decides adoption; migration plan for other projects"
+    kind: lane
+    track: PG
+    owner: plangraph-L1-main
+    state: open
+    estimate_h: 4
+    estimate_src: plan
+    depends_on: [PG-M3]
+    corrects: null
+    done_criteria: "Operator decision recorded as a D-id after the plan-graph adoption (PG-M4); migration plan for the other projects written"
+    evidence_kinds: [decision]
+    operator: true
+    priority: 0
+    note: "Operator architecture gate. T7-BOARD waits on this."
+    source: "docs/PROPOSAL.md#7-decision-requested"

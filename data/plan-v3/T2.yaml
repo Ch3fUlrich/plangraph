@@ -71,8 +71,8 @@ items:
     done_criteria: "test: 3-host round trip incl. an opencode session with Claude down; replay after restart; no lost/duplicated order"
     evidence_kinds: [commit+ci, run-record]
     operator: false
-    priority: 0
-    note: "STATUS: new (D-203), priority after T1-CLEAN; fleetd/bus spec exists (gap 2). Ambiguous: priority-after not wired as a hard dep."
+    priority: 1
+    note: "STATUS: new (D-203); fleetd/bus spec exists (gap 2). Decision: no hard dep on T1-CLEAN; priority 1."
     source: "data/source/plan-v3/T2-orchestration-core.md#T2-XMSG"
 
   - project: autoos
@@ -89,8 +89,8 @@ items:
     done_criteria: "test: a fake secret moves workstation<->coding.vm and never appears in transcripts/logs (canary); unauthorized name refused"
     evidence_kinds: [commit+ci, run-record]
     operator: false
-    priority: 0
-    note: "STATUS: new (D-203), priority after T1-CLEAN. Ambiguous: priority-after not wired as a hard dep."
+    priority: 1
+    note: "STATUS: new (D-203). Decision: no hard dep on T1-CLEAN; priority 1."
     source: "data/source/plan-v3/T2-orchestration-core.md#T2-XSECRET"
 
   - project: autoos
@@ -102,13 +102,13 @@ items:
     state: open
     estimate_h: 3
     estimate_src: default
-    depends_on: ["server:T6-OWUI"]
+    depends_on: [T1-WEBTOOLS, "server:T6-OWUI"]
     corrects: null
     done_criteria: "test: research card never lands on a no-web client; a report with a dead/made-up URL is refused"
     evidence_kinds: [commit+ci]
     operator: false
     priority: 0
-    note: "STATUS: designed; waits for SearXNG deploy (T6-OWUI). Ambiguous: may also depend on T1-WEBTOOLS; not wired."
+    note: "STATUS: designed; waits for the SearXNG deploy. Decision: depends_on T1-WEBTOOLS and T6-OWUI."
     source: "data/source/plan-v3/T2-orchestration-core.md#T2-RESEARCHCARD"
 
   - project: autoos
