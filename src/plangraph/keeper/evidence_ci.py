@@ -21,7 +21,7 @@ __all__ = ["CIAdapter"]
 
 # Only a strict owner/repo slug may reach the ``gh api`` path; every other
 # character (query, fragment, extra slash, space, dot-segments) is rejected.
-_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_SLUG_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
 def slug_from_remote(url: str) -> str | None:
@@ -103,13 +103,13 @@ class CIAdapter:
     # -- helpers ------------------------------------------------------------
     @staticmethod
     def _validated_slug(slug: object) -> tuple[str, str]:
-        if not isinstance(slug, str) or not _SLUG_RE.match(slug):
+        if not isinstance(slug, str) or not _SLUG_RE.fullmatch(slug):
             raise ValueError("ci repo must be an owner/repo slug")
         owner, repo = slug.split("/", 1)
         return owner, repo
 
     def _slug(self, value: str) -> str:
-        if _SLUG_RE.match(value) and not Path(value).is_dir():
+        if _SLUG_RE.fullmatch(value) and not Path(value).is_dir():
             return value
         path = Path(value)
         if path.is_dir():

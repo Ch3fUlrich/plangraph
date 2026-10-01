@@ -66,7 +66,8 @@ class CreateMixin:
             if existing is not None:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
-        self._validate(self._all_items() + defs, affected=keys)
+        before = self._all_items()
+        self._validate_change(before + defs, before, affected=keys)
         with self._write():
             for definition in defs:
                 self._insert_item(principal, definition, now)
@@ -130,6 +131,7 @@ class CreateMixin:
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
         self._check_text(fields)
+        before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
         for field, value in fields.items():
@@ -150,14 +152,27 @@ class CreateMixin:
                 me["depends_on"] = deps
             else:
                 me[field] = value
-        self._validate(candidate, affected={key})
+        self._validate_change(candidate, before, affected={key})
         assignments = [field for field in fields if field != "depends_on"]
         with self._write():
+            # Re-read inside the transaction: a competitor may have claimed or
+            # otherwise moved the item between the read above and here.
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if fresh["state"] != "open" or fresh["epoch"] != item["epoch"]:
+                raise Refused("conflict",
+                              f"{key} changed under the transaction")
+            self._may_manage(principal, fresh["project"])
             if assignments:
                 sets = ", ".join(f"{field}=?" for field in assignments)
                 values = [self._stored(field, fields[field]) for field in assignments]
-                self.conn.execute(f"UPDATE items SET {sets}, updated_at=? WHERE key=?",
-                                  (*values, self._iso(now), key))
+                cursor = self.conn.execute(
+                    f"UPDATE items SET {sets}, updated_at=?"
+                    " WHERE key=? AND state='open' AND epoch=?",
+                    (*values, self._iso(now), key, item["epoch"]))
+                self._race_guard(cursor, key, "open", item["epoch"])
+            else:
+                self._guarded_touch(key, ("open",), item["epoch"])
             if "depends_on" in fields:
                 self.conn.execute("DELETE FROM edges WHERE src=?", (key,))
                 for dep in me["depends_on"]:

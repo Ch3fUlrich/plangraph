@@ -1,8 +1,10 @@
 """Decision adapter: does ``| D-NNN |`` exist in the configured DECISIONS.md?
 
-The contract's marker is the literal line start ``^\\| D-(\\d+) \\|`` — a table
-row with spaces around the id. The comparison normalises ``D-0209`` / ``d-209``
-to ``D-209`` so a padded or lower-case reference still matches.
+The contract's marker is the literal line start ``^\\| D-([0-9]+) \\|`` — a table
+row with spaces around the id.  ``[0-9]`` rather than ``\\d`` because the latter
+also accepts non-ASCII digits, which are not valid decision ids.  The comparison
+normalises ``D-0209`` / ``d-209`` to ``D-209`` so a padded or lower-case
+reference still matches.
 
 Fenced code blocks (``` or ~~~) and indented code blocks (four spaces or a tab)
 are stripped before matching, so a decision id that only appears in an example
@@ -16,7 +18,8 @@ from pathlib import Path
 
 __all__ = ["DecisionsAdapter", "DECISION_LINE_RE"]
 
-DECISION_LINE_RE = re.compile(r"^\| D-(\d+) \|")
+DECISION_LINE_RE = re.compile(r"^\| D-([0-9]+) \|")
+_ASCII_DIGITS_RE = re.compile(r"[0-9]+\Z")
 _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 
 
@@ -61,7 +64,7 @@ class DecisionsAdapter:
         raw = decision_id.strip().upper()
         if raw.startswith("D-"):
             raw = raw[2:]
-        if not raw.isdigit():
+        if not _ASCII_DIGITS_RE.fullmatch(raw):
             return False
         return f"D-{int(raw)}" in self.decisions()
 

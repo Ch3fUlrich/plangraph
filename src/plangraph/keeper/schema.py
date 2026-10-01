@@ -113,12 +113,6 @@ CREATE TABLE audit_findings (
     code TEXT,
     msg  TEXT
 );
-
--- Keeper-controlled flag that lets auth's own admin writes past the principals
--- trigger.  It lives in main because SQLite triggers cannot reference temp
--- tables; only ``auth.add_principal``/``revoke`` set and clear it.
-CREATE TABLE _admin_ctx (ok INTEGER NOT NULL DEFAULT 0);
-INSERT INTO _admin_ctx(ok) VALUES (0);
 """
 
 # The reviewed/cancelled test, inlined because SQLite triggers cannot call
@@ -212,9 +206,10 @@ CREATE TRIGGER trg_audit_findings_append_only_delete
 BEFORE DELETE ON audit_findings
 BEGIN SELECT RAISE(ABORT, 'audit_findings are append-only'); END;
 
--- Principals change only through auth: a bare revoke (active 1 -> 0 with
--- nothing else touched) is allowed; anything else needs the admin flag.
-CREATE TRIGGER trg_principals_admin_only_update
+-- Principals change only through auth.  The single permitted update is a bare
+-- revoke: ``active`` 1 -> 0 with every other column identical to OLD.  INSERT
+-- (a new principal) stays allowed; any other UPDATE or any DELETE aborts.
+CREATE TRIGGER trg_principals_revoke_only_update
 BEFORE UPDATE ON principals
 WHEN NOT (
         OLD.active = 1 AND NEW.active = 0
@@ -222,7 +217,10 @@ WHEN NOT (
         AND OLD.projects IS NEW.projects AND OLD.family IS NEW.family
         AND OLD.token_sha256 IS NEW.token_sha256
      )
-     AND NOT EXISTS (SELECT 1 FROM _admin_ctx WHERE ok = 1)
+BEGIN SELECT RAISE(ABORT, 'principals are managed by auth'); END;
+
+CREATE TRIGGER trg_principals_no_delete
+BEFORE DELETE ON principals
 BEGIN SELECT RAISE(ABORT, 'principals are managed by auth'); END;
 
 CREATE INDEX idx_events_key ON events(key);

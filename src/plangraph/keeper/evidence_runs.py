@@ -1,6 +1,7 @@
 """Run-record adapter: reads ``<runs_dir>/<run_id>/{job,exit}.json``.
 
-The run id is validated against ``^[A-Za-z0-9._-]+$`` *before* it is joined
+The run id is validated against ``[A-Za-z0-9._-]+`` (``fullmatch``, so a
+trailing newline is rejected) *before* it is joined
 onto the runs directory, so ``..`` and any slash can never traverse out of it.
 Resolution is checked again anyway: the run directory must stay inside a
 resolved ``runs_dir`` and may not itself be a symlink, and neither ``job.json``
@@ -16,7 +17,7 @@ from pathlib import Path
 
 __all__ = ["RunRecordAdapter", "RUN_ID_RE"]
 
-RUN_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+RUN_ID_RE = re.compile(r"[A-Za-z0-9._-]+\Z")
 
 
 class RunRecordAdapter:
@@ -26,7 +27,7 @@ class RunRecordAdapter:
         self._runs_dir = Path(runs_dir) if runs_dir else None
 
     def valid_run_id(self, run_id: object) -> bool:
-        if not isinstance(run_id, str) or not RUN_ID_RE.match(run_id):
+        if not isinstance(run_id, str) or not RUN_ID_RE.fullmatch(run_id):
             return False
         return run_id not in (".", "..")
 

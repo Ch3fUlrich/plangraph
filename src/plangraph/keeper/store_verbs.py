@@ -30,8 +30,18 @@ class VerbsMixin:
         self._assert_unlocked(item)
         if item["state"] not in ("claimed", "in_review"):
             raise Refused("bad_state", f"{key} is {item['state']}")
+        # Slow verification (git/gh/http) happens before the write lock.
+        result = self._verify_evidence(item, kind, ref, now)
         with self._write():
-            return self._record_evidence(principal, item, kind, ref, now)
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if fresh["state"] not in ("claimed", "in_review"):
+                raise Refused("conflict",
+                              f"{fresh['key']} is {fresh['state']}")
+            self._guarded_touch(fresh["key"], ("claimed", "in_review"),
+                                fresh["epoch"])
+            return self._record_evidence(principal, fresh, kind, ref, now,
+                                         result)
 
     def add_evidence(self, principal, key, epoch, kind, ref):
         return self._run(principal, "add_evidence", key,
@@ -47,14 +57,22 @@ class VerbsMixin:
         if principal.role == "worker":
             self._require_project(principal, item["project"])
         self._epoch_ok(item, epoch)
+        # Slow verification runs outside the write lock; the row is inserted
+        # only under the state/epoch guard below.
+        result = self._verify_evidence(item, kind, ref, now)
         with self._write():
-            return self._record_evidence(principal, item, kind, ref, now)
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            self._epoch_ok(fresh, epoch)
+            if fresh["state"] != "claimed":
+                raise Refused("conflict",
+                              f"{fresh['key']} is {fresh['state']}, not claimed")
+            self._actor_or_delegate(principal, fresh)
+            self._guarded_touch(fresh["key"], ("claimed",), epoch)
+            return self._record_evidence(principal, fresh, kind, ref, now,
+                                         result)
 
-    def _record_evidence(self, principal, item, kind, ref, now):
-        verifier = self.verifiers.get(kind)
-        if verifier is None:
-            raise Refused("validation", f"unknown evidence kind {kind!r}")
-        result = verifier.verify(item, ref or {}, self._ctx(item, now))
+    def _record_evidence(self, principal, item, kind, ref, now, result):
         self.conn.execute(
             "INSERT INTO evidence(key,epoch,kind,ref,verified,detail,at)"
             " VALUES(?,?,?,?,?,?,?)",
@@ -119,10 +137,19 @@ class VerbsMixin:
             raise Refused("forbidden",
                           f"worker {name!r} is not scoped to {item['project']!r}")
         with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if fresh["state"] != "claimed":
+                raise Refused("conflict",
+                              f"{key} is {fresh['state']}, not claimed")
+            if principal.name != fresh["claimed_by"]:
+                raise Refused("forbidden", "only the claimant may delegate")
             self._append(principal, key, "delegated", {"worker": name}, now)
-            self.conn.execute(
-                "UPDATE items SET delegate=?, updated_at=? WHERE key=?",
-                (name, self._iso(now), key))
+            cursor = self.conn.execute(
+                "UPDATE items SET delegate=?, updated_at=?"
+                " WHERE key=? AND state='claimed' AND epoch=?",
+                (name, self._iso(now), key, item["epoch"]))
+            self._race_guard(cursor, key, "claimed", item["epoch"])
         return {"key": key, "delegate": name}
 
     def heartbeat(self, principal, key, epoch):
@@ -138,9 +165,18 @@ class VerbsMixin:
         self._epoch_ok(item, epoch)
         lease = self._iso(now + self.default_lease)
         with self._write():
-            self.conn.execute(
-                "UPDATE items SET lease_until=?, updated_at=? WHERE key=?",
-                (lease, self._iso(now), key))
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            self._epoch_ok(fresh, epoch)
+            if fresh["state"] != "claimed":
+                raise Refused("conflict",
+                              f"{key} is {fresh['state']}, not claimed")
+            self._actor_or_delegate(principal, fresh)
+            cursor = self.conn.execute(
+                "UPDATE items SET lease_until=?, updated_at=?"
+                " WHERE key=? AND state='claimed' AND epoch=?",
+                (lease, self._iso(now), key, epoch))
+            self._race_guard(cursor, key, "claimed", epoch)
         return {"key": key, "epoch": epoch, "lease_until": lease}
 
     def release(self, principal, key, epoch):
@@ -156,11 +192,22 @@ class VerbsMixin:
             raise Refused("forbidden", "only the claimant or router may release")
         self._epoch_ok(item, epoch)
         with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            self._epoch_ok(fresh, epoch)
+            if fresh["state"] != "claimed":
+                raise Refused("conflict",
+                              f"{key} is {fresh['state']}, not claimed")
+            if principal.role != "router" and principal.name != fresh["claimed_by"]:
+                raise Refused("forbidden",
+                              "only the claimant or router may release")
             self._append(principal, key, "released", {}, now)
-            self.conn.execute(
+            cursor = self.conn.execute(
                 "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
-                " reviewer=NULL, lease_until=NULL, updated_at=? WHERE key=?",
-                (self._iso(now), key))
+                " reviewer=NULL, lease_until=NULL, updated_at=?"
+                " WHERE key=? AND state='claimed' AND epoch=?",
+                (self._iso(now), key, epoch))
+            self._race_guard(cursor, key, "claimed", epoch)
         return {"key": key}
 
     # ----------------------------------------------------------- submit
@@ -207,33 +254,62 @@ class VerbsMixin:
         self._reviewer_family_ok(principal, item)
         if ok:
             self._require_evidence(item)
-            self._reverify_all(item, now)
+            # The slow re-verification of the current-epoch evidence runs
+            # before the write lock; it records exactly which evidence rows it
+            # considered so the transaction can prove that set is unchanged.
+            considered = self._reverify_all(item, now)
             with self._write():
-                self.conn.execute(
+                fresh = self._get_or_refuse(key)
+                self._assert_unlocked(fresh)
+                if fresh["state"] != "in_review":
+                    raise Refused("conflict",
+                                  f"{key} is {fresh['state']}, not in review")
+                if int(fresh["epoch"]) != int(item["epoch"]):
+                    raise Refused("conflict",
+                                  f"{key} changed under the transaction")
+                if self._verified_evidence_ids(fresh) != considered:
+                    raise Refused("conflict",
+                                  f"{key} evidence changed under the transaction")
+                self._require_project(principal, fresh["project"])
+                self._reviewer_family_ok(principal, fresh)
+                cursor = self.conn.execute(
                     "UPDATE items SET state='done', reviewer=?, updated_at=?"
-                    " WHERE key=?", (principal.name, self._iso(now), key))
+                    " WHERE key=? AND state='in_review' AND epoch=?",
+                    (principal.name, self._iso(now), key, item["epoch"]))
+                self._race_guard(cursor, key, "in_review", item["epoch"])
                 self._append(principal, key, "review_passed", {"reason": reason}, now)
             return {"key": key, "state": "done"}
 
-        prior = self.conn.execute(
-            "SELECT COUNT(*) FROM events WHERE key=? AND type='changes_requested'",
-            (key,)).fetchone()[0]
-        second = prior >= 1
-        state = "open" if second else "claimed"
         with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if fresh["state"] != "in_review":
+                raise Refused("conflict",
+                              f"{key} is {fresh['state']}, not in review")
+            if int(fresh["epoch"]) != int(item["epoch"]):
+                raise Refused("conflict",
+                              f"{key} changed under the transaction")
+            prior = self.conn.execute(
+                "SELECT COUNT(*) FROM events WHERE key=?"
+                " AND type='changes_requested'", (key,)).fetchone()[0]
+            second = prior >= 1
+            state = "open" if second else "claimed"
             self._append(principal, key, "changes_requested",
                          {"state": state, "reason": reason}, now)
             if second:
-                self.conn.execute(
+                cursor = self.conn.execute(
                     "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
-                    " reviewer=?, lease_until=NULL, updated_at=? WHERE key=?",
-                    (principal.name, self._iso(now), key))
+                    " reviewer=?, lease_until=NULL, updated_at=?"
+                    " WHERE key=? AND state='in_review' AND epoch=?",
+                    (principal.name, self._iso(now), key, item["epoch"]))
                 self._finding(key, "changes_requested_twice",
                               "two reviews requested changes in a row", now)
             else:
-                self.conn.execute(
+                cursor = self.conn.execute(
                     "UPDATE items SET state='claimed', reviewer=?, updated_at=?"
-                    " WHERE key=?", (principal.name, self._iso(now), key))
+                    " WHERE key=? AND state='in_review' AND epoch=?",
+                    (principal.name, self._iso(now), key, item["epoch"]))
+            self._race_guard(cursor, key, "in_review", item["epoch"])
         return {"key": key, "state": state}
 
     # ------------------------------------------------------------ cancel
@@ -247,6 +323,12 @@ class VerbsMixin:
         self._may_manage(principal, item["project"])
         if item["state"] not in ("open", "claimed", "in_review"):
             raise Refused("bad_state", f"{key} is {item['state']}")
+        before = self._all_items()
+        # Cancelling deliberately dangles dependents; that is the one new code
+        # it is allowed to introduce.  Any other regression is refused.
+        self._validate_change(self._changed(before, key, "cancelled"), before,
+                              affected={key},
+                              allow_new={"depends_on_cancelled"})
         with self._write():
             if principal.role != "router":
                 dependent = self.conn.execute(
@@ -281,8 +363,9 @@ class VerbsMixin:
                         self._append(principal, item["key"], "lease_expired", {}, now)
                         self.conn.execute(
                             "UPDATE items SET state='open', claimed_by=NULL,"
-                            " delegate=NULL, lease_until=NULL, updated_at=?"
-                            " WHERE key=?", (self._iso(now), item["key"]))
+                            " delegate=NULL, reviewer=NULL, lease_until=NULL,"
+                            " updated_at=? WHERE key=?",
+                            (self._iso(now), item["key"]))
                         expired.append(item["key"])
                 elif item["state"] == "in_review":
                     since = self._parse_iso(item["updated_at"])

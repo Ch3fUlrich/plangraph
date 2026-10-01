@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+from .. import views
 from . import events
 from .errors import Refused
 from .evidence_types import Context
@@ -141,7 +142,20 @@ class SupportMixin:
             out.append(record)
         return out
 
+    def _verified_evidence_ids(self, item):
+        """Row ids of the current epoch's *verified* evidence."""
+        return frozenset(
+            e["id"] for e in self._evidence(item["key"])
+            if e["epoch"] == item["epoch"] and e["verified"])
+
     # -------------------------------------------------- evidence rules
+    def _verify_evidence(self, item, kind, ref, now):
+        """Run the verifier for *kind*; the slow I/O a verb does pre-txn."""
+        verifier = self.verifiers.get(kind)
+        if verifier is None:
+            raise Refused("validation", f"unknown evidence kind {kind!r}")
+        return verifier.verify(item, ref or {}, self._ctx(item, now))
+
     def _require_evidence(self, item):
         kinds = item["evidence_kinds"] or ["any"]
         evidence = [e for e in self._evidence(item["key"])
@@ -207,6 +221,82 @@ class SupportMixin:
             if not result.ok:
                 raise Refused("evidence_unverified",
                               result.detail or "stale evidence")
+        return frozenset(e["id"] for e in evidence)
+
+    def _race_guard(self, cursor, key, expected_state, expected_epoch):
+        """Refuse unless a guarded UPDATE hit exactly one row.
+
+        Unlike ``Store._row_guard`` (kept for the verbs that already shipped
+        it), an epoch change here is reported as ``epoch_stale`` and a
+        same-epoch state change as ``conflict`` -- the two codes a caller of a
+        race-hardened verb expects.
+        """
+        if cursor.rowcount == 1:
+            return
+        fresh = self._item(key)
+        if fresh is None:
+            raise Refused("not_found", f"no item {key!r}")
+        if int(fresh["epoch"]) != int(expected_epoch):
+            raise Refused("epoch_stale",
+                          f"epoch {expected_epoch} != current {fresh['epoch']}")
+        raise Refused("conflict",
+                      f"{key} is {fresh['state']}, not {expected_state}")
+
+    def _guarded_touch(self, key, states, epoch):
+        """A no-op guarded UPDATE used by verbs that only INSERT.
+
+        ``add_evidence`` never updates the item row, but it still must prove
+        the row is in one of *states* at *epoch* before inserting.  The no-op
+        update yields a rowcount the shared guard can check.
+        """
+        placeholders = ",".join("?" for _ in states)
+        cursor = self.conn.execute(
+            "UPDATE items SET updated_at=updated_at WHERE key=? AND epoch=?"
+            f" AND state IN ({placeholders})",
+            (key, int(epoch), *states))
+        self._race_guard(cursor, key, states[0], epoch)
+        return cursor
+
+    @staticmethod
+    def _changed(items, key, state):
+        """A shallow copy of *items* with *key*'s state set to *state*."""
+        out = []
+        for item in items:
+            copy = dict(item)
+            if copy["key"] == key:
+                copy["state"] = state
+            out.append(copy)
+        return out
+
+    def _validate_change(self, after, before, affected=(), allow_new=()):
+        """Validate a proposed graph, refusing new problems and touched ones.
+
+        ``views.validate`` reports whole-graph problems.  A pre-existing
+        problem elsewhere must not block an unrelated write; it is refused only
+        when it touches a changed key.  On top of that, a problem that is
+        *new* compared with ``before`` is refused even when its key was not
+        changed -- that is how a reachability regression (dropping a
+        dependency leaving a pre-existing item unreachable) is caught.
+        ``allow_new`` names codes a verb is expected to introduce (``cancel``
+        deliberately creates ``depends_on_cancelled`` for its dependents).
+        """
+        baseline = {(p["code"], p["key"]) for p in views.validate(before)}
+        problems = []
+        for problem in views.validate(after):
+            token = (problem["code"], problem["key"])
+            if token in baseline:
+                if self._problem_affects(problem, affected):
+                    problems.append(problem)
+            elif problem["code"] not in allow_new:
+                problems.append(problem)
+        if not problems:
+            return
+        cycle = [p for p in problems if p["code"] == "cycle"]
+        if cycle:
+            raise Refused("cycle", cycle[0]["msg"])
+        detail = "; ".join(
+            f"{p['code']}:{p['key']}:{p['msg']}" for p in problems)
+        raise Refused("validation", detail)
 
     def _has_finding(self, key, code):
         return self.conn.execute(

@@ -11,6 +11,7 @@ codec, event append and the evidence checks — lives in ``store_support``.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sqlite3
 from contextlib import contextmanager
@@ -114,13 +115,18 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReadMixin):
 
         Re-read at the top of every verb so a token that was valid at
         authentication cannot keep acting after a revoke or a role/project edit.
-        A principal with no row (the synthetic reaper identity) is left alone.
+        A principal with no row is refused too, so a stale or forged identity
+        cannot act; the sole exception is the API reaper's synthetic
+        ``system``/``system`` identity, which has no row of its own.
         """
         row = self.conn.execute(
             "SELECT role,projects,active FROM principals WHERE name=?",
             (getattr(principal, "name", None),)).fetchone()
         if row is None:
-            return
+            if (getattr(principal, "name", None) == "system"
+                    and getattr(principal, "role", None) == "system"):
+                return
+            raise Refused("forbidden", "principal has no stored identity")
         if not row["active"]:
             raise Refused("forbidden", "principal is revoked or inactive")
         try:
@@ -148,7 +154,12 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReadMixin):
         except _MALFORMED:
             # A malformed request (bad body shape, wrong parameter type) is a
             # validation refusal, not a crash.  ``_write`` has already rolled
-            # back any partial transaction before we get here.
+            # back any partial transaction before we get here.  Log the
+            # traceback for the operator, but name only the verb and key: the
+            # request body may carry a token or other secret and must never
+            # reach the log.
+            logging.getLogger("plangraph.keeper").exception(
+                "malformed input for %s %s", action, key)
             self._audit(principal, action, key, False, "validation",
                         "malformed input", now)
             raise Refused("validation", "malformed input")

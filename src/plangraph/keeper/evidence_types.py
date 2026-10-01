@@ -15,8 +15,9 @@ __all__ = ["Result", "Context", "as_epoch", "valid_commit_ref", "DEFAULT_SKEW_S"
 
 # A commit reference is a full lowercase hex sha: 40 for sha1, 64 for sha256.
 # Abbreviations, refs ("main") and anything option-like are rejected so a sha
-# can never become a git/gh option.
-_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+# can never become a git/gh option.  ``fullmatch`` (not ``$``) so a trailing
+# newline cannot smuggle an otherwise-clean sha past the check.
+_COMMIT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 
 # Clock skew tolerated between a commit's author/committer dates and the claim.
 DEFAULT_SKEW_S = 120.0
@@ -24,7 +25,7 @@ DEFAULT_SKEW_S = 120.0
 
 def valid_commit_ref(value: Any) -> bool:
     """True only for a full lowercase hex commit sha (40 or 64 hex digits)."""
-    return isinstance(value, str) and _COMMIT_RE.match(value) is not None
+    return isinstance(value, str) and _COMMIT_RE.fullmatch(value) is not None
 
 
 @dataclass
