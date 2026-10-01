@@ -2,6 +2,10 @@
 
 The run id is validated against ``^[A-Za-z0-9._-]+$`` *before* it is joined
 onto the runs directory, so ``..`` and any slash can never traverse out of it.
+Resolution is checked again anyway: the run directory must stay inside a
+resolved ``runs_dir`` and may not itself be a symlink, and neither ``job.json``
+nor ``exit.json`` may be a symlink — a symlink would otherwise let a run record
+outside ``runs_dir`` verify.
 """
 
 from __future__ import annotations
@@ -31,7 +35,12 @@ class RunRecordAdapter:
             raise ValueError(f"invalid run id: {run_id!r}")
         if self._runs_dir is None:
             raise FileNotFoundError("runs_dir is not configured")
-        return self._runs_dir / run_id
+        candidate = self._runs_dir / run_id
+        if candidate.is_symlink():
+            raise ValueError(f"refusing symlinked run dir: {run_id!r}")
+        if not candidate.resolve().is_relative_to(self._runs_dir.resolve()):
+            raise ValueError(f"run dir escapes runs_dir: {run_id!r}")
+        return candidate
 
     def job(self, run_id: str) -> dict:
         return self._load(self.run_dir(run_id) / "job.json")
@@ -41,6 +50,8 @@ class RunRecordAdapter:
 
     @staticmethod
     def _load(path: Path) -> dict:
+        if path.is_symlink():
+            raise ValueError(f"refusing symlinked run file: {path.name}")
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
         if not isinstance(data, dict):

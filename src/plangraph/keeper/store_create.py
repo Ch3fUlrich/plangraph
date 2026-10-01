@@ -13,7 +13,10 @@ from .errors import Refused
 
 _EDITABLE = ("title", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note")
+_MAX_BATCH = 500
+_MAX_DEPS = 200
 _ITEM_COLUMNS = ("key", "project", "id", "title", "kind", "track", "owner",
+                 "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "source", "note", "corrects", "state",
                  "epoch", "claimed_by", "delegate", "lease_until", "reviewer",
@@ -35,9 +38,17 @@ class CreateMixin:
                          lambda now: self._create(principal, items, now, True))
 
     def _create(self, principal, items, now, legacy):
+        if len(items) > _MAX_BATCH:
+            raise Refused("validation", f"batch exceeds {_MAX_BATCH} items")
         defs = [self._normalise(raw) for raw in items]
         for definition in defs:
             self._may_manage(principal, definition["project"])
+        if principal.role != "router":
+            for definition in defs:
+                for dep in definition["depends_on"]:
+                    if not dep.startswith(definition["project"] + ":"):
+                        raise Refused("forbidden",
+                                      "cross-project dependency needs the router")
         if legacy:
             self._require_role(principal, "router")
             for definition in defs:
@@ -55,7 +66,7 @@ class CreateMixin:
             if existing is not None:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
-        self._validate(self._all_items() + defs)
+        self._validate(self._all_items() + defs, affected=keys)
         with self._write():
             for definition in defs:
                 self._insert_item(principal, definition, now)
@@ -68,7 +79,9 @@ class CreateMixin:
             "key": definition["key"], "project": definition["project"],
             "id": definition["id"], "title": definition.get("title", ""),
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
-            "owner": definition.get("owner"), "estimate_h": definition.get("estimate_h"),
+            "owner": definition.get("owner"),
+            "owner_family": definition.get("owner_family"),
+            "estimate_h": definition.get("estimate_h"),
             "estimate_src": definition.get("estimate_src"),
             "done_criteria": definition.get("done_criteria"),
             "evidence_kinds": json.dumps(definition.get("evidence_kinds") or ["any"]),
@@ -111,13 +124,24 @@ class CreateMixin:
         self._may_manage(principal, item["project"])
         if item["state"] != "open":
             raise Refused("bad_state", f"{key} is {item['state']}, not open")
+        if not isinstance(fields, dict):
+            raise Refused("validation", "edit body must be a mapping")
         unknown = set(fields) - set(_EDITABLE)
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
+        self._check_text(fields)
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
         for field, value in fields.items():
             if field == "depends_on":
+                if not isinstance(value, (list, tuple)):
+                    raise Refused("validation", "depends_on must be a list")
+                if len(value) > _MAX_DEPS:
+                    raise Refused("validation",
+                                  f"depends_on exceeds {_MAX_DEPS} entries")
+                if any(not isinstance(d, str) for d in value):
+                    raise Refused("validation",
+                                  "depends_on entries must be strings")
                 deps = [self._qualify(item["project"], d) for d in value]
                 if any(not d.startswith(item["project"] + ":") for d in deps) \
                         and principal.role != "router":
@@ -126,7 +150,7 @@ class CreateMixin:
                 me["depends_on"] = deps
             else:
                 me[field] = value
-        self._validate(candidate)
+        self._validate(candidate, affected={key})
         assignments = [field for field in fields if field != "depends_on"]
         with self._write():
             if assignments:

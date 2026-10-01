@@ -111,12 +111,13 @@ def test_semaphore_real_fetcher_does_not_leak_token(monkeypatch, tmp_path):
 
     seen: dict = {}
 
-    def fake_urlopen(req, timeout=None):
-        seen["url"] = req.full_url
-        seen["headers"] = {k.lower(): v for k, v in req.header_items()}
-        raise urllib.error.URLError("boom SUPERSECRETTOKEN")
+    class Opener:
+        def open(self, req, timeout=None):
+            seen["url"] = req.full_url
+            seen["headers"] = {k.lower(): v for k, v in req.header_items()}
+            raise urllib.error.URLError("boom SUPERSECRETTOKEN")
 
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
     adapter = SemaphoreAdapter()
     with pytest.raises(SemaphoreError) as excinfo:
         adapter.get("task-1")
@@ -154,10 +155,14 @@ def test_semaphore_parses_json(monkeypatch, tmp_path):
         def __exit__(self, *a):
             return False
 
-        def read(self):
+        def read(self, n=None):
             return b'{"status": "success"}'
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=None: Resp())
+    class Opener:
+        def open(self, req, timeout=None):
+            return Resp()
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
     assert SemaphoreAdapter().get("task-1") == {"status": "success"}
 
 

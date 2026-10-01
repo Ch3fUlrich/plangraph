@@ -5,20 +5,23 @@ The triggers are the *prevention* half of the locking model in
 ``items.state``) so a raw SQL writer cannot fake a lock by setting a column;
 ``cancelled`` is treated as locked too.  ``db.open_db`` installs this schema via
 its ``create=True`` path and then denies all DDL to the keeper connection.
+
+Every UPDATE trigger tests **both** the old and the new key: a statement that
+moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "TABLES", "TRIGGERS", "EVENT_TYPES",
            "ROLES"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
     "lease_expired", "evidence_added", "submitted", "changes_requested",
-    "review_passed", "cancelled", "priority_set",
+    "review_passed", "cancelled", "priority_set", "heartbeat",
 )
 
 TABLES = """
@@ -39,6 +42,7 @@ CREATE TABLE items (
     kind           TEXT,
     track          TEXT,
     owner          TEXT,
+    owner_family   TEXT,
     estimate_h     REAL,
     estimate_src   TEXT,
     done_criteria  TEXT,
@@ -109,6 +113,12 @@ CREATE TABLE audit_findings (
     code TEXT,
     msg  TEXT
 );
+
+-- Keeper-controlled flag that lets auth's own admin writes past the principals
+-- trigger.  It lives in main because SQLite triggers cannot reference temp
+-- tables; only ``auth.add_principal``/``revoke`` set and clear it.
+CREATE TABLE _admin_ctx (ok INTEGER NOT NULL DEFAULT 0);
+INSERT INTO _admin_ctx(ok) VALUES (0);
 """
 
 # The reviewed/cancelled test, inlined because SQLite triggers cannot call
@@ -139,9 +149,10 @@ BEFORE INSERT ON evidence
 WHEN {_LOCKED.format(k='NEW.key')}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
+-- Both, because UPDATE can move a row *onto* a locked key.
 CREATE TRIGGER trg_evidence_locked_update
 BEFORE UPDATE ON evidence
-WHEN {_LOCKED.format(k='OLD.key')}
+WHEN {_LOCKED.format(k='OLD.key')} OR {_LOCKED.format(k='NEW.key')}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
 CREATE TRIGGER trg_evidence_locked_delete
@@ -167,7 +178,8 @@ WHEN {_LOCKED.format(k='OLD.src')}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
 -- DONE/cancelled item rows are frozen.  The BEFORE INSERT guard also fires for
--- INSERT OR REPLACE, which deletes the old row and re-inserts it.
+-- INSERT OR REPLACE, which deletes the old row and re-inserts it.  The UPDATE
+-- guard checks the new key too, so a rename onto a locked key is refused.
 CREATE TRIGGER trg_items_locked_insert
 BEFORE INSERT ON items
 WHEN {_LOCKED.format(k='NEW.key')}
@@ -175,13 +187,43 @@ BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
 CREATE TRIGGER trg_items_locked_update
 BEFORE UPDATE ON items
-WHEN {_LOCKED.format(k='OLD.key')}
+WHEN {_LOCKED.format(k='OLD.key')} OR {_LOCKED.format(k='NEW.key')}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
 
 CREATE TRIGGER trg_items_locked_delete
 BEFORE DELETE ON items
 WHEN {_LOCKED.format(k='OLD.key')}
 BEGIN SELECT RAISE(ABORT, 'key is locked'); END;
+
+-- The audit trail is append-only too.
+CREATE TRIGGER trg_audit_log_append_only_update
+BEFORE UPDATE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+
+CREATE TRIGGER trg_audit_log_append_only_delete
+BEFORE DELETE ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit_log is append-only'); END;
+
+CREATE TRIGGER trg_audit_findings_append_only_update
+BEFORE UPDATE ON audit_findings
+BEGIN SELECT RAISE(ABORT, 'audit_findings are append-only'); END;
+
+CREATE TRIGGER trg_audit_findings_append_only_delete
+BEFORE DELETE ON audit_findings
+BEGIN SELECT RAISE(ABORT, 'audit_findings are append-only'); END;
+
+-- Principals change only through auth: a bare revoke (active 1 -> 0 with
+-- nothing else touched) is allowed; anything else needs the admin flag.
+CREATE TRIGGER trg_principals_admin_only_update
+BEFORE UPDATE ON principals
+WHEN NOT (
+        OLD.active = 1 AND NEW.active = 0
+        AND OLD.name IS NEW.name AND OLD.role IS NEW.role
+        AND OLD.projects IS NEW.projects AND OLD.family IS NEW.family
+        AND OLD.token_sha256 IS NEW.token_sha256
+     )
+     AND NOT EXISTS (SELECT 1 FROM _admin_ctx WHERE ok = 1)
+BEGIN SELECT RAISE(ABORT, 'principals are managed by auth'); END;
 
 CREATE INDEX idx_events_key ON events(key);
 CREATE INDEX idx_events_type ON events(type);

@@ -25,13 +25,17 @@ class FakeGit:
         trailers: dict | None = None,
         commit_time: float | None = CLAIM + 100,
         error: Exception | None = None,
+        author_time: float | None = None,
+        commit_time_error: Exception | None = None,
     ):
         self.repo = repo
         self.exists = exists
         self.ancestor = ancestor
         self.message_trailers = {"Plan-Item": ITEM["key"]} if trailers is None else trailers
         self.ctime = commit_time
+        self.atime = commit_time if author_time is None else author_time
         self.error = error
+        self.commit_time_error = commit_time_error
         self.repo_path_calls: list[str] = []
 
     def repo_path(self, project):
@@ -49,7 +53,14 @@ class FakeGit:
     def trailers(self, repo, sha):
         return dict(self.message_trailers)
 
+    def commit_times(self, repo, sha):
+        if self.commit_time_error:
+            raise self.commit_time_error
+        return (self.atime, self.ctime)
+
     def commit_time(self, repo, sha):
+        if self.commit_time_error:
+            raise self.commit_time_error
         return self.ctime
 
 

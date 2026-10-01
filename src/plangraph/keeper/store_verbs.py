@@ -44,6 +44,8 @@ class VerbsMixin:
         if item["state"] != "claimed":
             raise Refused("bad_state", f"{key} is {item['state']}, not claimed")
         self._actor_or_delegate(principal, item)
+        if principal.role == "worker":
+            self._require_project(principal, item["project"])
         self._epoch_ok(item, epoch)
         with self._write():
             return self._record_evidence(principal, item, kind, ref, now)
@@ -71,14 +73,14 @@ class VerbsMixin:
 
     def _claim(self, principal, key, lease_s, now):
         self._require_role(principal, "l1", "worker")
+        lease_seconds = self._lease_seconds(lease_s)
         with self._write():
             item = self._item(key)
             if item is None:
                 raise Refused("not_found", f"no item {key!r}")
             self._assert_unlocked(item)
-            if principal.role == "l1" and item["project"] not in (
-                    principal.projects or []):
-                raise Refused("forbidden", f"L1 does not own {item['project']!r}")
+            if principal.role in ("l1", "worker"):
+                self._require_project(principal, item["project"])
             if item["state"] == "claimed":
                 raise Refused("conflict", f"{key} already claimed")
             if item["state"] != "open":
@@ -86,7 +88,7 @@ class VerbsMixin:
             if not self._ready(item):
                 raise Refused("bad_state", f"{key} has unfinished dependencies")
             epoch = item["epoch"] + 1
-            lease = self._iso(now + (lease_s or self.default_lease))
+            lease = self._iso(now + lease_seconds)
             self._append(principal, key, "claimed",
                          {"epoch": epoch, "claimed_by": principal.name,
                           "lease_until": lease}, now)
@@ -113,6 +115,9 @@ class VerbsMixin:
         worker = auth.get_principal(self.conn, name)
         if worker is None or worker.role != "worker":
             raise Refused("validation", f"{name!r} is not a worker principal")
+        if item["project"] not in (worker.projects or []):
+            raise Refused("forbidden",
+                          f"worker {name!r} is not scoped to {item['project']!r}")
         with self._write():
             self._append(principal, key, "delegated", {"worker": name}, now)
             self.conn.execute(
@@ -164,19 +169,25 @@ class VerbsMixin:
                          lambda now: self._submit(principal, key, epoch, now))
 
     def _submit(self, principal, key, epoch, now):
-        item = self._get_or_refuse(key)
-        self._assert_unlocked(item)
-        if item["state"] != "claimed":
-            raise Refused("bad_state", f"{key} is {item['state']}, not claimed")
-        self._actor_or_delegate(principal, item)
-        self._epoch_ok(item, epoch)
-        self._require_evidence(item)
+        # Read and validate inside one immediate transaction so a competing
+        # writer cannot slip between the check and the guarded UPDATE.
         with self._write():
+            item = self._get_or_refuse(key)
+            self._assert_unlocked(item)
+            if item["state"] != "claimed":
+                raise Refused("bad_state",
+                              f"{key} is {item['state']}, not claimed")
+            self._actor_or_delegate(principal, item)
+            if principal.role == "worker":
+                self._require_project(principal, item["project"])
+            self._epoch_ok(item, epoch)
+            self._require_evidence(item)
             self._append(principal, key, "submitted", {"epoch": epoch}, now)
-            self.conn.execute(
+            cursor = self.conn.execute(
                 "UPDATE items SET state='in_review', lease_until=NULL,"
-                " updated_at=? WHERE key=?",
-                (self._iso(now), key))
+                " updated_at=? WHERE key=? AND state='claimed' AND epoch=?",
+                (self._iso(now), key, epoch))
+            self._row_guard(cursor, key, "claimed", epoch)
         return {"key": key, "epoch": epoch, "state": "in_review"}
 
     # ----------------------------------------------------------- verdict
@@ -192,8 +203,10 @@ class VerbsMixin:
             raise Refused("bad_state", f"{key} is {item['state']}, not in review")
         if principal.name in (item["claimed_by"], item["delegate"]):
             raise Refused("same_principal", "reviewer is the claimant")
+        self._require_project(principal, item["project"])
         self._reviewer_family_ok(principal, item)
         if ok:
+            self._require_evidence(item)
             self._reverify_all(item, now)
             with self._write():
                 self.conn.execute(
@@ -235,11 +248,19 @@ class VerbsMixin:
         if item["state"] not in ("open", "claimed", "in_review"):
             raise Refused("bad_state", f"{key} is {item['state']}")
         with self._write():
+            if principal.role != "router":
+                dependent = self.conn.execute(
+                    "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
+                    " WHERE e.dst=? AND i.state NOT IN ('done','cancelled')"
+                    " LIMIT 1", (key,)).fetchone()
+                if dependent is not None:
+                    raise Refused("conflict", f"{key} has active dependents")
             self._append(principal, key, "cancelled", {"reason": reason}, now)
-            self.conn.execute(
+            cursor = self.conn.execute(
                 "UPDATE items SET state='cancelled', lease_until=NULL,"
-                " updated_at=? WHERE key=?",
-                (self._iso(now), key))
+                " updated_at=? WHERE key=? AND state=?",
+                (self._iso(now), key, item["state"]))
+            self._row_guard(cursor, key, item["state"], item["epoch"])
         return {"key": key, "state": "cancelled"}
 
     # -------------------------------------------------------------- reap

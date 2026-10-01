@@ -34,20 +34,40 @@ def _denied_actions() -> set:
 
 _DENY = _denied_actions()
 
+# Pragmas that can weaken the triggers/authorizer itself.  A *write* (arg2 is a
+# value) is denied; the read form (``PRAGMA foreign_keys``) is still allowed.
+_WRITE_PRAGMAS = frozenset({
+    "recursive_triggers", "foreign_keys", "trusted_schema",
+    "ignore_check_constraints", "journal_mode", "query_only",
+    "schema_version", "writable_schema",
+})
+
 
 def _authorizer(action, arg1, arg2, dbname, source):
-    """Deny DDL, ``writable_schema``, ATTACH and ``load_extension``.
+    """Deny DDL, the write pragmas, ATTACH and ``load_extension``.
 
     Returning ``SQLITE_OK`` for everything else keeps normal DML/SELECT working.
     """
     if action in _DENY:
         return sqlite3.SQLITE_DENY
-    if action == sqlite3.SQLITE_PRAGMA and (arg1 or "").lower() in (
-            "writable_schema", "load_extension"):
-        return sqlite3.SQLITE_DENY
+    if action == sqlite3.SQLITE_PRAGMA:
+        name = (arg1 or "").lower()
+        if name == "load_extension" or (name in _WRITE_PRAGMAS and arg2 is not None):
+            return sqlite3.SQLITE_DENY
     if action == sqlite3.SQLITE_FUNCTION and (arg2 or "").lower() == "load_extension":
         return sqlite3.SQLITE_DENY
     return sqlite3.SQLITE_OK
+
+
+def _enable_defensive(conn):
+    """Turn on SQLITE_DBCONFIG_DEFENSIVE when the build supports it."""
+    if not hasattr(conn, "setconfig") or not hasattr(
+            sqlite3, "SQLITE_DBCONFIG_DEFENSIVE"):
+        return
+    try:
+        conn.setconfig(sqlite3.SQLITE_DBCONFIG_DEFENSIVE, True)
+    except (sqlite3.Error, AttributeError, TypeError, ValueError):
+        pass
 
 
 def open_db(path, *, create: bool = False,
@@ -61,8 +81,10 @@ def open_db(path, *, create: bool = False,
     path = Path(path)
     if create:
         path.parent.mkdir(parents=True, exist_ok=True)
+    # ``check_same_thread=False`` because the threaded API owns one connection
+    # behind one lock; all access is serialised there, never concurrent.
     conn = sqlite3.connect(str(path), timeout=busy_timeout / 1000.0,
-                           isolation_level=None)
+                           isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA recursive_triggers=ON")
@@ -80,6 +102,10 @@ def open_db(path, *, create: bool = False,
             raise RuntimeError(
                 f"{path} is not a keeper database (schema missing); "
                 "create it with open_db(..., create=True)")
+    # Defensive mode hardens shadow tables and blocks several bypasses; enable
+    # it after setup (it must not interfere with the CREATE statements above)
+    # and before the authorizer, which then covers the rest.
+    _enable_defensive(conn)
     conn.set_authorizer(_authorizer)
     return conn
 

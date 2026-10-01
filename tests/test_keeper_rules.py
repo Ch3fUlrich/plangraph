@@ -49,6 +49,9 @@ def test_reader_cannot_claim(w):
 
 def test_l1_cannot_cancel_other_project(w):
     (key,) = seed(w, [("A", [])], project="other")
+    # Retire the goal first: the owning L1's success must prove project scope,
+    # not trip the separate no-active-dependents rule.
+    w.store.cancel(w.p("router"), "other:GOAL", "drop goal")
     with pytest.raises(Refused) as exc:
         w.store.cancel(w.p("l1main"), key, "nope")
     assert exc.value.code == "forbidden"

@@ -7,12 +7,24 @@ which is what lets the tests run with fakes and no network. ``ctx.claim_time`` i
 the claim instant used for the "commit newer than the claim" rule; when it is
 missing the verifier fails closed.
 
-Nothing here prints or returns a secret. Adapter error text is reduced to the
-exception *type* before it reaches a :class:`Result`.
+A ``commit+ci`` ref must be a full lowercase hex sha (40 for sha1, 64 for
+sha256); anything else is rejected *before* any git or gh call, so a ref can
+never become a git option. Both the author (``%at``) and committer (``%ct``)
+dates must be at or after ``claim_time`` minus ``ctx.skew`` (default 120 s).
+Those dates are **advisory**: git lets an author forge both timestamps, so the
+binding evidence is the ``Plan-Item`` trailer, the commit being an ancestor of
+``main`` and a green CI result on that exact sha.
+
+Every verifier is wrapped by :func:`_guarded`: an unexpected exception (a
+subprocess timeout, an ``OSError``, a JSON error) becomes
+``Result(ok=False, detail=<exception class name>)`` -- it never raises and never
+passes. Detail text is reduced to the exception *type*; adapters never return a
+secret in it.
 """
 
 from __future__ import annotations
 
+import functools
 import time
 from typing import Any
 
@@ -21,7 +33,13 @@ from .evidence_decisions import DecisionsAdapter
 from .evidence_git import GitAdapter
 from .evidence_runs import RunRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError
-from .evidence_types import Context, Result, as_epoch
+from .evidence_types import (
+    DEFAULT_SKEW_S,
+    Context,
+    Result,
+    as_epoch,
+    valid_commit_ref,
+)
 
 __all__ = [
     "CommitCiVerifier",
@@ -59,6 +77,43 @@ def _ref(ref: Any) -> dict:
     return dict(ref) if isinstance(ref, dict) else {}
 
 
+def _guarded(fn):
+    """Backstop: any escaping exception becomes a sanitised failure Result."""
+
+    @functools.wraps(fn)
+    def wrapper(self, item, ref, ctx):
+        try:
+            return fn(self, item, ref, ctx)
+        except Exception as exc:  # noqa: BLE001 - a verifier must never raise
+            try:
+                safe_ref = _ref(ref)
+            except Exception:  # noqa: BLE001
+                safe_ref = {}
+            return Result(False, type(exc).__name__, safe_ref)
+
+    return wrapper
+
+
+def _skew(ctx: Any) -> float:
+    """The configured date tolerance, defaulting to :data:`DEFAULT_SKEW_S`."""
+    try:
+        value = float(getattr(ctx, "skew", DEFAULT_SKEW_S))
+    except (TypeError, ValueError):
+        return DEFAULT_SKEW_S
+    return value if value >= 0 else DEFAULT_SKEW_S
+
+
+def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float | None]:
+    """(author, committer) epochs; falls back to a single ``commit_time``."""
+    fn = getattr(git, "commit_times", None)
+    if fn is not None:
+        result = fn(repo, commit)
+        if isinstance(result, (tuple, list)) and len(result) == 2:
+            return result[0], result[1]
+    single = git.commit_time(repo, commit)
+    return single, single
+
+
 def _template_matches(data: dict, expected: Any) -> bool:
     wanted = str(expected)
     candidates: list[Any] = []
@@ -84,11 +139,16 @@ class CommitCiVerifier:
 
     kind = "commit+ci"
 
+    @_guarded
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
         commit = ref.get("commit")
         if not isinstance(commit, str) or not commit:
             return _fail("commit+ci requires a 'commit' sha", ref)
+        if not valid_commit_ref(commit):
+            return _fail(
+                "commit+ci requires a full lowercase commit sha (40 or 64 hex)", ref
+            )
 
         project = item.get("project")
         try:
@@ -126,12 +186,13 @@ class CommitCiVerifier:
         if claim_epoch is None:
             return _fail("no claim time available to compare the commit time", ref)
         try:
-            commit_epoch = ctx.git.commit_time(repo, commit)
+            author_epoch, committer_epoch = _commit_times(ctx.git, repo, commit)
         except Exception as exc:  # noqa: BLE001
             return _fail(f"git error reading the commit time ({type(exc).__name__})", ref)
-        if commit_epoch is None:
+        if author_epoch is None or committer_epoch is None:
             return _fail(f"could not read the commit time of {commit}", ref)
-        if commit_epoch < claim_epoch:
+        threshold = claim_epoch - _skew(ctx)
+        if author_epoch < threshold or committer_epoch < threshold:
             return _fail(f"commit {commit} predates the claim", ref)
 
         try:
@@ -167,6 +228,7 @@ class RunRecordVerifier:
 
     kind = "run-record"
 
+    @_guarded
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
         run_id = ref.get("run_id")
@@ -214,6 +276,7 @@ class SemaphoreTaskVerifier:
 
     kind = "semaphore-task"
 
+    @_guarded
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
         task_id = ref.get("task_id")
@@ -250,6 +313,7 @@ class DecisionVerifier:
 
     kind = "decision"
 
+    @_guarded
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
         decision_id = ref.get("id")
@@ -283,7 +347,10 @@ VERIFIERS: dict[str, Any] = {
 
 def verify(kind: str, item: dict, ref: dict, ctx: Any) -> Result:
     """Dispatch by evidence kind; an unknown kind is a validation failure."""
-    verifier = VERIFIERS.get(kind)
+    try:
+        verifier = VERIFIERS.get(kind)
+    except Exception as exc:  # noqa: BLE001 - e.g. an unhashable kind
+        return Result(False, type(exc).__name__, _ref(ref))
     if verifier is None:
         return Result(False, f"unknown evidence kind: {kind}", _ref(ref))
     return verifier.verify(item, ref, ctx)
@@ -301,8 +368,9 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
     """Build the real adapters from a keeper config mapping.
 
     Expected keys: ``repos`` (project → path), ``ci`` (project → slug/path/
-    ``none``), ``runs_dir`` and ``decisions_file``. Nothing here performs I/O or
-    connects anywhere; the adapters only read when a verifier calls them.
+    ``none``), ``runs_dir``, ``decisions_file`` and optional ``skew`` seconds.
+    Nothing here performs I/O or connects anywhere; the adapters only read when
+    a verifier calls them.
     """
     return Context(
         git=GitAdapter(_cfg(config, "repos", {}) or {}),
@@ -312,4 +380,5 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
+        skew=float(_cfg(config, "skew", DEFAULT_SKEW_S)),
     )

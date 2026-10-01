@@ -41,9 +41,20 @@ def _as_principal(row) -> Principal:
 
 
 def add_principal(conn, name, role, projects, family=None) -> str:
-    """Create a principal and return its token (shown once)."""
+    """Create a principal and return its token (shown once).
+
+    ``projects`` must be a list of project-name strings.  A bare string is
+    refused rather than silently exploded into characters by ``list()``, and
+    any non-string entry is refused so a principal cannot smuggle a value that
+    later comparisons would treat differently.
+    """
     if role not in ROLES:
         raise Refused("validation", f"unknown role {role!r}")
+    if isinstance(projects, (str, bytes)) or not hasattr(projects, "__iter__"):
+        raise Refused("validation", "projects must be a list of strings")
+    projects = list(projects)
+    if any(not isinstance(project, str) for project in projects):
+        raise Refused("validation", "projects must be a list of strings")
     existing = conn.execute(
         "SELECT 1 FROM principals WHERE name=?", (name,)).fetchone()
     if existing is not None:
@@ -52,7 +63,7 @@ def add_principal(conn, name, role, projects, family=None) -> str:
     conn.execute(
         "INSERT INTO principals(name,role,projects,family,token_sha256,active)"
         " VALUES(?,?,?,?,?,1)",
-        (name, role, json.dumps(list(projects)), family, hash_token(token)))
+        (name, role, json.dumps(projects), family, hash_token(token)))
     return token
 
 

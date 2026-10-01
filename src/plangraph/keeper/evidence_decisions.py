@@ -3,6 +3,10 @@
 The contract's marker is the literal line start ``^\\| D-(\\d+) \\|`` — a table
 row with spaces around the id. The comparison normalises ``D-0209`` / ``d-209``
 to ``D-209`` so a padded or lower-case reference still matches.
+
+Fenced code blocks (``` or ~~~) and indented code blocks (four spaces or a tab)
+are stripped before matching, so a decision id that only appears in an example
+snippet does not count as recorded.
 """
 
 from __future__ import annotations
@@ -13,6 +17,21 @@ from pathlib import Path
 __all__ = ["DecisionsAdapter", "DECISION_LINE_RE"]
 
 DECISION_LINE_RE = re.compile(r"^\| D-(\d+) \|")
+_FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
+
+
+def _prose_lines(text: str):
+    """Yield lines outside fenced and indented code blocks."""
+    fenced = False
+    for line in text.splitlines():
+        if _FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.startswith("    ") or line.startswith("\t"):
+            continue
+        yield line
 
 
 class DecisionsAdapter:
@@ -30,7 +49,7 @@ class DecisionsAdapter:
             text = self._path.read_text(encoding="utf-8")
         except OSError:
             return set()
-        for line in text.splitlines():
+        for line in _prose_lines(text):
             match = DECISION_LINE_RE.match(line)
             if match:
                 found.add(f"D-{int(match.group(1))}")

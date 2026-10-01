@@ -122,7 +122,8 @@ def test_commit_ci_wrong_trailer_value():
 
 
 def test_commit_ci_commit_older_than_claim():
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1))
+    # 1000 s before the claim is far outside the default 120 s skew.
+    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1000))
     res = verify("commit+ci", {"commit": SHA}, ctx)
     assert res.ok is False
     assert "claim" in res.detail.lower() or "predate" in res.detail.lower()

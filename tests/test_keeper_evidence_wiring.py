@@ -45,7 +45,7 @@ def test_real_verifier_sees_the_stores_claim_time(w):
 def test_commit_before_claim_is_unverified_and_blocks_submit(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     w.store.ctx = make_ctx(git=FakeGit(trailers={"Plan-Item": key},
-                                       commit_time=CLAIM - 1))
+                                       commit_time=CLAIM - 1000))
     epoch = to_claimed(w, key)
 
     out = w.store.add_evidence(w.p("l1main"), key, epoch, "commit+ci",

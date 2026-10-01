@@ -3,12 +3,20 @@
 Shells out to ``git`` with an argument list (never a shell), a bounded timeout,
 and ``cwd`` set to the repository so a relative path can never escape it. Repo
 paths are kept per project, from the router-owned ``repos`` config.
+
+Every commit argument is validated as a full lowercase hex sha first, then
+passed after ``--end-of-options``; an invalid or option-like value never
+reaches git. Commit *dates* are advisory only -- git lets an author forge both
+the author and committer timestamps, so the binding evidence is the trailer,
+the ancestry of ``main`` and the CI result on that exact sha.
 """
 
 from __future__ import annotations
 
 import subprocess
 from typing import Mapping
+
+from .evidence_types import valid_commit_ref
 
 __all__ = ["GitAdapter", "parse_trailers"]
 
@@ -67,28 +75,50 @@ class GitAdapter:
 
     # -- operations ---------------------------------------------------------
     def commit_exists(self, repo: str, sha: str) -> bool:
-        if not sha:
+        if not valid_commit_ref(sha):
             return False
-        proc = self._run(repo, ["cat-file", "-e", f"{sha}^{{commit}}"])
+        proc = self._run(repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"])
         return proc.returncode == 0
 
     def is_ancestor_of_main(self, repo: str, sha: str) -> bool:
-        if not sha:
+        if not valid_commit_ref(sha):
             return False
-        proc = self._run(repo, ["merge-base", "--is-ancestor", sha, "main"])
+        proc = self._run(
+            repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, "main"]
+        )
         return proc.returncode == 0
 
     def trailers(self, repo: str, sha: str) -> dict[str, str]:
-        proc = self._run(repo, ["show", "-s", "--format=%(trailers)", sha])
+        if not valid_commit_ref(sha):
+            return {}
+        proc = self._run(
+            repo, ["show", "-s", "--format=%(trailers)", "--end-of-options", sha]
+        )
         if proc.returncode != 0:
             return {}
         return parse_trailers(proc.stdout)
 
-    def commit_time(self, repo: str, sha: str) -> float | None:
-        proc = self._run(repo, ["show", "-s", "--format=%ct", sha])
+    def commit_times(self, repo: str, sha: str) -> tuple[float | None, float | None]:
+        """Return ``(author_epoch, committer_epoch)`` or ``(None, None)``.
+
+        Both dates are advisory (forgeable), but the verifier still compares
+        both against the claim.
+        """
+        if not valid_commit_ref(sha):
+            return (None, None)
+        proc = self._run(
+            repo, ["show", "-s", "--format=%at %ct", "--end-of-options", sha]
+        )
         if proc.returncode != 0:
-            return None
+            return (None, None)
+        parts = proc.stdout.split()
+        if len(parts) < 2:
+            return (None, None)
         try:
-            return float(proc.stdout.strip())
+            return (float(parts[0]), float(parts[1]))
         except ValueError:
-            return None
+            return (None, None)
+
+    def commit_time(self, repo: str, sha: str) -> float | None:
+        """The committer date (advisory), or ``None`` when unreadable."""
+        return self.commit_times(repo, sha)[1]

@@ -19,9 +19,9 @@ PRINCIPALS = [
     ("workerA", "worker", ["demo"], "teamB"),
     ("workerB", "worker", ["demo"], "teamB"),
     ("workerC", "worker", ["demo"], "teamC"),
-    ("reviewer", "reviewer", [], "teamC"),
-    ("reviewerSame", "reviewer", [], "teamA"),
-    ("reviewerNoFam", "reviewer", [], None),
+    ("reviewer", "reviewer", ["demo"], "teamC"),
+    ("reviewerSame", "reviewer", ["demo"], "teamA"),
+    ("reviewerNoFam", "reviewer", ["demo"], None),
     ("reader", "reader", [], "teamD"),
     ("system", "system", [], None),
 ]

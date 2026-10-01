@@ -13,10 +13,15 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import quote
+
+from .evidence_types import valid_commit_ref
 
 __all__ = ["CIAdapter"]
 
-_SLUG_RE = re.compile(r"^[^/\s]+/[^/\s]+$")
+# Only a strict owner/repo slug may reach the ``gh api`` path; every other
+# character (query, fragment, extra slash, space, dot-segments) is rejected.
+_SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def slug_from_remote(url: str) -> str | None:
@@ -68,19 +73,27 @@ class CIAdapter:
         """Return the normalised list of check-runs for *sha*.
 
         Accepts an ``owner/repo`` slug or a local checkout path; a path is turned
-        into a slug through its ``origin`` remote. Raises on a non-zero ``gh``
-        exit or unparseable output — the verifier catches and sanitises that.
+        into a slug through its ``origin`` remote. The sha and the slug are both
+        validated before any process runs; the API path is assembled from those
+        validated components only, so no user text can inject a query.
+        Raises on a non-zero ``gh`` exit or unparseable output — the verifier
+        catches and sanitises that.
         """
-        slug = self._slug(repo_slug_or_path)
+        if not valid_commit_ref(sha):
+            raise ValueError("check-runs requires a full lowercase commit sha")
+        owner, repo = self._validated_slug(self._slug(repo_slug_or_path))
+        path = "repos/{}/{}/commits/{}/check-runs".format(
+            quote(owner, safe=""), quote(repo, safe=""), quote(sha, safe="")
+        )
         proc = subprocess.run(
-            [self._gh, "api", f"repos/{slug}/commits/{sha}/check-runs"],
+            [self._gh, "api", path],
             capture_output=True,
             text=True,
             timeout=self._timeout,
             check=False,
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"gh api exited {proc.returncode} for {slug}")
+            raise RuntimeError(f"gh api exited {proc.returncode} for {owner}/{repo}")
         data = json.loads(proc.stdout)
         runs = data.get("check_runs") if isinstance(data, dict) else None
         if not isinstance(runs, list):
@@ -88,6 +101,13 @@ class CIAdapter:
         return [r for r in runs if isinstance(r, dict)]
 
     # -- helpers ------------------------------------------------------------
+    @staticmethod
+    def _validated_slug(slug: object) -> tuple[str, str]:
+        if not isinstance(slug, str) or not _SLUG_RE.match(slug):
+            raise ValueError("ci repo must be an owner/repo slug")
+        owner, repo = slug.split("/", 1)
+        return owner, repo
+
     def _slug(self, value: str) -> str:
         if _SLUG_RE.match(value) and not Path(value).is_dir():
             return value
