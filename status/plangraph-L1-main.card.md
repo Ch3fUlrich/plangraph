@@ -1,14 +1,14 @@
 # Status card — plangraph-L1-main (Sonnet 5.5, L1 orchestrator)
 Updated: 2026-10-01 | Brief: /home/s/code/routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md
 
-## Phase
+## Phase (M1 closed: operator approved C; M2a running)
 1. Proposal — APPROVED C (M1 verdict, 6 conditions in CONSTRAINTS.md); operator confirmation pending
-2. Pilot — blocked on operator architecture choice (via routing-00)
+2. M2a keeper — writers running: wp1b import decisions (private), a1 store core (qwen3.8-27b-free pinned), a2 evidence+--cdn (nemotron-3-super-free pinned); contract docs/KEEPER.md
 3. Tests — not started
 4. Adoption report — not started
 
 ## Now
-- WP1 import (89 items, checker green), WP2 views (51 tests), WP3 page (10 tests) merged on worktree-proposal bf1372b; 61 tests green; real graph: 0 validator problems, 24 ready, 16 waves, crit. path 48h (default estimates)
+- Next: merge branches, then B stage (api, cli, mcp, importer) ; reviews = Sonnet subagent + 1 pinned third-family via spawn only; stop+report exact text on any refusal; disk 99% — keep small, nothing heavy
 - New req 5a (L1 autonomy) + acceptance criteria are in CONSTRAINTS.md
 
 ## Next
