@@ -25,7 +25,7 @@ Snapshot-only (keeper-written, never in the import): `epoch` int, `claimed_by`/`
 `lease_until` iso|null, `evidence` list[{kind,ref,verified,at}], `model` str|null, `updated_at` iso, `corrected_by` list[key].
 Terminal states: `done`, `cancelled`. `done` satisfies a dependency; `cancelled` does not (the validator flags it).
 
-## Import YAML (`data/plan-v3.import.yaml`)
+## Import YAML (directory `data/plan-v3/`: `T0.yaml` … `T7.yaml`, `gates.yaml`; each file ≤ 400 lines, each `{meta?, items: [...]}`; the loader merges them)
 ```yaml
 meta: {source: routing docs/plan v3 @29a032d, generated_by: <model>, date: 2026-10-01}
 items:
