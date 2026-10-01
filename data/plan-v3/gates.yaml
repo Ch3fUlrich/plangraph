@@ -48,13 +48,13 @@ items:
     state: open
     estimate_h: 0
     estimate_src: default
-    depends_on: ["autoos:T1-PROV", "autoos:T1-LITELLM", "autoos:T1-PEER", "autoos:T2-RULES", "autoos:T2-SKILL", "workstation:T5-FINISH", "workstation:T5-CLONE", "workstation:T5-BRANCHES", "workstation:T5-KEYS", "workstation:T5-SYNC", "workstation:T5-PROVIDERS", "workstation:T5-SKILLS", "workstation:T5-HANDOFF", "workstation:T5-GRAPH", "workstation:T5-GROK", "server:T6-PILOT", "server:T6-HA"]
+    depends_on: ["autoos:T1-PROV", "autoos:T1-LITELLM", "autoos:T1-PEER", "autoos:T2-RULES", "autoos:T2-SKILL", "workstation:T5-FINISH", "workstation:T5-CLONE", "workstation:T5-BRANCHES", "workstation:T5-KEYS", "workstation:T5-SYNC", "workstation:T5-PROVIDERS", "workstation:T5-SKILLS", "workstation:T5-HANDOFF", "workstation:T5-GRAPH", "workstation:T5-GROK", "server:T6-PILOT", "server:T6-HA", "server:T6-PHONE"]
     corrects: null
     done_criteria: "every provider row probed; skill v4 merged; workstation on server gateway"
     evidence_kinds: [any]
     operator: false
     priority: 0
-    note: "Gate of phase 2. T6-VOICE in the README phase list is not a lane id; mapped to T6-HA."
+    note: "Gate of phase 2. README T6-VOICE is not a lane id; mapped to BOTH T6-HA and T6-PHONE."
     source: "data/source/plan-v3/README.md#phases-and-gates"
 
   - project: routing
@@ -84,7 +84,7 @@ items:
     state: open
     estimate_h: 0
     estimate_src: default
-    depends_on: ["routing:GATE-P3", "autoos:T1-CREDIT", "autoos:T1-JEV", "autoos:T1-MM", "autoos:T1-NOISE", "autoos:T1-UPGRADE", "autoos:T1-WEBTOOLS", "autoos:T1-ZEN", "autoos:T2-COMPACT", "autoos:T2-ISOLATE", "autoos:T2-LEAN", "autoos:T2-MCPLIFE", "autoos:T2-RESEARCHCARD", "autoos:T2-TASKSESSION", "autoos:T3-CLEAN", "autoos:T3-PRINCIPLES", "autoos:T3-SCRUB", "autoos:T3-SPLIT", "autoos:T3-WIN", "server:T6-DETECT", "server:T6-FIX", "server:T6-GRAPHMOVE", "server:T6-INFRA", "server:T6-IPV6", "server:T6-LEDGER", "server:T6-MEDIA", "server:T6-PHONE", "server:T6-SECRETS", "server:T6-UPDATES"]
+    depends_on: ["routing:GATE-P3", "plangraph:PG-M4", "autoos:T1-CREDIT", "autoos:T1-JEV", "autoos:T1-MM", "autoos:T1-NOISE", "autoos:T1-UPGRADE", "autoos:T1-WEBTOOLS", "autoos:T1-ZEN", "autoos:T2-COMPACT", "autoos:T2-ISOLATE", "autoos:T2-LEAN", "autoos:T2-MCPLIFE", "autoos:T2-RESEARCHCARD", "autoos:T2-TASKSESSION", "autoos:T3-CLEAN", "autoos:T3-PRINCIPLES", "autoos:T3-SCRUB", "autoos:T3-SPLIT", "autoos:T3-WIN", "server:T6-DETECT", "server:T6-FIX", "server:T6-GRAPHMOVE", "server:T6-INFRA", "server:T6-IPV6", "server:T6-LEDGER", "server:T6-MEDIA", "server:T6-PHONE", "server:T6-SECRETS", "server:T6-UPDATES"]
     corrects: null
     done_criteria: "Plan v3 complete"
     evidence_kinds: [any]

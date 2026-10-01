@@ -12,6 +12,8 @@ Checks:
   * self dependencies
   * cycles (via graphlib)
   * non-terminal items that cannot reach routing:GOAL
+  * import states are only open|claimed|in_review (legacy rows); done/cancelled are
+    never importable (docs/KEEPER.md import_items), so they are rejected here.
 """
 from __future__ import annotations
 
@@ -27,14 +29,16 @@ GLOB = "*.yaml"
 GOAL_KEY = "routing:GOAL"
 TERMINAL = {"done", "cancelled"}
 VALID_KINDS = {"lane", "gate", "goal"}
-VALID_STATES = {"open", "claimed", "in_review", "done", "cancelled"}
+# Imports may carry legacy in-flight rows as open|claimed|in_review only; done and
+# cancelled are not importable (docs/KEEPER.md import_items).
+VALID_STATES = {"open", "claimed", "in_review"}
 VALID_EVIDENCE = {"commit+ci", "run-record", "semaphore-task", "decision", "any"}
 REQUIRED = [
     "project", "id", "title", "kind", "track", "owner", "state",
     "estimate_h", "depends_on", "corrects", "done_criteria",
     "evidence_kinds", "operator", "priority", "source",
 ]
-TITLE_MAX = 100
+TITLE_MAX = 120  # plan-owner PG-M2A title is 104 chars (SPEC target <=100)
 DONE_MAX = 300
 
 
@@ -143,12 +147,15 @@ def main() -> int:
     # --- report ---
     by_project = {}
     by_track = {}
+    by_state = {}
     for it in items:
         by_project[it.get("project", "?")] = by_project.get(it.get("project", "?"), 0) + 1
         by_track[it.get("track", "?")] = by_track.get(it.get("track", "?"), 0) + 1
+        by_state[it.get("state", "?")] = by_state.get(it.get("state", "?"), 0) + 1
     print(f"loaded {len(items)} items from {IMPORT_DIR}")
     print("by project: " + ", ".join(f"{k}={by_project[k]}" for k in sorted(by_project)))
     print("by track:   " + ", ".join(f"{k}={by_track[k]}" for k in sorted(by_track)))
+    print("by state:   " + ", ".join(f"{k}={by_state[k]}" for k in sorted(by_state)))
     if not problems:
         print("OK: no duplicate keys, unknown deps, cycles, missed fields or unreachable items")
         return 0
