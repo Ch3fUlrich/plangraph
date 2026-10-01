@@ -44,6 +44,11 @@ def show_text(info: dict) -> str:
         lines.append("evidence -")
     if info.get("done_criteria"):
         lines.append(f"done {info['done_criteria']}")
+    reviews = ", ".join(f"{r.get('reviewer')}({r.get('family') or '-'})"
+                        for r in info.get("reviews") or []) or "-"
+    if info.get("review_waiver"):
+        reviews += f" | waiver {info['review_waiver']}"
+    lines.append(f"reviews {reviews}")
     return "\n".join(lines)
 
 
@@ -95,6 +100,8 @@ def digest_text(digest: dict) -> str:
     for done in digest.get("done") or []:
         kinds = ",".join(done.get("evidence_kinds") or [])
         lines.append(f"done {done['key']} [{kinds}]")
+    for waiver in digest.get("waivers") or []:
+        lines.append(f"waiver {waiver['key']} {waiver.get('decision_id')}")
     return "\n".join(lines) if lines else "empty"
 
 
@@ -119,6 +126,12 @@ def result_text(verb: str, result) -> str:
             return (f"{result.get('key')} claimed epoch {result.get('epoch')} "
                     f"lease {result.get('lease_until')}")
         if verb == "verdict":
+            if result.get("state") == "done":
+                return "done (2/2)"
+            if result.get("state") == "in_review":
+                passed = int(result.get("reviews_passed") or 0)
+                return (f"{passed}/2 passed — waiting for a second reviewer "
+                        "of another family")
             return f"{result.get('key')} {result.get('state')}"
         if verb == "whoami":
             return whoami_text(result)

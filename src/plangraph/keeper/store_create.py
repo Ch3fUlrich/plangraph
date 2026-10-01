@@ -189,10 +189,17 @@ class CreateMixin:
 
     def _priority(self, principal, key, n, now):
         self._require_role(principal, "router")
-        item = self._get_or_refuse(key)
-        self._assert_unlocked(item)
+        # Read and assert inside the transaction: the item may have been
+        # cancelled or marked DONE before we take the write lock, and must then
+        # get no priority change and no event.  The guarded UPDATE proves the
+        # row we read is the one we changed.
         with self._write():
-            self.conn.execute("UPDATE items SET priority=?, updated_at=? WHERE key=?",
-                              (int(n), self._iso(now), key))
+            item = self._get_or_refuse(key)
+            self._assert_unlocked(item)
+            cursor = self.conn.execute(
+                "UPDATE items SET priority=?, updated_at=?"
+                " WHERE key=? AND state=? AND epoch=?",
+                (int(n), self._iso(now), key, item["state"], item["epoch"]))
+            self._row_guard(cursor, key, item["state"], item["epoch"])
             self._append(principal, key, "priority_set", {"priority": int(n)}, now)
         return {"key": key, "priority": int(n)}

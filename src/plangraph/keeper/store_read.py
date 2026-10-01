@@ -60,6 +60,8 @@ class ReadMixin:
         evidence = [{"kind": record["kind"], "verified": record["verified"],
                      "at": record["at"], "detail": record["detail"],
                      "ref": record["ref"]} for record in self._evidence(key)]
+        reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
+                   for v in self._round_verdicts(item)]
         return {
             "key": key, "title": item["title"], "project": item["project"],
             "kind": item["kind"], "track": item["track"], "owner": item["owner"],
@@ -67,6 +69,7 @@ class ReadMixin:
             "epoch": item["epoch"], "claimed_by": item["claimed_by"],
             "delegate": item["delegate"], "lease_until": item["lease_until"],
             "reviewer": item["reviewer"], "done_criteria": item["done_criteria"],
+            "review_waiver": item.get("review_waiver"), "reviews": reviews,
             "corrects": item["corrects"], "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
@@ -84,6 +87,8 @@ class ReadMixin:
                 corrected.setdefault(item["corrects"], []).append(item["key"])
         out = []
         for item in items:
+            reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
+                       for v in self._round_verdicts(item)]
             out.append({
                 "project": item["project"], "id": item["id"], "key": item["key"],
                 "title": item["title"], "kind": item["kind"], "track": item["track"],
@@ -97,6 +102,7 @@ class ReadMixin:
                 "epoch": item["epoch"], "claimed_by": item["claimed_by"],
                 "worker_run": None, "reviewer_run": None,
                 "lease_until": item["lease_until"], "model": item["model"],
+                "review_waiver": item.get("review_waiver"), "reviews": reviews,
                 "evidence": [{"kind": r["kind"], "ref": r["ref"],
                               "verified": r["verified"], "at": r["at"]}
                              for r in self._evidence(item["key"])],
@@ -171,4 +177,9 @@ class ReadMixin:
         done = [{"key": it["key"], "title": it["title"],
                  "evidence_kinds": [r["kind"] for r in self._evidence(it["key"])]}
                 for it in done[-10:]]
-        return {"projects": counts, "done": done}
+        waivers = sorted(
+            ({"key": it["key"], "decision_id": it["review_waiver"]}
+             for it in items
+             if it["state"] == _DONE and it.get("review_waiver")),
+            key=lambda entry: entry["key"])
+        return {"projects": counts, "done": done, "waivers": waivers}

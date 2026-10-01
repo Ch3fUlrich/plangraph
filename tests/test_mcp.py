@@ -140,7 +140,7 @@ def test_tools_list_count_and_budget(api):
                api.client)
     (reply,) = replies(text)
     tools = reply["result"]["tools"]
-    assert len(tools) == 18
+    assert len(tools) == 19
     assert {tool["name"] for tool in tools} == {tool["name"] for tool in TOOLS}
     assert len(text.encode("utf-8")) < 9000  # the ~2,500-token budget
 

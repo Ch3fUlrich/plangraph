@@ -14,14 +14,15 @@ from __future__ import annotations
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "TABLES", "TRIGGERS", "EVENT_TYPES",
            "ROLES"]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
     "lease_expired", "evidence_added", "submitted", "changes_requested",
-    "review_passed", "cancelled", "priority_set", "heartbeat",
+    "review_verdict", "review_passed", "cancelled", "priority_set", "heartbeat",
+    "waiver_set",
 )
 
 TABLES = """
@@ -54,11 +55,13 @@ CREATE TABLE items (
     corrects       TEXT,
     state          TEXT NOT NULL DEFAULT 'open',
     epoch          INTEGER NOT NULL DEFAULT 0,
+    round          INTEGER NOT NULL DEFAULT 0,
     claimed_by     TEXT,
     delegate       TEXT,
     lease_until    TEXT,
     reviewer       TEXT,
     model          TEXT,
+    review_waiver  TEXT,
     created_at     TEXT,
     updated_at     TEXT
 );
@@ -117,6 +120,9 @@ CREATE TABLE audit_findings (
 
 # The reviewed/cancelled test, inlined because SQLite triggers cannot call
 # Python helpers.  `:k` is replaced with the key expression of each trigger.
+# Only ``review_passed`` locks: a ``review_verdict`` keeps the item in review
+# until the second, independent passing verdict emits ``review_passed``, and a
+# ``waiver_set`` (D-217) is an ordinary non-locking event.
 _LOCKED = (
     "EXISTS (SELECT 1 FROM events e WHERE e.key = {k} AND e.type = 'review_passed')"
     " OR EXISTS (SELECT 1 FROM items i WHERE i.key = {k} AND i.state = 'cancelled')"

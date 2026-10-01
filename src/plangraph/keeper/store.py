@@ -4,9 +4,10 @@
 already-authenticated :class:`Principal`, authorises it, validates the request,
 runs one transaction, and writes exactly one ``audit_log`` row — including for
 refusals, which commit only that audit row.  Verbs are grouped by
-responsibility: ``store_create`` (definitions), ``store_verbs`` (the lifecycle)
-and ``store_read`` (views); the shared plumbing — row hydration, the timestamp
-codec, event append and the evidence checks — lives in ``store_support``.
+responsibility: ``store_create`` (definitions), ``store_verbs`` (the lifecycle),
+``store_reap`` (the reaper) and ``store_read`` (views); the shared plumbing —
+row hydration, the timestamp codec, event append and the evidence checks —
+lives in ``store_support``.
 """
 from __future__ import annotations
 
@@ -22,8 +23,11 @@ from . import evidence
 from .errors import Refused
 from .store_create import CreateMixin
 from .store_read import ReadMixin
+from .store_reap import ReapMixin
+from .store_review import ReviewMixin
 from .store_support import SupportMixin, iso, parse_iso
 from .store_verbs import VerbsMixin
+from .store_waiver import WaiverMixin
 
 __all__ = ["Store", "Refused", "iso", "parse_iso"]
 
@@ -44,7 +48,8 @@ _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               sqlite3.ProgrammingError)
 
 
-class Store(SupportMixin, CreateMixin, VerbsMixin, ReadMixin):
+class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
+            ReadMixin, WaiverMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None):

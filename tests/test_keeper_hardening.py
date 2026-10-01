@@ -104,6 +104,7 @@ def test_verdict_ignores_stored_unverified_rows(w):
     w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-GOOD"})
     w.store.submit(w.p("l1main"), key, epoch)
     w.store.verdict(w.p("reviewer"), key, True, "ok")
+    w.store.verdict(w.p("reviewer2"), key, True, "ok")
     assert w.store._item(key)["state"] == "done"
 
 
@@ -119,6 +120,7 @@ def test_verdict_ignores_evidence_of_other_epochs(w):
     w.store.verifiers["decision"] = ref_verifier({"D-BAD"})
     w.store.submit(w.p("l1main"), key, epoch2)
     w.store.verdict(w.p("reviewer"), key, True, "ok")
+    w.store.verdict(w.p("reviewer2"), key, True, "ok")
     assert w.store._item(key)["state"] == "done"
 
 
@@ -158,6 +160,7 @@ def test_legacy_with_owner_family_can_be_reviewed(w):
     w.store.import_items(w.p("router"), items)
     w.store.add_evidence_router(w.p("router"), "demo:A", "decision", {"id": "D-1"})
     w.store.verdict(w.p("reviewer"), "demo:A", True, "ok")
+    w.store.verdict(w.p("reviewer2"), "demo:A", True, "ok")
     assert w.store._item("demo:A")["state"] == "done"
 
 

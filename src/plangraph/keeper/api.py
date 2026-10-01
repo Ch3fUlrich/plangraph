@@ -46,14 +46,12 @@ _READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
 _WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                 "set_priority", "claim", "delegate", "heartbeat", "release",
                 "add_evidence", "add_evidence_router", "submit", "verdict",
-                "cancel", "reap"}
+                "cancel", "reap", "waive_second_family"}
 _TEXT_DEFAULT = {"ready", "show", "alerts", "blocked"}
 
-_STATUS = {
-    "forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
-    "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
-    "same_family": 409,
-}
+_STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
+           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
+           "same_family": 409}
 
 
 # --------------------------------------------------------------------------- #
@@ -297,8 +295,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
                                lease_s=None if lease is None else int(lease))
         if name == "delegate":
             return store.delegate(principal, self._need(body, "key"),
-                                  self._need(body, "worker",
-                                             "worker_principal"))
+                                  self._need(body, "worker", "worker_principal"))
         if name in ("heartbeat", "release", "submit"):
             return getattr(store, name)(principal, self._need(body, "key"),
                                         self._need(body, "epoch"))
@@ -320,6 +317,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "cancel":
             return store.cancel(principal, self._need(body, "key"),
                                 body.get("reason") or "")
+        if name == "waive_second_family":
+            return store.waive_second_family(principal, self._need(body, "key"),
+                                             self._need(body, "decision_id"))
         if name == "reap":
             return store.reap(principal)
         raise Refused("not_found", f"no write verb {name!r}")

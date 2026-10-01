@@ -68,7 +68,7 @@ def read_events(conn):
 def _new_state():
     return {"state": "open", "epoch": 0, "claimed_by": None, "delegate": None,
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
-            "evidence": []}
+            "round": 0, "evidence": [], "review_waiver": None}
 
 
 def fold(events):
@@ -104,6 +104,7 @@ def fold(events):
             item["delegate"] = None
             item["lease_until"] = payload.get("lease_until")
             item["reviewer"] = None
+            item["round"] = 0
         elif kind == "delegated":
             item["delegate"] = payload.get("worker")
         elif kind in ("released", "lease_expired"):
@@ -118,18 +119,25 @@ def fold(events):
         elif kind == "submitted":
             item["state"] = "in_review"
             item["lease_until"] = None
+            item["round"] = payload.get("round", item["round"])
         elif kind == "changes_requested":
             item["state"] = payload.get("state", "claimed")
             item["reviewer"] = event.get("actor")
             # A second changes-requested sends the item back to the open pool
-            # and the store clears the holder; mirror that exactly.
+            # and the store clears the holder; mirror that exactly.  The first
+            # returns it to ``claimed`` under a fresh lease, which the store
+            # records in the payload.
             if item["state"] == "open":
                 item["claimed_by"] = None
                 item["delegate"] = None
                 item["lease_until"] = None
+            else:
+                item["lease_until"] = payload.get("lease_until")
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")
+        elif kind == "waiver_set":
+            item["review_waiver"] = payload.get("decision_id")
         elif kind == "cancelled":
             item["state"] = "cancelled"
             item["lease_until"] = None
@@ -173,8 +181,8 @@ def verify_integrity(conn):
     """
     folded = fold(read_events(conn))
     cached = {row["key"]: row for row in conn.execute(
-        "SELECT key,state,epoch,claimed_by,delegate,lease_until,reviewer"
-        " FROM items")}
+        "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
+        "review_waiver FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -186,7 +194,8 @@ def verify_integrity(conn):
                              "field": None, "expected": expected["state"],
                              "got": None})
             continue
-        for field in ("state", "epoch", "claimed_by", "delegate", "reviewer"):
+        for field in ("state", "epoch", "round", "claimed_by", "delegate",
+                      "reviewer", "review_waiver"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
                                  "field": field, "expected": expected[field],

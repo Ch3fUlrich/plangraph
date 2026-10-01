@@ -67,6 +67,10 @@ def test_decision_item_end_to_end(w):
     w.store.submit(w.p("l1main"), key, epoch)
     assert w.store._item(key)["state"] == "in_review"
 
-    # reviewer is family teamC, claimant l1main is teamA: cross-family review
+    # reviewer is family teamC, claimant l1main is teamA: cross-family review.
+    # D-219 needs two independent reviewers; the first verdict keeps it in
+    # review and reviewer2 (family teamR) has to add the second.
     w.store.verdict(w.p("reviewer"), key, True, "cross-family review")
+    assert w.store._item(key)["state"] == "in_review"
+    w.store.verdict(w.p("reviewer2"), key, True, "second family")
     assert w.store._item(key)["state"] == "done"

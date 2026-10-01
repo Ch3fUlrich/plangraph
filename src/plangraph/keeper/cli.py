@@ -34,6 +34,7 @@ HANDLERS = {
     "submit": cli_verbs.cmd_submit,
     "verdict": cli_verbs.cmd_verdict,
     "cancel": cli_verbs.cmd_cancel,
+    "waive": cli_verbs.cmd_waive,
     "priority": cli_verbs.cmd_priority,
     "define": cli_verbs.cmd_define,
     "blocked": cli_verbs.cmd_blocked,
@@ -109,6 +110,10 @@ def _add_writes(sub):
     cancel = _p(sub, "cancel", help="cancel an item")
     cancel.add_argument("key")
     cancel.add_argument("--reason")
+
+    waive = _p(sub, "waive", help="router: waive the second reviewer family")
+    waive.add_argument("key")
+    waive.add_argument("decision_id", metavar="D-NNN")
 
     priority = _p(sub, "priority", help="set an item's priority")
     priority.add_argument("key")

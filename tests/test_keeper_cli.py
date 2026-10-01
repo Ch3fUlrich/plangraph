@@ -35,7 +35,7 @@ def live(w, tmp_path, monkeypatch):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     token_files = {}
-    for name in ("l1main", "reviewer", "workerB", "router", "reader"):
+    for name in ("l1main", "reviewer", "reviewer2", "workerB", "router", "reader"):
         tf = tmp_path / f"{name}.token"
         tf.write_text(w.tok(name), encoding="utf-8")
         os.chmod(tf, 0o600)
@@ -65,6 +65,7 @@ def test_cli_full_lifecycle(live, capsys):
                "--decision", "D-1") == 0
     assert run(tokens["l1main"], "submit", "demo:A") == 0
     assert run(tokens["reviewer"], "verdict", "demo:A", "--pass") == 0
+    assert run(tokens["reviewer2"], "verdict", "demo:A", "--pass") == 0
     capsys.readouterr()  # discard the text output of the earlier steps
     run(tokens["reader"], "show", "demo:A", "--json")
     assert out_json(capsys)["state"] == "done"

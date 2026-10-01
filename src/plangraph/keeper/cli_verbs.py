@@ -330,6 +330,12 @@ def cmd_cancel(args, session):
     return write(session, "cancel", {"key": args.key, "reason": args.reason or ""})
 
 
+def cmd_waive(args, session):
+    return write(session, "waive_second_family",
+                 {"key": args.key, "decision_id": args.decision_id},
+                 lambda r: f"{r.get('key')} waiver {r.get('review_waiver')}")
+
+
 def cmd_priority(args, session):
     return write(session, "set_priority", {"key": args.key, "n": args.n},
                  lambda r: f"{r.get('key')} priority {r.get('priority')}")

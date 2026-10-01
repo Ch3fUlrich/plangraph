@@ -20,6 +20,7 @@ PRINCIPALS = [
     ("workerB", "worker", ["demo"], "teamB"),
     ("workerC", "worker", ["demo"], "teamC"),
     ("reviewer", "reviewer", ["demo"], "teamC"),
+    ("reviewer2", "reviewer", ["demo"], "teamR"),
     ("reviewerSame", "reviewer", ["demo"], "teamA"),
     ("reviewerNoFam", "reviewer", ["demo"], None),
     ("reader", "reader", [], "teamD"),
@@ -128,7 +129,17 @@ def to_in_review(world, key, who="l1main", kind="decision", ref=None,
     return epoch
 
 
+def pass_review(world, key, first="reviewer", second="reviewer2"):
+    """Give both D-219 passing verdicts; the second emits ``review_passed``.
+
+    The two reviewers are different principals of different families, so the
+    item reaches ``done`` exactly as a single verdict used to.
+    """
+    world.store.verdict(world.p(first), key, True, "passed")
+    return world.store.verdict(world.p(second), key, True, "passed")
+
+
 def to_done(world, key, who="l1main", reviewer="reviewer", kind="decision"):
     epoch = to_in_review(world, key, who, kind)
-    world.store.verdict(world.p(reviewer), key, True, "passed")
+    pass_review(world, key, first=reviewer)
     return epoch

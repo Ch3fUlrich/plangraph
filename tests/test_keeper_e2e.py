@@ -33,6 +33,7 @@ PRINCIPALS = (
     ("l1", "l1", ["routing", "autoos"], "teamA"),
     ("worker", "worker", ["routing", "autoos"], "teamB"),
     ("reviewer", "reviewer", ["routing", "autoos"], "teamC"),  # other family
+    ("reviewer2", "reviewer", ["routing", "autoos"], "teamR"),  # D-219 seat 2
 )
 EVIDENCE = ("decision", "commit+ci", "run-record", "semaphore-task")
 
@@ -195,18 +196,21 @@ def test_full_lifecycle_done_is_locked_and_audited(tmp_path):
     try:
         l1, worker, reviewer = (e2e.tokens["l1"], e2e.tokens["worker"],
                                 e2e.tokens["reviewer"])
+        reviewer2 = e2e.tokens["reviewer2"]
         status, body = call(e2e.base, "POST", "/v1/claim", token=l1,
                             body={"key": KEY})
         assert status == 200, body
         epoch = body["epoch"]
         heads = [e2e.head()]
-        for path, payload in (
-                ("/v1/delegate", {"key": KEY, "worker": "worker"}),
-                ("/v1/add_evidence", {"key": KEY, "epoch": epoch,
-                                      "kind": "decision", "ref": {"id": "D-1"}}),
-                ("/v1/submit", {"key": KEY, "epoch": epoch}),
-                ("/v1/verdict", {"key": KEY, "ok": True, "reason": "looks good"})):
-            token = reviewer if path == "/v1/verdict" else l1
+        for path, token, payload in (
+                ("/v1/delegate", l1, {"key": KEY, "worker": "worker"}),
+                ("/v1/add_evidence", l1, {"key": KEY, "epoch": epoch,
+                                          "kind": "decision", "ref": {"id": "D-1"}}),
+                ("/v1/submit", l1, {"key": KEY, "epoch": epoch}),
+                ("/v1/verdict", reviewer,
+                 {"key": KEY, "ok": True, "reason": "looks good"}),
+                ("/v1/verdict", reviewer2,
+                 {"key": KEY, "ok": True, "reason": "agreed"})):
             status, body = call(e2e.base, "POST", path, token=token, body=payload)
             assert status == 200, (path, body)
             json.loads(e2e.snapshot.read_text(encoding="utf-8"))  # always valid
@@ -215,7 +219,7 @@ def test_full_lifecycle_done_is_locked_and_audited(tmp_path):
 
         status, body = call(e2e.base, "GET", "/v1/show?key=" + KEY + "&fmt=json",
                             token=l1)
-        assert body["state"] == "done" and body["reviewer"] == "reviewer"
+        assert body["state"] == "done" and body["reviewer"] == "reviewer2"
 
         router = e2e.tokens["router"]
         attempts = [
@@ -293,7 +297,7 @@ def test_mcp_stdio_against_live_api(tmp_path):
              "params": {"name": "ready", "arguments": {"n": 50}}},
         ])
         listing, ready = [json.loads(line) for line in out.splitlines() if line]
-        assert len(listing["result"]["tools"]) == 18
+        assert len(listing["result"]["tools"]) == 19
         assert ready["result"]["isError"] is False
         assert KEY in ready["result"]["content"][0]["text"]
         assert e2e.tokens["router"] not in out

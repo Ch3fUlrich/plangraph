@@ -111,9 +111,9 @@ class VerbsMixin:
                          {"epoch": epoch, "claimed_by": principal.name,
                           "lease_until": lease}, now)
             self.conn.execute(
-                "UPDATE items SET state='claimed', epoch=?, claimed_by=?,"
-                " delegate=NULL, reviewer=NULL, lease_until=?, updated_at=?"
-                " WHERE key=?",
+                "UPDATE items SET state='claimed', epoch=?, round=0,"
+                " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
+                " updated_at=? WHERE key=?",
                 (epoch, principal.name, lease, self._iso(now), key))
         return {"key": key, "epoch": epoch, "lease_until": lease}
 
@@ -229,88 +229,16 @@ class VerbsMixin:
                 self._require_project(principal, item["project"])
             self._epoch_ok(item, epoch)
             self._require_evidence(item)
-            self._append(principal, key, "submitted", {"epoch": epoch}, now)
+            round_no = int(item.get("round") or 0) + 1
+            self._append(principal, key, "submitted",
+                         {"epoch": epoch, "round": round_no}, now)
             cursor = self.conn.execute(
-                "UPDATE items SET state='in_review', lease_until=NULL,"
+                "UPDATE items SET state='in_review', round=?, lease_until=NULL,"
                 " updated_at=? WHERE key=? AND state='claimed' AND epoch=?",
-                (self._iso(now), key, epoch))
+                (round_no, self._iso(now), key, epoch))
             self._row_guard(cursor, key, "claimed", epoch)
-        return {"key": key, "epoch": epoch, "state": "in_review"}
-
-    # ----------------------------------------------------------- verdict
-    def verdict(self, principal, key, ok, reason=""):
-        return self._run(principal, "verdict", key,
-                         lambda now: self._verdict(principal, key, ok, reason, now))
-
-    def _verdict(self, principal, key, ok, reason, now):
-        self._require_role(principal, "reviewer")
-        item = self._get_or_refuse(key)
-        self._assert_unlocked(item)
-        if item["state"] != "in_review":
-            raise Refused("bad_state", f"{key} is {item['state']}, not in review")
-        if principal.name in (item["claimed_by"], item["delegate"]):
-            raise Refused("same_principal", "reviewer is the claimant")
-        self._require_project(principal, item["project"])
-        self._reviewer_family_ok(principal, item)
-        if ok:
-            self._require_evidence(item)
-            # The slow re-verification of the current-epoch evidence runs
-            # before the write lock; it records exactly which evidence rows it
-            # considered so the transaction can prove that set is unchanged.
-            considered = self._reverify_all(item, now)
-            with self._write():
-                fresh = self._get_or_refuse(key)
-                self._assert_unlocked(fresh)
-                if fresh["state"] != "in_review":
-                    raise Refused("conflict",
-                                  f"{key} is {fresh['state']}, not in review")
-                if int(fresh["epoch"]) != int(item["epoch"]):
-                    raise Refused("conflict",
-                                  f"{key} changed under the transaction")
-                if self._verified_evidence_ids(fresh) != considered:
-                    raise Refused("conflict",
-                                  f"{key} evidence changed under the transaction")
-                self._require_project(principal, fresh["project"])
-                self._reviewer_family_ok(principal, fresh)
-                cursor = self.conn.execute(
-                    "UPDATE items SET state='done', reviewer=?, updated_at=?"
-                    " WHERE key=? AND state='in_review' AND epoch=?",
-                    (principal.name, self._iso(now), key, item["epoch"]))
-                self._race_guard(cursor, key, "in_review", item["epoch"])
-                self._append(principal, key, "review_passed", {"reason": reason}, now)
-            return {"key": key, "state": "done"}
-
-        with self._write():
-            fresh = self._get_or_refuse(key)
-            self._assert_unlocked(fresh)
-            if fresh["state"] != "in_review":
-                raise Refused("conflict",
-                              f"{key} is {fresh['state']}, not in review")
-            if int(fresh["epoch"]) != int(item["epoch"]):
-                raise Refused("conflict",
-                              f"{key} changed under the transaction")
-            prior = self.conn.execute(
-                "SELECT COUNT(*) FROM events WHERE key=?"
-                " AND type='changes_requested'", (key,)).fetchone()[0]
-            second = prior >= 1
-            state = "open" if second else "claimed"
-            self._append(principal, key, "changes_requested",
-                         {"state": state, "reason": reason}, now)
-            if second:
-                cursor = self.conn.execute(
-                    "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
-                    " reviewer=?, lease_until=NULL, updated_at=?"
-                    " WHERE key=? AND state='in_review' AND epoch=?",
-                    (principal.name, self._iso(now), key, item["epoch"]))
-                self._finding(key, "changes_requested_twice",
-                              "two reviews requested changes in a row", now)
-            else:
-                cursor = self.conn.execute(
-                    "UPDATE items SET state='claimed', reviewer=?, updated_at=?"
-                    " WHERE key=? AND state='in_review' AND epoch=?",
-                    (principal.name, self._iso(now), key, item["epoch"]))
-            self._race_guard(cursor, key, "in_review", item["epoch"])
-        return {"key": key, "state": state}
+        return {"key": key, "epoch": epoch, "round": round_no,
+                "state": "in_review"}
 
     # ------------------------------------------------------------ cancel
     def cancel(self, principal, key, reason=""):
@@ -330,6 +258,14 @@ class VerbsMixin:
                               affected={key},
                               allow_new={"depends_on_cancelled"})
         with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            # The epoch is re-read here: a release+reclaim between the pre-read
+            # and this transaction lands in the same ``claimed`` state at a new
+            # epoch, and must not be cancelled by the stale request.
+            if fresh["state"] != item["state"] or fresh["epoch"] != item["epoch"]:
+                raise Refused("conflict",
+                              f"{key} changed under the transaction")
             if principal.role != "router":
                 dependent = self.conn.execute(
                     "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
@@ -340,38 +276,7 @@ class VerbsMixin:
             self._append(principal, key, "cancelled", {"reason": reason}, now)
             cursor = self.conn.execute(
                 "UPDATE items SET state='cancelled', lease_until=NULL,"
-                " updated_at=? WHERE key=? AND state=?",
-                (self._iso(now), key, item["state"]))
-            self._row_guard(cursor, key, item["state"], item["epoch"])
+                " updated_at=? WHERE key=? AND state=? AND epoch=?",
+                (self._iso(now), key, fresh["state"], fresh["epoch"]))
+            self._row_guard(cursor, key, fresh["state"], fresh["epoch"])
         return {"key": key, "state": "cancelled"}
-
-    # -------------------------------------------------------------- reap
-    def reap(self, principal, now=None):
-        return self._run(principal, "reap", None,
-                         lambda audit_now: self._reap(
-                             principal, now if now is not None else audit_now))
-
-    def _reap(self, principal, now):
-        self._require_role(principal, "system")
-        expired = []
-        overdue = []
-        with self._write():
-            for item in self._all_items():
-                if item["state"] == "claimed" and item["lease_until"]:
-                    due = self._parse_iso(item["lease_until"])
-                    if due is not None and due.timestamp() < now:
-                        self._append(principal, item["key"], "lease_expired", {}, now)
-                        self.conn.execute(
-                            "UPDATE items SET state='open', claimed_by=NULL,"
-                            " delegate=NULL, reviewer=NULL, lease_until=NULL,"
-                            " updated_at=? WHERE key=?",
-                            (self._iso(now), item["key"]))
-                        expired.append(item["key"])
-                elif item["state"] == "in_review":
-                    since = self._parse_iso(item["updated_at"])
-                    if since is not None and now - since.timestamp() > self.review_overdue_s:
-                        if not self._has_finding(item["key"], "review_overdue"):
-                            self._finding(item["key"], "review_overdue",
-                                          "in review for over 4h", now)
-                        overdue.append(item["key"])
-        return {"expired": expired, "overdue": overdue}
