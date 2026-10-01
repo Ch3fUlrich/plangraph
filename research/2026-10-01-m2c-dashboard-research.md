@@ -57,24 +57,37 @@ secondary sources in places (flagged).
    node re-executes from its start on resume, so work before the interrupt must be idempotent [19].
 2. Temporal approvals are signals/conditions: workflow blocks on `wait_condition` with a timeout; the signal carries a structured
    approval (approver id, decision, comment, timestamp) [20].
-3. n8n pauses a run and stores state; a signed one-time resume URL wakes it; approvals via send-and-wait on messaging nodes,
-   Wait + IF, or AI tool gating (sec [21], not the n8n docs; UNVERIFIED against n8n docs).
+3. n8n docs: the Wait node resumes on a webhook call or a form submission; `$execution.resumeUrl` is generated at runtime and
+   "unique to each execution"; on pause the execution data is offloaded to the database [65]. The Wait page says nothing
+   about signing or one-time use (UNVERIFIED), and nothing about approvals. The Slack node lists "Send and Wait for Response"
+   ("Approvers can also respond directly inside Slack") [66]. AI tool calls can be gated by a human: nine channels (Chat,
+   Slack, Discord, Telegram, Teams, Gmail, WhatsApp, Google Chat, Outlook); the workflow pauses and the reviewer approves
+   (tool runs with the AI's input) or denies (action cancelled, AI told) [67].
 4. GitHub environments with required reviewers block a job until approved, approval buttons in the GitHub UI; custom
    protection rules via GitHub Apps; unapproved jobs fail automatically (researcher says after 30 days) [22].
-5. Agent-inbox pattern: interrupts route to an owner's queue; risky actions default to "ask" (sec [23]; the LangChain
-   Agent Inbox repo itself was not fetched, UNVERIFIED).
-6. HumanLayer: `require_approval` decorator blocks a call, denial feedback goes back to the LLM, routing/escalation/timeouts
-   over Slack, email, SMS, plus a human-as-tool call for questions (sec [24]; the HumanLayer docs/repo were not fetched).
-   The researcher found no successor product: UNVERIFIED.
+5. LangChain Agent Inbox README: "an inbox UX for interacting with human-in-the-loop agents", showing interrupts from
+   LangGraph deployments, with four responses: accept, edit (change arguments), respond (text), ignore. The repo was archived
+   on 2026-09-20 and is read-only; a hosted version remains at dev.agentinbox.ai [68]. "Risky actions default to ask" is
+   only in the blog (sec [23]): UNVERIFIED (primary page did not confirm).
+6. HumanLayer has pivoted. The GitHub repo says it is a "public issues repo ... the code here is pretty much all
+   deprecated" and points to a rebuild [69]; humanlayer.com now sells a collaborative IDE/cloud platform for coding agents
+   (comment-driven design review, QRSPI phases, local/cloud daemons), not an approval SDK [70]. The `require_approval`
+   decorator, Slack/email/SMS routing and human-as-tool claims (sec [24]) are UNVERIFIED (primary page did not confirm);
+   do not depend on the old SDK.
 7. Attribution: record reviewer identity, timestamp, what the reviewer saw, outcome; if the agent changes target/amount after
    approval, a new approval is needed; say which agent decided vs executed (sec [25]).
 8. Corrections: approved items lock; a correction is a new entry that references the original; enforce with triggers or revoked
    UPDATE/DELETE, hash-chain to detect tampering (sec [26]; these are vendor blogs, but they match the keeper design).
 9. Mobile: notify -> pause -> resolve; lock-screen push (e.g. ntfy) with one-tap approve/reject via a signed webhook; approvals
-   persisted so they survive restarts (sec [27], single vendor blog, UNVERIFIED as best practice). Slack-first routing is
-   claimed for on-call contexts (sec [28]).
-10. Net: first-class blocking human items exist as a pattern in every framework, but the primary-doc coverage fetched is
-    thin (LangGraph [19], Temporal [20], GitHub [22]); undo/correction and mobile findings rest on blogs.
+   the one-tap webhook and lock-screen push remain a single vendor blog (sec [27], UNVERIFIED as best practice). Slack-first
+   routing is claimed for on-call contexts (sec [28]).
+   Persistence: LangGraph says on interrupt it "saves the graph state using its persistence layer and waits indefinitely until
+   you resume", with a persistent (database-backed) checkpointer in production and resume by thread_id [19]. The n8n Wait page
+   says paused execution data goes to the database [65]. The Temporal approval page records approvals as Signal events in
+   Workflow history but does not itself state restart durability: UNVERIFIED for Temporal [20].
+10. Net: first-class blocking human items exist as a pattern in every framework, with primary docs now for LangGraph [19],
+    Temporal [20], GitHub [22], n8n [65-67] and Agent Inbox [68] (archived, so a pattern to copy, not a dependency; HumanLayer
+    [69-70] likewise). Undo/correction and mobile findings still rest on blogs.
 
 ### R3 Graph views at 100-500 nodes, desktop and phone
 1. Cytoscape.js canvas renderer: 286 nodes/288 edges rendered in about 50 ms (about 20 FPS cap); 2,643 nodes/4,903 edges about
@@ -259,3 +272,9 @@ secondary sources in places (flagged).
 62. https://beads.gascity.com/core-concepts/dependencies
 63. https://confluence.atlassian.com/spaces/JIRASOFTWARESERVER/pages/1044784190/Dependencies+in+Advanced+Roadmaps
 64. https://software-architecture-guild.com/guide/architecture/documentation/architectural-decision-records/ (sec)
+65. https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.wait/
+66. https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.slack/
+67. https://docs.n8n.io/build/integrate-ai/ai-examples/human-in-the-loop-for-tools/
+68. https://github.com/langchain-ai/agent-inbox
+69. https://github.com/humanlayer/humanlayer
+70. https://humanlayer.com
