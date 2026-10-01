@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .. import views
-from . import evidence
+from . import auth, evidence
 from .errors import Refused
 from .store_create import CreateMixin
 from .store_read import ReadMixin
@@ -330,7 +330,7 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "kind": raw.get("kind", "lane"),
             "track": raw.get("track"), "owner": raw.get("owner"),
-            "owner_family": raw.get("owner_family"),
+            "owner_family": auth.norm_family(raw.get("owner_family")),
             "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),
             "done_criteria": raw.get("done_criteria"),
             "evidence_kinds": list(raw.get("evidence_kinds") or ["any"]),

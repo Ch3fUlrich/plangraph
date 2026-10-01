@@ -184,21 +184,25 @@ class SupportMixin:
         fails closed, as does a reviewer with none.
         """
         from . import auth
-        if principal.family is None:
+        reviewer_family = auth.norm_family(principal.family)
+        if reviewer_family is None:
             raise Refused("family_unknown", "reviewer has no family")
         peers = []
         claimer = auth.get_principal(self.conn, item["claimed_by"])
         claimant_family = (claimer.family if claimer is not None
                            else item.get("owner_family"))
+        claimant_family = auth.norm_family(claimant_family)
         if claimant_family is None:
             raise Refused("family_unknown", "claimant family unknown")
         peers.append(claimant_family)
         if item["delegate"]:
             delegate = auth.get_principal(self.conn, item["delegate"])
-            if delegate is None or delegate.family is None:
+            delegate_family = (auth.norm_family(delegate.family)
+                               if delegate is not None else None)
+            if delegate_family is None:
                 raise Refused("family_unknown", "delegate family unknown")
-            peers.append(delegate.family)
-        if principal.family in peers:
+            peers.append(delegate_family)
+        if reviewer_family in peers:
             raise Refused("same_family", "reviewer shares a family with the item")
 
     def _reverify_all(self, item, now):

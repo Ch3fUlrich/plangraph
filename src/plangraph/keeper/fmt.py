@@ -101,7 +101,9 @@ def digest_text(digest: dict) -> str:
         kinds = ",".join(done.get("evidence_kinds") or [])
         lines.append(f"done {done['key']} [{kinds}]")
     for waiver in digest.get("waivers") or []:
-        lines.append(f"waiver {waiver['key']} {waiver.get('decision_id')}")
+        state = f" ({waiver['state']})" if waiver.get("state") else ""
+        lines.append(
+            f"waiver {waiver['key']} {waiver.get('decision_id')}{state}")
     return "\n".join(lines) if lines else "empty"
 
 

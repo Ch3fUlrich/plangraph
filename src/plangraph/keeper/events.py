@@ -105,6 +105,8 @@ def fold(events):
             item["lease_until"] = payload.get("lease_until")
             item["reviewer"] = None
             item["round"] = 0
+            # A waiver belongs to one work epoch; a fresh claim drops it.
+            item["review_waiver"] = None
         elif kind == "delegated":
             item["delegate"] = payload.get("worker")
         elif kind in ("released", "lease_expired"):
@@ -113,6 +115,7 @@ def fold(events):
             item["delegate"] = None
             item["lease_until"] = None
             item["reviewer"] = None
+            item["review_waiver"] = None
         elif kind == "heartbeat":
             item["lease_until"] = payload.get("lease_until",
                                               item["lease_until"])

@@ -177,9 +177,16 @@ class ReadMixin:
         done = [{"key": it["key"], "title": it["title"],
                  "evidence_kinds": [r["kind"] for r in self._evidence(it["key"])]}
                 for it in done[-10:]]
-        waivers = sorted(
-            ({"key": it["key"], "decision_id": it["review_waiver"]}
-             for it in items
-             if it["state"] == _DONE and it.get("review_waiver")),
-            key=lambda entry: entry["key"])
+        waivers = []
+        for it in items:
+            if not it.get("review_waiver"):
+                continue
+            if it["state"] == _DONE:
+                waivers.append({"key": it["key"],
+                                "decision_id": it["review_waiver"]})
+            elif it["state"] in ("claimed", "in_review"):
+                waivers.append({"key": it["key"],
+                                "decision_id": it["review_waiver"],
+                                "state": it["state"]})
+        waivers = sorted(waivers, key=lambda entry: entry["key"])
         return {"projects": counts, "done": done, "waivers": waivers}

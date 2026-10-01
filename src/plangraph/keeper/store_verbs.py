@@ -113,7 +113,7 @@ class VerbsMixin:
             self.conn.execute(
                 "UPDATE items SET state='claimed', epoch=?, round=0,"
                 " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
-                " updated_at=? WHERE key=?",
+                " review_waiver=NULL, updated_at=? WHERE key=?",
                 (epoch, principal.name, lease, self._iso(now), key))
         return {"key": key, "epoch": epoch, "lease_until": lease}
 
@@ -204,7 +204,8 @@ class VerbsMixin:
             self._append(principal, key, "released", {}, now)
             cursor = self.conn.execute(
                 "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
-                " reviewer=NULL, lease_until=NULL, updated_at=?"
+                " reviewer=NULL, lease_until=NULL, review_waiver=NULL,"
+                " updated_at=?"
                 " WHERE key=? AND state='claimed' AND epoch=?",
                 (self._iso(now), key, epoch))
             self._race_guard(cursor, key, "claimed", epoch)

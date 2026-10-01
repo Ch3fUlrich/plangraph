@@ -16,7 +16,7 @@ from .errors import Refused
 from .schema import ROLES
 
 __all__ = ["Principal", "add_principal", "authenticate", "revoke",
-           "get_principal", "list_principals", "hash_token"]
+           "get_principal", "list_principals", "hash_token", "norm_family"]
 
 
 @dataclass
@@ -32,12 +32,26 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def norm_family(value):
+    """Canonical reviewer family marker: ``None`` for unknown, else folded.
+
+    ``None`` and a blank/whitespace string both mean "unknown" and must fail
+    closed; ``teamC``, ``TEAMC`` and `` teamC `` are the *same* family.  The
+    single home for both rules so no caller can compare raw spellings.
+    """
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value.casefold() if value else None
+
+
 def _as_principal(row) -> Principal:
     try:
         projects = json.loads(row["projects"] or "[]")
     except (ValueError, TypeError):
         projects = []
-    return Principal(row["name"], row["role"], projects, row["family"])
+    return Principal(row["name"], row["role"], projects,
+                     norm_family(row["family"]))
 
 
 def add_principal(conn, name, role, projects, family=None) -> str:
@@ -63,7 +77,8 @@ def add_principal(conn, name, role, projects, family=None) -> str:
     conn.execute(
         "INSERT INTO principals(name,role,projects,family,token_sha256,active)"
         " VALUES(?,?,?,?,?,1)",
-        (name, role, json.dumps(projects), family, hash_token(token)))
+        (name, role, json.dumps(projects), norm_family(family),
+         hash_token(token)))
     return token
 
 

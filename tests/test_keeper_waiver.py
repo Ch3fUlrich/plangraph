@@ -146,7 +146,7 @@ def test_show_exposes_waiver_and_reviews(w):
     w.store.verdict(w.p("reviewer"), KEY, True, "ok")
     info = w.store.show(w.p("reader"), KEY)
     assert info["review_waiver"] == DECISION
-    assert info["reviews"] == [{"reviewer": "reviewer", "family": "teamC"}]
+    assert info["reviews"] == [{"reviewer": "reviewer", "family": "teamc"}]
     assert DECISION in __import__("plangraph.keeper.fmt", fromlist=["x"]).show_text(info)
 
 
@@ -169,7 +169,7 @@ def test_snapshot_exposes_waiver_and_reviews(w):
     snap = w.store.snapshot(w.p("reader"))
     item = {it["key"]: it for it in snap["items"]}[KEY]
     assert item["review_waiver"] == DECISION
-    assert item["reviews"] == [{"reviewer": "reviewer", "family": "teamC"}]
+    assert item["reviews"] == [{"reviewer": "reviewer", "family": "teamc"}]
 
 
 # ------------------------------------------------------------------------ API

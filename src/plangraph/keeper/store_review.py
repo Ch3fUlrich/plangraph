@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 
+from . import auth
 from .errors import Refused
 
 
@@ -89,15 +90,16 @@ class ReviewMixin:
                 raise Refused("conflict",
                               f"{key} already has two verdicts this round")
             if prior and not self._waiver_active(fresh):
-                first_family = prior[0].get("family")
+                first_family = auth.norm_family(prior[0].get("family"))
                 if first_family is None:
                     raise Refused("family_unknown",
                                   "first reviewer family unknown")
-                if principal.family == first_family:
+                if auth.norm_family(principal.family) == first_family:
                     raise Refused("same_family",
                                   "second reviewer shares a family")
             self._append(principal, key, "review_verdict",
-                         {"reviewer": principal.name, "family": principal.family,
+                         {"reviewer": principal.name,
+                          "family": auth.norm_family(principal.family),
                           "ok": True, "epoch": fresh["epoch"],
                           "round": fresh["round"]}, now)
             passed = len(prior) + 1
