@@ -52,3 +52,9 @@ Working in place on the empty repo is fine until the first commit; worktrees aft
 6 REVIEWS: merges need D-206 seats with model_source pinned/resolved; pin distinct free models per seat; unresolved families don't count.
 Start now (same for B and C): import YAML draft, views module, page. Keeper/store starts when operator confirms C.
 Remote: none until M2. Postgres = M4 decision. Work lives on branch worktree-proposal (worktree .claude/worktrees/proposal).
+
+## D-212 (routing-00 relay, 2026-10-01): paid deepseek-v4.1-flash and muse-spark-1.3-contributor allowed for writers/review seats when free legs are rate-limited
+Code carries no site data. Suggested: writers on deepseek (pinned, resolved); seat 1 = muse-spark; seat 2 = in-session Sonnet subagent. Seats valid only with resolved models. Log paid spend per run.
+If a spawn fails on an unservable leg, use a pinned free model for that try and tell routing-00. Any refusal: stop, report exact text. Never route around a denial.
+Review scheme (earlier msg): seat 1 Sonnet subagent (Agent tool), seat 2 one pinned model of a third family via autoos-agent spawn only; routing-00 does an Opus spot review at end of M2a.
+Disk on coding.vm ~99%: keep out/ small, nothing heavy until routing-00 says >=5 GB free.
