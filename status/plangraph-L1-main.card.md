@@ -2,7 +2,7 @@
 Updated: 2026-10-01 | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md (re-read after compaction)
 
 ## Phase
-M1 proposal CLOSED (operator approved C, 6 conditions). M2a keeper CODE COMPLETE + reviewed; awaiting routing-00 Opus spot review.
+M1 CLOSED. M2a accepted by routing-00 (Opus spot review). HANDOFF WRITTEN docs/HANDOFF.md (Opus successor continues: X6b collect, X7 tiers, re-review, pilot keeper, load, router batch, render, then D-231 M2c research+proposal).
 M2b (run-bound tokens, signed snapshot, outbox, anchor, off-host keeper) / M3 (tests+scorecard) / M4 (adoption) not started.
 
 ## State (branch worktree-proposal, worktree .claude/worktrees/proposal, last commit 1ef63ee)
