@@ -11,6 +11,7 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,12 +20,23 @@ from plangraph.keeper import api, auth, cli, config
 from plangraph.keeper import events as keeper_events
 from plangraph.keeper import mcp
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.evidence_decisions import DecisionsAdapter
+
+
+def _bind_decisions(world, tmp_path):
+    """X6c3: the D-row must name the scope it waives."""
+    path = tmp_path / "DECISIONS.md"
+    path.write_text("| ID | Note | Waiver scope |\n|---|---|---|\n"
+                    "| D-217 | second-family waiver | Waives: demo:A |\n",
+                    encoding="utf-8")
+    world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
 
 
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
     seed(world, [("A", [])])
+    _bind_decisions(world, tmp_path)
     yield world
     world.close()
 

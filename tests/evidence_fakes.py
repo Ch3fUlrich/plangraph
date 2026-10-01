@@ -116,14 +116,25 @@ class FakeSemaphore:
 
 
 class FakeDecisions:
-    def __init__(self, present: set | None = None, error: Exception | None = None):
+    def __init__(self, present: set | None = None, error: Exception | None = None,
+                 waiving: set | None = None):
         self.present = present if present is not None else {"D-209"}
         self.error = error
+        # (decision_id, key) pairs whose D-row carries a ``Waives: <key>`` token;
+        # ``None`` means "a recorded id waives every key it is asked about".
+        self.waiving = waiving
 
     def has(self, decision_id):
         if self.error:
             raise self.error
         return decision_id in self.present
+
+    def waives(self, decision_id, key):
+        if self.error:
+            raise self.error
+        if self.waiving is None:
+            return decision_id in self.present
+        return (decision_id, key) in self.waiving
 
 
 def make_ctx(**over):

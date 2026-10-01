@@ -10,6 +10,10 @@ relaxes *which families* count.
 
 Like ``add_evidence_router`` the slow decision verification runs before the
 write lock, and the row is re-read and guarded inside ``BEGIN IMMEDIATE``.
+
+The decision does not waive on its own: its D-row must carry the whole token
+``Waives: <key>`` for the item being waived (X6c3), checked through the
+``decisions`` adapter in that same pre-lock I/O.
 """
 from __future__ import annotations
 
@@ -38,6 +42,13 @@ class WaiverMixin:
         if not result.ok:
             raise Refused("evidence_unverified",
                           result.detail or f"decision {decision_id} unverified")
+        # X6c3: the recorded decision must name this item as its waiver scope
+        # (``Waives: <project:ID>`` in its D-row).  Also pre-lock read-only I/O.
+        decisions = self._ctx(item, now).decisions
+        waives = getattr(decisions, "waives", None)
+        if not callable(waives) or not waives(decision_id, key):
+            raise Refused("evidence_unverified",
+                          f"{decision_id} does not name {key} (Waives:)")
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)

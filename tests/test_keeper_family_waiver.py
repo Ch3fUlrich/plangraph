@@ -14,6 +14,7 @@ Three review findings:
 """
 import json
 import random
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,12 +23,19 @@ from plangraph.keeper import auth
 from plangraph.keeper import events as keeper_events
 from plangraph.keeper import fmt
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.evidence_decisions import DecisionsAdapter
 
 
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
     seed(world, [("A", [])])
+    # X6c3: D-217's row names the scope it waives.
+    path = tmp_path / "DECISIONS.md"
+    path.write_text("| ID | Note | Waiver scope |\n|---|---|---|\n"
+                    "| D-217 | second-family waiver | Waives: demo:A |\n",
+                    encoding="utf-8")
+    world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
     yield world
     world.close()
 

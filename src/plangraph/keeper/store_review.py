@@ -6,7 +6,10 @@ item in review; only the second passing verdict from a *different principal* of
 a *different family* re-verifies the evidence with the existing logic and emits
 ``review_passed`` (``done``).  A ``verdict(ok=False)`` from either seat returns
 the item to ``claimed`` exactly as before and, because the next ``submit``
-advances the submission ``round``, discards the round's earlier verdicts.
+advances the submission ``round``, discards the round's earlier verdicts.  A
+second change request only reopens when it is consecutive *within the current
+epoch*: change requests from earlier claims are ignored and a passing verdict
+resets the count.
 
 The waiver path (D-217) lives in ``store_waiver``: once the router records a
 verified decision, ``_waiver_active`` is true and the second passing verdict may
@@ -31,7 +34,34 @@ class ReviewMixin:
 
     def _waiver_active(self, item):
         """D-217 hook: a verified waiver lets the two verdicts share a family."""
-        return item.get("review_waiver") is not None
+        # The same truthiness question ``digest`` asks, so an item can never be
+        # "waived" to one of them and not the other.
+        return bool(item.get("review_waiver"))
+
+    def _epoch_change_streak(self, item):
+        """Trailing ``changes_requested`` events with no pass since, this epoch.
+
+        The lifetime count this replaces was a liveness bug: one change request
+        in an earlier claim made the first change request of every later claim
+        reopen the item and file a false ``changes_requested_twice`` finding.
+        'Twice in a row' is consecutive *within the current epoch*, and a
+        passing verdict resets the streak.
+        """
+        epoch = int(item["epoch"])
+        streak = 0
+        for row in self.conn.execute(
+                "SELECT type, payload FROM events WHERE key=?"
+                " AND type IN ('changes_requested', 'review_verdict')"
+                " ORDER BY seq", (item["key"],)):
+            payload = json.loads(row["payload"] or "{}")
+            if "epoch" in payload and int(payload["epoch"]) != epoch:
+                continue
+            if row["type"] == "review_verdict":
+                if payload.get("ok", True):
+                    streak = 0
+            else:
+                streak += 1
+        return streak
 
     def _round_verdicts(self, item):
         """Passing ``review_verdict`` payloads for this item's current round.
@@ -131,9 +161,7 @@ class ReviewMixin:
                 raise Refused("same_principal", "reviewer is the claimant")
             self._require_project(principal, fresh["project"])
             self._reviewer_family_ok(principal, fresh)
-            prior = self.conn.execute(
-                "SELECT COUNT(*) FROM events WHERE key=?"
-                " AND type='changes_requested'", (key,)).fetchone()[0]
+            prior = self._epoch_change_streak(fresh)
             second = prior >= 1
             state = "open" if second else "claimed"
             # A return to ``claimed`` is a fresh work window held by the same
@@ -143,7 +171,8 @@ class ReviewMixin:
             lease = None if second else self._iso(now + self.default_lease)
             self._append(principal, key, "changes_requested",
                          {"state": state, "reason": reason,
-                          "lease_until": lease}, now)
+                          "lease_until": lease, "epoch": fresh["epoch"],
+                          "round": fresh["round"]}, now)
             if second:
                 cursor = self.conn.execute(
                     "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"

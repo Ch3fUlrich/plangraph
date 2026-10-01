@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from dataclasses import dataclass, field
 
@@ -16,7 +17,8 @@ from .errors import Refused
 from .schema import ROLES
 
 __all__ = ["Principal", "add_principal", "authenticate", "revoke",
-           "get_principal", "list_principals", "hash_token", "norm_family"]
+           "get_principal", "list_principals", "hash_token", "norm_family",
+           "validate_family"]
 
 
 @dataclass
@@ -45,6 +47,30 @@ def norm_family(value):
     return value.casefold() if value else None
 
 
+_FAMILY_SOURCE_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def validate_family(value):
+    """Normalise a family marker, refusing a malformed non-blank value.
+
+    ``None`` and blank stay allowed (they mean unknown).  A non-blank value is
+    checked *before* casefolding: ``casefold`` happily turns non-ASCII source
+    such as ``ß`` into an ASCII token (``ss``) and full-width letters into
+    look-alikes, so the source must itself be plain ``[A-Za-z0-9._-]``.  The
+    normalised result then always matches ``[a-z0-9._-]+``, and anything else
+    is refused rather than silently laundered into unknown or into a token a
+    different family would wrongly compare equal to.
+    """
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    if not _FAMILY_SOURCE_RE.fullmatch(stripped):
+        raise Refused("validation", "family must match [a-z0-9._-]+")
+    return stripped.casefold()
+
+
 def _as_principal(row) -> Principal:
     try:
         projects = json.loads(row["projects"] or "[]")
@@ -64,6 +90,7 @@ def add_principal(conn, name, role, projects, family=None) -> str:
     """
     if role not in ROLES:
         raise Refused("validation", f"unknown role {role!r}")
+    family = validate_family(family)
     if isinstance(projects, (str, bytes)) or not hasattr(projects, "__iter__"):
         raise Refused("validation", "projects must be a list of strings")
     projects = list(projects)
@@ -77,7 +104,7 @@ def add_principal(conn, name, role, projects, family=None) -> str:
     conn.execute(
         "INSERT INTO principals(name,role,projects,family,token_sha256,active)"
         " VALUES(?,?,?,?,?,1)",
-        (name, role, json.dumps(projects), norm_family(family),
+        (name, role, json.dumps(projects), family,
          hash_token(token)))
     return token
 

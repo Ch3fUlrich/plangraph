@@ -144,6 +144,9 @@ def fold(events):
         elif kind == "cancelled":
             item["state"] = "cancelled"
             item["lease_until"] = None
+            # The work is abandoned, so the waiver that was raised for it dies
+            # here too -- ``_cancel`` clears the same column.
+            item["review_waiver"] = None
         elif kind == "priority_set":
             item["priority"] = payload.get("priority", item["priority"])
         elif kind == "evidence_added":

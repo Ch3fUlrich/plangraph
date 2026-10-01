@@ -275,9 +275,12 @@ class VerbsMixin:
                 if dependent is not None:
                     raise Refused("conflict", f"{key} has active dependents")
             self._append(principal, key, "cancelled", {"reason": reason}, now)
+            # Cancelling abandons the work, so the waiver that was granted for
+            # it goes too; the ``cancelled`` fold branch clears the same column.
             cursor = self.conn.execute(
                 "UPDATE items SET state='cancelled', lease_until=NULL,"
-                " updated_at=? WHERE key=? AND state=? AND epoch=?",
+                " review_waiver=NULL, updated_at=? WHERE key=? AND state=?"
+                " AND epoch=?",
                 (self._iso(now), key, fresh["state"], fresh["epoch"]))
             self._row_guard(cursor, key, fresh["state"], fresh["epoch"])
         return {"key": key, "state": "cancelled"}

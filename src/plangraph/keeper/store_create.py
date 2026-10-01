@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 
+from .auth import validate_family
 from .errors import Refused
 
 _EDITABLE = ("title", "estimate_h", "done_criteria", "evidence_kinds",
@@ -41,6 +42,9 @@ class CreateMixin:
         if len(items) > _MAX_BATCH:
             raise Refused("validation", f"batch exceeds {_MAX_BATCH} items")
         defs = [self._normalise(raw) for raw in items]
+        for raw in items:
+            if isinstance(raw, dict):
+                validate_family(raw.get("owner_family"))
         for definition in defs:
             self._may_manage(principal, definition["project"])
         if principal.role != "router":
