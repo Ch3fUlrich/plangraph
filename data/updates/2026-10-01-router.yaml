@@ -1,0 +1,574 @@
+# Router plan-graph update batch, converted from the router's markdown (apply as principal routing-00, in order).
+# Counts and rules: see data/updates/README.md. Commit evidence uses `repo:` (registered repos: server, autoos).
+batch: 2026-10-01-router
+principal: routing-00
+source: /home/s/code/routing/docs/plan/graph-updates-2026-10-01.md
+source_sha256: 98d2fe2f03760e30f99627812ef479e78199b6fb95a633580592a0b1e708a07b
+ops:
+
+  # ===== A1. done by decision (legacy in_review in plan-v3 => no legacy_state op needed) =====
+  - op: edit
+    key: autoos:T0-CONTAINER
+    fields:
+      review_tier: none
+      evidence_kinds: [decision]
+      note: 'done by decision: router recreated the container, Init=true (D-194, D-213); pids/mem in compose stays in T4-HARDEN'
+  - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: D-194}
+  - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: D-213}
+  - {op: close_on_decision, key: 'autoos:T0-CONTAINER'}
+  - op: edit
+    key: routing:T0-HOLD
+    fields:
+      review_tier: none
+      evidence_kinds: [decision]
+      note: 'done by decision (D-182): stale 09-28 sessions held + stopped'
+  - {op: add_evidence, key: 'routing:T0-HOLD', kind: decision, ref: D-182}
+  - {op: close_on_decision, key: 'routing:T0-HOLD'}
+  - op: edit
+    key: routing:T0-L1
+    fields:
+      review_tier: none
+      evidence_kinds: [decision]
+      note: 'done by decision (D-186, D-228): new L1-mains launched; recycled 2026-10-01 evening'
+  - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: D-186}
+  - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: D-228}
+  - {op: close_on_decision, key: 'routing:T0-L1'}
+
+  # ===== A2. T6-PILOT done (decision + commit); plan-v3 state open -> in_review first =====
+  - op: edit
+    key: server:T6-PILOT
+    fields:
+      review_tier: none
+      evidence_kinds: [decision]
+      note: 'done by decision D-224: gateway adopted as default read path; Server commit afa0a94; Semaphore tasks 127659, 127660
+        (recorded here, not attached as evidence)'
+  - {op: legacy_state, key: 'server:T6-PILOT', state: in_review, note: 'router: DONE via decision D-224 + Server afa0a94, Semaphore
+        127659/127660'}
+  - {op: add_evidence, key: 'server:T6-PILOT', kind: decision, ref: D-224}
+  - {op: add_evidence, key: 'server:T6-PILOT', kind: commit, repo: server, ref: afa0a94}
+  - {op: close_on_decision, key: 'server:T6-PILOT'}
+
+  # ===== A3. in_review with evidence (NOT closed) =====
+  - op: edit
+    key: autoos:T0-SYNC
+    fields: {note: needs L1-main confirmation that sync is complete; quarantine d8b6e0ef (D-182)}
+  - {op: add_evidence, key: 'autoos:T0-SYNC', kind: decision, ref: D-182}
+  - {op: legacy_state, key: 'server:T6-DETECT', state: in_review, note: 'router: inventory + LoggiFly/prometheus removal merged
+        (Server 50a7a5a); live cleanup deploy still pending (dry run first)'}
+  - {op: add_evidence, key: 'server:T6-DETECT', kind: commit, repo: server, ref: 50a7a5a}
+
+  # ===== A4. claimed =====
+  # T6-SECRETS already claimed in plan-v3 (owner prox): no legacy_state op, progress note via edit
+  - op: edit
+    key: server:T6-SECRETS
+    fields: {note: 'claimed by prox: 86/87 store files SOPS; tier B running (D-202, D-208, D-214, D-216, D-226, D-229)'}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-202}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-208}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-214}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-216}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-226}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-229}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: ecf4e6f}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: c962f0e}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: 5602cfc}
+  # T6-IPV6 already claimed in plan-v3 (owner prox): no legacy_state op, progress note via edit
+  - op: edit
+    key: server:T6-IPV6
+    fields: {note: 'claimed by prox: only the Fritzbox inbound share left (operator, see server:OP-FRITZ-V6) (D-207)'}
+  - {op: add_evidence, key: 'server:T6-IPV6', kind: decision, ref: D-207}
+  - {op: legacy_state, key: 'server:T6-OWUI', state: claimed, note: 'claimed by server-L1-main: small fix passes running'}
+
+  # ===== A5. open items =====
+  # workstation:T5-CLONE: router wants open; plan-v3 state is already open => nothing to emit (workst-L1 still runs in the operator checkout; relaunch = OP-WS-RELAUNCH)
+  # NEEDS VERB: workstation:T0-WSCLONE in_review->open   (router wants open: workst-L1 still runs in the operator checkout; no verb exists, nothing invented)
+  - op: edit
+    key: server:T6-INFRA
+    fields: {note: 'T-040 token half done (D-210, D-223); remaining: restricted `gateway` user + own Semaphore project (design);
+        blocker note removed'}
+
+  # ===== S1. T6-UPDATES -> DESIGN (done) + IMPL (open, high) =====
+  - op: create
+    item:
+      project: server
+      id: T6-UPDATES-DESIGN
+      title: 'Docker updates via Semaphore: design (backup + rollback)'
+      owner: server-L1-main
+      track: T6
+      kind: lane
+      depends_on: []
+      review_tier: none
+      evidence_kinds: [decision]
+      done_criteria: update-automation design recorded and reviewed (Server b70539d, D-215, D-221)
+      estimate_h: 1
+      estimate_src: default
+      priority: 0
+      note: split from server:T6-UPDATES 2026-10-01; no failure notifications (D-200)
+  - op: create
+    item:
+      project: server
+      id: T6-UPDATES-IMPL
+      title: 'Docker updates via Semaphore: implement, pilot, roll out'
+      owner: server-L1-main
+      track: T6
+      kind: lane
+      depends_on: ['server:T6-UPDATES-DESIGN', 'autoos:T1-CLEAN']
+      review_tier: high
+      evidence_kinds: [run-record, semaphore-task]
+      done_criteria: 1 low-risk stack supervised, then all non-critical stacks; rollback drill passes
+      estimate_h: 3
+      estimate_src: default
+      priority: 0
+      note: split from server:T6-UPDATES; pilot server/_ops/autoheal on media.vm. Failures -> T6-HEAL -> T6-FIX; no update notifications
+        (D-200)
+  - {op: legacy_state, key: 'server:T6-UPDATES-DESIGN', state: in_review, note: 'router: DESIGN done (Server b70539d, D-215,
+        D-221)'}
+  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: decision, ref: D-215}
+  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: decision, ref: D-221}
+  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: commit, repo: server, ref: b70539d}
+  - {op: close_on_decision, key: 'server:T6-UPDATES-DESIGN'}
+  - op: edit
+    key: routing:GOAL
+    fields:
+      depends_on: ['routing:GATE-P3', 'plangraph:PG-M4', 'routing:T7-BOARD', 'autoos:T1-CREDIT', 'autoos:T1-JEV', 'autoos:T1-MM',
+        'autoos:T1-NOISE', 'autoos:T1-UPGRADE', 'autoos:T1-WEBTOOLS', 'autoos:T1-ZEN', 'autoos:T2-COMPACT', 'autoos:T2-ISOLATE',
+        'autoos:T2-LEAN', 'autoos:T2-MCPLIFE', 'autoos:T2-RESEARCHCARD', 'autoos:T2-TASKSESSION', 'autoos:T3-CLEAN', 'autoos:T3-PRINCIPLES',
+        'autoos:T3-SCRUB', 'autoos:T3-SPLIT', 'autoos:T3-WIN', 'server:T6-DETECT', 'server:T6-FIX', 'server:T6-GRAPHMOVE', 'server:T6-INFRA',
+        'server:T6-IPV6', 'server:T6-LEDGER', 'server:T6-MEDIA', 'server:T6-PHONE', 'server:T6-SECRETS', 'server:T6-UPDATES-IMPL']
+  - {op: cancel, key: 'server:T6-UPDATES', reason: split}
+
+  # ===== S2. T5-GROK -> L1 (done) + L2 (claimed, workst-L1) =====
+  - op: create
+    item:
+      project: workstation
+      id: T5-GROK-L1
+      title: Grok Bot FastAPI wrapper + custom provider grokbot (local repo)
+      owner: workst-L1-autoos
+      track: T5
+      kind: lane
+      depends_on: []
+      review_tier: none
+      evidence_kinds: [decision]
+      done_criteria: wrapper + grokbot provider built in the local repo (5825688); recorded D-222
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: split from workstation:T5-GROK; done by decision D-222; local repo 5825688 is not a registered repo (no commit evidence
+        attached)
+  - op: create
+    item:
+      project: workstation
+      id: T5-GROK-L2
+      title: Grok Bot behind Tailscale Funnel; grokbot smoke (async job -> callback)
+      owner: workst-L1-autoos
+      track: T5
+      kind: lane
+      depends_on: ['workstation:T5-GROK-L1', 'routing:GATE-P1']
+      evidence_kinds: [run-record, commit+ci]
+      done_criteria: 'smoke: async job id -> result callback -> job complete; grokbot never in another combo'
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: 'split from workstation:T5-GROK; waits for OS-42 operator steps (workstation:OP-GROK-STEPS: Funnel click + 3 .env
+        values + manage key); OPERATOR provides the wrapper code; async only (C9: no fallback, timeouts >= 700 s, retries 0,
+        Protect off). Decision: operator true; trial end date + webhook from the operator.'
+  - {op: legacy_state, key: 'workstation:T5-GROK-L1', state: in_review, note: 'router: L1 done by decision D-222 (local repo
+        5825688)'}
+  - {op: add_evidence, key: 'workstation:T5-GROK-L1', kind: decision, ref: D-222}
+  - {op: close_on_decision, key: 'workstation:T5-GROK-L1'}
+  - {op: legacy_state, key: 'workstation:T5-GROK-L2', state: claimed, note: claimed by workst-L1-autoos; L2 waits for OS-42
+        operator steps}
+  - op: edit
+    key: routing:GATE-P2
+    fields:
+      depends_on: ['autoos:T1-PROV', 'autoos:T1-LITELLM', 'autoos:T1-PEER', 'autoos:T2-RULES', 'autoos:T2-SKILL', 'workstation:T5-FINISH',
+        'workstation:T5-CLONE', 'workstation:T5-BRANCHES', 'workstation:T5-KEYS', 'workstation:T5-SYNC', 'workstation:T5-PROVIDERS',
+        'workstation:T5-SKILLS', 'workstation:T5-HANDOFF', 'workstation:T5-GRAPH', 'workstation:T5-GROK-L2', 'server:T6-PILOT',
+        'server:T6-HA', 'server:T6-PHONE']
+  - {op: cancel, key: 'workstation:T5-GROK', reason: split}
+
+  # ===== S3. T6-GRAPHMOVE -> PREP (done) + CUTOVER (open) =====
+  - op: create
+    item:
+      project: server
+      id: T6-GRAPHMOVE-PREP
+      title: 'Omnigraph move to cloud.vm: prep (baseline, S2-S4 groundwork)'
+      owner: server-L1-main
+      track: T6
+      kind: lane
+      depends_on: []
+      review_tier: none
+      evidence_kinds: [decision]
+      done_criteria: baseline taken and prep merged (Server 6806b47, D-223)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: split from server:T6-GRAPHMOVE; baseline research/2026-10-01-omnigraph-baseline-autoos.md; D-191, D-223
+  - op: create
+    item:
+      project: server
+      id: T6-GRAPHMOVE-CUTOVER
+      title: 'Omnigraph move to cloud.vm: cutover (old instance read-only, then stopped)'
+      owner: server-L1-main
+      track: T6
+      kind: lane
+      depends_on: ['server:T6-GRAPHMOVE-PREP', 'autoos:T1-CLEAN']
+      evidence_kinds: [run-record, semaphore-task]
+      done_criteria: node counts + commit heads equal before/after; whoami check 1 row from coding.vm and workstation; old instance
+        read-only, then stopped
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: split from server:T6-GRAPHMOVE; cutover carries SEC-MINIO (fresh MinIO root); D-223
+  - {op: legacy_state, key: 'server:T6-GRAPHMOVE-PREP', state: in_review, note: 'router: PREP done (Server 6806b47, D-223)'}
+  - {op: add_evidence, key: 'server:T6-GRAPHMOVE-PREP', kind: decision, ref: D-223}
+  - {op: add_evidence, key: 'server:T6-GRAPHMOVE-PREP', kind: commit, repo: server, ref: 6806b47}
+  - {op: close_on_decision, key: 'server:T6-GRAPHMOVE-PREP'}
+  - op: edit
+    key: routing:GOAL
+    fields:
+      depends_on: ['routing:GATE-P3', 'plangraph:PG-M4', 'routing:T7-BOARD', 'autoos:T1-CREDIT', 'autoos:T1-JEV', 'autoos:T1-MM',
+        'autoos:T1-NOISE', 'autoos:T1-UPGRADE', 'autoos:T1-WEBTOOLS', 'autoos:T1-ZEN', 'autoos:T2-COMPACT', 'autoos:T2-ISOLATE',
+        'autoos:T2-LEAN', 'autoos:T2-MCPLIFE', 'autoos:T2-RESEARCHCARD', 'autoos:T2-TASKSESSION', 'autoos:T3-CLEAN', 'autoos:T3-PRINCIPLES',
+        'autoos:T3-SCRUB', 'autoos:T3-SPLIT', 'autoos:T3-WIN', 'server:T6-DETECT', 'server:T6-FIX', 'server:T6-GRAPHMOVE-CUTOVER',
+        'server:T6-INFRA', 'server:T6-IPV6', 'server:T6-LEDGER', 'server:T6-MEDIA', 'server:T6-PHONE', 'server:T6-SECRETS',
+        'server:T6-UPDATES-IMPL']
+  - {op: cancel, key: 'server:T6-GRAPHMOVE', reason: split}
+
+  # ===== T7-BOARD: cancel first, then drop from GOAL, then T7-CONSOLE =====
+  - {op: cancel, key: 'routing:T7-BOARD', reason: 'operator 2026-10-01: plan graph replaces the board; no kanban (D-229)'}
+  - op: edit
+    key: routing:GOAL
+    fields:
+      depends_on: ['routing:GATE-P3', 'plangraph:PG-M4', 'autoos:T1-CREDIT', 'autoos:T1-JEV', 'autoos:T1-MM', 'autoos:T1-NOISE',
+        'autoos:T1-UPGRADE', 'autoos:T1-WEBTOOLS', 'autoos:T1-ZEN', 'autoos:T2-COMPACT', 'autoos:T2-ISOLATE', 'autoos:T2-LEAN',
+        'autoos:T2-MCPLIFE', 'autoos:T2-RESEARCHCARD', 'autoos:T2-TASKSESSION', 'autoos:T3-CLEAN', 'autoos:T3-PRINCIPLES', 'autoos:T3-SCRUB',
+        'autoos:T3-SPLIT', 'autoos:T3-WIN', 'server:T6-DETECT', 'server:T6-FIX', 'server:T6-GRAPHMOVE-CUTOVER', 'server:T6-INFRA',
+        'server:T6-IPV6', 'server:T6-LEDGER', 'server:T6-MEDIA', 'server:T6-PHONE', 'server:T6-SECRETS', 'server:T6-UPDATES-IMPL']
+  # no other item depends on routing:T7-BOARD (grep of data/plan-v3: only routing:GOAL); T6-LEDGER only has a note "no hard dep on T7-BOARD" (unchanged)
+  - op: edit
+    key: autoos:T7-CONSOLE
+    fields: {title: Fleet console P2-P4 per FLEETSPEC; the plan-graph page is its board view, done_criteria: per-phase acceptance
+        tests in FLEETSPEC; plan-graph page is its board view (no board integration)}
+
+  # ===== B. 19 new items =====
+  - op: create
+    item:
+      project: autoos
+      id: SEC-ISOSEC
+      title: Sandboxes never carry plaintext secrets (isolation)
+      owner: autoos-L1-main
+      track: SEC
+      kind: lane
+      depends_on: []
+      review_tier: high
+      evidence_kinds: [commit+ci]
+      done_criteria: 'sandboxes never carry plaintext secrets: exclusions inherited, plaintext refusal, root outside AutoOS,
+        depth-1 clone, test (D-225)'
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: autoos
+      id: ORCH-V4-DOCS
+      title: 'Orchestration v4 docs: hierarchy, skill levels L0-L3, README'
+      owner: autoos-L1-main
+      track: ORCH
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [commit+ci]
+      done_criteria: docs/orchestration-hierarchy.md + skill levels L0-L3 + README section (D-228, D-230)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: autoos
+      id: ORCH-REVIEW-TIERS
+      title: Risk-tier reviewer rule in cards/spawner
+      owner: autoos-L1-main
+      track: ORCH
+      kind: lane
+      depends_on: ['autoos:ORCH-V4-DOCS']
+      review_tier: high
+      evidence_kinds: [commit+ci]
+      done_criteria: risk-tier reviewer rule in cards/spawner (1 default, 2 for security/secrets/gateway/deploy/keeper)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: autoos
+      id: ORCH-L2-LAUNCHER
+      title: Host launcher for L2 phase orchestrators
+      owner: autoos-L1-main
+      track: ORCH
+      kind: lane
+      depends_on: ['autoos:ORCH-V4-DOCS']
+      review_tier: high
+      evidence_kinds: [commit+ci]
+      done_criteria: host launcher for L2 phase orchestrators (request file -> host unit -> fresh Sonnet session; TTL + reaper)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: autoos
+      id: T2-RECORD-GAPS
+      title: 'Record gaps: pinned or-* models resolve a provider, record family'
+      owner: autoos-L1-main
+      track: T2
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [commit+ci]
+      done_criteria: pinned `or-*` models resolve a provider; pinned runs record model_source + family
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: autoos
+      id: T1-COMBO-LAYERS
+      title: OmniRoute combos grouped by layer (L0-L2 sticky, L3 rotating)
+      owner: autoos-L1-main
+      track: T1
+      kind: lane
+      depends_on: ['autoos:T1-COMBO3']
+      review_tier: high
+      evidence_kinds: [run-record]
+      done_criteria: 'OmniRoute combos grouped by layer: sticky L0-L2 orchestrator combos, rotating L3 writer combos, family-diverse
+        L3 reviewer pools (D-230)'
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: GW-FOLLOWUP
+      title: 'Gateway follow-up: _OPAQUE over-matching, 1 h watch findings'
+      owner: server-L1-main
+      track: GW
+      kind: lane
+      depends_on: ['server:T6-PILOT']
+      review_tier: high
+      evidence_kinds: [semaphore-task]
+      done_criteria: _OPAQUE redaction over-matches release titles + 1 h watch findings
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: GW-MCP-ROLLOUT
+      title: Homelab gateway MCP rollout to server-L1, prox, routing-00
+      owner: server-L1-main + prox
+      track: GW
+      kind: lane
+      depends_on: ['server:T6-PILOT']
+      review_tier: high
+      evidence_kinds: [decision]
+      done_criteria: homelab gateway MCP for server-L1, prox build sessions, routing-00 (per-consumer tokens, D-224)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: SEC-AUTHELIA-REDIS
+      title: Redis session store for Authelia
+      owner: prox
+      track: SEC
+      kind: lane
+      depends_on: []
+      review_tier: high
+      evidence_kinds: [semaphore-task]
+      done_criteria: Redis session store for Authelia; one announced logout window
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: SEC-OIDC
+      title: OIDC client secrets for 12 apps (one per batch)
+      owner: prox
+      track: SEC
+      kind: lane
+      depends_on: ['server:SEC-AUTHELIA-REDIS']
+      review_tier: high
+      evidence_kinds: [semaphore-task]
+      done_criteria: OIDC client secrets, 12 apps, one per batch
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: SEC-SESSION-SECRETS
+      title: 'Session secrets: Open WebUI, Paperless, Worklenz, Jellystat, ...'
+      owner: prox
+      track: SEC
+      kind: lane
+      depends_on: ['server:SEC-AUTHELIA-REDIS']
+      review_tier: high
+      evidence_kinds: [semaphore-task]
+      done_criteria: Open WebUI, Paperless, Worklenz, Jellystat, Headplane, Karakeep (same window)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: SEC-EDGE-GW-INVEST
+      title: Edge proxy secrets in the great-wiki/invest deploy folders
+      owner: prox
+      track: SEC
+      kind: lane
+      depends_on: []
+      review_tier: high
+      evidence_kinds: [semaphore-task]
+      done_criteria: edge proxy secrets in the great-wiki/invest deploy folders (env + recreate only)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: SEC-MINIO
+      title: Fresh MinIO root + dedicated service account at the cutover
+      owner: prox
+      track: SEC
+      kind: lane
+      depends_on: ['server:T6-GRAPHMOVE-CUTOVER']
+      review_tier: high
+      evidence_kinds: [semaphore-task]
+      done_criteria: fresh MinIO root + dedicated service account at the cutover
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: SEC-TIER-A
+      title: Tier A provider keys (+ AutoOS OS-31) after the OmniRoute work
+      owner: prox (+ operator keys)
+      track: SEC
+      kind: lane
+      depends_on: ['autoos:T1-COMBO3']
+      review_tier: high
+      evidence_kinds: [decision]
+      done_criteria: provider keys (+ AutoOS OS-31) after the main OmniRoute work
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: autoos
+      id: OP-MANAGE-KEY
+      title: 'OS-41: OmniRoute manage-scope key'
+      owner: operator
+      track: OP
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [decision]
+      done_criteria: OS-41 OmniRoute manage-scope key (unblocks drift + spend ledger)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: workstation
+      id: OP-GROK-STEPS
+      title: 'OS-42: Funnel click, 3 .env values, workstation manage key'
+      owner: operator
+      track: OP
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [decision]
+      done_criteria: OS-42 Funnel click + 3 .env values + workstation manage key
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: OP-DOCKHAND-REVOKE
+      title: 'OS-43: delete the Dockhand token "Claude code"'
+      owner: operator
+      track: OP
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [decision]
+      done_criteria: OS-43 delete Dockhand token "Claude code"
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: workstation
+      id: OP-WS-RELAUNCH
+      title: Relaunch workst-L1-autoos in ~/fleet/AutoOS (fixes T5-CLONE)
+      owner: operator
+      track: OP
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [decision]
+      done_criteria: relaunch workst-L1-autoos in ~/fleet/AutoOS from its handoff (fixes T5-CLONE)
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+  - op: create
+    item:
+      project: server
+      id: OP-FRITZ-V6
+      title: Fritzbox IPv6 inbound share for OPNsense 80/443
+      owner: operator
+      track: OP
+      kind: lane
+      depends_on: []
+      review_tier: standard
+      evidence_kinds: [decision]
+      done_criteria: Fritzbox IPv6 inbound share for OPNsense 80/443
+      estimate_h: 2
+      estimate_src: default
+      priority: 0
+      note: router definition 2026-10-01 (graph-updates-2026-10-01.md section B)
+
+  # ===== GOAL: every new leaf (no dependents) added; computed after the T7-BOARD drop and the re-points =====
+  # non-leaves not added (reach GOAL through a dependent): autoos:ORCH-V4-DOCS, server:SEC-AUTHELIA-REDIS
+  - op: edit
+    key: routing:GOAL
+    fields:
+      depends_on: ['routing:GATE-P3', 'plangraph:PG-M4', 'autoos:T1-CREDIT', 'autoos:T1-JEV', 'autoos:T1-MM', 'autoos:T1-NOISE',
+        'autoos:T1-UPGRADE', 'autoos:T1-WEBTOOLS', 'autoos:T1-ZEN', 'autoos:T2-COMPACT', 'autoos:T2-ISOLATE', 'autoos:T2-LEAN',
+        'autoos:T2-MCPLIFE', 'autoos:T2-RESEARCHCARD', 'autoos:T2-TASKSESSION', 'autoos:T3-CLEAN', 'autoos:T3-PRINCIPLES', 'autoos:T3-SCRUB',
+        'autoos:T3-SPLIT', 'autoos:T3-WIN', 'server:T6-DETECT', 'server:T6-FIX', 'server:T6-GRAPHMOVE-CUTOVER', 'server:T6-INFRA',
+        'server:T6-IPV6', 'server:T6-LEDGER', 'server:T6-MEDIA', 'server:T6-PHONE', 'server:T6-SECRETS', 'server:T6-UPDATES-IMPL',
+        'autoos:SEC-ISOSEC', 'autoos:ORCH-REVIEW-TIERS', 'autoos:ORCH-L2-LAUNCHER', 'autoos:T2-RECORD-GAPS', 'autoos:T1-COMBO-LAYERS',
+        'server:GW-FOLLOWUP', 'server:GW-MCP-ROLLOUT', 'server:SEC-OIDC', 'server:SEC-SESSION-SECRETS', 'server:SEC-EDGE-GW-INVEST',
+        'server:SEC-MINIO', 'server:SEC-TIER-A', 'autoos:OP-MANAGE-KEY', 'workstation:OP-GROK-STEPS', 'server:OP-DOCKHAND-REVOKE',
+        'workstation:OP-WS-RELAUNCH', 'server:OP-FRITZ-V6']
