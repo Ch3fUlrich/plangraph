@@ -1,0 +1,133 @@
+"""Shared fakes for the evidence verifier tests (not collected by pytest).
+
+A single fake per adapter, injected on a lightweight ``ctx`` stand-in, so the
+verifier tests need no git, no network and no filesystem.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+from plangraph.keeper import evidence as ev
+
+SHA = "a" * 40
+OTHER_SHA = "b" * 40
+CLAIM = 1_700_000_000.0
+ITEM = {"project": "routing", "id": "T2-ONEPATH", "key": "routing:T2-ONEPATH"}
+
+
+class FakeGit:
+    def __init__(
+        self,
+        repo: str | None = "/repos/routing",
+        exists: bool = True,
+        ancestor: bool = True,
+        trailers: dict | None = None,
+        commit_time: float | None = CLAIM + 100,
+        error: Exception | None = None,
+    ):
+        self.repo = repo
+        self.exists = exists
+        self.ancestor = ancestor
+        self.message_trailers = {"Plan-Item": ITEM["key"]} if trailers is None else trailers
+        self.ctime = commit_time
+        self.error = error
+        self.repo_path_calls: list[str] = []
+
+    def repo_path(self, project):
+        self.repo_path_calls.append(project)
+        if self.error:
+            raise self.error
+        return self.repo
+
+    def commit_exists(self, repo, sha):
+        return self.exists
+
+    def is_ancestor_of_main(self, repo, sha):
+        return self.ancestor
+
+    def trailers(self, repo, sha):
+        return dict(self.message_trailers)
+
+    def commit_time(self, repo, sha):
+        return self.ctime
+
+
+class FakeCI:
+    def __init__(self, mode: str | None = "owner/repo", runs=None, error: Exception | None = None):
+        self._mode = mode
+        self.runs = runs if runs is not None else [{"name": "build", "head_sha": SHA, "conclusion": "success"}]
+        self.error = error
+        self.calls: list[tuple[str, str]] = []
+
+    def mode(self, project):
+        return self._mode
+
+    def check_runs(self, repo_slug_or_path, sha):
+        self.calls.append((repo_slug_or_path, sha))
+        if self.error:
+            raise self.error
+        return list(self.runs)
+
+
+class FakeRuns:
+    def __init__(self, valid: bool = True, job: dict | None = None, exit: dict | None = None,
+                 job_error: Exception | None = None, exit_error: Exception | None = None):
+        self.valid = valid
+        self._job = job if job is not None else {"request": {"title": "do " + ITEM["key"]}, "task": ""}
+        self._exit = exit if exit is not None else {"rc": 0}
+        self.job_error = job_error
+        self.exit_error = exit_error
+
+    def valid_run_id(self, run_id):
+        return self.valid
+
+    def job(self, run_id):
+        if self.job_error:
+            raise self.job_error
+        return self._job
+
+    def exit(self, run_id):
+        if self.exit_error:
+            raise self.exit_error
+        return self._exit
+
+
+class FakeSemaphore:
+    def __init__(self, data: dict | None = None, error: Exception | None = None):
+        self.data = data if data is not None else {"status": "success"}
+        self.error = error
+
+    def get(self, task_id):
+        if self.error:
+            raise self.error
+        return self.data
+
+
+class FakeDecisions:
+    def __init__(self, present: set | None = None, error: Exception | None = None):
+        self.present = present if present is not None else {"D-209"}
+        self.error = error
+
+    def has(self, decision_id):
+        if self.error:
+            raise self.error
+        return decision_id in self.present
+
+
+def make_ctx(**over):
+    base = dict(
+        git=FakeGit(),
+        ci=FakeCI(),
+        runs=FakeRuns(),
+        semaphore=FakeSemaphore(),
+        decisions=FakeDecisions(),
+        now=CLAIM + 50,
+        claim_time=CLAIM,
+    )
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def verify(kind, ref, ctx=None, item=None):
+    return ev.VERIFIERS[kind].verify(item or ITEM, ref, ctx or make_ctx())
