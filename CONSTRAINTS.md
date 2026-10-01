@@ -39,3 +39,16 @@ Source: /home/s/code/routing/docs/plan/briefs/plangraph-L1-main.md. Talk to rout
 ## Facts routing-00 already holds (do not restate)
 Beads/Dolt can reopen/update/delete/sql-edit closed items, actor self-asserted; Gas Town owns the runtime (overlap); no self-hosted PM tool draws a dependency network.
 Working in place on the empty repo is fine until the first commit; worktrees after that. Round-2 tool-sweep file still pending (routing-00 will ping).
+
+## M1 verdict (routing-00, 2026-10-01): APPROVE C over B (operator confirms architecture shortly). Conditions:
+1 PLACEMENT: coding.vm agents run as user `s` (docker+lxd groups = root-equivalent) -> 0700 DB isolation void there. Production keeper on a
+  host where agents have no shell (small VM/LXC deployed by prox via Semaphore), API over tailnet only. M2 pilot on coding.vm labelled
+  "isolation not effective". Test 1b runs against the off-host keeper and checks docker/lxd/sudo group membership.
+2 STAGE: M2a = store+triggers+state machine+whole-graph validator+views+evidence verifier+CLI/MCP+import+page, simple per-principal tokens.
+  M2b = run-bound tokens, signed snapshot, outbox replay, hash-chain anchor. Report REAL line counts (router expects >1,500).
+3 EVIDENCE KINDS pluggable: commit+ci, run-record, semaphore-task (id, template, status success), decision (D-id exists in routing/DECISIONS.md).
+4 IMPORT: plan-v3.import.yaml goes to routing-00 for review BEFORE import; router owns plan content; definitions router-attributed.
+5 PAGE: `pg render` = one static HTML; routing-00 publishes it as private artifact; vendored JS, no external fetch beyond cdnjs/jsDelivr.
+6 REVIEWS: merges need D-206 seats with model_source pinned/resolved; pin distinct free models per seat; unresolved families don't count.
+Start now (same for B and C): import YAML draft, views module, page. Keeper/store starts when operator confirms C.
+Remote: none until M2. Postgres = M4 decision. Work lives on branch worktree-proposal (worktree .claude/worktrees/proposal).

@@ -2,13 +2,13 @@
 Updated: 2026-10-01 | Brief: /home/s/code/routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md
 
 ## Phase
-1. Proposal — v3 written, committed on branch worktree-proposal (docs/PROPOSAL.md); sent to routing-00 for M1 judgement
+1. Proposal — APPROVED C (M1 verdict, 6 conditions in CONSTRAINTS.md); operator confirmation pending
 2. Pilot — blocked on operator architecture choice (via routing-00)
 3. Tests — not started
 4. Adoption report — not started
 
 ## Now
-- Waiting on routing-00 judgement + operator architecture choice (C default); re-review of v3 not yet run
+- Building same-for-B-and-C parts: WP1 import YAML, WP2 views.py, WP3 render page (contract: docs/SPEC.md); keeper waits for operator OK
 - New req 5a (L1 autonomy) + acceptance criteria are in CONSTRAINTS.md
 
 ## Next
