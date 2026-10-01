@@ -20,6 +20,6 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
 
 ## Waiting on
 - X7a1 writer; X6c seats 1+2. Router batch load waits for: X7 + seats + pilot keeper + routing-00 OK on formal diff.
-## Claude budget (D-252, 600k per work set): used 83,465 (Sonnet subagent: router batch draft).
+## Claude subagent use: 83,465 tokens (Sonnet: router batch draft); keep small, free/trial seats first (D-253). Compactions this session: 0 (report each to routing; fresh restart after the 5th).
 ## Spend: pending ledger (gateway usage unreadable until OS-41). Paid run ids: see HANDOFF §2 + this session's x6c*/x7* titles.
 ## Notes: never read opencode session DBs; never print tokens; heavy runs -> workstation via routing-00.
