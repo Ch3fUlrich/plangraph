@@ -35,3 +35,4 @@ Server 2026-10-03-server-plan-d459 (6bda845b, 7 ops; source staged from t6/serve
 D-464 close server:T-020 (4 ops): data/updates/2026-10-02-router-close-d464.yaml — LIVE 2026-10-02 (verify ok).
 D-465 close server:T-004 (4 ops): data/updates/2026-10-02-router-close-d465.yaml — LIVE 2026-10-02 (verify ok).
 Audit gaps (router-OK, operator-instruction audit 2026-10-02): data/updates/2026-10-02-router-audit-gaps.yaml sha 4c7eedb4… — LIVE (create 28 = 5 Q + 22 gap rows + gate routing:PH-AUDIT-1002; routing:GOAL 52→53; 7 priorities; verify ok). First apply refused by the credential guard on 'explo/audiomuse' (slash pair near 'login'-like context) → rephrased.
+md-sync closes pre-check + status file + multi-id parser: merged cf8e6af (=750a9e5; seats gpt-oss review-call cc98b17b PASS + Qwen 69f9bc00 PASS; 1043 green WSL). Service now writes ~/.local/share/plangraph/md-sync.status.json. First run 23:41Z applied 19 ops: OS-60/72/85/86/90/94 done; second run 0 ops; verify ok.
