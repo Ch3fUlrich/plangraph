@@ -1,0 +1,22 @@
+batch: 2026-10-02-router-close-d459
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: fd499c024cc56507ed6bef137623a53758ee9b4213013b357bffd4b05ec23c9d
+ops:
+- op: edit
+  key: server:T-016
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:T-016
+  state: in_review
+  note: 'router D-459: T-016 closes (operator + router)'
+- op: add_evidence
+  key: server:T-016
+  kind: decision
+  ref:
+    id: D-459
+- op: close_on_decision
+  key: server:T-016
