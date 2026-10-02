@@ -27,6 +27,8 @@ plangraph-L1-main by SendMessage.
 
 - Gateway review calls (D-439/D-440): a tool-less single-call review over a pasted diff through the central OmniRoute counts as a
   response-side seat; ONLY via autoos `tools/review-call.py` (under KEYEXEC) once autoos-L1 announces it. Until then: workstation seat packages.
+- Seat sampling (routing, via autoos-L1, 2026-10-02): NEVER send `temperature: 0` to reasoning models (e.g. gpt-oss-120b); omit it (it
+  cuts answers at 64 completion tokens). finish_reason `length` or empty content = a FAILED seat: rerun it, never count it as a thin pass.
 
 ## Phase
 Goal · tasks (READ list, WRITE SCOPE, spec, tests) · acceptance · budget/TTL · return format.
