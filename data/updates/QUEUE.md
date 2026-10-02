@@ -25,7 +25,7 @@ Live apply waits only for the B1+B3 seats. Later: server d311-priority after KEE
 LIVE 2026-10-02 ~14:00Z (D-371): all 13 applied atomically on the pilot; 366 items, verify ok. Pending: server d311-priority after B2.
 D-446 close RESEAT-MODEL-A (4 ops): data/updates/2026-10-02-router-close-d446.yaml — LIVE 2026-10-02 ~18:05Z (applied 4 of 4).
 D-447 close autoos:EVTAG (4 ops): data/updates/2026-10-02-router-close-d447.yaml — LIVE 2026-10-02 (applied 4 of 4) after the operator allowance (OS-92).
-DRAFTS (not applied): 2026-10-02-router-rehome-workstation.yaml (10 rehome ops; needs apply_batch rehome op), 2026-10-02-router-closes-d428.yaml (6 ops; needs the D-434 tier-edit code live).
+D-413 rehome of the 10 OPEN workstation:* items -> autoos host=workstation: data/updates/2026-10-02-router-rehome-workstation.yaml — LIVE 2026-10-02 (applied 10 of 10, verify ok, aliases recorded) on apply_batch rehome (8af0e23; seats gpt-oss PASS review-call 4a208af6 + Qwen3.5-397B PASS 943c31bd). D-428 closes: LIVE (above).
 D-459 close server:T-016 (4 ops): data/updates/2026-10-02-router-close-d459.yaml — LIVE 2026-10-02 (applied 4 of 4, verify ok). Rehome batch content router-OK'd (D-459 msg); applies after the apply_batch rehome fix merges.
 D-420 close server:T-023 (4 ops): data/updates/2026-10-02-router-close-d420.yaml — LIVE 2026-10-02.
 D-428 closes autoos:T3-CIGREEN + T3-CIMAIN (6 ops): data/updates/2026-10-02-router-closes-d428.yaml — LIVE 2026-10-02 ~19:00Z on the D-434 tier-edit code (applied 6 of 6, verify ok).

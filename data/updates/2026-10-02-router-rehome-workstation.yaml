@@ -1,7 +1,7 @@
 batch: 2026-10-02-router-rehome-workstation
 principal: routing-00
 source: /home/s/code/routing/docs/decisions-log.md
-source_sha256: cfb7f22fcea85fcdef53bfa5bb4a08a2057d0de69b4293d7a2aea312dac1817b
+source_sha256: 0b19aa1f6f30e181aed4b3bd9056f4068249585ac7f50476c53bb3b010479a6e
 # D-413: rehome of workstation:* OK (T5-* -> autoos host=workstation, OP-* -> the project served; in-flight after release; terminal stay).
 # Only the 10 OPEN items move now; T0-WSCLONE (in_review), T5-BRANCHES and T5-GROK-L2 (claimed) wait for release.
 ops:
