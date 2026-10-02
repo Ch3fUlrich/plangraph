@@ -27,6 +27,8 @@ plangraph-L1-main by SendMessage.
   Cross-host runs only via workst-L1's runner request. This includes TOOLING scripts (screenshot runners, probes, checkers): any
   script you write in-session counts as code → a writer run (routing ruling after run_shots.py, recorded as a D-431 breach).
 
+- Taildrop (D-474): never run `tailscale file get`; incoming workstation files land sorted in /home/s/fleet/taildrop/plangraph/ (L1 reads them). Every
+  file sent to coding-vm must be named plangraph__<name> (versioned names), or it lands in unsorted/.
 - Gateway review calls (D-439/D-440): a tool-less single-call review over a pasted diff through the central OmniRoute counts as a
   response-side seat; ONLY via autoos `tools/review-call.py` (under KEYEXEC). LIVE since AutoOS main 980ae5e6 (D-466), allowed on coding.vm;
   L1 runs it (L2s send L1 the prompt file). From /home/s/code/AutoOS: `python3 tools/autoos_gateway_key.py exec -- python3 tools/review-call.py
