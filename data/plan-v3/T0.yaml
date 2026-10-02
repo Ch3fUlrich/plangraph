@@ -34,10 +34,11 @@ items:
     depends_on: []
     corrects: null
     done_criteria: "docker inspect -> Init=true, PidsLimit=32768, Memory set; PID 1 = tini; zombies < 50 after 24 h"
-    evidence_kinds: [run-record, decision]
+    evidence_kinds: [decision]
     operator: true
     priority: 0
-    note: "legacy, needs evidence; STATUS: docker inspect Init=true (D-194). Decision: no hard dep on T4-HARDEN; priority 0."
+    review_tier: none
+    note: "router 2026-10-01 (D-314 fold): done by decision: router recreated the container, Init=true (D-194, D-213); pids/mem in compose stays in T4-HARDEN; import note: legacy, needs evidence; STATUS: docker inspect Init=true (D-194). Decision: no hard dep on T4-HARDEN; priority 0."
     source: "data/source/plan-v3/T0-stabilize.md#T0-CONTAINER"
 
   - project: routing
@@ -52,10 +53,11 @@ items:
     depends_on: [T0-L1]
     corrects: null
     done_criteria: "each session acked HOLD (done 11:3xZ); closed or relaunched"
-    evidence_kinds: [run-record]
+    evidence_kinds: [decision]
     operator: false
     priority: 0
-    note: "legacy, needs evidence; STATUS: D-180, D-186; stale sessions held + stopped."
+    review_tier: none
+    note: "router 2026-10-01 (D-314 fold): done by decision (D-182): stale 09-28 sessions held + stopped; import note: legacy, needs evidence; STATUS: D-180, D-186; stale sessions held + stopped."
     source: "data/source/plan-v3/T0-stabilize.md#T0-HOLD"
 
   - project: routing
@@ -70,10 +72,11 @@ items:
     depends_on: ["autoos:T0-SYNC"]
     corrects: null
     done_criteria: "session up, ack names plan v3 + its first lane"
-    evidence_kinds: [run-record]
+    evidence_kinds: [decision]
     operator: false
     priority: 0
-    note: "legacy, needs evidence; STATUS: sessions 8cd0f9b4, cdd9f6da."
+    review_tier: none
+    note: "router 2026-10-01 (D-314 fold): done by decision (D-186, D-228): new L1-mains launched; recycled 2026-10-01 evening; import note: legacy, needs evidence; STATUS: sessions 8cd0f9b4, cdd9f6da."
     source: "data/source/plan-v3/T0-stabilize.md#T0-L1"
 
   - project: autoos
@@ -91,7 +94,7 @@ items:
     evidence_kinds: [commit+ci]
     operator: false
     priority: 0
-    note: "legacy, needs evidence; STATUS: SYNC done."
+    note: "router 2026-10-01 (D-314 fold): needs L1-main confirmation that sync is complete; quarantine d8b6e0ef (D-182); import note: legacy, needs evidence; STATUS: SYNC done."
     source: "data/source/plan-v3/T0-stabilize.md#T0-SYNC"
 
   - project: autoos

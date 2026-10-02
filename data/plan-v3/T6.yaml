@@ -165,7 +165,7 @@ items:
     operator: true
     priority: 0
     review_tier: high
-    note: "STATUS claimed: 82/83 encrypted + guard + R1; playbooks next, rotations in per-application batches with operator approval (D-203). Owner prox."
+    note: "router 2026-10-01 (D-314 fold): claimed by prox: 86/87 store files SOPS; tier B running (D-202, D-208, D-214, D-216, D-226, D-229); import note: STATUS claimed: 82/83 encrypted + guard + R1; playbooks next, rotations in per-application batches with operator approval (D-203). Owner prox."
     source: "data/source/plan-v3/T6-server-ops.md#T6-SECRETS"
 
   - project: server
@@ -183,7 +183,7 @@ items:
     evidence_kinds: [run-record, semaphore-task]
     operator: false
     priority: 0
-    note: "STATUS claimed: V1 applied except the deferred Fritzbox share; prox applies (prox via API)."
+    note: "router 2026-10-01 (D-314 fold): claimed by prox: only the Fritzbox inbound share left (operator, see server:OP-FRITZ-V6) (D-207); import note: STATUS claimed: V1 applied except the deferred Fritzbox share; prox applies (prox via API)."
     source: "data/source/plan-v3/T6-server-ops.md#T6-IPV6"
 
   - project: server

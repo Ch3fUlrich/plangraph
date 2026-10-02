@@ -5,31 +5,14 @@ principal: routing-00
 source: /home/s/code/routing/docs/plan/graph-updates-2026-10-01.md
 source_sha256: 98d2fe2f03760e30f99627812ef479e78199b6fb95a633580592a0b1e708a07b
 ops:
+  # D-314: ops for T0-CONTAINER/T0-HOLD/T0-L1 (tier none + [decision] + note) and the note edits for T0-SYNC, T6-SECRETS, T6-IPV6 are folded into the data/plan-v3 import (definitions are frozen once claimed/in_review).
 
   # ===== A1. done by decision (legacy in_review in plan-v3 => no legacy_state op needed) =====
-  - op: edit
-    key: autoos:T0-CONTAINER
-    fields:
-      review_tier: none
-      evidence_kinds: [decision]
-      note: 'done by decision: router recreated the container, Init=true (D-194, D-213); pids/mem in compose stays in T4-HARDEN'
   - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: {id: D-194}}
   - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: {id: D-213}}
   - {op: close_on_decision, key: 'autoos:T0-CONTAINER'}
-  - op: edit
-    key: routing:T0-HOLD
-    fields:
-      review_tier: none
-      evidence_kinds: [decision]
-      note: 'done by decision (D-182): stale 09-28 sessions held + stopped'
   - {op: add_evidence, key: 'routing:T0-HOLD', kind: decision, ref: {id: D-182}}
   - {op: close_on_decision, key: 'routing:T0-HOLD'}
-  - op: edit
-    key: routing:T0-L1
-    fields:
-      review_tier: none
-      evidence_kinds: [decision]
-      note: 'done by decision (D-186, D-228): new L1-mains launched; recycled 2026-10-01 evening'
   - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: {id: D-186}}
   - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: {id: D-228}}
   - {op: close_on_decision, key: 'routing:T0-L1'}
@@ -49,9 +32,6 @@ ops:
   - {op: close_on_decision, key: 'server:T6-PILOT'}
 
   # ===== A3. in_review with evidence (NOT closed) =====
-  - op: edit
-    key: autoos:T0-SYNC
-    fields: {note: needs L1-main confirmation that sync is complete; quarantine d8b6e0ef (D-182)}
   - {op: add_evidence, key: 'autoos:T0-SYNC', kind: decision, ref: {id: D-182}}
   - {op: legacy_state, key: 'server:T6-DETECT', state: in_review, note: 'router: inventory + LoggiFly/prometheus removal merged
         (Server 50a7a5a); live cleanup deploy still pending (dry run first)'}
@@ -59,9 +39,6 @@ ops:
 
   # ===== A4. claimed =====
   # T6-SECRETS already claimed in plan-v3 (owner prox): no legacy_state op, progress note via edit
-  - op: edit
-    key: server:T6-SECRETS
-    fields: {note: 'claimed by prox: 86/87 store files SOPS; tier B running (D-202, D-208, D-214, D-216, D-226, D-229)'}
   - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-202}}
   - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-208}}
   - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-214}}
@@ -72,9 +49,6 @@ ops:
   - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: {commit: c962f0eae3d350f1b58d079ac383230b7f8189e1}}
   - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: {commit: 5602cfc06fa9675b587bd6f16e295f41330bfd64}}
   # T6-IPV6 already claimed in plan-v3 (owner prox): no legacy_state op, progress note via edit
-  - op: edit
-    key: server:T6-IPV6
-    fields: {note: 'claimed by prox: only the Fritzbox inbound share left (operator, see server:OP-FRITZ-V6) (D-207)'}
   - {op: add_evidence, key: 'server:T6-IPV6', kind: decision, ref: {id: D-207}}
   - {op: legacy_state, key: 'server:T6-OWUI', state: claimed, note: 'claimed by server-L1-main: small fix passes running'}
 
