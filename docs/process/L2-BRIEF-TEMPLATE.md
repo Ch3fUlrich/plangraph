@@ -17,7 +17,8 @@ plangraph-L1-main by SendMessage.
   the code lines; no L1/L2 opinions, D-302) + README. L1 ships them. Disputed findings go to L1 with file:line; L1/router rule.
 - UI phases (D-323): a Playwright check at 1440×900 and 390×844 with a checklist + screenshots in the record; findings become fix tasks.
 - Privacy: site data (plans, decisions, QUESTIONS/ANSWERS) never goes to external models; writers and seats get code + synthetic fixtures.
-- Memory guard (D-204): start nothing heavy while MemAvailable < 3 GB.
+- Placement (D-389): new L2 sessions and writer runs go to the WORKSTATION via workst-L1. On coding.vm: max 3 concurrent agent runs
+  fleet-wide, none started below 4.5 GB MemAvailable.
 
 ## Phase
 Goal · tasks (READ list, WRITE SCOPE, spec, tests) · acceptance · budget/TTL · return format.
