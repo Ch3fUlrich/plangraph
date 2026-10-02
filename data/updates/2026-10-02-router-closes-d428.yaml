@@ -1,0 +1,33 @@
+batch: 2026-10-02-router-closes-d428
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: cfb7f22fcea85fcdef53bfa5bb4a08a2057d0de69b4293d7a2aea312dac1817b
+# D-428 (Closes: autoos:T3-CIGREEN autoos:T3-CIMAIN). Both are legacy-CLAIMED: needs the D-434 tier-edit keeper code live.
+# Refresh source_sha256 right before applying.
+ops:
+- op: edit
+  key: autoos:T3-CIGREEN
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: add_evidence
+  key: autoos:T3-CIGREEN
+  kind: decision
+  ref:
+    id: D-428
+- op: close_on_decision
+  key: autoos:T3-CIGREEN
+- op: edit
+  key: autoos:T3-CIMAIN
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: add_evidence
+  key: autoos:T3-CIMAIN
+  kind: decision
+  ref:
+    id: D-428
+- op: close_on_decision
+  key: autoos:T3-CIMAIN

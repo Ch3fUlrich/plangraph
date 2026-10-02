@@ -1,0 +1,47 @@
+batch: 2026-10-02-router-rehome-workstation
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: cfb7f22fcea85fcdef53bfa5bb4a08a2057d0de69b4293d7a2aea312dac1817b
+# D-413: rehome of workstation:* OK (T5-* -> autoos host=workstation, OP-* -> the project served; in-flight after release; terminal stay).
+# Only the 10 OPEN items move now; T0-WSCLONE (in_review), T5-BRANCHES and T5-GROK-L2 (claimed) wait for release.
+ops:
+- op: rehome
+  key: workstation:OP-WS-RELAUNCH
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-CERT
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-CLONE
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-FINISH
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-GRAPH
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-HANDOFF
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-KEYS
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-PROVIDERS
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-SKILLS
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-SYNC
+  new_project: autoos
+  host: workstation
