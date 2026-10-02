@@ -1,0 +1,21 @@
+batch: 2026-10-02-router-closes
+principal: routing-00
+source: /home/s/code/routing/docs/plan/graph-updates-2026-10-02-closes.md
+source_sha256: c4e9823cfea81505300978db8dda334b7135775dca8e62849d0533b69e7f241b
+# apply AFTER the 2026-10-01 router batch and server batches 1-7 (router queue order)
+ops:
+  # server:Q-MISSING-TITLES: done by decision D-342
+  - {op: edit, key: 'server:Q-MISSING-TITLES', fields: {review_tier: none, evidence_kinds: [decision]}}
+  - {op: legacy_state, key: 'server:Q-MISSING-TITLES', state: in_review, note: "router 2026-10-02: done by decision D-342: operator: keep waiting, profile unchanged, no deadline"}
+  - {op: add_evidence, key: 'server:Q-MISSING-TITLES', kind: decision, ref: {id: D-342}}
+  - {op: close_on_decision, key: 'server:Q-MISSING-TITLES'}
+  # server:DECIDE-AV1-WORKERS: done by decision D-342
+  - {op: edit, key: 'server:DECIDE-AV1-WORKERS', fields: {review_tier: none, evidence_kinds: [decision]}}
+  - {op: legacy_state, key: 'server:DECIDE-AV1-WORKERS', state: in_review, note: "router 2026-10-02: done by decision D-342: operator: keep 1 Tdarr worker"}
+  - {op: add_evidence, key: 'server:DECIDE-AV1-WORKERS', kind: decision, ref: {id: D-342}}
+  - {op: close_on_decision, key: 'server:DECIDE-AV1-WORKERS'}
+  # workstation:OP-GROK-STEPS: done by decision D-335
+  - {op: edit, key: 'workstation:OP-GROK-STEPS', fields: {review_tier: none, evidence_kinds: [decision]}}
+  - {op: legacy_state, key: 'workstation:OP-GROK-STEPS', state: in_review, note: "router 2026-10-02: done by decision D-335: Grok first job end to end (job bcb5b5fb)"}
+  - {op: add_evidence, key: 'workstation:OP-GROK-STEPS', kind: decision, ref: {id: D-335}}
+  - {op: close_on_decision, key: 'workstation:OP-GROK-STEPS'}
