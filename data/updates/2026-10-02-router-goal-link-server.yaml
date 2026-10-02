@@ -1,7 +1,7 @@
 batch: 2026-10-02-router-goal-link-server
 principal: routing-00
 source: /home/s/code/plangraph/.claude/worktrees/proposal/data/updates/QUEUE.md
-source_sha256: 2316a7a86208da15f8c8d766a4bbf08335170b0c801b4640fb37d5d2245f06b5
+source_sha256: 1c83988e8cdaaccffb08ac947fff8d435c62c74f4dff43d4035f9a2c2d14f70b
 ops:
 - op: edit
   key: routing:GOAL
