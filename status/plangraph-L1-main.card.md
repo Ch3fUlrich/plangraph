@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (Opus 5.5 high, L1 project orchestrator; relaunched fresh 2026-10-01 ~20:15)
-Updated: 2026-10-02 17:10 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+Updated: 2026-10-02 17:58 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
 M1 CLOSED. M2a code accepted (routing-00 Opus spot review). Now: X6 fixes -> X7 tiers -> 2-seat re-review -> pilot keeper -> plan-v3 load ->
@@ -12,7 +12,7 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
   refusal), B2..B2d (D-400), MODEL-A (D-427, request-side seats; re-seat lane plangraph:RESEAT-MODEL-A after autoos:EVTAG).
 - Applied batches: data/updates/* (QUEUE.md), router closes D-395/D-413/D-422, autoos WS-SHIFT, RECONCILE (86), MCP-ONE.
 - IN FLIGHT (workstation via workst-L1, Taildrop; D-389/D-430: runs only via autoos-agent spawn):
-  * integration fix md_sync x MODEL-NAMES (pkg c2c8051c) -> then merge, restart daemon, `pg migrate-descriptions`, rehome batch
+  * integ fix DONE cfda342 (968 green); mask port writer queued (pkg b38b82ec); then ONE seat pair (integ+mask+tieredit) -> merge, restart daemon, `pg migrate-descriptions`, rehome batch
     (10 open workstation:* -> T5-* autoos host=workstation, OP-* served project; D-413).
   * tier-edit keeper fix (pkg writer3 59785f94, D-434) -> seats -> merge -> D-428 closes (T3-CIGREEN/T3-CIMAIN).
   * md-sync mask-on-import (pkg writer2 bd685d62, D-405) -> rebase after integration fix.
@@ -21,4 +21,4 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
 - Rules in force: template docs/process/L2-BRIEF-TEMPLATE.md (D-430/431 spawn-only, D-389 placement, D-349, D-302 independence,
   D-421 MiMo normal, quote+VERDICT rule). L2s report only to me; I report to routing; workst-L1 direct (D-319); 2-h progress line (D-418).
 - Lessons: quoted heredocs for task texts; legacy-claim only items with a known close path; Taildrop inbox is shared (set aside + report).
-## Compactions this session: 0
+## Compactions this session: 1 (2026-10-02 ~17:55Z)
