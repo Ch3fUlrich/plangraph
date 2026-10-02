@@ -34,7 +34,8 @@ def run(cfg, *, host=None, port=None, ready=None):
     lock = kdb.lock_keeper(cfg.db)
     conn = kdb.open_db(cfg.db)
     try:
-        store = Store(conn, ctx=config_mod.verifier_context(cfg))
+        store = Store(conn, ctx=config_mod.verifier_context(cfg),
+                      batch_roots=cfg.batch_roots)
         server = api.make_server(store, cfg, host=host, port=port)
         server.start_reaper()
         stop = threading.Event()

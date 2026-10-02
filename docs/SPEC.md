@@ -20,6 +20,7 @@ Python 3.12, stdlib only (+ pytest for tests). Package `src/plangraph/`; each fi
 | `evidence_kinds` | list | any of `commit+ci`, `run-record`, `semaphore-task`, `decision` (all required unless the list is `[any]`) |
 | `operator` | bool | true when the plan marks it OPERATOR (human gate) |
 | `priority` | int | 0 default, router-owned |
+| `review_tier` | `standard`\|`high` | D-228 risk tier for reviews. Default at definition: `high` if `project == plangraph` or `id`/`title`/`track` matches a secret/key/security/gateway/omniroute/deploy/keeper/fence whole word, else `standard`. Router or the owning L1 may set it and raise `standard`→`high` while the item is not done; only the router may lower `high`→`standard`. |
 | `source` | str | `docs/plan/T2-orchestration-core.md#T2-ONEPATH` (provenance, import only) |
 Snapshot-only (keeper-written, never in the import): `epoch` int, `claimed_by`/`worker_run`/`reviewer_run` str|null,
 `lease_until` iso|null, `evidence` list[{kind,ref,verified,at}], `model` str|null, `updated_at` iso, `corrected_by` list[key].

@@ -197,6 +197,9 @@ def test_full_lifecycle_done_is_locked_and_audited(tmp_path):
         l1, worker, reviewer = (e2e.tokens["l1"], e2e.tokens["worker"],
                                 e2e.tokens["reviewer"])
         reviewer2 = e2e.tokens["reviewer2"]
+        # D-228: this test walks the two-reviewer path, so R1 is high-tier.
+        e2e.store.edit_definition(e2e.principals["router"], KEY,
+                                  {"review_tier": "high"})
         status, body = call(e2e.base, "POST", "/v1/claim", token=l1,
                             body={"key": KEY})
         assert status == 200, body
@@ -297,7 +300,7 @@ def test_mcp_stdio_against_live_api(tmp_path):
              "params": {"name": "ready", "arguments": {"n": 50}}},
         ])
         listing, ready = [json.loads(line) for line in out.splitlines() if line]
-        assert len(listing["result"]["tools"]) == 19
+        assert len(listing["result"]["tools"]) == 21
         assert ready["result"]["isError"] is False
         assert KEY in ready["result"]["content"][0]["text"]
         assert e2e.tokens["router"] not in out

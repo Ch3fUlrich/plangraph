@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from .errors import Refused
+from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
 
@@ -28,7 +29,7 @@ __all__ = ["load_dir", "export_yaml"]
 _FIELD_ORDER = (
     "project", "id", "key", "title", "kind", "track", "owner", "state",
     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
-    "evidence_kinds", "operator", "priority", "source", "note",
+    "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
 )
 _FIELDS = frozenset(_FIELD_ORDER)
 _IMPORT_STATES = ("open", "claimed", "in_review")
@@ -130,18 +131,27 @@ def _normalise_item(raw, where):
         corrects = _qualify(project, corrects)
     kinds = _string_list(raw, "evidence_kinds", key) or ["any"]
 
+    title = _string(raw, "title", key) or ""
+    track = _string(raw, "track", key)
+    explicit_tier = raw.get("review_tier")
+    if explicit_tier is not None:
+        review_tier = validated_review_tier(explicit_tier)
+    else:
+        review_tier = default_review_tier(project, identifier, title, track)
+
     unknown = {name: raw[name] for name in raw if name not in _FIELDS}
     note = _fold_note(raw.get("note"), unknown, key)
 
     values = {
         "project": project, "id": identifier, "key": key,
-        "title": _string(raw, "title", key) or "",
-        "kind": kind, "track": _string(raw, "track", key),
+        "title": title,
+        "kind": kind, "track": track,
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),
         "depends_on": depends, "corrects": corrects,
         "done_criteria": _string(raw, "done_criteria", key),
         "evidence_kinds": kinds, "operator": operator, "priority": priority,
+        "review_tier": review_tier,
         "source": _string(raw, "source", key), "note": note,
     }
     return {field: values[field] for field in _FIELD_ORDER}

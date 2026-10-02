@@ -18,6 +18,23 @@ Write `$KEEPER/keeper.json`; any mode other than **600** is refused:
     chmod 600 "$KEEPER/keeper.json"
     export PG_CONFIG="$KEEPER/keeper.json"
     pg admin init --router router          # prints the router token ONCE
+
+A full config, with the verifier paths and the legacy/decision-close settings
+(X7b) filled in:
+
+    {"db": "/home/me/keeper/keeper.db",
+     "snapshot": "/home/me/keeper/plan.snapshot.json",
+     "bind": "127.0.0.1:8765",
+     "reap_interval": 60,
+     "repos": {"server": "/home/s/code/Server", "autoos": "/home/s/code/AutoOS"},
+     "decisions_file": "/home/s/code/routing/docs/decisions-log.md",
+     "batch_roots": ["/home/s/code/routing/docs/plan"]}
+
+`batch_roots` is the **only** place `close_on_decision` may read a batch file from.
+Empty (the default) means the verb always refuses, so leave it unset until the
+operator has decided which plan/batch directory is authoritative.  Relative
+entries resolve next to the config file; containment is checked on the resolved
+real path, so a `..` or a symlink that escapes the list is refused.
 ## 2. Principals
     pg admin add-principal l1       --role l1       --projects autoos,routing --family teamA
     pg admin add-principal worker   --role worker   --projects autoos         --family teamB
@@ -51,7 +68,51 @@ with SQLite's own copy (safe while running; WAL is checkpointed) plus the snapsh
     sqlite3 "$KEEPER/keeper.db" ".backup '$KEEPER/backup.db'"
     cp "$KEEPER/plan.snapshot.json" "$KEEPER/backup.snapshot.json"
 
-## 5. Isolation — read this
+## 5. Legacy work and decision closes (X7b)
+Two router-only paths finish work that never sees a reviewer.  Both are for
+**legacy / operator-decided** items; the normal `standard`/`high` review path is
+unchanged, and both fail closed when the config is not filled in.
+
+Attach the historical proof, then close the batch (router principal only). The
+same verbs are on every door (`Store`, HTTP `POST /v1/...`, MCP tool, `pg`):
+
+    store.add_evidence_router(router, "routing:R-117", "commit",
+                              {"commit": "<40-hex sha>"})
+    store.close_on_decision(router, "routing:R-117",
+                            "/home/s/code/routing/docs/plan/batch-7.md@" + "<sha256>")
+
+* `commit` passes on "the sha exists and is an ancestor of `main`" in that
+  project's `repos` path — no trailer, no date window, no CI.  It is the weakest
+  proof the keeper accepts and **no other principal may attach it** (a claimant
+  trying gets `forbidden`).
+* `close_on_decision` needs the item at `review_tier='none'` (decision-only
+  definition, settable by the router alone) in `claimed`/`in_review`, at least
+  one attached `decision` evidence, every one verifiable in
+  `decisions_file`, and a batch file inside `batch_roots` whose bytes hash to
+  the digest in the ref.  If the decision row names anything
+  (`Closes: project:ID`, whole tokens, like `Waives:`), this key must be one of
+  them; with no `Closes:` token the hashed batch file alone authorises it.
+* The resulting `closed_on_decision` event locks the item exactly like
+  `review_passed`: afterwards edit, cancel and further evidence are refused
+  (`locked`), and `pg admin verify` (fold + chain) agrees with the cache.
+* Nothing here closes an `open` legacy row: move it into `claimed`/`in_review`
+  first with `set_legacy_state` (router only; any other target is `validation`,
+  a non-open item is `bad_state`).  `claimed_by` becomes the item's owner and the
+  `legacy_state_set` event keeps fold + `pg admin verify` agreeing.
+
+### Doors for `set_legacy_state` and `close_on_decision` (X7c)
+
+    pg define --file batch.json --tier none          # decision-only definition
+    pg legacy routing:R-117 claimed "backfilled"     # open -> claimed/in_review
+    pg close  routing:R-117 --batch /abs/plan/batch-7.md@<sha256>
+
+Over HTTP: `POST /v1/set_legacy_state {"key","state","note"}` and
+`POST /v1/close_on_decision {"key","batch_ref"}`; over MCP the tools
+`set_legacy_state` and `close_on_decision`.  A non-router token on either is
+`403 forbidden`, exactly like `waive`.  `close_on_decision` is refused `forbidden`
+until `batch_roots` is set in the config.
+
+## 6. Isolation — read this
 The keeper separates agents by OS user: each token is a mode-600 file owned by
 that user, and the DB is a local file.  **Isolation is NOT effective if agents
 run as the same unix user, or a user is in the `docker`/`lxd` group (host root),

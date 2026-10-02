@@ -13,7 +13,14 @@ snippet does not count as recorded.
 ``waives(decision_id, key)`` is the waiver-binding rule (D-217 / X6c3): a D-row
 must name the *scope* it waives as a whole ``Waives: <project:ID>`` token, so a
 recorded decision cannot be reused to waive an unrelated item.  ``demo:A`` never
-satisfies ``demo:AB``; one row may carry several ``Waives:`` tokens.
+satisfies ``demo:AB``; one row may carry several ``Waives:`` tokens.  Per router
+decision D-276, ``Waives:`` and ``Closes:`` tokens count only inside the
+DECISION cell (3rd column) of their D-row — a token in any other cell is
+ignored.  ``closes(decision_id)`` follows the same whole-token shape.
+
+Keyword capture stops at the next ``Word:`` (letters/hyphens followed by ``:`` and
+then whitespace or end of cell).  ``project:ID`` tokens (colon directly followed
+by a non-space) do not act as boundaries.
 """
 
 from __future__ import annotations
@@ -26,8 +33,29 @@ __all__ = ["DecisionsAdapter", "DECISION_LINE_RE"]
 DECISION_LINE_RE = re.compile(r"^\| D-([0-9]+) \|")
 _ASCII_DIGITS_RE = re.compile(r"[0-9]+\Z")
 _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
-_WAIVES_RE = re.compile(r"\bWaives:[ \t]*([^|\r\n]*)")
+# Match any keyword boundary: a word of letters/hyphens followed by : and then
+# whitespace or end of cell.  Does NOT match project:ID (colon directly
+# followed by non-space).
+_KEYWORD_RE = re.compile(r"\b([A-Za-z-]+):(?=\s|$)")
+# Waives:/Closes: keywords themselves match even without trailing space (old
+# behaviour), but capture stops at the next _KEYWORD_RE boundary.
+_WAIVES_RE = re.compile(r"\bWaives:")
+_CLOSES_RE = re.compile(r"\bCloses:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
+
+
+def _decision_cell(row: str) -> str:
+    """The DECISION cell (3rd column) of a ``|`` table row (``""`` when short).
+
+    Router decision D-276: ``Waives:``/``Closes:`` tokens bind only here, so a
+    token quoted in the project/by/why cells carries no authority.
+    """
+    cells = row.split("|")[1:]
+    if cells and cells[-1] == "":
+        cells = cells[:-1]
+    if len(cells) < 3:
+        return ""
+    return cells[2]
 
 
 def _prose_lines(text: str):
@@ -85,18 +113,52 @@ class DecisionsAdapter:
         canonical = self._canonical(decision_id)
         return canonical is not None and canonical in self._rows()
 
-    def waives(self, decision_id: str, key: str) -> bool:
-        """Does the row for *decision_id* name *key* as a whole ``Waives:`` token?"""
+    def _scoped_tokens(self, decision_id: str, pattern: re.Pattern) -> set[str]:
+        """The whole tokens in the DECISION cell of *decision_id*'s rows.
+
+        Tokens are captured from each Waives:/Closes: keyword until the next
+        keyword (any Word: followed by whitespace or end of cell) or end of cell.
+        """
         canonical = self._canonical(decision_id)
-        if canonical is None or not isinstance(key, str) or not key.strip():
-            return False
-        wanted = key.strip()
+        if canonical is None:
+            return set()
+        tokens: set[str] = set()
         for row in self._rows().get(canonical, ()):
-            for clause in _WAIVES_RE.finditer(row):
-                for token in _TOKEN_SPLIT_RE.split(clause.group(1).strip()):
-                    if token == wanted:
-                        return True
-        return False
+            cell = _decision_cell(row)
+            if not cell:
+                continue
+            # Find all keyword positions in the cell
+            keyword_positions = [(m.start(), m.group()) for m in _KEYWORD_RE.finditer(cell)]
+            # For each match of our target pattern (Waives: or Closes:)
+            for match in pattern.finditer(cell):
+                start = match.end()  # Position after "Waives:" or "Closes:"
+                # Find the next keyword position after this match
+                end = len(cell)
+                for kw_pos, kw_text in keyword_positions:
+                    if kw_pos > match.start():
+                        end = kw_pos
+                        break
+                # Extract the text between the keyword and the next keyword
+                token_text = cell[start:end].strip()
+                # Split into individual tokens
+                for token in _TOKEN_SPLIT_RE.split(token_text):
+                    if token:
+                        tokens.add(token)
+        return tokens
+
+    def waives(self, decision_id: str, key: str) -> bool:
+        """Does the DECISION cell of *decision_id*'s row name *key* as a whole ``Waives:`` token?"""
+        if not isinstance(key, str) or not key.strip():
+            return False
+        return key.strip() in self._scoped_tokens(decision_id, _WAIVES_RE)
+
+    def closes(self, decision_id: str) -> set[str]:
+        """The whole ``Closes: <project:ID>`` tokens in the DECISION cell of *decision_id*'s rows.
+
+        The empty set means the row names nothing — for a decision close (X7b)
+        that is not a refusal: the hashed batch file alone authorises it.
+        """
+        return self._scoped_tokens(decision_id, _CLOSES_RE)
 
     def __repr__(self) -> str:  # pragma: no cover - convenience only
         return "DecisionsAdapter()"

@@ -1,19 +1,30 @@
 """Review verbs for :class:`plangraph.keeper.store.Store`.
 
-D-219: a change needs one implementer plus exactly **two** reviewers.  A
-passing ``verdict(ok=True)`` records a ``review_verdict`` event and leaves the
-item in review; only the second passing verdict from a *different principal* of
-a *different family* re-verifies the evidence with the existing logic and emits
-``review_passed`` (``done``).  A ``verdict(ok=False)`` from either seat returns
-the item to ``claimed`` exactly as before and, because the next ``submit``
-advances the submission ``round``, discards the round's earlier verdicts.  A
-second change request only reopens when it is consecutive *within the current
-epoch*: change requests from earlier claims are ignored and a passing verdict
-resets the count.
+D-228 risk-tiered reviews: how many passing verdicts ``done`` needs depends on
+the item's ``review_tier``, which the router (or L1, through the router's
+defaults) fixes at definition time.
+
+* ``standard`` (the default): **one** passing ``verdict(ok=True)`` from a
+  reviewer who is neither the claimant nor the delegate and whose normalised
+  non-blank family differs from the writer's (``_reviewer_family_ok`` fails
+  closed on a blank family, for either side) records ``review_verdict`` and
+  writes ``review_passed`` (``done``, locked) immediately.
+* ``high`` — D-219 unchanged: a passing ``verdict(ok=True)`` records a
+  ``review_verdict`` event and leaves the item in review; only the second
+  passing verdict from a *different principal* of a *different family*
+  re-verifies the evidence with the existing logic and emits ``review_passed``
+  (``done``).  A third verdict is refused (``conflict``).
+
+A ``verdict(ok=False)`` from either seat returns the item to ``claimed`` exactly
+as before and, because the next ``submit`` advances the submission ``round``,
+discards the round's earlier verdicts.  A second change request only reopens
+when it is consecutive *within the current epoch*: change requests from earlier
+claims are ignored and a passing verdict resets the count.
 
 The waiver path (D-217) lives in ``store_waiver``: once the router records a
-verified decision, ``_waiver_active`` is true and the second passing verdict may
-share the first reviewer's family.
+verified decision, ``_waiver_active`` is true and the second passing verdict on
+a ``high`` item may share the first reviewer's family.  It is a no-op on a
+``standard`` item (``bad_state``), which never had a second seat to fill.
 """
 from __future__ import annotations
 
@@ -54,7 +65,10 @@ class ReviewMixin:
                 " AND type IN ('changes_requested', 'review_verdict')"
                 " ORDER BY seq", (item["key"],)):
             payload = json.loads(row["payload"] or "{}")
-            if "epoch" in payload and int(payload["epoch"]) != epoch:
+            # An event without an epoch predates epoch tracking (or was
+            # hand-written): it can never be "consecutive within this epoch",
+            # so it is ignored rather than counted.
+            if int(payload.get("epoch", -1)) != epoch:
                 continue
             if row["type"] == "review_verdict":
                 if payload.get("ok", True):
@@ -87,6 +101,10 @@ class ReviewMixin:
         self._assert_unlocked(item)
         if item["state"] != "in_review":
             raise Refused("bad_state", f"{key} is {item['state']}, not in review")
+        if (item.get("review_tier") or "standard") == "none":
+            raise Refused("bad_state",
+                          f"{key} is review_tier=none:"
+                          " closes only via close_on_decision")
         if principal.name in (item["claimed_by"], item["delegate"]):
             raise Refused("same_principal", "reviewer is the claimant")
         self._require_project(principal, item["project"])
@@ -107,6 +125,16 @@ class ReviewMixin:
                               f"{key} is {fresh['state']}, not in review")
             if int(fresh["epoch"]) != int(item["epoch"]):
                 raise Refused("conflict", f"{key} changed under the transaction")
+            if (fresh.get("review_tier") or "standard") == "none":
+                raise Refused("conflict",
+                              f"{key} is now review_tier=none")
+            if int(fresh.get("round") or 0) != int(item.get("round") or 0):
+                raise Refused("conflict",
+                              f"{key} changed round under the transaction")
+            if (fresh["claimed_by"] != item["claimed_by"]
+                    or fresh["delegate"] != item["delegate"]):
+                raise Refused("conflict",
+                              f"{key} changed holder under the transaction")
             if self._verified_evidence_ids(fresh) != considered:
                 raise Refused("conflict",
                               f"{key} evidence changed under the transaction")
@@ -116,6 +144,15 @@ class ReviewMixin:
             if any(v.get("reviewer") == principal.name for v in prior):
                 raise Refused("same_principal",
                               "reviewer already passed this round")
+            tier = fresh.get("review_tier") or "standard"
+            if tier == "standard":
+                # D-228: ``_reviewer_family_ok`` above already proved this
+                # reviewer is a distinct principal of a distinct, non-blank
+                # family from the writer's, so one verdict closes the review.
+                self._append(principal, key, "review_verdict",
+                             self._verdict_payload(principal, fresh), now)
+                return self._pass(principal, key, reason, fresh, now,
+                                  reviews_passed=1)
             if len(prior) >= 2:
                 raise Refused("conflict",
                               f"{key} already has two verdicts this round")
@@ -128,21 +165,34 @@ class ReviewMixin:
                     raise Refused("same_family",
                                   "second reviewer shares a family")
             self._append(principal, key, "review_verdict",
-                         {"reviewer": principal.name,
-                          "family": auth.norm_family(principal.family),
-                          "ok": True, "epoch": fresh["epoch"],
-                          "round": fresh["round"]}, now)
+                         self._verdict_payload(principal, fresh), now)
             passed = len(prior) + 1
             if passed >= 2:
-                cursor = self.conn.execute(
-                    "UPDATE items SET state='done', reviewer=?, updated_at=?"
-                    " WHERE key=? AND state='in_review' AND epoch=?",
-                    (principal.name, self._iso(now), key, item["epoch"]))
-                self._race_guard(cursor, key, "in_review", item["epoch"])
-                self._append(principal, key, "review_passed",
-                             {"reason": reason}, now)
-                return {"key": key, "state": "done", "reviews_passed": passed}
+                return self._pass(principal, key, reason, fresh, now,
+                                  reviews_passed=passed)
         return {"key": key, "state": "in_review", "reviews_passed": passed}
+
+    @staticmethod
+    def _verdict_payload(principal, item):
+        """The ``review_verdict`` event body for *principal* on *item*."""
+        return {"reviewer": principal.name,
+                "family": auth.norm_family(principal.family),
+                "ok": True, "epoch": item["epoch"], "round": item["round"]}
+
+    def _pass(self, principal, key, reason, item, now, reviews_passed):
+        """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
+
+        Reached from either tier: one standard verdict or the second high
+        verdict.  The UPDATE is guarded on ``in_review`` and the epoch, so a
+        peer verdict that slipped in between the pre-read and here loses.
+        """
+        cursor = self.conn.execute(
+            "UPDATE items SET state='done', reviewer=?, updated_at=?"
+            " WHERE key=? AND state='in_review' AND epoch=?",
+            (principal.name, self._iso(now), key, item["epoch"]))
+        self._race_guard(cursor, key, "in_review", item["epoch"])
+        self._append(principal, key, "review_passed", {"reason": reason}, now)
+        return {"key": key, "state": "done", "reviews_passed": reviews_passed}
 
     def _verdict_changes(self, principal, key, reason, item, now):
         """``ok=False``: return to claimed (or open on a second change)."""
@@ -154,6 +204,16 @@ class ReviewMixin:
                               f"{key} is {fresh['state']}, not in review")
             if int(fresh["epoch"]) != int(item["epoch"]):
                 raise Refused("conflict", f"{key} changed under the transaction")
+            if (fresh.get("review_tier") or "standard") == "none":
+                raise Refused("conflict",
+                              f"{key} is now review_tier=none")
+            if int(fresh.get("round") or 0) != int(item.get("round") or 0):
+                raise Refused("conflict",
+                              f"{key} changed round under the transaction")
+            if (fresh["claimed_by"] != item["claimed_by"]
+                    or fresh["delegate"] != item["delegate"]):
+                raise Refused("conflict",
+                              f"{key} changed holder under the transaction")
             # Mirror the ok=True path on the fresh row: a reviewer who was
             # re-scoped, delegated-over or made the claimant between the
             # pre-read and here must not be able to request changes either.

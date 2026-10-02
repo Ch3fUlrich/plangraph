@@ -35,6 +35,8 @@ HANDLERS = {
     "verdict": cli_verbs.cmd_verdict,
     "cancel": cli_verbs.cmd_cancel,
     "waive": cli_verbs.cmd_waive,
+    "close": cli_verbs.cmd_close,
+    "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
     "define": cli_verbs.cmd_define,
     "blocked": cli_verbs.cmd_blocked,
@@ -115,6 +117,16 @@ def _add_writes(sub):
     waive.add_argument("key")
     waive.add_argument("decision_id", metavar="D-NNN")
 
+    close = _p(sub, "close", help="router: close a tier-none item on a decision batch")
+    close.add_argument("key")
+    close.add_argument("--batch", required=True, metavar="PATH@SHA",
+                       help="batch file path@sha256 inside a batch_roots dir")
+
+    legacy = _p(sub, "legacy", help="router: set an open legacy item's state")
+    legacy.add_argument("key")
+    legacy.add_argument("state", choices=("claimed", "in_review"))
+    legacy.add_argument("note", nargs="?", default="")
+
     priority = _p(sub, "priority", help="set an item's priority")
     priority.add_argument("key")
     priority.add_argument("n", type=int)
@@ -123,6 +135,8 @@ def _add_writes(sub):
     define.add_argument("key", nargs="?")
     define.add_argument("--file", required=True)
     define.add_argument("--edit", action="store_true")
+    define.add_argument("--tier", choices=("standard", "high", "none"),
+                        default=None, help="override review_tier on create")
 
     render = _p(sub, "render", help="render the snapshot to HTML")
     render.add_argument("--out", required=True)

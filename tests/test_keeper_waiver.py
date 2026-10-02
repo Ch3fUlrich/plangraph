@@ -35,7 +35,7 @@ def _bind_decisions(world, tmp_path):
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    seed(world, [("A", [])], review_tier="high")
     _bind_decisions(world, tmp_path)
     yield world
     world.close()

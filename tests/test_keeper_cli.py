@@ -12,7 +12,7 @@ from plangraph.keeper import api, cli, cli_admin, config
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
-    seed(world, [("A", []), ("B", ["A"])])
+    seed(world, [("A", []), ("B", ["A"])], review_tier="high")
     yield world
     world.close()
 

@@ -31,11 +31,11 @@ DECISION = "D-217"
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    seed(world, [("A", [])], review_tier="high")
     # X6c3: a waiver needs a D-row that names the item (`Waives: demo:A`).
     path = tmp_path / "DECISIONS.md"
-    path.write_text("| ID | Note |\n|---|---|\n"
-                    "| D-217 | second-family waiver, Waives: demo:A |\n",
+    path.write_text("| ID | Project | Decision |\n|---|---|---|\n"
+                    "| D-217 | second-family waiver | Waives: demo:A |\n",
                     encoding="utf-8")
     world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
     yield world

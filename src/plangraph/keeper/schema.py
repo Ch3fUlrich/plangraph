@@ -14,15 +14,16 @@ from __future__ import annotations
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "TABLES", "TRIGGERS", "EVENT_TYPES",
            "ROLES"]
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
     "lease_expired", "evidence_added", "submitted", "changes_requested",
-    "review_verdict", "review_passed", "cancelled", "priority_set", "heartbeat",
-    "waiver_set",
+    "review_verdict", "review_passed", "closed_on_decision", "cancelled",
+    "priority_set", "heartbeat",
+    "waiver_set", "legacy_state_set",
 )
 
 TABLES = """
@@ -61,6 +62,8 @@ CREATE TABLE items (
     lease_until    TEXT,
     reviewer       TEXT,
     model          TEXT,
+    review_tier    TEXT NOT NULL DEFAULT 'standard'
+                   CHECK (review_tier IN ('standard','high','none')),
     review_waiver  TEXT,
     created_at     TEXT,
     updated_at     TEXT
@@ -120,11 +123,14 @@ CREATE TABLE audit_findings (
 
 # The reviewed/cancelled test, inlined because SQLite triggers cannot call
 # Python helpers.  `:k` is replaced with the key expression of each trigger.
-# Only ``review_passed`` locks: a ``review_verdict`` keeps the item in review
-# until the second, independent passing verdict emits ``review_passed``, and a
-# ``waiver_set`` (D-217) is an ordinary non-locking event.
+# Only ``review_passed`` and ``closed_on_decision`` lock: a ``review_verdict``
+# keeps the item in review until the second, independent passing verdict emits
+# ``review_passed``, and a ``waiver_set`` (D-217) is an ordinary non-locking
+# event.  A router ``closed_on_decision`` (X7b, tier ``none``) is final the same
+# way, so every trigger that froze a reviewed item freezes that one too.
 _LOCKED = (
-    "EXISTS (SELECT 1 FROM events e WHERE e.key = {k} AND e.type = 'review_passed')"
+    "EXISTS (SELECT 1 FROM events e WHERE e.key = {k}"
+    " AND e.type IN ('review_passed','closed_on_decision'))"
     " OR EXISTS (SELECT 1 FROM items i WHERE i.key = {k} AND i.state = 'cancelled')"
 )
 

@@ -29,7 +29,7 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    seed(world, [("A", [])], review_tier="high")
     # X6c3: D-217's row names the scope it waives.
     path = tmp_path / "DECISIONS.md"
     path.write_text("| ID | Note | Waiver scope |\n|---|---|---|\n"

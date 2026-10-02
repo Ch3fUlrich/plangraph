@@ -31,7 +31,7 @@ def _adapter(tmp_path, text):
 def _world(tmp_path, text):
     """A seeded world whose store reads ``text`` as its decisions file."""
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    seed(world, [("A", [])], review_tier="high")
     world.store.ctx = SimpleNamespace(
         decisions=_adapter(tmp_path, text))
     return world
@@ -56,7 +56,7 @@ def test_waives_whole_token_only(tmp_path):
 def test_waives_several_tokens_in_one_row(tmp_path):
     adapter = _adapter(tmp_path, _row("Waives: demo:B, demo:A"))
     assert adapter.waives(DECISION, "demo:A") is True
-    adapter2 = _adapter(tmp_path, _row("Waives: demo:B | Waives: demo:A"))
+    adapter2 = _adapter(tmp_path, _row("Waives: demo:B, Waives: demo:A"))
     assert adapter2.waives(DECISION, "demo:A") is True
     assert adapter2.waives(DECISION, "demo:C") is False
 

@@ -30,7 +30,7 @@ from typing import Any
 
 from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
-from .evidence_git import GitAdapter
+from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_runs import RunRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError
 from .evidence_types import (
@@ -338,6 +338,7 @@ VERIFIERS: dict[str, Any] = {
     verifier.kind: verifier
     for verifier in (
         CommitCiVerifier(),
+        LegacyCommitVerifier(),
         RunRecordVerifier(),
         SemaphoreTaskVerifier(),
         DecisionVerifier(),

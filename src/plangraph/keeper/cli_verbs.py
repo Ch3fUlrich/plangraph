@@ -336,6 +336,18 @@ def cmd_waive(args, session):
                  lambda r: f"{r.get('key')} waiver {r.get('review_waiver')}")
 
 
+def cmd_close(args, session):
+    return write(session, "close_on_decision",
+                 {"key": args.key, "batch_ref": args.batch},
+                 lambda r: f"{r.get('key')} closed {r.get('state')}")
+
+
+def cmd_legacy(args, session):
+    return write(session, "set_legacy_state",
+                 {"key": args.key, "state": args.state, "note": args.note},
+                 lambda r: f"{r.get('key')} -> {r.get('state')}")
+
+
 def cmd_priority(args, session):
     return write(session, "set_priority", {"key": args.key, "n": args.n},
                  lambda r: f"{r.get('key')} priority {r.get('priority')}")
@@ -347,6 +359,11 @@ def cmd_define(args, session):
         fields = payload.get("fields", payload) if isinstance(payload, dict) else payload
         return write(session, "edit_definition", {"key": args.key, "fields": fields})
     items = payload.get("items") if isinstance(payload, dict) else payload
+    tier = getattr(args, "tier", None)
+    if tier:
+        for definition in (items if isinstance(items, list) else [items]):
+            if isinstance(definition, dict):
+                definition["review_tier"] = tier
     return write(session, "create_items", {"items": items},
                  lambda r: f"created {len(r.get('created') or [])} items")
 

@@ -108,7 +108,13 @@ def test_verdict_changes_reviewer_descoped_refused(w):
 
 
 def test_verdict_changes_delegated_to_reviewer_refused(w):
-    """The item was delegated onto the reviewer between the reads."""
+    """The item was delegated onto the reviewer between the reads.
+
+    S2-4: the holder-identity re-check fires first, so a delegate changed
+    under the transaction is ``conflict`` (the mirrored same_principal
+    check no longer runs for this race).  Still refused, still in_review,
+    still no event.
+    """
     (key,) = seed(w, [("A", [])])
     to_in_review(w, key)
     store2, conn2 = _second(w)
@@ -120,7 +126,7 @@ def test_verdict_changes_delegated_to_reviewer_refused(w):
         _arm(w.store, competitor)
         with pytest.raises(Refused) as exc:
             w.store.verdict(w.p("reviewer"), key, False, "changes")
-        assert exc.value.code == "same_principal"
+        assert exc.value.code == "conflict"
         assert w.store._item(key)["state"] == "in_review"
         assert _count(w, key, "changes_requested") == 0
     finally:
@@ -128,7 +134,13 @@ def test_verdict_changes_delegated_to_reviewer_refused(w):
 
 
 def test_verdict_changes_delegate_same_family_refused(w):
-    """A delegate in the reviewer's family makes the review non-independent."""
+    """A delegate in the reviewer's family makes the review non-independent.
+
+    S2-4: the holder-identity re-check fires first, so a delegate changed
+    under the transaction is ``conflict`` (the mirrored same_family check
+    no longer runs for this race).  Still refused, still in_review, still
+    no event.
+    """
     (key,) = seed(w, [("A", [])])
     to_in_review(w, key)
     store2, conn2 = _second(w)
@@ -140,7 +152,7 @@ def test_verdict_changes_delegate_same_family_refused(w):
         _arm(w.store, competitor)
         with pytest.raises(Refused) as exc:
             w.store.verdict(w.p("reviewer"), key, False, "changes")
-        assert exc.value.code == "same_family"
+        assert exc.value.code == "conflict"
         assert w.store._item(key)["state"] == "in_review"
         assert _count(w, key, "changes_requested") == 0
     finally:

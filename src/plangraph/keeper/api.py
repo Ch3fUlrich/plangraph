@@ -41,17 +41,8 @@ __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
 
 MAX_BODY = 1024 * 1024  # 1 MiB
 
-_READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
-               "alerts", "digest", "snapshot", "whoami"}
-_WRITE_VERBS = {"create_items", "import_items", "edit_definition",
-                "set_priority", "claim", "delegate", "heartbeat", "release",
-                "add_evidence", "add_evidence_router", "submit", "verdict",
-                "cancel", "reap", "waive_second_family"}
-_TEXT_DEFAULT = {"ready", "show", "alerts", "blocked"}
-
-_STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
-           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
-           "same_family": 409}
+from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
+from .api_routes import TEXT_DEFAULT as _TEXT_DEFAULT, WRITE_VERBS as _WRITE_VERBS
 
 
 # --------------------------------------------------------------------------- #
@@ -320,6 +311,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "waive_second_family":
             return store.waive_second_family(principal, self._need(body, "key"),
                                              self._need(body, "decision_id"))
+        if name == "close_on_decision":
+            return store.close_on_decision(
+                principal, self._need(body, "key"), self._need(body, "batch_ref"))
+        if name == "set_legacy_state":
+            return store.set_legacy_state(
+                principal, self._need(body, "key"), self._need(body, "state"),
+                body.get("note", ""))
         if name == "reap":
             return store.reap(principal)
         raise Refused("not_found", f"no write verb {name!r}")
@@ -395,6 +393,8 @@ def make_server(store, config, *, host=None, port=None) -> KeeperHTTPServer:
     """Bind to ``config``'s address and start the reaper (not yet serving)."""
     bind_host = host or config.host
     bind_port = config.port if port is None else port
+    if getattr(config, "batch_roots", None):
+        store.batch_roots = list(config.batch_roots)  # X7-FIX-B: config wins
     server = KeeperHTTPServer((bind_host, bind_port), store, config)
     server.start_reaper()
     return server

@@ -16,9 +16,9 @@ from __future__ import annotations
 import subprocess
 from typing import Mapping
 
-from .evidence_types import valid_commit_ref
+from .evidence_types import Result, valid_commit_ref
 
-__all__ = ["GitAdapter", "parse_trailers"]
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers"]
 
 
 def parse_trailers(text: str) -> dict[str, str]:
@@ -122,3 +122,44 @@ class GitAdapter:
     def commit_time(self, repo: str, sha: str) -> float | None:
         """The committer date (advisory), or ``None`` when unreadable."""
         return self.commit_times(repo, sha)[1]
+
+
+class LegacyCommitVerifier:
+    """X7b: a commit that exists and is an ancestor of ``main`` — nothing else.
+
+    The legacy import path has no ``Plan-Item`` trailer, no claim-time window and
+    no CI run to check, so :class:`~plangraph.keeper.evidence.CommitCiVerifier`
+    can never verify its work.  This verifier deliberately asks only the two
+    questions a historical commit can still answer, which is precisely why
+    attaching kind ``commit`` is router-only (``add_evidence_router``) — see
+    ``docs/KEEPER.md``, "Legacy and decision closes".
+
+    It lives beside the adapter it uses, and catches every exception itself: a
+    verifier must never raise, and a repo path that does not exist or a git that
+    fails for any reason is an unverified result, not a crash.
+    """
+
+    kind = "commit"
+
+    def verify(self, item, ref, ctx):
+        ref = dict(ref) if isinstance(ref, dict) else {}
+        commit = ref.get("commit")
+        if not isinstance(commit, str) or not commit:
+            return Result(False, "commit requires a 'commit' sha", ref)
+        if not valid_commit_ref(commit):
+            return Result(False, "commit requires a full lowercase commit sha"
+                                 " (40 or 64 hex)", ref)
+        project = (item or {}).get("project")
+        try:
+            repo = ctx.git.repo_path(project) if ctx.git is not None else None
+            if not repo:
+                return Result(False, f"no repo registered for project"
+                                    f" {project!r}", ref)
+            if not ctx.git.commit_exists(repo, commit):
+                return Result(False, f"commit {commit} does not exist", ref)
+            if not ctx.git.is_ancestor_of_main(repo, commit):
+                return Result(False, f"commit {commit} is not an ancestor"
+                                    f" of main", ref)
+        except Exception as exc:  # noqa: BLE001 - a verifier must never raise
+            return Result(False, f"git error ({type(exc).__name__})", ref)
+        return Result(True, f"commit {commit} is an ancestor of main", ref)

@@ -32,12 +32,14 @@ def w(tmp_path):
 
 def legacy(pid, *, state="in_review", owner="legacy@example.invalid",
            owner_family=None, evidence_kinds=("any",), project="demo",
-           kind="lane", deps=()):
+           kind="lane", deps=(), review_tier=None):
     item = {"project": project, "id": pid, "title": pid, "kind": kind,
             "state": state, "owner": owner, "depends_on": list(deps),
             "evidence_kinds": list(evidence_kinds)}
     if owner_family is not None:
         item["owner_family"] = owner_family
+    if review_tier is not None:
+        item["review_tier"] = review_tier
     return item
 
 
@@ -97,7 +99,7 @@ def test_item_key_move_onto_event_locked_key_aborts(w):
 # =============================================================== finding 2
 
 def test_verdict_ignores_stored_unverified_rows(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",), review_tier="high")
     w.store.verifiers["decision"] = ref_verifier({"D-BAD"})
     epoch = to_claimed(w, key)
     w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-BAD"})
@@ -109,7 +111,7 @@ def test_verdict_ignores_stored_unverified_rows(w):
 
 
 def test_verdict_ignores_evidence_of_other_epochs(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",), review_tier="high")
     verifier = ref_verifier(set())
     w.store.verifiers["decision"] = verifier
     epoch1 = to_claimed(w, key)
@@ -156,7 +158,8 @@ def test_legacy_without_owner_family_is_family_unknown(w):
 
 
 def test_legacy_with_owner_family_can_be_reviewed(w):
-    items = [legacy("A", owner_family="teamZ"), legacy_goal(["A"])]
+    items = [legacy("A", owner_family="teamZ", review_tier="high"),
+             legacy_goal(["A"])]
     w.store.import_items(w.p("router"), items)
     w.store.add_evidence_router(w.p("router"), "demo:A", "decision", {"id": "D-1"})
     w.store.verdict(w.p("reviewer"), "demo:A", True, "ok")

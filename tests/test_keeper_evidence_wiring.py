@@ -58,7 +58,7 @@ def test_commit_before_claim_is_unverified_and_blocks_submit(w):
 
 
 def test_decision_item_end_to_end(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",), review_tier="high")
     epoch = to_claimed(w, key)
 
     out = w.store.add_evidence(w.p("l1main"), key, epoch, "decision",

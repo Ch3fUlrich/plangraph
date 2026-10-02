@@ -12,7 +12,8 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`. |
 | `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`. |
-| `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…)`; every verb takes `(principal, …)` |
+| `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…, ctx=…, batch_roots=…)`, mixed in from `store_create`/`store_verbs`/`store_review`/`store_waiver`/`store_close`/`store_read`/`store_reap`/`store_support`; every verb takes `(principal, …)` |
+| `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
 | `evidence.py` | pluggable verifiers (below) |
 | `importer.py` | YAML dir → router-attributed batch; `export_yaml(conn, dir)` for round trip |
 | `api.py` | HTTP JSON server around `Store` |
@@ -33,7 +34,8 @@ changes_requested, review_passed, cancelled, priority_set`. `items.state`, `epoc
 transaction as the event; `verify_integrity` proves cache == fold.
 
 ## Locking (prevention)
-Triggers key off `EXISTS (SELECT 1 FROM events WHERE key=… AND type='review_passed')` (never the cache), and also treat
+Triggers key off `EXISTS (SELECT 1 FROM events WHERE key=… AND type IN ('review_passed','closed_on_decision'))` (never the cache) — the
+two events that finish an item (X7b adds the router's decision close beside the passed review), and also treat
 `cancelled` as locked: `BEFORE UPDATE/DELETE` on `items` (any column except none — DONE rows are fully frozen), on `edges` where
 `src` is locked, on `evidence`/`events` of a locked key; `BEFORE INSERT` on `events`/`evidence`/`edges` for a locked key, and on
 `items` when the key already exists in a locked state (fires for `INSERT OR REPLACE`). New items MAY depend on locked/DONE items
@@ -56,11 +58,14 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
 | `release(p, key, epoch)` | claimant, router | `claimed`→`open` |
 | `add_evidence(p, key, epoch, kind, ref)` | claimant or delegate, state `claimed` | runs the verifier for `kind`; stores `verified` + detail; unverified evidence is stored but does not count |
 | `submit(p, key, epoch)` | claimant or delegate | `claimed`→`in_review` iff every kind in `evidence_kinds` has verified evidence; lease frozen (cleared) |
-| `request_changes` / `pass_review` as `verdict(p, key, ok, reason)` | reviewer | `in_review`: ok → records `review_verdict`; when two distinct reviewers (neither claimant/delegate, two distinct resolved families unless waived) have passed, re-verifies ALL evidence → `done` (event `review_passed`, locks); not ok → `claimed` (same epoch; 2nd time in a row → `open` + audit_finding). Refused: reviewer == claimant/delegate (`same_principal`); reviewer.family == delegate-or-claimant family (`same_family`); either family NULL (`family_unknown`, fail closed) |
-| `waive_second_family(p, key, D-NNN)` | router | `claimed`/`in_review`: runs the `decision` verifier on `{id: D-NNN}` **and** requires that D-row to contain the whole token `Waives: <key>` (X6c3); on success emits `waiver_set` and sets `items.review_waiver`, so the two passing verdicts may share a family (D-217). Refused: non-router (`forbidden`), unverified decision or a D-row that does not name the key (`evidence_unverified`), DONE (`locked`), other states (`bad_state`) |
+| `request_changes` / `pass_review` as `verdict(p, key, ok, reason)` | reviewer | `in_review`: ok → records `review_verdict` and re-verifies ALL evidence; on a `standard` item this one cross-family verdict → `done` (event `review_passed`, locks), on a `high` item a second distinct reviewer (two distinct resolved families unless waived) is required; not ok → `claimed` (same epoch; 2nd time in a row → `open` + audit_finding). Refused: reviewer == claimant/delegate (`same_principal`); reviewer.family == delegate-or-claimant family (`same_family`); either family NULL (`family_unknown`, fail closed) |
+| `waive_second_family(p, key, D-NNN)` | router | **`high` items only (D-228)** — `claimed`/`in_review`: runs the `decision` verifier on `{id: D-NNN}` **and** requires that D-row to contain the whole token `Waives: <key>` (X6c3); on success emits `waiver_set` and sets `items.review_waiver`, so the two passing verdicts may share a family (D-217). Refused: non-router (`forbidden`), unverified decision or a D-row that does not name the key (`evidence_unverified`), a `standard` item (`bad_state`: one verdict already suffices, there is no second family seat), DONE (`locked`), other states (`bad_state`) |
+| `close_on_decision(p, key, batch_ref)` | router only | **`review_tier='none'` items only (X7b)** — see "Legacy and decision closes" |
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
-**D-219 review rule (operator; supersedes the single-verdict `done` above):** one implementer + exactly TWO reviewers per change, no extra Sonnet final. `verdict(ok)` records a `review_verdict` event per reviewer (current epoch/submission round); `done` (`review_passed`) is emitted only when exactly two distinct reviewer principals — neither the claimant nor the delegate, and from two distinct RESOLVED families — have both passed and the evidence re-verifies; a third verdict is refused (`conflict`), a `--changes` verdict from either seat returns the item to `claimed` and voids the round's verdicts. Waiver path (D-217, e.g. the second family's seat is down > 1 h): router-only `waive_second_family(key, decision_id)` — requires a verified `decision` record D-id **whose DECISIONS.md row contains `Waives: <project:ID>` for exactly that key** (X6c3: whole-token match, so `Waives: demo:A` does not waive `demo:AB`; one D-row may list several `Waives:` tokens; tokens inside fenced/indented code blocks do not count) — lets the two verdicts share a family; the waiver is recorded in the event, shown by `show`, `digest` and the snapshot (`review_waiver: D-217`). Per-item `reviews_required` is fixed at 2 (not editable).
+**D-228 review tiers (operator; supersedes the single-verdict `done` above, and the flat "exactly TWO reviewers" reading of D-219):** how many passing verdicts `done` needs is a per-item `review_tier` (`'standard'`|`'high'`|`'none'` — `none` never gets a verdict at all, it is closed on a decision; see "Legacy and decision closes"), named at definition time by the **L0 router** or the **L1 project orchestrator** (`create_items`/`import_items`, `edit_definition`) — **only the L0 router may lower it** (a non-router `high`→`standard` edit is `forbidden`; raising is open to L1) **and only the L0 router may name `none`** (a non-router `none` is `forbidden`). The **L2 phase orchestrator** never sets or changes a tier; reviews belong to the **L3 task group** (writer + reviewers). With no explicit tier, `default_review_tier` picks `high` for project `plangraph` and for any item whose id/title/track matches a risk keyword (`secret(s)`, `key(s)`, `security`, `gateway`, `omniroute`, `deploy`, `keeper`, `fence`), else `standard`.
+
+Both tiers record one `review_verdict` event per passing verdict (current epoch/submission round) and re-verify ALL evidence with the same logic inside the same write lock, so a stale-evidence refusal never depends on which seat spoke first. `standard`: **one** passing verdict is enough — the reviewer must be a distinct principal (not the claimant, not the delegate) whose normalised non-blank family differs from the writer's (`_reviewer_family_ok`, fail closed on a blank family on either side) — and the item goes `done` + `review_passed` immediately. `high`: unchanged D-219 — one implementer plus exactly TWO reviewers, no extra Sonnet final; `done` only when two distinct reviewers from two distinct RESOLVED families have both passed, a third verdict is refused (`conflict`). Waiver path (D-217, e.g. the second family's seat is down > 1 h): router-only `waive_second_family(key, decision_id)` — requires a verified `decision` record D-id **whose DECISIONS.md row contains `Waives: <project:ID>` for exactly that key** (X6c3: whole-token match, so `Waives: demo:A` does not waive `demo:AB`; one D-row may list several `Waives:` tokens; tokens inside fenced/indented code blocks do not count) — lets the two verdicts share a family; the waiver is recorded in the event, shown by `show`, `digest` and the snapshot (`review_waiver: D-217`). Waiving a `standard` item is refused (`bad_state`). A `verdict(ok=False)` from either seat of either tier returns the item to `claimed` and voids the round's verdicts. Per-item `reviews_required` is fixed at 2 for `high` and 1 for `standard` (not editable).
 Allowed edges only: open→claimed, claimed→open, claimed→in_review, in_review→claimed, in_review→done, open|claimed|in_review→cancelled.
 Reads (any authenticated principal): `ready(project=None, n=10)` (text `views.brief`), `show(key)` (compact: fields, deps with states, unblocks,
 evidence, lease; ≤ ~300 tokens), `blocked(project)`, `waves()`, `critical_path(project)`, `percent(project)`, `alerts(project)` (lease expiring < 15 min,
@@ -76,7 +81,61 @@ injected adapters so tests use fakes: `ctx.git`, `ctx.ci`, `ctx.runs`, `ctx.sema
 | `run-record` | `{run_id}` | file `<runs_dir>/<run_id>/job.json` exists, its `request.title` or `task` text contains the item id or key, and `<run_id>/exit.json` has `rc == 0` (format: `job.json` = `{id, run_id, request{card,title,model,…}, task}`, `exit.json` = `{rc, ended}`); runs_dir is config |
 | `semaphore-task` | `{task_id, project_id?, template?}` | adapter GET returns status `success` (and template id/name equal to `template` if given); real fetcher reads base URL from env `PG_SEMAPHORE_URL` and the token from the file named by env `PG_SEMAPHORE_TOKEN_FILE`; the token value is never logged or returned; **API shape UNVERIFIED — ship tests with a fake; live check is done later by routing-00/prox** |
 | `decision` | `{id: "D-209"}` | line `| D-209 |` exists in the configured DECISIONS.md |
+| `commit` (X7b, legacy) | `{commit}` | the sha exists **and** is an ancestor of `main` in the project's registered `repos` path — and *nothing* else: no `Plan-Item` trailer, no claim-time window, no CI. Router-only attachment (see below) |
 `evidence_kinds: [any]` = at least one verified evidence of any kind. Unknown kind → `validation`.
+
+## Legacy and decision closes
+
+X7b covers the two ways work leaves the system without ever going through a review: a
+historical commit as proof, and a router decision that closes a whole batch.  Both are
+**router-only and legacy-only** — nothing on the normal `standard`/`high` path changes.
+
+**Tier `none`.** `review_tier` accepts a third value, `none`: the item is not reviewable,
+so no reviewer's verdict can ever move it to `done`.  Because that removes the gate rather
+than raising it, the store admits it only under its own precondition — the definition must
+be decision-only, `evidence_kinds == ['decision']`.  Any other combination (including
+`['any']` and a decision kind alongside another) is refused `validation` at
+`create_items`/`import_items`/`edit_definition`, and only the router may name it at all: a
+non-router `none` is `forbidden`.  `default_review_tier` never produces `none`, so an
+omission still means `standard`/`high`.
+
+**`close_on_decision(principal, key, batch_ref)`** (router, `store_close.py`) takes a
+`claimed`/`in_review` tier-`none` item straight to `done`.  It requires, all verified in
+read-only I/O *before* `BEGIN IMMEDIATE` — and the batch digest, decisions-file checks
+and `review_tier=='none'` are re-verified *inside* the write lock (X7-FIX-B), so a file,
+row or tier swapped between the check and the commit is refused:
+
+* at least one attached `decision` evidence for the current epoch, and **every** attached
+  decision must verify (the `decision` verifier *and* the configured decisions file);
+* `batch_ref` shaped `"<path>@<sha256 hex>"`.  The keeper resolves the path and refuses
+  `forbidden` unless it lands inside one of the config's `batch_roots` directories — the
+  containment test runs on `realpath`, so `..` segments and a symlink planted inside
+  `batch_roots` that points out of them are both refused.  It then hashes the bytes and
+  refuses `evidence_unverified` on any mismatch, and the same way on an unreadable or
+  missing file.  No `batch_roots` (the default) means the verb can never succeed.
+* the `Closes:` rule, the same whole-token shape as `Waives:` (X6c3): if any of those
+  decision rows carries a `Closes: <project:ID>` token, `key` must be one of the named
+  items (`evidence_unverified` otherwise; a row may name several).  A decision with no
+  `Closes:` token at all is still a valid close: the hashed batch file is the authorisation.
+
+Inside the write lock the verb re-reads the row and re-checks state, epoch and the exact
+set of decision-evidence ids, so a decision attached or replaced while the I/O was running
+loses the race (`conflict`).  It then writes the cache row (`done`, `reviewer` = the router)
+*before* appending `closed_on_decision {decision_ids, batch_ref, sha256}` — the event
+is what locks the key, exactly like `review_passed`, and every trigger, the `fold` and
+`verify_integrity` treat the two the same.  Afterwards `edit_definition`, `cancel`,
+`add_evidence` and a second close are all refused (`locked`), at the SQL level too.
+Refusals: non-router (`forbidden`), an item still `open` or already `done`/`cancelled`
+(`bad_state`/`locked` — an `open` legacy row must first be moved into an active state by
+`set_legacy_state`, a later task), a tier that is not `none` (`bad_state`).
+
+**Evidence kind `commit`** is the historical twin of `commit+ci`: it passes on "this sha
+exists and is an ancestor of `main` in the project's registered repo" and deliberately drops
+the trailer, claim-window and CI checks a migrated item can no longer satisfy.  That makes
+it a weaker proof, so it is attachable **only by the router through
+`add_evidence_router`**; a claimant or delegate naming kind `commit` is refused `forbidden`
+and stores nothing.  Unknown project (no `repos` entry), missing repo and any git error all
+fail closed as unverified.
 
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}`;
@@ -110,5 +169,9 @@ item reads as legitimately done. Only the hash-chain head anchor (M2b, an extern
 unix permissions and the host as part of the trust base.
 
 Waiver rule (D-217 / X6c3): `waive_second_family(key, D-NNN)` succeeds only if the D-NNN row in the decisions file contains `Waives: <project:ID>`
-for exactly that key (whole token; a row may name several keys; code blocks do not count). A forged D-id still needs the decision verifier, so the
+for exactly that key (whole token; a row may name several keys; code blocks do not count). `Waives:` and `Closes:` tokens count only inside the DECISION cell (3rd column) of their D-row (D-276). A forged D-id still needs the decision verifier, so the
 residual risk above applies to waivers too: a raw-SQL writer who can edit DECISIONS.md can name any key.
+
+Waiver re-check window (S1-2, documented residual): the `Waives:` row is verified before the write lock is taken, as the evidence verifiers are, because
+the decisions-file read is pre-lock I/O. If DECISIONS.md is edited between that read and the write, the waiver is recorded against the earlier text.
+The in-lock state/epoch/round checks still apply; only the decisions-file content is not re-read under the lock.

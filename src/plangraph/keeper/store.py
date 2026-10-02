@@ -21,7 +21,9 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from .errors import Refused
+from .store_close import CloseMixin
 from .store_create import CreateMixin
+from .store_legacy import LegacyMixin
 from .store_read import ReadMixin
 from .store_reap import ReapMixin
 from .store_review import ReviewMixin
@@ -47,18 +49,26 @@ _LEASE_MIN, _LEASE_MAX = 60, 86400
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               sqlite3.ProgrammingError)
 
+#: X7b: evidence kinds a claimant may never attach for itself.  Only the router
+#: puts legacy proof on an item, and only via ``add_evidence_router``.
+ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
+
 
 class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
-            ReadMixin, WaiverMixin):
+            ReadMixin, WaiverMixin, CloseMixin, LegacyMixin):
     """State machine, locking and audit over one keeper connection."""
 
-    def __init__(self, conn, clock=None, verifiers=None, ctx=None):
+    def __init__(self, conn, clock=None, verifiers=None, ctx=None,
+                 batch_roots=None):
         self.conn = conn
         self.clock = clock or (lambda: datetime.now(timezone.utc).timestamp())
         # Default to the real registry; tests inject fakes.  ``ctx`` supplies the
         # adapters the verifiers read through (``default_context`` in production).
         self.verifiers = dict(evidence.VERIFIERS if verifiers is None else verifiers)
         self.ctx = ctx
+        # X7b: the directories ``close_on_decision`` may read a batch file from.
+        # Empty by default, so the verb fails closed until the operator opts in.
+        self.batch_roots = [str(r) for r in (batch_roots or [])]
         self.default_lease = DEFAULT_LEASE_S
         self.review_overdue_s = REVIEW_OVERDUE_S
         self.lease_warn_s = LEASE_WARN_S
@@ -212,12 +222,31 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
         if item["state"] == "cancelled":
             raise Refused("locked", f"{item['key']} is cancelled")
         reviewed = self.conn.execute(
-            "SELECT 1 FROM events WHERE key=? AND type='review_passed' LIMIT 1",
+            "SELECT 1 FROM events WHERE key=? AND type IN"
+            " ('review_passed','closed_on_decision') LIMIT 1",
             (item["key"],)).fetchone()
         if reviewed is not None:
             raise Refused("locked", f"{item['key']} is DONE")
 
     # ------------------------------------------------- shared verb checks
+    def add_evidence(self, principal, key, epoch, kind, ref):
+        """The claimant evidence verb, fenced for the X7b legacy kinds.
+
+        ``commit`` proves only "this sha is on main": no trailer binding, no
+        claim-time window, no CI.  Only the router may attach it, and only
+        through ``add_evidence_router``, so the claimant path refuses it.
+        """
+        if kind in ROUTER_ONLY_EVIDENCE_KINDS:
+            return self._run(principal, "add_evidence", key,
+                             lambda now: self._refuse_router_only_kind(kind))
+        return super().add_evidence(principal, key, epoch, kind, ref)
+
+    @staticmethod
+    def _refuse_router_only_kind(kind):
+        raise Refused("forbidden",
+                      f"evidence kind {kind!r} is router-only: use"
+                      " add_evidence_router")
+
     def _actor_or_delegate(self, principal, item):
         if principal.name not in (item["claimed_by"], item["delegate"]):
             raise Refused("forbidden", "only the claimant or delegate may do this")

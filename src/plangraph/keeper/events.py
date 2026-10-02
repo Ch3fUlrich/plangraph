@@ -68,7 +68,8 @@ def read_events(conn):
 def _new_state():
     return {"state": "open", "epoch": 0, "claimed_by": None, "delegate": None,
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
-            "round": 0, "evidence": [], "review_waiver": None}
+            "round": 0, "evidence": [], "review_waiver": None,
+            "review_tier": "standard"}
 
 
 def fold(events):
@@ -91,12 +92,14 @@ def fold(events):
         if kind == "item_created":
             item["state"] = "open"
             item["epoch"] = 0
-            for field in ("priority", "model"):
+            for field in ("priority", "model", "review_tier"):
                 if field in payload:
                     item[field] = payload[field]
         elif kind == "item_defined":
             if "priority" in payload:
                 item["priority"] = payload["priority"]
+            if "review_tier" in payload:
+                item["review_tier"] = payload["review_tier"]
         elif kind == "claimed":
             item["state"] = "claimed"
             item["epoch"] = payload.get("epoch", item["epoch"] + 1)
@@ -139,6 +142,29 @@ def fold(events):
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")
+        elif kind == "closed_on_decision":
+            # X7b: the router's decision close is the tier-`none` equivalent of
+            # a passed review -- same final state, same lock, same attribution.
+            item["state"] = "done"
+            item["reviewer"] = event.get("actor")
+        elif kind == "legacy_state_set":
+            # X7c: the router opens an ``open`` legacy row into an active state
+            # with no claim.  Only the state and holder change; the owner is
+            # carried in the payload so the cache row folds back identically.
+            item["state"] = payload.get("state", item["state"])
+            item["claimed_by"] = payload.get("claimed_by", item["claimed_by"])
+            if "epoch" in payload:
+                # The move opens a fresh work epoch at a fresh round and
+                # clears the holder/lease/waiver columns; replay exactly what
+                # the store wrote so ``verify_integrity`` agrees.  Payloads
+                # written before the epoch bump carry no epoch and keep the
+                # old all-else-unchanged replay.
+                item["epoch"] = payload["epoch"]
+                item["round"] = payload.get("round", item["round"])
+                item["delegate"] = None
+                item["reviewer"] = None
+                item["lease_until"] = None
+                item["review_waiver"] = None
         elif kind == "waiver_set":
             item["review_waiver"] = payload.get("decision_id")
         elif kind == "cancelled":
@@ -188,7 +214,7 @@ def verify_integrity(conn):
     folded = fold(read_events(conn))
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
-        "review_waiver FROM items")}
+        "review_waiver,review_tier FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -201,7 +227,7 @@ def verify_integrity(conn):
                              "got": None})
             continue
         for field in ("state", "epoch", "round", "claimed_by", "delegate",
-                      "reviewer", "review_waiver"):
+                      "reviewer", "review_waiver", "review_tier"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
                                  "field": field, "expected": expected[field],

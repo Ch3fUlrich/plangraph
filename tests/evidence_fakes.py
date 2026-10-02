@@ -120,7 +120,8 @@ class FakeDecisions:
                  waiving: set | None = None):
         self.present = present if present is not None else {"D-209"}
         self.error = error
-        # (decision_id, key) pairs whose D-row carries a ``Waives: <key>`` token;
+        # (decision_id, key) pairs whose D-row names ``<key>`` in its DECISION
+        # cell (3rd column) as a whole ``Waives:``/``Closes:`` token (D-276);
         # ``None`` means "a recorded id waives every key it is asked about".
         self.waiving = waiving
 

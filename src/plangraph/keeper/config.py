@@ -8,6 +8,7 @@ The config maps the store and its verifiers onto real paths:
 * ``runs_dir``      — where ``run-record`` jobs live
 * ``decisions_file``— the DECISIONS.md the ``decision`` verifier reads
 * ``ci``            — ``{project: "owner/repo" | "none"}``
+* ``batch_roots``   — directories ``close_on_decision`` may read batch files from
 * ``bind``          — ``"host:port"`` (or ``host``/``port`` keys)
 * ``default_lease`` — seconds a claim is held without a heartbeat
 
@@ -48,6 +49,18 @@ class Config:
         self.runs_dir = data.get("runs_dir")
         self.decisions_file = data.get("decisions_file")
         self.ci = dict(data.get("ci") or {})
+        # X7b: the directories ``close_on_decision`` may read a batch file from.
+        # Empty means the verb always refuses, so an unconfigured deployment
+        # cannot close an item on a batch the operator never sanctioned.
+        roots = data.get("batch_roots") or []
+        if not isinstance(roots, (list, tuple)):
+            raise ConfigError("batch_roots must be a list of paths")
+        for root in roots:
+            if not isinstance(root, str):
+                raise ConfigError("batch_roots entries must be strings")
+        # A blank entry would ``_resolve`` to the config dir and silently
+        # authorise it; drop blanks before resolving.
+        self.batch_roots = [str(self._resolve(p)) for p in roots if p.strip()]
         host, port = self._bind(data)
         self.host = host
         self.port = port

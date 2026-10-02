@@ -17,7 +17,7 @@ from plangraph.keeper.errors import Refused
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    seed(world, [("A", [])], review_tier="high")
     yield world
     world.close()
 

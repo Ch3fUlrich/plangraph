@@ -100,17 +100,21 @@ def defn(pid, deps=(), project="demo", kind="lane", evidence_kinds=("any",),
     return item
 
 
-def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True):
+def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True,
+         **tier):
     """Create ``lanes`` plus a goal that depends on every lane.
 
     Returns the fully-qualified lane keys.  A goal is required because
-    ``views.validate`` refuses work that cannot reach one.
+    ``views.validate`` refuses work that cannot reach one.  ``tier`` carries the
+    per-item definition kwargs the caller needs (``review_tier="high"`` for the
+    two-reviewer tests).
     """
-    items = [defn(pid, deps, project=project, evidence_kinds=evidence_kinds)
+    items = [defn(pid, deps, project=project, evidence_kinds=evidence_kinds,
+                  **tier)
              for pid, deps in lanes]
     if goal:
         items.append(defn("GOAL", [pid for pid, _ in lanes], project=project,
-                          kind="goal"))
+                          kind="goal", **tier))
     world.store.create_items(world.p("router"), items)
     return [f"{project}:{pid}" for pid, _ in lanes]
 
@@ -130,13 +134,18 @@ def to_in_review(world, key, who="l1main", kind="decision", ref=None,
 
 
 def pass_review(world, key, first="reviewer", second="reviewer2"):
-    """Give both D-219 passing verdicts; the second emits ``review_passed``.
+    """Pass the review however many verdicts its ``review_tier`` needs (D-228).
 
-    The two reviewers are different principals of different families, so the
-    item reaches ``done`` exactly as a single verdict used to.
+    A ``standard`` item is ``done`` after the first verdict — the reviewer is a
+    different principal of a different family from the writer's, which is all
+    one verdict requires — so the second seat is only taken when the item is
+    still ``in_review`` (a ``high`` item, where D-219 still wants two distinct
+    families).
     """
-    world.store.verdict(world.p(first), key, True, "passed")
-    return world.store.verdict(world.p(second), key, True, "passed")
+    result = world.store.verdict(world.p(first), key, True, "passed")
+    if result["state"] == "in_review":
+        result = world.store.verdict(world.p(second), key, True, "passed")
+    return result
 
 
 def to_done(world, key, who="l1main", reviewer="reviewer", kind="decision"):
