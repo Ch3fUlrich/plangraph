@@ -181,3 +181,56 @@ def test_missing_input_file_exits_2(world, srv, token, site):
 def test_apply_and_dry_run_are_exclusive(world, srv, token, site):
     rc, _, _ = sync(site, srv, token, "--apply", "--dry-run")
     assert rc == 2
+
+
+SHAPED_QUESTIONS = (
+    "# Open questions (SYNTHETIC fixture, not site data)\n\n"
+    "## Questions for the router\n"
+    "- Q-SHAPY **Rotate the key** login see add/commitx\n"
+    "- Q-PLAIN **Rotate the routine key** plain words only\n")
+
+QUIET_ANSWERS = "# Answers (SYNTHETIC fixture, not site data)\n"
+
+
+def synthetic(site, questions=SHAPED_QUESTIONS, answers=QUIET_ANSWERS):
+    (site / "QUESTIONS.md").write_text(questions, encoding="utf-8")
+    (site / "ANSWERS.md").write_text(answers, encoding="utf-8")
+
+
+def test_shape_row_is_masked_and_the_apply_still_succeeds(world, srv, token, site):
+    """D-405: masking happens before the send, so the keeper never refuses."""
+    synthetic(site)
+    rc, out, err = sync(site, srv, token, "--dry-run")
+    assert rc == 0, out + err
+    assert "create routing:Q-SHAPY" in out and "redactions 1" in out
+    rc, out, err = sync(site, srv, token, "--apply")
+    assert rc == 0, out + err
+    assert "refused 0," in out and "applied 4 of 4" in out
+    assert "error:" not in out and "nothing applied" not in out
+    title, description = rows(world,
+                              "SELECT title, description FROM items WHERE key=?",
+                              "routing:Q-SHAPY")[0]
+    assert title == "Q: Rotate the key"
+    assert description == "login see [redacted]"
+    assert "commitx" not in description
+    plain = rows(world, "SELECT description FROM items WHERE key=?",
+                 "routing:Q-PLAIN")[0][0]
+    assert plain == "plain words only"  # no shape: untouched
+    assert state(world, "routing:Q-SHAPY") == "open"
+    rc, out, err = sync(site, srv, token, "--dry-run")
+    assert rc == 0 and "dry run: no ops" in out  # masked text matches the keeper
+
+
+def test_original_value_never_reaches_stdout_or_stderr(world, srv, token, site,
+                                                       capsys):
+    synthetic(site)
+    rc = md_sync.main(["--questions", str(site / "QUESTIONS.md"),
+                       "--answers", str(site / "ANSWERS.md"),
+                       "--decisions", str(site / "decisions-log.md"),
+                       "--url", srv.base_url, "--token-file", token, "--apply"])
+    captured = capsys.readouterr()
+    assert rc == 0, captured.out + captured.err
+    assert "redactions 1" in captured.out
+    for original in ("add/commitx", "login see add/commitx"):
+        assert original not in captured.out
+        assert original not in captured.err

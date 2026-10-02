@@ -206,6 +206,39 @@ def test_redaction_counts_and_masks_title_and_description():
     assert "Zx81" not in item["description"] and p.redactions == 1
 
 
+def test_credential_shape_in_description_is_masked_before_sending():
+    # D-405: the keeper refuses a word/secret pair near a credential keyword,
+    # so the planned create must carry the mask, not the pair.
+    p = build(q("- Q-N1 **Rotate** login see add/commitx\n"))
+    lane = p.ops[0]["item"]
+    assert lane["description"] == "login see [redacted]"
+    assert p.redactions == 1
+
+
+def test_row_without_a_credential_shape_is_unchanged():
+    p = build(q("- Q-N1 **Rotate** plain words only\n"))
+    lane = p.ops[0]["item"]
+    assert lane["title"] == "Q: Rotate"
+    assert lane["description"] == "plain words only"
+    assert p.redactions == 0
+
+
+def test_credential_shape_in_the_title_is_masked_too():
+    p = build(q("- Q-N1 **login svc/Zq9xk2LmPw done**\n"))
+    lane = p.ops[0]["item"]
+    assert lane["title"] == "Q: login [redacted] done"
+    assert "description" not in lane and p.redactions == 1
+
+
+def test_credential_masks_are_added_to_the_existing_redaction_count():
+    p = build(q("- Q-N1 **Rotate** token: Zx81kQ92LmPq77Vb near "
+                "login see add/commitx\n"))
+    lane = p.ops[0]["item"]
+    assert lane["description"] == ("token: [redacted] near "
+                                   "login see [redacted]")
+    assert p.redactions == 2  # 1 token mask + 1 credential mask
+
+
 def test_long_description_is_capped_for_the_description_column():
     p = build(q("- Q-N1 **T** " + "word " * 1000 + "\n"))
     desc = p.ops[0]["item"]["description"]

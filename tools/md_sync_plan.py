@@ -1,8 +1,24 @@
-"""md_sync plan: parsed markdown + live snapshot -> an ordered keeper ops list."""
+"""md_sync plan: parsed markdown + live snapshot -> an ordered keeper ops list.
+
+Every text field that leaves here is masked with the keeper's own credential
+guard first (D-405): the store refuses a ``word/secret`` pair near a credential
+keyword (D-374), so md_sync masks it, counts the mask as a redaction and never
+sends or prints the original.
+"""
+import os
 import re
+import sys
 from collections import Counter
 
 import md_sync_parse as mp
+
+# Import the guard from the checkout so tools/ works without an install step.
+_SRC = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    os.pardir, "src"))
+if _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
+
+from plangraph.keeper import credential_guard  # noqa: E402  (D-405)
 
 PROJECT = "routing"
 GATE_ID = "PH-OPERATOR"
@@ -106,7 +122,9 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items):
         seen.add(entry.id)
         title, n1 = mp.redact(entry.title)
         desc, n2 = mp.redact(entry.description)
-        plan.redactions += n1 + n2
+        title, m1 = credential_guard.mask(title)
+        desc, m2 = credential_guard.mask(desc)
+        plan.redactions += n1 + n2 + m1 + m2
         desc = _fit(desc)
         item = _find(by_id, entry.id)
         if item is None:
@@ -142,7 +160,28 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items):
                 and item["state"] == "open" and item["id"] not in seen
                 and item["id"] not in answered):
             plan.gone.append(item["key"])
+    _mask_guarded(plan)
     return plan
+
+
+def _mask_guarded(plan):
+    """D-405: mask a credential shape in every guarded field any op carries.
+
+    Title and description are masked as they are read (so edits compare masked
+    with masked and stay idempotent); this sweep is the structural guarantee
+    that no op leaves md_sync carrying a shape the keeper would refuse --
+    including fields the plan never redacts, like ``done_criteria`` or the
+    folded ``note`` of a ``legacy_state``.  Counts join ``plan.redactions``.
+    """
+    for op in plan.ops:
+        for holder in (op, op.get("item"), op.get("fields")):
+            if not isinstance(holder, dict):
+                continue
+            for field in credential_guard.GUARDED_FIELDS:
+                value = holder.get(field)
+                if isinstance(value, str):
+                    holder[field], n = credential_guard.mask(value)
+                    plan.redactions += n
 
 
 def _link(plan, state, new_lanes):
