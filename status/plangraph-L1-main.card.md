@@ -6,8 +6,8 @@ M1 CLOSED. M2a code accepted (routing-00 Opus spot review). Now: X6 fixes -> X7 
 router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 not started.
 
 ## State (branch worktree-proposal, worktree .claude/worktrees/proposal)
-- PILOT KEEPER LIVE (coding.vm 127.0.0.1:8787, "isolation not effective (pilot)"; stop by PID file, never pkill -f; tokens 0600 in
-  ~/.config/plangraph). Live graph ~433 items. Daemon runs PRE-MODEL-A code (restart only after the md_sync integration fix).
+- PILOT KEEPER LIVE (coding.vm 127.0.0.1:8787, "isolation not effective (pilot)"; stop by PID file, never pkill -f; daemon does NOT write
+  its pid file: write it after start). Daemon on 610271d code since 19:00Z (MODEL-A + integ + mask + tier-edit); descriptions migrated.
 - Merged + accepted: X7 (D-312), apply_ops+B3 (D-371), md-sync (D-388, timer ~/.config/systemd/user/plangraph-md-sync.*, halts on
   refusal), B2..B2d (D-400), MODEL-A (D-427, request-side seats; re-seat lane plangraph:RESEAT-MODEL-A after autoos:EVTAG).
 - Applied batches: data/updates/* (QUEUE.md), router closes D-395/D-413/D-422, autoos WS-SHIFT, RECONCILE (86), MCP-ONE.
