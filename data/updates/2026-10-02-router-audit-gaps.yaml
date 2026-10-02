@@ -1,0 +1,149 @@
+batch: 2026-10-02-router-audit-gaps
+principal: routing-00
+source: /home/s/code/routing/docs/audit/operator-instructions-2026-10-02.md
+source_sha256: b958718301ea245f244e663fe1e9b95acea7885787413e2f80111c2def1cc33b
+# Router-OK'd (operator-instruction audit, section 2 "Gaps to file", 22 rows) + the 5 MISSING decisions as open questions.
+# All new items hang off one gate routing:PH-AUDIT-1002 under routing:GOAL. "question" is not an item kind yet (MODEL-KINDS):
+# questions are lanes titled "Q: ..." on track QUESTIONS with evidence [decision] / tier none, owner routing-00.
+# OS-70 is DONE (immutable): its open step 3b is the correction item routing:OS-70B (audit row 22), not a reopen.
+ops:
+- op: create
+  item:
+  # --- the 5 MISSING decisions (router decides) ---
+  - {project: routing, id: Q-TIER-CONTRACT, kind: lane, track: QUESTIONS, owner: routing-00, review_tier: none, evidence_kinds: [decision], depends_on: [],
+     title: "Q: Reframe the t1 tier as reasoning plus external memory, not window size?",
+     done_criteria: "a D-row decides the t1 tier rule (reasoning need + parallelism vs 1M window) and closes this item",
+     description: "Audit MISSING #51. Replace the 1M-or-nothing rule with a routing rule on reasoning need and parallelism; big tasks splittable by default. Related D-228, D-253."}
+  - {project: routing, id: Q-ACK-PROBE-BUDGET, kind: lane, track: QUESTIONS, owner: routing-00, review_tier: none, evidence_kinds: [decision], depends_on: [],
+     title: "Q: Store the ack-probe token budget (2048 min) per reasoning combo in the registry?",
+     done_criteria: "a D-row decides where the ack-probe budget lives and closes this item",
+     description: "Audit MISSING #55. The 2048-token minimum for reasoning models lives only in prose."}
+  - {project: routing, id: Q-CHEAPEST-PROVIDER, kind: lane, track: QUESTIONS, owner: routing-00, review_tier: none, evidence_kinds: [decision], depends_on: [],
+     title: "Q: Rule for routing a model to its cheapest provider when paid legs are used?",
+     done_criteria: "a D-row fixes the provider-selection rule and closes this item",
+     description: "Audit MISSING #33. Price data in D-282 and D-394."}
+  - {project: routing, id: Q-OWUI-CODE-EXEC, kind: lane, track: QUESTIONS, owner: routing-00, review_tier: none, evidence_kinds: [decision], depends_on: [],
+     title: "Q: Enable code execution in Open WebUI (how, sandboxed where)?",
+     done_criteria: "a D-row decides Open WebUI code execution and closes this item",
+     description: "Audit MISSING #102 (part 1). STT, TTS, image and search are already planned (D-188)."}
+  - {project: routing, id: Q-OWUI-VIDEO-GEN, kind: lane, track: QUESTIONS, owner: routing-00, review_tier: none, evidence_kinds: [decision], depends_on: [],
+     title: "Q: Add video generation to Open WebUI (which provider/model)?",
+     done_criteria: "a D-row decides Open WebUI video generation and closes this item",
+     description: "Audit MISSING #102 (part 2)."}
+  # --- gap rows 1-16 (autoos) ---
+  - {project: autoos, id: GEMINI38, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:PROVROUTE, autoos:T1-COMBO3],
+     title: "Gemini 3.8 Flash only: registry, combos, pins",
+     done_criteria: "no Gemini 3.6/3.7 legs; 3.8 Flash ids (antigravity, vertex, AI Studio) in registry, combos and opencode pins; drift 0 + smoke; fleet rule published; merged on main",
+     description: "Audit gap 1 (#193, #405). Cite D-488 (also D-489, D-493, D-255)."}
+  - {project: autoos, id: ZCODE-GLM-BURN, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:ZCODE, routing:OS-85],
+     title: "Use the 100M free GLM tokens before ~10-07 (time-critical)",
+     done_criteria: "GLM-5.3-Flash (5M/day) and GLM-5.3 (3M/day) in writer combos + a review family with an allowance meter, no site data; daily consumption visible; merged",
+     description: "Audit gap 2 (#307). Host side with workst-L1-autoos. Cite D-346 (also D-348, D-357, D-383, D-386). Grant expires ~2026-10-07."}
+  - {project: autoos, id: DEVIN-BRIDGE, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:T1-PROV],
+     title: "Devin CLI bridge: catalog entry, Windows/Linux auto-install, OmniRoute wiring",
+     done_criteria: "Devin in the install catalog with automated setup on workstation and server, agentic bridge wired, shown on the cli-code page, in the free combos; merged",
+     description: "Audit gap 3 (#269, #282). Cite D-323 (lane named there; D-327, D-329)."}
+  - {project: autoos, id: PROV-WIRE-FREE, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:T1-PROV, autoos:PROVROUTE],
+     title: "Wire Kilo Code, freeaiapi and BazaarLink into the free combos",
+     done_criteria: "each leg probed, registered (freeaiapi with the allowance price kind), placed in the free combos on both gateways, card/no-card declared in the registry; merged",
+     description: "Audit gap 4 (#258, #268, #280). Cite D-323 (also D-305, D-334, D-287)."}
+  - {project: autoos, id: JULES-CLOUDAGENT, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:PROV-WIRE-FREE],
+     title: "Jules via the OmniRoute Cloud Agents task API",
+     done_criteria: "Jules connected through the task API (not chat completions), automated in the install setups, tested with the right model name; merged",
+     description: "Audit gap 5 (#303). Cite D-346."}
+  - {project: autoos, id: AIPRO-LIMITS, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: none, evidence_kinds: [decision], depends_on: [autoos:GEMINI38],
+     title: "Compare Gemini API key limits with Google AI Pro limits",
+     done_criteria: "sourced comparison recorded; a D-row decides which key serves which combo leg and closes this item",
+     description: "Audit gap 6 (#302). Ordered research (Haiku). Cite D-346."}
+  - {project: autoos, id: AUTOOS-UI-PROFILES, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [],
+     title: "AutoOS web UI: usage-intent profile groups",
+     done_criteria: "multi-select groups by usage intent replace the app list; auto install + wiring; only chosen groups' settings shown; grey placeholder examples; merged",
+     description: "Audit gap 7 (#314). Cite D-346."}
+  - {project: autoos, id: BAZAARLINK-AUTODISABLE, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:OMNIUPDATE],
+     title: "Find what disables BazaarLink in OmniRoute",
+     done_criteria: "cause found in OmniRoute auto-disable logic, sync scripts or initial JSON settings; fixed or documented; drift check added; merged",
+     description: "Audit gap 8 (#289). Cite D-323."}
+  - {project: autoos, id: MEMGUARD, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [autoos:WS-6],
+     title: "coding.vm memory watchdog at 1 GiB MemAvailable",
+     done_criteria: "watchdog acts only below 1 GiB (agent runs first), Claude Code's reaper off, fail-safe on systemctl errors, R22 seat findings fixed; merged and running",
+     description: "Audit gap 9 (#377). Cite D-438 (also D-437, D-493)."}
+  - {project: autoos, id: TIER-CONTRACT, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [routing:Q-TIER-CONTRACT, autoos:T1-COMBO3, autoos:T2-COMPACT],
+     title: "Implement the reframed t1 tier: reasoning plus external memory",
+     done_criteria: "routing rule on reasoning need and parallelism per the decision of routing:Q-TIER-CONTRACT; big tasks splittable by default; merged",
+     description: "Audit gap 10 (#51). Decision first (routing:Q-TIER-CONTRACT). Related D-228, D-253."}
+  - {project: autoos, id: ACK-PROBE-BUDGET, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [routing:Q-ACK-PROBE-BUDGET, autoos:T1-COMBO3],
+     title: "Ack-probe token budget stored per reasoning combo",
+     done_criteria: "the 2048-token minimum (or the decided value) in the registry next to each reasoning combo, used by the probe; merged",
+     description: "Audit gap 11 (#55). Decision first (routing:Q-ACK-PROBE-BUDGET)."}
+  - {project: autoos, id: CHEAPEST-PROVIDER, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [routing:Q-CHEAPEST-PROVIDER, autoos:T1-PROV],
+     title: "Route a model to its cheapest provider when paid legs are used",
+     done_criteria: "the decided selection rule encoded in the registry/renderer with a test; merged",
+     description: "Audit gap 12 (#33). Decision first (routing:Q-CHEAPEST-PROVIDER); data in D-282, D-394."}
+  - {project: autoos, id: OR-FREE-GUARD, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], depends_on: [autoos:T1-COMBO3],
+     title: "Test that OpenRouter legs are :free only",
+     done_criteria: "renderer/validator test fails on any paid OpenRouter model in a combo while the account has no credits; merged",
+     description: "Audit gap 13 (#14). Cite D-289 (also D-185)."}
+  - {project: autoos, id: QODER-FREE-LEG, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: none, evidence_kinds: [decision], depends_on: [autoos:T2-RECORD],
+     title: "Decide qoder as a free reviewer/writer leg",
+     done_criteria: "a D-row records qoder with Qwen3.8-flash under the D-206/D-271 limits (resolved-model recording, writer suspended) or closes it",
+     description: "Audit gap 14 (#40). Cite D-206 (also D-237, D-271)."}
+  - {project: autoos, id: GROK-UPSTREAM-PR, kind: lane, track: AUDIT, owner: workst-L1-autoos, review_tier: high, evidence_kinds: [commit+ci], depends_on: [workstation:T5-GROK-L2, routing:OS-76],
+     title: "Grok Bot upstream PR1/PR2 to OmniRoute",
+     done_criteria: "after the 2-day test: scrubbed, fork CI (OS-76), two-family seats, operator look; PR1 (job store + callback) then PR2 (executor + preset) opened, Grok setup card in the OmniRoute UI",
+     description: "Audit gap 15 (#154, #185, #230, #231, #305). Cite D-241 (also D-249, D-345, D-348)."}
+  - {project: autoos, id: ROUTING-INTO-AUTOOS, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [plangraph:PG-M4, autoos:SKILL2MCP],
+     title: "Fold the routing repo's generic mechanics into AutoOS",
+     done_criteria: "docs/integration-into-autoos.md executed: generic mechanics in public AutoOS, site state in the plan graph and Server, routing archived after a parallel week; router judges",
+     description: "Audit gap 16 (#240, #313). Cite D-300."}
+  # --- gap rows 17-22 ---
+  - {project: routing, id: REFERRAL-DOCS, kind: lane, track: AUDIT, owner: autoos-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [],
+     title: "Add the freeaiapi referral link to the docs",
+     done_criteria: "referral link next to the other provider referral links; merged",
+     description: "Audit gap 17 (#259). Cite D-305."}
+  - {project: server, id: SVC-ACCOUNTS, kind: lane, track: AUDIT, owner: prox-L1-main, review_tier: high, evidence_kinds: [commit+ci, semaphore-task], depends_on: [],
+     title: "Own service accounts for Explo, AudioMuse, mealie-tools and navidrome-sync",
+     done_criteria: "least-rights service accounts for all four (navidrome-sync, Explo and AudioMuse created ~20:40Z; mealie-tools open); no tool uses a personal login; key rotation never touches an operator login",
+     description: "Audit gap 18 (#394). With server-L1-main. Cite D-471."}
+  - {project: server, id: OMNIROUTE-AUTHELIA-API, kind: lane, track: AUDIT, owner: prox-L1-main, review_tier: high, evidence_kinds: [commit+ci, semaphore-task], depends_on: [routing:OS-64],
+     title: "Fix the OmniRoute dashboard behind Authelia (reload error, empty api-manager)",
+     done_criteria: "/api/* has the dashboard's Authelia policy or OmniRoute's own login protects it; reload and key list verified from the workstation",
+     description: "Audit gap 19 (#256, #288). Cite D-300 (also D-305)."}
+  - {project: server, id: OWUI-EXTRAS, kind: lane, track: AUDIT, owner: server-L1-main, review_tier: standard, evidence_kinds: [commit+ci, semaphore-task], depends_on: [server:T6-OWUI, autoos:T1-MM, routing:Q-OWUI-CODE-EXEC, routing:Q-OWUI-VIDEO-GEN],
+     title: "Open WebUI: code execution and video generation",
+     done_criteria: "code execution and video generation wired in Open WebUI as decided by the two routing questions; deployed",
+     description: "Audit gap 20 (#102). Cite D-188 (new D-rows via routing:Q-OWUI-CODE-EXEC and Q-OWUI-VIDEO-GEN)."}
+  - {project: plangraph, id: RUST-PORT, kind: lane, track: AUDIT, owner: plangraph-L1-main, review_tier: standard, evidence_kinds: [commit+ci], depends_on: [plangraph:PH-M2C, plangraph:PG-M4],
+     title: "Later Rust port of the plan-graph web page and databases",
+     done_criteria: "placeholder: port for speed after M2c and adoption; scope decided then",
+     description: "Audit gap 21 (#247). Cite D-300."}
+  - {project: routing, id: OS-70B, kind: lane, track: QUESTIONS, owner: operator, operator: true, review_tier: none, evidence_kinds: [decision], depends_on: [server:SVC-ACCOUNTS],
+     title: "OP: log in to Navidrome as the operator account (leak recovery step 3b)",
+     done_criteria: "operator logged in with the stored value; later sets an own password once navidrome-sync exists; a D-row closes this item",
+     description: "Audit gap 22 (#390). Correction of routing:OS-70 (done, immutable): step 3b is still open. prox-L1-main verifies. Cite D-471."}
+  # --- the gate ---
+  - {project: routing, id: PH-AUDIT-1002, kind: gate, track: AUDIT, owner: routing-00,
+     title: "Audit 2026-10-02: filed gaps and open decisions",
+     done_criteria: "all items filed from the operator-instruction audit of 2026-10-02 are done or cancelled",
+     depends_on: [routing:Q-TIER-CONTRACT, routing:Q-ACK-PROBE-BUDGET, routing:Q-CHEAPEST-PROVIDER, routing:Q-OWUI-CODE-EXEC, routing:Q-OWUI-VIDEO-GEN,
+                  autoos:GEMINI38, autoos:ZCODE-GLM-BURN, autoos:DEVIN-BRIDGE, autoos:PROV-WIRE-FREE, autoos:JULES-CLOUDAGENT, autoos:AIPRO-LIMITS,
+                  autoos:AUTOOS-UI-PROFILES, autoos:BAZAARLINK-AUTODISABLE, autoos:MEMGUARD, autoos:TIER-CONTRACT, autoos:ACK-PROBE-BUDGET,
+                  autoos:CHEAPEST-PROVIDER, autoos:OR-FREE-GUARD, autoos:QODER-FREE-LEG, autoos:GROK-UPSTREAM-PR, autoos:ROUTING-INTO-AUTOOS,
+                  routing:REFERRAL-DOCS, server:SVC-ACCOUNTS, server:OMNIROUTE-AUTHELIA-API, server:OWUI-EXTRAS, plangraph:RUST-PORT, routing:OS-70B]}
+- op: edit
+  key: routing:GOAL
+  fields:
+    depends_on: [autoos:OP-MANAGE-KEY, autoos:OP-WS-RELAUNCH, autoos:ORCH-L2-LAUNCHER, autoos:ORCH-REVIEW-TIERS, autoos:PH-MCP-ONE, autoos:PH-OPS-20261002,
+                 autoos:PH-WS-SHIFT, autoos:SEC-ISOSEC, autoos:T1-COMBO-LAYERS, autoos:T1-CREDIT, autoos:T1-JEV, autoos:T1-MM, autoos:T1-NOISE, autoos:T1-UPGRADE,
+                 autoos:T1-WEBTOOLS, autoos:T1-ZEN, autoos:T2-COMPACT, autoos:T2-ISOLATE, autoos:T2-LEAN, autoos:T2-MCPLIFE, autoos:T2-RECORD-GAPS,
+                 autoos:T2-RESEARCHCARD, autoos:T2-TASKSESSION, autoos:T3-CLEAN, autoos:T3-PRINCIPLES, autoos:T3-SCRUB, autoos:T3-SPLIT, autoos:T3-WIN,
+                 plangraph:PG-M4, routing:GATE-P3, routing:PH-OPERATOR, server:GOAL, server:GW-FOLLOWUP, server:GW-MCP-ROLLOUT, server:OP-DOCKHAND-REVOKE,
+                 server:OP-FRITZ-V6, server:SEC-EDGE-GW-INVEST, server:SEC-MINIO, server:SEC-OIDC, server:SEC-SESSION-SECRETS, server:SEC-TIER-A, server:T6-DETECT,
+                 server:T6-FIX, server:T6-GRAPHMOVE-CUTOVER, server:T6-INFRA, server:T6-IPV6, server:T6-LEDGER, server:T6-MEDIA, server:T6-PHONE,
+                 server:T6-SECRETS, server:T6-UPDATES-IMPL, workstation:OP-GROK-STEPS, routing:PH-AUDIT-1002]
+- {op: priority, key: autoos:ZCODE-GLM-BURN, priority: 3}
+- {op: priority, key: autoos:GEMINI38, priority: 2}
+- {op: priority, key: autoos:MEMGUARD, priority: 2}
+- {op: priority, key: server:SVC-ACCOUNTS, priority: 2}
+- {op: priority, key: autoos:ROUTING-INTO-AUTOOS, priority: 1}
+- {op: priority, key: server:OMNIROUTE-AUTHELIA-API, priority: 1}
+- {op: priority, key: autoos:GROK-UPSTREAM-PR, priority: 1}

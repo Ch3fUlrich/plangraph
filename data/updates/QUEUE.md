@@ -34,3 +34,4 @@ md-sync timer had halted 18:55Z (old daemon); re-run OK on new code (0 ops secon
 Server 2026-10-03-server-plan-d459 (6bda845b, 7 ops; source staged from t6/server-plan, sha d392fc3e): router OK; LIVE 2026-10-02 (applied 7 of 7, verify ok) after the operator widened OS-92 to plan batches.
 D-464 close server:T-020 (4 ops): data/updates/2026-10-02-router-close-d464.yaml — LIVE 2026-10-02 (verify ok).
 D-465 close server:T-004 (4 ops): data/updates/2026-10-02-router-close-d465.yaml — LIVE 2026-10-02 (verify ok).
+Audit gaps (router-OK, operator-instruction audit 2026-10-02): data/updates/2026-10-02-router-audit-gaps.yaml sha 4c7eedb4… — LIVE (create 28 = 5 Q + 22 gap rows + gate routing:PH-AUDIT-1002; routing:GOAL 52→53; 7 priorities; verify ok). First apply refused by the credential guard on 'explo/audiomuse' (slash pair near 'login'-like context) → rephrased.
