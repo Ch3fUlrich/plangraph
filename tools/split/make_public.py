@@ -87,8 +87,16 @@ def stage(source, files, dest):
 
 
 def deny_hits(files, manifest):
-    rx = [glob_re(g) for g in manifest.get("deny", {}).get("paths", [])]
+    rx = [glob_re(g, ci=True) for g in manifest.get("deny", {}).get("paths", [])]
     return [sc.Hit(f, 0, "deny") for f in files if any(r.match(f) for r in rx)]
+
+
+def _tree_rel(name, tree):
+    """*name* relative to *tree*, else ``<outside>`` (never a ``..`` path or a foreign location)."""
+    if not isinstance(name, str) or not name:
+        return "<unknown>"
+    rel = os.path.relpath(name, tree) if os.path.isabs(name) else os.path.normpath(name)
+    return "<outside>" if rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel) else rel
 
 
 def run_gitleaks(tree, binary):
@@ -111,7 +119,7 @@ def run_gitleaks(tree, binary):
         return [sc.Hit("gitleaks", 0, f"error:rc{rc}")], None
     hits = []
     for f in data:
-        rel = os.path.relpath(f.get("File", "?"), tree)
+        rel = _tree_rel(f.get("File"), tree)
         hits.append(sc.Hit(rel, int(f.get("StartLine", 0)), "gitleaks:" + str(f.get("RuleID", "?"))))
     if rc == 1 and not hits:
         hits.append(sc.Hit("gitleaks", 0, "findings"))
@@ -125,12 +133,12 @@ def verify(tree, files, manifest, args):
     cfg = sc.build_config(words_file=args.words, rules_files=rules)
     scrub_hits, skipped = sc.scan_tree(tree, cfg, with_skipped=True)
     hits += scrub_hits
-    warns = [f"{s}: binary file not scanned" for s in skipped]
+    warns = [f"{sc.path_tag(s)}: binary file not scanned" for s in skipped]
     if not args.no_gitleaks:
         gl, warn = run_gitleaks(tree, args.gitleaks)
         hits += gl
         warns += [warn] if warn else []
-    return hits, warns
+    return hits, warns, cfg["_words"]
 
 
 def fresh_repo(tree, manifest, date):
@@ -171,11 +179,11 @@ def build(args):
         tree = tmp / "tree"
         tree.mkdir()
         stage(source, files, tree)
-        hits, warns = verify(tree, files, manifest, args)
+        hits, warns, words = verify(tree, files, manifest, args)
         for w in warns:
             print(f"warning: {w}", file=sys.stderr)
         if hits:
-            sc.report(hits)
+            sc.report(hits, words=words)
             print("make_public: REFUSED -- nothing written", file=sys.stderr)
             return 1
         if args.check:

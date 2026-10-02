@@ -114,3 +114,80 @@ def test_skips_git_dir_and_symlink_is_a_hit(tmp_path):
     (tree / ".git" / "c").write_text(".".join(["10", "9", "8", "7"]) + "\n")
     (tree / "l").symlink_to("/etc/hostname")
     assert [(h.path, h.rule) for h in sc.scan_tree(tree, sc.build_config())] == [("l", "symlink")]
+
+
+# ---- seat-review fixes (L1 triage) -------------------------------------------------
+
+def _hits(tmp_path, text):
+    tree = tmp_path / "t"
+    tree.mkdir(exist_ok=True)
+    (tree / "f.txt").write_text(text + "\n")
+    return {h.rule for h in sc.scan_tree(tree, sc.build_config())}
+
+
+def test_private_word_in_file_name_is_never_printed(tmp_path, capsys):
+    import hashlib
+    words = tmp_path / "w.txt"
+    words.write_text("Project" + "Mordor\n")
+    tree = tmp_path / "t"
+    (tree / "d").mkdir(parents=True)
+    named = "d/Project" + "Mordor.txt"
+    (tree / named).write_text("10." + "1.2.3\n")      # also a content hit in that file
+    (tree / "d" / ("Project" + "Mordor.bin")).write_bytes(b"\x00\x01")
+    assert sc.main([str(tree), "--words", str(words)]) == 1
+    out = capsys.readouterr().out
+    assert "Mordor" not in out
+    digest = hashlib.sha256(named.encode()).hexdigest()[:12]
+    assert f"<path-hash:{digest}>:0: private-word" in out
+    assert "<path-hash:" in out and "binary file not scanned" in out
+    assert sc.main([str(tree), "--words", str(words), "--resolve", digest]) == 0
+    assert named in capsys.readouterr().out
+
+
+def test_ipv6_compressed_forms_detected_times_not(tmp_path):
+    cc, dot = ":" * 2, "."
+    for ok in ("fe80" + cc + "1", "2001:db8" + cc + "1", cc + "ffff:" + dot.join("1234"),
+               "addr [" + cc + "1] up", "fe80" + cc, ":".join("12345678")):
+        assert "ipv6" in _hits(tmp_path, "x = " + ok), ok
+    for clean in ("at 12:34:56 today", "a[" + cc + "2]", "a[" + cc + "1]", "std" + cc + "vector",
+                  "db" + cc + "add", "Foo" + cc + "bar",
+                  "x = y[1:2]", "ts 2026-10-02T12:34:56"):
+        assert "ipv6" not in _hits(tmp_path, clean), clean
+
+
+def test_entropy_variants(tmp_path):
+    lower_digit = "k3j9x0q7w2m5" + "z8c1v4b6n9a2" + "s5d7f0g3h8j1"
+    assert "high-entropy" in _hits(tmp_path, "key = " + lower_digit)
+    assert "high-entropy" in _hits(tmp_path, "K = " + lower_digit.upper())
+    sha = "0123456789abcdef" * 4
+    assert "high-entropy" not in _hits(tmp_path, "sha256: " + sha)
+    assert "high-entropy" in _hits(tmp_path, "secret = " + sha)
+    assert "high-entropy" in _hits(tmp_path, "API_TOKEN: " + "9f86d081884c7d65" + "9a2feaa0c55ad015")
+    for clean in ("name = test_keeper_credential_guard_shapes_are_masked_2",
+                  "x = averyveryverylongplainlowercaseidentifier",
+                  "git " + "a" * 40, "x = " + "ab12" * 12):
+        assert "high-entropy" not in _hits(tmp_path, clean), clean
+
+
+def test_home_path_variants(tmp_path):
+    for p in ("/var/ho" + "me/zol" + "tan/x", "/Us" + "ers/zol" + "tan/x", "C:" + "\\Us" + "ers\\zol" + "tan",
+              "C:" + "/Us" + "ers/zol" + "tan/x"):
+        assert "home-path" in _hits(tmp_path, "p = " + p), p
+    assert "home-path" not in _hits(tmp_path, "p = /var/ho" + "me/user/x")
+
+
+def test_allow_globs_are_case_insensitive(tmp_path):
+    tree = tmp_path / "t"
+    (tree / "Vendor").mkdir(parents=True)
+    (tree / "Vendor" / "a.js").write_text("v=" + ".".join("1234") + "\n")
+    cfg = sc.build_config(allow=[{"path": "vendor/**", "rules": ["ipv4"]}])
+    assert sc.scan_tree(tree, cfg) == []
+    assert sc.glob_re("*.db", ci=True).match("a/STATE.DB") and not sc.glob_re("*.db").match("STATE.DB")
+
+
+def test_symlink_hit_cannot_be_allowed(tmp_path):
+    tree = tmp_path / "t"
+    tree.mkdir()
+    (tree / "l").symlink_to("/etc/hostname")
+    cfg = sc.build_config(allow=[{"path": "l", "rules": ["symlink"]}])
+    assert [h.rule for h in sc.scan_tree(tree, cfg)] == ["symlink"]

@@ -206,3 +206,26 @@ def test_bad_manifest_is_a_usage_error(tmp_path, src, capsys):
     bad.write_text('[public]\ninclude = ["src"]\nbogus = 1\n')
     assert mp.main(["--source", str(src), "--check", "--manifest", str(bad)]) == 2
     assert "bogus" in capsys.readouterr().err
+
+
+def test_deny_globs_case_insensitive_and_private_path_hashed(tmp_path, src, manifest, capsys):
+    words = tmp_path / "w.txt"
+    words.write_text("Project" + "Mordor\n")
+    write(src, "src/pkg/STATE.DB", "\n")
+    write(src, "src/pkg/Project" + "Mordor.py", "x = 1\n")
+    write(src, "src/pkg/Project" + "Mordor.bin", "\n")
+    (src / ("src/pkg/Project" + "Mordor.bin")).write_bytes(b"\x00\x01")
+    assert run(src, tmp_path / "pub", manifest, "--words", str(words)) == 1
+    out = capsys.readouterr()
+    assert "src/pkg/STATE.DB:0: deny" in out.out
+    assert "Mordor" not in out.out + out.err and "<path-hash:" in out.out + out.err
+
+
+def test_gitleaks_outside_path_is_normalised(tmp_path, src, manifest, capsys):
+    fake = _fake_gitleaks(tmp_path, [{"File": "/etc/ssh/host_key", "StartLine": 3,
+                                      "RuleID": "private-key", "Secret": "S"}])
+    rc = mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+                  "--manifest", str(manifest), "--gitleaks", str(fake)])
+    out = capsys.readouterr().out
+    assert rc == 1 and "<outside>:3: gitleaks:private-key" in out
+    assert "/etc" not in out and ".." not in out

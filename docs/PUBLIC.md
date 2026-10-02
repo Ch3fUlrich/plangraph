@@ -68,8 +68,19 @@ python3 tools/split/make_public.py --source . --out ../plangraph-public \
 Rules checked: `hostname` (built-in internal suffixes + your `hostname_patterns` regexes), `ipv4`,
 `ipv6`, `email`, `token-shape` (known key prefixes, PEM headers, JWTs, `token = "..."`),
 `high-entropy`, `credential-shape` (the `credential_guard` word/secret pair), `home-path`,
-`private-word` (your word list, also matched against file names), `symlink`. Binary files are not
-scanned (they are listed). `gitleaks` is run when it is on `PATH` (or `--gitleaks PATH`); if it is
+`private-word` (your word list, also matched against file names), `symlink` (never allow-listable).
+`ipv6` covers full and compressed forms (a compressed form needs a digit, so `db::add` is not a hit;
+a subscript like `a[::1]` is not either). `high-entropy` flags mixed-case+digit tokens, long
+lower- or upper-case+digit tokens, and plain hex only on a line that names a secret/token/key (so
+commit and file hashes are fine). `home-path` covers `/home`, `/var/home`, `/Users` and
+`C:\Users` (`C:/Users`). Deny and `[[scrub.allow]]` globs are case-insensitive. Binary files are not
+scanned (they are listed).
+
+A path that contains a private word is never printed: the line shows `<path-hash:XXXXXXXXXXXX>`
+(first 12 hex of the sha256 of the relative path) instead, for `private-word` hits on paths and for
+the "binary file not scanned" notes. On your own terminal, `scrub_check.py TREE --resolve XXXXXXXXXXXX`
+prints the real path. gitleaks findings are reduced to tree-relative `file:line: gitleaks:RULE`
+(`<outside>` for anything not under the tree). `gitleaks` is run when it is on `PATH` (or `--gitleaks PATH`); if it is
 missing a warning says so and the scrub still runs. Use `--no-gitleaks` to skip it.
 
 `rules.toml` (public defaults live in the manifest's `[scrub]` section):
