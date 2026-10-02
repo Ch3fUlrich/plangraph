@@ -12,11 +12,18 @@ import re
 
 from .auth import validate_family
 from .errors import Refused
+from .note_fold import fold_checked
 
 _EDITABLE = ("title", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
+#: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
+KNOWN_ITEM_FIELDS = frozenset(
+    ("project", "id", "key", "title", "kind", "track", "owner", "owner_family",
+     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
+     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
+     "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "kind", "track", "owner",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
@@ -103,6 +110,14 @@ class CreateMixin:
         """Router only: create legacy rows whose ``state`` is honoured."""
         return self._run(principal, "import_items", None,
                          lambda now: self._create(principal, items, now, True))
+
+    @staticmethod
+    def _folded_note(raw, key):
+        """B3: unknown fields fold into ``note`` exactly as the importer does."""
+        unknown = {name: raw[name] for name in raw
+                   if name not in KNOWN_ITEM_FIELDS}
+        return fold_checked(raw.get("note"), unknown, key) if unknown \
+            else raw.get("note")
 
     def _create(self, principal, items, now, legacy):
         if len(items) > _MAX_BATCH:

@@ -5,7 +5,9 @@ HTTP API as the token's principal. The applier verifies the batch's
 `source_sha256` against its `source` file *before any call* (live and
 `--dry-run` alike). The sha256 pins the exact content of the source file
 (its bytes); any change to the source file invalidates the batch. The batch
-applies ops in order and stops at the first refusal.
+applies the ops as ONE atomic `apply_ops` call by default (all or nothing;
+see "Atomic mode"); `--per-op` replays them one verb at a time and stops at
+the first refusal.
 
 ## Format (YAML)
 
@@ -31,7 +33,7 @@ item key in `plan`/`ok` lines. `--token-file` is required and never printed.
 
 ```
 python3 tools/apply_batch.py BATCH.yaml --url http://127.0.0.1:8787 \
-    --token-file PATH [--dry-run] [--from N] [--allow-no-whoami]
+    --token-file PATH [--dry-run] [--from N] [--per-op] [--allow-no-whoami]
 ```
 
 `--dry-run` validates every op and prints the plan without any API call.
@@ -46,3 +48,18 @@ exit 0; on refusal `op <n> <op> <key>: <code> <message>` plus
 `ref` must be a mapping; `kind`/`note`/`reason`/
 `state`/`repo`/`key` must be strings, `fields` a JSON-encodable mapping; unhashable
 YAML keys are refused (`invalid mapping key`); relative `source` resolves beside the batch file's real path (after symlinks). Token must be printable ASCII without whitespace; non-UTF-8 token files exit 2 with exception class name only.
+
+## Atomic mode (default) and `--per-op`
+
+By default the whole file (from `--from N`) is sent as one `apply_ops` call
+(router only): the keeper applies every op in ONE SQLite transaction with the
+same per-op auth/state checks as the single verbs, validates the whole graph
+once at the end, and appends all events in that transaction. Later ops see
+earlier ones, so "create a leaf, then link it from the goal" works in one batch
+(it fails per-op). Any refusal rolls back every op: the output is
+`op <n> <op> <key>: <code> <message>` (`n` in the batch file's numbering, even
+with `--from`), `nothing applied (the whole batch was rolled back)`, exit 1; no
+`resume with --from` hint, because nothing was applied. `close_on_decision` uses
+the batch's hashed `source` as its `batch_ref`. Exit codes are unchanged.
+`--per-op` keeps the old behaviour: one call per op, partial progress, resume
+hint.

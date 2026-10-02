@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from .errors import Refused
+from .note_fold import fold_note as _fold_note
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
@@ -65,23 +66,6 @@ def _string_list(raw, field, key):
         if not isinstance(entry, str) or not entry:
             raise _bad(key, f"{field} entries must be non-empty strings")
     return list(value)
-
-
-def _render(value):
-    if isinstance(value, str):
-        return value
-    return json.dumps(value, sort_keys=True, ensure_ascii=False)
-
-
-def _fold_note(base, extra, key):
-    parts = []
-    if base is not None:
-        if not isinstance(base, str):
-            raise _bad(key, "note must be a string")
-        if base:
-            parts.append(base)
-    parts.extend(f"{name}: {_render(extra[name])}" for name in sorted(extra))
-    return "\n".join(parts) if parts else None
 
 
 def _normalise_item(raw, where):

@@ -42,7 +42,8 @@ __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
 MAX_BODY = 1024 * 1024  # 1 MiB
 
 from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
-from .api_routes import TEXT_DEFAULT as _TEXT_DEFAULT, WRITE_VERBS as _WRITE_VERBS
+from .api_routes import ROUTER_VERBS, TEXT_DEFAULT as _TEXT_DEFAULT
+from .api_routes import WRITE_VERBS as _WRITE_VERBS
 
 
 # --------------------------------------------------------------------------- #
@@ -311,13 +312,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "waive_second_family":
             return store.waive_second_family(principal, self._need(body, "key"),
                                              self._need(body, "decision_id"))
-        if name == "close_on_decision":
-            return store.close_on_decision(
-                principal, self._need(body, "key"), self._need(body, "batch_ref"))
-        if name == "set_legacy_state":
-            return store.set_legacy_state(
-                principal, self._need(body, "key"), self._need(body, "state"),
-                body.get("note", ""))
+        if name in ROUTER_VERBS:
+            return ROUTER_VERBS[name](store, principal, body, self._need)
         if name == "reap":
             return store.reap(principal)
         raise Refused("not_found", f"no write verb {name!r}")

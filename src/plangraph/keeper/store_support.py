@@ -151,6 +151,10 @@ class SupportMixin:
     # -------------------------------------------------- evidence rules
     def _verify_evidence(self, item, kind, ref, now):
         """Run the verifier for *kind*; the slow I/O a verb does pre-txn."""
+        if self._batch is not None:
+            done = self._batch.verified(item, kind, ref)
+            if done is not None:
+                return done
         verifier = self.verifiers.get(kind)
         if verifier is None:
             raise Refused("validation", f"unknown evidence kind {kind!r}")
@@ -283,7 +287,11 @@ class SupportMixin:
         dependency leaving a pre-existing item unreachable) is caught.
         ``allow_new`` names codes a verb is expected to introduce (``cancel``
         deliberately creates ``depends_on_cancelled`` for its dependents).
+        Inside ``apply_ops`` the call is only recorded: the batch validates once.
         """
+        if self._batch is not None:
+            self._batch.note(affected, allow_new)
+            return
         baseline = {(p["code"], p["key"]) for p in views.validate(before)}
         problems = []
         for problem in views.validate(after):

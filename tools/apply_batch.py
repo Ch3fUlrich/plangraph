@@ -12,6 +12,8 @@ from collections import Counter
 
 import yaml
 
+import apply_batch_atomic as atomic
+
 DEFAULT_URL = "http://127.0.0.1:8787"
 TIMEOUT = 15
 OP_SPECS = {
@@ -197,7 +199,7 @@ class Session:
         except (urllib.error.URLError, OSError) as exc:
             raise ApiError("unreachable", exc.__class__.__name__) from None
     def post(self, verb, body):
-        self._call(verb, body)
+        return self._call(verb, body)
     def get(self, verb):
         try:
             raw = self._call(verb)
@@ -234,7 +236,7 @@ def read_token(path):
     return token
 def print_help(out):
     out.write("usage: apply_batch.py BATCH.yaml --url URL --token-file PATH "
-              "[--dry-run] [--from N]\n")
+              "[--dry-run] [--from N] [--per-op]\n")
 def main(argv=None, out=None, err=None):
     args_in = list(sys.argv[1:] if argv is None else argv)
     out = out or sys.stdout
@@ -246,6 +248,7 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--from", dest="from_n", default=None)
     parser.add_argument("--allow-no-whoami", action="store_true")
+    parser.add_argument("--per-op", action="store_true")
     try:
         opts = parser.parse_args(args_in)
     except SystemExit:
@@ -345,14 +348,32 @@ def main(argv=None, out=None, err=None):
             return 2
     applied = Counter()
     done = 0
+    if not opts.per_op:
+        try:
+            raw = session.post("apply_ops",
+                               atomic.payload(ops, start, source, digest))
+        except BatchError as exc:
+            return fail(start, "-", "-", "error", str(exc))
+        except ApiError as exc:
+            first = ops[start - 1]
+            for text in atomic.refusal_lines(
+                    exc, start - 1, (first.get("op"), op_key(first))):
+                line(text)
+            return 1
+        sent = total - start + 1
+        if atomic.applied_count(raw, sent) != sent:
+            line(f"error: keeper applied {atomic.applied_count(raw, sent)} "
+                 f"of {sent} ops")
+            return 1
     for n, op in enumerate(ops, 1):
         if n < start:
             continue
         name = op.get("op") if isinstance(op, dict) else "?"
         key = op_key(op) if isinstance(op, dict) else "-"
         try:
-            verb, body = build_request(op, source, digest)
-            session.post(verb, body)
+            if opts.per_op:
+                verb, body = build_request(op, source, digest)
+                session.post(verb, body)
         except BatchError as exc:
             return fail(n, name, key, "error", str(exc))
         except ApiError as exc:

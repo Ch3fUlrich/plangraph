@@ -21,9 +21,11 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from .errors import Refused
+from .note_fold import NOTE_CAP
 from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
+from .store_ops import OpsMixin
 from .store_read import ReadMixin
 from .store_reap import ReapMixin
 from .store_review import ReviewMixin
@@ -38,7 +40,7 @@ REVIEW_OVERDUE_S = 4 * 3600
 LEASE_WARN_S = 15 * 60
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
-_TEXT_CAPS = {"title": 200, "note": 2000, "done_criteria": 600,
+_TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
               "owner": 100, "track": 100}
 _MAX_BATCH = 500
 _MAX_DEPS = 200
@@ -55,7 +57,7 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 
 class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
-            ReadMixin, WaiverMixin, CloseMixin, LegacyMixin):
+            ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -69,6 +71,8 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
         # X7b: the directories ``close_on_decision`` may read a batch file from.
         # Empty by default, so the verb fails closed until the operator opts in.
         self.batch_roots = [str(r) for r in (batch_roots or [])]
+        # B1: the OpBatch of an ``apply_ops`` in flight (``None`` otherwise).
+        self._batch = None
         self.default_lease = DEFAULT_LEASE_S
         self.review_overdue_s = REVIEW_OVERDUE_S
         self.lease_warn_s = LEASE_WARN_S
@@ -88,7 +92,14 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
     # ------------------------------------------------------- transactions
     @contextmanager
     def _write(self):
-        """One immediate write transaction; roll back on any failure."""
+        """One immediate write transaction; roll back on any failure.
+
+        Inside ``apply_ops`` the batch already holds the transaction, so a
+        single verb's own write block just runs in it.
+        """
+        if self._batch is not None:
+            yield
+            return
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             yield
@@ -365,7 +376,7 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
             "evidence_kinds": list(raw.get("evidence_kinds") or ["any"]),
             "operator": bool(raw.get("operator")),
             "priority": int(raw.get("priority") or 0),
-            "source": raw.get("source"), "note": raw.get("note"),
+            "source": raw.get("source"), "note": self._folded_note(raw, key),
             "corrects": corrects, "depends_on": deps,
             "state": raw.get("state", "open"),
         }

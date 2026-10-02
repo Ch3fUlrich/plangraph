@@ -160,7 +160,9 @@ def test_refusal_mid_batch_reports_resume_from(world, srv, token_file,
     ops[1] = {"op": "edit", "key": "demo:MISSING",
               "fields": {"title": "no such item"}}
     batch_path = write_batch(tmp_path, ops=ops, name="midbatch")
-    rc, out, errtxt = run(batch_path, srv.base_url, token_file)
+    # B1: the default mode is one atomic apply_ops call; this tests --per-op.
+    rc, out, errtxt = run(batch_path, srv.base_url, token_file,
+                          extra=["--per-op"])
     assert rc == 1
     assert "ok 1 create demo:B, demo:GOAL" in out
     assert "op 2 edit demo:MISSING: not_found" in out
@@ -168,7 +170,7 @@ def test_refusal_mid_batch_reports_resume_from(world, srv, token_file,
     assert state_of(world, "demo:B") == "open"
 
     rc2, out2, err2 = run(batch_path, srv.base_url, token_file,
-                          extra=["--from", "3"])
+                          extra=["--from", "3", "--per-op"])
     assert rc2 == 0, out2 + err2
     assert "op 2 " not in out2 and "ok 2 " not in out2
     assert "ok 3 legacy_state demo:B" in out2
@@ -283,8 +285,9 @@ def test_relative_source_resolved_against_batch_dir(world, srv, token_file,
         calls.append((verb, body))
         return orig_post(self, verb, body)
     apply_batch.Session.post = spy
-    try:
-        rc, out, errtxt = run(batch_path, srv.base_url, token_file)
+    try:  # B1: per-op path (the atomic default sends one apply_ops call)
+        rc, out, errtxt = run(batch_path, srv.base_url, token_file,
+                              extra=["--per-op"])
     finally:
         apply_batch.Session.post = orig_post
     assert rc == 0, out + errtxt
