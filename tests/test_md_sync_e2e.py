@@ -112,8 +112,10 @@ def test_apply_creates_closes_links_and_second_run_is_empty(world, srv, token, s
     assert rows(world, "SELECT COUNT(*) FROM items WHERE key='routing:Q-SHARED'")[0][0] == 0
     gate = rows(world, "SELECT key FROM items WHERE key='routing:PH-OPERATOR'")
     assert len(gate) == 1
+    desc = rows(world, "SELECT description FROM items WHERE key='routing:OS-1'")[0][0]
+    assert "Zx81kQ92LmPq77Vb" not in desc and "[redacted]" in desc
     note = rows(world, "SELECT note FROM items WHERE key='routing:OS-1'")[0][0]
-    assert "Zx81kQ92LmPq77Vb" not in note and "[redacted]" in note
+    assert note is None or "Zx81kQ92LmPq77Vb" not in note
     rc2, out2, _ = sync(site, srv, token, "--dry-run")
     assert "dry run: no ops" in out2
 

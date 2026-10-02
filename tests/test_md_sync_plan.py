@@ -19,6 +19,7 @@ GOAL = {"project": "routing", "id": "GOAL", "key": "routing:GOAL", "state": "ope
 def live(project, ident, state="open", **kw):
     item = {"project": project, "id": ident, "key": f"{project}:{ident}",
             "state": state, "kind": "lane", "title": "", "note": None,
+            "description": None,
             "depends_on": [], "evidence": [], "evidence_kinds": ["any"],
             "review_tier": "standard", "source": None}
     item.update(kw)
@@ -90,14 +91,38 @@ def test_gate_not_open_is_a_plan_error():
 
 def test_open_unchanged_is_quiet_and_changed_edits_ours_only():
     ours = live("routing", "Q-N1", title="Q: Old title", source="md-sync",
-                note="description: stale")
+                description="stale")
     foreign = live("server", "Q-F", title="curated title")
     p = build(q("- Q-N1 **New title** x\n- Q-F **other words**\n"), items=[ours, foreign])
     assert p.ops == [{"op": "edit", "key": "routing:Q-N1",
-                      "fields": {"title": "Q: New title", "note": "description: x"}}]
+                      "fields": {"title": "Q: New title", "description": "x"}}]
     same = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                note="description: x")
+                description="x")
     assert build(q("- Q-N1 **New title** x\n"), items=[same]).ops == []
+
+
+def test_pre_model_names_item_is_quiet_on_its_folded_note_line():
+    # No column yet: the ``description:`` line in note says the same thing,
+    # so a re-run emits nothing (idempotence across MODEL-NAMES).
+    folded = live("routing", "Q-N1", title="Q: New title", source="md-sync",
+                  note="description: x")
+    assert build(q("- Q-N1 **New title** x\n"), items=[folded]).ops == []
+    changed = live("routing", "Q-N1", title="Q: New title", source="md-sync",
+                   note="description: stale")
+    p = build(q("- Q-N1 **New title** x\n"), items=[changed])
+    assert p.ops == [{"op": "edit", "key": "routing:Q-N1",
+                      "fields": {"description": "x"}}]
+
+
+def test_change_detection_reads_the_column_over_a_leftover_note_line():
+    same = live("routing", "Q-N1", title="Q: New title", source="md-sync",
+                description="x", note="description: stale")
+    assert build(q("- Q-N1 **New title** x\n"), items=[same]).ops == []
+    gone = live("routing", "Q-N1", title="Q: New title", source="md-sync",
+                description="stale", note=None)
+    p = build(q("- Q-N1 **New title** x\n"), items=[gone])
+    assert p.ops == [{"op": "edit", "key": "routing:Q-N1",
+                      "fields": {"description": "x"}}]
 
 
 def test_answer_closes_open_item_with_full_sequence():
@@ -181,31 +206,33 @@ def test_redaction_counts_and_masks_title_and_description():
     assert "Zx81" not in item["description"] and p.redactions == 1
 
 
-def test_long_description_is_capped_for_the_note_field():
+def test_long_description_is_capped_for_the_description_column():
     p = build(q("- Q-N1 **T** " + "word " * 1000 + "\n"))
     desc = p.ops[0]["item"]["description"]
-    assert len("description: " + desc) <= 2000 and desc.endswith("…")
+    assert len(desc) <= plan.DESCRIPTION_CAP and desc.endswith("…")
 
 
-def test_note_format_matches_the_keeper_fold():
+def test_legacy_note_line_reads_back_the_keeper_fold():
     sys.path.insert(0, str(ROOT / "src"))
     from plangraph.keeper.note_fold import fold_note
-    assert plan.note_for("hello\nworld") == fold_note(None, {"description": "hello\nworld"}, "k")
-    assert plan.note_for("") == ""
+    folded = fold_note(None, {"description": "hello\nworld"}, "k")
+    assert plan.live_description({"description": None, "note": folded}) == "hello\nworld"
+    assert plan.live_description({"description": "", "note": folded}) == "hello\nworld"
+    assert plan.live_description({"description": None, "note": None}) == ""
+    assert plan.live_description({"description": None, "note": "just a note"}) == ""
 
 
 def test_counts_is_a_counter():
     assert isinstance(build().counts, Counter)
 
 
-def test_description_of_exactly_the_room_fills_the_note_and_one_more_is_cut():
-    room = plan.NOTE_CAP - len(plan.note_for("x")) + 1
+def test_description_of_exactly_the_cap_is_kept_and_one_more_is_cut():
+    room = plan.DESCRIPTION_CAP
     exact = "ab " * (room // 3)
     exact += "c" * (room - len(exact))
     assert len(exact) == room and plan._fit(exact) == exact
-    assert len(plan.note_for(exact)) == plan.NOTE_CAP
     cut = plan._fit(exact + "d")
-    assert cut.endswith("…") and len(plan.note_for(cut)) <= plan.NOTE_CAP
+    assert cut.endswith("…") and len(cut) <= room
 
 
 def test_gone_item_that_is_a_gate_dependency_is_reported_and_dep_kept():

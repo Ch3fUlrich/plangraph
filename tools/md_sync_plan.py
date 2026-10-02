@@ -1,4 +1,5 @@
 """md_sync plan: parsed markdown + live snapshot -> an ordered keeper ops list."""
+import re
 from collections import Counter
 
 import md_sync_parse as mp
@@ -8,7 +9,13 @@ GATE_ID = "PH-OPERATOR"
 GATE_KEY = f"{PROJECT}:{GATE_ID}"
 GOAL_KEY = f"{PROJECT}:GOAL"
 SOURCE = "md-sync"
-NOTE_CAP = 2000
+#: the cap the keeper puts on the ``description`` column
+#: (``plangraph.keeper.note_fold.DESCRIPTION_CAP``).
+DESCRIPTION_CAP = 2000
+#: MODEL-NAMES (4fb3167) made ``description`` a column; before that the
+#: keeper folded it into ``note`` as a first line with this prefix.
+FOLDED_PREFIX = "description: "
+_FIELD_LINE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*: ")
 ELLIPSIS = "…"
 
 
@@ -30,16 +37,35 @@ class Plan:
         self.counts[op["op"]] += 1
 
 
-def note_for(description):
-    """The ``note`` the keeper folds a ``description`` field into."""
-    return f"description: {description}" if description else ""
+def live_description(item):
+    """The live item's description: its column, else its pre-MODEL-NAMES note line.
+
+    Before MODEL-NAMES the keeper folded ``description`` into ``note`` as a
+    first ``description: `` line, so an item created back then still carries it
+    there until ``migrate-descriptions`` moves it.  Read it exactly like
+    ``plangraph.keeper.store_names.split_folded_description`` does: the first
+    line plus its continuation lines, up to the next ``name: value`` line.
+    """
+    description = item.get("description")
+    if description:
+        return description
+    note = item.get("note")
+    if not isinstance(note, str) or not note.startswith(FOLDED_PREFIX):
+        return ""
+    lines = note.split("\n")
+    taken = [lines[0][len(FOLDED_PREFIX):]]
+    rest = 1
+    while rest < len(lines) and not _FIELD_LINE.match(lines[rest]):
+        taken.append(lines[rest])
+        rest += 1
+    return "\n".join(taken)
 
 
 def _fit(description):
-    room = NOTE_CAP - len(note_for("x")) + 1
-    if len(description) <= room:
+    """Cap at the keeper's ``description`` column cap (never over it)."""
+    if len(description) <= DESCRIPTION_CAP:
         return description
-    return description[:room - len(ELLIPSIS)].rstrip() + ELLIPSIS
+    return description[:DESCRIPTION_CAP - len(ELLIPSIS)].rstrip() + ELLIPSIS
 
 
 def _index(items):
@@ -99,8 +125,13 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items):
             fields = {}
             if item.get("title") != title:
                 fields["title"] = title
-            if (item.get("note") or "") != note_for(desc):
-                fields["note"] = note_for(desc)
+            current = live_description(item)
+            if current != desc and (desc or item.get("description")):
+                # An empty markdown description only clears a real column: a
+                # folded note line belongs to ``migrate-descriptions``, and
+                # clearing ``note`` here would be undone by the fallback above
+                # on the very next run (no idempotence).
+                fields["description"] = desc
             if fields:
                 plan.add({"op": "edit", "key": item["key"], "fields": fields})
     _link(plan, state, new_lanes)
