@@ -1,0 +1,19 @@
+# Load queue for the pilot keeper (router-confirmed order; each needs routing-00's OK on the live diff)
+Prerequisite: KEEPER-BATCH merged (apply_ops; B3 keeps extra fields). Each batch: trial on a DB copy -> diff + `pg ready --all --brief`
+to routing-00 -> OK -> `tools/apply_batch.py FILE --url http://127.0.0.1:8787 --token-file ~/.config/plangraph/router.token`.
+
+| # | batch | file | status |
+|---|---|---|---|
+| 0 | plan-v3 import (D-314 fold) | data/plan-v3 | LOADED 2026-10-02 |
+| 1 | router 2026-10-01 A-C (76 ops) | data/updates/2026-10-01-router.yaml | pre-checked; OK pending live diff |
+| 2 | server b1 + router GOAL link | Server t6/server-plan docs/plan/graph/2026-10-02-server-plan.yaml | router-OK'd |
+| 3 | server d298 | ...-server-plan-d298.yaml | router-OK'd |
+| 4 | server backlog v2.1 | ...-server-plan-backlog.yaml | router-OK'd |
+| 5 | server plans | ...-server-plan-plans.yaml | router-OK'd |
+| 6 | server d311 | ...-server-plan-d311.yaml | router-OK'd |
+| 7 | server d336 | ...-server-plan-d336.yaml | router-OK'd (D-340) |
+| 8 | server d342 | ...-server-plan-d342.yaml | router-OK'd |
+| 9 | server d347 (batch 8) | ...-server-plan-d347.yaml @03cd03e | router-OK'd |
+| 10 | router closes 2026-10-02 (12 ops) | data/updates/2026-10-02-router-closes.yaml | router-OK'd |
+| 11 | plangraph M2c plan (29 items) | data/updates/2026-10-02-plangraph-m2c.yaml | router-OK'd |
+Server files: take the latest commit of t6/server-plan at load time and re-run tools/plancheck.py chained before the trial.
