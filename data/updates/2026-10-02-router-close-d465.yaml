@@ -1,0 +1,22 @@
+batch: 2026-10-02-router-close-d465
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: b381522825803f3725a8cc616763f23029b18110bb906c1fd92f9f7408328ccb
+ops:
+- op: edit
+  key: server:T-004
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:T-004
+  state: in_review
+  note: 'router D-465: Closes server:T-004'
+- op: add_evidence
+  key: server:T-004
+  kind: decision
+  ref:
+    id: D-465
+- op: close_on_decision
+  key: server:T-004
