@@ -143,7 +143,15 @@ class CloseMixin:
             if not recorded:
                 raise Refused("evidence_unverified",
                               f"decision {decision_id} is not in the decisions file")
-            named |= set(decisions.closes(decision_id))
+            closes = set(decisions.closes(decision_id))
+            # L5: a ``Closes:`` keyword with no valid project:ID token is a
+            # malformed close and fails closed (never batch_ref-only).
+            has_keyword = getattr(decisions, "has_closes_keyword", None)
+            if not closes and callable(has_keyword) and has_keyword(decision_id):
+                raise Refused("evidence_unverified",
+                              f"decision {decision_id} has a Closes: keyword "
+                              "but no valid project:ID token")
+            named |= closes
         if named and key not in named:
             raise Refused("evidence_unverified",
                           f"the decision closes {sorted(named)}, not {key}")

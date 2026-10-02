@@ -42,6 +42,8 @@ _KEYWORD_RE = re.compile(r"\b([A-Za-z-]+):(?=\s|$)")
 _WAIVES_RE = re.compile(r"\bWaives:")
 _CLOSES_RE = re.compile(r"\bCloses:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
+# A whole ``project:ID`` key (the same shape tools/apply_batch.py accepts).
+_KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
 
 
 def _decision_cell(row: str) -> str:
@@ -155,10 +157,24 @@ class DecisionsAdapter:
     def closes(self, decision_id: str) -> set[str]:
         """The whole ``Closes: <project:ID>`` tokens in the DECISION cell of *decision_id*'s rows.
 
-        The empty set means the row names nothing — for a decision close (X7b)
-        that is not a refusal: the hashed batch file alone authorises it.
+        The empty set means the row names nothing; only when the cell has no
+        ``Closes:`` keyword at all (``has_closes_keyword``) does the hashed batch
+        file alone authorise a decision close (X7b).
         """
-        return self._scoped_tokens(decision_id, _CLOSES_RE)
+        return {token for token in self._scoped_tokens(decision_id, _CLOSES_RE)
+                if _KEY_TOKEN_RE.match(token)}
+
+    def has_closes_keyword(self, decision_id: str) -> bool:
+        """Does the DECISION cell carry a ``Closes:`` keyword at all (L5)?
+
+        A keyword with no valid ``project:ID`` after it (``Closes: demo: A``,
+        a bare ``Closes:``) is a malformed close, which ``close_on_decision``
+        must refuse rather than treat as "names nothing".
+        """
+        canonical = self._canonical(decision_id)
+        return canonical is not None and any(
+            _CLOSES_RE.search(_decision_cell(row) or "")
+            for row in self._rows().get(canonical, ()))
 
     def __repr__(self) -> str:  # pragma: no cover - convenience only
         return "DecisionsAdapter()"
