@@ -12,6 +12,7 @@ import re
 
 from .auth import validate_family
 from .errors import Refused
+from .credential_guard import guard
 from .note_fold import fold_checked
 
 _EDITABLE = ("title", "estimate_h", "done_criteria", "evidence_kinds",
@@ -116,6 +117,8 @@ class CreateMixin:
         """B3: unknown fields fold into ``note`` exactly as the importer does."""
         unknown = {name: raw[name] for name in raw
                    if name not in KNOWN_ITEM_FIELDS}
+        for name, value in unknown.items():
+            guard(name, value)
         return fold_checked(raw.get("note"), unknown, key) if unknown \
             else raw.get("note")
 

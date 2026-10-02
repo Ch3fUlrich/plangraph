@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .. import views
 from . import fmt
+from .credential_guard import mask_all
 from .cli_local import evidence_ref, local_alerts, local_digest, local_show
 
 __all__ = ["Session", "RefusedCli", "Unreachable", "parse_duration",
@@ -382,6 +383,10 @@ def cmd_render(args, session):
         except Unreachable as exc:
             print(f"keeper unreachable: {exc}", file=sys.stderr)
             return EXIT_UNREACHABLE
+    snapshot, masked = mask_all(snapshot)  # D-374: last line of defence
+    if masked:
+        print(f"render: masked {masked} credential-shaped string(s)",
+              file=sys.stderr)
     document = render_mod.render(snapshot, render_mod.default_vendor_dir(),
                                  cdn=args.cdn)
     out = Path(args.out)

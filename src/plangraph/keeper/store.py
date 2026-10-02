@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from .errors import Refused
+from .credential_guard import GUARDED_FIELDS, guard
 from .note_fold import NOTE_CAP
 from .store_close import CloseMixin
 from .store_create import CreateMixin
@@ -322,7 +323,9 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
 
     @staticmethod
     def _check_text(fields):
-        """Refuse oversize or non-string capped text, naming the field."""
+        """Refuse oversize, non-string or credential-shaped text, naming the field."""
+        for field in GUARDED_FIELDS:
+            guard(field, fields.get(field))
         for field, cap in _TEXT_CAPS.items():
             value = fields.get(field)
             if value is None:
