@@ -231,7 +231,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
             items = views.ready(store._all_items(), project=project)
             if n is not None:
                 items = items[:int(n)]
-            return {"items": items}, False
+            return {"items": items,
+                    "unblocks": views.unblocks(store._all_items())}, False
         if name == "show":
             key = self._one(query, "key") or extra
             info = store.show(principal, key)

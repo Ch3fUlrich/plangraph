@@ -1,10 +1,14 @@
 """B2: L5 Closes: fail-closed, the ``priority`` batch op and the seat/earlier lows."""
 import pytest
+import yaml
 
 from keeper_util import World, defn, seed
 from plangraph.keeper.errors import Refused
 from test_keeper_apply_ops import create, link_goal, snap
 from test_keeper_close import DID, KEY, _world
+
+
+GOAL = "demo:GOAL"
 
 
 def _row(cell):
@@ -162,3 +166,138 @@ def test_usage_lists_allow_no_whoami():
     out = io.StringIO()
     apply_batch.print_help(out)
     assert "--allow-no-whoami" in out.getvalue()
+
+
+# ------------------------------------------- pg ready --brief unblocks column
+from contextlib import redirect_stderr, redirect_stdout  # noqa: E402
+
+from plangraph import views  # noqa: E402
+from plangraph.keeper import cli  # noqa: E402
+
+
+def _brief(monkeypatch, srv, token_file, *argv):
+    monkeypatch.setenv("PG_URL", srv.base_url)
+    monkeypatch.setenv("PG_TOKEN_FILE", token_file)
+    out, err = io.StringIO(), io.StringIO()
+    with redirect_stdout(out), redirect_stderr(err):
+        code = cli.main(["ready", *argv])
+    return code, out.getvalue()
+
+
+def test_ready_brief_unblocks_matches_full_graph(world, srv, token_file,
+                                                 monkeypatch):
+    world.store.create_items(world.p("router"), [
+        defn("B", []), defn("GOAL", ["B"], kind="goal")])
+    # only B is ready, GOAL (its dependent) is not: the count is 1, not 0
+    full = world.store._all_items()
+    assert views.unblocks(full)["demo:B"] == 1
+    code, text = _brief(monkeypatch, srv, token_file, "--brief")
+    assert code == 0
+    assert text.strip().startswith("demo:B |") and "unblocks 1" in text
+
+
+def test_ready_json_carries_full_graph_unblocks(world, srv, token_file):
+    import json
+    import urllib.request
+    world.store.create_items(world.p("router"), [
+        defn("B", []), defn("GOAL", ["B"], kind="goal")])
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/ready?fmt=json",
+        headers={"Authorization": f"Bearer {world.tokens['router']}",
+                 "Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=10) as resp:
+        body = json.loads(resp.read())
+    assert [i["key"] for i in body["items"]] == ["demo:B"]
+    assert body["unblocks"]["demo:B"] == 1
+
+
+# ------------------------------------------------------- seat LOWs and docs
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+from pathlib import Path  # noqa: E402
+
+from plangraph.keeper import importer  # noqa: E402
+from plangraph.keeper.api_routes import ROUTER_VERBS, WRITE_VERBS  # noqa: E402
+from plangraph.keeper.store_create import KNOWN_ITEM_FIELDS  # noqa: E402
+
+DOCS = Path(__file__).resolve().parents[1] / "docs"
+
+
+def test_op_validate_form_when_no_op_owns_the_problem(w):
+    # dropping GOAL's only dependency strands A, which no op of the batch touched
+    before = snap(w)
+    with pytest.raises(Refused) as exc:
+        w.store.apply_ops(w.p("router"), [link_goal()])
+    assert exc.value.msg.startswith("op - validate: ")
+    assert snap(w) == before
+    assert "`op - validate" in (DOCS / "BATCH.md").read_text(encoding="utf-8")
+
+
+def test_allow_new_lets_a_cancel_dangle_its_dependents(w):
+    out = w.store.apply_ops(w.p("router"), [{"op": "cancel", "key": "demo:A"}])
+    assert out["applied"] == 1 and w.store._item("demo:A")["state"] == "cancelled"
+    assert w.store._item(GOAL)["state"] == "open"   # depends_on_cancelled allowed
+
+
+def test_allow_new_does_not_cover_items_other_ops_create(w):
+    # a create depending on an item the same batch cancels is refused, exactly
+    # as the single create_items verb refuses it
+    before = snap(w)
+    with pytest.raises(Refused) as exc:
+        w.store.apply_ops(w.p("router"), [
+            {"op": "cancel", "key": "demo:A"}, create("X", deps=["A"]),
+            link_goal("X")])
+    assert exc.value.code == "validation" and "depends_on_cancelled" in exc.value.msg
+    assert snap(w) == before
+
+
+@pytest.mark.parametrize("verb", sorted(ROUTER_VERBS))
+def test_router_verbs_are_routed_writes(world, srv, verb):
+    assert verb in WRITE_VERBS
+    import json
+    import urllib.error
+    import urllib.request
+    body = {"key": "demo:A", "batch_ref": "x", "state": "claimed", "ops": []}
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(),
+        method="POST", headers={"Authorization": f"Bearer {world.tokens['l1main']}",
+                                "Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=10)
+    assert exc.value.code == 403   # routed to the verb, which refuses non-routers
+
+
+def test_known_item_fields_cover_every_items_column(w):
+    lifecycle = {"epoch", "round", "claimed_by", "delegate", "lease_until",
+                 "reviewer", "model", "review_waiver", "created_at",
+                 "updated_at"}
+    columns = {row[1] for row in w.conn.execute("PRAGMA table_info(items)")}
+    assert columns - lifecycle <= KNOWN_ITEM_FIELDS, (
+        "a new items column must be a known create field or a lifecycle column")
+    assert {"depends_on", "owner_family"} <= KNOWN_ITEM_FIELDS
+
+
+def test_importer_refuses_an_oversize_fold_like_the_api(tmp_path):
+    (tmp_path / "x.yaml").write_text(yaml.safe_dump({"items": [{
+        "project": "demo", "id": "Z", "title": "t", "track": "T0",
+        "owner": "o", "description": "d" * 2100}]}), encoding="utf-8")
+    with pytest.raises(Refused) as exc:
+        importer.load_dir(tmp_path)
+    assert exc.value.code == "validation" and "description" in exc.value.msg
+
+
+def test_runbook_backup_is_a_working_python_one_liner(w, tmp_path):
+    text = (DOCS / "RUNBOOK.md").read_text(encoding="utf-8")
+    assert 'sqlite3 "$KEEPER' not in text
+    line = next(ln.strip() for ln in text.splitlines()
+                if ln.strip().startswith("python3 -c 'import sqlite3"))
+    keeper = tmp_path / "k"
+    keeper.mkdir()
+    import shutil
+    shutil.copy(w.path, keeper / "keeper.db")
+    cmd = line.replace("python3", sys.executable, 1)
+    done = subprocess.run(["bash", "-c", cmd], env={"KEEPER": str(keeper),
+                                                    "PATH": "/usr/bin:/bin"},
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    assert (keeper / "backup.db").stat().st_size > 0

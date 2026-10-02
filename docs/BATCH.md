@@ -23,6 +23,7 @@ ops:                       # applied in order
   - {op: add_evidence, key: project:ID, kind: decision, ref: {id: D-1}, repo: ...}
   - {op: close_on_decision, key: project:ID}      # batch_ref = abspath@sha256
   - {op: cancel, key: project:ID, reason: ...}
+  - {op: priority, key: project:ID, priority: <int>}   # router set_priority, same transaction
 ```
 
 Only the keys shown above are allowed (per op and top level); duplicate YAML
@@ -63,3 +64,11 @@ with `--from`), `nothing applied (the whole batch was rolled back)`, exit 1; no
 the batch's hashed `source` as its `batch_ref`. Exit codes are unchanged.
 `--per-op` keeps the old behaviour: one call per op, partial progress, resume
 hint.
+
+A refusal that no single op owns (the final whole-graph validation found a new
+problem on an item no op of the batch touched, e.g. an edit that leaves another
+item unreachable) is reported as `op - validate: <code> <message>`, with
+`apply_batch` printing `op <first-op-number> ...` only when the keeper names no
+op at all. An unparseable or short 2xx reply from the keeper exits non-zero
+(`error: unreadable or short keeper reply ...`): the applier never prints
+`applied N of N` on a guess.

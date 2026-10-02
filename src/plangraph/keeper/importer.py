@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 from .errors import Refused
-from .note_fold import fold_note as _fold_note
+from .note_fold import fold_checked as _fold_note
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]

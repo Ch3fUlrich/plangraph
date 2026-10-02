@@ -150,14 +150,17 @@ def validate(items):
     return unique
 
 
-def ready(items, project=None):
+def ready(items, project=None, ub=None):
     """Open items whose every dependency is ``done``, best first.
+
+    *ub* is a precomputed :func:`unblocks` map over the FULL graph, for a caller
+    that holds only a subset of the items.
 
     Sorted by ``(-priority, -unblocks, estimate_h, key)``.  Gates and goals are
     included when open and unblocked: closing them is a valid action.
     """
     idx = index(items)
-    ub = unblocks(items)
+    ub = unblocks(items) if ub is None else ub
     out = [it for it in items
            if _state(it) == "open"
            and (project is None or it.get("project") == project)
@@ -289,15 +292,15 @@ def unblocks(items):
     return dict(sorted(counts.items()))
 
 
-def brief(items, project=None, n=10):
+def brief(items, project=None, n=10, ub=None):
     """Agent text: one line per ready item, capped at *n*.
 
     Format: ``key | title | est Nh | unblocks N | prio P``.
     """
-    rows = ready(items, project=project)
+    ub = unblocks(items) if ub is None else ub
+    rows = ready(items, project=project, ub=ub)
     if n is not None:
         rows = rows[:max(0, int(n))]
-    ub = unblocks(items)
     lines = [f"{it['key']} | {it.get('title', '')} | "
              f"est {_est(it):g}h | unblocks {ub.get(it['key'], 0)} | "
              f"prio {_prio(it)}" for it in rows]

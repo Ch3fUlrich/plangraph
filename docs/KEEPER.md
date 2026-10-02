@@ -169,6 +169,11 @@ The triggers and the authorizer guard *this process's* writes, not the file. A r
 item reads as legitimately done. Only the hash-chain head anchor (M2b, an external/notary copy of the head) detects such a row. Treat the DB file's
 unix permissions and the host as part of the trust base.
 
+Evidence inside `apply_ops` (B1 seat finding): the evidence verifiers are NOT re-run inside the transaction. A result computed before the lock is bound to the item's
+state and epoch, which are re-checked in the lock (`conflict` otherwise), and `close_on_decision` re-checks the decision-evidence id set; but a verifier's own external
+input (a git/CI/HTTP answer, a decisions file edited after the pre-lock read) is only as fresh as the pre-lock call. Evidence for an item an earlier op of the same
+batch creates or moves is verified in the lock instead.
+
 Waiver rule (D-217 / X6c3): `waive_second_family(key, D-NNN)` succeeds only if the D-NNN row in the decisions file contains `Waives: <project:ID>`
 for exactly that key (whole token; a row may name several keys; code blocks do not count). `Waives:` and `Closes:` tokens count only inside the DECISION cell (3rd column) of their D-row (D-276). A forged D-id still needs the decision verifier, so the
 residual risk above applies to waivers too: a raw-SQL writer who can edit DECISIONS.md can name any key.
@@ -179,7 +184,7 @@ The in-lock state/epoch/round checks still apply; only the decisions-file conten
 
 **`apply_ops(principal, ops, batch_ref=None)`** (router, `store_ops.py`; HTTP `POST
 /v1/apply_ops`, MCP tool `apply_ops`) applies a list of BATCH.md ops (`create`,
-`edit`, `legacy_state`, `add_evidence`, `close_on_decision`, `cancel`) in one
+`edit`, `legacy_state`, `add_evidence`, `close_on_decision`, `cancel`, `priority`) in one
 `BEGIN IMMEDIATE`. Each op runs its single verb's inner function (same auth and
 state checks) with the whole-graph validation deferred: it runs once over the
 final graph against the graph at lock time. Any refusal or problem rolls back

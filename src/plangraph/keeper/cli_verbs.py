@@ -205,7 +205,8 @@ def cmd_ready(args, session):
                      lambda items: fmt.ready_text(items, args.project, n))
     return read(session, "ready", {"project": args.project, "n": n,
                                    "all": 1 if args.all else None},
-                lambda r: fmt.ready_text(r["items"], args.project, n), local)
+                lambda r: fmt.ready_text(r["items"], args.project, n,
+                                          r.get("unblocks")), local)
 
 
 def cmd_show(args, session):

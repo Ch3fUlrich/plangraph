@@ -28,6 +28,7 @@ import json
 import logging
 import sqlite3
 
+from .. import views
 from . import events
 from .errors import Refused
 
@@ -54,11 +55,14 @@ class OpBatch:
         self.current = 0
         self.touched = {}        # op index -> keys its validation concerned
         self.allow_new = set()   # codes an op is expected to introduce
+        self.strict = set()      # keys of ops that may introduce NO new code
         self.pre = {}            # (key, kind, ref json) -> (result, state, epoch)
 
     def note(self, affected, allow_new):
         self.touched.setdefault(self.current, set()).update(affected or ())
         self.allow_new.update(allow_new or ())
+        if not allow_new:
+            self.strict.update(affected or ())
 
     def verified(self, item, kind, ref):
         """The pre-lock verification of this evidence, re-checked, or ``None``."""
@@ -242,6 +246,7 @@ class OpsMixin:
         try:
             self._validate_change(self._all_items(), before, affected=touched,
                                   allow_new=batch.allow_new)
+            self._refuse_strict_allow_new(before, batch)
         except Refused as exc:
             owner = next((i for i, keys in sorted(batch.touched.items())
                           if any(k in exc.msg for k in keys)), None)
@@ -249,3 +254,17 @@ class OpsMixin:
                 raise Refused(exc.code, f"op - validate: {exc.code} "
                                         f"{exc.msg}") from None
             raise _fail(owner, ops[owner], exc) from None
+
+    def _refuse_strict_allow_new(self, before, batch):
+        """``allow_new`` (a cancel's ``depends_on_cancelled``) is batch-wide in
+        ``_validate_change``; keep it from excusing an item that a create or edit
+        op of the batch introduced, exactly as the single verbs would refuse it."""
+        if not (batch.allow_new and batch.strict):
+            return
+        known = {(p["code"], p["key"]) for p in views.validate(before)}
+        bad = [p for p in views.validate(self._all_items())
+               if p["code"] in batch.allow_new and p["key"] in batch.strict
+               and (p["code"], p["key"]) not in known]
+        if bad:
+            raise Refused("validation", "; ".join(
+                f"{p['code']}:{p['key']}:{p['msg']}" for p in bad))

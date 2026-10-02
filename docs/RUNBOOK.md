@@ -63,9 +63,10 @@ never logs the token.
     pg admin verify                   # hash chain + cache integrity; exit 0 = ok
 
 The daemon rewrites `plan.snapshot.json` after every committed write.  Back up
-with SQLite's own copy (safe while running; WAL is checkpointed) plus the snapshot:
+with SQLite's own online backup API (safe while running; the `sqlite3` CLI is not
+installed, so use Python's) plus the snapshot:
 
-    sqlite3 "$KEEPER/keeper.db" ".backup '$KEEPER/backup.db'"
+    python3 -c 'import sqlite3,sys; s=sqlite3.connect(sys.argv[1]); d=sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()' "$KEEPER/keeper.db" "$KEEPER/backup.db"
     cp "$KEEPER/plan.snapshot.json" "$KEEPER/backup.snapshot.json"
 
 ## 5. Legacy work and decision closes (X7b)

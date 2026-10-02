@@ -15,8 +15,10 @@ __all__ = [
 ]
 
 
-def ready_text(items, project=None, n=10) -> str:
-    return views.brief(items, project=project, n=n)
+def ready_text(items, project=None, n=10, unblocks=None) -> str:
+    """The brief; *unblocks* is the server's full-graph map (the ``items`` of a
+    JSON ``ready`` reply are only the ready subset, so recounting there is 0)."""
+    return views.brief(items, project=project, n=n, ub=unblocks)
 
 
 def show_text(info: dict) -> str:
