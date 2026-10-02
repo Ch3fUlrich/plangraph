@@ -10,8 +10,11 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 import md_sync_parse as mp  # noqa: E402
 import md_sync_plan as plan  # noqa: E402
+from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 
 DEC = {"D-10", "D-11", "D-12"}
+DEC_HEAD = ("# Decisions (SYNTHETIC fixture, not site data)\n\n"
+            "| ID | project | decision | by | why |\n|---|---|---|---|---|\n")
 GOAL = {"project": "routing", "id": "GOAL", "key": "routing:GOAL", "state": "open",
         "kind": "goal", "depends_on": ["routing:R-1"], "evidence": []}
 
@@ -34,9 +37,20 @@ def a(text, date="2026-10-01"):
     return mp.parse_answers(f"## {date}\n" + text)
 
 
-def build(questions=(), answers=((), ()), items=(), decisions=DEC):
+def view(tmp_path, *rows):
+    """The keeper's own parser (DecisionsAdapter) over a synthetic decisions file."""
+    path = tmp_path / "decisions-log.md"
+    path.write_text(DEC_HEAD + "".join(rows), encoding="utf-8")
+    return DecisionsAdapter(path)
+
+
+def build(questions=(), answers=((), ()), items=(), decisions=DEC, view=None):
     return plan.build_plan(list(questions), answers[0], answers[1], decisions,
-                           [GOAL, *items])
+                           [GOAL, *items], decisions_view=view)
+
+
+def answer(ident, ids):
+    return [mp.Answer(ident, ids, "2026-10-02", "done by the router")], []
 
 
 def names(p):
@@ -282,3 +296,60 @@ def test_gone_item_that_is_a_gate_dependency_is_reported_and_dep_kept():
     assert p.ops[-1] == {"op": "edit", "key": "routing:PH-OPERATOR", "fields": {
         "depends_on": ["routing:Q-GONE", "routing:Q-N1"]}}
     assert [o["op"] for o in p.ops] == ["create", "edit"]
+
+
+def test_closes_without_the_item_key_skips_every_op_for_it(tmp_path):
+    # The keeper refuses a close whose cited DECISION cell has a Closes: keyword
+    # without the item's key, so md_sync must plan nothing for that item and say so.
+    v = view(tmp_path,
+             "| D-10 | demo | Closes: demo:OTHER | operator | small |\n",
+             "| D-11 | demo | both answers are in | operator | small |\n")
+    p = build(answers=([mp.Answer("X", ["D-10"], "2026-10-02", "done"),
+                        mp.Answer("Q-A", ["D-11"], "2026-10-02", "done")], []),
+              items=[live("demo", "X"), live("demo", "Q-A")], view=v)
+    assert p.close_skipped == [("X", "D-10", "demo:X")]
+    assert all(o.get("key") != "demo:X" for o in p.ops)
+    assert [o["op"] for o in p.ops] == ["edit", "legacy_state",
+                                        "add_evidence", "close_on_decision"]
+
+
+def test_closes_list_containing_the_key_plans_the_close_as_before(tmp_path):
+    v = view(tmp_path, "| D-10 | demo | Closes: demo:X | operator | small |\n")
+    p = build(answers=answer("X", ["D-10"]), items=[live("demo", "X")], view=v)
+    assert p.close_skipped == []
+    assert [o["op"] for o in p.ops] == ["edit", "legacy_state",
+                                        "add_evidence", "close_on_decision"]
+    assert p.counts["close_on_decision"] == 1
+
+
+def test_decision_without_a_closes_keyword_plans_the_close_as_before(tmp_path):
+    v = view(tmp_path, "| D-10 | demo | ship the default route | operator | small |\n")
+    p = build(answers=answer("X", ["D-10"]), items=[live("demo", "X")], view=v)
+    assert p.close_skipped == []
+    assert p.counts["close_on_decision"] == 1
+
+
+def test_any_cited_decision_without_the_key_skips_the_item(tmp_path):
+    v = view(tmp_path,
+             "| D-10 | demo | Closes: demo:X | operator | small |\n",
+             "| D-11 | demo | Closes: demo:OTHER | operator | small |\n")
+    p = build(answers=answer("X", ["D-10", "D-11"]), items=[live("demo", "X")],
+              view=v)
+    assert p.close_skipped == [("X", "D-11", "demo:X")]
+    assert p.ops == []
+
+
+def test_malformed_closes_keyword_without_a_usable_key_skips_too(tmp_path):
+    # L5: a Closes: keyword with no whole project:ID token is a malformed close,
+    # which the keeper refuses rather than reading as "names nothing".
+    v = view(tmp_path, "| D-10 | demo | Closes: demo: X | operator | small |\n")
+    p = build(answers=answer("X", ["D-10"]), items=[live("demo", "X")], view=v)
+    assert p.close_skipped == [("X", "D-10", "demo:X")]
+    assert p.ops == []
+
+
+def test_without_a_decisions_view_the_close_is_planned_like_before():
+    # build_plan callers that predate the pre-check keep today's behaviour.
+    p = build(answers=answer("X", ["D-10"]), items=[live("demo", "X")])
+    assert p.close_skipped == []
+    assert p.counts["close_on_decision"] == 1

@@ -127,15 +127,21 @@ title prefix `Q:` / `OP:`, reachable through the gate `routing:PH-OPERATOR`), an
 `ANSWERS.md` entries `- <ID> <words>: <text> (D-n[, D-m])` close the item on those
 decisions (`edit` tier none -> `legacy_state in_review` -> `add_evidence decision` ->
 `close_on_decision`, `batch_ref` = the ANSWERS.md path at its sha256).  An id that already
-exists in any project is reused, never duplicated.  `decisions-log.md` is only checked:
-an entry citing an unknown D-id is refused and reported, an entry without a D-id is
-skipped and reported, items gone from QUESTIONS are reported, never cancelled.  Token-like
+exists in any project is reused, never duplicated.  `decisions-log.md` is checked: an entry
+citing an unknown D-id is refused and reported, an entry without a D-id is
+skipped and reported, items gone from QUESTIONS are reported, never cancelled.  Every cited
+D-id is also pre-checked with the keeper's own parser (`DecisionsAdapter`): if that decision's
+`Closes:` list does not contain the item's key, the item gets **no ops at all** (no `edit`,
+`legacy_state`, `add_evidence` or `close_on_decision` — the keeper would refuse and the atomic
+batch would roll back), and the run says `close-skipped <ID>: <D-n> Closes does not list <key>`
+plus `close-skipped <n>` at the end of the `md-sync:` summary.  Token-like
 strings are masked `[redacted]` before any text reaches the keeper (count in the report).
 
     python3 tools/md_sync.py --questions /home/s/code/routing/QUESTIONS.md \
         --answers /home/s/code/routing/ANSWERS.md \
         --decisions /home/s/code/routing/docs/decisions-log.md \
-        --url http://127.0.0.1:8765 --token-file ~/keeper/router.token [--dry-run | --apply]
+        --url http://127.0.0.1:8765 --token-file ~/keeper/router.token \
+        [--dry-run | --apply] [--status-file /path/md-sync.status.json]
 
 `--dry-run` (default) reads the live graph and prints the plan and counts; `--apply` posts
 ONE atomic `apply_ops` call (all or nothing; a second run emits zero ops).  Exit codes as
@@ -144,7 +150,18 @@ ONE atomic `apply_ops` call (all or nothing; a second run emits zero ops).  Exit
 (`/home/s/code/routing`).  The principal in the batch is `--principal` (default `router`)
 and must match the token's name.
 
-Run it every 10 minutes and on change (`systemd --user`; `~/.config/systemd/user/`):
+`--status-file PATH` records the run for the router as one JSON object, written atomically
+(temp file + rename) on **every** run: dry or apply, success, refusal or early error.  The
+keys, in this order: `ts` (ISO-8601 UTC), `mode` (`dry`/`apply`), `ops`, `applied` (the batch
+really landed), `skipped`, `refused`, `gone`, `redactions`, `close_skipped` (a list of
+`{"id", "decision", "key"}`, so the router sees skipped closes without parsing the report) and
+`error` (one line, or `null`).  Ids and counts only — no titles, decision texts, descriptions
+or tokens ever reach the file.  Without the flag nothing is written.
+
+Run it every 10 minutes and on change (`systemd --user`; `~/.config/systemd/user/`), with a
+directory for the status file:
+
+    mkdir -p %h/.local/share/plangraph
 
     # md-sync.service
     [Unit]
@@ -154,7 +171,8 @@ Run it every 10 minutes and on change (`systemd --user`; `~/.config/systemd/user
     ExecStart=/usr/bin/python3 %h/code/plangraph/tools/md_sync.py \
       --questions %h/code/routing/QUESTIONS.md --answers %h/code/routing/ANSWERS.md \
       --decisions %h/code/routing/docs/decisions-log.md \
-      --url http://127.0.0.1:8765 --token-file %h/keeper/router.token --apply
+      --url http://127.0.0.1:8765 --token-file %h/keeper/router.token --apply \
+      --status-file %h/.local/share/plangraph/md-sync.status.json
 
     # md-sync.timer
     [Unit]

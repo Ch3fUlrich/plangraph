@@ -13,8 +13,7 @@ _HEADING_RE = re.compile(r"^## +(.*?)\s*$")
 _DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _SENTENCE_RE = re.compile(r"^(.+?[.?!])(?:\s+|$)")
-_TRAILING_D_RE = re.compile(
-    r"\(\s*(D-[0-9]+(?:\s*,\s*D-[0-9]+)*)\s*\)\s*[.]?\s*$")
+
 _DECISION_ROW_RE = re.compile(r"^\| D-([0-9]+) \|")
 _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 TITLE_MAX = 120
@@ -79,20 +78,128 @@ def parse_questions(text):
     return out
 
 
+#: the status words that make an id an *answer* (ADDENDUM 2)
+_STATUS_RE = re.compile(r"(?:done|resolved|obsolete|superseded|answered|cancelled|closed)",
+                        re.IGNORECASE)
+#: an id straight after by/with/via/see is a reference, not an answer
+_REF_BEFORE_RE = re.compile(r"(?i)\b(?:by|with|via|see)\s+$")
+_ID_OCCURRENCE_RE = re.compile(r"(?<![A-Za-z0-9-])(" + ID + r")(?![A-Za-z0-9-])")
+_D_IN_GROUP_RE = re.compile(r"D-[0-9]+")
+_GROUP_RE = re.compile(r"\(([^()]*)\)")
+_CLAUSE_ENDS = (", ", ". ", "(")
+
+
+def _d_groups(text):
+    """``(start, [normalised D-ids])`` per parenthesised group naming a D-id."""
+    out = []
+    for match in _GROUP_RE.finditer(text):
+        ids = [_norm_d(v) for v in _D_IN_GROUP_RE.findall(match.group(1))]
+        if ids:
+            out.append((match.start(), ids))
+    return out
+
+
+def _sentences(text):
+    """``(start, end)`` spans: one per sentence (split after ``. ``/``! ``/``? ``)."""
+    spans, start = [], 0
+    for match in re.finditer(r"[.!?]\s+", text):
+        spans.append((start, match.end()))
+        start = match.end()
+    spans.append((start, len(text)))
+    return spans
+
+
+def _clause_start(text, pos):
+    """Is *pos* the start of a clause (line start, after ``. `` / `, ` / `` + `` / `/`)?"""
+    if pos == 0:
+        return True
+    before = text[max(0, pos - 3):pos]
+    return before[-1] == "/" or before[-2:] in (", ", ". ", "- ") \
+        or before[-3:] == " + "
+
+
+def _has_status(text, end):
+    """Is a status word ahead of *end*, up to the next clause or sentence end?"""
+    stop = len(text)
+    for token in _CLAUSE_ENDS:
+        found = text.find(token, end)
+        if found != -1:
+            stop = min(stop, found)
+    return bool(_STATUS_RE.search(text[end:stop]))
+
+
+def _ids_for(groups, spans, pos, last_ids):
+    """*pos*'s sentence's D-ids, falling back to the line's last D-id group."""
+    span = next((s for s in spans if s[0] <= pos < s[1]), spans[-1])
+    own = []
+    for start, ids in groups:
+        if span[0] <= start < span[1]:
+            own += [i for i in ids if i not in own]
+    return own or list(last_ids)
+
+
+def _sentence_text(text, spans, pos):
+    for start, end in spans:
+        if start <= pos < end:
+            sent = text[start:end]
+            break
+    else:
+        sent = text
+    # drop the D-id groups (and keep prose groups such as "(some text)")
+    sent = _GROUP_RE.sub(lambda m: "" if _D_IN_GROUP_RE.search(m.group(1))
+                         else m.group(0), sent)
+    return " ".join(sent.split())
+
+
 def parse_answers(text):
-    """``(answers, skipped)``: entries under ``## <date>`` with / without D-ids."""
+    """``(answers, skipped)``: one ``Answer`` per answered id under ``## <date>``.
+
+    One line may answer several ids: each id that *starts* a clause (line start,
+    or after ``. `` / `, ` / `` + `` / `/`) and is followed — directly or after
+    joined ids — by one of done/resolved/obsolete/superseded/answered/cancelled/
+    closed is an answer.  An id after by/with/via/see or inside parentheses is a
+    reference, not an answer.  Each answered id takes the D-ids of its own
+    sentence, else the line's last D-id group; ``/`` separates D-ids like `,`.
+    A classic single-id bullet is exempt from the status rule and takes the
+    line's last group, as before (ADDENDUM 2).
+    """
     answers, skipped = [], []
     for heading, match, body in _entries(text, _BULLET_RE):
         if not heading or not _DATE_RE.match(heading):
             continue
-        full = " ".join([match.group(2).strip(), *body]).strip()
-        tail = _TRAILING_D_RE.search(full)
-        if not tail:
-            skipped.append(Skipped(match.group(1), "no D-id"))
+        lead, rest = match.group(1), match.group(2).strip()
+        head = f"{lead} {rest}" if rest else lead
+        full = " ".join([head, *body]).strip()
+        groups = _d_groups(full)
+        if not groups:
+            skipped.append(Skipped(lead, "no D-id"))
             continue
-        ids = [d.strip() for d in tail.group(1).split(",")]
-        answers.append(Answer(match.group(1), [_norm_d(d) for d in ids],
-                              heading, full[:tail.start()].strip()))
+        spans, last_ids = _sentences(full), groups[-1][1]
+        parens = [m.span() for m in _GROUP_RE.finditer(full)]
+        candidates = []
+        for found in _ID_OCCURRENCE_RE.finditer(full):
+            pos = found.start()
+            if any(a <= pos < b for a, b in parens):
+                continue  # inside parentheses: a reference (e.g. "superseded by X (y)")
+            if not _clause_start(full, pos) or _REF_BEFORE_RE.search(full[:pos]):
+                continue  # mid-prose or after by/with/via/see: a reference
+            candidates.append((found.group(1), pos))
+        if len(candidates) == 1:
+            # the classic single-id bullet: it is the answer whatever it says
+            answered = list(candidates)
+        else:
+            answered = [(ident, pos) for ident, pos in candidates
+                        if _has_status(full, pos + len(ident))]
+        if not answered:
+            skipped.append(Skipped(lead, "no status word"))
+            continue
+        emitted = set()
+        for ident, pos in sorted(answered, key=lambda item: item[1]):
+            if ident in emitted:
+                continue
+            emitted.add(ident)
+            answers.append(Answer(ident, _ids_for(groups, spans, pos, last_ids),
+                                  heading, _sentence_text(full, spans, pos)))
     return answers, skipped
 
 

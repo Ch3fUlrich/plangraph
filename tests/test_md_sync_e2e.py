@@ -143,17 +143,121 @@ def test_gate_is_created_once_across_runs(world, srv, token, site):
     assert "edit routing:PH-OPERATOR" in out and "edit routing:GOAL" not in out
 
 
-def test_half_failing_apply_leaves_db_unchanged(world, srv, token, site):
-    # D-10 now says it closes someone else: Q-ALPHA's close is refused mid-batch.
+def tally(out):
+    """The summary line as numbers, keyed ``close_skipped`` (status spelling)."""
+    text = [ln for ln in out.splitlines() if ln.startswith("md-sync: ")][-1]
+    pairs = (part.strip().split(" ", 1)
+             for part in text[len("md-sync: "):].rstrip().split(", "))
+    return {name.replace("-", "_"): int(n) for name, n in pairs}
+
+
+def status_of(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def closes_elsewhere(site, elsewhere="routing:Q-OTHER"):
+    """D-10's DECISION cell closes somebody else: Q-ALPHA's close would be refused."""
     log = site / "decisions-log.md"
-    log.write_text(log.read_text().replace(
-        "| use sqlite for the widget cache |", "| Closes: routing:Q-OTHER |"))
+    log.write_text(log.read_text(encoding="utf-8").replace(
+        "| use sqlite for the widget cache |", f"| Closes: {elsewhere} |"),
+        encoding="utf-8")
+
+
+def test_close_skipped_is_planned_away_and_recorded(world, srv, token, site, tmp_path):
+    """A close the keeper would refuse: no ops, one report line, id in the status."""
+    closes_elsewhere(site)
+    status = tmp_path / "md-sync.status.json"
+    rc, out, err = sync(site, srv, token, "--dry-run", "--status-file", str(status))
+    assert rc == 1, out + err  # Q-GHOST still cites D-999
+    assert "close-skipped Q-ALPHA: D-10 Closes does not list routing:Q-ALPHA" in out
+    for verb in ("legacy_state", "add_evidence", "close_on_decision"):
+        assert f"{verb} routing:Q-ALPHA" not in out
+    assert "create routing:Q-ALPHA" in out   # the lane itself still comes from QUESTIONS
+    assert out.rstrip().endswith("close-skipped 1")
+
+    doc = status_of(status)
+    assert list(doc) == ["ts", "mode", "ops", "applied", "skipped", "refused",
+                         "gone", "redactions", "close_skipped", "error"]
+    assert doc["mode"] == "dry" and doc["applied"] is False and doc["error"] is None
+    assert doc["close_skipped"] == [{"id": "Q-ALPHA", "decision": "D-10",
+                                     "key": "routing:Q-ALPHA"}]
+    counts = {k: n for k, n in tally(out).items() if k != "close_skipped"}
+    assert all(doc[name] == n for name, n in counts.items())
+    assert len(doc["close_skipped"]) == tally(out)["close_skipped"]
+    # ids and counts only: no title, decision text or description may leak
+    raw = status.read_text(encoding="utf-8")
+    for text in ("Pick a storage backend", "widget cache", "redacted"):
+        assert text not in raw
+
+
+def test_apply_writes_status_with_applied_and_no_error(world, srv, token, site, tmp_path):
+    status = tmp_path / "md-sync.status.json"
+    rc, out, err = sync(site, srv, token, "--apply", "--status-file", str(status))
+    assert rc == 1, out + err  # applied; Q-GHOST was refused and reported
+    doc = status_of(status)
+    assert (doc["mode"], doc["applied"], doc["error"]) == ("apply", True, None)
+    assert doc["close_skipped"] == []
+    counts = {k: n for k, n in tally(out).items() if k != "close_skipped"}
+    assert all(doc[name] == n for name, n in counts.items())
+
+
+def test_status_file_is_written_when_the_run_fails_early(world, srv, token, site,
+                                                         tmp_path):
+    """Exit 2 still leaves a record: the router must not have to guess."""
+    status = tmp_path / "md-sync.status.json"
+    rc, out, err = sync(site, srv, token, "--dry-run", "--status-file", str(status),
+                        answers="NOPE.md")
+    assert rc == 2 and "NOPE.md" in err
+    doc = status_of(status)
+    assert doc["mode"] == "dry" and doc["applied"] is False
+    assert doc["ops"] == 0 and doc["close_skipped"] == []
+    assert doc["error"].startswith("error:") and "NOPE.md" in doc["error"]
+    assert status.read_text(encoding="utf-8").count("\n") == 1  # one JSON object
+
+
+def test_status_file_is_written_on_bad_arguments(world, srv, token, site, tmp_path):
+    status = tmp_path / "md-sync.status.json"
+    rc, out, err = sync(site, srv, token, "--apply", "--dry-run",
+                        "--status-file", str(status))
+    assert rc == 2
+    doc = status_of(status)
+    assert (doc["mode"], doc["error"]) == ("apply", "error: bad arguments (see usage)")
+
+
+def test_half_failing_apply_leaves_db_unchanged(world, srv, token, site, tmp_path,
+                                                monkeypatch):
+    """The refusal must come from the keeper, i.e. after plan time.
+
+    md_sync pre-checks ``Closes:`` and would drop Q-ALPHA's whole item before
+    the keeper ever saw it, so D-10 is tampered inside ``write_batch`` -- the
+    plan is already built -- and the keeper alone refuses.  The batch is one
+    atomic ``apply_ops``: everything rolls back, and the status still records
+    the failed run.
+    """
+    log = site / "decisions-log.md"
+    original = log.read_text(encoding="utf-8")
+    real = md_sync.write_batch
+
+    def tamper(*a, **k):
+        path = real(*a, **k)
+        log.write_text(original.replace(
+            "| use sqlite for the widget cache |", "| Closes: routing:Q-OTHER |"),
+            encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(md_sync, "write_batch", tamper)
     before = (rows(world, "SELECT COUNT(*) FROM items")[0][0],
               rows(world, "SELECT COUNT(*) FROM events")[0][0])
-    rc, out, err = sync(site, srv, token, "--apply")
+    status = tmp_path / "md-sync.status.json"
+    rc, out, err = sync(site, srv, token, "--apply", "--status-file", str(status))
     assert rc == 1 and "nothing applied" in out
     assert (rows(world, "SELECT COUNT(*) FROM items")[0][0],
             rows(world, "SELECT COUNT(*) FROM events")[0][0]) == before
+    doc = status_of(status)
+    assert (doc["mode"], doc["applied"]) == ("apply", False)
+    assert isinstance(doc["error"], str) and doc["error"].strip() == doc["error"]
+    assert doc["error"] and "\n" not in doc["error"]
+    assert not doc["error"].startswith("acting as ")  # the refusal line, not the login
 
 
 def test_answers_changed_between_read_and_apply_is_refused(world, srv, token, site, monkeypatch):

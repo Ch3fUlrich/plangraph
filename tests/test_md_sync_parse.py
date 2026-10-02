@@ -76,6 +76,49 @@ def test_answers_entries_and_skipped():
     assert [s.id for s in skipped] == ["Q-BETA-2"]
 
 
+MULTI = ("## 2026-10-02\n"
+         "- OS-11 + OS-12 done (some text), OS-13 done, OS-14 done (text), "
+         "OS-15/OS-16 resolved by something (D-901).\n")
+
+
+def test_joined_ids_on_one_line_all_take_the_lines_last_d_group():
+    answers, skipped = mp.parse_answers(MULTI)
+    assert {a.id: a.decisions for a in answers} == {
+        i: ["D-901"] for i in ("OS-11", "OS-12", "OS-13", "OS-14", "OS-15", "OS-16")}
+    assert skipped == []
+
+
+def test_each_sentence_takes_its_own_d_ids_and_a_replacement_is_not_an_answer():
+    answers, skipped = mp.parse_answers(
+        "## 2026-10-02\n"
+        "- OS-21 obsolete: text (D-902). OS-22 superseded by OS-23 (text, D-903).\n")
+    assert {a.id: a.decisions for a in answers} == {
+        "OS-21": ["D-902"], "OS-22": ["D-903"]}
+    assert skipped == []   # OS-23 is only the replacement named after "by"
+
+
+def test_slash_separates_d_ids_like_a_comma():
+    answers, skipped = mp.parse_answers(
+        "## 2026-10-02\n- OS-31 done: text (D-904/D-905).\n")
+    assert [(a.id, a.decisions) for a in answers] == [("OS-31", ["D-904", "D-905"])]
+    assert skipped == []
+
+
+def test_ids_after_by_or_in_parentheses_are_references_not_answers():
+    answers, skipped = mp.parse_answers(
+        "## 2026-10-02\n"
+        "- OS-91 superseded by OS-92 (see OS-93), reviewed (D-910).\n")
+    assert [(a.id, a.decisions) for a in answers] == [("OS-91", ["D-910"])]
+    assert skipped == []
+
+
+def test_joined_id_without_a_status_word_is_not_an_answer():
+    answers, skipped = mp.parse_answers(
+        "## 2026-10-02\n- OS-94 done with the details, OS-95 note (D-911).\n")
+    assert {a.id: a.decisions for a in answers} == {"OS-94": ["D-911"]}
+    assert skipped == []   # OS-95 starts a clause but has no status word
+
+
 def test_decision_ids_normalised():
     ids = mp.parse_decisions((FIX / "decisions-log.md").read_text(encoding="utf-8"))
     assert ids == {"D-10", "D-11", "D-12"}

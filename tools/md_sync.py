@@ -2,14 +2,23 @@
 """One-way, idempotent import of the router's markdown into the keeper (SYNC-MD-IMPORT v1).
 
 QUESTIONS.md -> open question/operator lanes; ANSWERS.md -> closes them on the cited
-decisions; decisions-log.md is only checked.  The result is one batch (BATCH.md format)
+decisions; decisions-log.md is checked twice.  The plan pre-checks every cited
+decision with the keeper's own parser (``DecisionsAdapter``): a ``Closes:`` list
+without the item's key would be refused, so the item gets no ops at all and is
+reported as ``close-skipped``.  What is left is one batch (BATCH.md format)
 applied through ``apply_batch`` as a single ``apply_ops`` call.
+
+``--status-file`` leaves one JSON record of the run for the router: ids, counts
+and a single error line -- never titles, descriptions or secrets.  It is written
+atomically (tmp + rename) on every run, dry or apply, success, refusal or error.
 """
 import argparse
 import hashlib
+import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 import yaml
 
@@ -17,9 +26,12 @@ import apply_batch
 import md_sync_parse as mp
 import md_sync_plan as mplan
 
+# md_sync_plan puts src/ on sys.path, which is where the keeper lives.
+from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
+
 USAGE = ("usage: md_sync.py --questions P --answers P --decisions P "
          "[--dry-run | --apply] --url U --token-file F [--principal NAME] "
-         "[--batch-out FILE]\n")
+         "[--batch-out FILE] [--status-file FILE]\n")
 
 
 def write_batch(path, principal, answers_path, digest, ops):
@@ -34,6 +46,91 @@ def op_key(op):
     return apply_batch.op_key(op)
 
 
+def status_doc(mode):
+    """The status file's shape with a run's counters at zero (fixed key order)."""
+    return {"ts": None, "mode": mode, "ops": 0, "applied": False,
+            "skipped": 0, "refused": 0, "gone": 0, "redactions": 0,
+            "close_skipped": [], "error": None}
+
+
+def fill_status(status, plan):
+    """Counts from a plan: ids and numbers only, so no field text can leak."""
+    status["ops"] = len(plan.ops)
+    status["skipped"] = len(plan.skipped)
+    status["refused"] = len(plan.refused)
+    status["gone"] = len(plan.gone)
+    status["redactions"] = plan.redactions
+    status["close_skipped"] = [{"id": name, "decision": dec, "key": key}
+                               for name, dec, key in plan.close_skipped]
+
+
+def write_status(path, status, error, err=None):
+    """Record one run's status atomically (tmp + ``os.replace``).
+
+    Readers see the old file or the new one, never half a file; a missing path
+    is a no-op, and a failure to write only warns -- it must not change the
+    sync's own exit code.
+    """
+    if not path:
+        return
+    status["ts"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    status["error"] = error
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".md-sync.status.",
+                                   dir=os.path.dirname(os.path.abspath(path)) or ".")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(status, handle, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(tmp, path)
+    except OSError as exc:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        if err is not None:
+            err.write(f"warning: status file not written: {exc}\n")
+
+
+def _status_flag(argv, default=None):
+    """``--status-file`` out of raw argv, for runs argparse rejected."""
+    for n, arg in enumerate(argv):
+        if arg == "--status-file" and n + 1 < len(argv):
+            return argv[n + 1]
+        if arg.startswith("--status-file="):
+            return arg.split("=", 1)[1]
+    return default
+
+
+def _mode_of(argv):
+    """``"apply"`` if argv asked for it, else ``"dry"``."""
+    return "apply" if "--apply" in argv else "dry"
+
+
+class _Tee:
+    """A stream that also records what was written (the apply log -> ``error``)."""
+
+    def __init__(self, stream, record):
+        self.stream, self.record = stream, record
+
+    def write(self, text):
+        self.record.append(text)
+        return self.stream.write(text)
+
+    def flush(self):
+        return self.stream.flush()
+
+
+def _apply_error(log):
+    """One line naming why the batch died: the apply log's first real line."""
+    for text in log.splitlines():
+        line = text.strip()
+        if line and not line.startswith("acting as "):
+            return line
+    return "apply failed"
+
+
 def report(plan, out, dry):
     for n, op in enumerate(plan.ops, 1):
         out.write(f"plan {n} {op['op']} {op_key(op)}\n")
@@ -41,6 +138,8 @@ def report(plan, out, dry):
         out.write(f"skipped {ident}: {why}\n")
     for ident, why in plan.refused:
         out.write(f"refused {ident}: {why}\n")
+    for ident, decision, key in plan.close_skipped:
+        out.write(f"close-skipped {ident}: {decision} Closes does not list {key}\n")
     for key in plan.gone:
         out.write(f"gone {key}: not in QUESTIONS and not answered (not cancelled)\n")
     ops = ", ".join(f"{name} {plan.counts[name]}" for name in sorted(plan.counts))
@@ -48,10 +147,12 @@ def report(plan, out, dry):
         out.write("dry run: " + (ops or "no ops") + " (no calls made)\n")
     out.write(f"md-sync: ops {len(plan.ops)}, skipped {len(plan.skipped)}, "
               f"refused {len(plan.refused)}, gone {len(plan.gone)}, "
-              f"redactions {plan.redactions}\n")
+              f"redactions {plan.redactions}, "
+              f"close-skipped {len(plan.close_skipped)}\n")
 
 
 def main(argv=None, out=None, err=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
     out, err = out or sys.stdout, err or sys.stderr
     parser = argparse.ArgumentParser(add_help=False)
     for name in ("questions", "answers", "decisions", "token-file"):
@@ -59,14 +160,25 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--url", default=apply_batch.DEFAULT_URL)
     parser.add_argument("--principal", default="router")
     parser.add_argument("--batch-out")
+    parser.add_argument("--status-file")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
     try:
-        opts = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
+        opts = parser.parse_args(argv)
     except SystemExit:
         err.write(USAGE)
+        # Even a rejected invocation was a run: record it if the path parsed.
+        write_status(_status_flag(argv), status_doc(_mode_of(argv)),
+                     "error: bad arguments (see usage)", err)
         return 2
+    status = status_doc("apply" if opts.apply else "dry")
+
+    def stop(rc, error):
+        """Leave the run's status behind, then hand back the exit code."""
+        write_status(opts.status_file, status, error, err)
+        return rc
+
     try:
         texts = {}
         for name in ("questions", "answers", "decisions"):
@@ -75,7 +187,7 @@ def main(argv=None, out=None, err=None):
         token = apply_batch.read_token(opts.token_file)
     except (OSError, apply_batch.BatchError) as exc:
         err.write(f"error: {exc}\n")
-        return 2
+        return stop(2, f"error: {exc}")
     digest = hashlib.sha256(texts["answers"]).hexdigest()
     questions = mp.parse_questions(texts["questions"].decode("utf-8", "replace"))
     answers, skipped = mp.parse_answers(texts["answers"].decode("utf-8", "replace"))
@@ -85,24 +197,30 @@ def main(argv=None, out=None, err=None):
         items = session.get("snapshot").get("items") or []
     except apply_batch.ApiError as exc:
         err.write(f"error: cannot read the live graph: {exc.code} {exc.msg}\n")
-        return 2
+        return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
     try:
-        plan = mplan.build_plan(questions, answers, skipped, decisions, items)
+        plan = mplan.build_plan(questions, answers, skipped, decisions, items,
+                                decisions_view=DecisionsAdapter(opts.decisions))
     except mplan.PlanError as exc:
         out.write(f"error: {exc}\n")
-        return 1
+        return stop(1, f"error: {exc}")
+    fill_status(status, plan)
     report(plan, out, not opts.apply)
     rc = 1 if plan.refused else 0
     if not opts.apply or not plan.ops:
-        return rc
+        return stop(rc, None)
     answers_path = os.path.realpath(opts.answers)
+    record = []
     if opts.batch_out:
         path = write_batch(opts.batch_out, opts.principal, answers_path, digest, plan.ops)
-        return _apply(path, opts, out, err) or rc
-    with tempfile.TemporaryDirectory() as tmp:
-        path = write_batch(os.path.join(tmp, "md-sync.yaml"), opts.principal,
-                           answers_path, digest, plan.ops)
-        return _apply(path, opts, out, err) or rc
+        code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
+    else:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_batch(os.path.join(tmp, "md-sync.yaml"), opts.principal,
+                               answers_path, digest, plan.ops)
+            code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
+    status["applied"] = code == 0
+    return stop(code or rc, None if code == 0 else _apply_error("".join(record)))
 
 
 def _apply(path, opts, out, err):

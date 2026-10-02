@@ -19,6 +19,7 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from plangraph.keeper import credential_guard  # noqa: E402  (D-405)
+from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 
 PROJECT = "routing"
 GATE_ID = "PH-OPERATOR"
@@ -46,6 +47,9 @@ class Plan:
         self.skipped = []   # (id, reason): nothing done, worth reporting
         self.refused = []   # (id, reason): cited something that does not exist
         self.gone = []      # keys of our open items no longer in QUESTIONS
+        #: (id, decision_id, key): a close the keeper would refuse (Closes:
+        #: keyword without the key), so the whole item was left untouched
+        self.close_skipped = []
         self.redactions = 0
 
     def add(self, op):
@@ -108,7 +112,10 @@ def _decision_ids(item):
     return out
 
 
-def build_plan(questions, answers, skipped_answers, decision_ids, items):
+def build_plan(questions, answers, skipped_answers, decision_ids, items,
+               decisions_view=None):
+    """``decisions_view`` is the keeper's own ``DecisionsAdapter`` over the
+    decisions file (or ``None``: no ``Closes:`` pre-check, as before)."""
     plan = Plan()
     by_id = _index(items)
     state = {i["key"]: i for i in items}
@@ -153,7 +160,7 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items):
             if fields:
                 plan.add({"op": "edit", "key": item["key"], "fields": fields})
     _link(plan, state, new_lanes)
-    _answers(plan, answers, decision_ids, by_id, pending)
+    _answers(plan, answers, decision_ids, by_id, pending, decisions_view)
     answered = {a.id for a in answers}
     for item in items:
         if (item["project"] == PROJECT and item.get("source") == SOURCE
@@ -206,7 +213,21 @@ def _link(plan, state, new_lanes):
             "depends_on": list(gate.get("depends_on") or []) + list(new_lanes)}})
 
 
-def _answers(plan, answers, decision_ids, by_id, pending):
+def _closes_mismatch(view, decisions, key):
+    """Decisions whose keeper-owned ``Closes:`` list omits *key* (may refuse).
+
+    The token parsing is the keeper's own (``DecisionsAdapter.closes`` /
+    ``has_closes_keyword``), so md_sync and the keeper cannot diverge: a row
+    with a ``Closes:`` keyword whose whole tokens do not include *key* makes
+    ``close_on_decision`` refuse, and a malformed keyword (L5) refuses too.
+    """
+    if view is None:
+        return []
+    return [dec for dec in decisions
+            if view.has_closes_keyword(dec) and key not in view.closes(dec)]
+
+
+def _answers(plan, answers, decision_ids, by_id, pending, view=None):
     merged = {}
     for ans in answers:
         merged.setdefault(ans.id, [])
@@ -223,6 +244,15 @@ def _answers(plan, answers, decision_ids, by_id, pending):
             item = _find(by_id, ident)
         if item is None:
             plan.skipped.append((ident, "no live item"))
+            continue
+        mismatch = _closes_mismatch(view, decisions, item["key"])
+        if mismatch:
+            # No ops at all for this item (not tier edit, not legacy_state,
+            # not evidence, not close): otherwise the whole batch would roll
+            # back on the keeper's refusal, taking every other op with it.
+            name = item["id"] if "id" in item else item["key"].split(":", 1)[1]
+            for dec in mismatch:
+                plan.close_skipped.append((name, dec, item["key"]))
             continue
         _close(plan, item, decisions)
 
