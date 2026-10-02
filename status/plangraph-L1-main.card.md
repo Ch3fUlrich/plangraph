@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (Opus 5.5 high, L1 project orchestrator; relaunched fresh 2026-10-01 ~20:15)
-Updated: 2026-10-01 23:16 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+Updated: 2026-10-02 06:25 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
 M1 CLOSED. M2a code accepted (routing-00 Opus spot review). Now: X6 fixes -> X7 tiers -> 2-seat re-review -> pilot keeper -> plan-v3 load ->
@@ -11,10 +11,10 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
   charset, waiver bound to `Waives: <key>` D-row, residual-risk doc. Writers qoder (qfmodel, family unresolved, client-reported).
   Seats on X6c: seat1 muse-spark (205156), seat2 gemini-3.8-flash via gemini client (205302; trial leg before paid deepseek, D-242).
 - Writer leg: qoder client (promo). Unservable: ovh-*, groq-qwen, vertex-gemini-3.8-flash ("Unable to determine provider"); deepseek 504s.
-- PHASES (D-257/D-258): (1) KEEPER-X7 L2: code DONE (X7a1..X7d by qoder, head 9c2988c on phase/keeper-x7 in tmp/keeper-x7, 641 green)
-  but ZERO reviews (spark 504s on long runs, gemini-flash quota). Round 2 re-briefed: 5 slices, spark + deepseek pinned, probe first.
-  Nothing merged to worktree until both seats count (X6c 380683c also unreviewed). (3) M2c-RESEARCH DONE 573dc6c + R2 gap 6c68e99
-  (~300k vs 150k cap: noted). (2) PILOT-LOAD after (1) accepted. (4) M2c-PROPOSAL after (2); D-259 answers in task notes.
+- PHASES: (1) KEEPER-X7: code+fixes DONE at f17d578 (720 green; clone tmp/keeper-x7 phase/keeper-x7). Writers qoder (D-272 scan clean),
+  meta (muse-free via MCP pin bug), nvidia nemotron (CLI --free-model, D-284, gated). Seats gated by seat-model-evidence.py. Missing:
+  G3 spark + mimo S1/S2/S4 -> interactive L2 plangraph-L2-keeper-x7-seats (L2-LAUNCH sent). Nothing merged to worktree until all count.
+  (3) M2c-RESEARCH DONE 573dc6c+6c68e99. (2) PILOT-LOAD after (1). (4) M2c-PROPOSAL after (2): reqs D-259/D-276/D-290/D-292 in task notes.
 - Task contracts ready: $CLAUDE_JOB_DIR/tmp (= /home/s/.claude/jobs/7caaf7f5/tmp) hdr.txt + x6c1-3.txt, x7a1, x7a2, x7b, x7c (+ X7d batch applier TBD).
 - Router batch DRAFT: data/updates/2026-10-01-router.yaml (61a9fb9; 82 ops, 93->118 items, ready 19->31, checks pass; checker
   $CLAUDE_JOB_DIR/tmp/batchcheck/check.py). Sent to routing-00 for early look with 3 questions (T0-WSCLONE reopen verb, decision-only
