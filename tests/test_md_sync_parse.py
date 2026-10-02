@@ -102,3 +102,10 @@ def test_redaction_masks_long_runs():
 def test_redaction_leaves_prose():
     text = "key management and token rotation, prefix rules"
     assert mp.redact(text) == (text, 0)
+
+
+def test_text_after_a_truncated_title_is_kept_in_the_description():
+    text = "## Q\n- Q-LONG " + "word " * 60 + "end.\n"
+    (entry,) = mp.parse_questions(text)
+    assert "end." in entry.description
+    assert entry.title[len("Q: "):] + " " + entry.description == ("word " * 60 + "end.")

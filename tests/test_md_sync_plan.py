@@ -196,3 +196,23 @@ def test_note_format_matches_the_keeper_fold():
 
 def test_counts_is_a_counter():
     assert isinstance(build().counts, Counter)
+
+
+def test_description_of_exactly_the_room_fills_the_note_and_one_more_is_cut():
+    room = plan.NOTE_CAP - len(plan.note_for("x")) + 1
+    exact = "ab " * (room // 3)
+    exact += "c" * (room - len(exact))
+    assert len(exact) == room and plan._fit(exact) == exact
+    assert len(plan.note_for(exact)) == plan.NOTE_CAP
+    cut = plan._fit(exact + "d")
+    assert cut.endswith("…") and len(plan.note_for(cut)) <= plan.NOTE_CAP
+
+
+def test_gone_item_that_is_a_gate_dependency_is_reported_and_dep_kept():
+    gone = live("routing", "Q-GONE", source="md-sync")
+    gate = live("routing", "PH-OPERATOR", kind="gate", depends_on=["routing:Q-GONE"])
+    p = build(q("- Q-N1 **New**\n"), items=[gone, gate])
+    assert p.gone == ["routing:Q-GONE"]
+    assert p.ops[-1] == {"op": "edit", "key": "routing:PH-OPERATOR", "fields": {
+        "depends_on": ["routing:Q-GONE", "routing:Q-N1"]}}
+    assert [o["op"] for o in p.ops] == ["create", "edit"]
