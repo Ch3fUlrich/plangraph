@@ -301,3 +301,52 @@ def test_runbook_backup_is_a_working_python_one_liner(w, tmp_path):
                           capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
     assert (keeper / "backup.db").stat().st_size > 0
+
+
+# --------------------------------- mis-cased Closes:/Waives: keywords (rework)
+from types import SimpleNamespace  # noqa: E402
+
+from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
+
+
+def _adapter(tmp_path, cell):
+    path = tmp_path / "DEC.md"
+    path.write_text("| ID | Note | Scope |\n|---|---|---|\n"
+                    f"| D-1 | note | {cell} |\n", encoding="utf-8")
+    return DecisionsAdapter(path)
+
+
+@pytest.mark.parametrize("kw", ["closes:", "CLOSES:", "Closes:", "cLoSeS :"])
+def test_closes_keyword_is_case_insensitive_key_tokens_exact(tmp_path, kw):
+    ad = _adapter(tmp_path, f"{kw} demo:A")
+    assert ad.has_closes_keyword("D-1") and ad.closes("D-1") == {"demo:A"}
+    assert "demo:a" not in {t for t in ad.closes("D-1")}
+
+
+@pytest.mark.parametrize("kw", ["waives:", "WAIVES:", "Waives:"])
+def test_waives_keyword_is_case_insensitive_key_tokens_exact(tmp_path, kw):
+    ad = _adapter(tmp_path, f"{kw} demo:A")
+    assert ad.waives("D-1", "demo:A") and not ad.waives("D-1", "demo:a")
+    assert not ad.waives("D-1", "demo:B")
+
+
+@pytest.mark.parametrize("cell", ["closes: demo: A", "CLOSES:", "closes: ,",
+                                  "cLoSeS: demo:"])
+def test_miscased_closes_with_bad_token_is_an_L5_refusal(tmp_path, cell):
+    w2 = _world(tmp_path, _row(cell))
+    with pytest.raises(Refused) as exc:
+        w2.store.close_on_decision(w2.p("router"), KEY, w2.batch_ref)
+    assert exc.value.code == "evidence_unverified"
+    w2.close()
+
+
+def test_miscased_closes_with_valid_token_closes_only_that_key(tmp_path):
+    w2 = _world(tmp_path, _row("closes: demo:A"))
+    assert w2.store.close_on_decision(w2.p("router"), KEY,
+                                      w2.batch_ref)["state"] == "done"
+    w2.close()
+    w3 = _world(tmp_path / "o", _row("CLOSES: demo:Z"))
+    with pytest.raises(Refused) as exc:
+        w3.store.close_on_decision(w3.p("router"), KEY, w3.batch_ref)
+    assert exc.value.code == "evidence_unverified"
+    w3.close()

@@ -27,12 +27,19 @@ BAD = [f"login with {SECRET} on the box", f"password: {SECRET}",
        f"the CREDENTIAL is {SECRET}", f"pwd={SECRET}", f"{SECRET} passwd",
        f"x{' ' * 100}{SECRET} login"]
 OK = ["https://example.org/Zq9xk2LmPw login page",
-      "login docs at docs/Zq9xk2LmPw",
+      "see https://x/y/abcdefg login",
+      "login docs at docs/Zq9xk2LmPw", "password docs/setup.md",
       "see src/plangraph/Zq9xk2LmPw for the login code",
       "password reset: tools/resetpass.sh and tools/Zq9xk2LmPw",
-      "login uses svc/Zq9xk2Lm.json", "read svc/Zq9xk2LmPw.md for the password",
-      "data/Zq9xk2LmPw login", "plain text a/b login", "no keyword svc/Zq9xk2LmPw",
+      "data/Zq9xk2LmPw login", "login in tests/Zq9xk2LmPw", "login vendor/Zq9xk2LmPw",
+      "login out/Zq9xk2LmPw", "login ./Zq9xk2LmPw/x", "login ../Zq9xk2LmPw/x",
+      "login /etc/Zq9xk2LmPw", "login `docs/Zq9xk2LmPw`", "login (src/Zq9xk2LmPw)",
+      "plain text a/b login", "no keyword svc/Zq9xk2LmPw",
       "login " + "x" * 200 + " svcacct/Zq9xk2LmPw"]
+# the generic ".ext" exemption is gone: a dot after a secret does not hide it
+BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
+        "read svc/Zq9xk2LmPw.md for the password",
+        "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw"]
 
 
 @pytest.mark.parametrize("text", BAD)

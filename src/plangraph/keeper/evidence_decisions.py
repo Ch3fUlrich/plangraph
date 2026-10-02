@@ -39,8 +39,8 @@ _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 _KEYWORD_RE = re.compile(r"\b([A-Za-z-]+):(?=\s|$)")
 # Waives:/Closes: keywords themselves match even without trailing space (old
 # behaviour), but capture stops at the next _KEYWORD_RE boundary.
-_WAIVES_RE = re.compile(r"\bWaives:")
-_CLOSES_RE = re.compile(r"\bCloses:")
+_WAIVES_RE = re.compile(r"(?i)\bwaives\s*:")
+_CLOSES_RE = re.compile(r"(?i)\bcloses\s*:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
 # A whole ``project:ID`` key (the same shape tools/apply_batch.py accepts).
 _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
