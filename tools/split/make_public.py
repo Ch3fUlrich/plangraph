@@ -91,12 +91,22 @@ def deny_hits(files, manifest):
     return [sc.Hit(f, 0, "deny") for f in files if any(r.match(f) for r in rx)]
 
 
-def _tree_rel(name, tree):
-    """*name* relative to *tree*, else ``<outside>`` (never a ``..`` path or a foreign location)."""
+def _tree_rel(name, tree, pathmod=os.path):
+    """*name* relative to *tree*, else ``<outside>`` (never a ``..`` path or a foreign location).
+
+    *pathmod* swaps the path flavour so Windows semantics are testable off
+    Windows; the CLI always runs with the default ``os.path``.
+    """
     if not isinstance(name, str) or not name:
         return "<unknown>"
-    rel = os.path.relpath(name, tree) if os.path.isabs(name) else os.path.normpath(name)
-    return "<outside>" if rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel) else rel
+    if pathmod.isabs(name):
+        try:
+            rel = pathmod.relpath(name, tree)
+        except ValueError:
+            return "<outside>"  # no common root (e.g. paths on different Windows drives)
+    else:
+        rel = pathmod.normpath(name)
+    return "<outside>" if rel == ".." or rel.startswith(".." + pathmod.sep) or pathmod.isabs(rel) else rel
 
 
 def run_gitleaks(tree, binary):

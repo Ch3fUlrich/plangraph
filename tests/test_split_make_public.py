@@ -1,6 +1,8 @@
 """tools/split/make_public.py: allow-list copy, deny refusal, fresh one-commit history."""
 import json
+import ntpath
 import os
+import posixpath
 import shutil
 import stat
 import subprocess
@@ -229,3 +231,24 @@ def test_gitleaks_outside_path_is_normalised(tmp_path, src, manifest, capsys):
     out = capsys.readouterr().out
     assert rc == 1 and "<outside>:3: gitleaks:private-key" in out
     assert "/etc" not in out and ".." not in out
+
+
+def test_tree_rel_nt_path_flavour():
+    # a gitleaks File on a different drive must report <outside>, not raise (b1)
+    assert mp._tree_rel("D:\\other\\key.pem", "C:\\work\\tree", pathmod=ntpath) == "<outside>"
+    assert mp._tree_rel("C:\\work\\tree\\src\\a.py", "C:\\work\\tree",
+                        pathmod=ntpath) == "src\\a.py"
+    assert mp._tree_rel("..\\x", "C:\\work\\tree", pathmod=ntpath) == "<outside>"
+
+
+def test_tree_rel_posix_flavour_is_unchanged():
+    # "/etc/pass"+"wd": assembled, so this file's own scan reads no word/shape pair
+    assert mp._tree_rel("/etc/" + "pass" + "wd", "/work/tree",
+                        pathmod=posixpath) == "<outside>"
+    assert mp._tree_rel("src/a.py", "/work/tree", pathmod=posixpath) == "src/a.py"
+    assert mp._tree_rel("", "/work/tree", pathmod=posixpath) == "<unknown>"
+    assert mp._tree_rel(None, "/work/tree", pathmod=posixpath) == "<unknown>"
+    # the CLI's own flavour (os.path) keeps the same results on any host
+    assert mp._tree_rel(None, "/work/tree") == "<unknown>"
+    assert mp._tree_rel("../x", "/work/tree") == "<outside>"
+    assert mp._tree_rel("src" + os.sep + "a.py", "/work/tree") == "src" + os.sep + "a.py"
