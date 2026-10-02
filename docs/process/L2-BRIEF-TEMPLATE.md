@@ -23,7 +23,8 @@ plangraph-L1-main by SendMessage.
 - SPAWN PATH (D-430/D-431): every agent run (writer, seat, researcher) ONLY via the autoos-agent MCP `spawn` or `tools/autoos-agent.py run`;
   never agy/opencode/claude/qoder/gemini CLIs directly (D-271 discard). Code written by you or an in-session subagent counts as a writer run:
   writers/seats go via spawn (Sonnet fallback = claude client via spawn); in-session work only for your own read-only analysis.
-  Cross-host runs only via workst-L1's runner request.
+  Cross-host runs only via workst-L1's runner request. This includes TOOLING scripts (screenshot runners, probes, checkers): any
+  script you write in-session counts as code → a writer run (routing ruling after run_shots.py, recorded as a D-431 breach).
 
 - Gateway review calls (D-439/D-440): a tool-less single-call review over a pasted diff through the central OmniRoute counts as a
   response-side seat; ONLY via autoos `tools/review-call.py` (under KEYEXEC). LIVE since AutoOS main 980ae5e6 (D-466), allowed on coding.vm;
