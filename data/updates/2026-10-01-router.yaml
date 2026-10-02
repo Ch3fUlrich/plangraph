@@ -13,8 +13,8 @@ ops:
       review_tier: none
       evidence_kinds: [decision]
       note: 'done by decision: router recreated the container, Init=true (D-194, D-213); pids/mem in compose stays in T4-HARDEN'
-  - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: D-194}
-  - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: D-213}
+  - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: {id: D-194}}
+  - {op: add_evidence, key: 'autoos:T0-CONTAINER', kind: decision, ref: {id: D-213}}
   - {op: close_on_decision, key: 'autoos:T0-CONTAINER'}
   - op: edit
     key: routing:T0-HOLD
@@ -22,7 +22,7 @@ ops:
       review_tier: none
       evidence_kinds: [decision]
       note: 'done by decision (D-182): stale 09-28 sessions held + stopped'
-  - {op: add_evidence, key: 'routing:T0-HOLD', kind: decision, ref: D-182}
+  - {op: add_evidence, key: 'routing:T0-HOLD', kind: decision, ref: {id: D-182}}
   - {op: close_on_decision, key: 'routing:T0-HOLD'}
   - op: edit
     key: routing:T0-L1
@@ -30,8 +30,8 @@ ops:
       review_tier: none
       evidence_kinds: [decision]
       note: 'done by decision (D-186, D-228): new L1-mains launched; recycled 2026-10-01 evening'
-  - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: D-186}
-  - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: D-228}
+  - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: {id: D-186}}
+  - {op: add_evidence, key: 'routing:T0-L1', kind: decision, ref: {id: D-228}}
   - {op: close_on_decision, key: 'routing:T0-L1'}
 
   # ===== A2. T6-PILOT done (decision + commit); plan-v3 state open -> in_review first =====
@@ -44,38 +44,38 @@ ops:
         (recorded here, not attached as evidence)'
   - {op: legacy_state, key: 'server:T6-PILOT', state: in_review, note: 'router: DONE via decision D-224 (server-L1 pilot 1.5 + re-test 3/3, 2026-10-01) + Server afa0a94, Semaphore
         127659/127660'}
-  - {op: add_evidence, key: 'server:T6-PILOT', kind: decision, ref: D-224}
-  - {op: add_evidence, key: 'server:T6-PILOT', kind: commit, repo: server, ref: afa0a94}
+  - {op: add_evidence, key: 'server:T6-PILOT', kind: decision, ref: {id: D-224}}
+  - {op: add_evidence, key: 'server:T6-PILOT', kind: commit, repo: server, ref: {commit: afa0a943890acc960941ba96439663e819d3d573}}
   - {op: close_on_decision, key: 'server:T6-PILOT'}
 
   # ===== A3. in_review with evidence (NOT closed) =====
   - op: edit
     key: autoos:T0-SYNC
     fields: {note: needs L1-main confirmation that sync is complete; quarantine d8b6e0ef (D-182)}
-  - {op: add_evidence, key: 'autoos:T0-SYNC', kind: decision, ref: D-182}
+  - {op: add_evidence, key: 'autoos:T0-SYNC', kind: decision, ref: {id: D-182}}
   - {op: legacy_state, key: 'server:T6-DETECT', state: in_review, note: 'router: inventory + LoggiFly/prometheus removal merged
         (Server 50a7a5a); live cleanup deploy still pending (dry run first)'}
-  - {op: add_evidence, key: 'server:T6-DETECT', kind: commit, repo: server, ref: 50a7a5a}
+  - {op: add_evidence, key: 'server:T6-DETECT', kind: commit, repo: server, ref: {commit: 50a7a5abd4b4599af87550df7a11de41501bc011}}
 
   # ===== A4. claimed =====
   # T6-SECRETS already claimed in plan-v3 (owner prox): no legacy_state op, progress note via edit
   - op: edit
     key: server:T6-SECRETS
     fields: {note: 'claimed by prox: 86/87 store files SOPS; tier B running (D-202, D-208, D-214, D-216, D-226, D-229)'}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-202}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-208}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-214}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-216}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-226}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: D-229}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: ecf4e6f}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: c962f0e}
-  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: 5602cfc}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-202}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-208}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-214}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-216}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-226}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: decision, ref: {id: D-229}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: {commit: ecf4e6f72c209b632286b611cd4e972874a80941}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: {commit: c962f0eae3d350f1b58d079ac383230b7f8189e1}}
+  - {op: add_evidence, key: 'server:T6-SECRETS', kind: commit, repo: server, ref: {commit: 5602cfc06fa9675b587bd6f16e295f41330bfd64}}
   # T6-IPV6 already claimed in plan-v3 (owner prox): no legacy_state op, progress note via edit
   - op: edit
     key: server:T6-IPV6
     fields: {note: 'claimed by prox: only the Fritzbox inbound share left (operator, see server:OP-FRITZ-V6) (D-207)'}
-  - {op: add_evidence, key: 'server:T6-IPV6', kind: decision, ref: D-207}
+  - {op: add_evidence, key: 'server:T6-IPV6', kind: decision, ref: {id: D-207}}
   - {op: legacy_state, key: 'server:T6-OWUI', state: claimed, note: 'claimed by server-L1-main: small fix passes running'}
 
   # ===== A5. open items =====
@@ -122,9 +122,9 @@ ops:
         (D-200)
   - {op: legacy_state, key: 'server:T6-UPDATES-DESIGN', state: in_review, note: 'router: DESIGN done (Server b70539d, D-215,
         D-221)'}
-  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: decision, ref: D-215}
-  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: decision, ref: D-221}
-  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: commit, repo: server, ref: b70539d}
+  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: decision, ref: {id: D-215}}
+  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: decision, ref: {id: D-221}}
+  - {op: add_evidence, key: 'server:T6-UPDATES-DESIGN', kind: commit, repo: server, ref: {commit: b70539db03e1ef4435155950941245ca5bf24b94}}
   - {op: close_on_decision, key: 'server:T6-UPDATES-DESIGN'}
   - op: edit
     key: routing:GOAL
@@ -173,7 +173,7 @@ ops:
         Protect off). Decision: operator true; trial end date + webhook from the operator.'
   - {op: legacy_state, key: 'workstation:T5-GROK-L1', state: in_review, note: 'router: L1 done by decision D-222 (local repo
         5825688)'}
-  - {op: add_evidence, key: 'workstation:T5-GROK-L1', kind: decision, ref: D-222}
+  - {op: add_evidence, key: 'workstation:T5-GROK-L1', kind: decision, ref: {id: D-222}}
   - {op: close_on_decision, key: 'workstation:T5-GROK-L1'}
   - {op: legacy_state, key: 'workstation:T5-GROK-L2', state: claimed, note: claimed by workst-L1-autoos; L2 waits for OS-42
         operator steps}
@@ -220,8 +220,8 @@ ops:
       priority: 0
       note: split from server:T6-GRAPHMOVE; cutover carries SEC-MINIO (fresh MinIO root); D-223
   - {op: legacy_state, key: 'server:T6-GRAPHMOVE-PREP', state: in_review, note: 'router: PREP done (Server 6806b47, D-223)'}
-  - {op: add_evidence, key: 'server:T6-GRAPHMOVE-PREP', kind: decision, ref: D-223}
-  - {op: add_evidence, key: 'server:T6-GRAPHMOVE-PREP', kind: commit, repo: server, ref: 6806b47}
+  - {op: add_evidence, key: 'server:T6-GRAPHMOVE-PREP', kind: decision, ref: {id: D-223}}
+  - {op: add_evidence, key: 'server:T6-GRAPHMOVE-PREP', kind: commit, repo: server, ref: {commit: 6806b470e833585cd6f890bfdc59546c19debdc9}}
   - {op: close_on_decision, key: 'server:T6-GRAPHMOVE-PREP'}
   - op: edit
     key: routing:GOAL
