@@ -15,17 +15,17 @@ from .errors import Refused
 from .credential_guard import guard
 from .note_fold import fold_checked
 
-_EDITABLE = ("title", "estimate_h", "done_criteria", "evidence_kinds",
+_EDITABLE = ("title", "description", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
-    ("project", "id", "key", "title", "kind", "track", "owner", "owner_family",
+    ("project", "id", "key", "title", "description", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
-_ITEM_COLUMNS = ("key", "project", "id", "title", "kind", "track", "owner",
+_ITEM_COLUMNS = ("key", "project", "id", "title", "description", "kind", "track", "owner",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
@@ -95,6 +95,8 @@ def _defined_payload(fields):
     payload = {"fields": sorted(fields)}
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
+    if "description" in fields:
+        payload["description"] = fields["description"]
     return payload
 
 
@@ -194,6 +196,7 @@ class CreateMixin:
         row = {
             "key": definition["key"], "project": definition["project"],
             "id": definition["id"], "title": definition.get("title", ""),
+            "description": definition.get("description"),
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
             "owner": definition.get("owner"),
             "owner_family": definition.get("owner_family"),
@@ -220,9 +223,11 @@ class CreateMixin:
             self.conn.execute(
                 "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
                 (definition["key"], dep))
-        self._append(principal, definition["key"], "item_created",
-                     {"state": "open", "priority": row["priority"],
-                      "review_tier": row["review_tier"]}, now)
+        created = {"state": "open", "priority": row["priority"],
+                   "review_tier": row["review_tier"]}
+        if row["description"] is not None:
+            created["description"] = row["description"]
+        self._append(principal, definition["key"], "item_created", created, now)
         if state in ("claimed", "in_review"):
             self._append(principal, definition["key"], "claimed",
                          {"epoch": 1, "claimed_by": definition.get("owner"),

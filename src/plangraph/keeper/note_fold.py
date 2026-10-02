@@ -1,8 +1,8 @@
 """Fold unknown item fields into ``note`` (shared by the importer and create).
 
-The YAML importer has always kept an item's extra fields (``description``,
-``intent``, ``workstreams``, ``budget`` ...) by appending ``name: value`` lines
-to its ``note``.  B3 makes the API/batch create path do the same, through this
+The YAML importer has always kept an item's extra fields (``intent``,
+``workstreams``, ``budget`` ...) by appending ``name: value`` lines to its
+``note``.  B3 makes the API/batch create path do the same, through this
 one helper, so the same item gives the same note whichever door it came by.
 """
 from __future__ import annotations
@@ -12,6 +12,8 @@ import json
 from .errors import Refused
 
 NOTE_CAP = 2000
+#: ``description`` is a real column (MODEL-NAMES), no longer folded; same cap.
+DESCRIPTION_CAP = 2000
 
 
 def render(value):

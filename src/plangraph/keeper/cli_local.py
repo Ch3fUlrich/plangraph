@@ -41,7 +41,8 @@ def local_show(items, key) -> dict:
     unblocks = sorted(o["key"] for o in items
                       if key in (o.get("depends_on") or [])
                       and o.get("state") not in ("done", "cancelled"))
-    return {"key": key, "title": item.get("title"), "project": item.get("project"),
+    return {"key": key, "title": item.get("title"),
+            "description": item.get("description"), "project": item.get("project"),
             "kind": item.get("kind"), "track": item.get("track"),
             "owner": item.get("owner"), "state": item.get("state"),
             "priority": item.get("priority"), "epoch": item.get("epoch"),
@@ -71,6 +72,7 @@ def local_alerts(items, project) -> dict:
                                  if it.get("state") == "in_review"),
         "findings": [], "refusals": [],
         "stalled": bool(scope) and not ready and not in_flight and goal_open,
+        "warnings": views.warnings(scope),
     }
 
 

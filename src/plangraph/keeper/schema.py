@@ -14,7 +14,7 @@ from __future__ import annotations
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "TABLES", "TRIGGERS", "EVENT_TYPES",
            "ROLES"]
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader")
 
@@ -41,6 +41,7 @@ CREATE TABLE items (
     project        TEXT NOT NULL,
     id             TEXT NOT NULL,
     title          TEXT,
+    description    TEXT,
     kind           TEXT,
     track          TEXT,
     owner          TEXT,

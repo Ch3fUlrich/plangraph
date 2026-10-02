@@ -38,6 +38,7 @@ HANDLERS = {
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
+    "migrate-descriptions": cli_verbs.cmd_migrate_descriptions,
     "define": cli_verbs.cmd_define,
     "blocked": cli_verbs.cmd_blocked,
     "waves": cli_verbs.cmd_waves,
@@ -126,6 +127,9 @@ def _add_writes(sub):
     legacy.add_argument("key")
     legacy.add_argument("state", choices=("claimed", "in_review"))
     legacy.add_argument("note", nargs="?", default="")
+
+    _p(sub, "migrate-descriptions",
+       help="router: move folded 'description:' note lines into the column")
 
     priority = _p(sub, "priority", help="set an item's priority")
     priority.add_argument("key")

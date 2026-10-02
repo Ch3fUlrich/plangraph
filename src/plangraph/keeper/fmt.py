@@ -44,6 +44,8 @@ def show_text(info: dict) -> str:
             f"{e['kind']}{'✓' if e.get('verified') else '✗'}" for e in evidence))
     else:
         lines.append("evidence -")
+    if info.get("description"):
+        lines.append(f"desc {info['description']}")
     if info.get("done_criteria"):
         lines.append(f"done {info['done_criteria']}")
     reviews = ", ".join(f"{r.get('reviewer')}({r.get('family') or '-'})"
@@ -73,6 +75,8 @@ def alerts_text(alerts: dict) -> str:
                      f"{row.get('msg') or ''}".rstrip())
     for row in alerts.get("refusals") or []:
         lines.append(f"refusals {row['key']} x{row['count']}")
+    for row in alerts.get("warnings") or []:
+        lines.append(f"warning {row['code']} {row['key']}")
     if alerts.get("stalled"):
         lines.append("stalled true")
     return "\n".join(lines) if lines else "no alerts"

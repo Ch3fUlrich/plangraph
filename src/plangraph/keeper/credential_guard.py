@@ -16,7 +16,7 @@ from .errors import Refused
 _SHAPE = re.compile(r"\w+/\w{6,}")
 _WORD = re.compile(r"credential|password|passwd|pwd|login", re.IGNORECASE)
 _NEAR = 120
-#: the text fields a create/edit/import carries (``description`` folds into note).
+#: the text fields a create/edit/import carries (``description`` is its own column).
 GUARDED_FIELDS = ("title", "note", "done_criteria", "description")
 
 

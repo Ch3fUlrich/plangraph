@@ -70,6 +70,19 @@ def _enable_defensive(conn):
         pass
 
 
+#: Columns added after a schema shipped: ``(table, column, DDL type)``.  An older
+#: database gains them when opened (before the authorizer denies ALTER).
+_ADDED_COLUMNS = (("items", "description", "TEXT"),)
+
+
+def _upgrade(conn):
+    """Add any column an older database lacks; idempotent, DML-free."""
+    for table, column, ddl in _ADDED_COLUMNS:
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def open_db(path, *, create: bool = False,
             busy_timeout: int = _DEFAULT_BUSY_MS) -> sqlite3.Connection:
     """Open the keeper DB and lock it down.
@@ -102,6 +115,7 @@ def open_db(path, *, create: bool = False,
             raise RuntimeError(
                 f"{path} is not a keeper database (schema missing); "
                 "create it with open_db(..., create=True)")
+        _upgrade(conn)
     # Defensive mode hardens shadow tables and blocks several bypasses; enable
     # it after setup (it must not interfere with the CREATE statements above)
     # and before the authorizer, which then covers the rest.

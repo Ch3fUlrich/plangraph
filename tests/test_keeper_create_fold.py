@@ -6,7 +6,7 @@ from keeper_util import World, defn, seed
 from plangraph.keeper import importer
 from plangraph.keeper.errors import Refused
 
-EXTRA = {"description": "what this lane is for", "intent": "ship the thing",
+EXTRA = {"intent": "ship the thing",
          "workstreams": ["alpha", "beta"], "budget": {"h": 3, "usd": 0}}
 
 
@@ -33,7 +33,7 @@ def _note(w, key):
 def test_create_folds_unknown_fields_like_an_import(w, tmp_path):
     item = defn("X", **EXTRA)
     expected = _imported_note(tmp_path, item)
-    assert "description: what this lane is for" in expected
+    assert "intent: ship the thing" in expected
     w.store.create_items(w.p("router"), [item,
                          defn("GOAL2", ["X"], kind="goal")])
     assert _note(w, "demo:X") == expected
@@ -47,20 +47,20 @@ def test_create_keeps_explicit_note_then_folds(w, tmp_path):
 
 
 def test_apply_ops_create_folds_too(w, tmp_path):
-    item = defn("X", description="via a batch")
+    item = defn("X", intent="via a batch")
     w.store.apply_ops(w.p("router"), [
         {"op": "create", "item": item},
         {"op": "edit", "key": "demo:GOAL", "fields": {"depends_on": ["A", "X"]}}])
-    assert _note(w, "demo:X") == "description: via a batch"
+    assert _note(w, "demo:X") == "intent: via a batch"
 
 
 def test_oversize_fold_refused_naming_the_field(w):
     before = w.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     with pytest.raises(Refused) as exc:
         w.store.create_items(w.p("router"), [
-            defn("X", description="d" * 2100), defn("G2", ["X"], kind="goal")])
+            defn("X", intent="d" * 2100), defn("G2", ["X"], kind="goal")])
     assert exc.value.code == "validation"
-    assert "description" in exc.value.msg and "2000" in exc.value.msg
+    assert "intent" in exc.value.msg and "2000" in exc.value.msg
     assert w.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == before
 
 

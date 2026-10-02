@@ -22,10 +22,11 @@ from .. import views
 from . import auth, evidence
 from .errors import Refused
 from .credential_guard import GUARDED_FIELDS, guard
-from .note_fold import NOTE_CAP
+from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
+from .store_names import NamesMixin
 from .store_ops import OpsMixin
 from .store_read import ReadMixin
 from .store_reap import ReapMixin
@@ -42,7 +43,7 @@ LEASE_WARN_S = 15 * 60
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
 _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
-              "owner": 100, "track": 100}
+              "description": DESCRIPTION_CAP, "owner": 100, "track": 100}
 _MAX_BATCH = 500
 _MAX_DEPS = 200
 _LEASE_MIN, _LEASE_MAX = 60, 86400
@@ -58,7 +59,8 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 
 class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
-            ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin):
+            ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
+            NamesMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -371,7 +373,8 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
             corrects = self._qualify(project, corrects)
         return {
             "key": key, "project": project, "id": identifier,
-            "title": raw.get("title", ""), "kind": raw.get("kind", "lane"),
+            "title": raw.get("title", ""), "description": raw.get("description"),
+            "kind": raw.get("kind", "lane"),
             "track": raw.get("track"), "owner": raw.get("owner"),
             "owner_family": auth.norm_family(raw.get("owner_family")),
             "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),

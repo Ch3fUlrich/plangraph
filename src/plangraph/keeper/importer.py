@@ -21,14 +21,15 @@ from pathlib import Path
 import yaml
 
 from .errors import Refused
-from .note_fold import fold_checked as _fold_note
+from .note_fold import DESCRIPTION_CAP, fold_checked as _fold_note
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
 
 #: The item fields the importer emits and the exporter writes, in output order.
 _FIELD_ORDER = (
-    "project", "id", "key", "title", "kind", "track", "owner", "state",
+    "project", "id", "key", "title", "description", "kind", "track", "owner",
+    "state",
     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
 )
@@ -116,6 +117,9 @@ def _normalise_item(raw, where):
     kinds = _string_list(raw, "evidence_kinds", key) or ["any"]
 
     title = _string(raw, "title", key) or ""
+    description = _string(raw, "description", key)
+    if description is not None and len(description) > DESCRIPTION_CAP:
+        raise _bad(key, f"description exceeds {DESCRIPTION_CAP} characters")
     track = _string(raw, "track", key)
     explicit_tier = raw.get("review_tier")
     if explicit_tier is not None:
@@ -128,7 +132,7 @@ def _normalise_item(raw, where):
 
     values = {
         "project": project, "id": identifier, "key": key,
-        "title": title,
+        "title": title, "description": description,
         "kind": kind, "track": track,
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),

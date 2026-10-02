@@ -63,7 +63,8 @@ class ReadMixin:
         reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
                    for v in self._round_verdicts(item)]
         return {
-            "key": key, "title": item["title"], "project": item["project"],
+            "key": key, "title": item["title"],
+            "description": item["description"], "project": item["project"],
             "kind": item["kind"], "track": item["track"], "owner": item["owner"],
             "state": item["state"], "priority": item["priority"],
             "review_tier": item["review_tier"],
@@ -92,7 +93,8 @@ class ReadMixin:
                        for v in self._round_verdicts(item)]
             out.append({
                 "project": item["project"], "id": item["id"], "key": item["key"],
-                "title": item["title"], "kind": item["kind"], "track": item["track"],
+                "title": item["title"], "description": item["description"],
+                "kind": item["kind"], "track": item["track"],
                 "owner": item["owner"], "state": item["state"],
                 "estimate_h": item["estimate_h"], "estimate_src": item["estimate_src"],
                 "depends_on": item["depends_on"], "corrects": item["corrects"],
@@ -156,7 +158,8 @@ class ReadMixin:
                     if row["key"] in keys]
         return {"lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
                 "review_overdue": sorted(review_overdue),
-                "findings": findings, "refusals": refusals, "stalled": stalled}
+                "findings": findings, "refusals": refusals, "stalled": stalled,
+                "warnings": views.warnings(scope)}
 
     # --------------------------------------------------------------- digest
     def digest(self, principal):

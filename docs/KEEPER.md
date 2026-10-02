@@ -23,7 +23,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
 `items(key PK, project, id, title, kind, track, owner, estimate_h, estimate_src, done_criteria, evidence_kinds json, operator,
-priority, source, note, corrects, state, epoch, claimed_by, delegate, lease_until, reviewer, model, created_at, updated_at)` ·
+priority, source, note, description, corrects, state, epoch, claimed_by, delegate, lease_until, reviewer, model, created_at, updated_at)` ·
 `edges(src, dst, rel CHECK rel IN ('depends_on'))` (`corrects` lives on the item; `src` depends on `dst`) ·
 `events(seq INTEGER PK AUTOINCREMENT, ts, actor, role, model, key, type, payload json, prev_hash, hash)` append-only ·
 `evidence(id PK, key, epoch, kind, ref json, verified, detail, at)` ·
@@ -50,8 +50,9 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
 |---|---|---|
 | `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically |
 | `import_items(p, items)` | router only | like `create_items`, but per-item `state` ∈ {open, claimed, in_review} is honoured (legacy rows, e.g. work already in flight): the item gets `item_created` plus a `claimed`/`submitted` event flagged `legacy: true` with `claimed_by` = the item's `owner` string (need not be a principal) and NO verified-evidence requirement; `done` is never importable; the router later attaches evidence (e.g. `decision`) via `add_evidence_router(p, key, kind, ref)` (router-only, state `in_review`/`claimed`, still runs the verifier) |
-| `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, estimate_h, done_criteria, evidence_kinds, depends_on, track, owner, note; cross-project `depends_on` changes: router only; whole-graph validate; `item_defined` event |
+| `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, description, estimate_h, done_criteria, evidence_kinds, depends_on, track, owner, note; cross-project `depends_on` changes: router only; whole-graph validate; `item_defined` event |
 | `set_priority(p, key, n)` | router | `priority_set` |
+| `migrate_descriptions(p)` | router | moves a leading folded `description: ` note line into the `description` column of every active item (never DONE/cancelled, never overwrites); one `item_defined` event per item; idempotent. `alerts` also lists advisory `warnings` (`title_is_id`, `no_description`) |
 | `claim(p, key, lease_s=7200)` | l1 (own project), worker | `open`+ready (all deps `done`) → `claimed`, epoch+1, `lease_until`; atomic (BEGIN IMMEDIATE); second claimant gets `conflict` |
 | `delegate(p, key, worker_principal)` | claimant (l1) | sets `delegate` (the worker principal; it must have role `worker`) |
 | `heartbeat(p, key, epoch)` | claimant or delegate | extends lease; stale epoch → `epoch_stale` |
@@ -197,6 +198,6 @@ the lock, and `close_on_decision` re-reads its batch and decision files in the
 lock as it always did.
 
 **Credential-shape guard (D-374, `credential_guard.py`).** `create_items`/`edit_definition`/`import_items`/`apply_ops` refuse (`validation`, naming the field,
-never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
+never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field; `description` is its own column, cap 2000) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
 characters of `credential|password|passwd|pwd|login`; there are no exemptions, so rephrase paths and URLs near credential words.
 `pg render` masks any match that is already stored as `[redacted]` and prints `render: masked N credential-shaped string(s)` on stderr.
