@@ -72,6 +72,7 @@ items:
     evidence_kinds: [semaphore-task, decision]
     operator: true
     priority: 0
+    review_tier: high
     note: "STATUS: blocked on OPERATOR T-040/MT-233 admin token."
     source: "data/source/plan-v3/T6-server-ops.md#T6-INFRA"
 
@@ -144,6 +145,7 @@ items:
     evidence_kinds: [run-record, semaphore-task]
     operator: false
     priority: 0
+    review_tier: high
     note: "STATUS: research done; queued; T1-CLEAN. Failures -> T6-HEAL -> T6-FIX; no update notifications (D-200)."
     source: "data/source/plan-v3/T6-server-ops.md#T6-UPDATES"
 
@@ -162,6 +164,7 @@ items:
     evidence_kinds: [semaphore-task, decision]
     operator: true
     priority: 0
+    review_tier: high
     note: "STATUS claimed: 82/83 encrypted + guard + R1; playbooks next, rotations in per-application batches with operator approval (D-203). Owner prox."
     source: "data/source/plan-v3/T6-server-ops.md#T6-SECRETS"
 

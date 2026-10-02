@@ -54,6 +54,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: "HOOKS H2, D-159."
     source: "data/source/plan-v3/T4-opencode-fleet.md#T4-FENCE"
 

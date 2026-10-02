@@ -18,6 +18,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-COMBO3"
 
@@ -36,6 +37,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-CTX"
 
@@ -54,6 +56,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: "STATUS: queued, priority after the train; blocks every site-data lane (server T6-*)."
     source: "data/source/plan-v3/T1-gateway-models.md#T1-CLEAN"
 
@@ -72,6 +75,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-PROV"
 
@@ -90,6 +94,7 @@ items:
     evidence_kinds: [run-record, commit+ci]
     operator: false
     priority: 0
+    review_tier: high
     note: "STATUS: CREDIT-FIX verified (reviews pending)."
     source: "data/source/plan-v3/T1-gateway-models.md#T1-CREDIT"
 
@@ -108,6 +113,7 @@ items:
     evidence_kinds: [run-record, commit+ci]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-ZEN"
 
@@ -126,6 +132,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-LITELLM"
 
@@ -144,6 +151,7 @@ items:
     evidence_kinds: [run-record, commit+ci]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-PEER"
 
@@ -162,6 +170,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: "STATUS: designed (SearXNG + MCP); waits for the SearXNG deploy (T6-OWUI)."
     source: "data/source/plan-v3/T1-gateway-models.md#T1-WEBTOOLS"
 
@@ -180,6 +189,7 @@ items:
     evidence_kinds: [run-record, commit+ci]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-MM"
 
@@ -198,6 +208,7 @@ items:
     evidence_kinds: [commit+ci, run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: "Before C10a (T1-COMBO3) goes live."
     source: "data/source/plan-v3/T1-gateway-models.md#T1-UPGRADE"
 
@@ -216,6 +227,7 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-JEV"
 
@@ -234,5 +246,6 @@ items:
     evidence_kinds: [run-record]
     operator: false
     priority: 0
+    review_tier: high
     note: ""
     source: "data/source/plan-v3/T1-gateway-models.md#T1-NOISE"
