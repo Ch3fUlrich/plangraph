@@ -16,7 +16,7 @@ item's `note`, so write freely but put real acceptance into `done_criteria`.
 | cross-project dependency | `depends_on: [otherproject:ID]` | qualified key; unqualified ids mean the same project. |
 
 ## Item fields (create)
-`project` (str, required) · `id` (required, unique per project; convention `[A-Z0-9-]+`, not yet enforced) · `title` (≤ 80 chars) · `kind` lane|gate|goal ·
+`project` (str, required) · `id` (required, unique per project; convention `[A-Z0-9-]+`, not yet enforced) · `title` (≤ 80 chars recommended; keeper cap 200) · `kind` lane|gate|goal ·
 `track` · `owner` · `operator` bool · `depends_on` list · `done_criteria` (testable, ≤ 300 chars) · `evidence_kinds` subset of
 `commit+ci`, `run-record`, `semaphore-task`, `decision` (all required) · `review_tier` standard|high (default by keyword:
 secret/key/security/gateway/omniroute/deploy/keeper/fence → high; only the router may lower) · `estimate_h` number · `priority` int

@@ -10,7 +10,7 @@ for f in sorted(glob.glob(ROOT + '/data/plan-v3/*.yaml')):
         items[f"{it['project']}:{it['id']}"] = dict(it)
 def q(p, d): return d if ':' in d else f'{p}:{d}'
 for k, it in items.items(): it['depends_on'] = [q(it['project'], d) for d in it.get('depends_on', [])]
-probs = []
+probs = []; warns = []
 KINDS = {'lane', 'gate', 'goal'}; TIERS = {'standard', 'high', 'none'}; EV = {'commit+ci', 'run-record', 'semaphore-task', 'decision', 'any', 'commit'}
 def apply(path, strict):
     b = yaml.safe_load(open(path)); src = b.get('source')
@@ -25,7 +25,8 @@ def apply(path, strict):
             if it.get('review_tier', 'standard') not in TIERS: probs.append(f'op {n}: {k} tier {it.get("review_tier")}')
             bad = set(it.get('evidence_kinds', [])) - EV
             if bad: probs.append(f'op {n}: {k} evidence {bad}')
-            if len(it.get('title', '')) > 80: probs.append(f'op {n}: {k} title > 80')
+            if len(it.get('title', '')) > 200: probs.append(f'op {n}: {k} title > 200 (keeper cap)')
+            elif len(it.get('title', '')) > 80: warns.append(f'op {n}: {k} title {len(it["title"])} > 80 (style)')
             it['depends_on'] = [q(it['project'], d) for d in it.get('depends_on', [])]
             it.setdefault('state', 'open'); it.setdefault('kind', 'lane'); items[k] = it
         elif o == 'edit':
@@ -65,6 +66,7 @@ ready = sorted(k for k in new if items[k].get('kind') == 'lane' and items[k].get
                and all(items.get(d, {}).get('state') == 'done' for d in items[k]['depends_on']))
 print(f'plan: {a.plan}\nnew items: {len(new)} (kinds: ' + str({kk: sum(1 for k in new if items[k].get("kind") == kk) for kk in KINDS}) + ')')
 print(f'problems ({len(probs)}):'); [print('  -', p) for p in probs]
+if warns: print(f'warnings ({len(warns)}): ' + '; '.join(warns))
 print(f'ready after load ({len(ready)}): ' + ', '.join(r.split(":")[1] for r in ready))
 if a.expect:
     exp = {f'{list(proj)[0]}:{e.strip()}' for e in a.expect.split(',') if e.strip()}
