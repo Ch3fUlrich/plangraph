@@ -1,0 +1,183 @@
+"""md_sync plan: parsed markdown + live snapshot -> an ordered keeper ops list."""
+from collections import Counter
+
+import md_sync_parse as mp
+
+PROJECT = "routing"
+GATE_ID = "PH-OPERATOR"
+GATE_KEY = f"{PROJECT}:{GATE_ID}"
+GOAL_KEY = f"{PROJECT}:GOAL"
+SOURCE = "md-sync"
+NOTE_CAP = 2000
+ELLIPSIS = "…"
+
+
+class PlanError(Exception):
+    """The live graph cannot take the import (no goal, gate closed, ...)."""
+
+
+class Plan:
+    def __init__(self):
+        self.ops = []
+        self.counts = Counter()
+        self.skipped = []   # (id, reason): nothing done, worth reporting
+        self.refused = []   # (id, reason): cited something that does not exist
+        self.gone = []      # keys of our open items no longer in QUESTIONS
+        self.redactions = 0
+
+    def add(self, op):
+        self.ops.append(op)
+        self.counts[op["op"]] += 1
+
+
+def note_for(description):
+    """The ``note`` the keeper folds a ``description`` field into."""
+    return f"description: {description}" if description else ""
+
+
+def _fit(description):
+    room = NOTE_CAP - len(note_for("x")) + 1
+    if len(description) <= room:
+        return description
+    return description[:room - len(ELLIPSIS)].rstrip() + ELLIPSIS
+
+
+def _index(items):
+    by_id = {}
+    for item in items:
+        by_id.setdefault(item["id"], []).append(item)
+    return by_id
+
+
+def _find(by_id, ident):
+    """The live item for *ident*: ``routing:`` first, then any project."""
+    found = sorted(by_id.get(ident, []), key=lambda i: i["key"])
+    mine = [i for i in found if i["project"] == PROJECT]
+    pool = mine or [i for i in found if i["state"] != "cancelled"]
+    return (pool or [None])[0]
+
+
+def _decision_ids(item):
+    out = set()
+    for row in item.get("evidence") or []:
+        ref = row.get("ref")
+        if row.get("kind") == "decision":
+            out.add(ref.get("id") if isinstance(ref, dict) else ref)
+    return out
+
+
+def build_plan(questions, answers, skipped_answers, decision_ids, items):
+    plan = Plan()
+    by_id = _index(items)
+    state = {i["key"]: i for i in items}
+    plan.skipped.extend((s.id, s.reason) for s in skipped_answers)
+    pending = {}  # id -> key, created in this run
+    new_lanes, seen = [], set()
+    for entry in questions:
+        if entry.id in seen:
+            plan.skipped.append((entry.id, "duplicate in QUESTIONS"))
+            continue
+        seen.add(entry.id)
+        title, n1 = mp.redact(entry.title)
+        desc, n2 = mp.redact(entry.description)
+        plan.redactions += n1 + n2
+        desc = _fit(desc)
+        item = _find(by_id, entry.id)
+        if item is None:
+            lane = {"project": PROJECT, "id": entry.id, "title": title,
+                    "kind": "lane", "track": "QUESTIONS", "owner": "operator",
+                    "operator": True, "evidence_kinds": ["decision"],
+                    "review_tier": "none", "depends_on": [], "source": SOURCE}
+            if desc:
+                lane["description"] = desc
+            plan.add({"op": "create", "item": lane})
+            key = f"{PROJECT}:{entry.id}"
+            pending[entry.id] = key
+            new_lanes.append(key)
+        elif item["project"] == PROJECT and item.get("source") == SOURCE \
+                and item["state"] == "open":
+            fields = {}
+            if item.get("title") != title:
+                fields["title"] = title
+            if (item.get("note") or "") != note_for(desc):
+                fields["note"] = note_for(desc)
+            if fields:
+                plan.add({"op": "edit", "key": item["key"], "fields": fields})
+    _link(plan, state, new_lanes)
+    _answers(plan, answers, decision_ids, by_id, pending)
+    answered = {a.id for a in answers}
+    for item in items:
+        if (item["project"] == PROJECT and item.get("source") == SOURCE
+                and item["state"] == "open" and item["id"] not in seen
+                and item["id"] not in answered):
+            plan.gone.append(item["key"])
+    return plan
+
+
+def _link(plan, state, new_lanes):
+    """Reachability: new lanes hang off the gate; a new gate hangs off the goal."""
+    if not new_lanes:
+        return
+    gate = state.get(GATE_KEY)
+    if gate is None:
+        goal = state.get(GOAL_KEY)
+        if goal is None or goal["state"] != "open":
+            raise PlanError(f"{GOAL_KEY} must exist and be open to link {GATE_KEY}")
+        plan.add({"op": "create", "item": {
+            "project": PROJECT, "id": GATE_ID, "title": "Operator questions and steps",
+            "kind": "gate", "track": "QUESTIONS", "owner": "operator",
+            "depends_on": list(new_lanes), "source": SOURCE}})
+        plan.add({"op": "edit", "key": GOAL_KEY, "fields": {
+            "depends_on": list(goal.get("depends_on") or []) + [GATE_KEY]}})
+    else:
+        if gate["state"] != "open":
+            raise PlanError(f"{GATE_KEY} is {gate['state']}: new lanes would be unreachable")
+        plan.add({"op": "edit", "key": GATE_KEY, "fields": {
+            "depends_on": list(gate.get("depends_on") or []) + list(new_lanes)}})
+
+
+def _answers(plan, answers, decision_ids, by_id, pending):
+    merged = {}
+    for ans in answers:
+        merged.setdefault(ans.id, [])
+        merged[ans.id] += [d for d in ans.decisions if d not in merged[ans.id]]
+    for ident, decisions in merged.items():
+        unknown = [d for d in decisions if d not in decision_ids]
+        if unknown:
+            plan.refused.append((ident, f"unknown decision {', '.join(unknown)}"))
+            continue
+        if ident in pending:
+            item = {"key": pending[ident], "state": "open", "review_tier": "none",
+                    "evidence_kinds": ["decision"], "evidence": []}
+        else:
+            item = _find(by_id, ident)
+        if item is None:
+            plan.skipped.append((ident, "no live item"))
+            continue
+        _close(plan, item, decisions)
+
+
+def _close(plan, item, decisions):
+    key, st = item["key"], item["state"]
+    if st in ("done", "cancelled"):
+        plan.skipped.append((item["id"] if "id" in item else key.split(":", 1)[1],
+                             "already " + st))
+        return
+    ident = key.split(":", 1)[1]
+    decision_only = (item.get("review_tier") == "none"
+                     and item.get("evidence_kinds") == ["decision"])
+    if st == "open":
+        if not decision_only:
+            plan.add({"op": "edit", "key": key, "fields": {
+                "review_tier": "none", "evidence_kinds": ["decision"]}})
+        plan.add({"op": "legacy_state", "key": key, "state": "in_review",
+                  "note": "md-sync: answered by " + ", ".join(decisions)})
+    elif not decision_only:
+        plan.skipped.append((ident, f"blocked: {key} is {st}"))
+        return
+    have = _decision_ids(item)
+    for dec in decisions:
+        if dec not in have:
+            plan.add({"op": "add_evidence", "key": key, "kind": "decision",
+                      "ref": {"id": dec}})
+    plan.add({"op": "close_on_decision", "key": key})
