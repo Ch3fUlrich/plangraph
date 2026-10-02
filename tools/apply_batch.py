@@ -24,6 +24,7 @@ OP_SPECS = {
     "close_on_decision": (["key"], {}),
     "cancel": (["key"], {}),
     "priority": (["key", "priority"], {"priority": int}),
+    "rehome": (["key", "new_project"], {"new_project": str}),
 }
 OP_ALLOWED = {
     "create": {"op", "item"},
@@ -33,6 +34,7 @@ OP_ALLOWED = {
     "close_on_decision": {"op", "key"},
     "cancel": {"op", "key", "reason"},
     "priority": {"op", "key", "priority"},
+    "rehome": {"op", "key", "new_project", "host"},
 }
 TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops"}
 LEGACY_STATES = ("claimed", "in_review")
@@ -134,7 +136,7 @@ def validate_op(op):
                 _check_item(entry)
         else:
             _check_item(item)
-    for f in ("kind", "note", "reason", "state", "repo", "key"):
+    for f in ("kind", "note", "reason", "state", "repo", "key", "host"):
         if f in op and op[f] is not None and not isinstance(op[f], str):
             raise BatchError(f"{name}: {f!r} must be str")
     if op.get("ref") is not None and not isinstance(op.get("ref"), dict):
@@ -144,6 +146,8 @@ def validate_op(op):
     if name == "legacy_state" and op["state"] not in LEGACY_STATES:
         raise BatchError(f"legacy_state: state must be one of "
                          f"{', '.join(LEGACY_STATES)}")
+    if name == "rehome" and not op["new_project"]:
+        raise BatchError("rehome: 'new_project' must be a non-empty string")
     key = op.get("key")
     if key is not None and not KEY_RE.match(str(key)):
         raise BatchError(f"key {key!r} must be 'project:ID'")
@@ -170,6 +174,9 @@ def build_request(op, source, digest):
         return "cancel", {"key": op["key"], "reason": op.get("reason", "")}
     if name == "priority":
         return "set_priority", {"key": op["key"], "n": op["priority"]}
+    if name == "rehome":
+        return "rehome", {"key": op["key"], "new_project": op["new_project"],
+                          "host": op.get("host")}
     raise BatchError(f"unknown op {name!r}")
 class Session:
     """Bearer-token calls to the keeper API; the token is never printed."""

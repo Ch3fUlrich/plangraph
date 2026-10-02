@@ -24,7 +24,10 @@ ops:                       # applied in order
   - {op: close_on_decision, key: project:ID}      # batch_ref = abspath@sha256
   - {op: cancel, key: project:ID, reason: ...}
   - {op: priority, key: project:ID, priority: <int>}   # router set_priority, same transaction
+  - {op: rehome, key: project:ID, new_project: <project>, host: <host or omit>}
 ```
+
+`rehome` only moves OPEN, non-done items (the keeper refuses others) and records an alias `old -> new`.
 
 Only the keys shown above are allowed (per op and top level); duplicate YAML
 keys are refused. Keys are `project:ID`. A multi-item `create` lists every
