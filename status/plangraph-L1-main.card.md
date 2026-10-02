@@ -21,5 +21,6 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
 - Rules in force: template docs/process/L2-BRIEF-TEMPLATE.md (D-430/431 spawn-only, D-389 placement, D-349, D-302 independence,
   D-421 MiMo normal, quote+VERDICT rule). L2s report only to me; I report to routing; workst-L1 direct (D-319); 2-h progress line (D-418).
 - OS-92 GRANTED (operator, this session): L1 may write router-approved batches (closes, rehome, priority) AND router-OK project plan batches (create/edit/priority) under data/updates/ and apply them to :8787 with apply_batch, then verify.
+- DESIGN TODO (routing audit 2026-10-02): item kind `decision` (or linked D-row import, ~130 rule answers) + `question` kind -> M2c model proposal with MODEL-KINDS.
 - Lessons: quoted heredocs for task texts; legacy-claim only items with a known close path; Taildrop (D-474): NEVER `tailscale file get`; read only /home/s/fleet/taildrop/plangraph/ (prefix stripped; dup -> x.1); senders keep the plangraph__ prefix; check the file is FILED (ls + sha) before pointing an L2 at it.
 ## Compactions this session: 1 (2026-10-02 ~17:55Z)
