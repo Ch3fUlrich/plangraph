@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (Opus 5.5 high, L1 project orchestrator; relaunched fresh 2026-10-01 ~20:15)
-Updated: 2026-10-02 10:10 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+Updated: 2026-10-02 14:40 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
 M1 CLOSED. M2a code accepted (routing-00 Opus spot review). Now: X6 fixes -> X7 tiers -> 2-seat re-review -> pilot keeper -> plan-v3 load ->
@@ -15,9 +15,12 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
 - PILOT KEEPER RUNNING (coding.vm 127.0.0.1:8787, "isolation not effective (pilot)"; config ~/.local/share/plangraph/keeper.json,
   pid in daemon.pid (stop by PID, never pkill -f); tokens ~/.config/plangraph/{router,plangraph-L1-main}.token 0600). plan-v3 loaded
   (93 items, D-314 fold of 6 router defs, c698570), verify ok, 19 ready. Page out/plan-cdn.html -> routing (private publish).
-- Router batch (76 ops) + server batches 1-5 (@50a2a68, end-state clean) BLOCKED until apply_ops: per-op validation refuses new leaves
-  (unreachable_goal). Phase KEEPER-BATCH (D-316) = interactive L2 plangraph-L2-keeper-batch (brief tmp/L2-keeper-batch-brief.md):
-  apply_ops + L5 Closes fail-closed + unblocks column + RUNBOOK python backup.
+- KEEPER-BATCH: B1 apply_ops + B3 field fold written by the L2 (anthropic; D-363 bans foreign writers), head 6b7271c in
+  tmp/keeper-batch, 753 green. Seats shipped (D-319/D-365): OVH gpt-oss-120b + OVH Qwen via workst-L1 (pkgs tmp/r6/*.tgz).
+  B2 (L5 fail-closed, lows, B1c priority op) after the load.
+- QUEUE (data/updates/QUEUE.md) trialled on a DB copy with 6b7271c: full chain loads (366 items, verify ok) once server-L1 fixes
+  b1 ops 73/75/82/84, d311 priority edits, d352 title > 200. Bundle sent to routing for one OK; live apply when seats count.
+- Next: L2-LAUNCH md-sync (brief tmp/L2-md-sync-brief.md) after the merge.
 - M2c-RESEARCH DONE (573dc6c+6c68e99). M2c phase 1 = code/data split (fresh public history; D-300). Reqs D-259/276/290/292/300 in task notes.
 - Tools: tools/plancheck.py (end-state pre-check), docs/PLAN-FORMAT.md (L1 plan format, D-296), tmp/d272check.py.
 - Task contracts ready: $CLAUDE_JOB_DIR/tmp (= /home/s/.claude/jobs/7caaf7f5/tmp) hdr.txt + x6c1-3.txt, x7a1, x7a2, x7b, x7c (+ X7d batch applier TBD).
