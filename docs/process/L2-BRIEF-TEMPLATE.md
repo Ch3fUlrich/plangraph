@@ -25,5 +25,8 @@ plangraph-L1-main by SendMessage.
   writers/seats go via spawn (Sonnet fallback = claude client via spawn); in-session work only for your own read-only analysis.
   Cross-host runs only via workst-L1's runner request.
 
+- Gateway review calls (D-439/D-440): a tool-less single-call review over a pasted diff through the central OmniRoute counts as a
+  response-side seat; ONLY via autoos `tools/review-call.py` (under KEYEXEC) once autoos-L1 announces it. Until then: workstation seat packages.
+
 ## Phase
 Goal · tasks (READ list, WRITE SCOPE, spec, tests) · acceptance · budget/TTL · return format.
