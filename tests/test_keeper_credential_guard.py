@@ -26,12 +26,11 @@ def w(tmp_path):
 BAD = [f"login with {SECRET} on the box", f"password: {SECRET}",
        f"the CREDENTIAL is {SECRET}", f"pwd={SECRET}", f"{SECRET} passwd",
        f"x{' ' * 100}{SECRET} login"]
-OK = ["https://example.org/Zq9xk2LmPw login page",
-      "see https://x/y/abcdefg login", "login see https://x/y/abcdefg",
-      "plain text a/b login", "no keyword svc/Zq9xk2LmPw",
-      "login " + "x" * 200 + " svcacct/Zq9xk2LmPw"]
-# no prefix/dir/extension exemption: only a URL (``://`` in the token) is exempt.
-# Accepted false positive: authors rephrase file paths near credential words.
+OK = ["plain text a/b login", "no keyword svc/Zq9xk2LmPw",
+      "login " + "x" * 200 + " svcacct/Zq9xk2LmPw",
+      "svcacct/Zq9xk2LmPw " + "x" * 200 + " login"]
+# D-388: NO exemptions. URLs, paths, extensions and brackets do not hide a pair;
+# the accepted false positive is that authors rephrase paths/URLs near credential words.
 BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "read svc/Zq9xk2LmPw.md for the password",
         "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw",
@@ -39,9 +38,12 @@ BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "login {src/secret1234}", "login <data/secret1234>",
         "password docs/setup_guide.md", "login docs/Zq9xk2LmPw",
         "login src/plangraph/Zq9xk2LmPw", "login tools/Zq9xk2LmPw",
-        "login tests/Zq9xk2LmPw", "login vendor/Zq9xk2LmPw",
-        "login out/Zq9xk2LmPw", "login ../svcacct/Secret123",
-        "login `docs/Zq9xk2LmPw`", "login (src/Zq9xk2LmPw)"]
+        "login ../svcacct/Secret123", "login `docs/Zq9xk2LmPw`",
+        "login (src/Zq9xk2LmPw)",
+        "login see https://x/y/abcdefg", "see https://x/y/abcdefg login",
+        "https://example.org/Zq9xk2LmPw login page",
+        "login svcacct/Secret123://", "login my://svcacct/Secret12345",
+        "my://svcacct/Secret12345 password"]
 
 
 @pytest.mark.parametrize("text", BAD)
@@ -50,7 +52,7 @@ def test_shape_next_to_a_credential_word_is_found(text):
 
 
 @pytest.mark.parametrize("text", OK)
-def test_only_urls_and_far_or_keywordless_text_pass(text):
+def test_keywordless_or_far_text_passes(text):
     assert not find_shapes(text)
 
 
@@ -97,7 +99,7 @@ def test_five_char_segment_is_not_a_shape():
     assert find_shapes("password docs/setup_guide.md")
 
 
-def test_exceptions_still_create(w):
+def test_ordinary_text_still_creates(w):
     w.store.create_items(w.p("router"), [
         defn("X", title=OK[0]), defn("G2", ["X"], kind="goal")])
     assert w.store._item("demo:X")["title"] == OK[0]
@@ -105,8 +107,8 @@ def test_exceptions_still_create(w):
 
 def test_mask_replaces_matches_and_counts():
     text, count = mask(f"login {SECRET} and https://h.org/Zq9xk2LmPw login")
-    assert text == "login [redacted] and https://h.org/Zq9xk2LmPw login"
-    assert count == 1
+    assert text == "login [redacted] and https://h.[redacted] login"
+    assert count == 2
 
 
 def test_pg_render_masks_and_counts_on_stderr(w, tmp_path, monkeypatch):

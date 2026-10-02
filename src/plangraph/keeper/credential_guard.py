@@ -4,8 +4,8 @@ A ``word/secretish`` token (``\w+/\w{6,}``) within 120 characters of
 ``credential|password|passwd|pwd|login`` is how a pasted ``user/password`` pair
 looks.  ``create``/``edit``/``import`` refuse it (naming the field, never
 echoing the value) and ``pg render`` masks any that got in as ``[redacted]``.
-Only a URL (``://`` in the token) is exempt; authors rephrase file paths that
-sit near a credential word.
+There are NO exemptions (D-388): a URL, a path or a ``.ext`` does not hide a
+pair, so authors rephrase paths and URLs that sit near a credential word.
 """
 from __future__ import annotations
 
@@ -20,22 +20,6 @@ _NEAR = 120
 GUARDED_FIELDS = ("title", "note", "done_criteria", "description")
 
 
-def _token(text, match):
-    start, end = match.start(), match.end()
-    while start > 0 and not text[start - 1].isspace():
-        start -= 1
-    while end < len(text) and not text[end].isspace():
-        end += 1
-    return text[start:end]
-
-
-def _exempt(text, match):
-    """Only a URL (``://`` in the token) is exempt.  A path, a ``.ext`` or a
-    leading directory exempts nothing (D-374 rework): ``./svc/Secret123`` and
-    ``{src/secret1234}`` are credential-shaped pairs like any other."""
-    return "://" in _token(text, match)
-
-
 def find_shapes(text):
     """The credential-shaped matches in *text* (empty when there are none)."""
     if not isinstance(text, str):
@@ -43,7 +27,7 @@ def find_shapes(text):
     words = [m.span() for m in _WORD.finditer(text)]
     return [m for m in _SHAPE.finditer(text)
             if any(a <= m.end() + _NEAR and b >= m.start() - _NEAR
-                   for a, b in words) and not _exempt(text, m)]
+                   for a, b in words)]
 
 
 def guard(field, text):
