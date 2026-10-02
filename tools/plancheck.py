@@ -19,7 +19,8 @@ def apply(path, strict):
     for n, op in enumerate(b['ops']):
         o = op['op']
         if o == 'create':
-            it = dict(op['item']); k = f"{it['project']}:{it['id']}"
+          for it in (op['item'] if isinstance(op['item'], list) else [op['item']]):
+            it = dict(it); k = f"{it['project']}:{it['id']}"
             if k in items: probs.append(f'op {n}: create {k}: key exists'); continue
             if it.get('kind', 'lane') not in KINDS: probs.append(f'op {n}: {k} kind {it.get("kind")}')
             if it.get('review_tier', 'standard') not in TIERS: probs.append(f'op {n}: {k} tier {it.get("review_tier")}')

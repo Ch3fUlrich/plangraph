@@ -3,7 +3,7 @@
 One YAML file per change, written by a project's L1 and loaded into the keeper by the router (routing-00) through
 `tools/apply_batch.py`. The same format serves a first project plan and every later change. Only fields listed here are
 validated. Any other field on an item (e.g. `budget`, `intent`, `workstreams`, `acceptance_extra`) is KEPT, folded into the
-item's `note`, so write freely but put real acceptance into `done_criteria`.
+item's `note` (YAML import today; API/batch creates after KEEPER-BATCH task B3), so write freely but put real acceptance into `done_criteria`.
 
 ## How the graph models a plan (until M2c adds question/decision kinds)
 | plan concept | graph item | how |
