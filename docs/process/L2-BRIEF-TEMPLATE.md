@@ -26,7 +26,12 @@ plangraph-L1-main by SendMessage.
   Cross-host runs only via workst-L1's runner request.
 
 - Gateway review calls (D-439/D-440): a tool-less single-call review over a pasted diff through the central OmniRoute counts as a
-  response-side seat; ONLY via autoos `tools/review-call.py` (under KEYEXEC) once autoos-L1 announces it. Until then: workstation seat packages.
+  response-side seat; ONLY via autoos `tools/review-call.py` (under KEYEXEC). LIVE since AutoOS main 980ae5e6 (D-466), allowed on coding.vm;
+  L1 runs it (L2s send L1 the prompt file). From /home/s/code/AutoOS: `python3 tools/autoos_gateway_key.py exec -- python3 tools/review-call.py
+  --model <omniroute id, e.g. ovh/gpt-oss-120b> --prompt-file <prompt with pasted diff> --out-dir <dir> [--title <repo>/<slug>] [--max-tokens N]`.
+  Key only via exec; never --temperature 0. Out: review.txt + evidence.json. Exit 0 ok, 2 args/key, 3 gateway, 4 truncated/empty = failed seat
+  (rerun). Prompt ends asking for a plain line `VERDICT: pass` or `VERDICT: fail-with-findings`; "VERDICT: missing" = read review.txt yourself.
+  Seat family != writer family. Workstation seat packages stay as the fallback.
 - Seat sampling (routing, via autoos-L1, 2026-10-02): NEVER send `temperature: 0` to reasoning models (e.g. gpt-oss-120b); omit it (it
   cuts answers at 64 completion tokens). finish_reason `length` or empty content = a FAILED seat: rerun it, never count it as a thin pass.
 
