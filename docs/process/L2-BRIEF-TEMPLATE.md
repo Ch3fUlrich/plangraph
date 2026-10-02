@@ -10,8 +10,10 @@ plangraph-L1-main by SendMessage.
 - D-349: touch secret stores only through wrappers that print names/lengths/hashes; never read token files, secret files or git history of
   secrets; pass token files only as paths.
 - Cost (D-297/D-352/D-354/D-365): no paid legs, no Scaleway, no Sonnet subagents unless L1 says so; keep your context small.
-- Writers (D-363): foreign-repo writer spawns stay off until L1 sends a working form. Until then you write in-session (your code counts as
-  anthropic, D-339), TDD, commits prefixed `L2 writer:`, files ≤ 400 lines, full suite green after each.
+- Writers: keyed foreign-repo spawns work since AutoOS main 41f57ba1 (FLEET-AGENTS-2): writer `--model omniroute/deepinfra-mimo-v2.6-flash
+  --isolate` (MiMo, xiaomi). Seats: `--tier 3 --read-only --no-fallthrough --lean --model omniroute/ovh-direct-gpt-oss-120b` (non-xiaomi when MiMo
+  wrote). Avoid vertex pins, qwen3-coder for multi-file tasks, combos as seats. Placement (D-389) still decides WHERE: workstation by default;
+  coding.vm only with <= 3 runs fleet-wide and >= 4.5 GB free. Your own in-session code counts as anthropic (D-339), commits `L2 writer:`.
 - Seats: the tier's count of distinct non-writer families. Today: OVH models on the workstation (gpt-oss-120b, Qwen, Llama-3.3-70B,
   Mistral) as packages (D-319): `git format-patch` + a git bundle + an independent review-task.txt (quote rule: every PASS and finding quotes
   the code lines; no L1/L2 opinions, D-302) + README. L1 ships them. Disputed findings go to L1 with file:line; L1/router rule.
