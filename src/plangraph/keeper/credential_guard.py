@@ -4,8 +4,8 @@ A ``word/secretish`` token (``\w+/\w{6,}``) within 120 characters of
 ``credential|password|passwd|pwd|login`` is how a pasted ``user/password`` pair
 looks.  ``create``/``edit``/``import`` refuse it (naming the field, never
 echoing the value) and ``pg render`` masks any that got in as ``[redacted]``.
-A URL (``://`` in the token) and a path that starts at ``data/ docs/ src/
-tools/ tests/ vendor/ out/ ./ ../`` or ``/`` are not credentials.
+Only a URL (``://`` in the token) is exempt; authors rephrase file paths that
+sit near a credential word.
 """
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from .errors import Refused
 
 _SHAPE = re.compile(r"\w+/\w{6,}")
 _WORD = re.compile(r"credential|password|passwd|pwd|login", re.IGNORECASE)
-_DIRS = ("data/", "docs/", "src/", "tools/", "tests/", "vendor/", "out/",
-         "./", "../", "/")
 _NEAR = 120
 #: the text fields a create/edit/import carries (``description`` folds into note).
 GUARDED_FIELDS = ("title", "note", "done_criteria", "description")
@@ -32,11 +30,10 @@ def _token(text, match):
 
 
 def _exempt(text, match):
-    """A URL (``://`` in the token) or a path that starts at a known directory,
-    ``./``, ``../`` or ``/``.  A bare ``.ext`` exempts nothing: ``x/secretish.y``
-    is still a credential-shaped pair."""
-    token = _token(text, match)
-    return "://" in token or token.lstrip("`'\"([<{").startswith(_DIRS)
+    """Only a URL (``://`` in the token) is exempt.  A path, a ``.ext`` or a
+    leading directory exempts nothing (D-374 rework): ``./svc/Secret123`` and
+    ``{src/secret1234}`` are credential-shaped pairs like any other."""
+    return "://" in _token(text, match)
 
 
 def find_shapes(text):

@@ -27,19 +27,21 @@ BAD = [f"login with {SECRET} on the box", f"password: {SECRET}",
        f"the CREDENTIAL is {SECRET}", f"pwd={SECRET}", f"{SECRET} passwd",
        f"x{' ' * 100}{SECRET} login"]
 OK = ["https://example.org/Zq9xk2LmPw login page",
-      "see https://x/y/abcdefg login",
-      "login docs at docs/Zq9xk2LmPw", "password docs/setup.md",
-      "see src/plangraph/Zq9xk2LmPw for the login code",
-      "password reset: tools/resetpass.sh and tools/Zq9xk2LmPw",
-      "data/Zq9xk2LmPw login", "login in tests/Zq9xk2LmPw", "login vendor/Zq9xk2LmPw",
-      "login out/Zq9xk2LmPw", "login ./Zq9xk2LmPw/x", "login ../Zq9xk2LmPw/x",
-      "login /etc/Zq9xk2LmPw", "login `docs/Zq9xk2LmPw`", "login (src/Zq9xk2LmPw)",
+      "see https://x/y/abcdefg login", "login see https://x/y/abcdefg",
       "plain text a/b login", "no keyword svc/Zq9xk2LmPw",
       "login " + "x" * 200 + " svcacct/Zq9xk2LmPw"]
-# the generic ".ext" exemption is gone: a dot after a secret does not hide it
+# no prefix/dir/extension exemption: only a URL (``://`` in the token) is exempt.
+# Accepted false positive: authors rephrase file paths near credential words.
 BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "read svc/Zq9xk2LmPw.md for the password",
-        "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw"]
+        "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw",
+        "login ./svcacct/Secret123", "login /svcacct/Secret123",
+        "login {src/secret1234}", "login <data/secret1234>",
+        "password docs/setup_guide.md", "login docs/Zq9xk2LmPw",
+        "login src/plangraph/Zq9xk2LmPw", "login tools/Zq9xk2LmPw",
+        "login tests/Zq9xk2LmPw", "login vendor/Zq9xk2LmPw",
+        "login out/Zq9xk2LmPw", "login ../svcacct/Secret123",
+        "login `docs/Zq9xk2LmPw`", "login (src/Zq9xk2LmPw)"]
 
 
 @pytest.mark.parametrize("text", BAD)
@@ -48,7 +50,7 @@ def test_shape_next_to_a_credential_word_is_found(text):
 
 
 @pytest.mark.parametrize("text", OK)
-def test_urls_file_paths_and_far_or_keywordless_text_pass(text):
+def test_only_urls_and_far_or_keywordless_text_pass(text):
     assert not find_shapes(text)
 
 
@@ -77,6 +79,22 @@ def test_import_path_refuses_too(w):
     with pytest.raises(Refused):
         w.store.import_items(w.p("router"), [defn("X", note=BAD[3]),
                                              defn("G2", ["X"], kind="goal")])
+
+
+@pytest.mark.parametrize("text", ["login ./svcacct/Secret123",
+                                  "password docs/setup_guide.md"])
+def test_path_shaped_text_is_refused_without_echo(w, text):
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(w.p("router"), [defn("X", note=text),
+                                             defn("G2", ["X"], kind="goal")])
+    assert exc.value.code == "validation" and "note" in exc.value.msg
+    assert "Secret123" not in str(exc.value) and "setup_guide" not in str(exc.value)
+
+
+def test_five_char_segment_is_not_a_shape():
+    # the shape needs 6+ word chars after the slash: docs/setup.md is not one
+    assert not find_shapes("password docs/setup.md")
+    assert find_shapes("password docs/setup_guide.md")
 
 
 def test_exceptions_still_create(w):

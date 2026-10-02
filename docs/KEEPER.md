@@ -198,5 +198,5 @@ lock as it always did.
 
 **Credential-shape guard (D-374, `credential_guard.py`).** `create_items`/`edit_definition`/`import_items`/`apply_ops` refuse (`validation`, naming the field,
 never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
-characters of `credential|password|passwd|pwd|login`; a URL path (`://` in the token) or a clear file path (a `.ext`, or a leading `data/ docs/ src/ tools/`) is exempt.
+characters of `credential|password|passwd|pwd|login`; only a URL (`://` in the token) is exempt (no path/extension exemption).
 `pg render` masks any match that is already stored as `[redacted]` and prints `render: masked N credential-shaped string(s)` on stderr.
