@@ -105,6 +105,11 @@ def fold(events):
             for name in ("description", "host"):
                 if name in payload:
                     item[name] = payload[name]
+            if "while" in payload:
+                # D-434: the router re-tiered an active item, so the store
+                # bumped ``round`` in the same UPDATE; replay it or the cache
+                # would keep counting the verdicts this edit just voided.
+                item["round"] += 1
         elif kind == "claimed":
             item["state"] = "claimed"
             item["epoch"] = payload.get("epoch", item["epoch"] + 1)
