@@ -151,7 +151,7 @@ class CloseMixin:
                 raise Refused("evidence_unverified",
                               f"decision {decision_id} has a Closes: keyword "
                               "but no valid project:ID token")
-            named |= closes
+            named |= {self.resolve_key(token) for token in closes}
         if named and key not in named:
             raise Refused("evidence_unverified",
                           f"the decision closes {sorted(named)}, not {key}")

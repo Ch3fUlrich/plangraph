@@ -64,7 +64,8 @@ class ReadMixin:
                    for v in self._round_verdicts(item)]
         return {
             "key": key, "title": item["title"],
-            "description": item["description"], "project": item["project"],
+            "description": item["description"], "host": item["host"],
+            "project": item["project"],
             "kind": item["kind"], "track": item["track"], "owner": item["owner"],
             "state": item["state"], "priority": item["priority"],
             "review_tier": item["review_tier"],
@@ -94,7 +95,7 @@ class ReadMixin:
             out.append({
                 "project": item["project"], "id": item["id"], "key": item["key"],
                 "title": item["title"], "description": item["description"],
-                "kind": item["kind"], "track": item["track"],
+                "host": item["host"], "kind": item["kind"], "track": item["track"],
                 "owner": item["owner"], "state": item["state"],
                 "estimate_h": item["estimate_h"], "estimate_src": item["estimate_src"],
                 "depends_on": item["depends_on"], "corrects": item["corrects"],
@@ -116,7 +117,8 @@ class ReadMixin:
         head = self.conn.execute(
             "SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
         return {"generated": self._iso(now), "head": head[0] if head else None,
-                "items": out}
+                "items": out,
+                "aliases": {a["old"]: a["new"] for a in self._aliases()}}
 
     # --------------------------------------------------------------- alerts
     def alerts(self, principal, project=None):

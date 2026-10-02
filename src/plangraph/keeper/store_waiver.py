@@ -56,7 +56,8 @@ class WaiverMixin:
         # (``Waives: <project:ID>`` in its D-row).  Also pre-lock read-only I/O.
         decisions = self._ctx(item, now).decisions
         waives = getattr(decisions, "waives", None)
-        if not callable(waives) or not waives(decision_id, key):
+        names = [key, *self.alias_sources(key)]  # a rehomed item's old keys
+        if not callable(waives) or not any(waives(decision_id, k) for k in names):
             raise Refused("evidence_unverified",
                           f"{decision_id} does not name {key} (Waives:)")
         with self._write():

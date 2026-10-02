@@ -11,13 +11,14 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
            "ROUTER_VERBS"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
-              "alerts", "digest", "snapshot", "whoami"}
+              "alerts", "digest", "snapshot", "whoami", "aliases"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
-               "set_legacy_state", "apply_ops", "migrate_descriptions"}
-TEXT_DEFAULT = {"ready", "show", "alerts", "blocked"}
+               "set_legacy_state", "apply_ops", "migrate_descriptions",
+               "rehome"}
+TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
@@ -44,7 +45,14 @@ def _migrate_descriptions(store, principal, body, need):
     return store.migrate_descriptions(principal)
 
 
+def _rehome(store, principal, body, need):
+    # the store checks the role first, then new_project (so a non-router gets 403)
+    return store.rehome(principal, need(body, "key"), body.get("new_project"),
+                        body.get("host"))
+
+
 ROUTER_VERBS = {"close_on_decision": _close_on_decision,
+                "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
                 "apply_ops": _apply_ops}

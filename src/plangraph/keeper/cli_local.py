@@ -30,8 +30,12 @@ def evidence_ref(args) -> dict:
     return ref
 
 
-def local_show(items, key) -> dict:
+def local_show(items, key, aliases=None) -> dict:
     """The same shape as ``Store.show``, from snapshot items."""
+    for _ in range(16):  # old -> new, like Store.resolve_key
+        if key not in (aliases or {}):
+            break
+        key = aliases[key]
     index = {it["key"]: it for it in items}
     item = index.get(key)
     if item is None:
@@ -42,7 +46,8 @@ def local_show(items, key) -> dict:
                       if key in (o.get("depends_on") or [])
                       and o.get("state") not in ("done", "cancelled"))
     return {"key": key, "title": item.get("title"),
-            "description": item.get("description"), "project": item.get("project"),
+            "description": item.get("description"), "host": item.get("host"),
+            "project": item.get("project"),
             "kind": item.get("kind"), "track": item.get("track"),
             "owner": item.get("owner"), "state": item.get("state"),
             "priority": item.get("priority"), "epoch": item.get("epoch"),

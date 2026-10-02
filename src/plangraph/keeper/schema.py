@@ -11,10 +11,10 @@ moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
 
-__all__ = ["SCHEMA_VERSION", "SCHEMA", "TABLES", "TRIGGERS", "EVENT_TYPES",
-           "ROLES"]
+__all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
+           "EVENT_TYPES", "ROLES"]
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader")
 
@@ -25,6 +25,25 @@ EVENT_TYPES = (
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set",
 )
+
+#: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
+#: separate ``IF NOT EXISTS`` statements so ``db._upgrade`` can install it on a
+#: database created before it existed.
+ALIASES_DDL = """
+CREATE TABLE IF NOT EXISTS aliases (
+    old_key TEXT PRIMARY KEY,
+    new_key TEXT NOT NULL CHECK (new_key <> old_key),
+    ts      TEXT,
+    actor   TEXT,
+    reason  TEXT
+);
+CREATE TRIGGER IF NOT EXISTS trg_aliases_append_only_update
+BEFORE UPDATE ON aliases
+BEGIN SELECT RAISE(ABORT, 'aliases are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_aliases_append_only_delete
+BEFORE DELETE ON aliases
+BEGIN SELECT RAISE(ABORT, 'aliases are append-only'); END;
+"""
 
 TABLES = """
 CREATE TABLE principals (
@@ -42,6 +61,7 @@ CREATE TABLE items (
     id             TEXT NOT NULL,
     title          TEXT,
     description    TEXT,
+    host           TEXT,
     kind           TEXT,
     track          TEXT,
     owner          TEXT,
@@ -243,4 +263,4 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = TABLES + TRIGGERS
+SCHEMA = TABLES + TRIGGERS + ALIASES_DDL

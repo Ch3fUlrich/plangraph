@@ -15,17 +15,17 @@ from .errors import Refused
 from .credential_guard import guard
 from .note_fold import fold_checked
 
-_EDITABLE = ("title", "description", "estimate_h", "done_criteria", "evidence_kinds",
+_EDITABLE = ("title", "description", "host", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
-    ("project", "id", "key", "title", "description", "kind", "track", "owner", "owner_family",
+    ("project", "id", "key", "title", "description", "host", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
-_ITEM_COLUMNS = ("key", "project", "id", "title", "description", "kind", "track", "owner",
+_ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "kind", "track", "owner",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
@@ -95,8 +95,9 @@ def _defined_payload(fields):
     payload = {"fields": sorted(fields)}
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
-    if "description" in fields:
-        payload["description"] = fields["description"]
+    for name in ("description", "host"):
+        if name in fields:
+            payload[name] = fields[name]
     return payload
 
 
@@ -197,6 +198,7 @@ class CreateMixin:
             "key": definition["key"], "project": definition["project"],
             "id": definition["id"], "title": definition.get("title", ""),
             "description": definition.get("description"),
+            "host": definition.get("host"),
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
             "owner": definition.get("owner"),
             "owner_family": definition.get("owner_family"),
@@ -225,8 +227,11 @@ class CreateMixin:
                 (definition["key"], dep))
         created = {"state": "open", "priority": row["priority"],
                    "review_tier": row["review_tier"]}
-        if row["description"] is not None:
-            created["description"] = row["description"]
+        for name in ("description", "host"):
+            if row[name] is not None:
+                created[name] = row[name]
+        if definition.get("rehomed_from"):
+            created["rehomed_from"] = definition["rehomed_from"]
         self._append(principal, definition["key"], "item_created", created, now)
         if state in ("claimed", "in_review"):
             self._append(principal, definition["key"], "claimed",

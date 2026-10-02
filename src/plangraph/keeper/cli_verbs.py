@@ -213,7 +213,8 @@ def cmd_ready(args, session):
 def cmd_show(args, session):
     def local():
         try:
-            data = local_show(session.local_items(), args.key)
+            data = local_show(session.local_items(), args.key,
+                              session.local_snapshot().get("aliases"))
         except KeyError:
             print(f"not found in the local snapshot: {args.key}", file=sys.stderr)
             return EXIT_REFUSED
@@ -348,10 +349,6 @@ def cmd_legacy(args, session):
     return write(session, "set_legacy_state",
                  {"key": args.key, "state": args.state, "note": args.note},
                  lambda r: f"{r.get('key')} -> {r.get('state')}")
-
-
-def cmd_migrate_descriptions(args, session):
-    return write(session, "migrate_descriptions", {}, lambda r: f"migrated {len(r['migrated'])}, skipped {len(r['skipped'])}")
 
 
 def cmd_priority(args, session):

@@ -69,7 +69,8 @@ def _new_state():
     return {"state": "open", "epoch": 0, "claimed_by": None, "delegate": None,
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
             "round": 0, "evidence": [], "review_waiver": None,
-            "review_tier": "standard", "description": None}
+            "review_tier": "standard", "description": None,
+            "host": None}
 
 
 def fold(events):
@@ -92,7 +93,8 @@ def fold(events):
         if kind == "item_created":
             item["state"] = "open"
             item["epoch"] = 0
-            for field in ("priority", "model", "review_tier", "description"):
+            for field in ("priority", "model", "review_tier", "description",
+                          "host"):
                 if field in payload:
                     item[field] = payload[field]
         elif kind == "item_defined":
@@ -100,8 +102,9 @@ def fold(events):
                 item["priority"] = payload["priority"]
             if "review_tier" in payload:
                 item["review_tier"] = payload["review_tier"]
-            if "description" in payload:
-                item["description"] = payload["description"]
+            for name in ("description", "host"):
+                if name in payload:
+                    item[name] = payload[name]
         elif kind == "claimed":
             item["state"] = "claimed"
             item["epoch"] = payload.get("epoch", item["epoch"] + 1)
@@ -203,6 +206,13 @@ def verify_chain(conn):
     return problems
 
 
+def folded_aliases(events):
+    """``old_key -> new_key`` as the ``item_created.rehomed_from`` events say."""
+    return {e["payload"]["rehomed_from"]: e["key"] for e in events
+            if e["type"] == "item_created"
+            and (e.get("payload") or {}).get("rehomed_from")}
+
+
 def verify_integrity(conn):
     """Compare the cached rows against ``fold`` and the evidence table.
 
@@ -213,10 +223,11 @@ def verify_integrity(conn):
 
     Returns a list of ``{key, code, field, expected, got}`` problems.
     """
-    folded = fold(read_events(conn))
+    all_events = read_events(conn)
+    folded = fold(all_events)
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
-        "review_waiver,review_tier,description FROM items")}
+        "review_waiver,review_tier,description,host FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -229,7 +240,8 @@ def verify_integrity(conn):
                              "got": None})
             continue
         for field in ("state", "epoch", "round", "claimed_by", "delegate",
-                      "reviewer", "review_waiver", "review_tier", "description"):
+                      "reviewer", "review_waiver", "review_tier", "description",
+                      "host"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
                                  "field": field, "expected": expected[field],
@@ -263,4 +275,12 @@ def verify_integrity(conn):
         if key not in folded:
             problems.append({"key": key, "code": "cache_extra",
                              "field": None, "expected": None, "got": None})
+    want = folded_aliases(all_events)
+    have = {r["old_key"]: r["new_key"]
+            for r in conn.execute("SELECT old_key,new_key FROM aliases")}
+    for old in sorted(set(want) | set(have)):
+        if want.get(old) != have.get(old):
+            problems.append({"key": old, "code": "alias_mismatch",
+                             "field": "alias", "expected": want.get(old),
+                             "got": have.get(old)})
     return problems

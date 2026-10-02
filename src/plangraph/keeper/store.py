@@ -21,14 +21,14 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from .errors import Refused
-from .credential_guard import GUARDED_FIELDS, guard
-from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
+from .store_input import InputMixin
 from .store_names import NamesMixin
 from .store_ops import OpsMixin
 from .store_read import ReadMixin
+from .store_rehome import RehomeMixin
 from .store_reap import ReapMixin
 from .store_review import ReviewMixin
 from .store_support import SupportMixin, iso, parse_iso
@@ -41,11 +41,6 @@ DEFAULT_LEASE_S = 7200
 REVIEW_OVERDUE_S = 4 * 3600
 LEASE_WARN_S = 15 * 60
 
-# Request-shape caps.  A field named in the refusal lets the caller fix it.
-_TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
-              "description": DESCRIPTION_CAP, "owner": 100, "track": 100}
-_MAX_BATCH = 500
-_MAX_DEPS = 200
 _LEASE_MIN, _LEASE_MAX = 60, 86400
 
 # Exceptions raised by a verb that mean the request was malformed, not that the
@@ -58,9 +53,9 @@ _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
 ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 
-class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
-            ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
-            NamesMixin):
+class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
+            ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
+            NamesMixin, RehomeMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -323,20 +318,6 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
         detail = "; ".join(f"{p['code']}:{p['key']}:{p['msg']}" for p in problems)
         raise Refused("validation", detail)
 
-    @staticmethod
-    def _check_text(fields):
-        """Refuse oversize, non-string or credential-shaped text, naming the field."""
-        for field in GUARDED_FIELDS:
-            guard(field, fields.get(field))
-        for field, cap in _TEXT_CAPS.items():
-            value = fields.get(field)
-            if value is None:
-                continue
-            if not isinstance(value, str):
-                raise Refused("validation", f"{field} must be a string")
-            if len(value) > cap:
-                raise Refused("validation", f"{field} exceeds {cap} characters")
-
     def _lease_seconds(self, value):
         """Validate and clamp a requested lease to [60, 86400] seconds."""
         if value is None:
@@ -347,49 +328,6 @@ class Store(SupportMixin, CreateMixin, VerbsMixin, ReviewMixin, ReapMixin,
         if math.isnan(seconds) or math.isinf(seconds):
             raise Refused("validation", "lease_s must be a finite number")
         return min(max(seconds, _LEASE_MIN), _LEASE_MAX)
-
-    def _normalise(self, raw):
-        self._check_text(raw)
-        project = raw.get("project")
-        identifier = raw.get("id")
-        if not project or not identifier:
-            raise Refused("validation", "each item needs project and id")
-        key = f"{project}:{identifier}"
-        if raw.get("key") and raw["key"] != key:
-            raise Refused("validation", f"key {raw['key']!r} != {key!r}")
-        raw_deps = raw.get("depends_on") or []
-        if not isinstance(raw_deps, (list, tuple)):
-            raise Refused("validation", "depends_on must be a list")
-        if len(raw_deps) > _MAX_DEPS:
-            raise Refused("validation", f"depends_on exceeds {_MAX_DEPS} entries")
-        deps = []
-        for dep in raw_deps:
-            if not isinstance(dep, str):
-                raise Refused("validation",
-                              "depends_on entries must be strings")
-            deps.append(self._qualify(project, dep))
-        corrects = raw.get("corrects")
-        if corrects:
-            corrects = self._qualify(project, corrects)
-        return {
-            "key": key, "project": project, "id": identifier,
-            "title": raw.get("title", ""), "description": raw.get("description"),
-            "kind": raw.get("kind", "lane"),
-            "track": raw.get("track"), "owner": raw.get("owner"),
-            "owner_family": auth.norm_family(raw.get("owner_family")),
-            "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),
-            "done_criteria": raw.get("done_criteria"),
-            "evidence_kinds": list(raw.get("evidence_kinds") or ["any"]),
-            "operator": bool(raw.get("operator")),
-            "priority": int(raw.get("priority") or 0),
-            "source": raw.get("source"), "note": self._folded_note(raw, key),
-            "corrects": corrects, "depends_on": deps,
-            "state": raw.get("state", "open"),
-        }
-
-    @staticmethod
-    def _qualify(project, dep):
-        return dep if ":" in dep else f"{project}:{dep}"
 
     @staticmethod
     def _stored(field, value):

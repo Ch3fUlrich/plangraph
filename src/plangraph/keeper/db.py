@@ -12,7 +12,7 @@ import sqlite3
 from pathlib import Path
 
 from .errors import KeeperLocked
-from .schema import SCHEMA
+from .schema import ALIASES_DDL, SCHEMA
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock"]
 
@@ -72,15 +72,16 @@ def _enable_defensive(conn):
 
 #: Columns added after a schema shipped: ``(table, column, DDL type)``.  An older
 #: database gains them when opened (before the authorizer denies ALTER).
-_ADDED_COLUMNS = (("items", "description", "TEXT"),)
+_ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"))
 
 
 def _upgrade(conn):
-    """Add any column an older database lacks; idempotent, DML-free."""
+    """Add any column/table an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.executescript(ALIASES_DDL)
 
 
 def open_db(path, *, create: bool = False,

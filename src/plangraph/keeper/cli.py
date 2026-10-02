@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import cli_admin, cli_verbs
+from . import cli_admin, cli_names, cli_verbs
 from .cli_verbs import Session
 
 __all__ = ["main", "build_parser"]
@@ -38,7 +38,9 @@ HANDLERS = {
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
-    "migrate-descriptions": cli_verbs.cmd_migrate_descriptions,
+    "migrate-descriptions": cli_names.cmd_migrate_descriptions,
+    "rehome": cli_names.cmd_rehome,
+    "aliases": cli_names.cmd_aliases,
     "define": cli_verbs.cmd_define,
     "blocked": cli_verbs.cmd_blocked,
     "waves": cli_verbs.cmd_waves,
@@ -128,8 +130,14 @@ def _add_writes(sub):
     legacy.add_argument("state", choices=("claimed", "in_review"))
     legacy.add_argument("note", nargs="?", default="")
 
+    _p(sub, "aliases", help="list old -> new keys left by rehome")
     _p(sub, "migrate-descriptions",
        help="router: move folded 'description:' note lines into the column")
+
+    rehome = _p(sub, "rehome", help="router: move an open item to another project")
+    rehome.add_argument("key")
+    rehome.add_argument("project", help="the new project")
+    rehome.add_argument("--host", default=None, help="host of the moved item")
 
     priority = _p(sub, "priority", help="set an item's priority")
     priority.add_argument("key")

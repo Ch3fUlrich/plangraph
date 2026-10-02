@@ -44,6 +44,8 @@ def show_text(info: dict) -> str:
             f"{e['kind']}{'✓' if e.get('verified') else '✗'}" for e in evidence))
     else:
         lines.append("evidence -")
+    if info.get("host"):
+        lines.append(f"host {info['host']}")
     if info.get("description"):
         lines.append(f"desc {info['description']}")
     if info.get("done_criteria"):
@@ -80,6 +82,11 @@ def alerts_text(alerts: dict) -> str:
     if alerts.get("stalled"):
         lines.append("stalled true")
     return "\n".join(lines) if lines else "no alerts"
+
+
+def aliases_text(rows) -> str:
+    return "\n".join(f"{r['old']} -> {r['new']}" for r in rows or []) \
+        or "no aliases"
 
 
 def waves_text(waves) -> str:

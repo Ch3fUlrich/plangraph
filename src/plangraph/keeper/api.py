@@ -234,7 +234,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return {"items": items,
                     "unblocks": views.unblocks(store._all_items())}, False
         if name == "show":
-            key = self._one(query, "key") or extra
+            key = store.resolve_key(self._one(query, "key") or extra)
             info = store.show(principal, key)
             return (fmt.show_text(info), True) if as_text else (info, False)
         if name == "blocked":
@@ -259,9 +259,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "snapshot":
             data = store.snapshot(principal)
             return (fmt.snapshot_text(data), True) if as_text else (data, False)
-        if name == "whoami":
-            data = store.whoami(principal)
-            return (fmt.whoami_text(data), True) if as_text else (data, False)
+        if name in ("aliases", "whoami"):
+            data = getattr(store, name)(principal)
+            text = getattr(fmt, name + "_text")
+            return (text(data), True) if as_text else (data, False)
         raise Refused("not_found", f"no read verb {name!r}")
     # --------------------------------------------------------------- writes
     def _write(self, name, body, principal):
@@ -271,6 +272,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 body = {"items": body}
             else:
                 raise Refused("validation", "body must be a JSON object")
+        if isinstance(body.get("key"), str):  # old (rehomed) keys resolve
+            body["key"] = store.resolve_key(body["key"])
         if name in ("create_items", "import_items"):
             items = body.get("items")
             if not isinstance(items, list):

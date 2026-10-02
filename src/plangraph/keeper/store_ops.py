@@ -41,11 +41,12 @@ _OPS = {
     "close_on_decision": {"op", "key"},
     "cancel": {"op", "key", "reason"},
     "priority": {"op", "key", "priority"},
+    "rehome": {"op", "key", "new_project", "host"},
 }
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               sqlite3.ProgrammingError)
 #: ops that change a key's state or epoch (evidence after them is verified in-lock).
-_MOVES = ("create", "legacy_state", "cancel", "close_on_decision")
+_MOVES = ("create", "legacy_state", "cancel", "close_on_decision", "rehome")
 
 
 class OpBatch:
@@ -182,7 +183,8 @@ class OpsMixin:
 
     # ------------------------------------------------------------ applying
     def _run_op(self, principal, op, batch_ref, now):
-        name, key = op["op"], op.get("key")
+        name = op["op"]
+        key = self.resolve_key(op.get("key"))  # an alias made earlier in the batch
         if name == "create":
             item = op["item"]
             return self._create(principal, item if isinstance(item, list)
@@ -199,11 +201,16 @@ class OpsMixin:
             return self._close_on_decision(principal, key, batch_ref, now)
         if name == "priority":
             return self._priority(principal, key, op["priority"], now)
+        if name == "rehome":
+            return self._rehome(principal, key, op.get("new_project"),
+                                op.get("host"), now)
         return self._cancel(principal, key, op.get("reason", ""), now)
 
     def _apply_ops(self, principal, ops, batch_ref, now):
         self._require_role(principal, "router")
         self._plan_ops(ops, batch_ref)
+        ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
+               for op in ops]
         batch = OpBatch()
         self._prelock(ops, batch_ref, batch, now)
         results = []
