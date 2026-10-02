@@ -8,7 +8,9 @@ plangraph-L1-main by SendMessage.
 - STOP on any permission/classifier denial: report the exact text to L1; never work around it.
 - Write ONLY inside your phase clone/worktree (<path>); read other repos only as named in this brief.
 - D-471 (fleet): NEVER reset or change an operator's personal login password in any app to a stored/generated value; automation uses its own service accounts.
-- D-488 (fleet, operator): Gemini ONLY as 3.8 Flash (never 3.6/3.7). The UI T3/T4 Gemini writer = the agy 3.8 Flash pin, usable only after autoos-L1 reports its multi-turn smoke PASS; until then MiMo.
+- D-488/D-489: Gemini ONLY as 3.8 Flash (never 3.6/3.7/Pro). PROVEN writer (smoke 20261002-200622-agysmoke38h): `--client opencode --isolate --model
+  omniroute/agy-gemini-3.8-flash` via workst-L1 (run-local overlay → agy/gemini-3.8-flash-high; -medium on cooldown) until GEMINI38 is on main.
+  antigravity trains on prompts: public synthetic code only. Seats for Gemini code: non-google.
 - D-349: touch secret stores only through wrappers that print names/lengths/hashes; never read token files, secret files or git history of
   secrets; pass token files only as paths.
 - Cost (D-297/D-352/D-354/D-365): no paid legs, no Scaleway, no Sonnet subagents unless L1 says so; keep your context small.
