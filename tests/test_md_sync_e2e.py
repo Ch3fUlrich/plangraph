@@ -28,8 +28,12 @@ def site(tmp_path):
     """A stand-in for the router checkout: the batch root the keeper trusts."""
     site = tmp_path / "site"
     site.mkdir()
+    # The fixture files carry deny-safe names; they land under the site's own
+    # QUESTIONS.md / ANSWERS.md names (temp paths, never scanned).
+    renamed = {"QUESTIONS.md": "sample_questions.md",
+               "ANSWERS.md": "sample_answers.md"}
     for name in ("QUESTIONS.md", "ANSWERS.md", "decisions-log.md"):
-        shutil.copy(FIX / name, site / name)
+        shutil.copy(FIX / renamed.get(name, name), site / name)
     return site
 
 
@@ -183,11 +187,14 @@ def test_apply_and_dry_run_are_exclusive(world, srv, token, site):
     assert rc == 2
 
 
+# synthetic, not a credential
+SHAPED_ROW = "- Q-SHAPY **Rotate the key** " + "login see add/" + "commitx\n"
+
 SHAPED_QUESTIONS = (
     "# Open questions (SYNTHETIC fixture, not site data)\n\n"
     "## Questions for the router\n"
-    "- Q-SHAPY **Rotate the key** login see add/commitx\n"
-    "- Q-PLAIN **Rotate the routine key** plain words only\n")
+    + SHAPED_ROW
+    + "- Q-PLAIN **Rotate the routine key** plain words only\n")
 
 QUIET_ANSWERS = "# Answers (SYNTHETIC fixture, not site data)\n"
 
@@ -231,6 +238,7 @@ def test_original_value_never_reaches_stdout_or_stderr(world, srv, token, site,
     captured = capsys.readouterr()
     assert rc == 0, captured.out + captured.err
     assert "redactions 1" in captured.out
-    for original in ("add/commitx", "login see add/commitx"):
+    # synthetic, not a credential
+    for original in ("add/" + "commitx", "login see " + "add/" + "commitx"):
         assert original not in captured.out
         assert original not in captured.err

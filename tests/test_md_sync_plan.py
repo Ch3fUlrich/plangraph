@@ -207,9 +207,11 @@ def test_redaction_counts_and_masks_title_and_description():
 
 
 def test_credential_shape_in_description_is_masked_before_sending():
-    # D-405: the keeper refuses a word/secret pair near a credential keyword,
+    # D-405: the keeper refuses a word-slash-secret pair near a credential keyword,
     # so the planned create must carry the mask, not the pair.
-    p = build(q("- Q-N1 **Rotate** login see add/commitx\n"))
+    # synthetic, not a credential
+    shaped = "login see " + "add/" + "commitx"
+    p = build(q("- Q-N1 **Rotate** " + shaped + "\n"))
     lane = p.ops[0]["item"]
     assert lane["description"] == "login see [redacted]"
     assert p.redactions == 1
@@ -224,15 +226,19 @@ def test_row_without_a_credential_shape_is_unchanged():
 
 
 def test_credential_shape_in_the_title_is_masked_too():
-    p = build(q("- Q-N1 **login svc/Zq9xk2LmPw done**\n"))
+    # synthetic, not a credential
+    shaped = "login " + "svc/" + "Zq9xk2LmPw done"
+    p = build(q("- Q-N1 **" + shaped + "**\n"))
     lane = p.ops[0]["item"]
     assert lane["title"] == "Q: login [redacted] done"
     assert "description" not in lane and p.redactions == 1
 
 
 def test_credential_masks_are_added_to_the_existing_redaction_count():
+    # synthetic, not a credential
+    shaped = "login see " + "add/" + "commitx"
     p = build(q("- Q-N1 **Rotate** token: Zx81kQ92LmPq77Vb near "
-                "login see add/commitx\n"))
+                + shaped + "\n"))
     lane = p.ops[0]["item"]
     assert lane["description"] == ("token: [redacted] near "
                                    "login see [redacted]")

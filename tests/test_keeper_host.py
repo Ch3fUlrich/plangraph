@@ -23,9 +23,10 @@ def _item(w, key):
 
 
 def test_create_stores_host_and_default_is_null(w):
+    # ws-01: synthetic host value (no domain suffix), replaces a flagged example
     w.store.create_items(w.p("router"), [
-        defn("X", host="workstation.lan"), defn("G2", ["X"], kind="goal")])
-    assert _item(w, "demo:X")["host"] == "workstation.lan"
+        defn("X", host="ws-01"), defn("G2", ["X"], kind="goal")])
+    assert _item(w, "demo:X")["host"] == "ws-01"
     assert _item(w, "demo:A")["host"] is None
     assert verify_integrity(w.conn) == []
 

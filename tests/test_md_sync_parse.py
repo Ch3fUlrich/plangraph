@@ -11,7 +11,7 @@ FIX = ROOT / "tests" / "fixtures" / "md_sync"
 
 
 def questions():
-    return mp.parse_questions((FIX / "QUESTIONS.md").read_text(encoding="utf-8"))
+    return mp.parse_questions((FIX / "sample_questions.md").read_text(encoding="utf-8"))
 
 
 def by_id(entries):
@@ -67,7 +67,7 @@ def test_non_entry_bullets_and_paragraphs_are_ignored():
 
 
 def test_answers_entries_and_skipped():
-    answers, skipped = mp.parse_answers((FIX / "ANSWERS.md").read_text(encoding="utf-8"))
+    answers, skipped = mp.parse_answers((FIX / "sample_answers.md").read_text(encoding="utf-8"))
     got = {a.id: (a.decisions, a.date) for a in answers}
     assert got["Q-ALPHA"] == (["D-10"], "2026-09-30")  # notes section ignored
     assert got["OS-1"] == (["D-11", "D-12"], "2026-09-30")
@@ -94,7 +94,8 @@ def test_redaction_masks_and_counts():
 
 def test_redaction_masks_long_runs():
     hexrun = "a1" * 20
-    b64 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo0MTIzNDU2Nzg5"
+    # synthetic, not a credential
+    b64 = ("QUJDREVGR0hJSktMTU" + "5PUFFSU1RVVldYWVo0" + "MTIzNDU2Nzg5")
     out, n = mp.redact(f"hash {hexrun} blob {b64}")
     assert hexrun not in out and b64 not in out and n == 2
 

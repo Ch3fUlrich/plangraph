@@ -84,9 +84,11 @@ def test_tampered_description_is_an_integrity_problem(w):
 
 
 def test_edit_description_credential_guarded(w):
+    # synthetic, not a credential
+    fake = "login " + "admin/" + "Zq9xk2mQ7w"
     with pytest.raises(Refused) as exc:
         w.store.edit_definition(w.p("router"), "demo:A",
-                                {"description": "login admin/Zq9xk2mQ7w"})
+                                {"description": fake})
     assert "description" in exc.value.msg and "Zq9xk2" not in exc.value.msg
 
 

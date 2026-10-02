@@ -1,4 +1,5 @@
 {
+ "aliases": {},
  "generated": "2026-01-01T00:00:00Z",
  "head": null,
  "items": [
@@ -7,6 +8,7 @@
    "corrected_by": [],
    "corrects": null,
    "depends_on": [],
+   "description": null,
    "done_criteria": "Chart reviewed.",
    "epoch": 1,
    "estimate_h": 4.0,
@@ -15,6 +17,7 @@
    "evidence_kinds": [
     "decision"
    ],
+   "host": null,
    "id": "L-1",
    "key": "lighthouse:L-1",
    "kind": "lane",
@@ -43,6 +46,7 @@
    "depends_on": [
     "lighthouse:L-1"
    ],
+   "description": null,
    "done_criteria": "Pattern table approved.",
    "epoch": 0,
    "estimate_h": 3.0,
@@ -51,6 +55,7 @@
    "evidence_kinds": [
     "decision"
    ],
+   "host": null,
    "id": "L-2",
    "key": "lighthouse:L-2",
    "kind": "lane",
@@ -80,6 +85,7 @@
     "lighthouse:L-2",
     "orchard:O-2"
    ],
+   "description": null,
    "done_criteria": "Generator output matches the pattern table.",
    "epoch": 0,
    "estimate_h": 6.0,
@@ -88,6 +94,7 @@
    "evidence_kinds": [
     "commit+ci"
    ],
+   "host": null,
    "id": "L-3",
    "key": "lighthouse:L-3",
    "kind": "lane",
@@ -117,6 +124,7 @@
     "lighthouse:L-3",
     "orchard:O-4"
    ],
+   "description": null,
    "done_criteria": "Both projects delivered.",
    "epoch": 0,
    "estimate_h": 0.0,
@@ -125,6 +133,7 @@
    "evidence_kinds": [
     "decision"
    ],
+   "host": null,
    "id": "GOAL",
    "key": "orchard:GOAL",
    "kind": "goal",
@@ -151,6 +160,7 @@
    "corrected_by": [],
    "corrects": null,
    "depends_on": [],
+   "description": null,
    "done_criteria": "Catalogue list is reviewed.",
    "epoch": 1,
    "estimate_h": 2.0,
@@ -159,6 +169,7 @@
    "evidence_kinds": [
     "decision"
    ],
+   "host": null,
    "id": "O-1",
    "key": "orchard:O-1",
    "kind": "lane",
@@ -187,6 +198,7 @@
    "depends_on": [
     "orchard:O-1"
    ],
+   "description": null,
    "done_criteria": "Format document is approved.",
    "epoch": 0,
    "estimate_h": 3.0,
@@ -195,6 +207,7 @@
    "evidence_kinds": [
     "decision"
    ],
+   "host": null,
    "id": "O-2",
    "key": "orchard:O-2",
    "kind": "lane",
@@ -223,6 +236,7 @@
    "depends_on": [
     "orchard:O-2"
    ],
+   "description": null,
    "done_criteria": "Validator rejects overlapping waterings.",
    "epoch": 0,
    "estimate_h": 5.0,
@@ -231,6 +245,7 @@
    "evidence_kinds": [
     "commit+ci"
    ],
+   "host": null,
    "id": "O-3",
    "key": "orchard:O-3",
    "kind": "lane",
@@ -259,6 +274,7 @@
    "depends_on": [
     "orchard:O-3"
    ],
+   "description": null,
    "done_criteria": "Budget approved by the operator.",
    "epoch": 0,
    "estimate_h": 0.0,
@@ -267,6 +283,7 @@
    "evidence_kinds": [
     "decision"
    ],
+   "host": null,
    "id": "O-4",
    "key": "orchard:O-4",
    "kind": "gate",

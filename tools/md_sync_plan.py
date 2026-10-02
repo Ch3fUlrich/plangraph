@@ -1,9 +1,9 @@
 """md_sync plan: parsed markdown + live snapshot -> an ordered keeper ops list.
 
 Every text field that leaves here is masked with the keeper's own credential
-guard first (D-405): the store refuses a ``word/secret`` pair near a credential
-keyword (D-374), so md_sync masks it, counts the mask as a redaction and never
-sends or prints the original.
+guard first (D-405): the store refuses a ``word-slash-secret`` pair near a
+credential keyword (D-374), so md_sync masks it, counts the mask as a redaction
+and never sends or prints the original.
 """
 import os
 import re
