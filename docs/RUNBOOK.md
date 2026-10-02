@@ -119,3 +119,59 @@ run as the same unix user, or a user is in the `docker`/`lxd` group (host root),
 or anything else can read the DB or a token file** — such an agent can act as
 another principal.  Use one unix user per agent and one DB host; otherwise treat
 the keeper as an audit trail, not a sandbox.
+
+## 7. Markdown import (`tools/md_sync.py`, SYNC-MD-IMPORT v1)
+One-way, idempotent: the router's `QUESTIONS.md` becomes open lanes (`routing:<ID>`,
+title prefix `Q:` / `OP:`, reachable through the gate `routing:PH-OPERATOR`), and
+`ANSWERS.md` entries `- <ID> <words>: <text> (D-n[, D-m])` close the item on those
+decisions (`edit` tier none -> `legacy_state in_review` -> `add_evidence decision` ->
+`close_on_decision`, `batch_ref` = the ANSWERS.md path at its sha256).  An id that already
+exists in any project is reused, never duplicated.  `decisions-log.md` is only checked:
+an entry citing an unknown D-id is refused and reported, an entry without a D-id is
+skipped and reported, items gone from QUESTIONS are reported, never cancelled.  Token-like
+strings are masked `[redacted]` before any text reaches the keeper (count in the report).
+
+    python3 tools/md_sync.py --questions /home/s/code/routing/QUESTIONS.md \
+        --answers /home/s/code/routing/ANSWERS.md \
+        --decisions /home/s/code/routing/docs/decisions-log.md \
+        --url http://127.0.0.1:8765 --token-file ~/keeper/router.token [--dry-run | --apply]
+
+`--dry-run` (default) reads the live graph and prints the plan and counts; `--apply` posts
+ONE atomic `apply_ops` call (all or nothing; a second run emits zero ops).  Exit codes as
+`apply_batch.py`: 0 ok, 1 refused (also when an ANSWERS entry was refused), 2 usage/token/IO.
+`close_on_decision` needs the router checkout in the keeper config `batch_roots`
+(`/home/s/code/routing`).  The principal in the batch is `--principal` (default `router`)
+and must match the token's name.
+
+Run it every 10 minutes and on change (`systemd --user`; `~/.config/systemd/user/`):
+
+    # md-sync.service
+    [Unit]
+    Description=plangraph markdown import
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/bin/python3 %h/code/plangraph/tools/md_sync.py \
+      --questions %h/code/routing/QUESTIONS.md --answers %h/code/routing/ANSWERS.md \
+      --decisions %h/code/routing/docs/decisions-log.md \
+      --url http://127.0.0.1:8765 --token-file %h/keeper/router.token --apply
+
+    # md-sync.timer
+    [Unit]
+    Description=plangraph markdown import every 10 minutes
+    [Timer]
+    OnBootSec=2min
+    OnUnitActiveSec=10min
+    [Install]
+    WantedBy=timers.target
+
+    # md-sync.path  (also run on change; starts md-sync.service)
+    [Unit]
+    Description=plangraph markdown import on change
+    [Path]
+    PathChanged=%h/code/routing/QUESTIONS.md
+    PathChanged=%h/code/routing/ANSWERS.md
+    PathChanged=%h/code/routing/docs/decisions-log.md
+    [Install]
+    WantedBy=default.target
+
+    systemctl --user daemon-reload && systemctl --user enable --now md-sync.timer md-sync.path

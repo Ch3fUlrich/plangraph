@@ -1,0 +1,181 @@
+"""md_sync v1 against a real keeper (in-process HTTP server), synthetic fixtures."""
+import hashlib
+import io
+import json
+import os
+import shutil
+import sys
+import threading
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+import md_sync  # noqa: E402
+
+from keeper_util import World, defn  # noqa: E402
+from plangraph.keeper import api, config  # noqa: E402
+from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
+
+FIX = ROOT / "tests" / "fixtures" / "md_sync"
+
+
+@pytest.fixture
+def site(tmp_path):
+    """A stand-in for the router checkout: the batch root the keeper trusts."""
+    site = tmp_path / "site"
+    site.mkdir()
+    for name in ("QUESTIONS.md", "ANSWERS.md", "decisions-log.md"):
+        shutil.copy(FIX / name, site / name)
+    return site
+
+
+@pytest.fixture
+def world(tmp_path, site):
+    w = World(tmp_path)
+    r = w.p("router")
+    w.store.create_items(r, [
+        defn("R-1", project="routing"),
+        defn("Q-SHARED", project="server"),
+        defn("GOAL", project="routing", kind="goal",
+             deps=["routing:R-1", "server:Q-SHARED"])])
+    w.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(site / "decisions-log.md"))
+    w.store.batch_roots = [str(site)]
+    yield w
+    w.close()
+
+
+@pytest.fixture
+def srv(world, tmp_path):
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text(json.dumps({"db": str(world.path), "bind": "127.0.0.1:0",
+                               "snapshot": str(tmp_path / "plan.snapshot.json")}))
+    os.chmod(cfg, 0o600)
+    server = api.make_server(world.store, config.load_config(cfg), port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    server.base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    yield server
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=5)
+
+
+@pytest.fixture
+def token(world, tmp_path):
+    path = tmp_path / "router.token"
+    path.write_text(world.tokens["router"], encoding="utf-8")
+    return str(path)
+
+
+def sync(site, srv, token, *extra, answers="ANSWERS.md"):
+    out, err = io.StringIO(), io.StringIO()
+    rc = md_sync.main(["--questions", str(site / "QUESTIONS.md"),
+                       "--answers", str(site / answers),
+                       "--decisions", str(site / "decisions-log.md"),
+                       "--url", srv.base_url, "--token-file", token, *extra],
+                      out=out, err=err)
+    return rc, out.getvalue(), err.getvalue()
+
+
+def rows(world, sql, *args):
+    return world.conn.execute(sql, args).fetchall()
+
+
+def state(world, key):
+    return rows(world, "SELECT state FROM items WHERE key=?", key)[0][0]
+
+
+def test_dry_run_prints_plan_and_changes_nothing(world, srv, token, site):
+    before = rows(world, "SELECT COUNT(*) FROM events")[0][0]
+    rc, out, err = sync(site, srv, token, "--dry-run")
+    assert rc == 1  # Q-GHOST cites D-999, which the decisions log lacks
+    assert "plan 1 create routing:Q-ALPHA" in out
+    assert "refused Q-GHOST: unknown decision D-999" in out
+    assert "no D-id" in out and "Q-BETA-2" in out
+    assert "redactions 1" in out and "(no calls made)" in out
+    assert rows(world, "SELECT COUNT(*) FROM events")[0][0] == before
+
+
+def test_apply_creates_closes_links_and_second_run_is_empty(world, srv, token, site):
+    rc, out, err = sync(site, srv, token, "--apply")
+    assert rc == 1, out + err  # applied, but Q-GHOST was refused and reported
+    assert "refused Q-GHOST" in out and "summary:" in out
+    assert state(world, "routing:Q-ALPHA") == "done"
+    assert state(world, "routing:OS-1") == "done"
+    assert state(world, "routing:OS-2") == "done"
+    assert state(world, "server:Q-SHARED") == "done"   # reused across projects
+    assert state(world, "routing:Q-GHOST") == "open"
+    assert rows(world, "SELECT COUNT(*) FROM items WHERE key='routing:Q-SHARED'")[0][0] == 0
+    gate = rows(world, "SELECT key FROM items WHERE key='routing:PH-OPERATOR'")
+    assert len(gate) == 1
+    note = rows(world, "SELECT note FROM items WHERE key='routing:OS-1'")[0][0]
+    assert "Zx81kQ92LmPq77Vb" not in note and "[redacted]" in note
+    rc2, out2, _ = sync(site, srv, token, "--dry-run")
+    assert "dry run: no ops" in out2
+
+
+def test_close_uses_answers_path_and_sha_as_batch_ref(world, srv, token, site):
+    sync(site, srv, token, "--apply")
+    sha = hashlib.sha256((site / "ANSWERS.md").read_bytes()).hexdigest()
+    payloads = [json.loads(r[0]) for r in rows(
+        world, "SELECT payload FROM events WHERE type='closed_on_decision'")]
+    assert payloads and all(
+        p["batch_ref"] == f"{site / 'ANSWERS.md'}@{sha}" and p["sha256"] == sha
+        for p in payloads)
+
+
+def test_gate_is_created_once_across_runs(world, srv, token, site):
+    sync(site, srv, token, "--apply")
+    with open(site / "QUESTIONS.md", "a", encoding="utf-8") as f:
+        f.write("- Q-LATE **Added later**\n")
+    rc, out, _ = sync(site, srv, token, "--dry-run")
+    assert "create routing:Q-LATE" in out and "create routing:PH-OPERATOR" not in out
+    assert "edit routing:PH-OPERATOR" in out and "edit routing:GOAL" not in out
+
+
+def test_half_failing_apply_leaves_db_unchanged(world, srv, token, site):
+    # D-10 now says it closes someone else: Q-ALPHA's close is refused mid-batch.
+    log = site / "decisions-log.md"
+    log.write_text(log.read_text().replace(
+        "| use sqlite for the widget cache |", "| Closes: routing:Q-OTHER |"))
+    before = (rows(world, "SELECT COUNT(*) FROM items")[0][0],
+              rows(world, "SELECT COUNT(*) FROM events")[0][0])
+    rc, out, err = sync(site, srv, token, "--apply")
+    assert rc == 1 and "nothing applied" in out
+    assert (rows(world, "SELECT COUNT(*) FROM items")[0][0],
+            rows(world, "SELECT COUNT(*) FROM events")[0][0]) == before
+
+
+def test_answers_changed_between_read_and_apply_is_refused(world, srv, token, site, monkeypatch):
+    real = md_sync.write_batch
+
+    def tamper(*a, **k):
+        path = real(*a, **k)
+        with open(site / "ANSWERS.md", "a", encoding="utf-8") as f:
+            f.write("\n")
+        return path
+
+    monkeypatch.setattr(md_sync, "write_batch", tamper)
+    rc, out, _ = sync(site, srv, token, "--apply")
+    assert rc == 1 and "sha256 mismatch" in out
+    assert state(world, "routing:R-1") == "open"
+    assert rows(world, "SELECT COUNT(*) FROM items WHERE key='routing:Q-ALPHA'")[0][0] == 0
+
+
+def test_bad_token_file_exits_2(world, srv, site, tmp_path):
+    rc, out, err = sync(site, srv, str(tmp_path / "missing"), "--dry-run")
+    assert rc == 2 and "token" in err
+
+
+def test_missing_input_file_exits_2(world, srv, token, site):
+    rc, _, err = sync(site, srv, token, "--dry-run", answers="NOPE.md")
+    assert rc == 2 and "NOPE.md" in err
+
+
+def test_apply_and_dry_run_are_exclusive(world, srv, token, site):
+    rc, _, _ = sync(site, srv, token, "--apply", "--dry-run")
+    assert rc == 2
