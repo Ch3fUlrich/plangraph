@@ -22,5 +22,10 @@ plangraph-L1-main by SendMessage.
 - Placement (D-389): new L2 sessions and writer runs go to the WORKSTATION via workst-L1. On coding.vm: max 3 concurrent agent runs
   fleet-wide, none started below 4.5 GB MemAvailable.
 
+- SPAWN PATH (D-430/D-431): every agent run (writer, seat, researcher) ONLY via the autoos-agent MCP `spawn` or `tools/autoos-agent.py run`;
+  never agy/opencode/claude/qoder/gemini CLIs directly (D-271 discard). Code written by you or an in-session subagent counts as a writer run:
+  writers/seats go via spawn (Sonnet fallback = claude client via spawn); in-session work only for your own read-only analysis.
+  Cross-host runs only via workst-L1's runner request.
+
 ## Phase
 Goal · tasks (READ list, WRITE SCOPE, spec, tests) · acceptance · budget/TTL · return format.
