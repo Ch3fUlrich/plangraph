@@ -42,7 +42,7 @@ ops:
       evidence_kinds: [decision]
       note: 'done by decision D-224: gateway adopted as default read path; Server commit afa0a94; Semaphore tasks 127659, 127660
         (recorded here, not attached as evidence)'
-  - {op: legacy_state, key: 'server:T6-PILOT', state: in_review, note: 'router: DONE via decision D-224 + Server afa0a94, Semaphore
+  - {op: legacy_state, key: 'server:T6-PILOT', state: in_review, note: 'router: DONE via decision D-224 (server-L1 pilot 1.5 + re-test 3/3, 2026-10-01) + Server afa0a94, Semaphore
         127659/127660'}
   - {op: add_evidence, key: 'server:T6-PILOT', kind: decision, ref: D-224}
   - {op: add_evidence, key: 'server:T6-PILOT', kind: commit, repo: server, ref: afa0a94}
