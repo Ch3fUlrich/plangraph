@@ -1,7 +1,7 @@
 batch: 2026-10-02-router-close-prop-m2c
 principal: routing-00
 source: /home/s/code/routing/docs/decisions-log.md
-source_sha256: 571d5cd19280bc2adc1bbb29bd8c7479711ea97ccbd310881ea33b3130a94f2d
+source_sha256: d566330edb6a9da6051ac74a3bcdf83e4d66b20664133c1e255f589ff24a2d88
 ops:
 - op: edit
   key: plangraph:PROP-M2C
