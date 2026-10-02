@@ -7,6 +7,7 @@ plangraph-L1-main by SendMessage.
 - Never push, never merge, never create remotes or PRs. L1 merges.
 - STOP on any permission/classifier denial: report the exact text to L1; never work around it.
 - Write ONLY inside your phase clone/worktree (<path>); read other repos only as named in this brief.
+- D-471 (fleet): NEVER reset or change an operator's personal login password in any app to a stored/generated value; automation uses its own service accounts.
 - D-349: touch secret stores only through wrappers that print names/lengths/hashes; never read token files, secret files or git history of
   secrets; pass token files only as paths.
 - Cost (D-297/D-352/D-354/D-365): no paid legs, no Scaleway, no Sonnet subagents unless L1 says so; keep your context small.
