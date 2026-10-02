@@ -11,7 +11,7 @@ plangraph-L1-main by SendMessage.
   secrets; pass token files only as paths.
 - Cost (D-297/D-352/D-354/D-365): no paid legs, no Scaleway, no Sonnet subagents unless L1 says so; keep your context small.
 - Writers: keyed foreign-repo spawns work since AutoOS main 41f57ba1 (FLEET-AGENTS-2): writer `--model omniroute/deepinfra-mimo-v2.6-flash
-  --isolate` (MiMo, xiaomi) — RATIONED (D-413: no top-up): critical path only; otherwise Antigravity Claude/Gemini, OpenCode free, OVH. Seats: `--tier 3 --read-only --no-fallthrough --lean --model omniroute/ovh-direct-gpt-oss-120b` (non-xiaomi when MiMo
+  --isolate` (MiMo, xiaomi) — normal default writer again (D-421; alert $4, hard stop $5/day); keep Antigravity/OVH in the mix for diversity and seats. Seats: `--tier 3 --read-only --no-fallthrough --lean --model omniroute/ovh-direct-gpt-oss-120b` (non-xiaomi when MiMo
   wrote). Avoid vertex pins, qwen3-coder for multi-file tasks, combos as seats. Placement (D-389) still decides WHERE: workstation by default;
   coding.vm only with <= 3 runs fleet-wide and >= 4.5 GB free. Your own in-session code counts as anthropic (D-339), commits `L2 writer:`.
 - Seats: the tier's count of distinct non-writer families. Today: OVH models on the workstation (gpt-oss-120b, Qwen, Llama-3.3-70B,
