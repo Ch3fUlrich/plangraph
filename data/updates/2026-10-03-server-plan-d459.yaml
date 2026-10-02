@@ -1,0 +1,35 @@
+batch: 2026-10-03-server-plan-d459
+principal: routing-00
+source: /home/s/.claude/jobs/7caaf7f5/tmp/server-src/server-plan-2026-10-02.md
+source_sha256: d392fc3ea28903369910155f0cffed98729c5955d07145936ccbcfd400f921ab
+# Applies AFTER batches 1-9 (+ d311-priority). Operator D-459: LiteLLM stays for now; moving the apps onto the central
+# OmniRoute is a FUTURE phase with LiteLLM kept as the fallback if OmniRoute fails; disclose the free LLM fallbacks.
+ops:
+  - op: create
+    item: {project: server, id: LL-DISCLOSE, kind: lane, track: OWUI, owner: server-L1-main, review_tier: standard, estimate_h: 1,
+           title: "Disclose free LLM fallbacks: Open WebUI banner, LiteLLM free-leg labels, app docs (D-459)",
+           done_criteria: "WEBUI_BANNERS notice live in Open WebUI; free-* routes labelled; privacy note in Mealie/HA/Speakr/Sparky docs; merged + deployed",
+           evidence_kinds: [commit+ci, semaphore-task]}
+  - op: create
+    item: {project: server, id: LLR-DESIGN, kind: lane, track: LITELLM-RETIRE, owner: server-L1-main, review_tier: standard, estimate_h: 2,
+           title: "Design: apps -> central OmniRoute (aliases, private-safe combo, local Ollama provider, per-client keys); LiteLLM = fallback",
+           done_criteria: "design doc merged: client list (Mealie, HA, Speakr, Sparky), OmniRoute aliases + combo, Ollama reachability, key per client, LiteLLM fallback wiring, rollback",
+           evidence_kinds: [commit+ci]}
+  - op: create
+    item: {project: server, id: LLR-MIGRATE, kind: lane, track: LITELLM-RETIRE, owner: server-L1-main, review_tier: standard, estimate_h: 6,
+           title: "Move Mealie, Speakr, Sparky, then HA to the central OmniRoute one at a time (LiteLLM remains the fallback)",
+           done_criteria: "each client served via OmniRoute under its own key with a served-model smoke; HA via an operator UI step; LiteLLM fallback verified once",
+           evidence_kinds: [commit+ci, semaphore-task], depends_on: [LLR-DESIGN]}
+  - op: create
+    item: {project: server, id: PH-LITELLM-RETIRE, kind: gate, track: LITELLM-RETIRE, title: "Phase LITELLM-RETIRE (future, D-459)",
+           done_criteria: "free fallbacks disclosed; all LiteLLM clients on OmniRoute; LiteLLM kept only as the fallback",
+           depends_on: [LL-DISCLOSE, LLR-DESIGN, LLR-MIGRATE]}
+  - {op: priority, key: server:LLR-DESIGN, priority: -1}
+  - {op: priority, key: server:LLR-MIGRATE, priority: -1}
+  - op: edit
+    key: server:GOAL
+    fields: {depends_on: [server:PH-DEPLOYSAFE, server:PH-UPDATES, server:PH-GRAPHMOVE, server:PH-OWUI, server:PH-OWUIEXT,
+                          server:PH-GATEWAY, server:PH-INFRA, server:PH-DETECT, server:PH-HEAL, server:PH-LEDGER, server:PH-FIX,
+                          server:PH-HEALTH, server:PH-DOCS, server:PH-VOICE, server:PH-MEDIA, server:PH-BOOKS, server:PH-MAINT,
+                          server:PH-HA, server:PH-UPDATESRUN, server:PH-MANUAL, server:PH-PLANS, server:PH-HEAL-LIVE,
+                          server:PH-LITELLM-RETIRE]}

@@ -31,4 +31,4 @@ D-420 close server:T-023 (4 ops): data/updates/2026-10-02-router-close-d420.yaml
 D-428 closes autoos:T3-CIGREEN + T3-CIMAIN (6 ops): data/updates/2026-10-02-router-closes-d428.yaml — LIVE 2026-10-02 ~19:00Z on the D-434 tier-edit code (applied 6 of 6, verify ok).
 Daemon restarted ~19:00Z on worktree code = 610271d (integ + mask + tier-edit; DB backup keeper.db.pre-modela); `pg migrate-descriptions`: migrated 76, skipped 0.
 md-sync timer had halted 18:55Z (old daemon); re-run OK on new code (0 ops second run), timer + path re-armed.
-Server 2026-10-03-server-plan-d459 (6bda845b, 7 ops): router OK; apply REFUSED by the classifier (outside OS-92 wording) -> waits for a widened operator line.
+Server 2026-10-03-server-plan-d459 (6bda845b, 7 ops; source staged from t6/server-plan, sha d392fc3e): router OK; LIVE 2026-10-02 (applied 7 of 7, verify ok) after the operator widened OS-92 to plan batches.

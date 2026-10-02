@@ -20,6 +20,6 @@ router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 n
   * SPLIT-PREP (L2 plangraph-L2-split-prep): fix round 106e410 in re-review (pkg 6da3baa5).
 - Rules in force: template docs/process/L2-BRIEF-TEMPLATE.md (D-430/431 spawn-only, D-389 placement, D-349, D-302 independence,
   D-421 MiMo normal, quote+VERDICT rule). L2s report only to me; I report to routing; workst-L1 direct (D-319); 2-h progress line (D-418).
-- OS-92 GRANTED by the operator in this session: L1 may write router-approved batches (closes, rehome, priority) under data/updates/ and apply them to :8787, then verify. D-447 EVTAG close LIVE.
+- OS-92 GRANTED (operator, this session): L1 may write router-approved batches (closes, rehome, priority) AND router-OK project plan batches (create/edit/priority) under data/updates/ and apply them to :8787 with apply_batch, then verify.
 - Lessons: quoted heredocs for task texts; legacy-claim only items with a known close path; Taildrop inbox is shared (set aside + report).
 ## Compactions this session: 1 (2026-10-02 ~17:55Z)
