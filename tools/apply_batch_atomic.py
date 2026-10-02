@@ -22,13 +22,13 @@ def renumber(msg, offset):
                           msg or "", count=1)
 
 
-def applied_count(raw, default):
+def parsed(raw):
+    """The reply as a mapping, or ``None`` when a 2xx body is unreadable."""
     try:
         data = json.loads(raw.decode("utf-8"))
-        data = data.get("result", data) if isinstance(data, dict) else {}
-        return int(data.get("applied", default))
-    except (ValueError, TypeError, AttributeError, UnicodeDecodeError):
-        return default
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        return None
+    return data.get("result", data) if isinstance(data, dict) else None
 
 
 def refusal_lines(exc, offset, first):
@@ -41,3 +41,24 @@ def refusal_lines(exc, offset, first):
     if not _OP_PREFIX.match(text):
         text = f"op {offset + 1} {first[0]} {first[1]}: {exc.code} {text}"
     return [text, "nothing applied (the whole batch was rolled back)"]
+
+
+def send(session, ops, start, source, digest, errors, op_key):
+    """Post the batch as one ``apply_ops`` call; ``(exit_code, report_lines)``.
+
+    An unreadable 2xx reply, or one that does not report every op applied, is
+    an error: the caller never prints "applied N of N" on a guess.
+    """
+    sent = len(ops) - start + 1
+    try:
+        raw = session.post("apply_ops", payload(ops, start, source, digest))
+    except errors as exc:
+        first = ops[start - 1]
+        return 1, refusal_lines(exc, start - 1,
+                                (first.get("op"), op_key(first)))
+    reply = parsed(raw)
+    got = reply.get("applied") if reply is not None else None
+    if got != sent:
+        return 1, [f"error: unreadable or short keeper reply (applied {got!r} "
+                   f"of {sent}); batch state unknown, check the keeper"]
+    return 0, []

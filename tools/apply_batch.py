@@ -23,6 +23,7 @@ OP_SPECS = {
     "add_evidence": (["key", "kind"], {}),
     "close_on_decision": (["key"], {}),
     "cancel": (["key"], {}),
+    "priority": (["key", "priority"], {"priority": int}),
 }
 OP_ALLOWED = {
     "create": {"op", "item"},
@@ -31,6 +32,7 @@ OP_ALLOWED = {
     "add_evidence": {"op", "key", "kind", "ref", "repo"},
     "close_on_decision": {"op", "key"},
     "cancel": {"op", "key", "reason"},
+    "priority": {"op", "key", "priority"},
 }
 TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops"}
 LEGACY_STATES = ("claimed", "in_review")
@@ -137,6 +139,8 @@ def validate_op(op):
             raise BatchError(f"{name}: {f!r} must be str")
     if op.get("ref") is not None and not isinstance(op.get("ref"), dict):
         raise BatchError("add_evidence: 'ref' must be a mapping")
+    if name == "priority" and isinstance(op["priority"], bool):
+        raise BatchError("priority: 'priority' must be int")
     if name == "legacy_state" and op["state"] not in LEGACY_STATES:
         raise BatchError(f"legacy_state: state must be one of "
                          f"{', '.join(LEGACY_STATES)}")
@@ -164,6 +168,8 @@ def build_request(op, source, digest):
                 {"key": op["key"], "batch_ref": f"{source}@{digest}"})
     if name == "cancel":
         return "cancel", {"key": op["key"], "reason": op.get("reason", "")}
+    if name == "priority":
+        return "set_priority", {"key": op["key"], "n": op["priority"]}
     raise BatchError(f"unknown op {name!r}")
 class Session:
     """Bearer-token calls to the keeper API; the token is never printed."""
@@ -236,7 +242,7 @@ def read_token(path):
     return token
 def print_help(out):
     out.write("usage: apply_batch.py BATCH.yaml --url URL --token-file PATH "
-              "[--dry-run] [--from N] [--per-op]\n")
+              "[--dry-run] [--from N] [--per-op] [--allow-no-whoami]\n")
 def main(argv=None, out=None, err=None):
     args_in = list(sys.argv[1:] if argv is None else argv)
     out = out or sys.stdout
@@ -349,22 +355,12 @@ def main(argv=None, out=None, err=None):
     applied = Counter()
     done = 0
     if not opts.per_op:
-        try:
-            raw = session.post("apply_ops",
-                               atomic.payload(ops, start, source, digest))
-        except BatchError as exc:
-            return fail(start, "-", "-", "error", str(exc))
-        except ApiError as exc:
-            first = ops[start - 1]
-            for text in atomic.refusal_lines(
-                    exc, start - 1, (first.get("op"), op_key(first))):
-                line(text)
-            return 1
-        sent = total - start + 1
-        if atomic.applied_count(raw, sent) != sent:
-            line(f"error: keeper applied {atomic.applied_count(raw, sent)} "
-                 f"of {sent} ops")
-            return 1
+        code, report = atomic.send(session, ops, start, source, digest,
+                                   (ApiError, BatchError), op_key)
+        for text in report:
+            line(text)
+        if code:
+            return code
     for n, op in enumerate(ops, 1):
         if n < start:
             continue
@@ -373,7 +369,9 @@ def main(argv=None, out=None, err=None):
         try:
             if opts.per_op:
                 verb, body = build_request(op, source, digest)
-                session.post(verb, body)
+                if atomic.parsed(session.post(verb, body)) is None:
+                    raise ApiError("error", "unreadable keeper reply "
+                                            "(op state unknown)")
         except BatchError as exc:
             return fail(n, name, key, "error", str(exc))
         except ApiError as exc:

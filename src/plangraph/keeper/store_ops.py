@@ -1,7 +1,8 @@
 """B1: the router-only ``apply_ops`` verb for :class:`...store.Store`.
 
 ``apply_ops(principal, ops, batch_ref=None)`` applies a list of BATCH.md ops
-(create, edit, legacy_state, add_evidence, close_on_decision, cancel) in ONE
+(create, edit, legacy_state, add_evidence, close_on_decision, cancel,
+priority) in ONE
 ``BEGIN IMMEDIATE`` transaction, all or nothing.  Every op runs the very same
 inner function as its single verb (so the same auth/state checks), except that
 the whole-graph validation is deferred: the single verbs' ``_validate_change``
@@ -38,6 +39,7 @@ _OPS = {
     "add_evidence": {"op", "key", "kind", "ref", "repo"},
     "close_on_decision": {"op", "key"},
     "cancel": {"op", "key", "reason"},
+    "priority": {"op", "key", "priority"},
 }
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               sqlite3.ProgrammingError)
@@ -130,6 +132,10 @@ class OpsMixin:
             return
         if not isinstance(op.get("key"), str):
             raise Refused("validation", f"{name} needs a key")
+        if name == "priority":
+            n = op.get("priority")
+            if isinstance(n, bool) or not isinstance(n, int):
+                raise Refused("validation", "priority must be an integer")
         if name == "close_on_decision" and not isinstance(batch_ref, str):
             raise Refused("validation", "close_on_decision needs a batch_ref")
 
@@ -187,6 +193,8 @@ class OpsMixin:
                                          self._evidence_ref(op), now)
         if name == "close_on_decision":
             return self._close_on_decision(principal, key, batch_ref, now)
+        if name == "priority":
+            return self._priority(principal, key, op["priority"], now)
         return self._cancel(principal, key, op.get("reason", ""), now)
 
     def _apply_ops(self, principal, ops, batch_ref, now):
