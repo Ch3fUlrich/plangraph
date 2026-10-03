@@ -13,12 +13,25 @@ the ancestry of ``main`` and the CI result on that exact sha.
 
 from __future__ import annotations
 
+import re
 import subprocess
-from typing import Mapping
+from typing import Any, Mapping
 
 from .evidence_types import Result, valid_commit_ref
 
-__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers"]
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref"]
+
+_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
+_SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
+
+
+def valid_ref(ref: Any) -> bool:
+    """Validate git ref: only [A-Za-z0-9._/-], no leading '-', no '..'."""
+    if not isinstance(ref, str) or not ref:
+        return False
+    if ref.startswith("-") or ".." in ref:
+        return False
+    return bool(_REF_RE.fullmatch(ref))
 
 
 def parse_trailers(text: str) -> dict[str, str]:
@@ -44,20 +57,32 @@ class GitAdapter:
 
     def __init__(
         self,
-        repos: Mapping[str, str] | None = None,
+        repos: Mapping[str, Any] | None = None,
         *,
         git: str = "git",
         timeout: float = 30.0,
     ) -> None:
-        self._repos = {str(k): str(v) for k, v in dict(repos or {}).items()}
+        self._repos = dict(repos or {})
         self._git = git
         self._timeout = float(timeout)
 
     # -- config -------------------------------------------------------------
     def repo_path(self, project: str) -> str | None:
         """Return the registered repository path for *project*, or ``None``."""
-        path = self._repos.get(project)
-        return path if path else None
+        entry = self._repos.get(project)
+        if isinstance(entry, dict):
+            path = entry.get("path")
+            return str(path) if path else None
+        return str(entry) if entry else None
+
+    def repo_ref(self, project: str) -> str:
+        """Return the target ref for *project* (defaults to 'main')."""
+        entry = self._repos.get(project)
+        if isinstance(entry, dict):
+            ref = entry.get("ref")
+            if ref and isinstance(ref, str) and valid_ref(ref):
+                return ref
+        return "main"
 
     def __repr__(self) -> str:  # never dump the whole mapping casually
         return f"GitAdapter(projects={sorted(self._repos)!r})"
@@ -80,13 +105,16 @@ class GitAdapter:
         proc = self._run(repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"])
         return proc.returncode == 0
 
-    def is_ancestor_of_main(self, repo: str, sha: str) -> bool:
-        if not valid_commit_ref(sha):
+    def is_ancestor(self, repo: str, sha: str, ref: str) -> bool:
+        if not isinstance(sha, str) or not _SHA_ARG_RE.fullmatch(sha) or not valid_ref(ref):
             return False
         proc = self._run(
-            repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, "main"]
+            repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref]
         )
         return proc.returncode == 0
+
+    def is_ancestor_of_main(self, repo: str, sha: str) -> bool:
+        return self.is_ancestor(repo, sha, "main")
 
     def trailers(self, repo: str, sha: str) -> dict[str, str]:
         if not valid_commit_ref(sha):
@@ -143,7 +171,7 @@ class LegacyCommitVerifier:
 
     def verify(self, item, ref, ctx):
         ref = dict(ref) if isinstance(ref, dict) else {}
-        commit = ref.get("commit")
+        commit = ref.get("sha") or ref.get("commit")
         if not isinstance(commit, str) or not commit:
             return Result(False, "commit requires a 'commit' sha", ref)
         if not valid_commit_ref(commit):
@@ -157,9 +185,14 @@ class LegacyCommitVerifier:
                                     f" {project!r}", ref)
             if not ctx.git.commit_exists(repo, commit):
                 return Result(False, f"commit {commit} does not exist", ref)
-            if not ctx.git.is_ancestor_of_main(repo, commit):
+            target_ref = ctx.git.repo_ref(project) if hasattr(ctx.git, "repo_ref") else "main"
+            if hasattr(ctx.git, "is_ancestor"):
+                is_anc = ctx.git.is_ancestor(repo, commit, target_ref)
+            else:
+                is_anc = ctx.git.is_ancestor_of_main(repo, commit)
+            if not is_anc:
                 return Result(False, f"commit {commit} is not an ancestor"
-                                    f" of main", ref)
+                                    f" of {target_ref}", ref)
         except Exception as exc:  # noqa: BLE001 - a verifier must never raise
             return Result(False, f"git error ({type(exc).__name__})", ref)
-        return Result(True, f"commit {commit} is an ancestor of main", ref)
+        return Result(True, f"commit {commit} is an ancestor of {target_ref}", ref)

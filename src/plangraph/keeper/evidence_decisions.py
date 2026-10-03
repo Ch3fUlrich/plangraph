@@ -44,6 +44,22 @@ _CLOSES_RE = re.compile(r"(?i)\bcloses\s*:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
 # A whole ``project:ID`` key (the same shape tools/apply_batch.py accepts).
 _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
+_CLOSES_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}\Z")
+
+
+def _parse_closes_token(token: str) -> tuple[str, str | None] | None:
+    """Parse a Closes token into (key, sha|None). Returns None if invalid."""
+    if "@" in token:
+        parts = token.split("@")
+        if len(parts) != 2:
+            return None
+        key, sha = parts
+        if _KEY_TOKEN_RE.fullmatch(key) and _CLOSES_SHA_RE.fullmatch(sha):
+            return key, sha
+        return None
+    if _KEY_TOKEN_RE.fullmatch(token):
+        return token, None
+    return None
 
 
 def _decision_cell(row: str) -> str:
@@ -154,15 +170,42 @@ class DecisionsAdapter:
             return False
         return key.strip() in self._scoped_tokens(decision_id, _WAIVES_RE)
 
+    def closes_with_commits(self, decision_id: str) -> dict[str, str | None]:
+        """Map of key -> sha|None for valid ``Closes:`` tokens in *decision_id*'s rows."""
+        canonical = self._canonical(decision_id)
+        if canonical is None:
+            return {}
+        result: dict[str, str | None] = {}
+        for row in self._rows().get(canonical, ()):
+            cell = _decision_cell(row)
+            if not cell:
+                continue
+            keyword_positions = [(m.start(), m.group()) for m in _KEYWORD_RE.finditer(cell)]
+            for match in _CLOSES_RE.finditer(cell):
+                start = match.end()
+                end = len(cell)
+                for kw_pos, kw_text in keyword_positions:
+                    if kw_pos > match.start():
+                        end = kw_pos
+                        break
+                token_text = cell[start:end].strip()
+                for token in _TOKEN_SPLIT_RE.split(token_text):
+                    if token:
+                        parsed = _parse_closes_token(token)
+                        if parsed is not None:
+                            key, sha = parsed
+                            if key not in result or (result[key] is None and sha is not None):
+                                result[key] = sha
+        return result
+
     def closes(self, decision_id: str) -> set[str]:
-        """The whole ``Closes: <project:ID>`` tokens in the DECISION cell of *decision_id*'s rows.
+        """The whole ``Closes: <project:ID>`` keys in the DECISION cell of *decision_id*'s rows.
 
         The empty set means the row names nothing; only when the cell has no
         ``Closes:`` keyword at all (``has_closes_keyword``) does the hashed batch
         file alone authorise a decision close (X7b).
         """
-        return {token for token in self._scoped_tokens(decision_id, _CLOSES_RE)
-                if _KEY_TOKEN_RE.match(token)}
+        return set(self.closes_with_commits(decision_id).keys())
 
     def has_closes_keyword(self, decision_id: str) -> bool:
         """Does the DECISION cell carry a ``Closes:`` keyword at all (L5)?

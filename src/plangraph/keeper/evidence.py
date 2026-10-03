@@ -165,10 +165,15 @@ class CommitCiVerifier:
             return _fail(f"git error checking the commit ({type(exc).__name__})", ref)
 
         try:
-            if not ctx.git.is_ancestor_of_main(repo, commit):
-                return _fail(f"commit {commit} is not an ancestor of main", ref)
+            target_ref = ctx.git.repo_ref(project) if hasattr(ctx.git, "repo_ref") else "main"
+            if hasattr(ctx.git, "is_ancestor"):
+                is_anc = ctx.git.is_ancestor(repo, commit, target_ref)
+            else:
+                is_anc = ctx.git.is_ancestor_of_main(repo, commit)
+            if not is_anc:
+                return _fail(f"commit {commit} is not an ancestor of {target_ref}", ref)
         except Exception as exc:  # noqa: BLE001
-            return _fail(f"git error checking main ancestry ({type(exc).__name__})", ref)
+            return _fail(f"git error checking {target_ref} ancestry ({type(exc).__name__})", ref)
 
         try:
             trailers = ctx.git.trailers(repo, commit)

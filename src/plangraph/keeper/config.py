@@ -23,6 +23,8 @@ import os
 import stat
 from pathlib import Path
 
+from .evidence_git import valid_ref
+
 __all__ = ["Config", "ConfigError", "load_config", "verifier_context",
            "REQUIRED_MODE"]
 
@@ -45,7 +47,23 @@ class Config:
         self.db = self._resolve(data.get("db") or _DEFAULT_DB)
         self.snapshot = self._resolve(
             data.get("snapshot") or _DEFAULT_SNAPSHOT)
-        self.repos = dict(data.get("repos") or {})
+        repos = data.get("repos") or {}
+        if not isinstance(repos, dict):
+            raise ConfigError("repos must be a dictionary")
+        self.repos = {}
+        for proj, entry in repos.items():
+            if isinstance(entry, str):
+                self.repos[proj] = entry
+            elif isinstance(entry, dict):
+                path = entry.get("path")
+                if not isinstance(path, str) or not path:
+                    raise ConfigError(f"repo {proj!r} must contain a 'path' string")
+                ref = entry.get("ref", "main")
+                if not isinstance(ref, str) or not valid_ref(ref):
+                    raise ConfigError(f"repo {proj!r} ref {ref!r} is invalid")
+                self.repos[proj] = {"path": path, "ref": ref}
+            else:
+                raise ConfigError(f"repo {proj!r} entry must be a path string or dict")
         self.runs_dir = data.get("runs_dir")
         self.decisions_file = data.get("decisions_file")
         self.ci = dict(data.get("ci") or {})

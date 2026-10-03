@@ -16,6 +16,16 @@ from .auth import validate_family
 from .errors import Refused
 from .credential_guard import guard
 from .note_fold import fold_checked
+from .store_tiers import (
+    REVIEW_TIERS,
+    _REVIEW_KEYWORD,
+    _TIER_FIELDS,
+    default_review_tier,
+    tier_needs_router,
+    validated_decision_tier,
+    validated_review_tier,
+    _tier_only,
+)
 
 _EDITABLE = ("title", "description", "host", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
@@ -34,70 +44,6 @@ _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "kind",
                  "corrects", "state",
                  "epoch", "claimed_by", "delegate", "lease_until", "reviewer",
                  "model", "created_at", "updated_at")
-
-#: D-228 risk-tiered reviews: the allowed tiers and the keyword pattern that
-#: promotes an item to ``high`` when no tier was given.  The boundaries are
-#: letters, not ``\b`` word edges, so ``my_secret``, ``SECRET_KEY`` and
-#: ``keeper2`` match while ``keystore`` does not (``_`` and digits are word
-#: characters, so ``\b`` would miss the former and the spec wants them).
-REVIEW_TIERS = ("standard", "high", "none")
-_REVIEW_KEYWORD = re.compile(
-    r"(?i)(?<![a-z])(secret|secrets|key|keys|security|gateway|omniroute|deploy"
-    r"|keeper|fence)(?![a-z])")
-
-#: X7b: ``none`` means "this item is never reviewed" -- a decision-only
-#: definition, settable only by the router.
-_DECISION_TIER = "none"
-_DECISION_EVIDENCE = ["decision"]
-
-#: D-434: the only fields the router may change while an item is claimed/in
-#: review (``_EDITABLE`` still gates input).
-_TIER_FIELDS = frozenset(("review_tier", "evidence_kinds"))
-
-
-def default_review_tier(project, identifier, title, track):
-    """The tier an item gets when nobody named one: ``high`` for risky work."""
-    if project == "plangraph":
-        return "high"
-    for value in (identifier, title, track):
-        if value and _REVIEW_KEYWORD.search(value):
-            return "high"
-    return "standard"
-
-
-def validated_review_tier(value):
-    """Return *value* if it is a legal tier, else refuse as ``validation``."""
-    if value not in REVIEW_TIERS:
-        raise Refused("validation",
-                      f"review_tier must be one of {list(REVIEW_TIERS)}")
-    return value
-
-
-def tier_needs_router(tier):
-    """X7b: only the router may put an item outside the review system."""
-    return tier == _DECISION_TIER
-
-
-def validated_decision_tier(tier, evidence_kinds):
-    """Return *tier*; a ``none`` item must be decision-only or it is refused.
-
-    ``none`` means the review gate never runs, so the decision is the item's
-    sole proof of work: anything looser (``any``, several kinds, none at all)
-    would let an unproven item be closed on a decision alone.
-    """
-    if tier == _DECISION_TIER and list(evidence_kinds or []) != _DECISION_EVIDENCE:
-        raise Refused("validation",
-                      f"review_tier='none' requires evidence_kinds="
-                      f"{_DECISION_EVIDENCE}, not {list(evidence_kinds or [])}")
-    return tier
-
-
-def _tier_only(fields):
-    """D-434: a non-empty subset of the two tier fields (empty or non-mapping
-    answers ``False``, so those shapes keep the ordinary open-only refusal)."""
-    return (isinstance(fields, dict) and bool(fields)
-            and not set(fields) - _TIER_FIELDS)
-
 
 def _defined_payload(fields):
     """``item_defined`` payload: the changed field names plus the new tier value.

@@ -157,6 +157,35 @@ class CloseMixin:
                           f"the decision closes {sorted(named)}, not {key}")
         return rows, named
 
+    def _check_commit_evidence(self, key, item, now):
+        """For tier 'none' items with 'commit' in evidence_kinds: require at least
+        one verified commit evidence row whose sha is an ancestor of configured ref.
+        """
+        commit_rows = [e for e in self._evidence(key)
+                       if e["epoch"] == item["epoch"] and e["kind"] == "commit"]
+        if not commit_rows:
+            raise Refused("evidence_unverified", "no commit evidence")
+        ctx = self._ctx(item, now)
+        target_ref = (ctx.git.repo_ref(item.get("project"))
+                      if ctx.git is not None and hasattr(ctx.git, "repo_ref")
+                      else "main")
+        verified_any = False
+        last_sha = None
+        for row in commit_rows:
+            ref = row.get("ref") or {}
+            sha = ref.get("sha") or ref.get("commit")
+            if sha:
+                last_sha = sha
+            result = self._verify_evidence(item, "commit", ref, now)
+            if result.ok:
+                verified_any = True
+                break
+        if not verified_any:
+            sha_label = f" {last_sha}" if last_sha else ""
+            raise Refused("evidence_unverified",
+                          f"commit{sha_label} not merged into {target_ref}")
+        return commit_rows
+
     def _close_on_decision(self, principal, key, batch_ref, now):
         self._require_role(principal, "router")
         item = self._get_or_refuse(key)
@@ -170,9 +199,13 @@ class CloseMixin:
                           f"{key} is review_tier={item.get('review_tier')},"
                           " only 'none' closes on a decision")
         rows, named = self._decision_evidence(key, item, now)
+        commit_rows = (self._check_commit_evidence(key, item, now)
+                       if "commit" in (item.get("evidence_kinds") or [])
+                       else [])
         sha = self._read_batch(batch_ref)
         decision_ids = sorted({e["ref"]["id"] for e in rows})
         seen = frozenset(e["id"] for e in rows)
+        seen_commits = frozenset(e["id"] for e in commit_rows)
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -198,6 +231,17 @@ class CloseMixin:
             if fresh.get("review_tier") != "none":
                 raise Refused("conflict",
                               f"{key} changed review_tier under the transaction")
+            if set(fresh.get("evidence_kinds") or []) != set(item.get("evidence_kinds") or []):
+                raise Refused("conflict",
+                              f"{key} changed evidence_kinds under the transaction")
+            if "commit" in (fresh.get("evidence_kinds") or []):
+                again_commits = frozenset(e["id"] for e in self._evidence(key)
+                                          if e["epoch"] == fresh["epoch"]
+                                          and e["kind"] == "commit")
+                if again_commits != seen_commits:
+                    raise Refused("conflict",
+                                  "the commit evidence changed under the transaction")
+                self._check_commit_evidence(key, fresh, now)
             # The cache row goes first, exactly like ``_pass``: the event below
             # is what locks the key, and the triggers refuse a locked insert.
             cursor = self.conn.execute(
