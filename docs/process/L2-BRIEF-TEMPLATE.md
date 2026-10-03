@@ -9,6 +9,10 @@ plangraph-L1-main by SendMessage.
 - Write ONLY inside your phase clone/worktree (<path>); read other repos only as named in this brief.
 - D-471 (fleet): NEVER reset or change an operator's personal login password in any app to a stored/generated value; automation uses its own service accounts.
 - D-488/D-489: Gemini ONLY as 3.8 Flash (never 3.6/3.7/Pro). PROVEN writer (smoke 20261002-200622-agysmoke38h): `--client opencode --isolate --model
+- ANTI-TEST-GAMING (routing 2026-10-03, after T2b/T3a): every WRITER task text carries the line "Never change behaviour to satisfy a test,
+  never special-case test inputs, never edit a guard/test outside your scope; report failing tests instead." Every SEAT prompt carries a
+  mandatory point: "no production code detects or adapts to test inputs (equality overrides, test-name checks, environment sniffing) and no
+  test/guard was weakened" (quote-confirmed).
 - TRAINING PROVIDERS (antigravity/agy etc.; routing after the 2026-10-02 T2b incident): EVERY plangraph branch/bundle is SITE DATA. Only a vetted
   ORPHAN snapshot (D-494: rename + vocabulary grep + seat) may go to a training leg. No test/guard edits outside the task scope, ever. Training-leg sandboxes live under a neutral root (no username in the path, e.g. C:\fleet\sandboxes).
   omniroute/agy-gemini-3.8-flash` via workst-L1 (run-local overlay → agy/gemini-3.8-flash-high; -medium on cooldown) until GEMINI38 is on main.
