@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (L1 project orchestrator; next relaunch: Sonnet high, bypass, D-496/D-506)
-Updated: 2026-10-03 14:30 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+Updated: 2026-10-03 18:45 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
 M2a done + pilot keeper live. M2c in progress: UI-BUILD (L2 plangraph-L2-ui-build, keeps running), D-505 keeper/md-sync work, stack note.
@@ -22,9 +22,10 @@ run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches
 - P1 md-sync (D-505 + Path 1): router D-rows `Closes: key@sha` -> in_review + evidence -> close when merged (read-only git fetch, fail
   closed); [decision]-only items close by decision; code lanes without @sha -> in_review + listed. OLD pkg mdsync-dclose is HELD at workst.
   FIRST RUN GATE: stop timer+path, dry run, send routing the (key, D-row) list, apply only OK'd keys, re-arm.
-- Stack design note: Haiku research run 20261003-065708-sresearch-8424ef running at workst; then write a <=2-page note
-  (Python/SQLite vs Rust, Postgres M4, UI libs, phased no-loss migration). Proposal docs/proposals/2026-10-03-graph-tracks-acceptance.md.
 - GRAPH 541 items (D-492..D-526 progress batch + server new lanes LIVE, head 00418362643e). GEN-CLOSEOUT closes after K1 (live parser rejects key@sha).
+- GRAPH-UI (D-560, TOP priority, operator reviews): design note accepted (docs/proposals/2026-10-03-graph-ui-design-note.md); T3b-1fix6 at workst
+  -> L2-LAUNCH (routing launches after fix6; brief pkg/BRIEF-GRAPHUI.md) -> G1-G5 on agy -> my Playwright check (2x6 shots, MemAvailable>=6GB) -> operator.
+  D-562: spawns from a private worktree use a NEUTRAL EMPTY cwd unless the leg is private-safe.
 - URL plan.ohje.ooguy.com LIVE upstream: prox nginx 100.82.253.38:8089 serves out/plan-cdn.html (single-file bind mount); my user timer
   plangraph-render.timer (5 min) copies the render INTO that file (same inode; a rename would orphan the mount). Waits for prox DNS + e2e. Own
   static_serve PARKED (urlview v2/v3 unmerged). Writers at workst (free leg, agy cooldown until 16:36Z): P1, PROGRESS-PANEL, T3b-1fix5, stack-research.
