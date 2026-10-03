@@ -1,0 +1,24 @@
+# Missing Closes keys from D-548/D-549 (router OK 2026-10-03: create them the same way as the missing-keys batch).
+batch: 2026-10-03-router-missing-closes-keys-2
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 9c229c8dffbf70cedf3e078b4be0f47ac96329eb3ddff67445040386666f07ff
+ops:
+- op: create
+  item:
+  - {project: server, id: BACKUP-RENDER-TEST, kind: lane, track: UPDATESRUN, owner: server-L1-main, review_tier: standard, evidence_kinds: [commit+ci], estimate_h: 1, estimate_src: default, priority: 0, depends_on: [],
+     title: "Backup render test (backup-render-test)",
+     done_criteria: "merged on Server origin/main; the backup render test passes",
+     description: "Router D-548: backup-render-test accepted, main sha 195da5a1. Closes server:BACKUP-RENDER-TEST@195da5a1."}
+  - {project: autoos, id: FLEET-HOOKS, kind: lane, track: FLEET, owner: autoos-L1-main, review_tier: high, evidence_kinds: [commit+ci], estimate_h: 3, estimate_src: default, priority: 0, depends_on: [],
+     title: "FLEET-HOOKS bash-guard v2.2 as a user-level PreToolUse/Bash hook",
+     done_criteria: "merged on AutoOS main; hook installed on coding.vm and proven live; workstation install by the operator settings",
+     description: "Router D-549: bash-guard v2.2 (AutoOS 7ccdf12f) accepted and installed on coding.vm. Seats Qwen3.5-397B (fixed) and gpt-oss-120b (pass). Closes autoos:FLEET-HOOKS@7ccdf12f."}
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on: [routing:OS-102B, server:BACKUP-HARDEN, server:CHAPTARR-ENV, server:CS-CADDY, server:CS-CADDY-PII, server:DH-DOCS, server:GW-LOGS-REWORK, server:GW-NFS-COUNTS, server:GW-SEMAPHORE-HARDEN, server:HEAL-LLM-REPOINT, server:IDS-HOMENET, server:IDS-READSHAPE, server:IDS-SCHEDULE-ON, server:IDS-V6SRC, server:MEALIE-CAP, server:OVERLAY-VERSION-GUARD, server:OWUI-PYODIDE, server:PH-TWOARMED, server:PLAN-VHOST, server:STREAMING-BACKUP, server:UPR-LOG-B1, server:UPR-LOG-B2, server:VIDEO-CAP, server:VM-IPV6-RA, server:BACKUP-RENDER-TEST]
+- op: edit
+  key: routing:PH-FLEET-1003
+  fields:
+    depends_on: [autoos:COMBO-REFRESH, autoos:COMBO-REFRESH-A4, autoos:FAMILY-TRACK, autoos:G-KEEPER, autoos:LAUNCHER-CPU-GATE, autoos:LEAN-MCP, autoos:O1-OPENCODE-SESSIONS, autoos:O2-FLEET-BUS-MCP, autoos:O3-GKEEPER-OPENCODE, autoos:O4-BASH-GUARD, autoos:O5-LEAN-MCP-PILOT, autoos:O6-ROUTING-ON-OPENCODE, autoos:ROUTE-FRESH, autoos:RUNNER-SCALE-20, autoos:U12, autoos:WIN-PROMPT, autoos:WORKST-L0-FAILOVER, autoos:FLEET-HOOKS]
