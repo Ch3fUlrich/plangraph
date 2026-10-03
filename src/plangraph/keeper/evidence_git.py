@@ -15,14 +15,16 @@ from __future__ import annotations
 
 import re
 import subprocess
+from pathlib import Path
 from typing import Any, Mapping
 
 from .evidence_types import Result, valid_commit_ref
 
-__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref"]
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref", "resolve_commit"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
 _SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
+_FULL_HEX40_RE = re.compile(r"^[0-9a-f]{40}\Z")
 
 
 def valid_ref(ref: Any) -> bool:
@@ -50,6 +52,37 @@ def parse_trailers(text: str) -> dict[str, str]:
         if key:
             trailers[key] = value
     return trailers
+
+
+def resolve_commit(
+    repo: str | Path,
+    sha: str,
+    *,
+    git: str = "git",
+    timeout: float = 30.0,
+) -> str | None:
+    """Resolve *sha* to the full lowercase 40-hex commit id via ``git rev-parse``, or None."""
+    if not repo or not isinstance(repo, (str, Path)):
+        return None
+    if not isinstance(sha, str) or sha.startswith("-") or not _SHA_ARG_RE.fullmatch(sha):
+        return None
+    try:
+        proc = subprocess.run(
+            [str(git), "rev-parse", "--verify", "--end-of-options", f"{sha}^{{commit}}"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            timeout=float(timeout),
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        full = proc.stdout.strip().lower()
+        if _FULL_HEX40_RE.fullmatch(full):
+            return full
+        return None
+    except Exception:
+        return None
 
 
 class GitAdapter:
@@ -100,10 +133,14 @@ class GitAdapter:
 
     # -- operations ---------------------------------------------------------
     def commit_exists(self, repo: str, sha: str) -> bool:
-        if not valid_commit_ref(sha):
+        if not isinstance(sha, str) or not _SHA_ARG_RE.fullmatch(sha):
             return False
         proc = self._run(repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"])
         return proc.returncode == 0
+
+    def resolve_commit(self, repo: str, sha: str) -> str | None:
+        """Resolve *sha* to a full 40-hex commit id, or None."""
+        return resolve_commit(repo, sha, git=self._git, timeout=self._timeout)
 
     def is_ancestor(self, repo: str, sha: str, ref: str) -> bool:
         if not isinstance(sha, str) or not _SHA_ARG_RE.fullmatch(sha) or not valid_ref(ref):
@@ -174,9 +211,9 @@ class LegacyCommitVerifier:
         commit = ref.get("sha") or ref.get("commit")
         if not isinstance(commit, str) or not commit:
             return Result(False, "commit requires a 'commit' sha", ref)
-        if not valid_commit_ref(commit):
-            return Result(False, "commit requires a full lowercase commit sha"
-                                 " (40 or 64 hex)", ref)
+        if not _SHA_ARG_RE.fullmatch(commit):
+            return Result(False, "commit requires a valid commit sha"
+                                 " (7..64 hex)", ref)
         project = (item or {}).get("project")
         try:
             repo = ctx.git.repo_path(project) if ctx.git is not None else None

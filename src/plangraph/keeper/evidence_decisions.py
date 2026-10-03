@@ -176,6 +176,7 @@ class DecisionsAdapter:
         if canonical is None:
             return {}
         result: dict[str, str | None] = {}
+        invalid: set[str] = set()
         for row in self._rows().get(canonical, ()):
             cell = _decision_cell(row)
             if not cell:
@@ -190,12 +191,31 @@ class DecisionsAdapter:
                         break
                 token_text = cell[start:end].strip()
                 for token in _TOKEN_SPLIT_RE.split(token_text):
-                    if token:
-                        parsed = _parse_closes_token(token)
-                        if parsed is not None:
-                            key, sha = parsed
-                            if key not in result or (result[key] is None and sha is not None):
+                    if not token:
+                        continue
+                    parsed = _parse_closes_token(token)
+                    if parsed is None:
+                        continue
+                    key, sha = parsed
+                    if key in invalid:
+                        continue
+                    if key not in result:
+                        result[key] = sha
+                    else:
+                        prev = result[key]
+                        if prev is None:
+                            result[key] = sha
+                        elif sha is None:
+                            pass
+                        else:
+                            p_l, s_l = prev.lower(), sha.lower()
+                            if p_l.startswith(s_l):
+                                pass
+                            elif s_l.startswith(p_l):
                                 result[key] = sha
+                            else:
+                                invalid.add(key)
+                                del result[key]
         return result
 
     def closes(self, decision_id: str) -> set[str]:
