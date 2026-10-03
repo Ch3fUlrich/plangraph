@@ -1,0 +1,29 @@
+# GRAPH-UI lane (operator order D-560 via routing: the web UI graph is "fully not usable": too many lines, not interactive, too rigid).
+batch: 2026-10-03-router-graph-ui
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: abab217f9b0be6209bd5dfbf13f19bc65c8794267e2b9cfb11da16c8cc16427e
+ops:
+- op: create
+  item:
+  - {project: plangraph, id: GRAPH-UI-RESEARCH, kind: lane, track: GRAPHUI, owner: plangraph-L1-main, review_tier: standard, evidence_kinds: [run-record], estimate_h: 3, estimate_src: default, priority: 3, depends_on: [],
+     title: "GRAPH-UI research: large-graph best practice + the public Omnigraph UI",
+     done_criteria: "two non-Claude research runs (public question only) and a design note of at most 2 pages with sources sent to the router",
+     description: "D-560 step 1. R1 large graph and flowgraph practice (clusters, collapse/expand, edge aggregation, level of detail, layout engines, libraries); R2 the public Omnigraph UI. No plan data in the prompts."}
+  - {project: plangraph, id: GRAPH-UI-BUILD, kind: lane, track: GRAPHUI, owner: plangraph-L2-ui-build, review_tier: standard, evidence_kinds: [commit+ci], estimate_h: 16, estimate_src: default, priority: 3, depends_on: [plangraph:GRAPH-UI-RESEARCH],
+     title: "GRAPH-UI build: project and phase clusters collapsed by default, aggregated edges, details, search",
+     done_criteria: "default view = every project one coloured node with a count, click expands to phases, then tasks; one aggregated edge per cluster pair with a count; a visible-edge budget; pan/zoom, search/filter, details panel; small steps on agy, synthetic fixtures, seats non-Google",
+     description: "D-560 steps 2-3. Writer Gemini 3.8 Flash (agy), open class, plangraph CODE only, $2 per run. Base: the ui-build line (T3b-1 + fix5)."}
+  - {project: plangraph, id: GRAPH-UI-VISCHECK, kind: lane, track: GRAPHUI, owner: plangraph-L1-main, review_tier: standard, evidence_kinds: [run-record], estimate_h: 4, estimate_src: default, priority: 3, depends_on: [plangraph:GRAPH-UI-BUILD],
+     title: "GRAPH-UI visual check by a non-writer agent on a local build against the real keeper",
+     done_criteria: "Playwright check: default view collapsed, expand/collapse works, colour per project, edge count in the default view, screenshots; at most 2 rounds of 6 screenshots; fix rounds go back to the writer",
+     description: "D-560 step 4. Exception to D-437 for this check only (operator order); MemAvailable >= 6 GB first; the browser is closed after."}
+  - {project: plangraph, id: GRAPH-UI, kind: lane, track: GRAPHUI, owner: plangraph-L1-main, review_tier: none, evidence_kinds: [decision], estimate_h: 1, estimate_src: default, priority: 3, depends_on: [plangraph:GRAPH-UI-VISCHECK],
+     title: "GRAPH-UI operator review and go-ahead (not deployed to plan.ohje before the operator's OK)",
+     done_criteria: "a router D-row records the operator's OK on the record with screenshots; only then the new UI replaces the page at plan.ohje.ooguy.com",
+     description: "D-560 step 5. The OPERATOR is the reviewer this time."}
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    depends_on: [plangraph:PROGRESS-PANEL, plangraph:UI-GRAPH, plangraph:UI-SHELL, plangraph:UI-TABLE, plangraph:UI-WRITES, plangraph:GRAPH-UI]
+- {op: priority, key: plangraph:UI-GRAPH, priority: 3}
