@@ -1,30 +1,36 @@
-# Status card — plangraph-L1-main (Opus 5.5 high, L1 project orchestrator; relaunched fresh 2026-10-01 ~20:15)
-Updated: 2026-10-02 23:40 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+# Status card — plangraph-L1-main (L1 project orchestrator; next relaunch: Sonnet high, bypass, D-496/D-506)
+Updated: 2026-10-03 05:40 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
-M1 CLOSED. M2a code accepted (routing-00 Opus spot review). Now: X6 fixes -> X7 tiers -> 2-seat re-review -> pilot keeper -> plan-v3 load ->
-router batch -> render --cdn -> M2c research + proposal (D-231). M2b / M3 / M4 not started.
+M2a done + pilot keeper live. M2c in progress: UI-BUILD (L2 plangraph-L2-ui-build, keeps running), D-505 keeper/md-sync work, stack note.
+Operating-core order APPROVED by routing: MODEL-KINDS (+intent, question/decision/OP kinds, D-row import) -> M2b off-host keeper +
+run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches.
 
-## State (branch worktree-proposal, worktree .claude/worktrees/proposal)
-- PILOT KEEPER LIVE (coding.vm 127.0.0.1:8787, "isolation not effective (pilot)"; stop by PID file, never pkill -f; daemon does NOT write
-  its pid file: write it after start). Daemon on 610271d code since 19:00Z (MODEL-A + integ + mask + tier-edit); descriptions migrated.
-- Merged + accepted: X7 (D-312), apply_ops+B3 (D-371), md-sync (D-388, timer ~/.config/systemd/user/plangraph-md-sync.*, halts on
-  refusal), B2..B2d (D-400), MODEL-A (D-427, request-side seats; re-seat lane plangraph:RESEAT-MODEL-A after autoos:EVTAG).
-- Applied batches: data/updates/* (QUEUE.md), router closes D-395/D-413/D-422, autoos WS-SHIFT, RECONCILE (86), MCP-ONE.
-- IN FLIGHT (workstation via workst-L1, Taildrop; D-389/D-430: runs only via autoos-agent spawn):
-  * integ fix DONE cfda342 (968 green); mask port writer queued (pkg b38b82ec); then ONE seat pair (integ+mask+tieredit) -> merge, restart daemon, `pg migrate-descriptions`, rehome batch
-    (10 open workstation:* -> T5-* autoos host=workstation, OP-* served project; D-413).
-  * tier-edit keeper fix (pkg writer3 59785f94, D-434) -> seats -> merge -> D-428 closes (T3-CIGREEN/T3-CIMAIN).
-  * md-sync mask-on-import (pkg writer2 bd685d62, D-405) -> rebase after integration fix.
-  * UI-BUILD (L2 plangraph-L2-ui-build): T1 MiMo writer (pkg f0c7604a); T2-T4 Gemini via OmniRoute pin (D-424) when autoos-L1 proves it.
-  * SPLIT-PREP DONE (L2-DONE): tooling merged fcc1839..30d2419 (+ splitinteg; 1028 green WSL; worktree scan "check ok 162 files"). Real-repo steps open.
-- Rules in force: template docs/process/L2-BRIEF-TEMPLATE.md (D-430/431 spawn-only, D-389 placement, D-349, D-302 independence,
-  D-421 MiMo normal, quote+VERDICT rule). L2s report only to me; I report to routing; workst-L1 direct (D-319); 2-h progress line (D-418).
-- OS-92 GRANTED (operator, this session): L1 may write router-approved batches (closes, rehome, priority) AND router-OK project plan batches (create/edit/priority) under data/updates/ and apply them to :8787 with apply_batch, then verify.
-- INCIDENT 2026-10-02 ~23:16Z (closed for tonight by routing): workst-L1 agy run 20261002-231606-t2c-d813a6 saw a non-clean ui-build tree (fleet project names in test_render.py, file-name list, workstation username); LOW, real breach; sandbox kept for audit until the operator has seen the morning report. T2b guard widening reverted by T2c (MiMo).
-- WORKST ACK RULE (fleet): every task to workst-L1 gets RECEIVED → LAUNCHED <run-id> | QUEUED pos N within 10 min; no ack within 15 min → ping workst-L1.
-- D-505 (operator): done = commit merged to the repo target ref (autoos/server/routing origin/main, plangraph main). K1 keeper (key@sha tokens, per-repo ref, commit-gated decision closes; Vertex, HIGH) shipped; then config refs + daemon restart; then P1 md-sync (read-only fetch, fail closed). Old dclose pkg HELD.
-- PATH 1 (md-sync D-row Closes) GO by routing: on merge FIRST stop plangraph-md-sync.timer+.path, run a DRY RUN, send routing the (key, D-row) list, apply only after routing OKs/strikes keys, then re-arm. Later runs need no OK.
-- DESIGN TODO (routing audit 2026-10-02): item kind `decision` (or linked D-row import, ~130 rule answers) + `question` kind -> M2c model proposal with MODEL-KINDS.
-- Lessons: quoted heredocs for task texts; legacy-claim only items with a known close path; Taildrop (D-474): NEVER `tailscale file get`; read only /home/s/fleet/taildrop/plangraph/ (prefix stripped; dup -> x.1); senders keep the plangraph__ prefix; check the file is FILED (ls + sha) before pointing an L2 at it.
+## Live systems (coding.vm)
+- Keeper 127.0.0.1:8787, PID in ~/.local/share/plangraph/daemon.pid (daemon does NOT write it; stop with kill -TERM, never pkill -f).
+  Code = worktree head (keeper code as of 610271d + apply_batch rehome + md_sync changes). 489 items. Verify: PG_CONFIG=… pg admin verify.
+- md-sync timer + path (~/.config/systemd/user/plangraph-md-sync.*), writes ~/.local/share/plangraph/md-sync.status.json every run;
+  halts on refusal -> look at the status file, fix the cause, re-arm. Closes only ANSWERS-cited items today.
+- OS-92 (operator): L1 may apply ROUTER-OK'd batches (closes/rehome/priority + plan batches create/edit/priority) under data/updates/.
+
+## In flight (workstation via workst-L1; Taildrop in, read /home/s/fleet/taildrop/plangraph/ only; workst ACKs within 10 min)
+- UI T3b-1fix3 (Vertex run 20261003-051823-t3b1fix3-37999d) on ui-build 18e6122 -> browser acceptance -> L2 seat prompt (T3b-1+fix+fix2+fix3,
+  gpt-oss via review-call + Qwen at workst, anti-gaming + "no fit-all" points) -> accept -> T3b-2, T3b-3, T4 (Gemini direct pins, D-510).
+- K1 keeper (D-505: key@sha Closes tokens, per-repo target ref, commit-gated decision closes), Vertex run 20261003-043743-k1-64eed3:
+  workst verifying. Then 2 non-google seats (HIGH) -> merge -> keeper config refs (autoos/server/routing origin/main, plangraph main) ->
+  daemon restart -> write P1.
+- P1 md-sync (D-505 + Path 1): router D-rows `Closes: key@sha` -> in_review + evidence -> close when merged (read-only git fetch, fail
+  closed); [decision]-only items close by decision; code lanes without @sha -> in_review + listed. OLD pkg mdsync-dclose is HELD at workst.
+  FIRST RUN GATE: stop timer+path, dry run, send routing the (key, D-row) list, apply only OK'd keys, re-arm.
+- Stack design note: Haiku research run queued at workst (task plangraph__stack-research-task.txt); then write a <=2-page note
+  (Python/SQLite vs Rust, Postgres M4, UI libs, phased no-loss migration). Proposal docs/proposals/2026-10-03-graph-tracks-acceptance.md.
+
+## Rules (full list: docs/process/L2-BRIEF-TEMPLATE.md)
+D-437 zero agent runs on coding.vm; D-430/431 spawn only; D-510 writers Gemini 3.8 Flash direct pins, seats other families (never Google
+for Gemini code); D-509 plangraph CODE open class, plan DATA private; anti-test-gaming line in every writer task + seat point (real quotes);
+D-302 L1 rules on seat findings; record -> ACCEPT -> merge; no push/remote; Taildrop names plangraph__<name>.
+
+## Lessons
+Verify a Taildrop file is filed before relaying a path; seats invent quotes for absence claims (check every quote); writers game tests if
+the legit test change is not in scope (list it); workst-L1 reads every writer diff for test-gaming; quoted heredocs / Write tool for tasks.
 ## Compactions this session: 1 (2026-10-02 ~17:55Z)
