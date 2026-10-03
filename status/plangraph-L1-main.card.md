@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (L1 project orchestrator; next relaunch: Sonnet high, bypass, D-496/D-506)
-Updated: 2026-10-03 09:25 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+Updated: 2026-10-03 11:37 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
 M2a done + pilot keeper live. M2c in progress: UI-BUILD (L2 plangraph-L2-ui-build, keeps running), D-505 keeper/md-sync work, stack note.
@@ -17,11 +17,8 @@ run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches
 - UI T3b-1fix3 DONE but 2 phone fails (A18 collapsed header off-canvas, A19 cross-project Jump lands on stale layout) -> fix4 package
   (L2 pkg/T3b1fix4) at workst, writer run 20261003-064807-t3b1fix4-5a0308 -> probe A18/A19 (+visibleTasks) -> L2 seat prompt (pkg/T3b1seat,
   gpt-oss via review-call + Qwen at workst) -> accept T3b-1 -> T3b-2, T3b-3, T4 (Gemini direct pins, D-510).
-- K1 keeper (D-505) delivered 9b860dc (bundle sha c4dd1c5e); seat1 gpt-oss found: Closes key@sha token sha NOT bound to the verified
-  evidence sha -> K1fix at workst (run 20261003-064522-k1fix-7fe698; pkg k1fix-pkg, sha 824187e9). Then gpt-oss rerun here + Qwen seat at workst
-  (HIGH) -> routing merge OK (routing: fix approved) -> keeper config refs (autoos/server/routing origin/main, plangraph main) -> daemon
-  restart -> write P1. Routing D-point: decision-only item with @sha token = no refusal, but WARNING in md-sync status + report line
-  "sha ignored on decision-only item <key>" (put in P1).
+- K1 keeper MERGED (D-537, 5b4fe9d..8cdad08), daemon restarted ~11:32Z with per-repo refs; GEN-CLOSEOUT closed. Next: write P1 md-sync (writer run) +
+  warning rule "sha ignored on decision-only item <key>"; MEALIE-CAP (D-537) + other new Closes rows (D-527..D-537) go through P1's gated first run.
 - P1 md-sync (D-505 + Path 1): router D-rows `Closes: key@sha` -> in_review + evidence -> close when merged (read-only git fetch, fail
   closed); [decision]-only items close by decision; code lanes without @sha -> in_review + listed. OLD pkg mdsync-dclose is HELD at workst.
   FIRST RUN GATE: stop timer+path, dry run, send routing the (key, D-row) list, apply only OK'd keys, re-arm.
