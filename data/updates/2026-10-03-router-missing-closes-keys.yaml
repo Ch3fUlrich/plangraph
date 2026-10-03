@@ -1,0 +1,41 @@
+# Missing Closes keys from decision rows D-492..D-537 (router order 2026-10-03): items the rows name that are not in the graph.
+# Source = the D-row (each description cites it). gen items are decision-only (gen-analysis is not a registered repo for commit evidence).
+batch: 2026-10-03-router-missing-closes-keys
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 9e9a2e6fbfe8156197c2ac38f4b9a5692681c491d94211c994345b43d5590e39
+ops:
+- op: create
+  item:
+  - {project: server, id: UPR-LOG-B2, kind: lane, track: UPDATESRUN, owner: server-L1-main, review_tier: standard, evidence_kinds: [commit+ci], estimate_h: 2, estimate_src: default, priority: 0, depends_on: [],
+     title: "Update-run execution log batch 2 (docs, updates-run-log-b2)",
+     done_criteria: "merged; every log line claims only what was observed",
+     description: "Router D-532: updates-run-log-b2 aaad4960 accepted (docs). Closes server:UPR-LOG-B2@aaad4960."}
+  - {project: server, id: IDS-SCHEDULE-ON, kind: lane, track: SECURITY, owner: server-L1-main, review_tier: standard, evidence_kinds: [commit+ci, semaphore-task], estimate_h: 1, estimate_src: default, priority: 0, depends_on: [],
+     title: "IDS scheduled run switched on (ids-schedule-on)",
+     done_criteria: "merged; the scheduled IDS run is active and its checks are green",
+     description: "Router D-533: ids-schedule-on f3bcc583 ACCEPTED. Closes server:IDS-SCHEDULE-ON@f3bcc583."}
+  - {project: workst-gen, id: GEN-CIHEALTH, kind: lane, track: GEN, owner: workst-L1-gen, review_tier: none, evidence_kinds: [decision], estimate_h: 1, estimate_src: default, priority: 0, depends_on: [],
+     title: "gen-analysis docker CI job green again (run 37118689789 on 79401f9)",
+     done_criteria: "router decision records the green run; PR lanes 77-82 run interleaved",
+     description: "Router D-533: the docker job is green again, the first since 2026-09-17, router-verified; delta seat on Qwen's one-flag commit passed. Closes workst-gen:GEN-CIHEALTH@79401f9."}
+  - {project: workst-gen, id: BWERROR, kind: lane, track: GEN, owner: workst-L1-gen, review_tier: none, evidence_kinds: [decision], estimate_h: 2, estimate_src: default, priority: 0, depends_on: [],
+     title: "gen-analysis /bloodwork/{person}: whitelisted escaped de/en message for ?error=",
+     done_criteria: "router accepts the lane after seats and tests (D-535)",
+     description: "Router D-535: gen BWERROR 510cdfe ACCEPTED; 13 statuses, 38 tests incl. hostile payloads; seats OVH gpt-oss + Qwen ACCEPT; full suite 3711/0. Closes workst-gen:BWERROR@510cdfe."}
+  - {project: plangraph, id: K1-KEEPER, kind: lane, track: M2C, owner: plangraph-L1-main, review_tier: high, evidence_kinds: [commit+ci], estimate_h: 12, estimate_src: default, priority: 0, depends_on: [],
+     title: "K1 keeper: commit-gated decision closes (D-505)",
+     done_criteria: "K1 merged on the plangraph main line, seats gpt-oss + Qwen recorded",
+     description: "Router D-537: K1 keeper ACCEPTED (HIGH, 2 non-Google seats, 14/14 mutants killed). Merged on worktree-proposal as 5b4fe9d..8cdad08; reviewed sha 9f97b37. Closes plangraph:K1-KEEPER@9f97b37."}
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on: [server:BACKUP-HARDEN, server:CHAPTARR-ENV, server:CS-CADDY, server:CS-CADDY-PII, server:DH-DOCS, server:GW-LOGS-REWORK, server:GW-NFS-COUNTS, server:GW-SEMAPHORE-HARDEN, server:IDS-HOMENET, server:IDS-READSHAPE, server:IDS-V6SRC, server:MEALIE-CAP, server:OVERLAY-VERSION-GUARD, server:OWUI-PYODIDE, server:PLAN-VHOST, server:STREAMING-BACKUP, server:UPR-LOG-B1, server:VIDEO-CAP, server:VM-IPV6-RA, server:UPR-LOG-B2, server:IDS-SCHEDULE-ON]
+- op: edit
+  key: routing:PH-GEN-1003
+  fields:
+    depends_on: [workst-gen:GEN-ATOMIC-SWAP-OBS, workst-gen:GEN-CLOSEOUT, workst-gen:GEN-FLEET-SWITCH, workst-gen:GEN-HISTORY-REWRITE, workst-gen:GEN-REGISTRY-ROUTE, workst-gen:GEN-SHARELINK-FLAKE, workst-gen:GEN-CIHEALTH, workst-gen:BWERROR]
+- op: edit
+  key: plangraph:PH-M2C-SYNC
+  fields:
+    depends_on: [plangraph:SYNC-MD-IMPORT, plangraph:K1-KEEPER]
