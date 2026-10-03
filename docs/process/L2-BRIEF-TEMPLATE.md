@@ -14,6 +14,9 @@ plangraph-L1-main by SendMessage.
   mandatory point: "no production code detects or adapts to test inputs (equality overrides, test-name checks, environment sniffing) and no
   test/guard was weakened" (quote-confirmed with REAL lines: the definitions themselves + an explicit statement of what was searched;
   seats invent quotes for absence claims, so an invented quote invalidates the line).
+- D-510 (operator, 2026-10-03): NO combos until autoos-L1 refreshed them. Writers = Gemini 3.8 Flash via DIRECT pins (vertex / AI Studio / agy when its
+  quota is back), spread so no single quota runs out. Seats = other families (free OpenRouter families, OVH gpt-oss/Qwen, agy Claude, Mistral),
+  never Google for Gemini code; risk-gated: HIGH 2 seats of 2 non-writer families, normal 1-2, low 1.
 - D-509 (operator, 2026-10-03) SUPERSEDES the training-provider rule below for plangraph CODE branches (ui-build, keeper code clones): writers/seats
   may use free/training legs and combos (speed/cost), seats keep family diversity, secrets never sent, no orphan snapshot needed. STILL site
   data, never to external models: data/ (plan-v3, update batches), the keeper DB/snapshots, routing QUESTIONS/ANSWERS/decision logs.
