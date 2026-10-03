@@ -29,7 +29,7 @@ run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches
   non-Google seats; then I deploy the 2 user units on coding.vm; server-L1 does Caddy/Authelia/DNS (PLAN-VHOST, 100.82.253.38:8089), prox the ACL.
 
 ## Rules (full list: docs/process/L2-BRIEF-TEMPLATE.md)
-D-437 zero agent runs on coding.vm; D-430/431 spawn only; D-510 writers Gemini 3.8 Flash direct pins, seats other families (never Google
+D-538 NO Google AI Studio (vertex single leg or free only); D-437 zero agent runs on coding.vm; D-430/431 spawn only; D-510 writers Gemini 3.8 Flash direct pins, seats other families (never Google
 for Gemini code); D-509 plangraph CODE open class, plan DATA private; anti-test-gaming line in every writer task + seat point (real quotes);
 D-302 L1 rules on seat findings; record -> ACCEPT -> merge; no push/remote; Taildrop names plangraph__<name>.
 ## Lessons
