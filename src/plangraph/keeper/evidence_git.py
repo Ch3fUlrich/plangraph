@@ -133,7 +133,7 @@ class GitAdapter:
 
     # -- operations ---------------------------------------------------------
     def commit_exists(self, repo: str, sha: str) -> bool:
-        if not isinstance(sha, str) or not _SHA_ARG_RE.fullmatch(sha):
+        if not valid_commit_ref(sha):
             return False
         proc = self._run(repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"])
         return proc.returncode == 0
@@ -211,9 +211,9 @@ class LegacyCommitVerifier:
         commit = ref.get("sha") or ref.get("commit")
         if not isinstance(commit, str) or not commit:
             return Result(False, "commit requires a 'commit' sha", ref)
-        if not _SHA_ARG_RE.fullmatch(commit):
-            return Result(False, "commit requires a valid commit sha"
-                                 " (7..64 hex)", ref)
+        if not valid_commit_ref(commit):
+            return Result(False, "commit requires a full lowercase commit sha"
+                                 " (40 or 64 hex)", ref)
         project = (item or {}).get("project")
         try:
             repo = ctx.git.repo_path(project) if ctx.git is not None else None

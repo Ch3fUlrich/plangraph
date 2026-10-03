@@ -16,7 +16,8 @@ from keeper_util import World, defn
 from plangraph.keeper import evidence
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
-from plangraph.keeper.evidence_git import GitAdapter, resolve_commit
+from plangraph.keeper.evidence_git import GitAdapter, LegacyCommitVerifier, resolve_commit
+from plangraph.keeper.evidence_types import Result
 
 DID = "D-505"
 KEY = "demo:A"
@@ -35,8 +36,7 @@ def _batch_file(tmp_path: Path) -> str:
     root.mkdir(parents=True, exist_ok=True)
     path = root / "batch.md"
     path.write_text("batch content\n", encoding="utf-8")
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return f"{path}@{digest}"
+    return f"{path}@{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
 def _git_cmd(repo_path: Path, *args: str) -> str:
@@ -59,7 +59,6 @@ def git_repo(tmp_path: Path):
     _git_cmd(repo, "commit", "-q", "-m", "main commit")
     _git_cmd(repo, "branch", "-M", "main")
     main_sha = _git_cmd(repo, "rev-parse", "HEAD")
-
     _git_cmd(repo, "checkout", "-q", "-b", "feature")
     (repo / "feat.txt").write_text("feature\n", encoding="utf-8")
     _git_cmd(repo, "add", "feat.txt")
@@ -71,14 +70,15 @@ def git_repo(tmp_path: Path):
 
 
 def _world(tmp_path: Path, git_repo=None, kinds=("decision", "commit"),
-           ref="main", cell=f"Closes: {KEY}") -> World:
+           ref="main", cell=f"Closes: {KEY}", adapter=None) -> World:
     w = World(tmp_path)
     w.store.verifiers = dict(evidence.VERIFIERS)
     w.store.create_items(w.p("router"), [
         defn("A", [], evidence_kinds=list(kinds), review_tier="none"),
         defn("GOAL", ["A"], kind="goal"),
     ])
-    adapter = _decisions_adapter(tmp_path, cell)
+    if adapter is None:
+        adapter = _decisions_adapter(tmp_path, cell)
     git = GitAdapter({"demo": {"path": str(git_repo.path), "ref": ref}}) if git_repo else None
     w.store.ctx = SimpleNamespace(decisions=adapter, git=git)
     w.batch_ref = _batch_file(tmp_path)
@@ -91,10 +91,17 @@ def test_abbrev_evidence_fabricated_40hex_token_refused(tmp_path: Path, git_repo
     feat_sha = git_repo.feature_sha
     abbrev_sha = feat_sha[:7]
     fabricated_token = abbrev_sha + "0" * 33
-    assert len(fabricated_token) == 40
-    assert fabricated_token != feat_sha
+    assert len(fabricated_token) == 40 and fabricated_token != feat_sha
+
+    class _StubCommitVerifier:
+        """Test-local stub accepting only injected abbreviated ref for testing commit evidence; lives only in this test."""
+        kind = "commit"
+        def verify(self, item, ref, ctx):
+            s = (ref or {}).get("sha") or (ref or {}).get("commit")
+            return Result(s == abbrev_sha, "injected" if s == abbrev_sha else "unverified", ref or {})
 
     w = _world(tmp_path, git_repo, cell=f"Closes: {KEY}@{fabricated_token}")
+    w.store.verifiers["commit"] = _StubCommitVerifier()
     w.store.set_legacy_state(w.p("router"), KEY, "in_review")
     w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": DID})
     w.store.add_evidence_router(w.p("router"), KEY, "commit", {"sha": abbrev_sha})
@@ -111,14 +118,21 @@ def test_abbrev_evidence_full_token_closes(tmp_path: Path, git_repo):
     feat_sha = git_repo.feature_sha
     abbrev_sha = feat_sha[:7]
 
+    class _StubCommitVerifier:
+        """Test-local stub accepting only injected abbreviated ref for testing commit evidence; lives only in this test."""
+        kind = "commit"
+        def verify(self, item, ref, ctx):
+            s = (ref or {}).get("sha") or (ref or {}).get("commit")
+            return Result(s == abbrev_sha, "injected" if s == abbrev_sha else "unverified", ref or {})
+
     w = _world(tmp_path, git_repo, cell=f"Closes: {KEY}@{feat_sha}")
+    w.store.verifiers["commit"] = _StubCommitVerifier()
     w.store.set_legacy_state(w.p("router"), KEY, "in_review")
     w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": DID})
     w.store.add_evidence_router(w.p("router"), KEY, "commit", {"sha": abbrev_sha})
 
     res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
-    assert res["state"] == "done"
-    assert res["decision_ids"] == [DID]
+    assert res["state"] == "done" and res["decision_ids"] == [DID]
     w.close()
 
 
@@ -273,16 +287,7 @@ def test_close_with_conflicting_tokens_refused(tmp_path: Path, git_repo):
         encoding="utf-8",
     )
     adapter = DecisionsAdapter(d_path)
-    w2 = World(tmp_path / "g2")
-    w2.store.verifiers = dict(evidence.VERIFIERS)
-    w2.store.create_items(w2.p("router"), [
-        defn("A", [], evidence_kinds=["decision", "commit"], review_tier="none"),
-        defn("GOAL", ["A"], kind="goal"),
-    ])
-    git = GitAdapter({"demo": {"path": str(git_repo.path), "ref": "main"}})
-    w2.store.ctx = SimpleNamespace(decisions=adapter, git=git)
-    w2.batch_ref = _batch_file(tmp_path / "g2")
-    w2.store.batch_roots = [str(tmp_path / "g2" / "plan")]
+    w2 = _world(tmp_path / "g2", git_repo, adapter=adapter)
 
     w2.store.set_legacy_state(w2.p("router"), KEY, "in_review")
     w2.store.add_evidence_router(w2.p("router"), KEY, "decision", {"id": "D-101"})
@@ -320,16 +325,7 @@ def test_multiple_decision_rows_prefix_pair_closes(tmp_path: Path, git_repo):
         encoding="utf-8",
     )
     adapter = DecisionsAdapter(d_path)
-    w = World(tmp_path / "multi_pfx")
-    w.store.verifiers = dict(evidence.VERIFIERS)
-    w.store.create_items(w.p("router"), [
-        defn("A", [], evidence_kinds=["decision", "commit"], review_tier="none"),
-        defn("GOAL", ["A"], kind="goal"),
-    ])
-    git = GitAdapter({"demo": {"path": str(git_repo.path), "ref": "main"}})
-    w.store.ctx = SimpleNamespace(decisions=adapter, git=git)
-    w.batch_ref = _batch_file(tmp_path / "multi_pfx")
-    w.store.batch_roots = [str(tmp_path / "multi_pfx" / "plan")]
+    w = _world(tmp_path / "multi_pfx", git_repo, adapter=adapter)
 
     w.store.set_legacy_state(w.p("router"), KEY, "in_review")
     w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": "D-101"})
@@ -339,4 +335,60 @@ def test_multiple_decision_rows_prefix_pair_closes(tmp_path: Path, git_repo):
     res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
     assert res["state"] == "done"
     assert res["decision_ids"] == ["D-101", "D-102"]
+    w.close()
+
+
+def test_commit_exists_and_verifier_refuse_abbrev_and_uppercase(git_repo):
+    """(i) abbreviated sha (7 hex) and uppercase full sha are refused; valid lowercase full sha verifies."""
+    valid_sha, repo_dir = git_repo.feature_sha, str(git_repo.path)
+    abbrev_sha, upper_sha = valid_sha[:7], valid_sha.upper()
+    adapter = GitAdapter({"demo": {"path": repo_dir, "ref": "main"}})
+    verifier = LegacyCommitVerifier()
+    ctx = SimpleNamespace(git=adapter)
+    item = {"project": "demo"}
+
+    assert adapter.commit_exists(repo_dir, abbrev_sha) is False
+    assert adapter.commit_exists(repo_dir, upper_sha) is False
+    assert adapter.commit_exists(repo_dir, valid_sha) is True
+
+    expected_refusal = "commit requires a full lowercase commit sha (40 or 64 hex)"
+    res_abbrev = verifier.verify(item, {"sha": abbrev_sha}, ctx)
+    assert not res_abbrev.ok and expected_refusal in res_abbrev.detail
+
+    res_upper = verifier.verify(item, {"sha": upper_sha}, ctx)
+    assert not res_upper.ok and expected_refusal in res_upper.detail
+
+    res_valid = verifier.verify(item, {"sha": valid_sha}, ctx)
+    assert res_valid.ok and f"commit {valid_sha} is an ancestor of main" in res_valid.detail
+
+
+def test_decision_only_item_with_sha_token_closes(tmp_path: Path):
+    """(ii) decision-only item with no commit kind closes when decision row names one @sha token."""
+    w = _world(tmp_path, kinds=["decision"], cell=f"Closes: {KEY}@abcdef0123")
+    w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": DID})
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done" and res["decision_ids"] == [DID]
+    w.close()
+
+
+def test_resolve_commit_skipped_mutation_fails(tmp_path: Path, git_repo):
+    """(iii) close fails if resolve_commit is skipped (comparing token with raw evidence sha instead of resolved id)."""
+    feat_sha = git_repo.feature_sha
+    abbrev_sha = feat_sha[:7]
+
+    class _StubCommitVerifier:
+        """Test-local stub accepting only injected abbreviated ref for testing commit evidence; lives only in this test."""
+        kind = "commit"
+        def verify(self, item, ref, ctx):
+            s = (ref or {}).get("sha") or (ref or {}).get("commit")
+            return Result(s == abbrev_sha, "injected" if s == abbrev_sha else "unverified", ref or {})
+
+    w = _world(tmp_path, git_repo, cell=f"Closes: {KEY}@{feat_sha[:10]}")
+    w.store.verifiers["commit"] = _StubCommitVerifier()
+    w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": DID})
+    w.store.add_evidence_router(w.p("router"), KEY, "commit", {"sha": abbrev_sha})
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done" and res["decision_ids"] == [DID]
     w.close()
