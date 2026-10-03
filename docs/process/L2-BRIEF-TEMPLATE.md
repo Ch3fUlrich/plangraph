@@ -17,7 +17,8 @@ plangraph-L1-main by SendMessage.
 - D-510 (operator, 2026-10-03): NO combos until autoos-L1 refreshed them. Writers = Gemini 3.8 Flash via DIRECT pins (vertex / AI Studio / agy when its
   quota is back), spread so no single quota runs out. Seats = other families (free OpenRouter families, OVH gpt-oss/Qwen, agy Claude, Mistral),
   never Google for Gemini code; risk-gated: HIGH 2 seats of 2 non-writer families, normal 1-2, low 1.
-- D-540 (operator, 2026-10-03): Vertex STOPPED too. plangraph code writers = agy gemini-3.8-flash only, else free OpenRouter; seats OVH gpt-oss/Qwen/Mistral; no Google seats.
+- D-543 (operator, 2026-10-03) supersedes D-538/D-540 for pins: Vertex + AI Studio re-activated with a hard cap, costs must drop (~$100/12 h). plangraph code: agy gemini-3.8-flash FIRST (no marginal cost), Vertex at MEDIUM effort ONLY when agy fails, no AI Studio; per-run ceiling $2; ranged reads, small briefs; record leg + cost per run.
+- (superseded by D-543) D-540 (operator, 2026-10-03): Vertex STOPPED too. plangraph code writers = agy gemini-3.8-flash only, else free OpenRouter; seats OVH gpt-oss/Qwen/Mistral; no Google seats.
 - D-538/D-539 (operator, 2026-10-03): NO Google AI Studio until further notice. For plangraph CODE (open class) the preferred Gemini writer is
   Antigravity gemini-3.8-flash with the neutral sandbox root (no username in the path, e.g. C:\fleet\sandboxes); use agy when it answers (no 429),
   else the Vertex single leg. Plan DATA (data/, keeper DB, decision logs) never goes to agy or any external model; packages carry code + synthetic only.
