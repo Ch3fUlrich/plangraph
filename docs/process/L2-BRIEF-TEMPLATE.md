@@ -14,7 +14,10 @@ plangraph-L1-main by SendMessage.
   mandatory point: "no production code detects or adapts to test inputs (equality overrides, test-name checks, environment sniffing) and no
   test/guard was weakened" (quote-confirmed with REAL lines: the definitions themselves + an explicit statement of what was searched;
   seats invent quotes for absence claims, so an invented quote invalidates the line).
-- TRAINING PROVIDERS (antigravity/agy etc.; routing after the 2026-10-02 T2b incident): EVERY plangraph branch/bundle is SITE DATA. Only a vetted
+- D-509 (operator, 2026-10-03) SUPERSEDES the training-provider rule below for plangraph CODE branches (ui-build, keeper code clones): writers/seats
+  may use free/training legs and combos (speed/cost), seats keep family diversity, secrets never sent, no orphan snapshot needed. STILL site
+  data, never to external models: data/ (plan-v3, update batches), the keeper DB/snapshots, routing QUESTIONS/ANSWERS/decision logs.
+  Anti-test-gaming rule stays. (Old rule, kept for reference:) TRAINING PROVIDERS: EVERY plangraph branch/bundle is SITE DATA. Only a vetted
   ORPHAN snapshot (D-494: rename + vocabulary grep + seat) may go to a training leg. No test/guard edits outside the task scope, ever. Training-leg sandboxes live under a neutral root (no username in the path, e.g. C:\fleet\sandboxes).
   omniroute/agy-gemini-3.8-flash` via workst-L1 (run-local overlay → agy/gemini-3.8-flash-high; -medium on cooldown) until GEMINI38 is on main.
   antigravity trains on prompts: public synthetic code only. Seats for Gemini code: non-google.
