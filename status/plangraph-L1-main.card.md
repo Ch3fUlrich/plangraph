@@ -27,7 +27,6 @@ run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches
   FIRST RUN GATE: stop timer+path, dry run, send routing the (key, D-row) list, apply only OK'd keys, re-arm.
 - Stack design note: Haiku research run 20261003-065708-sresearch-8424ef running at workst; then write a <=2-page note
   (Python/SQLite vs Rust, Postgres M4, UI libs, phased no-loss migration). Proposal docs/proposals/2026-10-03-graph-tracks-acceptance.md.
-
 - GRAPH 541 items (D-492..D-526 progress batch + server new lanes LIVE, head 00418362643e). GEN-CLOSEOUT closes after K1 (live parser rejects key@sha).
 - URL plan.ohje.ooguy.com (read-only, D-525): urlview writer (static_serve.py + render timer, task pkg urlview-pkg) at workst on the AI Studio pin NOW,
   non-Google seats; then I deploy the 2 user units on coding.vm; server-L1 does Caddy/Authelia/DNS (PLAN-VHOST, 100.82.253.38:8089), prox the ACL.
@@ -36,8 +35,6 @@ run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches
 D-437 zero agent runs on coding.vm; D-430/431 spawn only; D-510 writers Gemini 3.8 Flash direct pins, seats other families (never Google
 for Gemini code); D-509 plangraph CODE open class, plan DATA private; anti-test-gaming line in every writer task + seat point (real quotes);
 D-302 L1 rules on seat findings; record -> ACCEPT -> merge; no push/remote; Taildrop names plangraph__<name>.
-
 ## Lessons
 Verify a Taildrop file is filed before relaying a path; seats invent quotes for absence claims (check every quote); writers game tests if
 the legit test change is not in scope (list it); workst-L1 reads every writer diff for test-gaming; quoted heredocs / Write tool for tasks.
-## Compactions this session: 1 (2026-10-02 ~17:55Z)
