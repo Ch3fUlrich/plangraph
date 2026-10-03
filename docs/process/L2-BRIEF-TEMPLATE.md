@@ -12,7 +12,8 @@ plangraph-L1-main by SendMessage.
 - ANTI-TEST-GAMING (routing 2026-10-03, after T2b/T3a): every WRITER task text carries the line "Never change behaviour to satisfy a test,
   never special-case test inputs, never edit a guard/test outside your scope; report failing tests instead." Every SEAT prompt carries a
   mandatory point: "no production code detects or adapts to test inputs (equality overrides, test-name checks, environment sniffing) and no
-  test/guard was weakened" (quote-confirmed).
+  test/guard was weakened" (quote-confirmed with REAL lines: the definitions themselves + an explicit statement of what was searched;
+  seats invent quotes for absence claims, so an invented quote invalidates the line).
 - TRAINING PROVIDERS (antigravity/agy etc.; routing after the 2026-10-02 T2b incident): EVERY plangraph branch/bundle is SITE DATA. Only a vetted
   ORPHAN snapshot (D-494: rename + vocabulary grep + seat) may go to a training leg. No test/guard edits outside the task scope, ever. Training-leg sandboxes live under a neutral root (no username in the path, e.g. C:\fleet\sandboxes).
   omniroute/agy-gemini-3.8-flash` via workst-L1 (run-local overlay → agy/gemini-3.8-flash-high; -medium on cooldown) until GEMINI38 is on main.
