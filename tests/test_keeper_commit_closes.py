@@ -317,3 +317,74 @@ def test_configured_target_ref_per_repo(tmp_path: Path, git_repo):
     assert w.store.verify_integrity() == []
     assert keeper_events.fold(keeper_events.read_events(w.conn))[KEY]["state"] == "done"
     w.close()
+
+
+# ------------------------------------------------------------- 5. Token sha binding (D-505 fix)
+def _setup_item(tmp_path: Path, git_repo, cell: str, kinds=("decision", "commit"),
+                commit_sha: str | None = None) -> World:
+    w = _world(tmp_path, git_repo, kinds=kinds, cell=cell)
+    w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": DID})
+    if "commit" in kinds:
+        sha = commit_sha or git_repo.main_sha
+        w.store.add_evidence_router(w.p("router"), KEY, "commit", {"sha": sha})
+    return w
+
+
+def test_token_sha7_prefix_closes(tmp_path: Path, git_repo):
+    w = _setup_item(tmp_path, git_repo, cell=f"Closes: {KEY}@{git_repo.main_sha[:7]}")
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    w.close()
+
+
+def test_token_sha40_equal_closes(tmp_path: Path, git_repo):
+    w = _setup_item(tmp_path, git_repo, cell=f"Closes: {KEY}@{git_repo.main_sha}")
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    w.close()
+
+
+def test_token_sha_differs_refused_names_both(tmp_path: Path, git_repo):
+    _git_cmd(git_repo.path, "merge", "--ff-only", git_repo.feature_sha)
+    cell = f"Closes: {KEY}@{git_repo.feature_sha}"
+    w = _setup_item(tmp_path, git_repo, cell=cell, commit_sha=git_repo.main_sha)
+    with pytest.raises(Refused) as exc:
+        w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert exc.value.code == "evidence_unverified"
+    assert git_repo.feature_sha in exc.value.msg
+    assert git_repo.main_sha in exc.value.msg
+    assert f"Closes token {KEY}@{git_repo.feature_sha} does not match the verified commit evidence" in exc.value.msg
+    w.close()
+
+
+def test_token_without_sha_closes_as_before(tmp_path: Path, git_repo):
+    w = _setup_item(tmp_path, git_repo, cell=f"Closes: {KEY}")
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    w.close()
+
+
+def test_uppercase_token_hex_matches(tmp_path: Path, git_repo):
+    upper_sha = git_repo.main_sha[:10].upper()
+    w = _setup_item(tmp_path, git_repo, cell=f"Closes: {KEY}@{upper_sha}")
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    w.close()
+
+
+def test_decision_only_with_sha_token_closes(tmp_path: Path, git_repo):
+    w = _setup_item(tmp_path, git_repo, cell=f"Closes: {KEY}@1234567", kinds=("decision",))
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    w.close()
+
+
+def test_commit_gated_close_fold_and_verify_integrity_agree(tmp_path: Path, git_repo):
+    w = _setup_item(tmp_path, git_repo, cell=f"Closes: {KEY}@{git_repo.main_sha[:8]}")
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    assert w.store.verify_integrity() == []
+    folded = keeper_events.fold(keeper_events.read_events(w.conn))[KEY]
+    assert folded["state"] == "done" and folded["reviewer"] == "router"
+    w.close()

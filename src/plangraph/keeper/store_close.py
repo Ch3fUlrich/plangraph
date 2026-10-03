@@ -41,6 +41,16 @@ _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
 _CHUNK = 1 << 16
 
 
+def _sha_matches(tok: str, evidence_sha: str) -> bool:
+    """True when tok and evidence_sha match (case-insensitive prefix, both >= 7 chars)."""
+    if not isinstance(tok, str) or not isinstance(evidence_sha, str):
+        return False
+    t, e = tok.strip().lower(), evidence_sha.strip().lower()
+    if len(t) < 7 or len(e) < 7:
+        return False
+    return t.startswith(e) or e.startswith(t)
+
+
 class CloseMixin:
     """The router-only ``close_on_decision`` verb."""
 
@@ -157,9 +167,34 @@ class CloseMixin:
                           f"the decision closes {sorted(named)}, not {key}")
         return rows, named
 
-    def _check_commit_evidence(self, key, item, now):
+    def _closes_token_sha(self, key, rows, item=None, now=None):
+        """The commit sha from this key's Closes token in the decision rows, or None."""
+        if item is None:
+            item = self._item(key)
+        if item is None:
+            return None
+        if now is None:
+            now = self.clock()
+        decisions = self._decisions_adapter(item, now)
+        if not hasattr(decisions, "closes_with_commits"):
+            return None
+        for row in rows:
+            decision_id = (row.get("ref") or {}).get("id")
+            if not decision_id:
+                continue
+            try:
+                cwc = decisions.closes_with_commits(decision_id)
+            except Exception:  # noqa: BLE001
+                cwc = {}
+            for raw_key, sha in cwc.items():
+                if self.resolve_key(raw_key) == key and sha is not None:
+                    return sha
+        return None
+
+    def _check_commit_evidence(self, key, item, now, tok=None):
         """For tier 'none' items with 'commit' in evidence_kinds: require at least
-        one verified commit evidence row whose sha is an ancestor of configured ref.
+        one verified commit evidence row whose sha is an ancestor of configured ref,
+        and matches tok if tok is not None.
         """
         commit_rows = [e for e in self._evidence(key)
                        if e["epoch"] == item["epoch"] and e["kind"] == "commit"]
@@ -170,6 +205,7 @@ class CloseMixin:
                       if ctx.git is not None and hasattr(ctx.git, "repo_ref")
                       else "main")
         verified_any = False
+        verified_shas = []
         last_sha = None
         for row in commit_rows:
             ref = row.get("ref") or {}
@@ -179,11 +215,18 @@ class CloseMixin:
             result = self._verify_evidence(item, "commit", ref, now)
             if result.ok:
                 verified_any = True
-                break
+                if sha:
+                    verified_shas.append(sha)
         if not verified_any:
             sha_label = f" {last_sha}" if last_sha else ""
             raise Refused("evidence_unverified",
                           f"commit{sha_label} not merged into {target_ref}")
+        if tok is not None:
+            if not any(_sha_matches(tok, s) for s in verified_shas):
+                shas = sorted(set(verified_shas))
+                raise Refused("evidence_unverified",
+                              f"Closes token {key}@{tok} does not match"
+                              f" the verified commit evidence {shas}")
         return commit_rows
 
     def _close_on_decision(self, principal, key, batch_ref, now):
@@ -199,7 +242,10 @@ class CloseMixin:
                           f"{key} is review_tier={item.get('review_tier')},"
                           " only 'none' closes on a decision")
         rows, named = self._decision_evidence(key, item, now)
-        commit_rows = (self._check_commit_evidence(key, item, now)
+        tok = (self._closes_token_sha(key, rows, item, now)
+               if "commit" in (item.get("evidence_kinds") or [])
+               else None)
+        commit_rows = (self._check_commit_evidence(key, item, now, tok)
                        if "commit" in (item.get("evidence_kinds") or [])
                        else [])
         sha = self._read_batch(batch_ref)
@@ -224,7 +270,7 @@ class CloseMixin:
             # re-run every file-backed check inside it (small files, a
             # router-only verb) so nothing can change between the two.
             sha = self._read_batch(batch_ref)
-            _again_rows, again_named = self._decision_evidence(key, fresh, now)
+            again_rows, again_named = self._decision_evidence(key, fresh, now)
             if again_named != named:
                 raise Refused("evidence_unverified",
                               "the Closes: set changed under the transaction")
@@ -241,7 +287,13 @@ class CloseMixin:
                 if again_commits != seen_commits:
                     raise Refused("conflict",
                                   "the commit evidence changed under the transaction")
-                self._check_commit_evidence(key, fresh, now)
+                again_tok = self._closes_token_sha(key, again_rows, fresh, now)
+                tok_norm = tok.lower() if tok else None
+                again_tok_norm = again_tok.lower() if again_tok else None
+                if again_tok_norm != tok_norm:
+                    raise Refused("evidence_unverified",
+                                  "the Closes: token sha changed under the transaction")
+                self._check_commit_evidence(key, fresh, now, again_tok)
             # The cache row goes first, exactly like ``_pass``: the event below
             # is what locks the key, and the triggers refuse a locked insert.
             cursor = self.conn.execute(
