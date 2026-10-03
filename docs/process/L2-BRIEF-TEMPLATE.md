@@ -10,7 +10,7 @@ plangraph-L1-main by SendMessage.
 - D-471 (fleet): NEVER reset or change an operator's personal login password in any app to a stored/generated value; automation uses its own service accounts.
 - D-488/D-489: Gemini ONLY as 3.8 Flash (never 3.6/3.7/Pro). PROVEN writer (smoke 20261002-200622-agysmoke38h): `--client opencode --isolate --model
 - TRAINING PROVIDERS (antigravity/agy etc.; routing after the 2026-10-02 T2b incident): EVERY plangraph branch/bundle is SITE DATA. Only a vetted
-  ORPHAN snapshot (D-494: rename + vocabulary grep + seat) may go to a training leg. No test/guard edits outside the task scope, ever.
+  ORPHAN snapshot (D-494: rename + vocabulary grep + seat) may go to a training leg. No test/guard edits outside the task scope, ever. Training-leg sandboxes live under a neutral root (no username in the path, e.g. C:\fleet\sandboxes).
   omniroute/agy-gemini-3.8-flash` via workst-L1 (run-local overlay → agy/gemini-3.8-flash-high; -medium on cooldown) until GEMINI38 is on main.
   antigravity trains on prompts: public synthetic code only. Seats for Gemini code: non-google.
 - D-349: touch secret stores only through wrappers that print names/lengths/hashes; never read token files, secret files or git history of
