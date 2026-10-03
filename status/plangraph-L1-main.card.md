@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (L1 project orchestrator; next relaunch: Sonnet high, bypass, D-496/D-506)
-Updated: 2026-10-03 07:00 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+Updated: 2026-10-03 09:25 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
 
 ## Phase
 M2a done + pilot keeper live. M2c in progress: UI-BUILD (L2 plangraph-L2-ui-build, keeps running), D-505 keeper/md-sync work, stack note.
@@ -27,6 +27,10 @@ run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches
   FIRST RUN GATE: stop timer+path, dry run, send routing the (key, D-row) list, apply only OK'd keys, re-arm.
 - Stack design note: Haiku research run 20261003-065708-sresearch-8424ef running at workst; then write a <=2-page note
   (Python/SQLite vs Rust, Postgres M4, UI libs, phased no-loss migration). Proposal docs/proposals/2026-10-03-graph-tracks-acceptance.md.
+
+- GRAPH 541 items (D-492..D-526 progress batch + server new lanes LIVE, head 00418362643e). GEN-CLOSEOUT closes after K1 (live parser rejects key@sha).
+- URL plan.ohje.ooguy.com (read-only, D-525): urlview writer (static_serve.py + render timer, task pkg urlview-pkg) at workst on the AI Studio pin NOW,
+  non-Google seats; then I deploy the 2 user units on coding.vm; server-L1 does Caddy/Authelia/DNS (PLAN-VHOST, 100.82.253.38:8089), prox the ACL.
 
 ## Rules (full list: docs/process/L2-BRIEF-TEMPLATE.md)
 D-437 zero agent runs on coding.vm; D-430/431 spawn only; D-510 writers Gemini 3.8 Flash direct pins, seats other families (never Google
