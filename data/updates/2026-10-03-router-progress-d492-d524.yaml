@@ -4,7 +4,7 @@
 batch: 2026-10-03-router-progress-d492-d524
 principal: routing-00
 source: /home/s/code/routing/docs/decisions-log.md
-source_sha256: 6785794d9d5564e3cfbbafcd3afdad71622123f5df1e8948f1ca349ba31092b6
+source_sha256: 583beb3dbf17950c4210d8eddd84c1956bdc4cd5be90873eae0e4b014fb6391d
 ops:
 - op: create
   item:
@@ -83,7 +83,8 @@ ops:
     title: ebn compute at low priority with at most 12 cores in total
     description: 'D-523: after the 08:09Z incident (ebn classifier-audit jobs about 19/32 cores stalled all 7 workstation writers) ebn compute runs low priority with at most 12 cores total.'
     done_criteria: ebn launcher sets low priority and the 12-core cap, shown in a run record
-    evidence_kinds: [run-record]
+    review_tier: none
+    evidence_kinds: [decision]
     estimate_h: 1
     estimate_src: default
     priority: 3
@@ -97,7 +98,8 @@ ops:
     title: gen-analysis new tasks on the fleet setup (private-safe OmniRoute writers)
     description: 'D-514 (OS-119 YES): new gen-analysis tasks use private-safe OmniRoute implementation, other-family risk-gated reviews, routing-00 ACCEPT before merge or push. D-524: sensitive writer tasks run on the workstation (gen-in to gen-out folder protocol, workstation gateway only).'
     done_criteria: first fleet-run gen task accepted with seat records and the folder protocol used
-    evidence_kinds: [run-record]
+    review_tier: none
+    evidence_kinds: [decision]
     estimate_h: 4
     estimate_src: default
     priority: 0
@@ -136,6 +138,7 @@ ops:
     title: gen-analysis close-out (16 commits pushed, 3667 tests pass)
     description: 'D-516: close-out ACCEPTED, head d148368 pushed. Closed by a later router D-row with a Closes token.'
     done_criteria: router close with the commit on the repo main line
+    review_tier: none
     evidence_kinds: [decision]
     estimate_h: 1
     estimate_src: default
@@ -163,7 +166,8 @@ ops:
     title: gen-analysis gets a vertex/OVH route for sensitive cards
     description: 'D-520: the registry privacy filter demanded a paid tier, so vertex/OVH were rejected; autoos COMBO-REFRESH A4 fixes it (privacy = trains_on_prompts + cited retention, never the billing tier).'
     done_criteria: a sensitive gen-analysis writer spawn finds a route and runs
-    evidence_kinds: [run-record]
+    review_tier: none
+    evidence_kinds: [decision]
     estimate_h: 1
     estimate_src: default
     priority: 0
@@ -431,6 +435,103 @@ ops:
 - op: close_on_decision
   key: workst-ebn:P3-DIAG-REVIEW
 - op: legacy_state
+  key: workst-ebn:P1-AUDIT-REAL-DATA
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-ebn: P1 v2 running'
+- op: legacy_state
+  key: workst-ebn:P2-CELL-OUT-REDO
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-ebn: queued and claimed'
+- op: legacy_state
+  key: workst-gen:GEN-SHARELINK-FLAKE
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-gen: SHARELINK-2 running'
+- op: legacy_state
+  key: workst-gen:GEN-ATOMIC-SWAP-OBS
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-gen: claimed'
+- op: legacy_state
+  key: autoos:COMBO-REFRESH
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:COMBO-REFRESH-A4
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:WIN-PROMPT
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:FAMILY-TRACK
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:U12
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:LEAN-MCP
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:ROUTE-FRESH
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:G-KEEPER
+  state: claimed
+  note: 'router D-526 2026-10-03: autoos-L1-main: claimed'
+- op: legacy_state
+  key: autoos:O1-OPENCODE-SESSIONS
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-autoos: claimed'
+- op: legacy_state
+  key: autoos:RUNNER-SCALE-20
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-autoos: runner side live, repo part pending'
+- op: legacy_state
+  key: autoos:LAUNCHER-CPU-GATE
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-autoos: runner side live, repo part pending'
+- op: legacy_state
+  key: autoos:WORKST-L0-FAILOVER
+  state: claimed
+  note: 'router D-526 2026-10-03: workst-L1-autoos: observe-only until the operator arms it in its chat'
+- op: legacy_state
+  key: workst-ebn:EBN-COMPUTE-LOWPRIO
+  state: in_review
+  note: 'router D-526: done by decision D-523'
+- op: add_evidence
+  key: workst-ebn:EBN-COMPUTE-LOWPRIO
+  kind: decision
+  ref:
+    id: D-523
+- op: close_on_decision
+  key: workst-ebn:EBN-COMPUTE-LOWPRIO
+- op: legacy_state
+  key: workst-gen:GEN-FLEET-SWITCH
+  state: in_review
+  note: 'router D-526: done by decision D-514'
+- op: add_evidence
+  key: workst-gen:GEN-FLEET-SWITCH
+  kind: decision
+  ref:
+    id: D-514
+- op: close_on_decision
+  key: workst-gen:GEN-FLEET-SWITCH
+- op: legacy_state
+  key: workst-gen:GEN-REGISTRY-ROUTE
+  state: in_review
+  note: 'router D-526: done by decision D-524'
+- op: add_evidence
+  key: workst-gen:GEN-REGISTRY-ROUTE
+  kind: decision
+  ref:
+    id: D-524
+- op: close_on_decision
+  key: workst-gen:GEN-REGISTRY-ROUTE
+- op: legacy_state
   key: workst-gen:GEN-CLOSEOUT
   state: in_review
-  note: 'router D-516: gen-analysis close-out ACCEPTED, 16 commits pushed d148368, 3667 tests pass (gen-analysis repo is not in the keeper repo registry, so no commit evidence)'
+  note: 'router D-526 Closes workst-gen:GEN-CLOSEOUT@d148368 (gen-analysis head d148368 on its origin/main, 16 commits, 3667 tests); the live keeper parser rejects @sha tokens until K1 is merged, so the close follows the K1 merge'
