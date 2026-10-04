@@ -51,3 +51,4 @@ Missing Closes keys 3 (14 keys from D-552..D-572; router OK 04 Oct): data/update
 Missing Closes keys 4 (8 keys named by routing: D-562, D-567, D-577..D-581): data/updates/2026-10-04-router-missing-closes-keys-4.yaml — LIVE 2026-10-04 ~06:50Z (applied 3 of 3, verify ok; backup keeper.db.pre-missingkeys4).
 Cancel autoos:O4-BASH-GUARD as duplicate of O4-BASHGUARD-PLUGIN (router order 04 Oct; 4 ops): data/updates/2026-10-04-router-cancel-o4-duplicate.yaml — LIVE 2026-10-04 ~07:00Z (verify ok; backup keeper.db.pre-cancelo4).
 Missing Closes keys 5 (4 keys: D-583, D-584, D-581 follow-up; router order 04 Oct): data/updates/2026-10-04-router-missing-closes-keys-5.yaml — LIVE 2026-10-04 ~07:00Z (applied 3 of 3, verify ok; backup keeper.db.pre-missingkeys5).
+UI-TABLE re-scoped (router D-586, 4 sub-lanes, deps changed): data/updates/2026-10-04-router-ui-table-rescope.yaml — LIVE 2026-10-04 ~08:10Z (applied 2 of 2, verify ok; backup keeper.db.pre-uitable).
