@@ -1,39 +1,29 @@
-# Status card — plangraph-L1-main (L1 project orchestrator; next relaunch: Sonnet high, bypass, D-496/D-506)
-Updated: 2026-10-03 18:45 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md
+# Status card — plangraph-L1-main (L1 project orchestrator; relaunch: Sonnet high, bypass, same worktree)
+Updated: 2026-10-04 11:30 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md (READ IT FIRST)
 
 ## Phase
-M2a done + pilot keeper live. M2c in progress: UI-BUILD (L2 plangraph-L2-ui-build, keeps running), D-505 keeper/md-sync work, stack note.
-Operating-core order APPROVED by routing: MODEL-KINDS (+intent, question/decision/OP kinds, D-row import) -> M2b off-host keeper +
-run-bound tokens + MCP remote -> L1s pull from `ready` -> retire md hand-batches.
+Pilot keeper live (593 items), K1 + P1 merged on worktree-proposal (NOT on main), plan page live behind Authelia, GRAPH-UI + TABLE (operator top priority, D-560/D-586) in build at workst.
+No L2 running (all in-flight state is in files). Context cycled at routing's request (very long transcript).
 
 ## Live systems (coding.vm)
-- Keeper 127.0.0.1:8787, PID in ~/.local/share/plangraph/daemon.pid (daemon does NOT write it; stop with kill -TERM, never pkill -f).
-  Code = worktree head (keeper code as of 610271d + apply_batch rehome + md_sync changes). 489 items. Verify: PG_CONFIG=… pg admin verify.
-- md-sync timer + path (~/.config/systemd/user/plangraph-md-sync.*), writes ~/.local/share/plangraph/md-sync.status.json every run;
-  halts on refusal -> look at the status file, fix the cause, re-arm. Closes only ANSWERS-cited items today.
-- OS-92 (operator): L1 may apply ROUTER-OK'd batches (closes/rehome/priority + plan batches create/edit/priority) under data/updates/.
+- Keeper 127.0.0.1:8787, config ~/.local/share/plangraph/keeper.json (repos: server=origin/IMPROVE (D-592), autoos/routing origin/main, plangraph main), PID daemon.pid (kill -TERM, never pkill).
+- md-sync (P1) timer+path run with --keeper-config; gate LIFTED; manual runs need routing's OK. Status ~/.local/share/plangraph/md-sync.status.json.
+- Plan page: plangraph-render.timer (5 min) copies the render INTO /home/s/code/plangraph/out/plan-cdn.html (same inode); prox nginx 192.168.178.73:8089 (firewall OPNsense only), edge plan.ohje.ooguy.com. Shows the OLD UI until the OPERATOR OKs GRAPH-UI.
+- Operator preview (T3b fix6 line, real snapshot, local only): ~/.local/share/plangraph/preview/plan-t3b-fix6-preview.html (delivered to the operator by routing).
 
-## In flight (workstation via workst-L1; Taildrop in, read /home/s/fleet/taildrop/plangraph/ only; workst ACKs within 10 min)
-- UI T3b-1fix3 DONE but 2 phone fails (A18 collapsed header off-canvas, A19 cross-project Jump lands on stale layout) -> fix4 package
-  (L2 pkg/T3b1fix4) at workst, writer run 20261003-064807-t3b1fix4-5a0308 -> probe A18/A19 (+visibleTasks) -> L2 seat prompt (pkg/T3b1seat,
-  gpt-oss via review-call + Qwen at workst) -> accept T3b-1 -> T3b-2, T3b-3, T4 (Gemini direct pins, D-510).
-- K1 keeper MERGED (D-537, 5b4fe9d..8cdad08), daemon restarted ~11:32Z with per-repo refs; GEN-CLOSEOUT closed. Next: write P1 md-sync (writer run) +
-  warning rule "sha ignored on decision-only item <key>"; MEALIE-CAP (D-537) + other new Closes rows (D-527..D-537) go through P1's gated first run.
-- P1 md-sync (D-505 + Path 1): router D-rows `Closes: key@sha` -> in_review + evidence -> close when merged (read-only git fetch, fail
-  closed); [decision]-only items close by decision; code lanes without @sha -> in_review + listed. OLD pkg mdsync-dclose is HELD at workst.
-  FIRST RUN GATE: stop timer+path, dry run, send routing the (key, D-row) list, apply only OK'd keys, re-arm.
-- GRAPH 541 items (D-492..D-526 progress batch + server new lanes LIVE, head 00418362643e). GEN-CLOSEOUT closes after K1 (live parser rejects key@sha).
-- GRAPH-UI (D-560, TOP priority, operator reviews): design note accepted (docs/proposals/2026-10-03-graph-ui-design-note.md); T3b-1fix6 at workst
-  -> L2-LAUNCH (routing launches after fix6; brief pkg/BRIEF-GRAPHUI.md) -> G1-G5 on agy -> my Playwright check (2x6 shots, MemAvailable>=6GB) -> operator.
-  D-562: spawns from a private worktree use a NEUTRAL EMPTY cwd unless the leg is private-safe.
-- URL plan.ohje.ooguy.com LIVE upstream: prox nginx 100.82.253.38:8089 serves out/plan-cdn.html (single-file bind mount); my user timer
-  plangraph-render.timer (5 min) copies the render INTO that file (same inode; a rename would orphan the mount). Waits for prox DNS + e2e. Own
-  static_serve PARKED (urlview v2/v3 unmerged). Writers at workst (free leg, agy cooldown until 16:36Z): P1, PROGRESS-PANEL, T3b-1fix5, stack-research.
+## In flight at workst (via the workst-L1-autoos bridge session; Taildrop files land in /home/s/fleet/taildrop/plangraph/ WITHOUT the plangraph__ prefix)
+- GRAPH-UI GU-G2b (hulls, chip bar, overview default): steps 1-5 staged + browser-verified; STEP 6 (hull gap, phone focus label on the label-only box, user-pan latch, font-cap scope, real-geometry tests)
+  running as gug2b9 on OVH Qwen3.8-27B since 10:34Z (D-593: <=850k input, <=$2/run, seats gpt-oss/Mistral, writer family alibaba written by hand). If it fails: split 6a/6b, or the L2 as Sonnet writer (D-576, ask routing).
+  Then real-browser verification (A27 at 1440x900, 1280x800, 390x844), accept, then L2-LAUNCH (via routing) for G3b/G4b/G5 (heads in HANDOFF; pkg-graphui/BRIEF-GRAPHUI-4.md + L1-RULINGS.md).
+- TABLE (D-586): lanes UI-TABLE-MODEL/VIEW/WIRE/PHONE. TB1 PARKED (WIP 650dcb5c, page_table_model.js 399 lines, no tests; continuation tb1-cont.txt) -> next OVH slot after step 6 (D-590/D-593), TB2 after; agy resumes tables when its quota returns.
+  Vertex open-class overflow only while the workstation day < $8 (D-589; reopens after 00:00Z). TB3 SPLIT into TB3a/TB3b and TB1b (description + note search, router correction) are TEXT TO WRITE in the next L2 round (L1-RULINGS addenda 3+4); TB3 waits for G2b accepted.
+
+## Next (mine)
+1. P1 SUPERSEDE RULE lane (routing: after the GRAPH-UI wiring): a later D-row supersedes earlier rows for the same key (reviewed -> main sha); only the latest row attached as evidence; same-row conflicts stay invalid; agy round + seats; many Server keys wait for it.
+2. PROGRESS-PANEL (package at workst, step B verification pending), MODEL-KINDS, stack note, merge worktree-proposal to main (own record), K1-KEEPER close needs `Closes: plangraph:K1-KEEPER@8cdad08` after it.
 
 ## Rules (full list: docs/process/L2-BRIEF-TEMPLATE.md)
-D-543 writers: agy 3.8 Flash first, Vertex MEDIUM only if agy fails, no AI Studio, $2/run (seats OVH/Mistral); D-437 zero agent runs on coding.vm; D-430/431 spawn only; D-510 writers Gemini 3.8 Flash direct pins, seats other families (never Google
-for Gemini code); D-509 plangraph CODE open class, plan DATA private; anti-test-gaming line in every writer task + seat point (real quotes);
-D-302 L1 rules on seat findings; record -> ACCEPT -> merge; no push/remote; Taildrop names plangraph__<name>.
+D-543 agy first, Vertex medium only if the cap allows, $2/run; OVH writers per D-593; max 2 agy writers fleet-wide; D-562 neutral empty cwd for spawns from a private worktree; D-437 no suites/browsers on coding.vm
+(except D-560's visual check); seats of non-writer families, writer family written by hand; a REAL-BROWSER probe gates UI code; record -> ACCEPT -> merge, no push/remote; anti-gaming line in every writer task.
 ## Lessons
-Verify a Taildrop file is filed before relaying a path; seats invent quotes for absence claims (check every quote); writers game tests if
-the legit test change is not in scope (list it); workst-L1 reads every writer diff for test-gaming; quoted heredocs / Write tool for tasks.
+Verify a Taildrop file is FILED (ls + sha256) before relaying; seats invent quotes (check every quote); lenient fake DOMs hide strict-mode errors; never kill by image name; manual md-sync waits for routing's OK.
