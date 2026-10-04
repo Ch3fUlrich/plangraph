@@ -21,6 +21,8 @@ if _SRC not in sys.path:
 from plangraph.keeper import credential_guard  # noqa: E402  (D-405)
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 
+import md_sync_dclose  # noqa: E402  (D-505: router D-rows with Closes key@sha)
+
 PROJECT = "routing"
 GATE_ID = "PH-OPERATOR"
 GATE_KEY = f"{PROJECT}:{GATE_ID}"
@@ -50,6 +52,14 @@ class Plan:
         #: (id, decision_id, key): a close the keeper would refuse (Closes:
         #: keyword without the key), so the whole item was left untouched
         self.close_skipped = []
+        #: D-505: the router D-row pass (tools/md_sync_dclose.py)
+        self.d_closes = []       # {key, decision}: a close the D-rows planned
+        self.d_in_review = []    # {key, decision, sha, reason}: accepted-but-unmerged
+        self.d_lines = []        # one report line per planned D-row item
+        self.dclose_skipped = [] # (id, D-n, key, reason): D-row close "not in graph"
+        self.warnings = []       # {key, decision, text}: D-505/D-547 warnings
+        self.models = []         # {key, decision, text}: Models trailers copied
+        self.invalid_tokens = [] # D-ids whose Closes tokens the keeper parser marked invalid
         self.redactions = 0
 
     def add(self, op):
@@ -113,9 +123,15 @@ def _decision_ids(item):
 
 
 def build_plan(questions, answers, skipped_answers, decision_ids, items,
-               decisions_view=None):
+               decisions_view=None, decisions_text=None, repos=None, since=1):
     """``decisions_view`` is the keeper's own ``DecisionsAdapter`` over the
-    decisions file (or ``None``: no ``Closes:`` pre-check, as before)."""
+    decisions file (or ``None``: no ``Closes:`` pre-check, as before).
+
+    With ``decisions_text`` (the raw decisions log) the router D-row pass runs
+    too (D-505): its ``Closes: key@sha`` rows close only on a merged commit,
+    with ``repos`` (the keeper config's ``repos``) and ``since`` (ignore D-rows
+    below it) selecting the merge gate.
+    """
     plan = Plan()
     by_id = _index(items)
     state = {i["key"]: i for i in items}
@@ -160,7 +176,17 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
             if fields:
                 plan.add({"op": "edit", "key": item["key"], "fields": fields})
     _link(plan, state, new_lanes)
-    _answers(plan, answers, decision_ids, by_id, pending, decisions_view)
+    dinfo, invalid_rows = ({}, [])
+    if decisions_text is not None and decisions_view is not None:
+        dinfo, invalid_rows = md_sync_dclose.collect(decisions_text,
+                                                     decisions_view, since)
+    _answers(plan, answers, decision_ids, by_id, pending, decisions_view,
+             dinfo=dinfo or None, owned=set(dinfo))
+    if decisions_text is not None and decisions_view is not None:
+        md_sync_dclose.finalize(dinfo)
+        by_key = {item["key"]: item for item in items}
+        md_sync_dclose.plan(plan, dinfo, invalid_rows, by_key=by_key,
+                            pending_keys=set(pending.values()), repos=repos)
     answered = {a.id for a in answers}
     for item in items:
         if (item["project"] == PROJECT and item.get("source") == SOURCE
@@ -189,6 +215,8 @@ def _mask_guarded(plan):
                 if isinstance(value, str):
                     holder[field], n = credential_guard.mask(value)
                     plan.redactions += n
+    for entry in plan.models:
+        entry["text"], _ = credential_guard.mask(entry["text"])
 
 
 def _link(plan, state, new_lanes):
@@ -227,7 +255,31 @@ def _closes_mismatch(view, decisions, key):
             if view.has_closes_keyword(dec) and key not in view.closes(dec)]
 
 
-def _answers(plan, answers, decision_ids, by_id, pending, view=None):
+def _contribute_drows(plan, key, ident, decisions, view, dinfo):
+    """Join an ANSWERS entry's D-ids into the D-row close of its key.
+
+    A cited decision whose DECISION cell has a ``Closes:`` keyword that does
+    not list *key* cannot be attached: the keeper would refuse the close and
+    roll back the whole batch, so it is dropped and reported ``close_skipped``
+    (the same pre-check the ordinary ANSWERS close gets).
+    """
+    info = dinfo.setdefault(key, {"dnums": set(), "sha": None, "conflict": False,
+                                  "conflict_d": None, "models": []})
+    for dec in decisions:
+        if view is not None and view.has_closes_keyword(dec) \
+                and key not in view.closes(dec):
+            plan.close_skipped.append((ident, dec, key))
+            continue
+        tail = dec.split("-", 1)[1] if dec.startswith("D-") else ""
+        if tail.isdigit():
+            info["dnums"].add(int(tail))
+
+
+def _answers(plan, answers, decision_ids, by_id, pending, view=None,
+             dinfo=None, owned=None):
+    """One close per answered key; a key named by a router D-row (D-505) is
+    owned by that pass: its cited D-ids join the D-row close instead (one
+    close, all D-ids as decision evidence)."""
     merged = {}
     for ans in answers:
         merged.setdefault(ans.id, [])
@@ -244,6 +296,9 @@ def _answers(plan, answers, decision_ids, by_id, pending, view=None):
             item = _find(by_id, ident)
         if item is None:
             plan.skipped.append((ident, "no live item"))
+            continue
+        if dinfo is not None and item["key"] in owned:
+            _contribute_drows(plan, item["key"], ident, decisions, view, dinfo)
             continue
         mismatch = _closes_mismatch(view, decisions, item["key"])
         if mismatch:

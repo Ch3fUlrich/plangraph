@@ -8,6 +8,12 @@ without the item's key would be refused, so the item gets no ops at all and is
 reported as ``close-skipped``.  What is left is one batch (BATCH.md format)
 applied through ``apply_batch`` as a single ``apply_ops`` call.
 
+Router D-rows (BY cell names the router, D-505) carry their own ``Closes:``
+tokens: ``key@sha`` closes a code item only when the commit is an ancestor of
+the keeper config's target ref for that project (``--keeper-config`` /
+``PG_CONFIG``, ``repos``); unmerged or unregistered work is planned
+``in_review`` instead, and ``--decisions-since N`` ignores D-rows below N.
+
 ``--status-file`` leaves one JSON record of the run for the router: ids, counts
 and a single error line -- never titles, descriptions or secrets.  It is written
 atomically (tmp + rename) on every run, dry or apply, success, refusal or error.
@@ -27,11 +33,13 @@ import md_sync_parse as mp
 import md_sync_plan as mplan
 
 # md_sync_plan puts src/ on sys.path, which is where the keeper lives.
+from plangraph.keeper import config as keeper_config  # noqa: E402
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 
 USAGE = ("usage: md_sync.py --questions P --answers P --decisions P "
          "[--dry-run | --apply] --url U --token-file F [--principal NAME] "
-         "[--batch-out FILE] [--status-file FILE]\n")
+         "[--batch-out FILE] [--status-file FILE] [--keeper-config PATH] "
+         "[--decisions-since N]\n")
 
 
 def write_batch(path, principal, answers_path, digest, ops):
@@ -50,7 +58,8 @@ def status_doc(mode):
     """The status file's shape with a run's counters at zero (fixed key order)."""
     return {"ts": None, "mode": mode, "ops": 0, "applied": False,
             "skipped": 0, "refused": 0, "gone": 0, "redactions": 0,
-            "close_skipped": [], "error": None}
+            "close_skipped": [], "d_closes": [], "d_in_review": [],
+            "warnings": [], "models": [], "error": None}
 
 
 def fill_status(status, plan):
@@ -60,8 +69,22 @@ def fill_status(status, plan):
     status["refused"] = len(plan.refused)
     status["gone"] = len(plan.gone)
     status["redactions"] = plan.redactions
-    status["close_skipped"] = [{"id": name, "decision": dec, "key": key}
-                               for name, dec, key in plan.close_skipped]
+    status["close_skipped"] = [
+        {"id": name, "decision": dec, "key": key}
+        for name, dec, key in plan.close_skipped
+    ] + [
+        {"id": ident, "decision": dec, "key": key}
+        for ident, dec, key, _reason in plan.dclose_skipped
+    ]
+    status["d_closes"] = [{"key": c["key"], "decision": c["decision"]}
+                          for c in plan.d_closes]
+    status["d_in_review"] = [{"key": r["key"], "decision": r["decision"],
+                              "sha": r["sha"], "reason": r["reason"]}
+                             for r in plan.d_in_review]
+    status["warnings"] = [{"key": w["key"], "decision": w["decision"],
+                           "text": w["text"]} for w in plan.warnings]
+    status["models"] = [{"key": m["key"], "decision": m["decision"],
+                         "text": m["text"]} for m in plan.models]
 
 
 def write_status(path, status, error, err=None):
@@ -142,13 +165,27 @@ def report(plan, out, dry):
         out.write(f"close-skipped {ident}: {decision} Closes does not list {key}\n")
     for key in plan.gone:
         out.write(f"gone {key}: not in QUESTIONS and not answered (not cancelled)\n")
+    for line in plan.d_lines:
+        out.write(line + "\n")
+    for ident, decision, key, reason in plan.dclose_skipped:
+        out.write(f"close-skipped {ident}: {decision} {reason} ({key})\n")
+    for warn in plan.warnings:
+        out.write(f"warning: {warn['text']}\n")
+    for model in plan.models:
+        out.write(f"models {model['key']}: {model['text']}\n")
+    for d_id in plan.invalid_tokens:
+        out.write(f"invalid Closes token in {d_id}\n")
     ops = ", ".join(f"{name} {plan.counts[name]}" for name in sorted(plan.counts))
     if dry:
         out.write("dry run: " + (ops or "no ops") + " (no calls made)\n")
+    close_skipped = len(plan.close_skipped) + len(plan.dclose_skipped)
     out.write(f"md-sync: ops {len(plan.ops)}, skipped {len(plan.skipped)}, "
               f"refused {len(plan.refused)}, gone {len(plan.gone)}, "
               f"redactions {plan.redactions}, "
-              f"close-skipped {len(plan.close_skipped)}\n")
+              f"close-skipped {close_skipped}, "
+              f"d-closes {len(plan.d_closes)}, "
+              f"in-review {len(plan.d_in_review)}, "
+              f"warnings {len(plan.warnings)}\n")
 
 
 def main(argv=None, out=None, err=None):
@@ -161,6 +198,8 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--principal", default="router")
     parser.add_argument("--batch-out")
     parser.add_argument("--status-file")
+    parser.add_argument("--keeper-config")
+    parser.add_argument("--decisions-since", type=int, default=1)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
@@ -188,10 +227,21 @@ def main(argv=None, out=None, err=None):
     except (OSError, apply_batch.BatchError) as exc:
         err.write(f"error: {exc}\n")
         return stop(2, f"error: {exc}")
+    # D-505: the merge gate reads the keeper config's ``repos`` only (a
+    # missing/unreadable config means no registered repo: fail closed there).
+    repos = {}
+    cfg_path = opts.keeper_config or os.environ.get("PG_CONFIG")
+    if cfg_path:
+        try:
+            repos = keeper_config.load_config(cfg_path).repos
+        except keeper_config.ConfigError as exc:
+            err.write(f"error: {exc}\n")
+            return stop(2, f"error: {exc}")
     digest = hashlib.sha256(texts["answers"]).hexdigest()
     questions = mp.parse_questions(texts["questions"].decode("utf-8", "replace"))
     answers, skipped = mp.parse_answers(texts["answers"].decode("utf-8", "replace"))
-    decisions = mp.parse_decisions(texts["decisions"].decode("utf-8", "replace"))
+    decisions_text = texts["decisions"].decode("utf-8", "replace")
+    decisions = mp.parse_decisions(decisions_text)
     session = apply_batch.Session(opts.url, token)
     try:
         items = session.get("snapshot").get("items") or []
@@ -200,7 +250,9 @@ def main(argv=None, out=None, err=None):
         return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
     try:
         plan = mplan.build_plan(questions, answers, skipped, decisions, items,
-                                decisions_view=DecisionsAdapter(opts.decisions))
+                                decisions_view=DecisionsAdapter(opts.decisions),
+                                decisions_text=decisions_text, repos=repos,
+                                since=opts.decisions_since)
     except mplan.PlanError as exc:
         out.write(f"error: {exc}\n")
         return stop(1, f"error: {exc}")

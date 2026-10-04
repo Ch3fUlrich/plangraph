@@ -173,17 +173,23 @@ def test_close_skipped_is_planned_away_and_recorded(world, srv, token, site, tmp
     for verb in ("legacy_state", "add_evidence", "close_on_decision"):
         assert f"{verb} routing:Q-ALPHA" not in out
     assert "create routing:Q-ALPHA" in out   # the lane itself still comes from QUESTIONS
-    assert out.rstrip().endswith("close-skipped 1")
+    assert out.rstrip().endswith("close-skipped 1, d-closes 0, in-review 0, warnings 0")
 
     doc = status_of(status)
     assert list(doc) == ["ts", "mode", "ops", "applied", "skipped", "refused",
-                         "gone", "redactions", "close_skipped", "error"]
+                         "gone", "redactions", "close_skipped", "d_closes",
+                         "d_in_review", "warnings", "models", "error"]
     assert doc["mode"] == "dry" and doc["applied"] is False and doc["error"] is None
     assert doc["close_skipped"] == [{"id": "Q-ALPHA", "decision": "D-10",
                                      "key": "routing:Q-ALPHA"}]
-    counts = {k: n for k, n in tally(out).items() if k != "close_skipped"}
+    counts = {k: n for k, n in tally(out).items()
+              if k not in ("close_skipped", "d_closes", "in_review", "warnings")}
     assert all(doc[name] == n for name, n in counts.items())
     assert len(doc["close_skipped"]) == tally(out)["close_skipped"]
+    assert len(doc["d_closes"]) == tally(out)["d_closes"]
+    assert len(doc["d_in_review"]) == tally(out)["in_review"]
+    assert len(doc["warnings"]) == tally(out)["warnings"]
+    assert doc["models"] == []
     # ids and counts only: no title, decision text or description may leak
     raw = status.read_text(encoding="utf-8")
     for text in ("Pick a storage backend", "widget cache", "redacted"):
@@ -197,8 +203,17 @@ def test_apply_writes_status_with_applied_and_no_error(world, srv, token, site, 
     doc = status_of(status)
     assert (doc["mode"], doc["applied"], doc["error"]) == ("apply", True, None)
     assert doc["close_skipped"] == []
-    counts = {k: n for k, n in tally(out).items() if k != "close_skipped"}
+    assert doc["d_closes"] == []
+    assert doc["d_in_review"] == []
+    assert doc["warnings"] == []
+    assert doc["models"] == []
+    counts = {k: n for k, n in tally(out).items()
+              if k not in ("close_skipped", "d_closes", "in_review", "warnings")}
     assert all(doc[name] == n for name, n in counts.items())
+    assert len(doc["close_skipped"]) == tally(out)["close_skipped"]
+    assert len(doc["d_closes"]) == tally(out)["d_closes"]
+    assert len(doc["d_in_review"]) == tally(out)["in_review"]
+    assert len(doc["warnings"]) == tally(out)["warnings"]
 
 
 def test_status_file_is_written_when_the_run_fails_early(world, srv, token, site,
