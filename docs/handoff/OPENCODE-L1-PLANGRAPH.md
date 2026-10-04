@@ -66,3 +66,7 @@ Later, not now: PROGRESS-PANEL step B check, MODEL-KINDS, stack note, merge of `
 - A lenient fake DOM hides strict-mode errors. Use a real browser at workst.
 - Writers game tests. Read the diff of every test change.
 - Keep the status card at 40 lines or fewer. Keep files at 400 lines or fewer.
+
+## Open relay (unverified, 2026-10-04)
+- server-L1 relayed from prox-L1: HA work (ha-assist LLM alias, wyoming TTS/STT, HA 2026.9.4, new integrations, two-armed plan Q1-Q12 answered) is done. Source of truth: `server/manage/homeassistant/README.md` section "Current state (2026-10-04)" and `docs/operations/two-armed-phase-plan.md` section 10a.
+- Not checked by plangraph-L1. Change NO keeper items for it until routing confirms and OKs a batch (D-596: no new lanes).
