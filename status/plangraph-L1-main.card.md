@@ -1,7 +1,8 @@
 # Status card — plangraph-L1-main (L1 project orchestrator; relaunch: Sonnet high, bypass, same worktree)
-Updated: 2026-10-04 11:45 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md (READ IT FIRST)
+Updated: 2026-10-04 12:00 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-main.md | Constraints: CONSTRAINTS.md | Handoff: docs/HANDOFF.md (READ IT FIRST)
 
 ## Phase
+D-596 (operator): Claude quota ~5% -> NO new lanes; handoff for an OpenCode L1 is docs/handoff/OPENCODE-L1-PLANGRAPH.md; L1-main goes quiet (incidents only).
 Pilot keeper live (593 items), K1 + P1 merged on worktree-proposal (NOT on main), plan page live behind Authelia, GRAPH-UI + TABLE (operator top priority, D-560/D-586) in build at workst.
 No L2 running (all in-flight state is in files). Context cycled at routing's request (very long transcript).
 
