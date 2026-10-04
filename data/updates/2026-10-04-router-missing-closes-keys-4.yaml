@@ -1,0 +1,203 @@
+# 8 keys named by routing (D-562, D-567, D-577..D-581), router order 04 Oct.
+batch: 2026-10-04-router-missing-closes-keys-4
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: d6c80747cedc6d3bae41029ce49d1e830f7fad04c15e48abeb1b42d82beb0f3e
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: O4-BASHGUARD-PLUGIN
+    kind: lane
+    track: OPENCODE
+    owner: autoos-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: O4 bash-guard plugin for OpenCode (directory plugin, deny with reason, fails open on missing guard)
+    done_criteria: merged on AutoOS main; live deny proof; the pilot starts unattended only after a canary (a known-bad call denied), logged at every start
+    description: 'Router D-579: O4 accepted, fc19ec81. Overlaps autoos:O4-BASH-GUARD (the O1-O6 plan lane): router decides whether to cancel the older one.'
+  - project: autoos
+    id: COST-GATE-ACTIVATE
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'COST-GATE-ACTIVATE: refresh job, default gate path in the spawner, per-host budgets, stale and price-gap status'
+    done_criteria: installers live on both hosts with the accepted budgets (workstation 12/15, coding.vm 8/10); the D-569 manual rule ends when both are live
+    description: 'Router D-581 (HIGH, money): accepted; unpriced models at the highest known Flash rate with a flag; STALE at 30 min.'
+  - project: autoos
+    id: OVH-PRICE-ROWS
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'OVH price rows: Qwen3.5-397B-A17B at $0.708/$4.248 per 1M (cited catalogue)'
+    done_criteria: merged on AutoOS main; provider-scoped price lane planned after the pilot
+    description: 'Router D-580: accepted. Gap: model-keyed prices cannot hold OVH prices for shared models (gpt-oss, Llama).'
+  - project: autoos
+    id: OC-PILOT
+    kind: lane
+    track: OPENCODE
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - run-record
+    estimate_h: 3
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'OC-PILOT: one OpenCode L1 (ovh/Qwen3.5-397B) drives one real open-class lane with zero Claude calls'
+    done_criteria: one real lane end to end (spawner writers, 2 non-writer seats, record), gateway-log proof of zero Claude calls, one stall/recovery test, bash-guard canary
+    description: 'Router D-578 (operator: Claude rate limits close, test OpenCode in production): pilot autoos-oc-L1 on the workstation; 3M input budget; messaging via file/Taildrop outbox + 30-min heartbeat;
+      push stays a Claude step (O-PUSH next).'
+  - project: server
+    id: ACCOUNTS-PWSTORE
+    kind: lane
+    track: ACCOUNTS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'ACCOUNTS-PWSTORE: admin-set passwords in a separate AES-256-GCM store (homelab-accounts 0.3.0)'
+    done_criteria: merged on Server origin/main; deployed by prox in 7 steps (key + off-host copy, build 0.3.0, merge, backups, dryrun then up, TEST user only, rollback 0.2.1)
+    description: 'Router D-577 (HIGH): accepted (D-570 option B); 240 tests, 54 of 66 mutants killed; key generated on the host by prox, never printed.'
+  - project: server
+    id: ACCOUNTS-PWSTORE-F40
+    kind: lane
+    track: ACCOUNTS
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:ACCOUNTS-PWSTORE
+    title: 'ACCOUNTS-PWSTORE follow-up F40: a symlink is followed on read of the store'
+    done_criteria: fixed with a test that failed before; merged
+    description: Router D-577 follow-up F40.
+  - project: autoos
+    id: SPAWNER-F0-CWD
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'SPAWNER-F0-CWD: classify by the cwd''s repo (worktrees resolved), refuse non-private-safe legs or force an empty sandbox'
+    done_criteria: merged on AutoOS main; a spawn from a private worktree on a free leg is refused or runs in an empty sandbox (test)
+    description: 'Router D-562: after the privacy near-miss (D-501 F0 refusal did not fire). Interim rule: neutral empty cwd.'
+  - project: autoos
+    id: OVH-GUARD
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'OVH-GUARD: at most 2 concurrent OVH writers per host, at most 1M input per OVH writer run, hourly OVH alert, cumulative cap'
+    done_criteria: merged on AutoOS main; the per-run gate covers OVH legs; hourly $3 alert; cumulative OVH figure against the $100 cap
+    description: 'Router D-567: after the OVH spend jump (~$6.5 in one hour from 6 parallel step writers). Default OVH code writer = Qwen3-Coder-30B.'
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on:
+    - routing:OS-102B
+    - server:BACKUP-HARDEN
+    - server:BACKUP-RENDER-TEST
+    - server:CHAPTARR-ENV
+    - server:CS-CADDY
+    - server:CS-CADDY-PII
+    - server:DH-DOCS
+    - server:GW-LOGS-REWORK
+    - server:GW-NFS-COUNTS
+    - server:GW-SEMAPHORE-HARDEN
+    - server:HA-CLEANUP
+    - server:HA-DOCS-SPLIT
+    - server:HA-STT-FREE
+    - server:HA-STT-FREE-ENV
+    - server:HA-STT-WS
+    - server:HA-WS-INSTALLED
+    - server:HEAL-LLM-REPOINT
+    - server:IDS-HOMENET
+    - server:IDS-READSHAPE
+    - server:IDS-SCHEDULE-ON
+    - server:IDS-V6SRC
+    - server:MEALIE-CAP
+    - server:OVERLAY-VERSION-GUARD
+    - server:OVG-RENDER-TEST
+    - server:OWUI-PYODIDE
+    - server:PH-TWOARMED
+    - server:PLAN-LAN-TEST
+    - server:PLAN-VHOST
+    - server:PROX-STABLE-NAME
+    - server:SQLITE-ONLINE-BACKUP
+    - server:STREAMING-BACKUP
+    - server:UPR-LOG-B1
+    - server:UPR-LOG-B2
+    - server:VIDEO-CAP
+    - server:VM-IPV6-RA
+    - server:ACCOUNTS-PWSTORE
+    - server:ACCOUNTS-PWSTORE-F40
+- op: edit
+  key: routing:PH-FLEET-1003
+  fields:
+    depends_on:
+    - autoos:COMBO-REFRESH
+    - autoos:COMBO-REFRESH-A4
+    - autoos:COST-GUARD
+    - autoos:FAMILY-TRACK
+    - autoos:FLEET-HOOKS
+    - autoos:G-KEEPER
+    - autoos:LAUNCHER-CPU-GATE
+    - autoos:LEAN-MCP
+    - autoos:O1-OPENCODE-SESSIONS
+    - autoos:O2-FLEET-BUS-MCP
+    - autoos:O3-GKEEPER-OPENCODE
+    - autoos:O4-BASH-GUARD
+    - autoos:O5-LEAN-MCP-PILOT
+    - autoos:O6-ROUTING-ON-OPENCODE
+    - autoos:OVH-TEXT
+    - autoos:ROUTE-FRESH
+    - autoos:RUNNER-SCALE-20
+    - autoos:U12
+    - autoos:U13
+    - autoos:WIN-PROMPT
+    - autoos:WIN-PROMPT-LINTFIX
+    - autoos:WORKST-L0-FAILOVER
+    - autoos:O4-BASHGUARD-PLUGIN
+    - autoos:COST-GATE-ACTIVATE
+    - autoos:OVH-PRICE-ROWS
+    - autoos:OC-PILOT
+    - autoos:SPAWNER-F0-CWD
+    - autoos:OVH-GUARD
