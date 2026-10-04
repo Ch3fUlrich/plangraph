@@ -1,0 +1,146 @@
+# 4 keys named by routing (D-583, D-584, D-581 follow-up), router order 04 Oct.
+batch: 2026-10-04-router-missing-closes-keys-5
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 896b7ded251ccf0eac89d98f2f66c638fe9863019f15da1beacb8d8c35039132
+ops:
+- op: create
+  item:
+  - project: server
+    id: CROWDSEC-ENFORCE
+    kind: lane
+    track: SECURITY
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: CrowdSec enforcement after the 24 h simulation (ABS cover 404 exempted by the parser whitelist)
+    done_criteria: merged on Server origin/main; no bans on own networks
+    description: 'Router D-584: whitelist b4423c09 on main; post-merge seat gpt-oss PASS; 26 foreign scanner alerts, 1 false positive (iOS Audiobookshelf cover 404s). Closes server:CROWDSEC-ENFORCE@b4423c09.'
+  - project: server
+    id: BACKUP-SQLITE-LABEL-FIX
+    kind: lane
+    track: UPDATESRUN
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'Pre-update backup abort on online sqlite_copy entries: never-failing label substitution (F42)'
+    done_criteria: c1 (one-line fix) merged first on Server origin/main, then the c2 real-task test; prox merges before any Tier-B wave or up of affected stacks
+    description: 'Router D-583 (HIGH, real bug from bfde7539 at pre-update-backup.yml:586): fail-closed, no data loss. Fix accepted: t6/backup-host-sqlite-test-v3 tip d24db84a (c1 27c6b189).'
+  - project: server
+    id: CROWDSEC-ABS-ANCHOR
+    kind: lane
+    track: SECURITY
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CROWDSEC-ENFORCE
+    title: 'CrowdSec ABS whitelist: anchor the /cover$ pattern at the next touch (F44, low)'
+    done_criteria: merged on Server origin/main
+    description: Router D-584 follow-up F44 (low).
+  - project: autoos
+    id: COST-GATE-CULTURE-FIX
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - autoos:COST-GATE-ACTIVATE
+    title: 'COST-GATE-CULTURE-FIX: follow-up of COST-GATE-ACTIVATE (D-581)'
+    done_criteria: definition per router, to refine; merged on AutoOS main with CI green and two seats
+    description: 'Router message 04 Oct: D-581 follow-up (HIGH, money). Definition per router, to refine.'
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on:
+    - routing:OS-102B
+    - server:ACCOUNTS-PWSTORE
+    - server:ACCOUNTS-PWSTORE-F40
+    - server:BACKUP-HARDEN
+    - server:BACKUP-RENDER-TEST
+    - server:CHAPTARR-ENV
+    - server:CS-CADDY
+    - server:CS-CADDY-PII
+    - server:DH-DOCS
+    - server:GW-LOGS-REWORK
+    - server:GW-NFS-COUNTS
+    - server:GW-SEMAPHORE-HARDEN
+    - server:HA-CLEANUP
+    - server:HA-DOCS-SPLIT
+    - server:HA-STT-FREE
+    - server:HA-STT-FREE-ENV
+    - server:HA-STT-WS
+    - server:HA-WS-INSTALLED
+    - server:HEAL-LLM-REPOINT
+    - server:IDS-HOMENET
+    - server:IDS-READSHAPE
+    - server:IDS-SCHEDULE-ON
+    - server:IDS-V6SRC
+    - server:MEALIE-CAP
+    - server:OVERLAY-VERSION-GUARD
+    - server:OVG-RENDER-TEST
+    - server:OWUI-PYODIDE
+    - server:PH-TWOARMED
+    - server:PLAN-LAN-TEST
+    - server:PLAN-VHOST
+    - server:PROX-STABLE-NAME
+    - server:SQLITE-ONLINE-BACKUP
+    - server:STREAMING-BACKUP
+    - server:UPR-LOG-B1
+    - server:UPR-LOG-B2
+    - server:VIDEO-CAP
+    - server:VM-IPV6-RA
+    - server:CROWDSEC-ENFORCE
+    - server:BACKUP-SQLITE-LABEL-FIX
+    - server:CROWDSEC-ABS-ANCHOR
+- op: edit
+  key: routing:PH-FLEET-1003
+  fields:
+    depends_on:
+    - autoos:COMBO-REFRESH
+    - autoos:COMBO-REFRESH-A4
+    - autoos:COST-GATE-ACTIVATE
+    - autoos:COST-GUARD
+    - autoos:FAMILY-TRACK
+    - autoos:FLEET-HOOKS
+    - autoos:G-KEEPER
+    - autoos:LAUNCHER-CPU-GATE
+    - autoos:LEAN-MCP
+    - autoos:O1-OPENCODE-SESSIONS
+    - autoos:O2-FLEET-BUS-MCP
+    - autoos:O3-GKEEPER-OPENCODE
+    - autoos:O4-BASHGUARD-PLUGIN
+    - autoos:O5-LEAN-MCP-PILOT
+    - autoos:O6-ROUTING-ON-OPENCODE
+    - autoos:OC-PILOT
+    - autoos:OVH-GUARD
+    - autoos:OVH-PRICE-ROWS
+    - autoos:OVH-TEXT
+    - autoos:ROUTE-FRESH
+    - autoos:RUNNER-SCALE-20
+    - autoos:SPAWNER-F0-CWD
+    - autoos:U12
+    - autoos:U13
+    - autoos:WIN-PROMPT
+    - autoos:WIN-PROMPT-LINTFIX
+    - autoos:WORKST-L0-FAILOVER
+    - autoos:COST-GATE-CULTURE-FIX
