@@ -1,39 +1,31 @@
-# HANDOFF — plangraph-L1-main, written 2026-10-03 ~05:40Z (for the relaunch on Sonnet high / bypass, D-496 + D-506)
+# HANDOFF — plangraph-L1-main, refreshed 2026-10-04 ~06:30Z (for a relaunch; Sonnet/Opus, bypass, D-496/D-506)
 
-Read in this order: CONSTRAINTS.md -> status/plangraph-L1-main.card.md (live state) -> this file -> docs/process/L2-BRIEF-TEMPLATE.md
-(every rule in force). Talk to routing-00 (`routing`) and, for file/run handover, workst-L1-autoos (D-319), autoos-L1-main, server-L1-main.
-Bypass mode does NOT widen the mandate (routing): apply only router-OK'd batches, record -> ACCEPT -> merge, no push/remote, stop and
-escalate on any refusal you still meet.
+Read in this order: CONSTRAINTS.md -> status/plangraph-L1-main.card.md (live state) -> this file -> docs/process/L2-BRIEF-TEMPLATE.md.
+Talk to routing (`routing`), workst-L1-autoos (bridge session; ListAgents shows its address), server-L1-main, prox-L1-main. Bypass does NOT widen the mandate:
+batches/merges only after the router's OK (OS-92 covers router-OK'd batches), record -> ACCEPT -> merge, no push/remote, no browser/suite runs on coding.vm except routing's
+D-560 visual-check exception (2 rounds x <= 6 shots, MemAvailable >= 6 GB first, close the browser).
 
 ## Where things are
-- Repo /home/s/code/plangraph, work on branch `worktree-proposal` in /home/s/code/plangraph/.claude/worktrees/proposal (main = 1st commit).
-  Code: src/plangraph/{keeper,web}, tools/ (apply_batch, md_sync*, split/), tests/. Data (PRIVATE, D-509): data/plan-v3, data/updates
-  (QUEUE.md lists every applied batch). Proposals: docs/proposals/. Reviews: docs/reviews/.
-- Job scratch of the previous L1 (KEEP, do not delete; the L2 works there): /home/s/.claude/jobs/7caaf7f5/tmp/
-  - ui-build/ = plangraph-L2-ui-build's clone (branch phase/ui-build, head 18e6122) + pkg/ (task packages, seat prompts);
-  - combo/ = code-only clone used to build bundles for workstation runs (branches: splitinteg, mdsync-closes, rehome-op, …);
-  - k1-pkg/, mdsync-dclose-pkg/ (HELD), stack-research/, seat-*/ (seat records).
-- Pilot keeper: config ~/.local/share/plangraph/keeper.json (0600), DB keeper.db (+ .pre-* backups), PID file daemon.pid, start:
-  `cd <worktree> && PYTHONPATH=src nohup python3 -m plangraph.keeper.daemon --config ~/.local/share/plangraph/keeper.json &` then write
-  the PID into daemon.pid. Tokens: ~/.config/plangraph/{router,plangraph-L1-main}.token (0600, never print; pass as PG_TOKEN_FILE).
-  CLI: `PYTHONPATH=src PG_URL=http://127.0.0.1:8787 PG_TOKEN_FILE=… python3 -m plangraph.keeper.cli <verb>`; batches:
-  `python3 tools/apply_batch.py FILE --url http://127.0.0.1:8787 --token-file ~/.config/plangraph/router.token [--dry-run]`.
-- Review calls: from /home/s/code/AutoOS: `python3 tools/autoos_gateway_key.py exec -- python3 tools/review-call.py --model ovh/gpt-oss-120b
-  --prompt-file P --out-dir D --title plangraph/<slug>` (RC-2: default 16000 tokens). Second seat: Qwen3.5-397B at workst-L1.
-- Workstation route: tar the package as plangraph__<name>.tgz, `tailscale file cp <tgz> bz-wg-pdw028:`, message workst-L1 (sha256,
-  writer form, return names). Results land sorted in /home/s/fleet/taildrop/plangraph/ (never `tailscale file get`). Screenshots go to
-  /home/s/fleet/playwright-shots/<task>/ and routing gets the paths + one line on the visible change.
+- Repo /home/s/code/plangraph, branch `worktree-proposal` in .claude/worktrees/proposal (main = first commit; K1 + P1 are cherry-picked here, NOT on main; merge to main waits until the UI T3b/G rounds are done, record + routing OK).
+- Keeper pilot 127.0.0.1:8787 (config ~/.local/share/plangraph/keeper.json, per-repo refs; DB keeper.db + .pre-* backups; PID file daemon.pid; restart = kill -TERM, never pkill -f). 577 items. Verify: PG_CONFIG=... pg admin verify.
+- md-sync (P1) timer + path (~/.config/systemd/user/plangraph-md-sync.*) run tools/md_sync.py with --keeper-config; the gate is LIFTED (routing 04 Oct): the timer applies normally; a MANUAL run needs routing's OK.
+- Plan page: user timer plangraph-render.timer (5 min) copies `pg render --cdn` INTO /home/s/code/plangraph/out/plan-cdn.html (same inode, nginx single-file mount); prox's nginx serves it on 192.168.178.73:8089 (firewall: only OPNsense), edge plan.ohje.ooguy.com (Authelia admins/2FA). It shows the OLD UI until GRAPH-UI is accepted by the OPERATOR (nothing deploys before his OK).
+- Operator preview of the T3b line (fix6) was delivered locally: ~/.local/share/plangraph/preview/plan-t3b-fix6-preview.html (private).
+- Job scratch (KEEP): /home/s/.claude/jobs/7caaf7f5/tmp/ui-build/ (L2's clone) and pkg-graphui/ (ALL GRAPH-UI packages, BRIEF-GRAPHUI-{,2,3,4}.md, L1-RULINGS.md with two addenda, HANDOFF-L2-GRAPHUI.md, ACCEPTANCE-GRAPHUI.md). Mine: /home/s/.claude/jobs/fa3662f3/tmp/ (seat records, trials; delete trial DB copies when done).
+- Seat records: docs/reviews/2026-10-03-k1-seats.md, 2026-10-04-p1-seats.md. Design note: docs/proposals/2026-10-03-graph-ui-design-note.md.
 
-## Open threads (details on the card)
-1. UI T3b-1fix3 -> browser acceptance -> seats -> accept T3b-1 -> T3b-2/T3b-3/T4 (packages drafted by the L2 in pkg/T3b2, T3b3).
-2. K1 keeper (D-505) -> seats (2 non-google, HIGH) -> merge -> keeper config refs + daemon restart -> write P1 md-sync -> first-run dry
-   run gate with routing.
-3. Stack design note after the Haiku research returns; proposal "graph tracks acceptance" (Path 1 = P1 above, Path 2 after M2b).
-4. Later: MODEL-KINDS, M2b off-host keeper, split real-repo steps (private word list, gitleaks, licence via routing), RUST-PORT item.
+## Open threads (card has the live detail)
+1. GRAPH-UI (D-560, operator TOP priority; operator is the reviewer): accepted heads: fix6 e92c1f2 (+tests ab4abd38); G2b0 3cd43a71; G1 c0711b45+a6c8654+a9563f9a(tests); G2a e6d9236c; G3a 36f5c6a4; G4a 102c6fa7.
+   Integrated base gu-integ-ord 3cbfa08 (bundle in pkg-graphui/). In flight at workst: GU-G2b (chip bar + hulls + overview default) steps 3 (fix: strict fake DOM, chip bar placement, zoom clamp, H7 tests, desktop load fits ALL hulls) and
+   G2b4 (phone first view: first project header inside, non-focused project leaves hidden). Order after G2b: G3b (focus; single tap TOGGLES, focus = double tap + Focus button), G4b (budget wiring, hover reveal, legend), G5 (phone chips/breadcrumbs, regression A15/A17).
+   L2 launches go through routing (`L2-LAUNCH <name> <brief> <cwd>`); the L2 builds each bundle on the previous ACCEPTED head; workst-L1 verifies (real browser, mutations, one non-Google seat) before I accept. Cleanup list (park): dead lines 12-13 of page_graph_view.js, G3a nits, G1 loop-with-lift regression, G2a/G4a test gaps, chipClick prototype-named ids.
+2. P1 supersede rule (routing OK, after the GRAPH-UI wiring): a LATER D-row supersedes earlier rows for the same key (reviewed sha -> main sha); only the latest row is attached as evidence; same-row conflicts stay invalid; small agy round + seats; many Server keys wait for it.
+3. PROGRESS-PANEL (pg progress + panel in the render; writer package sent, step A taken, step B written by a free model, verification pending at workst), MODEL-KINDS (right after P1/GRAPH-UI wiring), stack design note (Haiku research not started), later M2b off-host keeper.
+4. Merge of worktree-proposal to plangraph main (routing OK'd the plan): own record docs/reviews/<date>-main-merge.md; K1-KEEPER close needs `Closes: plangraph:K1-KEEPER@8cdad08` after it.
 
-## Process lessons from 2026-10-02/03
-- Seats invent quotes, especially for "absence" claims: machine-check every quote; an invented quote invalidates the line.
-- Writers (Gemini) gamed tests twice (widened guard, `__eq__` override): every writer task lists the legit test change and carries the
-  anti-gaming line; workst-L1 reads each diff before bundling.
-- Merge = cherry-pick reviewed commits into the worktree only when clean; any conflict resolution is a writer run.
-- Confirm a Taildrop file is filed (ls + sha) before pointing an L2 at it.
+## Rules learned (do not forget)
+- Agy is the preferred writer (D-543: agy first, Vertex medium only if agy fails AND the cap allows, $2/run); max 2 agy writers FLEET-WIDE (3 caused a 3-hour cooldown). Seats non-Google; write the writer family by hand in seat records.
+- A real-browser probe is the gate for UI code (a lenient fake DOM hid a strict-mode TypeError). Never accept on green unit tests alone.
+- Spawns from a private worktree use a NEUTRAL EMPTY cwd (D-562). Verify a Taildrop file is FILED (ls + sha256) before relaying; files land without the plangraph__ prefix.
+- Manual md-sync runs wait for routing's OK. Never run full test suites on coding.vm (D-437): UI files only (about 6 s).
+- Seats invent quotes: machine-check every quote; an invented quote invalidates the line. Writers game tests: every task carries the anti-gaming line.
