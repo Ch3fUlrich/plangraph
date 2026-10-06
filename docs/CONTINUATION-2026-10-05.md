@@ -25,6 +25,9 @@ rules) and `docs/HANDOFF.md` (accepted heads, rulings).
   - graphify: `graphify-out/graph.json` (3773 nodes / 9122 edges / 147 communities, AST +
     semantic over docs; data/ excluded from semantic pass to keep plan data out of queries).
     Query from this folder: `graphify query|explain|path … --graph graphify-out/graph.json`.
+- Remote (operator-ordered 2026-10-06): origin = github.com/Ch3fUlrich/plangraph (PRIVATE).
+  main + worktree-proposal pushed. This supersedes the old "no remote without routing's OK"
+  rule for this repo; keep the repo private — plan data must never land in a public repo.
 - Keeper alerts to carry forward: `K1-KEEPER` review-overdue (its close is gated on the
   worktree->main merge with `Closes: plangraph:K1-KEEPER@8cdad08`, see HANDOFF item 4);
   PG-M2B/M3/M4 + PH-M2C-* have no descriptions (cosmetic; fix in a router batch, not solo).

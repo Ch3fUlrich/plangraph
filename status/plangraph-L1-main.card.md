@@ -6,6 +6,9 @@ FINAL SAVE DONE (2026-10-05): the two parked WIP bundles from workst (D-621) are
 branches in the L2 clone (see docs/CONTINUATION-2026-10-05.md). No code changed; worktree clean.
 Keeper healthy (verify exit 0), md-sync + render timers live, page = OLD UI (operator OK for
 GRAPH-UI still pending). plangraph 12.5 % done; only ready lane: plangraph:UI-TABLE-MODEL (TB1).
+Remote (operator-ordered 2026-10-06, supersedes "no remote without routing OK"): origin =
+github.com/Ch3fUlrich/plangraph (PRIVATE; plan-data privacy class per D-620). main +
+worktree-proposal pushed; never push plan data to a public repo.
 
 ## Where the work state lives
 - Branches on base gu-integ-ord 3cbfa08 in /home/s/.claude/jobs/7caaf7f5/tmp/ui-build (KEEP):
