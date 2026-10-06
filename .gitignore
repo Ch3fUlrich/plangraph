@@ -6,3 +6,4 @@ out/
 # agent tooling artifacts (local navigation, not shipped)
 .serena/
 graphify-out/
+logs/
