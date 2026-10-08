@@ -11,6 +11,7 @@ import json
 from .. import views
 from .brief import build as _build_brief
 from .errors import Refused
+from .item_fields import MODEL_FIELDS
 
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
@@ -124,6 +125,7 @@ class ReadMixin:
             "key": key, "title": item["title"],
             "description": item["description"], "host": item["host"],
             "wait": item.get("wait"),
+            **{name: item.get(name) for name in MODEL_FIELDS},
             "waits_on_operator": bool(item.get("operator"))
             and item.get("state") not in ("done", "cancelled"),
             "project": item["project"],
@@ -187,6 +189,7 @@ class ReadMixin:
                 "project": item["project"], "id": item["id"], "key": item["key"],
                 "title": item["title"], "description": item["description"],
                 "host": item["host"], "wait": item.get("wait"),
+                **{name: item.get(name) for name in MODEL_FIELDS},
                 "waits_on_operator": bool(item.get("operator"))
                 and item.get("state") not in ("done", "cancelled"),
                 "kind": item["kind"], "track": item["track"],

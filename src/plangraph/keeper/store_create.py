@@ -15,6 +15,7 @@ import re
 from .auth import validate_family
 from .errors import Refused
 from .credential_guard import guard
+from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_model_fields
 from .note_fold import fold_checked
 from .store_tiers import (
     REVIEW_TIERS,
@@ -27,17 +28,20 @@ from .store_tiers import (
     _tier_only,
 )
 
-_EDITABLE = ("title", "description", "host", "wait", "estimate_h", "done_criteria", "evidence_kinds",
+_EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
+             "phase_kind", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
-    ("project", "id", "key", "title", "description", "host", "wait", "kind", "track", "owner", "owner_family",
+    ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
+     "agent_id", "phase_kind", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
-_ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "kind", "track", "owner",
+_ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
+                 "agent_id", "phase_kind", "kind", "track", "owner",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
@@ -54,7 +58,7 @@ def _defined_payload(fields):
     payload = {"fields": sorted(fields)}
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
-    for name in ("description", "host", "wait"):
+    for name in SMALL_FIELDS:
         if name in fields:
             payload[name] = fields[name]
     return payload
@@ -162,6 +166,7 @@ class CreateMixin:
             "description": definition.get("description"),
             "host": definition.get("host"),
             "wait": definition.get("wait"),
+            **{name: definition.get(name) for name in MODEL_FIELDS},
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
             "owner": definition.get("owner"),
             "owner_family": definition.get("owner_family"),
@@ -190,7 +195,7 @@ class CreateMixin:
                 (definition["key"], dep))
         created = {"state": "open", "priority": row["priority"],
                    "review_tier": row["review_tier"]}
-        for name in ("description", "host", "wait"):
+        for name in SMALL_FIELDS:
             if row[name] is not None:
                 created[name] = row[name]
         if definition.get("rehomed_from"):
@@ -227,6 +232,7 @@ class CreateMixin:
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
         self._check_text(fields)
+        check_model_fields(fields, item["kind"], key)
         if "review_tier" in fields:
             validated_review_tier(fields["review_tier"])
             if (item["review_tier"] == "high"

@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+from .item_fields import SMALL_FIELDS
+
 __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
            "verify_chain", "verify_integrity", "FIELDS"]
 
@@ -70,7 +72,8 @@ def _new_state():
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
             "round": 0, "evidence": [], "review_waiver": None,
             "review_tier": "standard", "description": None,
-            "host": None, "wait": None, "writer_model": None,
+            "host": None, "wait": None, "layer": None, "role": None,
+            "agent_id": None, "phase_kind": None, "writer_model": None,
             "seat_models": None, "run_ids": None}
 
 
@@ -133,8 +136,7 @@ def fold(events):
         if kind == "item_created":
             item["state"] = "open"
             item["epoch"] = 0
-            for field in ("priority", "model", "review_tier", "description",
-                          "host", "wait"):
+            for field in ("priority", "model", "review_tier") + SMALL_FIELDS:
                 if field in payload:
                     item[field] = payload[field]
         elif kind == "item_defined":
@@ -142,7 +144,7 @@ def fold(events):
                 item["priority"] = payload["priority"]
             if "review_tier" in payload:
                 item["review_tier"] = payload["review_tier"]
-            for name in ("description", "host", "wait"):
+            for name in SMALL_FIELDS:
                 if name in payload:
                     item[name] = payload[name]
             if "while" in payload:
@@ -274,8 +276,8 @@ def verify_integrity(conn):
     folded = fold(all_events)
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
-        "review_waiver,review_tier,description,host,wait,writer_model,"
-        "seat_models,run_ids FROM items")}
+        "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
+        "phase_kind,writer_model,seat_models,run_ids FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -289,7 +291,8 @@ def verify_integrity(conn):
             continue
         for field in ("state", "epoch", "round", "claimed_by", "delegate",
                       "reviewer", "review_waiver", "review_tier", "description",
-                      "host", "wait", "writer_model", "seat_models",
+                      "host", "wait", "layer", "role", "agent_id",
+                      "phase_kind", "writer_model", "seat_models",
                       "run_ids"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
