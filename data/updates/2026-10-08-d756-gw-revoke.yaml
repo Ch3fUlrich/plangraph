@@ -1,0 +1,33 @@
+# D-756: great-wiki GW-COLLAB-REVOKE under PH-GW-M6.
+batch: 2026-10-08-d756-gw-revoke
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: a94bb31e6b60e95494f5bbe52dd496800bd9c50a57108ca4691c64a83c673209
+ops:
+- op: create
+  item:
+  - project: great-wiki
+    id: GW-COLLAB-REVOKE
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: 'Collab access revoke: close sockets on grant change/move/trash; publish refuses post-lapse updates'
+    done_criteria: sockets closed immediately via the M6 bus on grant change/move/trash; publish refuses updates applied after an access lapse; a test fails when the pre-write recheck is removed; routing
+      ACCEPT; merged; CI green
+    description: 'D-756 (routing 2026-10-08): pre-existing gap found during the move lanes, not blocking the move-lane closes. On grant change/move/trash close affected sockets immediately via the M6 bus;
+      publish refuses updates applied after an access lapse.'
+- op: edit
+  key: great-wiki:PH-GW-M6
+  fields:
+    depends_on:
+    - great-wiki:GW-COLLAB-REVOKE
+    - great-wiki:GW-COMMENTS-RESOLVE
+    - great-wiki:GW-DIGEST
+    - great-wiki:GW-NOTIF-VIEW

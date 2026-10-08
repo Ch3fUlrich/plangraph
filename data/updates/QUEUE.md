@@ -90,3 +90,4 @@ D-721/D-729 (4 keys never in graph: create+close) + D-741 EBN-UNTAGGED-VALIDITY 
 D-742 EBN-REBINARIZE close + D-743 AO-L2-LIVE create+close, AO-L2-SECRETS / AO-ADMISSION-FLOOR open under ROUTE-L2-LAYER: data/updates/2026-10-08-d742-d743.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d743).
 D-744 EBN-REDTRACE-NONBINARY close + EBN-PROVIDER-PACK (operator, wait answer); D-745 PG-MODELS close (commit e2b07d9): data/updates/2026-10-08-d744-d745.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d744).
 D-749 PG-FETCH-ON-DEMAND: closed by md-sync (D-row pass); manual batch not needed (removed).
+D-756 great-wiki:GW-COLLAB-REVOKE under PH-GW-M6: data/updates/2026-10-08-d756-gw-revoke.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d756).
