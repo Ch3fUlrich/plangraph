@@ -8,11 +8,14 @@ Item shape (all keys fully qualified) is documented in ``docs/SPEC.md``.
 """
 from __future__ import annotations
 
+import re
+
 from . import views_graph as _g
 
 __all__ = [
     "index",
     "validate",
+    "warnings",
     "ready",
     "blocked",
     "waves",
@@ -148,6 +151,29 @@ def validate(items):
             seen.add(token)
             unique.append(problem)
     return unique
+
+
+_ID_ONLY = re.compile(r"^[A-Z0-9-]+$")
+
+
+def warnings(items):
+    """Advisory findings (never errors) for active items, sorted.
+
+    ``title_is_id``: the title is only an id-looking token (``^[A-Z0-9-]+$``);
+    ``no_description``: the item has no description.  Done and cancelled items
+    are locked and never warned about.
+    """
+    out = []
+    for it in items:
+        if _state(it) in TERMINAL:
+            continue
+        key = it["key"]
+        if _ID_ONLY.match(it.get("title") or ""):
+            out.append(_problem("title_is_id", key,
+                                "title is only an id; give it a name"))
+        if not (it.get("description") or "").strip():
+            out.append(_problem("no_description", key, "no description"))
+    return sorted(out, key=lambda p: (p["code"], p["key"]))
 
 
 def ready(items, project=None, ub=None):
