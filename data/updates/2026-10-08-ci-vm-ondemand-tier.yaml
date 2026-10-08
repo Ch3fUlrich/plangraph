@@ -1,0 +1,11 @@
+# CI-VM-ONDEMAND: no CI configured for server in the keeper, Semaphore verifier not configured -> close via router D-row with commit check (D-434 tier edit on a claimed item).
+batch: 2026-10-08-ci-vm-ondemand-tier
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 96eae2087a1031056020c7bf5a52a41d564f9a1ff5e0f9375a4a66a8ffab93d7
+ops:
+- op: edit
+  key: server:CI-VM-ONDEMAND
+  fields:
+    review_tier: none
+    evidence_kinds: [decision, commit]
