@@ -92,3 +92,4 @@ D-744 EBN-REDTRACE-NONBINARY close + EBN-PROVIDER-PACK (operator, wait answer); 
 D-749 PG-FETCH-ON-DEMAND: closed by md-sync (D-row pass); manual batch not needed (removed).
 D-756 great-wiki:GW-COLLAB-REVOKE under PH-GW-M6: data/updates/2026-10-08-d756-gw-revoke.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d756).
 D-759 server:OMNIGRAPH-HOP-TLS (owner server-L1-main) under PH-SERVER-1003: data/updates/2026-10-08-d759-omnigraph-hop.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d759).
+UI-MORE-NODE-EXPAND under PH-M2C-UI (judge note on UI-NODE-BUDGET): data/updates/2026-10-08-ui-more-node.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-uimore).
