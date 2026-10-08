@@ -1,0 +1,177 @@
+# plangraph plans to reality (D-639 step 3): fix lanes from the review + browser check + workstation handoff.
+batch: 2026-10-08-plangraph-reality
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: e954e5132b7095d10dceaa19c8d20aa9809fa0f1ebe0c0032ecdbdca3b3831a9
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: UI-OVERVIEW-FIX
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: &id001
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: Graph opens on the collapsed project overview fitted to all hulls; style warnings; phone Settings; dead page_boot copy
+    done_criteria: merged on plangraph main; real-browser check PASS at 1440x900, 1280x800, 390x844
+    description: D-639 browser check (workst-L1) FAIL at 3 viewports. Writers W1/W2 (muse-spark), commit 04b1d78 on fix/review-wave1.
+  - project: plangraph
+    id: UI-REVIEW-W3
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 2
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'Review fixes: phase filter uses phase||track, state: facet case-insensitive, sidebar tables capped at 300 rows'
+    done_criteria: merged on plangraph main with tests
+    description: Seat 2 (muse-spark) findings 1, 4, 5, docs/reviews/2026-10-08-since-1006-seats.md. Writer W3.
+  - project: plangraph
+    id: UI-QA-COUNTS
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 2
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'Q&A: status badge, answered and Needs You counts update after an answer in the page'
+    done_criteria: merged with a node test; browser check
+    description: Workstation handoff 2026-10-08 item 2 (docs/handoff/WORKST-PLANGRAPH-REVIEW-2026-10-08.md).
+  - project: plangraph
+    id: UI-TESTS-TABLE-QA
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 3
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: Tests for the table page view, the Q&A page and the sidebar resize
+    done_criteria: node tests merged that fail on a broken grouping, a broken answer flow and a broken resize clamp
+    description: 'Workstation handoff item 3: a01c8ed was checked in a browser only.'
+  - project: plangraph
+    id: UI-CREATED-AT
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 2
+    estimate_src: default
+    priority: 2
+    depends_on: []
+    title: Keeper snapshot carries created_at so the table's created column is real
+    done_criteria: snapshot export has created_at per item (first event time); table shows it; test
+    description: 'Workstation handoff item 5: the column falls back to the earliest evidence date and shows ''-'' for most items.'
+  - project: plangraph
+    id: UI-HASH-STATE
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 2
+    estimate_src: default
+    priority: 2
+    depends_on: []
+    title: URL hash keeps expanded/collapsed phases, focus project and filters
+    done_criteria: copy URL, reload -> same view; round-trip test
+    description: Seat 2 finding 2 (page_boot.js comment claims hash survival the codec does not implement).
+  - project: plangraph
+    id: UI-NODE-BUDGET
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 3
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: Node budget for expanded phases (1000+ tasks)
+    done_criteria: expanding a 1000-task phase renders at most N task nodes plus an 'N more' node; perf test
+    description: Seat 2 finding 6 (edge-only budget).
+  - project: plangraph
+    id: RENDER-NEWUI-DETECT
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 1
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: render._new_ui checks content, not presence of questions/decisions
+    done_criteria: empty lists and phase:null keep the offline path; test updated with the reason
+    description: 'Seat 2 finding 3 (low: only offline renders).'
+  - project: plangraph
+    id: MD-SYNC-SUPERSEDE
+    kind: lane
+    track: SYNC
+    owner: plangraph-L1-main
+    review_tier: high
+    evidence_kinds: *id001
+    estimate_h: 4
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: 'Supersede rule: the latest router D-row wins for a key''s Closes sha; skipped keys are reported'
+    done_criteria: merged on plangraph main with tests and 1 seat; keeper daemon on the new code; CHAPTARR-ENV + 9 D-548 keys close on the next md-sync
+    description: Routing OK 2026-10-08 (writer + 1 seat). 10 server keys were silently skipped as sha conflicts (D-531/D-548 etc.). Writer W4.
+  - project: plangraph
+    id: KEEPER-REF-PLANGRAPH
+    kind: lane
+    track: SYNC
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: 'Keeper config: plangraph ref = origin/main (local main is the initial commit)'
+    done_criteria: keeper.json repos.plangraph.ref = origin/main, daemon restarted, verify ok; K1-KEEPER closes on its 8cdad08 token
+    description: Local /home/s/code/plangraph main = f610d98 (192 behind), so no plangraph commit close can verify (K1-KEEPER in_review since 2026-10-03).
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    depends_on:
+    - plangraph:GRAPH-UI
+    - plangraph:PROGRESS-PANEL
+    - plangraph:UI-GRAPH
+    - plangraph:UI-SHELL
+    - plangraph:UI-TABLE
+    - plangraph:UI-WRITES
+    - plangraph:UI-OVERVIEW-FIX
+    - plangraph:UI-REVIEW-W3
+    - plangraph:UI-QA-COUNTS
+    - plangraph:UI-TESTS-TABLE-QA
+    - plangraph:UI-CREATED-AT
+    - plangraph:UI-HASH-STATE
+    - plangraph:UI-NODE-BUDGET
+    - plangraph:RENDER-NEWUI-DETECT
+- op: edit
+  key: plangraph:PH-M2C-SYNC
+  fields:
+    depends_on:
+    - plangraph:K1-KEEPER
+    - plangraph:SYNC-MD-IMPORT
+    - plangraph:MD-SYNC-SUPERSEDE
+    - plangraph:KEEPER-REF-PLANGRAPH
+
