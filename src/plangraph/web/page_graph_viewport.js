@@ -295,6 +295,10 @@
     var pName = p0 ? p0.name : null, box = null;
     var bbOpts = { includeLabels: true, includeOverlays: false };
 
+    if (cy && PlanUI.isOverviewState && PlanUI.isOverviewState(ui, vm)) {   // fresh load: fit all hulls
+      var over = PlanUI.fitOverview(cy, isPh, onApply, bbOpts);
+      if (over) return over;
+    }
     if (isPh) {
       if (ui && pName) {
         var curFocus = (typeof ui.get === "function") ? ui.get("focusProject") : ui.focusProject;

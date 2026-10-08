@@ -132,13 +132,13 @@ process.stdout.write(JSON.stringify({
 
 @need_node
 def test_t4_graph_style_rules(tmp_path: Path):
-    """T4: graphStyleRules with fake env equals literal 27 selectors, ext rules come last, phase-collapsed properties."""
+    """T4: graphStyleRules with fake env equals literal 29 selectors (incl. the data-guarded width/height rules), ext rules come last, phase-collapsed properties."""
     EXPECTED_SELECTORS = [
-        "node", "node.task-node", "node.critical-node", "node.loop-node", "node.exit-node",
+        "node", "node[width][height]", "node.task-node", "node.critical-node", "node.loop-node", "node.exit-node",
         "node.exit-node.hollow", "node.exit-node.filled", "node.ghost-node, node.ghost-stub",
         "node.gate-node", "node.goal-node", ":parent", "node.project-compound",
         "node.phase-compound", "node.phase-collapsed, node.project-collapsed",
-        "node.project-collapsed", "node.phase-collapsed", "node:selected", "edge",
+        "node.project-collapsed", "node.phase-collapsed", "node:selected", "edge", "edge[width]",
         "edge.critical-edge", ".dim", "node.state-ready", "node.state-blocked",
         "node.state-claimed", "node.state-done", "node.state-open",
         "node.state-in_review", "node.state-cancelled"

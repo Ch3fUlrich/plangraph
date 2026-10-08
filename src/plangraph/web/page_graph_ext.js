@@ -167,7 +167,8 @@
       acc = cv("--accent") || "#33415c";
 
     var s = [
-      { selector: "node", style: { label: "data(label)", "font-family": "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", "font-size": 15, "text-valign": "center", "text-halign": "center", "text-wrap": "wrap", "text-max-width": 216, "text-overflow-wrap": "anywhere", "line-height": 1.25, color: fg, "background-color": panel, "border-width": 2, "border-color": bdr, shape: "round-rectangle", width: "data(width)", height: "data(height)" } },
+      { selector: "node", style: { label: "data(label)", "font-family": "system-ui, -apple-system, Segoe UI, Roboto, sans-serif", "font-size": 15, "text-valign": "center", "text-halign": "center", "text-wrap": "wrap", "text-max-width": 216, "text-overflow-wrap": "anywhere", "line-height": 1.25, color: fg, "background-color": panel, "border-width": 2, "border-color": bdr, shape: "round-rectangle" } },
+      { selector: "node[width][height]", style: { width: "data(width)", height: "data(height)" } },
       { selector: "node.task-node", style: { "background-fill": "linear-gradient", "background-gradient-direction": "to-right", "background-gradient-stop-colors": function (el) { var c = el.data("color") || "#2f6f4f"; return c + " " + c + " " + panel + " " + panel; }, "background-gradient-stop-positions": "0% 2.5% 2.5% 100%" } },
       { selector: "node.critical-node", style: { "border-color": crit, "border-width": 3 } },
       { selector: "node.loop-node", style: { "border-style": "double", "border-width": 4 } },
@@ -184,7 +185,8 @@
       { selector: "node.project-collapsed", style: { "font-size": 24, "font-weight": "bold" } },
       { selector: "node.phase-collapsed", style: { "font-size": 20, "font-weight": "normal" } },
       { selector: "node:selected", style: { "border-width": 4, "border-color": acc } },
-      { selector: "edge", style: { "curve-style": "taxi", "taxi-direction": "rightward", "taxi-turn": "50%", width: "data(width)", "target-arrow-shape": "triangle", "arrow-scale": 1.2, "line-color": bdr, "target-arrow-color": bdr, label: "data(label)", "font-size": 11, color: mut, "text-rotation": "autorotate", "text-background-opacity": 0.8, "text-background-color": cv("--bg") || "#ffffff", "text-background-padding": 2 } },
+      { selector: "edge", style: { "curve-style": "taxi", "taxi-direction": "rightward", "taxi-turn": "50%", width: 2, "target-arrow-shape": "triangle", "arrow-scale": 1.2, "line-color": bdr, "target-arrow-color": bdr, label: "data(label)", "font-size": 11, color: mut, "text-rotation": "autorotate", "text-background-opacity": 0.8, "text-background-color": cv("--bg") || "#ffffff", "text-background-padding": 2 } },
+      { selector: "edge[width]", style: { width: "data(width)" } },
       { selector: "edge.critical-edge", style: { "line-color": crit, "target-arrow-color": crit, width: 4 } },
       { selector: ".dim", style: { opacity: 0.15 } }
     ];
