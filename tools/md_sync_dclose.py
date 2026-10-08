@@ -71,7 +71,7 @@ def router_drows(text, since=1):
         if cells and cells[-1] == "":
             cells = cells[:-1]
         by = cells[3] if len(cells) >= 4 else ""
-        if "router" not in by.lower():
+        if "router" not in by.lower() and "routing-00" not in by.lower():  # D-722: both spellings
             continue
         dec = cells[2] if len(cells) >= 3 else ""
         yield int(match.group(1)), by, dec
