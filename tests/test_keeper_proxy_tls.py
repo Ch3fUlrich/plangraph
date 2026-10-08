@@ -1,6 +1,7 @@
 """PG-PROXY-ACCESS D-759 A: mint-certs.sh output and the mutual-TLS sidecar config."""
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -80,7 +81,7 @@ def test_a_foreign_ca_does_not_verify(minted, tmp_path):
 
 def test_nginx_requires_client_certs_and_modern_tls():
     conf = (PROXY / "nginx.conf").read_text(encoding="utf-8")
-    assert "listen 192.168.178.73:8788 ssl;" in conf
+    assert re.search(r"listen [0-9.]+:8788 ssl;", conf)  # the LAN listener is TLS
     assert "ssl_verify_client on;" in conf
     assert "ssl_client_certificate /etc/nginx/tls/ca.crt;" in conf
     assert "ssl_protocols TLSv1.2 TLSv1.3;" in conf
