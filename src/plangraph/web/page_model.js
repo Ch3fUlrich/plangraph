@@ -119,7 +119,7 @@
     return typeof r === "string" && r ? r : "";
   }
 
-  function deriveDecisions(items) {
+  function deriveDecisions(items, decisionText) {
     var order = [], byId = {};
     items.forEach(function (i) {
       (Array.isArray(i.evidence) ? i.evidence : []).forEach(function (ev) {
@@ -128,8 +128,11 @@
         if (!id) return;
         var d = byId[id];
         if (!d) {                                    // first-seen order, first-seen project
-          d = byId[id] = { id: id, project: i.project, title: "Decision " + id,
-                               text: "", date: str(ev.at).slice(0, 10), items: [] };
+          var txt = (decisionText && typeof decisionText[id] === "string") ? decisionText[id] : null;
+          d = byId[id] = { id: id, project: i.project,
+                               title: txt ? id + ": " + txt.slice(0, 90) : "Decision " + id,
+                               text: txt != null ? txt : "",
+                               date: str(ev.at).slice(0, 10), items: [] };
           order.push(d);
         }
         if (d.items.indexOf(i.key) < 0) d.items.push(i.key);
@@ -214,7 +217,7 @@
     });
 
     var questions = Array.isArray(snap.questions) ? snap.questions : deriveQuestions(raw);
-    var decisions = Array.isArray(snap.decisions) ? snap.decisions : deriveDecisions(raw);
+    var decisions = Array.isArray(snap.decisions) ? snap.decisions : deriveDecisions(raw, snap.decision_text);
     var decisionById = {};
     decisions.forEach(function (d) { decisionById[d.id] = d; });
 

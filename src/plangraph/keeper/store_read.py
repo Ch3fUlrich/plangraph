@@ -118,7 +118,44 @@ class ReadMixin:
             "SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
         return {"generated": self._iso(now), "head": head[0] if head else None,
                 "items": out,
-                "aliases": {a["old"]: a["new"] for a in self._aliases()}}
+                "aliases": {a["old"]: a["new"] for a in self._aliases()},
+                "decision_text": self._decision_text(items, now)}
+
+    def _decision_text(self, items, now):
+        """Map of decision id -> cell text for ids cited by item evidence."""
+        try:
+            wanted: list[str] = []
+            seen: set[str] = set()
+            for item in items:
+                for record in self._evidence(item["key"]):
+                    if record.get("kind") != "decision":
+                        continue
+                    ref = record.get("ref") or {}
+                    did = ref.get("id") if isinstance(ref, dict) else None
+                    if isinstance(did, str) and did and did not in seen:
+                        seen.add(did)
+                        wanted.append(did)
+            if not wanted or not items:
+                return {}
+            try:
+                adapter = self._ctx(items[0], now).decisions
+            except Exception:  # noqa: BLE001 - snapshot never raises
+                return {}
+            text_fn = getattr(adapter, "text", None)
+            if not callable(text_fn):
+                return {}
+            result: dict[str, str] = {}
+            for did in wanted:
+                try:
+                    value = text_fn(did)
+                except Exception:  # noqa: BLE001 - one bad row skips
+                    continue
+                if not isinstance(value, str) or not value:
+                    continue
+                result[did] = value[:600]
+            return result
+        except Exception:  # noqa: BLE001 - snapshot never raises
+            return {}
 
     # --------------------------------------------------------------- alerts
     def alerts(self, principal, project=None):

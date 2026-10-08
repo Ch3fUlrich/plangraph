@@ -42,6 +42,7 @@ _KEYWORD_RE = re.compile(r"\b([A-Za-z-]+):(?=\s|$)")
 _WAIVES_RE = re.compile(r"(?i)\bwaives\s*:")
 _CLOSES_RE = re.compile(r"(?i)\bcloses\s*:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
+_WS_RE = re.compile(r"\s+")
 # A whole ``project:ID`` key (the same shape tools/apply_batch.py accepts).
 _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
 _CLOSES_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}\Z")
@@ -130,6 +131,20 @@ class DecisionsAdapter:
     def has(self, decision_id: str) -> bool:
         canonical = self._canonical(decision_id)
         return canonical is not None and canonical in self._rows()
+
+    def text(self, decision_id: str) -> str | None:
+        """The DECISION cell of *decision_id*'s row, whitespace-collapsed."""
+        canonical = self._canonical(decision_id)
+        if canonical is None:
+            return None
+        rows = self._rows().get(canonical)
+        if not rows:
+            return None
+        for row in rows:
+            collapsed = _WS_RE.sub(" ", _decision_cell(row)).strip()
+            if collapsed:
+                return collapsed
+        return ""
 
     def _scoped_tokens(self, decision_id: str, pattern: re.Pattern) -> set[str]:
         """The whole tokens in the DECISION cell of *decision_id*'s rows.
