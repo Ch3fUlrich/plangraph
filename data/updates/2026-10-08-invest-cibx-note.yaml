@@ -1,0 +1,10 @@
+# invest-L1 update: INV-CIBX blocked.
+batch: 2026-10-08-invest-cibx-note
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 2aa17b4f9b820a8995aa14d9a0f34d30a565a0aeb2eae18e40ebf4362027777b
+ops:
+- op: edit
+  key: invest:INV-CIBX
+  fields:
+    note: 'BLOCKED 2026-10-08: ci.vm unreachable from the invest host (no route).'
