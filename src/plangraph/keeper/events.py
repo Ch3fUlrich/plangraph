@@ -70,7 +70,47 @@ def _new_state():
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
             "round": 0, "evidence": [], "review_waiver": None,
             "review_tier": "standard", "description": None,
-            "host": None, "wait": None}
+            "host": None, "wait": None, "writer_model": None,
+            "seat_models": None, "run_ids": None}
+
+
+def _dump(value) -> str:
+    """Canonical JSON text shared with the store (identical bytes)."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _fold_run(item, payload):
+    """Replay one ``run_recorded`` payload into the cached columns."""
+    payload = payload or {}
+    run_id = payload.get("run_id")
+    seats = payload.get("seats")
+    try:
+        have = json.loads(item.get("run_ids")) if item.get("run_ids") else []
+    except (ValueError, TypeError):
+        have = []
+    if not isinstance(have, list):
+        have = []
+    seen = set(have)
+    ordered = list(have)
+    cands = []
+    if run_id is not None:
+        cands.append(run_id)
+    if isinstance(seats, list):
+        for seat in seats:
+            if isinstance(seat, dict) and seat.get("run_id") is not None:
+                cands.append(seat.get("run_id"))
+    for cand in cands:
+        if cand not in seen:
+            seen.add(cand)
+            ordered.append(cand)
+    item["run_ids"] = _dump(ordered)
+    writer = payload.get("writer")
+    if isinstance(writer, dict) and writer.get("model") is not None:
+        item["writer_model"] = writer.get("model")
+    if seats is not None and isinstance(seats, list):
+        item["seat_models"] = _dump(
+            [{"model": s.get("model"), "verdict": s.get("verdict")}
+             for s in seats if isinstance(s, dict)])
 
 
 def fold(events):
@@ -185,6 +225,8 @@ def fold(events):
             item["review_waiver"] = None
         elif kind == "priority_set":
             item["priority"] = payload.get("priority", item["priority"])
+        elif kind == "run_recorded":
+            _fold_run(item, payload)
         elif kind == "evidence_added":
             item["evidence"].append({
                 "epoch": item["epoch"],
@@ -232,7 +274,8 @@ def verify_integrity(conn):
     folded = fold(all_events)
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
-        "review_waiver,review_tier,description,host,wait FROM items")}
+        "review_waiver,review_tier,description,host,wait,writer_model,"
+        "seat_models,run_ids FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -246,7 +289,8 @@ def verify_integrity(conn):
             continue
         for field in ("state", "epoch", "round", "claimed_by", "delegate",
                       "reviewer", "review_waiver", "review_tier", "description",
-                      "host", "wait"):
+                      "host", "wait", "writer_model", "seat_models",
+                      "run_ids"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
                                  "field": field, "expected": expected[field],

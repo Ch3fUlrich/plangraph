@@ -14,16 +14,16 @@ from __future__ import annotations
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES"]
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
-ROLES = ("router", "l1", "worker", "reviewer", "system", "reader")
+ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
     "lease_expired", "evidence_added", "submitted", "changes_requested",
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
-    "waiver_set", "legacy_state_set",
+    "waiver_set", "legacy_state_set", "run_recorded",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -87,6 +87,9 @@ CREATE TABLE items (
     review_tier    TEXT NOT NULL DEFAULT 'standard'
                    CHECK (review_tier IN ('standard','high','none')),
     review_waiver  TEXT,
+    writer_model TEXT,
+    seat_models  TEXT,
+    run_ids      TEXT,
     created_at     TEXT,
     updated_at     TEXT
 );

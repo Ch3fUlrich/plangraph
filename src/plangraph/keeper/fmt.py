@@ -49,6 +49,11 @@ def show_text(info: dict) -> str:
         lines.append(f"host {info['host']}")
     if info.get("wait"):
         lines.append(f"wait {info['wait']}")
+    if info.get("writer_model") or info.get("seat_models"):
+        seats = ",".join(
+            f"{s.get('model')}:{s.get('verdict') if s.get('verdict') is not None else '-'}"
+            for s in info.get("seat_models") or []) or "-"
+        lines.append(f"models writer={info.get('writer_model') or '-'} seats={seats}")
     if info.get("description"):
         lines.append(f"desc {info['description']}")
     if info.get("done_criteria"):

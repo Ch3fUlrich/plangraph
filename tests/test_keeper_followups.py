@@ -270,7 +270,7 @@ def test_router_verbs_are_routed_writes(world, srv, verb):
 def test_known_item_fields_cover_every_items_column(w):
     lifecycle = {"epoch", "round", "claimed_by", "delegate", "lease_until",
                  "reviewer", "model", "review_waiver", "created_at",
-                 "updated_at"}
+                 "updated_at", "writer_model", "seat_models", "run_ids"}
     columns = {row[1] for row in w.conn.execute("PRAGMA table_info(items)")}
     assert columns - lifecycle <= KNOWN_ITEM_FIELDS, (
         "a new items column must be a known create field or a lifecycle column")

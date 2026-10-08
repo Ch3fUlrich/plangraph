@@ -17,7 +17,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "rehome"}
+               "rehome", "record_run"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
@@ -51,8 +51,13 @@ def _rehome(store, principal, body, need):
                         body.get("host"))
 
 
+def _record_run(store, principal, body, need):
+    return store.record_run(principal, need(body, "key"), body.get("run"))
+
+
 ROUTER_VERBS = {"close_on_decision": _close_on_decision,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
-                "apply_ops": _apply_ops}
+                "apply_ops": _apply_ops,
+                "record_run": _record_run}

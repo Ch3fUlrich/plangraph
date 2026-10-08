@@ -95,6 +95,9 @@ TOOLS = (
     _tool("edit", "Edit an open item: l1 own project only, router anywhere; locked once done/cancelled.",
           {"key": {"type": "string"}, "fields": {"type": "object"}},
           ("key", "fields")),
+    _tool("record_run", "Spawner: record which models ran on a claimed item.",
+          {"key": {"type": "string"}, "run": {"type": "object"}},
+          ("key", "run")),
 )
 
 #: name -> (HTTP method, /v1/<verb>).  All other args pass through.
@@ -113,6 +116,7 @@ _ROUTES = {
     "percent": ("GET", "percent"), "alerts": ("GET", "alerts"),
     "digest": ("GET", "digest"), "whoami": ("GET", "whoami"),
     "create": ("POST", "create_items"), "edit": ("POST", "edit_definition"),
+    "record_run": ("POST", "record_run"),
 }
 
 
