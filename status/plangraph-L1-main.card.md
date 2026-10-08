@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (coding.vm, the only plangraph L1; D-639)
-Updated: 2026-10-08 23:10 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-2026-10-08b.md | Constraints: CONSTRAINTS.md
+Updated: 2026-10-08 23:55 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-2026-10-08b.md | Constraints: CONSTRAINTS.md
 
 ## Phase
 Live tree (worktree-proposal) = main a01c8ed + sync fixes + review fix waves 1-2 + all 2026-10-08 batches, pushed.
@@ -15,10 +15,10 @@ Cron d83d9251 (:17/:47, session-only). No writers. Keeper = plangraph-keeper.ser
 D-649/650 (5), D-653 routing (9), plangraph reality (10 fix lanes). Backups keeper.db.pre-* (newest by ls -t).
 
 ## Next (in order)
-1. Waiting: workst browser check of 97d0ded (UI-CREATED-AT/NODE-BUDGET/NEWUI-DETECT) → routing closes; main ff → 14ec1fc.
+1. Waiting on routing: UI closes (browser PASS sent), MK closes, main ff → aeb0208.
 2. PG-PROXY-ACCESS go-live parked (D-759 A: operator mints the shared internal hop CA, then listener/vhost/cutover);
    files merged b00ea79; design docs/proposals/2026-10-08-pg-proxy-access.md, deploy/keeper-proxy/.
-3. MODEL-KINDS (+ D-656 gaps), UI-MORE-NODE-EXPAND. Spawns frozen by routing (memory floor) until told otherwise.
+3. MODEL-KINDS live (aeb0208, closes owed by routing). Next: UI-MORE-NODE-EXPAND. Spawns frozen by routing (memory floor) until told otherwise.
 
 ## Catch-up (D-653, 2026-10-08)
 ZCode stand-in (10-05/06) work is on origin (ded3a03, 2d9d0b5); no keeper writes. Parked WIP 8dfa483 (G2b step 6) and

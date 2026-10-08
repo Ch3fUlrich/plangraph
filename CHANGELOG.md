@@ -4,6 +4,10 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-08
 
+- **MODEL-KINDS (D-231/D-292/D-656):** item kinds question/decision/operator_task (operator/wait defaults), fields
+  layer/role/agent_id/phase_kind/fixes, evidence kind `error`, router verb `answer` (event `answered`, locks like a
+  decision close; old DBs get their lock triggers rebuilt on open), reads `needs_you` / `answers`; MCP 28 tools
+  (aeb0208, L2-mk + plangraph-L1, judge ACCEPT).
 - **UI lanes (L2-ui) + keeper proxy files:** table created column from snapshot created_at, node budget 200 per
   expanded phase with a '+N more' node, render new-UI detection on content (97d0ded). Keeper proxy (not live):
   nginx sidecar with mutual TLS + edge allowlist, mint-certs.sh for the shared internal hop CA (b00ea79, D-759 A).
