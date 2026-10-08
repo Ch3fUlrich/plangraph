@@ -1,0 +1,78 @@
+# D-715 CI-VM-ONDEMAND (prox).
+batch: 2026-10-08-ci-vm-ondemand
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: ce03f4052524923439ab94fece19b905e9edadf86656cac0a00a3e72ceb82e8d
+ops:
+- op: create
+  item:
+  - project: server
+    id: CI-VM-ONDEMAND
+    kind: lane
+    track: INFRA
+    owner: prox-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: 'ci.vm (VM 112) on demand: start on queued Forgejo jobs, clean shutdown after 2 h idle, onboot=0'
+    done_criteria: queued jobs for ci-vm112 labels start the VM; idle >= 2 h with no running job -> clean shutdown; onboot=0; dry-run + tests; 1 seat from another family; merged on Server improve
+    description: D-715, prox-L1-main.
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on:
+    - routing:OS-102B
+    - server:ABR-TRUSTED-GROUP
+    - server:ACC-GROUPS-DEPLOY
+    - server:ACC-GROUPS-T1
+    - server:ACC-GROUPS-T2
+    - server:ACCOUNTS-PWSTORE
+    - server:ACCOUNTS-PWSTORE-F40
+    - server:BACKUP-HARDEN
+    - server:BACKUP-RENDER-TEST
+    - server:BACKUP-SQLITE-LABEL-FIX
+    - server:BOOKS-SLSKD-RECOVERY
+    - server:CHAPTARR-ENV
+    - server:CROWDSEC-ABS-ANCHOR
+    - server:CROWDSEC-ENFORCE
+    - server:CS-CADDY
+    - server:CS-CADDY-PII
+    - server:DH-DOCS
+    - server:F48-CLAMAV-TEST
+    - server:GW-LOGS-REWORK
+    - server:GW-NFS-COUNTS
+    - server:GW-SEMAPHORE-HARDEN
+    - server:HA-CLEANUP
+    - server:HA-DOCS-SPLIT
+    - server:HA-STT-FREE
+    - server:HA-STT-FREE-ENV
+    - server:HA-STT-WS
+    - server:HA-WS-INSTALLED
+    - server:HEAL-LLM-REPOINT
+    - server:IDS-HOMENET
+    - server:IDS-READSHAPE
+    - server:IDS-SCHEDULE-ON
+    - server:IDS-V6SRC
+    - server:MCP-SERVERS-ADOPT
+    - server:MEALIE-CAP
+    - server:OVERLAY-VERSION-GUARD
+    - server:OVG-RENDER-TEST
+    - server:OWUI-PYODIDE
+    - server:PH-TWOARMED
+    - server:PLAN-LAN-TEST
+    - server:PLAN-VHOST
+    - server:PROX-STABLE-NAME
+    - server:PRUNE-WEEKLY
+    - server:SABLIER-MAIL-POLICY
+    - server:SQLITE-ONLINE-BACKUP
+    - server:STREAMING-BACKUP
+    - server:UPR-LOG-B1
+    - server:UPR-LOG-B2
+    - server:VIDEO-CAP
+    - server:VM-IPV6-RA
+    - server:CI-VM-ONDEMAND
+
