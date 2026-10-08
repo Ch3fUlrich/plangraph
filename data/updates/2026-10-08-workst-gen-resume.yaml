@@ -1,0 +1,115 @@
+# workst-L1-gen fleet lanes (gen-analysis main 0755398, docs/superpowers/plans/2026-10-08-fleet-lanes); routing D-668. plangraph-L1: source copied locally, gate edit added.
+batch: 2026-10-08-workst-gen-resume
+principal: routing-00
+source: ../source/2026-10-08-workst-gen-fleet-lanes-README.md
+source_sha256: e8008c8842963a42353b15a8555eeaeb59ed94872012b549808858411485b8d5
+ops:
+- op: create
+  item:
+  - project: workst-gen
+    id: GEN-QGUARD
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: high
+    estimate_h: 2
+    priority: 3
+    evidence_kinds:
+    - commit+ci
+    title: Labs uploads unclaimable by the generic upload worker
+    done_criteria: lane full suite green; 3 non-writer-family seats quote test B unchanged; routing ACCEPT; merged and pushed; Actions run green
+  - project: workst-gen
+    id: GEN-PERSONID
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: high
+    estimate_h: 3
+    priority: 3
+    evidence_kinds:
+    - commit+ci
+    title: New person never overwrites an existing one (slug ids, INSERT only)
+    done_criteria: two-Annas-1990 and same-name-no-year tests pass; 3-family seats; routing ACCEPT; merged; Actions green
+  - project: workst-gen
+    id: GEN-NUMIN
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: standard
+    estimate_h: 1.5
+    priority: 2
+    evidence_kinds:
+    - commit+ci
+    title: Questionnaire numbers refuse nan/inf, non-ASCII digits, 1e3, 1_000, +5
+    done_criteria: a test per refused form incl. the admin min/max path; 1 seat; routing ACCEPT; merged; Actions green
+    depends_on:
+    - workst-gen:GEN-PERSONID
+  - project: workst-gen
+    id: GEN-BWERROR-ACTIONS
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: standard
+    estimate_h: 0.2
+    priority: 1
+    evidence_kinds:
+    - run-record
+    title: Read back the Actions run containing the BWERROR merge
+    done_criteria: a run containing f6f0777 is green in all four jobs, reported to routing
+    note: 'DONE 2026-10-08: Actions success on f6f0777 and 8a02336; close with run-record'
+  - project: workst-gen
+    id: GEN-CHANGELOG-CATCHUP
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: standard
+    estimate_h: 1
+    priority: 2
+    evidence_kinds:
+    - commit+ci
+    title: CHANGELOG entries for the 49 PR merges of 2026-10-03..05
+    done_criteria: '[Unreleased] names every merged PR number once; identifier guard green; 1 seat; merged'
+  - project: workst-gen
+    id: GEN-SWAP-OBS-CLOSE
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: standard
+    estimate_h: 0.3
+    priority: 1
+    evidence_kinds:
+    - run-record
+    title: Close or reopen the atomic-swap flake observation (on/after 2026-10-10)
+    done_criteria: omnigraph Task closed if every run printed retries 0, else reopened with suffixes
+    depends_on:
+    - workst-gen:GEN-ATOMIC-SWAP-OBS
+  - project: workst-gen
+    id: Q-GEN-PR-OWNER
+    kind: lane
+    track: GEN
+    owner: routing-00
+    operator: false
+    review_tier: standard
+    evidence_kinds:
+    - decision
+    title: 'Q: who triages the 28 open automated PRs (83-110)?'
+    done_criteria: router D-id names the owner
+- op: edit
+  key: routing:PH-GEN-1003
+  fields:
+    depends_on:
+    - workst-gen:BWERROR
+    - workst-gen:GEN-ATOMIC-SWAP-OBS
+    - workst-gen:GEN-CIHEALTH
+    - workst-gen:GEN-CLOSEOUT
+    - workst-gen:GEN-FLEET-SWITCH
+    - workst-gen:GEN-HISTORY-REWRITE
+    - workst-gen:GEN-REGISTRY-ROUTE
+    - workst-gen:GEN-SHARELINK-FLAKE
+    - workst-gen:GEN-QGUARD
+    - workst-gen:GEN-PERSONID
+    - workst-gen:GEN-NUMIN
+    - workst-gen:GEN-BWERROR-ACTIONS
+    - workst-gen:GEN-CHANGELOG-CATCHUP
+    - workst-gen:GEN-SWAP-OBS-CLOSE
+    - workst-gen:Q-GEN-PR-OWNER
