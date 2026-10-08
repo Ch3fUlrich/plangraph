@@ -4,6 +4,9 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-08
 
+- **PG-FETCH-ON-DEMAND / PG-SPLIT-EXAMPLES-TEST / PG-CI:** keeper fetches a stale origin/* clone once per repo per
+  60 s when commit evidence misses (b8ea51b); examples regenerated + README pointer reworded, full suite 0 failures
+  (5c029fa); GitHub Actions pytest on push/PR (fffd19f, run 37850230244 green).
 - **PG-MODELS (D-708 A):** keeper verb `record_run` (new role `spawner`, principal created) records run ids, writer
   model and seat models per item (e2b07d9, judge ACCEPT server-L1-routing); show/snapshot add created_at, done_at,
   reviewed, merged. md-sync status close_skipped carries the reason (c9edf6c).

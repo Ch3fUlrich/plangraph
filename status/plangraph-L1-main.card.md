@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (coding.vm, the only plangraph L1; D-639)
-Updated: 2026-10-08 22:30 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-2026-10-08b.md | Constraints: CONSTRAINTS.md
+Updated: 2026-10-08 22:05 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-2026-10-08b.md | Constraints: CONSTRAINTS.md
 
 ## Phase
 Live tree (worktree-proposal) = main a01c8ed + sync fixes + review fix waves 1-2 + all 2026-10-08 batches, pushed.
@@ -15,8 +15,8 @@ Cron d83d9251 (:17/:47, session-only). No writers. Keeper = plangraph-keeper.ser
 D-649/650 (5), D-653 routing (9), plangraph reality (10 fix lanes). Backups keeper.db.pre-* (newest by ls -t).
 
 ## Next (in order)
-1. Routing: ff main → 2d53adb; Closes ADOPT-400LOC-PLANGRAPH@ef4c67f.
-2. Open lanes: UI-CREATED-AT, UI-NODE-BUDGET, RENDER-NEWUI-DETECT, MODEL-KINDS (+ D-656 gaps); proposed UI-DECISION-TEXT.
+1. PG-PROXY-ACCESS (asked routing: start it or UI lanes first). Branch protection for the `tests` check = routing.
+2. Open lanes: UI-CREATED-AT, UI-NODE-BUDGET, RENDER-NEWUI-DETECT, MODEL-KINDS (+ D-656 gaps).
 3. After autoos-L1 lands layered-planning (D-646): 3-line pointer in skills/plangraph-planning.
 
 ## Catch-up (D-653, 2026-10-08)
