@@ -31,6 +31,7 @@ from .store_read import ReadMixin
 from .store_rehome import RehomeMixin
 from .store_reap import ReapMixin
 from .store_review import ReviewMixin
+from .store_runs import RunsMixin
 from .store_support import SupportMixin, iso, parse_iso
 from .store_verbs import VerbsMixin
 from .store_waiver import WaiverMixin
@@ -55,7 +56,7 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
-            NamesMixin, RehomeMixin):
+            NamesMixin, RehomeMixin, RunsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,

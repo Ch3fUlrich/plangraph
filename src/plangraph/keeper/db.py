@@ -73,7 +73,10 @@ def _enable_defensive(conn):
 #: Columns added after a schema shipped: ``(table, column, DDL type)``.  An older
 #: database gains them when opened (before the authorizer denies ALTER).
 _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
-                  ("items", "wait", "TEXT"))
+                  ("items", "wait", "TEXT"),
+                  ("items", "writer_model", "TEXT"),
+                  ("items", "seat_models", "TEXT"),
+                  ("items", "run_ids", "TEXT"))
 
 
 def _upgrade(conn):

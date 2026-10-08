@@ -14,6 +14,28 @@ from .errors import Refused
 
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
+_MERGED_KINDS = ("commit+ci", "commit")
+_TS_TYPES = ("review_passed", "closed_on_decision", "item_created")
+
+
+def _decode_models(value):
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (ValueError, TypeError):
+        return None
+    return list(parsed) if isinstance(parsed, list) else None
+
+
+def _decode_run_ids(value):
+    if value is None:
+        return []
+    try:
+        parsed = json.loads(value) if isinstance(value, str) else value
+    except (ValueError, TypeError):
+        return []
+    return list(parsed) if isinstance(parsed, list) else []
 
 _ACTIVITY_TYPES = ("item_created", "legacy_state_set", "closed_on_decision",
                    "cancelled", "claimed", "submitted", "review_passed",
@@ -60,6 +82,31 @@ class ReadMixin:
                                       "family": principal.family})
 
     # -------------------------------------------------------------- show
+    def _run_derived(self, key, item, evidence=None):
+        """Read-time ``record_run`` fields plus done/reviewed/merged."""
+        done_at, created_ts, reviewed = None, None, False
+        for row in self.conn.execute(
+                "SELECT type,ts FROM events WHERE key=? AND type IN"
+                " ('review_passed','closed_on_decision','item_created')"
+                " ORDER BY seq", (key,)):
+            if row["type"] == "item_created" and created_ts is None:
+                created_ts = row["ts"]
+            elif row["type"] == "review_passed":
+                reviewed = True
+                if done_at is None:
+                    done_at = row["ts"]
+            elif row["type"] == "closed_on_decision" and done_at is None:
+                done_at = row["ts"]
+        rows = evidence if evidence is not None else self._evidence(key)
+        merged = any(r.get("verified") and r.get("kind") in _MERGED_KINDS
+                     for r in rows)
+        created_at = item.get("created_at") or created_ts
+        return {"writer_model": item.get("writer_model"),
+                "seat_models": _decode_models(item.get("seat_models")),
+                "run_ids": _decode_run_ids(item.get("run_ids")),
+                "created_at": created_at, "done_at": done_at,
+                "reviewed": reviewed, "merged": merged}
+
     def _show(self, key):
         item = self._get_or_refuse(key)
         index = {it["key"]: it for it in self._all_items()}
@@ -73,7 +120,7 @@ class ReadMixin:
                      "ref": record["ref"]} for record in self._evidence(key)]
         reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
                    for v in self._round_verdicts(item)]
-        return {
+        info = {
             "key": key, "title": item["title"],
             "description": item["description"], "host": item["host"],
             "wait": item.get("wait"),
@@ -90,6 +137,8 @@ class ReadMixin:
             "corrects": item["corrects"], "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
+        info.update(self._run_derived(key, item))
+        return info
 
     def _brief(self, key):
         """The short task brief: identity, state, requirements, latest note."""
@@ -104,12 +153,32 @@ class ReadMixin:
         return self._run(principal, "snapshot", None,
                          lambda now: self._snapshot(now))
 
+    def _snapshot_run_meta(self):
+        """One grouped query for done/reviewed/created timestamps + merged."""
+        created, done, reviewed = {}, {}, set()
+        for row in self.conn.execute(
+                "SELECT key,type,ts FROM events WHERE type IN"
+                " ('review_passed','closed_on_decision','item_created')"
+                " ORDER BY seq"):
+            if row["type"] == "item_created":
+                created.setdefault(row["key"], row["ts"])
+            elif row["type"] == "review_passed":
+                reviewed.add(row["key"])
+                done.setdefault(row["key"], row["ts"])
+            else:
+                done.setdefault(row["key"], row["ts"])
+        merged = {row["key"] for row in self.conn.execute(
+            "SELECT key FROM evidence WHERE verified!=0 AND kind IN"
+            " ('commit+ci','commit') GROUP BY key")}
+        return created, done, reviewed, merged
+
     def _snapshot(self, now):
         items = self._all_items()
         corrected = {}
         for item in items:
             if item["corrects"]:
                 corrected.setdefault(item["corrects"], []).append(item["key"])
+        created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
         out = []
         for item in items:
             reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
@@ -138,6 +207,14 @@ class ReadMixin:
                              for r in self._evidence(item["key"])],
                 "updated_at": item["updated_at"],
                 "corrected_by": sorted(corrected.get(item["key"], [])),
+                "writer_model": item.get("writer_model"),
+                "seat_models": _decode_models(item.get("seat_models")),
+                "run_ids": _decode_run_ids(item.get("run_ids")),
+                "created_at": item.get("created_at")
+                or created_ts.get(item["key"]),
+                "done_at": done_ts.get(item["key"]),
+                "reviewed": item["key"] in reviewed_keys,
+                "merged": item["key"] in merged_keys,
             })
         head = self.conn.execute(
             "SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
