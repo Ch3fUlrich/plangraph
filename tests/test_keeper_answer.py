@@ -56,7 +56,9 @@ def test_answer_question_open(w):
     assert len(ev) == 1 and ev[0]["key"] == "demo:Q"
     assert ev[0]["payload"] == {"text": "yes, ship it", "decision_id": DID}
     assert verify_integrity(w.conn) == []
-    assert w.store.show(w.p("reader"), "demo:Q")["done_at"] is not None
+    done_at = w.store.show(w.p("reader"), "demo:Q")["done_at"]
+    row = next(i for i in w.store.snapshot(w.p("reader"))["items"] if i["key"] == "demo:Q")
+    assert done_at is not None and row["done_at"] == done_at
 
 
 def test_answer_decision_kind_and_active_states(w):
@@ -140,6 +142,19 @@ def test_no_decisions_adapter_fails_closed(w):
     with pytest.raises(Refused) as exc:
         w.store.answer(w.p("router"), "demo:Q", "x", DID)
     assert exc.value.code == "evidence_unverified"
+
+
+@pytest.mark.parametrize("broken", ["has", "closes"])
+def test_raising_adapter_fails_closed(w, broken):
+    def boom(_did):
+        raise RuntimeError("unreadable")
+    ok = SimpleNamespace(has=lambda _d: True, closes=lambda _d: ["demo:Q"])
+    setattr(ok, broken, boom)
+    w.store.ctx = SimpleNamespace(decisions=ok)
+    with pytest.raises(Refused) as exc:
+        w.store.answer(w.p("router"), "demo:Q", "x", DID)
+    assert exc.value.code == "evidence_unverified"
+    assert _item(w, "demo:Q")["state"] == "open"
 
 
 def test_cancelled_item_refused(w):

@@ -47,12 +47,13 @@ class AnswerMixin:
         decisions = self._decisions_adapter(item, now)
         try:
             recorded = decisions.has(decision_id)
+            named = ({self.resolve_key(token) for token in decisions.closes(decision_id)}
+                     if recorded else set())
         except Exception:  # noqa: BLE001 - unreadable file fails closed
-            recorded = False
+            recorded, named = False, set()
         if not recorded:
             raise Refused("evidence_unverified",
                           f"decision {decision_id} is not in the decisions file")
-        named = {self.resolve_key(token) for token in decisions.closes(decision_id)}
         if key not in named:
             raise Refused("evidence_unverified",
                           f"decision {decision_id} does not name {key} in Closes:")
