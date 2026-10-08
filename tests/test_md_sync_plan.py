@@ -65,7 +65,7 @@ def test_new_question_creates_lane_gate_and_goal_link():
         "project": "routing", "id": "Q-N1", "title": "Q: New thing", "kind": "lane",
         "track": "QUESTIONS", "owner": "operator", "operator": True,
         "evidence_kinds": ["decision"], "review_tier": "none", "depends_on": [],
-        "description": "more words", "source": "md-sync"}
+        "description": "more words", "source": "md-sync", "wait": "answer"}
     gate = creates[-1]
     assert gate["id"] == "PH-OPERATOR" and gate["kind"] == "gate"
     assert gate["depends_on"] == ["routing:Q-N1", "routing:Q-N2"]
@@ -105,13 +105,13 @@ def test_gate_not_open_is_a_plan_error():
 
 def test_open_unchanged_is_quiet_and_changed_edits_ours_only():
     ours = live("routing", "Q-N1", title="Q: Old title", source="md-sync",
-                description="stale")
+                description="stale", wait="answer")
     foreign = live("server", "Q-F", title="curated title")
     p = build(q("- Q-N1 **New title** x\n- Q-F **other words**\n"), items=[ours, foreign])
     assert p.ops == [{"op": "edit", "key": "routing:Q-N1",
                       "fields": {"title": "Q: New title", "description": "x"}}]
     same = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                description="x")
+                description="x", wait="answer")
     assert build(q("- Q-N1 **New title** x\n"), items=[same]).ops == []
 
 
@@ -119,10 +119,10 @@ def test_pre_model_names_item_is_quiet_on_its_folded_note_line():
     # No column yet: the ``description:`` line in note says the same thing,
     # so a re-run emits nothing (idempotence across MODEL-NAMES).
     folded = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                  note="description: x")
+                  note="description: x", wait="answer")
     assert build(q("- Q-N1 **New title** x\n"), items=[folded]).ops == []
     changed = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                   note="description: stale")
+                   note="description: stale", wait="answer")
     p = build(q("- Q-N1 **New title** x\n"), items=[changed])
     assert p.ops == [{"op": "edit", "key": "routing:Q-N1",
                       "fields": {"description": "x"}}]
@@ -130,10 +130,10 @@ def test_pre_model_names_item_is_quiet_on_its_folded_note_line():
 
 def test_change_detection_reads_the_column_over_a_leftover_note_line():
     same = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                description="x", note="description: stale")
+                description="x", note="description: stale", wait="answer")
     assert build(q("- Q-N1 **New title** x\n"), items=[same]).ops == []
     gone = live("routing", "Q-N1", title="Q: New title", source="md-sync",
-                description="stale", note=None)
+                description="stale", note=None, wait="answer")
     p = build(q("- Q-N1 **New title** x\n"), items=[gone])
     assert p.ops == [{"op": "edit", "key": "routing:Q-N1",
                       "fields": {"description": "x"}}]

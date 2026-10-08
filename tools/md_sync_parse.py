@@ -2,11 +2,11 @@
 import re
 from collections import namedtuple
 
-Question = namedtuple("Question", "id kind title description heading")
+Question = namedtuple("Question", "id kind title description heading wait")
 Answer = namedtuple("Answer", "id decisions date text")
 Skipped = namedtuple("Skipped", "id reason")
 
-ID = r"(?:OS-[0-9]+|Q-[A-Z0-9][A-Z0-9-]*)"
+ID = r"(?:OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)"
 _BULLET_RE = re.compile(r"^- +(" + ID + r")(?![A-Za-z0-9-])[ :]*(.*)$")
 _ANY_BULLET_RE = re.compile(r"^- ")
 _HEADING_RE = re.compile(r"^## +(.*?)\s*$")
@@ -66,16 +66,98 @@ def _title_and_rest(text):
     return title, rest
 
 
+def _norm_id(ident):
+    if re.fullmatch(r"(?i)OS-[0-9]+[A-Za-z]?", ident or ""):
+        return ident.upper()
+    return ident
+
+
+def _classify_wait(ident, kind, title, raw):
+    """``answer`` for a question/decision, else ``task`` (D-677)."""
+    if ident.startswith("Q-"):
+        return "answer"
+    if "?" in (title or ""):
+        return "answer"
+    stripped = (raw or "").lstrip()
+    if stripped.startswith("Decision") or stripped.startswith("decide"):
+        return "answer"
+    if kind == "question":
+        return "answer"
+    return "task"
+
+
+_TABLE_ID_RE = re.compile(r"(?i)(OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)")
+
+
+def _table_rows(text):
+    """``(heading, id, why, step, where)`` per priority-table data row.
+
+    Shape: ``| <anything> | OS-123 | <why> | <exact step> | <where> |``.
+    Rows before the table header count too; a header/separator row has no
+    id in its 2nd cell.  ``OS-70 (3b)`` yields ``OS-70``; a 2nd cell with
+    two or more ids (``OS-56, OS-51, ...``) is skipped.
+    """
+    out, heading, fenced = [], None, False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if _FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        head = _HEADING_RE.match(line)
+        if head:
+            heading, _ = head.group(1), None
+            continue
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        if line.startswith("    ") or line.startswith("\t"):
+            continue
+        parts = stripped.split("|")[1:]
+        if parts and parts[-1].strip() == "":
+            parts = parts[:-1]
+        cells = [p.strip() for p in parts]
+        if len(cells) < 5:
+            continue
+        ids = _TABLE_ID_RE.findall(cells[1])
+        if len(ids) != 1:
+            continue
+        out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4]))
+    return out
+
+
 def parse_questions(text):
-    out = []
+    bullets = []
     for heading, match, body in _entries(text, _BULLET_RE):
-        title, rest = _title_and_rest(match.group(2).strip())
+        raw = match.group(2).strip()
+        title, rest = _title_and_rest(raw)
         kind = "op" if heading and "Operator" in heading else "question"
         prefix = "OP: " if kind == "op" else "Q: "
+        full_title = (prefix + title)[:TITLE_CAP]
         description = "\n".join(p for p in [rest, *body] if p)
-        out.append(Question(match.group(1), kind, (prefix + title)[:TITLE_CAP],
-                            description, heading))
-    return out
+        ident = _norm_id(match.group(1))
+        bullets.append(Question(ident, kind, full_title, description, heading,
+                                _classify_wait(ident, kind, full_title, raw)))
+    won = {entry.id for entry in bullets}
+    tables = []
+    seen_table = set()
+    for heading, ident, why, step, where in _table_rows(text):
+        if ident in won or ident in seen_table:
+            continue
+        seen_table.add(ident)
+        title, _ = _title_and_rest(why.strip())
+        kind = "op" if ident.startswith("OS-") else "question"
+        prefix = "OP: " if kind == "op" else "Q: "
+        full_title = (prefix + title)[:TITLE_CAP]
+        step, where = step.strip(), where.strip()
+        if step and where:
+            description = f"{step} — {where}"
+        else:
+            description = step or where
+        tables.append(Question(ident, kind, full_title, description, heading,
+                               _classify_wait(ident, kind, full_title, why)))
+    return tables + bullets
 
 
 #: the status words that make an id an *answer* (ADDENDUM 2)
@@ -167,7 +249,7 @@ def parse_answers(text):
     for heading, match, body in _entries(text, _BULLET_RE):
         if not heading or not _DATE_RE.match(heading):
             continue
-        lead, rest = match.group(1), match.group(2).strip()
+        lead, rest = _norm_id(match.group(1)), match.group(2).strip()
         head = f"{lead} {rest}" if rest else lead
         full = " ".join([head, *body]).strip()
         groups = _d_groups(full)
@@ -183,7 +265,7 @@ def parse_answers(text):
                 continue  # inside parentheses: a reference (e.g. "superseded by X (y)")
             if not _clause_start(full, pos) or _REF_BEFORE_RE.search(full[:pos]):
                 continue  # mid-prose or after by/with/via/see: a reference
-            candidates.append((found.group(1), pos))
+            candidates.append((_norm_id(found.group(1)), pos))
         if len(candidates) == 1:
             # the classic single-id bullet: it is the answer whatever it says
             answered = list(candidates)

@@ -155,6 +155,9 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                     "kind": "lane", "track": "QUESTIONS", "owner": "operator",
                     "operator": True, "evidence_kinds": ["decision"],
                     "review_tier": "none", "depends_on": [], "source": SOURCE}
+            want_create = getattr(entry, "wait", None)
+            if want_create is not None:
+                lane["wait"] = want_create
             if desc:
                 lane["description"] = desc
             plan.add({"op": "create", "item": lane})
@@ -173,6 +176,11 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                 # clearing ``note`` here would be undone by the fallback above
                 # on the very next run (no idempotence).
                 fields["description"] = desc
+            want = getattr(entry, "wait", None)
+            if want is not None and item.get("wait") != want:
+                # Claimed/in-review items are not editable here at all: this
+                # branch only runs for open items, so no extra guard is needed.
+                fields["wait"] = want
             if fields:
                 plan.add({"op": "edit", "key": item["key"], "fields": fields})
     _link(plan, state, new_lanes)
