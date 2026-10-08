@@ -49,6 +49,13 @@ def show_text(info: dict) -> str:
         lines.append(f"host {info['host']}")
     if info.get("wait"):
         lines.append(f"wait {info['wait']}")
+    if info.get("fixes") or info.get("fixed_by"):
+        lines.append(f"fixes {info.get('fixes') or '-'} fixed_by "
+                     f"{','.join(info.get('fixed_by') or []) or '-'}")
+    model = " ".join(f"{n} {info[n]}" for n in ("layer", "role", "agent_id", "phase_kind")
+                     if info.get(n))
+    if model:
+        lines.append(model)
     if info.get("writer_model") or info.get("seat_models"):
         seats = ",".join(
             f"{s.get('model')}:{s.get('verdict') if s.get('verdict') is not None else '-'}"
@@ -95,6 +102,21 @@ def alerts_text(alerts: dict) -> str:
 def aliases_text(rows) -> str:
     return "\n".join(f"{r['old']} -> {r['new']}" for r in rows or []) \
         or "no aliases"
+
+
+def needs_you_text(rows) -> str:
+    return "\n".join(
+        f"{r['key']} | {r['title']} | {r['kind']} {r.get('wait') or '-'} | "
+        f"unblocks {r['unblocks']} | prio {r['priority']}"
+        for r in rows or []) or "nothing needs you"
+
+
+def answers_text(rows) -> str:
+    return "\n".join(
+        f"{r['key']} | {r['decision_id']} | {r['done_at']} | {r['answer']}"
+        + (f" | superseded_by {','.join(r['superseded_by'])}"
+           if r.get("superseded_by") else "")
+        for r in rows or []) or "no answers"
 
 
 def waves_text(waves) -> str:

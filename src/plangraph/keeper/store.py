@@ -21,11 +21,13 @@ from datetime import datetime, timezone
 from .. import views
 from . import auth, evidence
 from .errors import Refused
+from .store_answer import AnswerMixin
 from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
 from .store_input import InputMixin
 from .store_names import NamesMixin
+from .store_needs import NeedsMixin
 from .store_ops import OpsMixin
 from .store_read import ReadMixin
 from .store_rehome import RehomeMixin
@@ -56,7 +58,7 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
-            NamesMixin, RehomeMixin, RunsMixin):
+            NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -233,7 +235,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             raise Refused("locked", f"{item['key']} is cancelled")
         reviewed = self.conn.execute(
             "SELECT 1 FROM events WHERE key=? AND type IN"
-            " ('review_passed','closed_on_decision') LIMIT 1",
+            " ('review_passed','closed_on_decision','answered') LIMIT 1",
             (item["key"],)).fetchone()
         if reviewed is not None:
             raise Refused("locked", f"{item['key']} is DONE")

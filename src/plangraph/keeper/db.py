@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import sqlite3
 from pathlib import Path
 
 from .errors import KeeperLocked
-from .schema import ALIASES_DDL, SCHEMA
+from .schema import ALIASES_DDL, SCHEMA, TRIGGERS
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock"]
 
@@ -76,16 +77,41 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "wait", "TEXT"),
                   ("items", "writer_model", "TEXT"),
                   ("items", "seat_models", "TEXT"),
-                  ("items", "run_ids", "TEXT"))
+                  ("items", "run_ids", "TEXT"),
+                  ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
+                  ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
+                  ("items", "fixes", "TEXT"))
+
+
+_LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
+
+
+def _upgrade_lock_triggers(conn):
+    """MK-ANSWER: re-create the key-lock triggers if they predate ``answered``.
+
+    The lock list lives inside each trigger body, so an older database only
+    freezes a key on ``review_passed``/``closed_on_decision``; drop and recreate
+    them in one transaction (idempotent: a no-op once ``'answered'`` is there).
+    """
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger'"
+                       " AND name='trg_events_locked_insert'").fetchone()
+    if row is None or "'answered'" in row[0]:
+        return
+    found = list(_LOCK_TRIGGER.finditer(TRIGGERS))
+    script = "BEGIN IMMEDIATE;\n" + "".join(
+        f"DROP TRIGGER IF EXISTS {m.group(1)};\n" for m in found)
+    script += "\n".join(m.group(0) for m in found) + "\nCOMMIT;"
+    conn.executescript(script)
 
 
 def _upgrade(conn):
-    """Add any column/table an older database lacks; idempotent, DML-free."""
+    """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.executescript(ALIASES_DDL)
+    _upgrade_lock_triggers(conn)
 
 
 def open_db(path, *, create: bool = False,

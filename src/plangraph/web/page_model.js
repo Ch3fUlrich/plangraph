@@ -183,9 +183,12 @@
 
   /* planning | implementation | review. An explicit item `role` wins; otherwise
    * gates are reviews, goals are planning, then the title decides, else implementation. */
+  var ROLE_ALIAS = { planning: "planning", implementation: "implementation", review: "review",
+    planner: "planning", researcher: "planning", implementer: "implementation",
+    operator: "implementation", reviewer: "review" };
   function roleOf(it) {
-    var r = String(it.role || "").toLowerCase();
-    if (r === "planning" || r === "implementation" || r === "review") return r;
+    var k = String(it.role || "").toLowerCase();   // keeper role: planner/implementer/...
+    if (Object.prototype.hasOwnProperty.call(ROLE_ALIAS, k)) return ROLE_ALIAS[k];
     if (it.kind === "gate") return "review";
     if (it.kind === "goal") return "planning";
     var t = String(it.title || "");

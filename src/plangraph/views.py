@@ -331,3 +331,58 @@ def brief(items, project=None, n=10, ub=None):
              f"est {_est(it):g}h | unblocks {ub.get(it['key'], 0)} | "
              f"prio {_prio(it)}" for it in rows]
     return "\n".join(lines)
+
+
+#: MK-READS: kinds that always wait on the operator, whatever their ``operator`` flag.
+OPERATOR_KINDS = ("question", "decision", "operator_task")
+
+
+def needs_you(items, project=None, ub=None):
+    """What waits on the operator, most-blocking first.
+
+    Non-terminal items with ``operator`` set or an operator kind, ranked by
+    ``(-unblocks, -priority, key)``; each row is a small plain dict.
+    """
+    ub = unblocks(items) if ub is None else ub
+    picked = [it for it in items
+              if _state(it) not in TERMINAL
+              and (project is None or it.get("project") == project)
+              and (it.get("operator") or it.get("kind") in OPERATOR_KINDS)]
+    picked.sort(key=lambda it: (-ub.get(it["key"], 0), -_prio(it), it["key"]))
+    return [{"key": it["key"], "project": it.get("project"),
+             "title": it.get("title", ""), "kind": it.get("kind"),
+             "state": _state(it), "wait": it.get("wait"),
+             "priority": _prio(it), "unblocks": ub.get(it["key"], 0)}
+            for it in picked]
+
+
+def answers(items, project=None):
+    """Answered question/decision items, newest first.
+
+    An item is answered when it is ``done`` and carries ``answer`` (``{"text",
+    "decision_id"}``) and ``done_at`` (the store joins them from the ``answered``
+    event).  A row whose item is named by another live item's ``corrects`` gets
+    ``superseded_by`` (sorted keys of those items).
+    """
+    corrected_by = {}
+    for it in items:
+        if it.get("corrects") and _state(it) != "cancelled":
+            corrected_by.setdefault(it["corrects"], []).append(it["key"])
+    rows = []
+    for it in items:
+        answer = it.get("answer")
+        if (it.get("kind") not in ("question", "decision") or _state(it) != "done"
+                or not answer
+                or (project is not None and it.get("project") != project)):
+            continue
+        row = {"key": it["key"], "project": it.get("project"),
+               "title": it.get("title", ""), "kind": it.get("kind"),
+               "answer": answer.get("text"),
+               "decision_id": answer.get("decision_id"),
+               "done_at": it.get("done_at")}
+        if corrected_by.get(it["key"]):
+            row["superseded_by"] = sorted(corrected_by[it["key"]])
+        rows.append(row)
+    rows.sort(key=lambda r: r["key"])
+    rows.sort(key=lambda r: r["done_at"] or "", reverse=True)
+    return rows

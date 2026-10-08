@@ -8,17 +8,27 @@ within its size budget as new doors (``close_on_decision``,
 from __future__ import annotations
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
-           "ROUTER_VERBS"]
+           "ROUTER_VERBS", "READ_CALLS"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
-              "alerts", "digest", "snapshot", "whoami", "aliases"}
+              "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
+              "answers"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "rehome", "record_run"}
+               "rehome", "record_run", "answer"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
+
+#: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
+#: is ``fmt.<name>_text``.
+READ_CALLS = {
+    "aliases": lambda store, who, project: store.aliases(who),
+    "whoami": lambda store, who, project: store.whoami(who),
+    "needs_you": lambda store, who, project: store.needs_you(who, project=project),
+    "answers": lambda store, who, project: store.answers(who, project=project),
+}
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
@@ -55,7 +65,13 @@ def _record_run(store, principal, body, need):
     return store.record_run(principal, need(body, "key"), body.get("run"))
 
 
+def _answer(store, principal, body, need):
+    return store.answer(principal, need(body, "key"), body.get("text"),
+                        body.get("decision_id"))
+
+
 ROUTER_VERBS = {"close_on_decision": _close_on_decision,
+                "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
