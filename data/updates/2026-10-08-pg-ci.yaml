@@ -1,0 +1,49 @@
+# PG-CI + split-examples test fix.
+batch: 2026-10-08-pg-ci
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 4017f3c4db2f48630d5a07f56de2431c490abbb22587dd24b9f9687cfd5c4e70
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: PG-CI
+    kind: lane
+    track: PGSSOT
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 7
+    depends_on: []
+    title: 'GitHub Actions: pytest on push/PR for plangraph (no browser; node UI tests)'
+    done_criteria: workflow green on the default branch; required for lane merges
+    description: server-L1-routing judgement of PG-MCP-WRITE (D-708 A).
+  - project: plangraph
+    id: PG-SPLIT-EXAMPLES-TEST
+    kind: lane
+    track: PGSSOT
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 6
+    depends_on: []
+    title: Fix tests/test_split_examples.py::test_generated_files_are_up_to_date (pre-existing failure)
+    done_criteria: test green; examples regenerated or the check fixed
+    description: server-L1-routing judgement of PG-MCP-WRITE (D-708 A).
+- op: edit
+  key: plangraph:PH-M2C-SYNC
+  fields:
+    depends_on:
+    - plangraph:K1-KEEPER
+    - plangraph:KEEPER-REF-PLANGRAPH
+    - plangraph:MD-SYNC-SUPERSEDE
+    - plangraph:SYNC-MD-IMPORT
+    - plangraph:PG-CI
+    - plangraph:PG-SPLIT-EXAMPLES-TEST
+
