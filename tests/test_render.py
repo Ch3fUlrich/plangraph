@@ -78,7 +78,9 @@ def test_vendor_scripts_are_inlined():
         assert body in html, f"{name} was not inlined"
     # page assets are inlined too
     assert (SRC / "plangraph" / "web" / "page.css").read_text(encoding="utf-8") in html
-    assert (SRC / "plangraph" / "web" / "page.js").read_text(encoding="utf-8") in html
+    # page JS is inlined after render._strip_line_comments (whole-line comments dropped)
+    from plangraph import render as _render
+    assert _render._strip_line_comments((SRC / "plangraph" / "web" / "page.js").read_text(encoding="utf-8")) in html
 
 
 def test_contains_every_item_key():

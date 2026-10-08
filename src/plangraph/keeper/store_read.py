@@ -6,11 +6,19 @@ writes, so "every attempt" in the contract includes a refused read.
 """
 from __future__ import annotations
 
+import json
+
 from .. import views
 from .errors import Refused
 
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
+
+_ACTIVITY_TYPES = ("item_created", "legacy_state_set", "closed_on_decision",
+                   "cancelled", "claimed", "submitted", "review_passed",
+                   "changes_requested")
+_ACTIVITY_WINDOW_S = 31 * 86400
+_ACTIVITY_CAP = 5000
 
 
 class ReadMixin:
@@ -125,7 +133,40 @@ class ReadMixin:
         return {"generated": self._iso(now), "head": head[0] if head else None,
                 "items": out,
                 "aliases": {a["old"]: a["new"] for a in self._aliases()},
+                "activity": self._activity(now),
                 "decision_text": self._decision_text(items, now)}
+
+    def _activity(self, now):
+        """Compact ``events`` feed for the last 31 days, oldest first."""
+        try:
+            cutoff = self._iso(float(now) - _ACTIVITY_WINDOW_S)
+            placeholders = ",".join("?" for _ in _ACTIVITY_TYPES)
+            rows = self.conn.execute(
+                "SELECT ts, key, type, actor, payload FROM events"
+                f" WHERE type IN ({placeholders}) AND ts >= ?"
+                " ORDER BY seq DESC LIMIT ?",
+                (*_ACTIVITY_TYPES, cutoff, _ACTIVITY_CAP)).fetchall()
+            out = []
+            for row in reversed(list(rows)):
+                try:
+                    payload = json.loads(row["payload"] or "{}")
+                except (ValueError, TypeError):
+                    payload = {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                entry = {"ts": row["ts"], "key": row["key"],
+                         "type": row["type"], "actor": row["actor"]}
+                state = payload.get("state")
+                if isinstance(state, str) and state:
+                    entry["state"] = state
+                if row["type"] == "cancelled":
+                    reason = payload.get("reason")
+                    if isinstance(reason, str) and reason:
+                        entry["reason"] = reason[:120]
+                out.append(entry)
+            return out
+        except Exception:  # noqa: BLE001 - snapshot never raises
+            return []
 
     def _decision_text(self, items, now):
         """Map of decision id -> cell text for ids cited by item evidence."""

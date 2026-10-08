@@ -184,6 +184,37 @@ def _vendor_scripts(vendor_dir: Path, cdn: bool) -> str:
     return f"<script>\n{vendor_js}\n</script>"
 
 
+
+def _strip_line_comments(js: str) -> str:
+    """Drop whole-line ``//`` comments and block comments that start a line.
+
+    Keeps the page under its size budget (UI-PLAN 12) without a minifier:
+    only lines whose first non-blank characters open a comment are touched,
+    and code after a closing ``*/`` on the same line is kept.
+    """
+    out, in_block = [], False
+    for line in js.split("\n"):
+        text = line.strip()
+        if in_block:
+            if "*/" in text:
+                in_block = False
+                rest = text.split("*/", 1)[1].strip()
+                if rest:
+                    out.append(rest)
+            continue
+        if text.startswith("//"):
+            continue
+        if text.startswith("/*"):
+            if "*/" not in text:
+                in_block = True
+            else:
+                rest = text.split("*/", 1)[1].strip()
+                if rest:
+                    out.append(rest)
+            continue
+        out.append(line)
+    return "\n".join(out)
+
 def render(
     snapshot: dict,
     vendor_dir: Path,
@@ -213,7 +244,7 @@ def render(
     vendor_dir = Path(vendor_dir)
     vendor_scripts = _vendor_scripts(vendor_dir, bool(cdn))
 
-    page_js = "\n;\n".join(_read(ASSETS_DIR / name) for name in JS_FILES)
+    page_js = _strip_line_comments("\n;\n".join(_read(ASSETS_DIR / name) for name in JS_FILES))
     page_css = "\n".join(_read(ASSETS_DIR / name) for name in CSS_FILES)
 
     doc = _read(ASSETS_DIR / "page_template.html")

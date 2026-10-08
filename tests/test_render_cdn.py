@@ -150,7 +150,8 @@ def test_cdn_html_inlines_data_and_page_code_but_no_vendor():
     for name in render_mod.JS_FILES:
         body = render_mod.ASSETS_DIR.joinpath(name)
         assert body.is_file(), f"{name} is registered but missing"
-        assert body.read_text(encoding="utf-8") in document, f"{name} not inlined"
+        # inlined after render._strip_line_comments (whole-line comments dropped, size budget)
+        assert render_mod._strip_line_comments(body.read_text(encoding="utf-8")) in document, f"{name} not inlined"
     css = render_mod.ASSETS_DIR.joinpath("page.css")
     assert css.read_text(encoding="utf-8") in document
     assert embedded(document) == NEW  # round-trips exactly
@@ -266,3 +267,12 @@ def test_cli_with_cdn_renders_new_snapshot(tmp_path):
 def test_cli_default_vendor_dir_is_discovered():
     discovered = render_mod.default_vendor_dir()
     assert (discovered / "cytoscape.min.js").is_file(), discovered
+
+
+def test_strip_line_comments_keeps_code():
+    """Only whole-line comments go; code after a closing */ and inline // stay."""
+    js = "/* head\n * more */ var a = 1;\n// gone\n  var url = 'http://x//y'; // tail\n/* one */\nvar b = 2;"
+    out = render_mod._strip_line_comments(js)
+    assert "var a = 1;" in out and "var b = 2;" in out
+    assert "'http://x//y'; // tail" in out
+    assert "gone" not in out and "head" not in out and "one" not in out
