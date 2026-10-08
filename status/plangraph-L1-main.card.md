@@ -8,22 +8,18 @@ plan.ohje serves the NEW UI (render --cdn; nginx :8089 file mount). Real-browser
 Review record: docs/reviews/2026-10-08-since-1006-seats.md (seats gpt-oss + muse-spark; mediums fixed by W1-W3).
 
 ## Running
-- W4 supersede rule (md_sync_dclose.collect + keeper _closes_token_sha): the later D-row wins. Closes CHAPTARR-ENV +
-  9 D-548 keys once merged AND the keeper daemon runs the new code (restart needed).
-- Research leg: agent task size → step 5 options to routing.
+Nothing (no writers, no cron). Keeper = plangraph-keeper.service on the supersede code; plangraph ref origin/main.
 
 ## Keeper (127.0.0.1:8787, verify ok)
 2026-10-08 batches: Chaptarr (24), missing keys 6 (8), ROUTESETUP (24 + RS-GEMINI-PARAMS), server books/sablier (13),
 D-649/650 (5), D-653 routing (9), plangraph reality (10 fix lanes). Backups keeper.db.pre-* (newest by ls -t).
-Blocker: keeper.json plangraph ref = local `main` (f610d98, the initial commit) → no plangraph commit close can verify
-(K1-KEEPER stuck since 10-03). Lane plangraph:KEEPER-REF-PLANGRAPH: set ref origin/main + restart (needs routing OK).
 
 ## Next (in order)
-1. W4 review (1 seat, not the writer's family) → merge → daemon restart → md-sync → report the closes.
-2. Closes D-row for routing once main is fast-forwarded: UI-TABLE-MODEL, UI-OVERVIEW-FIX, UI-REVIEW-W3, GRAPH-UI-BUILD,
-   GRAPH-UI-VISCHECK (workst PASS), GRAPH-UI-RESEARCH (design note on main).
-3. Open lanes: UI-QA-COUNTS, UI-TESTS-TABLE-QA, UI-CREATED-AT, UI-HASH-STATE, UI-NODE-BUDGET, RENDER-NEWUI-DETECT.
-4. After autoos-L1 lands layered-planning (D-646): 3-line pointer in skills/plangraph-planning.
+1. Routing: ff origin/main to the live tip; Closes D-row (UI-TABLE-MODEL, UI-OVERVIEW-FIX, GRAPH-UI-BUILD, GRAPH-UI-VISCHECK,
+   GRAPH-UI-RESEARCH, K1-KEEPER@8cdad08, autoos:D655-LEG-PROBE); later UI-REVIEW-W3@f856375, MD-SYNC-SUPERSEDE@9a8fd66.
+2. Open lanes: UI-QA-COUNTS, UI-TESTS-TABLE-QA, UI-CREATED-AT, UI-HASH-STATE, UI-NODE-BUDGET, RENDER-NEWUI-DETECT,
+   ADOPT-400LOC-PLANGRAPH (split page_ui.js/page_side.js), MODEL-KINDS (+ D-656 keeper gaps).
+3. After autoos-L1 lands layered-planning (D-646): 3-line pointer in skills/plangraph-planning.
 
 ## Catch-up (D-653, 2026-10-08)
 ZCode stand-in (10-05/06) work is on origin (ded3a03, 2d9d0b5); no keeper writes. Parked WIP 8dfa483 (G2b step 6) and
