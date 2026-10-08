@@ -23,7 +23,7 @@
 
   function parseTs(v) { var m = Date.parse(v); return isFinite(m) ? m : NaN; }
   function isDone(e) {
-    return e.type === "closed_on_decision" || e.type === "review_passed" ||
+    return e.type === "closed_on_decision" || e.type === "review_passed" || e.type === "answered" ||
       (e.type === "legacy_state_set" && e.state === "done");
   }
   function isCancelled(e) {

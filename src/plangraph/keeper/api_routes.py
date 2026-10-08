@@ -17,7 +17,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "rehome", "record_run"}
+               "rehome", "record_run", "answer"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
@@ -55,7 +55,13 @@ def _record_run(store, principal, body, need):
     return store.record_run(principal, need(body, "key"), body.get("run"))
 
 
+def _answer(store, principal, body, need):
+    return store.answer(principal, need(body, "key"), body.get("text"),
+                        body.get("decision_id"))
+
+
 ROUTER_VERBS = {"close_on_decision": _close_on_decision,
+                "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
