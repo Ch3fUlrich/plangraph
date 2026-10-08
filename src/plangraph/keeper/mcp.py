@@ -89,6 +89,12 @@ TOOLS = (
           {"project": {"type": "string"}}),
     _tool("digest", "Per-project counts and recent done (router)."),
     _tool("whoami", "The authenticated principal."),
+    _tool("create", "Create items: l1 in own project only, router anywhere.",
+          {"items": {"type": "array", "items": {"type": "object"}}},
+          ("items",)),
+    _tool("edit", "Edit an open item: l1 own project only, router anywhere; locked once done/cancelled.",
+          {"key": {"type": "string"}, "fields": {"type": "object"}},
+          ("key", "fields")),
 )
 
 #: name -> (HTTP method, /v1/<verb>).  All other args pass through.
@@ -106,6 +112,7 @@ _ROUTES = {
     "waves": ("GET", "waves"), "critical_path": ("GET", "critical_path"),
     "percent": ("GET", "percent"), "alerts": ("GET", "alerts"),
     "digest": ("GET", "digest"), "whoami": ("GET", "whoami"),
+    "create": ("POST", "create_items"), "edit": ("POST", "edit_definition"),
 }
 
 
@@ -182,6 +189,11 @@ def _initialize(params):
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}}
 
 
+def _tool_error(mid, message):
+    return _result(mid, {"content": [{"type": "text", "text": message}],
+                         "isError": True})
+
+
 def _call_tool(mid, params, client):
     name = params.get("name") if isinstance(params, dict) else None
     args = params.get("arguments") if isinstance(params, dict) else None
@@ -191,6 +203,18 @@ def _call_tool(mid, params, client):
         args = {}
     if not isinstance(args, dict):
         return _error(mid, -32602, "arguments must be an object")
+    if name == "create":
+        items = args.get("items")
+        if (not isinstance(items, list) or len(items) > 50
+                or any(not isinstance(entry, dict) for entry in items)):
+            return _tool_error(
+                mid, "validation: items must be a list of objects (<= 50)")
+    elif name == "edit":
+        if (not isinstance(args.get("key"), str) or not args.get("key")
+                or not isinstance(args.get("fields"), dict)):
+            return _tool_error(
+                mid, "validation: key must be a string,"
+                " fields must be an object")
     method, verb = _ROUTES[name]
     try:
         text, is_error = client.call(method, verb, args)
