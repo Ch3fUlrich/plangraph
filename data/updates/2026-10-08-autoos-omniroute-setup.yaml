@@ -1,7 +1,7 @@
 batch: 2026-10-08-autoos-omniroute-setup
 principal: routing-00
-source: data/source/2026-10-08-autoos-omniroute-setup-findings.md
-source_sha256: SET-BY-ROUTER-AFTER-REVIEW
+source: ../source/2026-10-08-autoos-omniroute-setup-findings.md
+source_sha256: c25de76d960343a7420c5c3d91f72d2e7ba80fd809ff1318225f1845cb91812a
 # Open work extracted from the exported OpenCode session "omniroute_setup" (2026-09-30..10-07) plus the 2026-10-08 workstation
 # fixes. Items only (no state ops): work that the export shows DONE is not re-created. Owners are proposals; routing assigns.
 ops:
@@ -128,3 +128,8 @@ ops:
                         RS-L2-RESEARCHER-1M, RS-OPENCODE-MODELS, RS-FUTURE-MODELS, RS-SPAWNER-MCP, RS-CLEF-PILOT,
                         RS-PHASE-GATES, RS-RENAME-CI, RS-SPAWN-TEMPLATES, RS-CHANGELOG-GATE, RS-LIT-TABLE,
                         RS-LEDGER-WIRING, RS-PLAN-ROWS, RS-NOTIFY-L1S, RS-META-KEY, RS-OC-KEY-GLM, RS-NSCALE]}
+  # plangraph-L1 review (D-639): the new gate must reach a goal -> hang it under the fleet gate like earlier autoos lanes.
+  - op: edit
+    key: routing:PH-FLEET-1003
+    fields:
+      depends_on: [autoos:COMBO-REFRESH, autoos:COMBO-REFRESH-A4, autoos:COST-GATE-ACTIVATE, autoos:COST-GATE-CULTURE-FIX, autoos:COST-GUARD, autoos:FAMILY-TRACK, autoos:FLEET-HOOKS, autoos:G-KEEPER, autoos:LAUNCHER-CPU-GATE, autoos:LEAN-MCP, autoos:MCP-STDIN, autoos:O1-OPENCODE-SESSIONS, autoos:O2-FLEET-BUS-MCP, autoos:O3-GKEEPER-OPENCODE, autoos:O4-BASHGUARD-PLUGIN, autoos:O5-LEAN-MCP-PILOT, autoos:O6-ROUTING-ON-OPENCODE, autoos:OC-HEARTBEAT, autoos:OC-PILOT, autoos:OC-RENDER-KEYS, autoos:OC-START-BACKOFF, autoos:OMNI-AUTOOS3-U2, autoos:OVH-GUARD, autoos:OVH-PRICE-ROWS, autoos:OVH-TEXT, autoos:ROUTE-FRESH, autoos:RUNNER-SCALE-20, autoos:SPAWNER-F0-CWD, autoos:U12, autoos:U13, autoos:WIN-PROMPT, autoos:WIN-PROMPT-LINTFIX, autoos:WORKST-L0-FAILOVER, autoos:ZCODE-CLIENT-LANE-Z, autoos:PH-ROUTESETUP]
