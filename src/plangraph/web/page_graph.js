@@ -30,6 +30,13 @@
     return set;
   }
 
+  /* UI-NODE-BUDGET: task nodes drawn per expanded phase; the rest fold into one "+N more" node. */
+  var NODE_BUDGET = 200;
+  function nodeBudget(ui) {
+    var n = ui && ui.settings && ui.settings.nodeBudget;
+    return (typeof n === "number" && n > 0 && Math.floor(n) === n && isFinite(n)) ? n : NODE_BUDGET;
+  }
+
   /* §4: buildElements(vm, ui) -> { nodes: [], edges: [] } */
   function buildElements(vm, ui) {
     vm = vm || { items: new Map(), projects: [], decisionById: {} };
@@ -121,7 +128,13 @@
           classes: "phase-compound" + (ph.wait ? " wait-" + ph.wait : "") + (filtering && !phMatch ? " dim" : "")
         });
 
-        pKeys.forEach(function (k) {
+        var vis = pKeys.filter(function (k) {
+          var vi = vm.items.get(k);
+          return !!vi && !(matchMode === "hide" && filtering && !matches(vi));
+        });
+        var cap = nodeBudget(ui);
+        var moreCount = vis.length > cap ? vis.length - cap : 0;
+        (moreCount ? vis.slice(0, cap) : vis).forEach(function (k) {
           var it = vm.items.get(k);
           if (!it) return;
           var m = matches(it);
@@ -155,6 +168,12 @@
             });
           }
         });
+        if (moreCount) {
+          putNode({
+            data: { id: "more:" + phId, parent: "ph:" + phId, project: proj.name, phase: ph.name, label: "+" + moreCount + " more", hiddenCount: moreCount, width: 240, height: 64 },
+            classes: "more-node"
+          });
+        }
       });
     });
 
@@ -312,6 +331,7 @@
     return rep && layout[rep.data.id] ? box(layout[rep.data.id]) : null;
   }
 
+  PlanUI.NODE_BUDGET = NODE_BUDGET;
   PlanUI.buildElements = buildElements;
   PlanUI.initialCollapsed = initialCollapsed;
   PlanUI.matchCounts = matchCounts;
