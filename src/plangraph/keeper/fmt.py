@@ -97,6 +97,21 @@ def aliases_text(rows) -> str:
         or "no aliases"
 
 
+def needs_you_text(rows) -> str:
+    return "\n".join(
+        f"{r['key']} | {r['title']} | {r['kind']} {r.get('wait') or '-'} | "
+        f"unblocks {r['unblocks']} | prio {r['priority']}"
+        for r in rows or []) or "nothing needs you"
+
+
+def answers_text(rows) -> str:
+    return "\n".join(
+        f"{r['key']} | {r['decision_id']} | {r['done_at']} | {r['answer']}"
+        + (f" | superseded_by {','.join(r['superseded_by'])}"
+           if r.get("superseded_by") else "")
+        for r in rows or []) or "no answers"
+
+
 def waves_text(waves) -> str:
     return "\n".join(f"wave {i}: {', '.join(layer)}"
                      for i, layer in enumerate(waves or []))
