@@ -70,11 +70,12 @@ def fill_status(status, plan):
     status["gone"] = len(plan.gone)
     status["redactions"] = plan.redactions
     status["close_skipped"] = [
-        {"id": name, "decision": dec, "key": key}
+        {"id": name, "decision": dec, "key": key,
+         "reason": "Closes does not list the key"}
         for name, dec, key in plan.close_skipped
     ] + [
-        {"id": ident, "decision": dec, "key": key}
-        for ident, dec, key, _reason in plan.dclose_skipped
+        {"id": ident, "decision": dec, "key": key, "reason": reason}
+        for ident, dec, key, reason in plan.dclose_skipped
     ]
     status["d_closes"] = [{"key": c["key"], "decision": c["decision"]}
                           for c in plan.d_closes]
