@@ -33,6 +33,47 @@
     };
   }
 
+  /* Fresh-load overview (D-639 browser check): every project collapsed and no
+   * focus -> GraphViewport.initial() fits all elements instead of anchoring. */
+  function uiVal(ui, key) {
+    try {
+      if (ui && typeof ui.get === "function") { var v = ui.get(key); if (v !== undefined) return v; }
+      if (ui && ui[key] !== undefined) return ui[key];
+    } catch (e) {}
+    return undefined;
+  }
+
+  function isOverviewState(ui, vm) {
+    var focus = uiVal(ui, "focusProject");
+    if (focus && focus !== "all" && focus !== "All") return false;
+    var cPr = uiVal(ui, "collapsedProjects"), projs = (vm && vm.projects) || [];
+    if (!cPr || !projs.length) return false;
+    return projs.every(function (p) {
+      var n = p && p.name;
+      if (typeof cPr.has === "function") return cPr.has(n);
+      return Array.isArray(cPr) ? cPr.indexOf(n) >= 0 : !!cPr[n];
+    });
+  }
+
+  function fitOverview(cy, isPh, onApply, bbOpts) {
+    var GV = PlanUI.GraphViewport || {};
+    var eles = (typeof cy.elements === "function") ? cy.elements() : null;
+    if (!eles || !eles.length || typeof cy.fit !== "function") return null;
+    var inset = GV.sheetInset ? GV.sheetInset() : null;
+    if (typeof onApply === "function") onApply(true);
+    try { cy.fit(eles, 24); } catch (e) {}
+    if (isPh && inset && inset.bottom) {
+      try { var p = cy.pan(); cy.pan({ x: p.x, y: p.y - inset.bottom / 2 }); } catch (e2) {}
+    }
+    try { if (cy.zoom() > 1) cy.zoom(1); } catch (e3) {}
+    if (typeof onApply === "function") onApply(false);
+    if (GV.installHook) GV.installHook(cy);
+    var bb = null;
+    try { bb = eles.boundingBox(bbOpts); } catch (e4) {}
+    return { zoom: cy.zoom(), pan: cy.pan(), box: bb };
+  }
+
   PlanUI.PanDrag = { install: install };
+  PlanUI.isOverviewState = isOverviewState; PlanUI.fitOverview = fitOverview;
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);

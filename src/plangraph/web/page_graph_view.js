@@ -334,8 +334,8 @@
       else {
         var cPh = currentUI.get("collapsedPhases"), cPr = currentUI.get("collapsedProjects");
         if ((!cPh || cPh.size === 0) && (!cPr || cPr.size === 0)) {
-          var initCol = PlanUI.initialCollapsed(currentVM);
-          if (initCol && initCol.size > 0) currentUI.patch({ collapsedPhases: initCol });
+          var ov = PlanUI.overviewState ? PlanUI.overviewState(currentVM, { level: "project" }) : { collapsedPhases: PlanUI.initialCollapsed(currentVM), collapsedProjects: new Set() };
+          currentUI.patch({ collapsedPhases: ov.collapsedPhases, collapsedProjects: ov.collapsedProjects });
         }
       }
     }
