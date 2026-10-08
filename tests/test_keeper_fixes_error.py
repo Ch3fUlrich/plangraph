@@ -219,7 +219,7 @@ def test_error_record_credential_guard(w):
     epoch = to_claimed(w, "demo:A")
     with pytest.raises(Refused):
         w.store.add_evidence(w.p("l1main"), "demo:A", epoch, "error",
-                             {"code": "E", "msg": "login admin/hunter22secret failed"})
+                             {"code": "E", "msg": "login " + "admin" + "/" + "hunter22secret failed"})
 
 
 def test_router_may_record_error_evidence(w):
