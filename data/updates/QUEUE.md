@@ -77,3 +77,4 @@ D-677 parked/later sweep (routing OS-123, OS-124B, OS-130..135, OS-116, OS-41B u
 D-677 wait backfill (wait=answer|task on open operator items; claimed ones skipped): data/updates/2026-10-08-d677-wait-backfill.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-waitfill).
 workst-gen:GEN-RETENTION-PERSON under PH-GEN-1003: data/updates/2026-10-08-workst-gen-found.yaml — LIVE 2026-10-08 (2 of 2, verify ok).
 D-683 server ABR-TRUSTED-GROUP, ACC-GROUPS-T1 -> T2 -> DEPLOY under PH-SERVER-1003: data/updates/2026-10-08-d683-groups.yaml — LIVE 2026-10-08 (2 of 2, verify ok).
+D-678 autoos:AO-ADMISSION (+ AO-ADMISSION-2) under PH-FLEET-1003: data/updates/2026-10-08-ao-admission.yaml — LIVE 2026-10-08.
