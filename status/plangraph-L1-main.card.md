@@ -1,5 +1,5 @@
 # Status card — plangraph-L1-main (coding.vm, the only plangraph L1; D-639)
-Updated: 2026-10-08 12:30 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-2026-10-08b.md | Constraints: CONSTRAINTS.md
+Updated: 2026-10-08 22:30 UTC | Brief: routing/docs/plan/briefs/plangraph-L1-2026-10-08b.md | Constraints: CONSTRAINTS.md
 
 ## Phase
 Live tree (worktree-proposal) = main a01c8ed + sync fixes + review fix waves 1-2 + all 2026-10-08 batches, pushed.
@@ -8,7 +8,7 @@ plan.ohje serves the NEW UI (render --cdn; nginx :8089 file mount). Real-browser
 Review record: docs/reviews/2026-10-08-since-1006-seats.md (seats gpt-oss + muse-spark; mediums fixed by W1-W3).
 
 ## Running
-Nothing (no writers, no cron). Keeper = plangraph-keeper.service on the supersede code; plangraph ref origin/main.
+Cron d83d9251 (:17/:47, session-only). No writers. Keeper = plangraph-keeper.service on the supersede code; plangraph ref origin/main.
 
 ## Keeper (127.0.0.1:8787, verify ok)
 2026-10-08 batches: Chaptarr (24), missing keys 6 (8), ROUTESETUP (24 + RS-GEMINI-PARAMS), server books/sablier (13),

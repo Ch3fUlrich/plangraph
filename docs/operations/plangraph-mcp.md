@@ -19,6 +19,7 @@ Each principal has its own token file `~/.config/plangraph/<name>.token` (mode 6
 | workst-L1-gen | l1 | workst-gen (workstation) |
 | workst-L1-ebn | l1 | workst-ebn (workstation) |
 | prox-L1-main | l1 | server (ssh relay) |
+| spawner | spawner | all (record_run only; token ~/.config/plangraph/spawner.token for the autoos spawner) |
 | routing-00 | router | all |
 
 Add to the session's MCP config (`mcpServers`), replacing `<name>`:
