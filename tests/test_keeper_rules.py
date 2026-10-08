@@ -227,7 +227,7 @@ def test_delegate_only_by_claimant(w):
 
 
 def test_forged_actor_field_is_ignored(w):
-    items = [defn("A", actor="router", role="router"),
+    items = [defn("A", actor="router", actor_role="router"),
              defn("GOAL", kind="goal", deps=["A"])]
     w.store.create_items(w.p("l1main"), items)
     actor = w.conn.execute(

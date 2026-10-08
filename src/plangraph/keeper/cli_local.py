@@ -7,6 +7,7 @@ so the CLI can still answer read verbs offline.
 from __future__ import annotations
 
 from .. import views
+from .item_fields import MODEL_FIELDS
 
 __all__ = ["evidence_ref", "local_show", "local_alerts", "local_digest"]
 
@@ -48,6 +49,7 @@ def local_show(items, key, aliases=None) -> dict:
     return {"key": key, "title": item.get("title"),
             "description": item.get("description"), "host": item.get("host"),
             "wait": item.get("wait"),
+            **{name: item.get(name) for name in MODEL_FIELDS},
             "waits_on_operator": bool(item.get("operator"))
             and item.get("state") not in ("done", "cancelled"),
             "project": item.get("project"),
@@ -59,7 +61,9 @@ def local_show(items, key, aliases=None) -> dict:
             "done_criteria": item.get("done_criteria"), "note": item.get("note"),
             "review_tier": item.get("review_tier"),
             "evidence_kinds": item.get("evidence_kinds"),
-            "corrects": item.get("corrects"), "depends_on": deps,
+            "corrects": item.get("corrects"), "fixes": item.get("fixes"),
+            "fixed_by": sorted(o["key"] for o in items if o.get("fixes") == key),
+            "depends_on": deps,
             "unblocks": unblocks, "evidence": item.get("evidence") or []}
 
 

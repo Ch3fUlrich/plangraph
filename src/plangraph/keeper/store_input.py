@@ -10,7 +10,7 @@ from __future__ import annotations
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
-from .item_fields import check_host, check_wait
+from .item_fields import MODEL_FIELDS, check_host, check_model_fields, check_wait
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
@@ -60,13 +60,21 @@ class InputMixin:
                 raise Refused("validation",
                               "depends_on entries must be strings")
             deps.append(self._qualify(project, dep))
+        kind = raw.get("kind", "lane")
+        check_model_fields(raw, kind, key)
         corrects = raw.get("corrects")
         if corrects:
             corrects = self._qualify(project, corrects)
+        fixes = raw.get("fixes")
+        if fixes is not None:
+            if not isinstance(fixes, str) or not fixes:
+                raise Refused("validation", f"{key}: fixes must be a key string or null")
+            fixes = self._qualify(project, fixes)
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
-            "host": raw.get("host"), "wait": raw.get("wait"), "kind": raw.get("kind", "lane"),
+            "host": raw.get("host"), "wait": raw.get("wait"), "kind": kind,
+            **{name: raw.get(name) for name in MODEL_FIELDS},
             "track": raw.get("track"), "owner": raw.get("owner"),
             "owner_family": auth.norm_family(raw.get("owner_family")),
             "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),
@@ -75,7 +83,7 @@ class InputMixin:
             "operator": bool(raw.get("operator")),
             "priority": int(raw.get("priority") or 0),
             "source": raw.get("source"), "note": self._folded_note(raw, key),
-            "corrects": corrects, "depends_on": deps,
+            "corrects": corrects, "fixes": fixes, "depends_on": deps,
             "state": raw.get("state", "open"),
         }
 
