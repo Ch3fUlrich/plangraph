@@ -26,6 +26,7 @@
       collapsedPhases: new Set(),        // "proj|phase" ids
       collapsedProjects: new Set(),
       expanded: new Set(),               // task cards open in the graph
+      moreShown: {},                     // "proj|phase" -> extra task nodes past the budget (session only)
       filters: { projects: new Set(), phases: new Set(), states: new Set(),
                  owners: new Set(), operatorOnly: false, loopOnly: false,
                  edgeMode: "all" },      // "all" | "critical" | "blocking" | "cross"

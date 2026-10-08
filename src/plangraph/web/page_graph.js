@@ -36,6 +36,11 @@
     var n = ui && ui.settings && ui.settings.nodeBudget;
     return (typeof n === "number" && n > 0 && Math.floor(n) === n && isFinite(n)) ? n : NODE_BUDGET;
   }
+  /* UI-MORE-NODE-EXPAND: extra nodes the user revealed for one phase (tap on "+N more" or a jump). */
+  function moreShown(ui, phId) {
+    var m = ui && ui.moreShown, n = m && Object.prototype.hasOwnProperty.call(m, phId) ? m[phId] : 0;
+    return (typeof n === "number" && n > 0 && isFinite(n)) ? Math.floor(n) : 0;
+  }
 
   /* §4: buildElements(vm, ui) -> { nodes: [], edges: [] } */
   function buildElements(vm, ui) {
@@ -132,8 +137,14 @@
           var vi = vm.items.get(k);
           return !!vi && !(matchMode === "hide" && filtering && !matches(vi));
         });
-        var cap = nodeBudget(ui);
+        // Search hits first, so the budget never folds a match behind non-matches.
+        if (filtering) {
+          vis = vis.filter(function (k) { return matches(vm.items.get(k)); })
+            .concat(vis.filter(function (k) { return !matches(vm.items.get(k)); }));
+        }
+        var cap = nodeBudget(ui) + moreShown(ui, phId);
         var moreCount = vis.length > cap ? vis.length - cap : 0;
+        var folded = moreCount ? vis.slice(cap) : [];
         (moreCount ? vis.slice(0, cap) : vis).forEach(function (k) {
           var it = vm.items.get(k);
           if (!it) return;
@@ -170,7 +181,8 @@
         });
         if (moreCount) {
           putNode({
-            data: { id: "more:" + phId, parent: "ph:" + phId, project: proj.name, phase: ph.name, label: "+" + moreCount + " more", hiddenCount: moreCount, width: 240, height: 64 },
+            data: { id: "more:" + phId, parent: "ph:" + phId, project: proj.name, phase: ph.name, phId: phId, label: "+" + moreCount + " more", hiddenCount: moreCount,
+              hiddenMatches: filtering ? folded.filter(function (k) { return matches(vm.items.get(k)); }).length : 0, keys: folded, width: 240, height: 64 },
             classes: "more-node"
           });
         }
@@ -292,6 +304,7 @@
       var cls = n.classes || "";
       if (cls.indexOf("dim") >= 0 || cls.indexOf("compound") >= 0) return;
       if (n.data && n.data.id && (n.data.id.indexOf("t:") === 0 || n.data.id.indexOf("phc:") === 0)) nodes++;
+      if (n.data && n.data.hiddenMatches) nodes += n.data.hiddenMatches;   // folded search hits still count
     });
     (elements.edges || []).forEach(function (e) {
       if ((e.classes || "").indexOf("dim") < 0) edges++;
@@ -313,6 +326,19 @@
       ui.collapsedProjects.forEach(function (p) { if (p !== it.project) nj.add(p); });
       patch.collapsedProjects = nj;
     }
+    // A task past the node budget: widen that phase's window so the task is drawn (search order can move
+    // it at most idx places, so idx + 1 extra is always enough).
+    var keys = null;
+    (vm.projects || []).forEach(function (p) {
+      if (p.name === it.project) (p.phases || []).forEach(function (ph) { if (ph.name === it.phase) keys = ph.keys || null; });
+    });
+    var idx = keys ? keys.indexOf(key) : -1;
+    if (idx >= nodeBudget(ui) && idx + 1 > nodeBudget(ui) + moreShown(ui, phId)) {
+      var ms = {};
+      Object.keys((ui && ui.moreShown) || {}).forEach(function (p) { ms[p] = ui.moreShown[p]; });
+      ms[phId] = idx + 1;
+      patch.moreShown = ms;
+    }
     return patch;
   }
 
@@ -332,6 +358,8 @@
   }
 
   PlanUI.NODE_BUDGET = NODE_BUDGET;
+  PlanUI.nodeBudget = nodeBudget;
+  PlanUI.moreShown = moreShown;
   PlanUI.buildElements = buildElements;
   PlanUI.initialCollapsed = initialCollapsed;
   PlanUI.matchCounts = matchCounts;

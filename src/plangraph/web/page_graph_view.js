@@ -309,6 +309,13 @@
       if (c.has(p)) c.delete(p); else c.add(p);
       currentUI.set("collapsedProjects", c);
     });
+    on("tap", "node.more-node", function (evt) {       // UI-MORE-NODE-EXPAND: show the next batch
+      var d = evt.target.data(); if (!d || !d.phId || !currentUI) return;
+      var ms = {}, cur = currentUI.get("moreShown") || {};
+      Object.keys(cur).forEach(function (p) { ms[p] = cur[p]; });
+      ms[d.phId] = PlanUI.moreShown({ moreShown: cur }, d.phId) + PlanUI.nodeBudget(currentUI.get());
+      currentUI.set("moreShown", ms);
+    });
     on("dbltap", "node.task-node", function (evt) {
       var k = evt.target.data("key"); if (!k || !currentUI) return;
       var exp = new Set(currentUI.get("expanded") || []);

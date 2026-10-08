@@ -2322,6 +2322,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       collapsedPhases: new Set(),        // "proj|phase" ids
       collapsedProjects: new Set(),
       expanded: new Set(),               // task cards open in the graph
+      moreShown: {},                     // "proj|phase" -> extra task nodes past the budget (session only)
       filters: { projects: new Set(), phases: new Set(), states: new Set(),
                  owners: new Set(), operatorOnly: false, loopOnly: false,
                  edgeMode: "all" },      // "all" | "critical" | "blocking" | "cross"
@@ -3172,6 +3173,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var n = ui && ui.settings && ui.settings.nodeBudget;
     return (typeof n === "number" && n > 0 && Math.floor(n) === n && isFinite(n)) ? n : NODE_BUDGET;
   }
+  function moreShown(ui, phId) {
+    var m = ui && ui.moreShown, n = m && Object.prototype.hasOwnProperty.call(m, phId) ? m[phId] : 0;
+    return (typeof n === "number" && n > 0 && isFinite(n)) ? Math.floor(n) : 0;
+  }
 
   function buildElements(vm, ui) {
     vm = vm || { items: new Map(), projects: [], decisionById: {} };
@@ -3267,8 +3272,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
           var vi = vm.items.get(k);
           return !!vi && !(matchMode === "hide" && filtering && !matches(vi));
         });
-        var cap = nodeBudget(ui);
+        if (filtering) {
+          vis = vis.filter(function (k) { return matches(vm.items.get(k)); })
+            .concat(vis.filter(function (k) { return !matches(vm.items.get(k)); }));
+        }
+        var cap = nodeBudget(ui) + moreShown(ui, phId);
         var moreCount = vis.length > cap ? vis.length - cap : 0;
+        var folded = moreCount ? vis.slice(cap) : [];
         (moreCount ? vis.slice(0, cap) : vis).forEach(function (k) {
           var it = vm.items.get(k);
           if (!it) return;
@@ -3305,7 +3315,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         });
         if (moreCount) {
           putNode({
-            data: { id: "more:" + phId, parent: "ph:" + phId, project: proj.name, phase: ph.name, label: "+" + moreCount + " more", hiddenCount: moreCount, width: 240, height: 64 },
+            data: { id: "more:" + phId, parent: "ph:" + phId, project: proj.name, phase: ph.name, phId: phId, label: "+" + moreCount + " more", hiddenCount: moreCount,
+              hiddenMatches: filtering ? folded.filter(function (k) { return matches(vm.items.get(k)); }).length : 0, keys: folded, width: 240, height: 64 },
             classes: "more-node"
           });
         }
@@ -3426,6 +3437,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       var cls = n.classes || "";
       if (cls.indexOf("dim") >= 0 || cls.indexOf("compound") >= 0) return;
       if (n.data && n.data.id && (n.data.id.indexOf("t:") === 0 || n.data.id.indexOf("phc:") === 0)) nodes++;
+      if (n.data && n.data.hiddenMatches) nodes += n.data.hiddenMatches;   // folded search hits still count
     });
     (elements.edges || []).forEach(function (e) {
       if ((e.classes || "").indexOf("dim") < 0) edges++;
@@ -3446,6 +3458,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       ui.collapsedProjects.forEach(function (p) { if (p !== it.project) nj.add(p); });
       patch.collapsedProjects = nj;
     }
+    var keys = null;
+    (vm.projects || []).forEach(function (p) {
+      if (p.name === it.project) (p.phases || []).forEach(function (ph) { if (ph.name === it.phase) keys = ph.keys || null; });
+    });
+    var idx = keys ? keys.indexOf(key) : -1;
+    if (idx >= nodeBudget(ui) && idx + 1 > nodeBudget(ui) + moreShown(ui, phId)) {
+      var ms = {};
+      Object.keys((ui && ui.moreShown) || {}).forEach(function (p) { ms[p] = ui.moreShown[p]; });
+      ms[phId] = idx + 1;
+      patch.moreShown = ms;
+    }
     return patch;
   }
 
@@ -3464,6 +3487,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
 
   PlanUI.NODE_BUDGET = NODE_BUDGET;
+  PlanUI.nodeBudget = nodeBudget;
+  PlanUI.moreShown = moreShown;
   PlanUI.buildElements = buildElements;
   PlanUI.initialCollapsed = initialCollapsed;
   PlanUI.matchCounts = matchCounts;
@@ -5947,6 +5972,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       lastToggledId = p; try { var rp = evt.target.renderedPosition(); lastToggledRenderedPos = rp ? { x: rp.x, y: rp.y } : null; } catch (e) {}
       if (c.has(p)) c.delete(p); else c.add(p);
       currentUI.set("collapsedProjects", c);
+    });
+    on("tap", "node.more-node", function (evt) {       // UI-MORE-NODE-EXPAND: show the next batch
+      var d = evt.target.data(); if (!d || !d.phId || !currentUI) return;
+      var ms = {}, cur = currentUI.get("moreShown") || {};
+      Object.keys(cur).forEach(function (p) { ms[p] = cur[p]; });
+      ms[d.phId] = PlanUI.moreShown({ moreShown: cur }, d.phId) + PlanUI.nodeBudget(currentUI.get());
+      currentUI.set("moreShown", ms);
     });
     on("dbltap", "node.task-node", function (evt) {
       var k = evt.target.data("key"); if (!k || !currentUI) return;
