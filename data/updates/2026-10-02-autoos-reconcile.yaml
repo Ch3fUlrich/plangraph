@@ -1,0 +1,612 @@
+batch: 2026-10-02-autoos-reconcile
+principal: routing-00
+source: /home/s/code/AutoOS-worktrees/.sessions/l1-main/lane-inputs/RECONCILE-autoos-20261002.md
+source_sha256: 9c4a57e90f95f8d85a8ceaeaa10c439899c359a7dffbbc8222d27c390860e825
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: DEEPINFRA-WIRE
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: DeepInfra provider wiring (registry chain step 2)
+    description: Full DeepInfra wiring; registry chain after PAIDSTOP (WS-1).
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: PROVROUTE
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Provider routing registry chain reg2r->reg3->reg7->reg5->recipe
+    description: Registry chain steps, after DEEPINFRA-WIRE.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: DEBTCAP
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Debt-cap rebase (registry chain)
+    description: Rebase in the registry chain.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: GWRETRY3
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Gateway retry v3 rebase + delta seat (D-368)
+    description: Registry chain.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: CREDIT-18
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Credit lane 18 (registry chain)
+    description: Registry chain.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: KEYEXEC
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Durable key execution path (D-370)
+    description: R1 on the workstation.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: TAILDROP-SORT
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Taildrop fetcher sorting files into per-L1 dirs (D-410)
+    description: One fetcher on coding.vm sorts by owner prefix.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: ZCODE
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Z.ai coding (zcode) installer, compose, docs
+    description: Run by autoos-L2-zcode.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: OMNIUPDATE
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: OmniRoute update U1-U6 (D-415/D-416)
+    description: Update path incl. live apply.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: WRITER-BENCH
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Writer benchmark across legs
+    description: After OMNIUPDATE U2/U3.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on:
+    - OMNIUPDATE
+  - project: autoos
+    id: T3-CIGREEN-WIN
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: CI green on the Windows/workstation runner
+    description: Runner mode.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: DOCS-OMNIROUTE
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: Document OmniRoute traps for agents
+    description: Runner mode.
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: FA-3
+    kind: lane
+    track: OPS
+    owner: autoos-L1-main
+    title: FLEET-AGENTS-2 minors
+    description: Follow-ups from FLEET-AGENTS-2 (41f57ba1).
+    done_criteria: merged on main (or applied) with CI green / evidence per its lane record
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+  - project: autoos
+    id: PH-OPS-20261002
+    kind: gate
+    track: OPS
+    title: Ops lanes reconciled 2026-10-02 done
+    done_criteria: every reconciled ops lane done
+    depends_on:
+    - DEEPINFRA-WIRE
+    - PROVROUTE
+    - DEBTCAP
+    - GWRETRY3
+    - CREDIT-18
+    - KEYEXEC
+    - TAILDROP-SORT
+    - ZCODE
+    - OMNIUPDATE
+    - WRITER-BENCH
+    - T3-CIGREEN-WIN
+    - DOCS-OMNIROUTE
+    - FA-3
+- op: edit
+  key: routing:GOAL
+  fields:
+    depends_on:
+    - autoos:OP-MANAGE-KEY
+    - autoos:ORCH-L2-LAUNCHER
+    - autoos:ORCH-REVIEW-TIERS
+    - autoos:PH-WS-SHIFT
+    - autoos:SEC-ISOSEC
+    - autoos:T1-COMBO-LAYERS
+    - autoos:T1-CREDIT
+    - autoos:T1-JEV
+    - autoos:T1-MM
+    - autoos:T1-NOISE
+    - autoos:T1-UPGRADE
+    - autoos:T1-WEBTOOLS
+    - autoos:T1-ZEN
+    - autoos:T2-COMPACT
+    - autoos:T2-ISOLATE
+    - autoos:T2-LEAN
+    - autoos:T2-MCPLIFE
+    - autoos:T2-RECORD-GAPS
+    - autoos:T2-RESEARCHCARD
+    - autoos:T2-TASKSESSION
+    - autoos:T3-CLEAN
+    - autoos:T3-PRINCIPLES
+    - autoos:T3-SCRUB
+    - autoos:T3-SPLIT
+    - autoos:T3-WIN
+    - plangraph:PG-M4
+    - routing:GATE-P3
+    - routing:PH-OPERATOR
+    - server:GOAL
+    - server:GW-FOLLOWUP
+    - server:GW-MCP-ROLLOUT
+    - server:OP-DOCKHAND-REVOKE
+    - server:OP-FRITZ-V6
+    - server:SEC-EDGE-GW-INVEST
+    - server:SEC-MINIO
+    - server:SEC-OIDC
+    - server:SEC-SESSION-SECRETS
+    - server:SEC-TIER-A
+    - server:T6-DETECT
+    - server:T6-FIX
+    - server:T6-GRAPHMOVE-CUTOVER
+    - server:T6-INFRA
+    - server:T6-IPV6
+    - server:T6-LEDGER
+    - server:T6-MEDIA
+    - server:T6-PHONE
+    - server:T6-SECRETS
+    - server:T6-UPDATES-IMPL
+    - workstation:OP-GROK-STEPS
+    - workstation:OP-WS-RELAUNCH
+    - autoos:PH-OPS-20261002
+- op: edit
+  key: autoos:T0-PAID
+  fields:
+    note: 'reconcile 2026-10-02: SUPERSEDED by PAIDSTOP (WS-1) + OMNIUPDATE live apply; closes when PAIDSTOP is on main + applied (drift 0 + smoke) | STATUS: T0-PAID v1 verified; split into 2a enforcement
+      (running), 2b last-resort tier + deepseek 3-test gate, 2c meta review-only. Writers done, reviews running; merge as one train behind T3-CIGREEN.'
+- op: edit
+  key: autoos:T0-PAID
+  fields:
+    depends_on:
+    - autoos:WS-1
+    - autoos:OMNIUPDATE
+- op: edit
+  key: autoos:T3-CIGREEN
+  fields:
+    note: 'reconcile 2026-10-02: = CI-GREEN lane (tip 9ae2ebc1, CI-like green, seat at workstation) | STATUS: running; ~40 more deepseek-pinned tests after the paid flip; queued behind PAID-2.'
+- op: edit
+  key: autoos:T3-CIMAIN
+  fields:
+    note: 'reconcile 2026-10-02: = CI-GREEN lane (tip 9ae2ebc1, CI-like green, seat at workstation)'
+- op: edit
+  key: autoos:WS-1
+  fields:
+    note: 'reconcile 2026-10-02: = PAIDSTOP, registry chain step 1 (then DEEPINFRA-WIRE, PROVROUTE, DEBTCAP, GWRETRY3, CREDIT-18) | description: Fresh fleet clone of origin/main, MiMo pin through the CENTRAL
+      gateway (key server-issued, process env only); bundle back.'
+- op: edit
+  key: autoos:T2-ONEPATH
+  fields:
+    note: 'reconcile 2026-10-02: runner, research first'
+- op: edit
+  key: autoos:T2-LEAN
+  fields:
+    note: 'reconcile 2026-10-02: after T2-ONEPATH research (same function) | Order: fits between the chain; no fixed position (no dep wired).'
+- op: edit
+  key: autoos:T2-LEAN
+  fields:
+    depends_on:
+    - autoos:T2-ONEPATH
+- op: edit
+  key: autoos:T2-MCPLIFE
+  fields:
+    note: 'reconcile 2026-10-02: after T2-ONEPATH (same module family)'
+- op: edit
+  key: autoos:T2-MCPLIFE
+  fields:
+    depends_on:
+    - autoos:T2-ONEPATH
+- op: edit
+  key: autoos:T2-TASKSESSION
+  fields:
+    note: 'reconcile 2026-10-02: depends on T2-ONEPATH single path'
+- op: edit
+  key: autoos:T2-TASKSESSION
+  fields:
+    depends_on:
+    - autoos:T2-ONEPATH
+- op: edit
+  key: autoos:T1-NOISE
+  fields:
+    note: 'reconcile 2026-10-02: folded into OMNIUPDATE as U7 (after 3.8.51)'
+- op: edit
+  key: autoos:T1-NOISE
+  fields:
+    depends_on:
+    - autoos:OMNIUPDATE
+- op: edit
+  key: autoos:T4-HARDEN
+  fields:
+    note: 'reconcile 2026-10-02: with OMNIUPDATE/ZCODE compose work, after ZCODE compose override | STATUS: queued (container already recreated by the router).'
+- op: edit
+  key: autoos:T4-HARDEN
+  fields:
+    depends_on:
+    - autoos:ZCODE
+    - autoos:OMNIUPDATE
+- op: edit
+  key: autoos:T2-XMSG
+  fields:
+    note: 'reconcile 2026-10-02: large (fleet bus); Taildrop-sort + KEYEXEC are the interim; design lane after WS-SHIFT | STATUS: new (D-203); fleetd/bus spec exists (gap 2). Decision: no hard dep on T1-CLEAN;
+      priority 1.'
+- op: edit
+  key: autoos:T2-XSECRET
+  fields:
+    note: 'reconcile 2026-10-02: large (fleet bus); Taildrop-sort + KEYEXEC are the interim; design lane after WS-SHIFT | STATUS: new (D-203). Decision: no hard dep on T1-CLEAN; priority 1.'
+- op: edit
+  key: autoos:T0-FREEZE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T0-PAID
+  fields:
+    owner: autoos-L1-main (L2 gateway lane)
+- op: edit
+  key: autoos:T1-CLEAN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-COMBO3
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-CREDIT
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-CTX
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-JEV
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-LITELLM
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-MM
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-NOISE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-PEER
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-PROV
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-UPGRADE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-WEBTOOLS
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T1-ZEN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-BUDGET
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-CANARY
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-COMPACT
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-CUTRUN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-ISOLATE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-LEAN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-MCPLIFE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-ONEPATH
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-RECORD
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-RESEARCHCARD
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-RULES
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-SKILL
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-TASKSESSION
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-WATCH
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-XMSG
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T2-XSECRET
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-CIGREEN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-CIMAIN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-CLEAN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-PREPUSH
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-PRINCIPLES
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-SCRUB
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-SPLIT
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T3-WIN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T4-FENCE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T4-HARDEN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T4-HOST
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T4-MSG
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T4-ZEN
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T7-CONSOLE
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T7-CONSOLE-MSG
+  fields:
+    owner: autoos-L1-main
+- op: edit
+  key: autoos:T7-GRAPH-A
+  fields:
+    owner: autoos-L1-main (L2)
+- op: edit
+  key: autoos:T7-GRAPH-USE
+  fields:
+    owner: autoos-L1-main
+- op: legacy_state
+  key: autoos:WS-1
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:T3-CIGREEN
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:T3-CIMAIN
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:T2-ONEPATH
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:T2-CANARY
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:T3-SCRUB
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:DEEPINFRA-WIRE
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:PROVROUTE
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:DEBTCAP
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:GWRETRY3
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:CREDIT-18
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:KEYEXEC
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:TAILDROP-SORT
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:ZCODE
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:OMNIUPDATE
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:T3-CIGREEN-WIN
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:DOCS-OMNIROUTE
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02
+- op: legacy_state
+  key: autoos:FA-3
+  state: claimed
+  note: running per autoos-L1 reconcile 2026-10-02

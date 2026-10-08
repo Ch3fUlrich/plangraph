@@ -1,0 +1,8 @@
+{
+  "generated": "2026-10-01T00:00:00Z",
+  "head": null,
+  "items": [
+    {"project": "demo", "id": "A", "key": "demo:A", "title": "Work A", "kind": "lane", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 1, "depends_on": [], "corrects": null, "priority": 0},
+    {"project": "demo", "id": "B", "key": "demo:B", "title": "Work B", "kind": "lane", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 2, "depends_on": ["demo:A"], "corrects": null, "priority": 0}
+  ]
+}

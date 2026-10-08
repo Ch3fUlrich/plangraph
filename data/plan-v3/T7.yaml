@@ -1,0 +1,112 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: routing
+    id: T7-GRAPH-R
+    title: "Routing repo graph: D-NNN, standing orders, operator steps in omnigraph"
+    kind: lane
+    track: T7
+    owner: routing-00
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: ["routing:GATE-P2"]
+    corrects: null
+    done_criteria: "query returns all D-ids; last sync < 1 h old"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T7-memory-console.md#T7-GRAPH-R"
+
+  - project: autoos
+    id: T7-GRAPH-A
+    title: "AutoOS graph: components, ADRs/plans/decisions, skill rules, tasks"
+    kind: lane
+    track: T7
+    owner: "AutoOS L1-main -> L2"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: ["routing:GATE-P2"]
+    corrects: null
+    done_criteria: "counts per node type; whoami query (CLAUDE.md) returns 1 row; drift report empty"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T7-memory-console.md#T7-GRAPH-A"
+
+  - project: autoos
+    id: T7-GRAPH-USE
+    title: "Agents use the graph: context_pack at session start; decisions via facade"
+    kind: lane
+    track: T7
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: ["routing:GATE-P2"]
+    corrects: null
+    done_criteria: "measured: tokens at relaunch down; recall test 30 questions >= 80%"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "MEMSPEC P1/P2; context_pack <= 1.5k tokens."
+    source: "data/source/plan-v3/T7-memory-console.md#T7-GRAPH-USE"
+
+  - project: routing
+    id: T7-BOARD
+    title: "Decide after PG-M4 whether a separate human board is still needed (plan graph is the board store)"
+    kind: lane
+    track: T7
+    owner: routing-00
+    state: open
+    estimate_h: 6
+    estimate_src: default
+    depends_on: ["plangraph:PG-M4"]
+    corrects: null
+    done_criteria: "Operator decision recorded as a D-id after the plan-graph adoption (PG-M4)."
+    evidence_kinds: [decision]
+    operator: true
+    priority: 0
+    note: "Decision: board evaluation replaced by the plan-graph adoption call; project routing, owner routing-00."
+    source: "data/source/plan-v3/T7-memory-console.md#T7-BOARD"
+
+  - project: autoos
+    id: T7-CONSOLE-MSG
+    title: "Console pages for agent messaging and secret-exchange audit"
+    kind: lane
+    track: T7
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: [T2-XMSG, T2-XSECRET, "routing:GATE-P2"]
+    corrects: null
+    done_criteria: "messages and exchanges visible within 5 s; phone-usable"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: new (D-203); priority after T1-CLEAN. Pages for T2-XMSG and T2-XSECRET; built in-house."
+    source: "data/source/plan-v3/T7-memory-console.md#T7-CONSOLE-MSG"
+
+  - project: autoos
+    id: T7-CONSOLE
+    title: "Fleet console P2-P4 per FLEETSPEC using the chosen board"
+    kind: lane
+    track: T7
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 8
+    estimate_src: default
+    depends_on: ["plangraph:PG-M4", "routing:GATE-P2"]
+    corrects: null
+    done_criteria: "per-phase acceptance tests in FLEETSPEC"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T7-memory-console.md#T7-CONSOLE"

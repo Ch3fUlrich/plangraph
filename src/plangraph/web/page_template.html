@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Read-only plan graph: dependencies, ready and blocked work, critical path.">
+<title>@@PAGE_TITLE@@</title>
+<style>
+@@PAGE_CSS@@
+</style>
+</head>
+<body data-screen="graph" data-sbopen="1" data-textsize="M" data-theme="light">
+<header class="top" role="banner">
+  <button id="sb-toggle" class="icon-btn desktop-only" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Toggle sidebar">&#9776;</button>
+  <button id="search-toggle" class="icon-btn phone-only" type="button" aria-label="Show search" aria-expanded="false">Search</button>
+  <div class="top-title">
+    <h1>@@PAGE_TITLE@@</h1>
+    <p class="sub" id="meta-line"></p>
+  </div>
+  <div class="searchwrap">
+    <input id="search" type="search" placeholder="Search — press /" aria-label="Search items" autocomplete="off" spellcheck="false">
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button id="tab-graph" type="button" role="tab" aria-selected="true" aria-controls="panel-graph">Graph</button>
+    <button id="tab-list" type="button" role="tab" aria-selected="false" aria-controls="panel-list">Table</button>
+  </nav>
+  <div class="progress" id="progress">
+    <div class="bar" role="img" aria-label="percent done"><span id="progress-bar"></span></div>
+    <p class="pct" id="progress-text"></p>
+  </div>
+</header>
+
+
+<div class="layout">
+  <aside id="sidebar" aria-label="Sidebar">
+    <button id="sb-close" class="sb-close" type="button" aria-label="Back to graph">&#10005;</button>
+    <details class="sb-filters" id="sb-filters" open>
+      <summary>Filters</summary>
+      <div id="filter-rows" class="filter-rows" aria-label="Project and track filters"></div>
+      <label class="toggle"><input type="checkbox" id="collapse-done" checked> Collapse done per track</label>
+    </details>
+    <div class="sb-tabs" role="tablist" aria-label="Sidebar sections">
+      <button class="sb-tab" type="button" role="tab" data-tab="needs" aria-selected="true" aria-controls="sb-panel-needs" title="Needs You">
+        <span class="sb-ico" aria-hidden="true">!</span><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span>
+      </button>
+      <button class="sb-tab" type="button" role="tab" data-tab="qa" aria-selected="false" aria-controls="sb-panel-qa" title="Decisions &amp; Q&amp;A">
+        <span class="sb-ico" aria-hidden="true">Q</span><span class="sb-label">Decisions &amp; Q&amp;A</span><span class="sb-count" id="sb-count-qa" hidden>0</span>
+      </button>
+      <button class="sb-tab" type="button" role="tab" data-tab="answers" aria-selected="false" aria-controls="sb-panel-answers" title="Answers">
+        <span class="sb-ico" aria-hidden="true">&#10003;</span><span class="sb-label">Answers</span><span class="sb-count" id="sb-count-answers" hidden>0</span>
+      </button>
+      <button class="sb-tab" type="button" role="tab" data-tab="settings" aria-selected="false" aria-controls="sb-panel-settings" title="Settings">
+        <span class="sb-ico" aria-hidden="true">&#9881;</span><span class="sb-label">Settings</span>
+      </button>
+    </div>
+    <div class="sb-body">
+      <section id="sb-panel-needs" class="sb-panel" data-panel="needs" role="tabpanel" aria-label="Needs You"></section>
+      <section id="sb-panel-qa" class="sb-panel" data-panel="qa" role="tabpanel" aria-label="Decisions and Q&amp;A" hidden></section>
+      <section id="sb-panel-answers" class="sb-panel" data-panel="answers" role="tabpanel" aria-label="Answers" hidden></section>
+      <section id="sb-panel-settings" class="sb-panel" data-panel="settings" role="tabpanel" aria-label="Settings" hidden></section>
+    </div>
+  </aside>
+
+  <main>
+    <section id="panel-graph" class="tabpanel" role="tabpanel" aria-labelledby="tab-graph">
+      <div class="graph-wrap">
+        <div id="cy" aria-label="Dependency graph"></div>
+        <p id="graph-empty" class="empty" hidden></p>
+      </div>
+      <div class="legend" id="legend" aria-label="Colour legend"></div>
+    </section>
+
+    <section id="panel-list" class="tabpanel" role="tabpanel" aria-labelledby="tab-list" hidden>
+      <p class="t4-note">Table view arrives in T4 — sortable columns, batch priority and export land with it. The legacy list stays below.</p>
+      <div id="list-content"></div>
+    </section>
+  </main>
+
+  <aside id="details" class="details bottom-sheet" data-snap="peek" aria-label="Item details" hidden></aside>
+</div>
+
+<div id="sb-scrim" hidden></div>
+
+<nav id="tabbar" aria-label="Main sections">
+  <button type="button" class="tab-btn" data-screen="graph" aria-current="page">Graph</button>
+  <button type="button" class="tab-btn" data-screen="table">Table</button>
+  <button type="button" class="tab-btn" data-screen="inbox">Inbox<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
+  <button type="button" class="tab-btn" data-screen="menu">Menu</button>
+</nav>
+
+<script type="application/json" id="snapshot-data">@@SNAPSHOT_JSON@@</script>
+@@VENDOR_SCRIPTS@@
+<script>@@PAGE_JS@@</script>
+</body>
+</html>

@@ -1,0 +1,255 @@
+"""Hand-written stdio MCP server exposing the keeper verbs as tools.
+
+JSON-RPC 2.0 over newline-delimited JSON on stdin/stdout.  There is no MCP SDK
+and no keeper import beyond this module's own HTTP client: every tool call is one
+request to the keeper API (base URL ``PG_URL``) carrying the bearer token read
+from the file named by ``PG_TOKEN_FILE``.  Token values are never logged or
+returned.  Protocol version is ``2025-06-18`` and is echoed back when the client
+asks for a different one.  Entry point: ``python -m plangraph.keeper.mcp``.
+
+Tool failures (a refused verb or an unreachable API) are MCP results with
+``isError`` true — JSON-RPC errors are reserved for a broken request envelope.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+
+__all__ = ["serve", "handle", "HttpKeeper", "main", "TOOLS", "PROTOCOL_VERSION"]
+
+PROTOCOL_VERSION = "2025-06-18"
+SERVER_NAME = "plangraph-keeper"
+SERVER_VERSION = "0.1"
+TIMEOUT = 10
+
+
+def _tool(name, description, props=None, required=()):
+    schema = {"type": "object", "properties": props or {}}
+    if required:
+        schema["required"] = list(required)
+    return {"name": name, "description": description, "inputSchema": schema}
+
+
+#: Terse on purpose: tools/list is paid for on every session.
+TOOLS = (
+    _tool("ready", "Open items whose deps are done.",
+          {"project": {"type": "string"}, "n": {"type": "integer"}}),
+    _tool("show", "One item, compact.",
+          {"key": {"type": "string"}}, ("key",)),
+    _tool("claim", "Claim a ready item; optional lease seconds.",
+          {"key": {"type": "string"}, "lease_s": {"type": "integer"}}, ("key",)),
+    _tool("delegate", "Hand a claimed item to a worker principal.",
+          {"key": {"type": "string"}, "worker": {"type": "string"}},
+          ("key", "worker")),
+    _tool("heartbeat", "Extend a lease at the given epoch.",
+          {"key": {"type": "string"}, "epoch": {"type": "integer"}},
+          ("key", "epoch")),
+    _tool("release", "Return a claimed item to open.",
+          {"key": {"type": "string"}, "epoch": {"type": "integer"}},
+          ("key", "epoch")),
+    _tool("evidence", "Attach evidence {kind, ref} to a claimed item.",
+          {"key": {"type": "string"}, "epoch": {"type": "integer"},
+           "kind": {"type": "string"}, "ref": {"type": "object"}},
+          ("key", "epoch", "kind", "ref")),
+    _tool("submit", "Submit claimed work for review.",
+          {"key": {"type": "string"}, "epoch": {"type": "integer"}},
+          ("key", "epoch")),
+    _tool("verdict", "Reviewer passes or requests changes.",
+          {"key": {"type": "string"}, "ok": {"type": "boolean"},
+           "reason": {"type": "string"}}, ("key", "ok")),
+    _tool("waive_second_family", "Router: waive the second-family rule (verified decision).",
+          {"key": {"type": "string"}, "decision_id": {"type": "string"}},
+          ("key", "decision_id")),
+    _tool("close_on_decision", "Router: close a tier-none item on a verified decision + hashed batch file.",
+          {"key": {"type": "string"}, "batch_ref": {"type": "string"}},
+          ("key", "batch_ref")),
+    _tool("set_legacy_state", "Router: move an open legacy item to claimed/in_review.",
+          {"key": {"type": "string"}, "state": {"type": "string"},
+           "note": {"type": "string"}}, ("key", "state")),
+    _tool("apply_ops", "Router: apply a list of BATCH.md ops atomically (one transaction).",
+          {"ops": {"type": "array", "items": {"type": "object"}},
+           "batch_ref": {"type": "string"}}, ("ops",)),
+    _tool("cancel", "Cancel an active item.",
+          {"key": {"type": "string"}, "reason": {"type": "string"}}, ("key",)),
+    _tool("priority", "Set router-owned priority.",
+          {"key": {"type": "string"}, "n": {"type": "integer"}},
+          ("key", "n")),
+    _tool("blocked", "Active items with unmet dependencies.",
+          {"project": {"type": "string"}}),
+    _tool("waves", "Layered schedule of non-terminal items."),
+    _tool("critical_path", "Longest remaining path by estimate.",
+          {"project": {"type": "string"}}),
+    _tool("percent", "Percent complete.",
+          {"by": {"type": "string"}, "project": {"type": "string"}}),
+    _tool("alerts", "Leases, overdue reviews, findings, refusals.",
+          {"project": {"type": "string"}}),
+    _tool("digest", "Per-project counts and recent done (router)."),
+    _tool("whoami", "The authenticated principal."),
+)
+
+#: name -> (HTTP method, /v1/<verb>).  All other args pass through.
+_ROUTES = {
+    "ready": ("GET", "ready"), "show": ("GET", "show"),
+    "claim": ("POST", "claim"), "delegate": ("POST", "delegate"),
+    "heartbeat": ("POST", "heartbeat"), "release": ("POST", "release"),
+    "evidence": ("POST", "evidence"), "submit": ("POST", "submit"),
+    "verdict": ("POST", "verdict"), "cancel": ("POST", "cancel"),
+    "waive_second_family": ("POST", "waive_second_family"),
+    "close_on_decision": ("POST", "close_on_decision"),
+    "set_legacy_state": ("POST", "set_legacy_state"),
+    "apply_ops": ("POST", "apply_ops"),
+    "priority": ("POST", "priority"), "blocked": ("GET", "blocked"),
+    "waves": ("GET", "waves"), "critical_path": ("GET", "critical_path"),
+    "percent": ("GET", "percent"), "alerts": ("GET", "alerts"),
+    "digest": ("GET", "digest"), "whoami": ("GET", "whoami"),
+}
+
+
+class _Transport(Exception):
+    """The API could not be reached at all (a tool error, not a refusal)."""
+
+
+def _refusal(body, status):
+    """Turn a 4xx body into ``(code, msg)``; fall back to the HTTP status."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return f"http_{status}", (body or "").strip()
+    if isinstance(data, dict) and data.get("error"):
+        return str(data["error"]), str(data.get("msg", ""))
+    return f"http_{status}", str(data)
+
+
+class HttpKeeper:
+    """Bearer-authenticated client for the keeper HTTP API."""
+
+    def __init__(self, base_url, token_path, *, opener=None, timeout=TIMEOUT):
+        self.base_url = (base_url or "").rstrip("/")
+        self.token_path = token_path or ""
+        self.timeout = timeout
+        self._opener = opener or urllib.request.build_opener()
+
+    def _token(self):
+        with open(self.token_path, encoding="utf-8") as handle:
+            return handle.read().strip()
+
+    def call(self, method, verb, args):
+        """Return ``(text, is_error)``; never raise for a refusal."""
+        try:
+            token = self._token()
+            url = f"{self.base_url}/v1/{verb}"
+            data = None
+            if method == "GET":
+                query = {name: value for name, value in args.items()
+                         if value is not None}
+                query.setdefault("fmt", "text")
+                url += "?" + urllib.parse.urlencode(query)
+            else:
+                data = json.dumps(args).encode("utf-8")
+            request = urllib.request.Request(url, data=data, method=method)
+            request.add_header("Authorization", "Bearer " + token)
+            request.add_header("Accept", "text/plain")
+            if data is not None:
+                request.add_header("Content-Type", "application/json")
+            with self._opener.open(request, timeout=self.timeout) as response:
+                return response.read().decode("utf-8", "replace"), False
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")
+            code, msg = _refusal(body, exc.code)
+            return (f"{code}: {msg}" if msg else code), True
+        except (urllib.error.URLError, OSError) as exc:
+            raise _Transport(f"unreachable: {exc}") from exc
+
+
+def _error(mid, code, message):
+    return {"jsonrpc": "2.0", "id": mid,
+            "error": {"code": code, "message": message}}
+
+
+def _result(mid, payload):
+    return {"jsonrpc": "2.0", "id": mid, "result": payload}
+
+
+def _initialize(params):
+    requested = params.get("protocolVersion") if isinstance(params, dict) else None
+    version = requested if isinstance(requested, str) and requested \
+        else PROTOCOL_VERSION
+    return {"protocolVersion": version, "capabilities": {"tools": {}},
+            "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}}
+
+
+def _call_tool(mid, params, client):
+    name = params.get("name") if isinstance(params, dict) else None
+    args = params.get("arguments") if isinstance(params, dict) else None
+    if name not in _ROUTES:
+        return _error(mid, -32602, f"unknown tool: {name}")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        return _error(mid, -32602, "arguments must be an object")
+    method, verb = _ROUTES[name]
+    try:
+        text, is_error = client.call(method, verb, args)
+    except _Transport as exc:
+        text, is_error = str(exc), True
+    return _result(mid, {"content": [{"type": "text", "text": text}],
+                         "isError": is_error})
+
+
+def handle(message, client):
+    """Dispatch one decoded JSON-RPC message; ``None`` for notifications."""
+    if not isinstance(message, dict) or "method" not in message:
+        return _error(None, -32600, "invalid request")
+    method = message["method"]
+    mid = message.get("id")
+    params = message.get("params")
+    params = params if isinstance(params, dict) else {}
+    if isinstance(method, str) and method.startswith("notifications/"):
+        return None
+    if method == "initialize":
+        response = _result(mid, _initialize(params))
+    elif method == "ping":
+        response = _result(mid, {})
+    elif method == "tools/list":
+        response = _result(mid, {"tools": list(TOOLS)})
+    elif method == "tools/call":
+        response = _call_tool(mid, params, client)
+    else:
+        response = _error(mid, -32601, f"method not found: {method}")
+    return response if mid is not None else None
+
+
+def serve(instream, outstream, client=None):
+    """Read newline-delimited JSON from *instream*, write replies to *outstream*."""
+    client = client or _default_client()
+    for line in instream:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            message = json.loads(line)
+        except ValueError:
+            response = _error(None, -32700, "parse error")
+        else:
+            response = handle(message, client)
+        if response is not None:
+            outstream.write(json.dumps(response, ensure_ascii=False) + "\n")
+            outstream.flush()
+
+
+def _default_client():
+    return HttpKeeper(os.environ.get("PG_URL", ""),
+                      os.environ.get("PG_TOKEN_FILE", ""))
+
+
+def main(argv=None):
+    serve(sys.stdin, sys.stdout, _default_client())
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

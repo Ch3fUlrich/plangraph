@@ -1,0 +1,9 @@
+batch: 2026-10-02-router-mt050
+principal: routing-00
+source: /home/s/code/plangraph/.claude/worktrees/proposal/data/updates/2026-10-02-router-mt050.md
+source_sha256: e69887c5aabd1c45e70685d38530323e73ae6864f470fdaaa2b6bf32748552da
+ops:
+- op: edit
+  key: server:MT-050
+  fields:
+    title: 'OP: MT-050 Navidrome user + credentials for Music Assistant (current login is wrong)'

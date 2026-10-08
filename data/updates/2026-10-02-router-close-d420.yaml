@@ -1,0 +1,22 @@
+batch: 2026-10-02-router-close-d420
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 1ec03f7d6e3807dc6dfe3d94d982cf90d24837824432624f704895d6306589fc
+ops:
+- op: edit
+  key: server:T-023
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:T-023
+  state: in_review
+  note: 'router D-420: Closes server:T-023'
+- op: add_evidence
+  key: server:T-023
+  kind: decision
+  ref:
+    id: D-420
+- op: close_on_decision
+  key: server:T-023

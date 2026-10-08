@@ -1,0 +1,254 @@
+"""tools/split/make_public.py: allow-list copy, deny refusal, fresh one-commit history."""
+import json
+import ntpath
+import os
+import posixpath
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools" / "split"))
+
+import make_public as mp  # noqa: E402
+
+MANIFEST = """\
+[public]
+include = ["src", "tests", "tools", "docs/PUBLIC.md", "examples"]
+optional = ["LICENSE", "README.md", "pyproject.toml", "NOT_THERE"]
+exclude = ["**/__pycache__/**", "*.pyc", "tests/fixtures/real/**", "tools/private_*"]
+[deny]
+paths = ["**/*.db", ".env*", "**/secrets/**", "DECISIONS.md"]
+[commit]
+author_name = "plangraph contributors"
+author_email = "noreply@example.invalid"
+message = "Initial public history"
+"""
+
+
+def git(cwd, *args):
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    return subprocess.run(["git", *args], cwd=cwd, env=env, check=True,
+                          capture_output=True, text=True).stdout
+
+
+def write(root, rel, text="x = 1\n"):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+@pytest.fixture
+def src(tmp_path):
+    s = tmp_path / "src_repo"
+    for rel in ("src/pkg/__init__.py", "src/pkg/core.py", "tests/test_core.py",
+                "tests/fixtures/synthetic.json", "tools/apply.py", "docs/PUBLIC.md",
+                "examples/p1.yaml", "README.md", "pyproject.toml"):
+        write(s, rel)
+    # present in the source but NOT public:
+    for rel in ("tests/fixtures/real/site.json", "tools/private_sync.py",
+                "src/pkg/__pycache__/core.pyc", "docs/RUNBOOK.md", "DECISIONS.md",
+                ".claude/settings.json", "out/page.html", "notes.txt"):
+        write(s, rel, "private\n")
+    git(tmp_path, "init", "-q", "-b", "main", str(s))
+    git(s, "add", "-A")
+    for i in range(3):
+        git(s, "-c", "user.name=Real Person", "-c", "user.email=real@corp.example",
+            "commit", "-q", "--allow-empty", "-m", f"private history {i}")
+    return s
+
+
+@pytest.fixture
+def manifest(tmp_path):
+    p = tmp_path / "manifest.toml"
+    p.write_text(MANIFEST)
+    return p
+
+
+def run(src, out, manifest, *extra):
+    return mp.main(["--source", str(src), "--out", str(out), "--manifest", str(manifest),
+                    "--no-gitleaks", *extra])
+
+
+EXPECT = {"src/pkg/__init__.py", "src/pkg/core.py", "tests/test_core.py",
+          "tests/fixtures/synthetic.json", "tools/apply.py", "docs/PUBLIC.md",
+          "examples/p1.yaml", "README.md", "pyproject.toml"}
+
+
+def test_build_is_fresh_one_commit_exact_allow_list(tmp_path, src, manifest, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / ".gitconfig").write_text("[user]\n\tname = Someone Else\n[core]\n\thooksPath = /nope\n")
+    monkeypatch.setenv("HOME", str(home))
+    out = tmp_path / "pub"
+    assert run(src, out, manifest) == 0
+    assert set(git(out, "ls-files").split()) == EXPECT
+    assert {p.relative_to(out).as_posix() for p in out.rglob("*")
+            if p.is_file() and ".git" not in p.relative_to(out).parts} == EXPECT
+    assert git(out, "rev-list", "--count", "HEAD").strip() == "1"
+    assert git(out, "log", "-1", "--format=%an|%ae|%cn|%s").strip() == (
+        "plangraph contributors|noreply@example.invalid|plangraph contributors|Initial public history")
+    assert git(out, "status", "--porcelain").strip() == ""
+    src_head = git(src, "rev-parse", "HEAD").strip()
+    assert src_head not in git(out, "log", "--all", "--format=%H")
+
+
+def test_deny_listed_survivor_is_refused_and_nothing_written(tmp_path, src, manifest, capsys):
+    write(src, "src/pkg/state.db", "\n")
+    write(src, "src/pkg/secrets/k.txt", "\n")
+    out = tmp_path / "pub"
+    assert run(src, out, manifest) == 1
+    text = capsys.readouterr().out
+    assert "src/pkg/state.db:0: deny" in text and "src/pkg/secrets/k.txt:0: deny" in text
+    assert not out.exists()
+    assert [p for p in tmp_path.iterdir() if p.name.startswith(".mp-")] == []
+
+
+def test_dirty_content_refused_value_not_printed(tmp_path, src, manifest, capsys):
+    write(src, "src/pkg/conf.py", "H = '" + "build7" + ".corp.internal" + "'\n"
+          "K = '" + "gh" + "p_" + "Zy9Xw8Vu7T" * 3 + "abcdef" + "'\n"
+          "P = '" + "/ho" + "me/" + "zoltan" + "/x'\n")
+    out = tmp_path / "pub"
+    assert run(src, out, manifest) == 1
+    text = capsys.readouterr().out
+    for rule in ("hostname", "token-shape", "home-path"):
+        assert f"src/pkg/conf.py:" in text and rule in text
+    assert "build7" not in text and "Zy9Xw8Vu7T" not in text and "zoltan" not in text
+    assert not out.exists()
+
+
+def test_private_words_file_applies_to_staged_tree(tmp_path, src, manifest, capsys):
+    words = tmp_path / "w.txt"
+    words.write_text("Project" + "Mordor\n")
+    write(src, "src/pkg/doc.py", "# Project" + "Mordor notes\n")
+    assert run(src, tmp_path / "pub", manifest, "--words", str(words)) == 1
+    assert "private-word" in capsys.readouterr().out
+
+
+def test_check_mode_builds_nothing(tmp_path, src, manifest, capsys):
+    out = tmp_path / "pub"
+    assert run(src, out, manifest, "--check") == 0
+    assert not out.exists() and "ok" in capsys.readouterr().out
+    write(src, "src/pkg/e.py", "m = '" + "a.b" + "@" + "acme-corp" + ".io'\n")
+    assert run(src, out, manifest, "--check") == 1
+
+
+def test_existing_nonempty_out_is_refused(tmp_path, src, manifest):
+    out = tmp_path / "pub"
+    write(out, "keep.txt")
+    assert run(src, out, manifest) == 2
+    assert (out / "keep.txt").exists()
+
+
+def test_symlink_and_missing_required_are_refused(tmp_path, src, manifest, capsys):
+    (src / "src" / "pkg" / "ln").symlink_to("/etc/hostname")
+    assert run(src, tmp_path / "pub", manifest) == 1
+    assert "src/pkg/ln:0: symlink" in capsys.readouterr().out
+    (src / "src" / "pkg" / "ln").unlink()
+    (src / "examples" / "p1.yaml").unlink()
+    (src / "examples").rmdir()
+    assert run(src, tmp_path / "pub2", manifest) == 2
+    assert "examples" in capsys.readouterr().err
+
+
+def _fake_gitleaks(tmp_path, findings):
+    f = tmp_path / "fake-gitleaks"
+    f.write_text("#!/bin/sh\nrp=\nwhile [ $# -gt 0 ]; do [ \"$1\" = --report-path ] && rp=$2; "
+                 "[ \"$1\" = -s ] && src=$2; shift; done\n"
+                 f"printf '%s' '{json.dumps(findings)}' | sed \"s#@SRC@#$src#\" > \"$rp\"\n"
+                 f"exit {1 if findings else 0}\n")
+    f.chmod(f.stat().st_mode | stat.S_IXUSR)
+    return f
+
+
+def test_gitleaks_wrapped_skipped_when_missing(tmp_path, src, manifest, capsys, monkeypatch):
+    only_git = tmp_path / "bin"
+    only_git.mkdir()
+    (only_git / "git").symlink_to(shutil.which("git"))
+    monkeypatch.setenv("PATH", str(only_git))
+    assert mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+                    "--manifest", str(manifest)]) == 0
+    assert "gitleaks not installed" in capsys.readouterr().err
+
+
+def test_gitleaks_findings_refuse_without_secret(tmp_path, src, manifest, capsys):
+    fake = _fake_gitleaks(tmp_path, [{"File": "@SRC@/src/pkg/core.py", "StartLine": 1,
+                                      "RuleID": "generic-api-key", "Secret": "TOPSECRETVALUE"}])
+    rc = mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+                  "--manifest", str(manifest), "--gitleaks", str(fake)])
+    out = capsys.readouterr()
+    assert rc == 1 and "src/pkg/core.py:1: gitleaks:generic-api-key" in out.out
+    assert "TOPSECRETVALUE" not in out.out + out.err
+    assert not (tmp_path / "pub").exists()
+    clean = _fake_gitleaks(tmp_path, [])
+    assert mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+                    "--manifest", str(manifest), "--gitleaks", str(clean)]) == 0
+
+
+def test_glob_semantics():
+    g = mp.glob_re
+    assert g("**/__pycache__/**").match("src/a/__pycache__/x.pyc")
+    assert g("*.pyc").match("a/b/c.pyc") and not g("*.pyc").match("a/b/c.py")
+    assert g("tools/private_*").match("tools/private_x.py")
+    assert not g("tools/private_*").match("tools/sub/private_x.py")
+    assert g(".env*").match("a/.env.local")
+
+
+def test_shipped_manifest_passes_on_this_tree(capsys):
+    assert mp.main(["--source", str(ROOT), "--check", "--no-gitleaks"]) == 0
+    assert "check ok" in capsys.readouterr().out
+
+
+def test_bad_manifest_is_a_usage_error(tmp_path, src, capsys):
+    bad = tmp_path / "bad.toml"
+    bad.write_text('[public]\ninclude = ["src"]\nbogus = 1\n')
+    assert mp.main(["--source", str(src), "--check", "--manifest", str(bad)]) == 2
+    assert "bogus" in capsys.readouterr().err
+
+
+def test_deny_globs_case_insensitive_and_private_path_hashed(tmp_path, src, manifest, capsys):
+    words = tmp_path / "w.txt"
+    words.write_text("Project" + "Mordor\n")
+    write(src, "src/pkg/STATE.DB", "\n")
+    write(src, "src/pkg/Project" + "Mordor.py", "x = 1\n")
+    write(src, "src/pkg/Project" + "Mordor.bin", "\n")
+    (src / ("src/pkg/Project" + "Mordor.bin")).write_bytes(b"\x00\x01")
+    assert run(src, tmp_path / "pub", manifest, "--words", str(words)) == 1
+    out = capsys.readouterr()
+    assert "src/pkg/STATE.DB:0: deny" in out.out
+    assert "Mordor" not in out.out + out.err and "<path-hash:" in out.out + out.err
+
+
+def test_gitleaks_outside_path_is_normalised(tmp_path, src, manifest, capsys):
+    fake = _fake_gitleaks(tmp_path, [{"File": "/etc/ssh/host_key", "StartLine": 3,
+                                      "RuleID": "private-key", "Secret": "S"}])
+    rc = mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+                  "--manifest", str(manifest), "--gitleaks", str(fake)])
+    out = capsys.readouterr().out
+    assert rc == 1 and "<outside>:3: gitleaks:private-key" in out
+    assert "/etc" not in out and ".." not in out
+
+
+def test_tree_rel_nt_path_flavour():
+    # a gitleaks File on a different drive must report <outside>, not raise (b1)
+    assert mp._tree_rel("D:\\other\\key.pem", "C:\\work\\tree", pathmod=ntpath) == "<outside>"
+    assert mp._tree_rel("C:\\work\\tree\\src\\a.py", "C:\\work\\tree",
+                        pathmod=ntpath) == "src\\a.py"
+    assert mp._tree_rel("..\\x", "C:\\work\\tree", pathmod=ntpath) == "<outside>"
+
+
+def test_tree_rel_posix_flavour_is_unchanged():
+    # "/etc/pass"+"wd": assembled, so this file's own scan reads no word/shape pair
+    assert mp._tree_rel("/etc/" + "pass" + "wd", "/work/tree",
+                        pathmod=posixpath) == "<outside>"
+    assert mp._tree_rel("src/a.py", "/work/tree", pathmod=posixpath) == "src/a.py"
+    assert mp._tree_rel("", "/work/tree", pathmod=posixpath) == "<unknown>"
+    assert mp._tree_rel(None, "/work/tree", pathmod=posixpath) == "<unknown>"
+    # the CLI's own flavour (os.path) keeps the same results on any host
+    assert mp._tree_rel(None, "/work/tree") == "<unknown>"
+    assert mp._tree_rel("../x", "/work/tree") == "<outside>"
+    assert mp._tree_rel("src" + os.sep + "a.py", "/work/tree") == "src" + os.sep + "a.py"

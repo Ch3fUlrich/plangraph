@@ -1,0 +1,148 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: autoos
+    id: T3-CIGREEN
+    title: "Make main green (only lane allowed to merge during T0-FREEZE)"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: [T0-PAID, "routing:GATE-P0"]
+    corrects: null
+    done_criteria: "3 consecutive green main runs; each fix names the commit that changed the expectation"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: running; ~40 more deepseek-pinned tests after the paid flip; queued behind PAID-2."
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-CIGREEN"
+
+  - project: autoos
+    id: T3-CIMAIN
+    title: "CI triggers: main only; omnigraph-images push branches [main]"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: [T3-CIGREEN, "routing:GATE-P0"]
+    corrects: null
+    done_criteria: "trigger test; no lane-branch runs for 48 h"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-CIMAIN"
+
+  - project: autoos
+    id: T3-WIN
+    title: "Windows job: re-enable on main or move coverage to workstation local-green"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T3-CIMAIN, T3-PREPUSH]
+    corrects: null
+    done_criteria: "Windows suite result attached to every merge touching .ps1/.psm1"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-WIN"
+
+  - project: autoos
+    id: T3-PREPUSH
+    title: "Local-green gate everywhere: pre-push hook in every worktree"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T3-CIGREEN]
+    corrects: null
+    done_criteria: "tests (exist) green in CI; hook present in all worktrees"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-PREPUSH"
+
+  - project: autoos
+    id: T3-PRINCIPLES
+    title: "coding-principles skill gains MUST rules with sources"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: [T3-CIMAIN, T3-PREPUSH]
+    corrects: null
+    done_criteria: "skill tests; rules referenced by the ready-check"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-PRINCIPLES"
+
+  - project: autoos
+    id: T3-CLEAN
+    title: "Delete/fold throwaway scripts; archive docs/handoff older than 7 days"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T3-CIMAIN, T3-PREPUSH]
+    corrects: null
+    done_criteria: "each deletion: git grep shows no live reference; tests green; reviewers confirm"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-CLEAN"
+
+  - project: autoos
+    id: T3-SPLIT
+    title: "400-line rule: CI check on changed files; split plan for legacy files"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T3-CIMAIN, T3-PREPUSH]
+    corrects: null
+    done_criteria: "CI check active for changed files; split plan doc"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-SPLIT"
+
+  - project: autoos
+    id: T3-SCRUB
+    title: "Merge ws-scrubgap (adds tools/ to public-scrub scan)"
+    kind: lane
+    track: T3
+    owner: "AutoOS L1-main"
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "scan list includes tools/; scrub test green"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: SCRUB already on main (1738258f)."
+    source: "data/source/plan-v3/T3-ci-quality.md#T3-SCRUB"

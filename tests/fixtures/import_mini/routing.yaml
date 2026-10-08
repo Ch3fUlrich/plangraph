@@ -1,0 +1,89 @@
+meta: {source: import_mini routing plan, generated_by: test, date: 2026-10-01}
+items:
+  - project: routing
+    id: R1
+    title: Wire the router
+    kind: lane
+    track: T1
+    owner: AutoOS L1-main
+    state: open
+    estimate_h: 2
+    estimate_src: default
+    depends_on: []
+    done_criteria: Router answers every ready call.
+    evidence_kinds: [decision]
+    operator: false
+    source: docs/plan/mini.md#R1
+    rationale: Keeps the seam clean.
+  - project: routing
+    id: R2
+    title: Router reads the store
+    kind: lane
+    track: T1
+    owner: AutoOS L1-main
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [R1]
+    done_criteria: Reads are audited.
+    evidence_kinds: [decision]
+    operator: false
+    source: docs/plan/mini.md#R2
+  - project: routing
+    id: G1
+    title: Router gate
+    kind: gate
+    track: T1
+    owner: OPERATOR
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: [R2]
+    done_criteria: Gate signed off.
+    evidence_kinds: [any]
+    operator: true
+    source: docs/plan/mini.md#G1
+  - project: routing
+    id: C1
+    title: Legacy claimed lane
+    kind: lane
+    track: T1
+    owner: autoos-l1
+    state: claimed
+    estimate_h: 5
+    estimate_src: default
+    depends_on: [R2]
+    done_criteria: Claimed work lands.
+    evidence_kinds: [commit+ci]
+    operator: false
+    source: docs/plan/mini.md#C1
+  - project: routing
+    id: IR1
+    title: Legacy in-review lane
+    kind: lane
+    track: T1
+    owner: prox
+    state: in_review
+    estimate_h: 5
+    estimate_src: default
+    depends_on: [R2]
+    done_criteria: Review passes.
+    evidence_kinds: [decision]
+    operator: false
+    source: docs/plan/mini.md#IR1
+    note: came from a previous keeper
+    blocked_by: waiting on review
+  - project: routing
+    id: GOAL
+    title: Routing goal
+    kind: goal
+    track: T1
+    owner: OPERATOR
+    state: open
+    estimate_h: 0
+    estimate_src: default
+    depends_on: [G1, C1, IR1, autoos:A1, autoos:A2, autoos:A3, autoos:A4, autoos:A5, autoos:A6]
+    done_criteria: Every routing lane is done.
+    evidence_kinds: [any]
+    operator: false
+    source: docs/plan/mini.md#GOAL

@@ -1,0 +1,259 @@
+meta:
+  source: routing docs/plan v3 @29a032d
+  generated_by: t2-worker-clean
+  date: 2026-10-01
+items:
+  - project: server
+    id: T6-GRAPHMOVE
+    title: "Finish omnigraph move to cloud.vm per Server migration S2-S4"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: ["autoos:T1-CLEAN"]
+    corrects: null
+    done_criteria: "node counts + commit heads equal before/after; whoami check 1 row from coding.vm and workstation; old instance read-only, then stopped"
+    evidence_kinds: [run-record, semaphore-task]
+    operator: false
+    priority: 0
+    note: "STATUS: queued; T1-CLEAN; baseline taken (research/2026-10-01-omnigraph-baseline-autoos.md). D-191."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-GRAPHMOVE"
+
+  - project: server
+    id: T6-PILOT
+    title: "Homelab gateway pilot 1.5: .mcp.json + per-project token files"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: ["autoos:T1-CLEAN", "routing:GATE-P1"]
+    corrects: null
+    done_criteria: "pilot report: answer quality, tokens, latency"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "STATUS: implementation queued; T1-CLEAN."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-PILOT"
+
+  - project: server
+    id: T6-MEDIA
+    title: "Phase 2 media writes per binding rules (usenet-only, caps, ABR)"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "per-service write tests (fake APIs) + one live supervised write each"
+    evidence_kinds: [run-record, commit+ci]
+    operator: false
+    priority: 0
+    note: ""
+    source: "data/source/plan-v3/T6-server-ops.md#T6-MEDIA"
+
+  - project: server
+    id: T6-INFRA
+    title: "Phase 3 infra actions via Semaphore"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "Semaphore applies the infra actions; each action has a task record"
+    evidence_kinds: [semaphore-task, decision]
+    operator: true
+    priority: 0
+    review_tier: high
+    note: "STATUS: blocked on OPERATOR T-040/MT-233 admin token."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-INFRA"
+
+  - project: server
+    id: T6-DETECT
+    title: "Detection inventory -> one list; decide LoggiFly; add update detection"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: ["autoos:T1-CLEAN"]
+    corrects: null
+    done_criteria: "detector table with owner + alert path; LoggiFly decision recorded"
+    evidence_kinds: [commit+ci]
+    operator: false
+    priority: 0
+    note: "STATUS: research done; implementation queued; T1-CLEAN."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-DETECT"
+
+  - project: server
+    id: T6-HEAL
+    title: "Self-healing pilot gate: HolmesGPT read-only RCA on 3 past incidents"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: ["routing:GATE-P2"]
+    corrects: null
+    done_criteria: "pilot scorecard: root cause correct?, time, tokens, secrets leaked? (canary) -> adopt/drop recommendation"
+    evidence_kinds: [run-record, decision]
+    operator: true
+    priority: 0
+    note: "OPERATOR confirms adoption (architecture)."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-HEAL"
+
+  - project: server
+    id: T6-FIX
+    title: "Fix agents: detection -> triage -> L2 fix orchestrator -> deploy via Semaphore"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 6
+    estimate_src: default
+    depends_on: [T6-HEAL]
+    corrects: null
+    done_criteria: "3 supervised end-to-end fixes; incident record complete"
+    evidence_kinds: [run-record, semaphore-task]
+    operator: false
+    priority: 0
+    note: "Decision: depends_on T6-HEAL (runtime HEAL -> FIX chain is also build order)."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-FIX"
+
+  - project: server
+    id: T6-UPDATES
+    title: "Fully automatic docker updates via Semaphore with backup + rollback"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: ["autoos:T1-CLEAN"]
+    corrects: null
+    done_criteria: "1 low-risk stack supervised, then all non-critical stacks; rollback drill passes"
+    evidence_kinds: [run-record, semaphore-task]
+    operator: false
+    priority: 0
+    review_tier: high
+    note: "STATUS: research done; queued; T1-CLEAN. Failures -> T6-HEAL -> T6-FIX; no update notifications (D-200)."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-UPDATES"
+
+  - project: server
+    id: T6-SECRETS
+    title: "Agent-safe secrets: SOPS+age in git; plaintext removed; OPERATOR decides"
+    kind: lane
+    track: T6
+    owner: prox
+    state: claimed
+    estimate_h: 4
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "no plaintext secret readable by any agent on coding.vm; Semaphore deploy test green"
+    evidence_kinds: [semaphore-task, decision]
+    operator: true
+    priority: 0
+    review_tier: high
+    note: "router 2026-10-01 (D-314 fold): claimed by prox: 86/87 store files SOPS; tier B running (D-202, D-208, D-214, D-216, D-226, D-229); import note: STATUS claimed: 82/83 encrypted + guard + R1; playbooks next, rotations in per-application batches with operator approval (D-203). Owner prox."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-SECRETS"
+
+  - project: server
+    id: T6-IPV6
+    title: "IPv6 in OPNsense: WAN PD, LAN RA/DHCPv6, Unbound v6, default-deny"
+    kind: lane
+    track: T6
+    owner: prox
+    state: claimed
+    estimate_h: 3
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "v6 client reaches vhosts; exposure review: no new inbound"
+    evidence_kinds: [run-record, semaphore-task]
+    operator: false
+    priority: 0
+    note: "router 2026-10-01 (D-314 fold): claimed by prox: only the Fritzbox inbound share left (operator, see server:OP-FRITZ-V6) (D-207); import note: STATUS claimed: V1 applied except the deferred Fritzbox share; prox applies (prox via API)."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-IPV6"
+
+  - project: server
+    id: T6-LEDGER
+    title: "Incident database: event..outcome + model per step; mail via Apprise"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 4
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "schema + 1 week of records; mail received"
+    evidence_kinds: [commit+ci, run-record]
+    operator: false
+    priority: 0
+    note: "Decision: no hard dep on T7-BOARD (links to the board only); priority 0."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-LEDGER"
+
+  - project: server
+    id: T6-OWUI
+    title: "Open WebUI on cloud VM: OmniRoute chat+STT+TTS, search, RAG, model sync"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 8
+    estimate_src: default
+    depends_on: ["autoos:T1-CLEAN"]
+    corrects: null
+    done_criteria: "side-by-side test vs Perplexity on 20 real questions -> scorecard; sync script idempotent with --check; chat/STT/TTS each tested; fallback test"
+    evidence_kinds: [run-record, commit+ci, semaphore-task]
+    operator: false
+    priority: 0
+    note: "STATUS: research done; queued; T1-CLEAN. Goal: replace Perplexity. Deploys only via Semaphore."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-OWUI"
+
+  - project: server
+    id: T6-HA
+    title: "Home Assistant Assist voice: wyoming_openai -> OmniRoute STT/TTS"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: [T6-OWUI, "routing:GATE-P1"]
+    corrects: null
+    done_criteria: "Assist round trip < 3 s median, documented"
+    evidence_kinds: [run-record]
+    operator: false
+    priority: 0
+    note: "Phase table name T6-VOICE maps to both T6-HA and T6-PHONE. Decision: depends_on T6-OWUI (STT/TTS combos)."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-HA"
+
+  - project: server
+    id: T6-PHONE
+    title: "Phone dictation via Caddy HTTPS path + per-device key"
+    kind: lane
+    track: T6
+    owner: server-L1-main
+    state: open
+    estimate_h: 3
+    estimate_src: default
+    depends_on: []
+    corrects: null
+    done_criteria: "test from the phone"
+    evidence_kinds: [run-record, decision]
+    operator: true
+    priority: 0
+    note: "STATUS: needs an edge OK. OPERATOR approves the edge route (security change)."
+    source: "data/source/plan-v3/T6-server-ops.md#T6-PHONE"

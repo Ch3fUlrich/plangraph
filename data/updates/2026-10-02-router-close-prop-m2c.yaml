@@ -1,0 +1,22 @@
+batch: 2026-10-02-router-close-prop-m2c
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: d566330edb6a9da6051ac74a3bcdf83e4d66b20664133c1e255f589ff24a2d88
+ops:
+- op: edit
+  key: plangraph:PROP-M2C
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: plangraph:PROP-M2C
+  state: in_review
+  note: 'router D-395: M2c plan + operator orders D-346/D-379/D-391 replace the proposal step'
+- op: add_evidence
+  key: plangraph:PROP-M2C
+  kind: decision
+  ref:
+    id: D-395
+- op: close_on_decision
+  key: plangraph:PROP-M2C

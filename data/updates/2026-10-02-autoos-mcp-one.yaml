@@ -1,0 +1,185 @@
+batch: 2026-10-02-autoos-mcp-one
+principal: routing-00
+source: /home/s/code/AutoOS-worktrees/.sessions/l1-main/lane-inputs/MCP-ONE-batch.md
+source_sha256: 5f5f9a4c41c3ea63eb8976057fb14912c9a9ec075a3ecfe4a8c2107a185ed39c
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: EVTAG
+    kind: lane
+    track: MCP-ONE
+    owner: autoos-L1-main
+    title: Seat runs from foreign repos keep their session tag (response-side evidence)
+    description: Foreign-repo seat runs lose the session tag, so gateway evidence cannot attribute them (D-427).
+    done_criteria: a foreign-repo seat run is attributable by the response-side gate (all_match)
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 2
+    depends_on: []
+  - project: autoos
+    id: MCP-REMOTE
+    kind: lane
+    track: MCP-ONE
+    owner: autoos-L1-main
+    title: 'MCP-ONE M3: remote spawn via a small host runner per host (minimal T2-XMSG)'
+    description: spawn(host=<name>) -> host runner pulls requests over the tailnet, runs the same engine, returns record + bundle + seat evidence.
+    done_criteria: a spawn on host=workstation returns record + bundle + evidence
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 2
+    depends_on:
+    - WS-1
+    - EVTAG
+  - project: autoos
+    id: MCP-SEAT-EVIDENCE
+    kind: lane
+    track: MCP-ONE
+    owner: autoos-L1-main
+    title: 'MCP-ONE M4: seat evidence collected inside spawn before sandbox cleanup'
+    description: spawn(review=...) writes response-side evidence into the run record (incl. foreign repos after EVTAG).
+    done_criteria: a seat record carries evidence sha + all_match; cleanup only after evidence
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 2
+    depends_on:
+    - WS-1
+    - EVTAG
+  - project: autoos
+    id: SKILL2MCP
+    kind: lane
+    track: MCP-ONE
+    owner: autoos-L1-main
+    title: 'MCP-ONE M6: skills/briefs show only MCP calls (A-E)'
+    description: Skills/briefs show only spawn/route/ps/result/cancel; CLI forms removed from agent docs; rule with a test.
+    done_criteria: 'skill lint test: no direct client CLI forms'
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 2
+    depends_on:
+    - WS-1
+    - EVTAG
+  - project: autoos
+    id: PH-MCP-ONE
+    kind: gate
+    track: MCP-ONE
+    title: 'Phase MCP-ONE done: autoos-agent MCP is the one spawn path'
+    done_criteria: M1-M6 done
+    depends_on:
+    - T2-ONEPATH
+    - T2-MCPLIFE
+    - MCP-REMOTE
+    - MCP-SEAT-EVIDENCE
+    - ORCH-L2-LAUNCHER
+    - SKILL2MCP
+  - project: plangraph
+    id: RESEAT-MODEL-A
+    kind: lane
+    track: FOLLOWUP
+    owner: plangraph-L1-main
+    title: Response-side re-seat of MODEL-A on the merged head after EVTAG (D-427)
+    description: MODEL-A merged on 2 request-side seats under D-427; one response-side seat on the merged head is owed once EVTAG lands; a blocker means revert.
+    done_criteria: one counted response-side seat PASS (or findings resolved) on the merged MODEL-A head
+    evidence_kinds:
+    - run-record
+    estimate_h: 1
+    estimate_src: default
+    priority: 2
+    depends_on:
+    - autoos:EVTAG
+- op: edit
+  key: autoos:T2-MCPLIFE
+  fields:
+    depends_on:
+    - autoos:T2-ONEPATH
+    - autoos:WS-1
+    - autoos:EVTAG
+    note: 'MCP-ONE M2 | reconcile 2026-10-02: after T2-ONEPATH (same module family)'
+- op: edit
+  key: autoos:ORCH-L2-LAUNCHER
+  fields:
+    depends_on:
+    - autoos:ORCH-V4-DOCS
+    - autoos:MCP-REMOTE
+    note: 'MCP-ONE M5: L2 session launch through the MCP on both hosts; needs an operator OS line | router definition 2026-10-01 (graph-updates-2026-10-01.md section B)'
+- op: edit
+  key: autoos:T2-XMSG
+  fields:
+    note: 'MCP-ONE M3 (autoos:MCP-REMOTE) is the minimal form of this lane | reconcile 2026-10-02: large (fleet bus); Taildrop-sort + KEYEXEC are the interim; design lane after WS-SHIFT | STATUS: new (D-203);
+      fleetd/bus spec exists (gap 2). Decision: no hard dep on T1-CLEAN; priority 1.'
+- op: edit
+  key: routing:GOAL
+  fields:
+    depends_on:
+    - autoos:OP-MANAGE-KEY
+    - autoos:ORCH-L2-LAUNCHER
+    - autoos:ORCH-REVIEW-TIERS
+    - autoos:PH-OPS-20261002
+    - autoos:PH-WS-SHIFT
+    - autoos:SEC-ISOSEC
+    - autoos:T1-COMBO-LAYERS
+    - autoos:T1-CREDIT
+    - autoos:T1-JEV
+    - autoos:T1-MM
+    - autoos:T1-NOISE
+    - autoos:T1-UPGRADE
+    - autoos:T1-WEBTOOLS
+    - autoos:T1-ZEN
+    - autoos:T2-COMPACT
+    - autoos:T2-ISOLATE
+    - autoos:T2-LEAN
+    - autoos:T2-MCPLIFE
+    - autoos:T2-RECORD-GAPS
+    - autoos:T2-RESEARCHCARD
+    - autoos:T2-TASKSESSION
+    - autoos:T3-CLEAN
+    - autoos:T3-PRINCIPLES
+    - autoos:T3-SCRUB
+    - autoos:T3-SPLIT
+    - autoos:T3-WIN
+    - plangraph:PG-M4
+    - routing:GATE-P3
+    - routing:PH-OPERATOR
+    - server:GOAL
+    - server:GW-FOLLOWUP
+    - server:GW-MCP-ROLLOUT
+    - server:OP-DOCKHAND-REVOKE
+    - server:OP-FRITZ-V6
+    - server:SEC-EDGE-GW-INVEST
+    - server:SEC-MINIO
+    - server:SEC-OIDC
+    - server:SEC-SESSION-SECRETS
+    - server:SEC-TIER-A
+    - server:T6-DETECT
+    - server:T6-FIX
+    - server:T6-GRAPHMOVE-CUTOVER
+    - server:T6-INFRA
+    - server:T6-IPV6
+    - server:T6-LEDGER
+    - server:T6-MEDIA
+    - server:T6-PHONE
+    - server:T6-SECRETS
+    - server:T6-UPDATES-IMPL
+    - workstation:OP-GROK-STEPS
+    - workstation:OP-WS-RELAUNCH
+    - autoos:PH-MCP-ONE
+- op: edit
+  key: plangraph:PH-M2C
+  fields:
+    depends_on:
+    - plangraph:FU-X7-LOWS
+    - plangraph:PH-M2C-API
+    - plangraph:PH-M2C-KG
+    - plangraph:PH-M2C-MODEL
+    - plangraph:PH-M2C-SPLIT
+    - plangraph:PH-M2C-SYNC
+    - plangraph:PH-M2C-UI
+    - plangraph:RESEAT-MODEL-A

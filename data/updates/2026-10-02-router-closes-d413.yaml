@@ -1,0 +1,73 @@
+batch: 2026-10-02-router-closes-d413
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 2cc3a84d488bf48a1fe6c607d57e7c768e7abd442614b8fe052d8f2048ac4937
+ops:
+- op: edit
+  key: server:T-002
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:T-002
+  state: in_review
+  note: 'router D-413: done (media-churn fix 1796360 + live runs)'
+- op: add_evidence
+  key: server:T-002
+  kind: decision
+  ref:
+    id: D-413
+- op: close_on_decision
+  key: server:T-002
+- op: edit
+  key: server:T-007
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:T-007
+  state: in_review
+  note: 'router D-413: done (conclusion c4a73ad)'
+- op: add_evidence
+  key: server:T-007
+  kind: decision
+  ref:
+    id: D-413
+- op: close_on_decision
+  key: server:T-007
+- op: edit
+  key: server:DS-FOLLOWUP
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:DS-FOLLOWUP
+  state: in_review
+  note: 'router D-413: done (2bddc08 in 812c593)'
+- op: add_evidence
+  key: server:DS-FOLLOWUP
+  kind: decision
+  ref:
+    id: D-413
+- op: close_on_decision
+  key: server:DS-FOLLOWUP
+- op: edit
+  key: server:MED-DAILY-REPORT
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: server:MED-DAILY-REPORT
+  state: in_review
+  note: 'router D-413: done (598cd6f + aa24b5b, tpl 93/schedule 47)'
+- op: add_evidence
+  key: server:MED-DAILY-REPORT
+  kind: decision
+  ref:
+    id: D-413
+- op: close_on_decision
+  key: server:MED-DAILY-REPORT

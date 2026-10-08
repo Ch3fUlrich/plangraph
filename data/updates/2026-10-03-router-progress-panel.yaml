@@ -1,0 +1,17 @@
+# PROGRESS-PANEL lane (router D-547, operator requirement via prox: standing progress view) + MODEL-KINDS priority above T4.
+batch: 2026-10-03-router-progress-panel
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 9c229c8dffbf70cedf3e078b4be0f47ac96329eb3ddff67445040386666f07ff
+ops:
+- op: create
+  item:
+  - {project: plangraph, id: PROGRESS-PANEL, kind: lane, track: M2C, owner: plangraph-L1-main, review_tier: standard, evidence_kinds: [commit+ci], estimate_h: 6, estimate_src: default, priority: 3, depends_on: [],
+     title: "Progress panel: pg progress + a top panel in the 5-minute render",
+     done_criteria: "pg progress (text and JSON) and a static panel in pg render show percent per project and per phase by count and hours, state counts, hours left, open operator tasks per project, what is running now with owner and model, and the last update per project; tests; one non-Google seat",
+     description: "Router D-547 (operator requirement via prox): standing view, no regeneration on request. Pure progress(items, events) in views.py; staleness = last event per project; model unknown shown until the L1s write through the keeper."}
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    depends_on: [plangraph:UI-GRAPH, plangraph:UI-SHELL, plangraph:UI-TABLE, plangraph:UI-WRITES, plangraph:PROGRESS-PANEL]
+- {op: priority, key: plangraph:MODEL-KINDS, priority: 3}

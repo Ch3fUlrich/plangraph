@@ -1,0 +1,12 @@
+batch: 2026-10-03-router-close-d526
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 9e9a2e6fbfe8156197c2ac38f4b9a5692681c491d94211c994345b43d5590e39
+ops:
+- op: add_evidence
+  key: workst-gen:GEN-CLOSEOUT
+  kind: decision
+  ref:
+    id: D-526
+- op: close_on_decision
+  key: workst-gen:GEN-CLOSEOUT

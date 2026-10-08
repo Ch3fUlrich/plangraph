@@ -1,0 +1,85 @@
+# UI-TABLE re-scoped (router D-586): 4 sub-lanes, deps changed.
+batch: 2026-10-04-router-ui-table-rescope
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 1dbcb66c7a39c8142be933623ca5a31e0eba97e787f368e3bbe564707d713f43
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: UI-TABLE-MODEL
+    kind: lane
+    track: UI
+    owner: plangraph-L2-ui-build
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'Table model (pure): columns, multi-column sort, filters, full-text search, grouping, windowing, URL state'
+    done_criteria: 'pure module + node-run tests; 1000+ synthetic rows: sort, filter and search measured under a stated millisecond budget; URL state round-trips'
+    description: 'D-586 step 1: filters project/phase/state/owner/priority/kind/operator-needed; group per project with collapsible phase groups; row window for 1000+ rows.'
+  - project: plangraph
+    id: UI-TABLE-VIEW
+    kind: lane
+    track: UI
+    owner: plangraph-L2-ui-build
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - plangraph:UI-TABLE-MODEL
+    title: 'Table view (DOM): sticky header, state badges, project colour, group headers, inline row details, column chooser, windowed rows'
+    done_criteria: strict fake DOM tests; real-browser probe at 1440x900; 1000+ rows scroll smoothly (measured rendered row count bounded)
+    description: 'D-586 step 2: native table; project colours from the GRAPH-UI palette; no innerHTML with data.'
+  - project: plangraph
+    id: UI-TABLE-WIRE
+    kind: lane
+    track: UI
+    owner: plangraph-L2-ui-build
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - plangraph:UI-TABLE-VIEW
+    - plangraph:GRAPH-UI-BUILD
+    title: 'Table tab next to the graph: view switch, filter/search bar, URL-persisted filters, selection to the details panel, measured hook'
+    done_criteria: Table tab works beside the graph on the same static page; filters survive reload via the URL; details panel opens from a row; real-browser probe
+    description: 'D-586 step 3: touches the page shell, so it starts after the GRAPH-UI wiring is accepted (G2b).'
+  - project: plangraph
+    id: UI-TABLE-PHONE
+    kind: lane
+    track: UI
+    owner: plangraph-L2-ui-build
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - plangraph:UI-TABLE-WIRE
+    title: 'Table phone layout: cards below 600 px, sticky group headers, filter sheet, 1000-row check'
+    done_criteria: real-browser probe at 390x844; cards, sticky headers, filters usable; regression of the desktop table
+    description: D-586 step 4.
+- op: edit
+  key: plangraph:UI-TABLE
+  fields:
+    depends_on:
+    - plangraph:UI-TABLE-MODEL
+    - plangraph:UI-TABLE-VIEW
+    - plangraph:UI-TABLE-WIRE
+    - plangraph:UI-TABLE-PHONE
+    title: 'Plan table: Table tab on the existing page, sortable, searchable, filtered, grouped (read-only first)'
+    done_criteria: 'a Table tab beside the graph on the existing static page (keeper JSON as today): sortable columns, full-text search, filters (project, phase, state, owner, priority, kind, operator-needed),
+      row colour per project, state badges, grouping per project with collapsible phase groups, inline row details, column chooser, URL-persisted filters, phone cards below 600 px, 1000+ rows fast (windowed);
+      read-only (batch priority writes stay with UI-WRITES); Playwright check by a non-writer at 1440x900 and 390x844; the OPERATOR reviews a local preview; no deploy before the operator''s OK'
+    note: 'router D-586 (operator, priority equal to GRAPH-UI): re-scoped to the existing page line; UI-SHELL and MODEL-NAMES dependencies dropped (the SvelteKit shell stays a later option)'

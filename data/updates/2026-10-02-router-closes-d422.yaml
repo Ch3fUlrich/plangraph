@@ -1,0 +1,56 @@
+batch: 2026-10-02-router-closes-d422
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 86119159314baf9f8b3a416c420259f6bb550bf29b08b13906da630e871ec642
+ops:
+- op: edit
+  key: autoos:T0-FREEZE
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: autoos:T0-FREEZE
+  state: in_review
+  note: 'router D-422: merged on AutoOS main (fe609c42, 9ca464d9, ebd45053, 669f48a0, 41f57ba1)'
+- op: add_evidence
+  key: autoos:T0-FREEZE
+  kind: decision
+  ref:
+    id: D-422
+- op: close_on_decision
+  key: autoos:T0-FREEZE
+- op: edit
+  key: autoos:T2-ISOLATE
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: autoos:T2-ISOLATE
+  state: in_review
+  note: 'router D-422: merged on AutoOS main (fe609c42, 9ca464d9, ebd45053, 669f48a0, 41f57ba1)'
+- op: add_evidence
+  key: autoos:T2-ISOLATE
+  kind: decision
+  ref:
+    id: D-422
+- op: close_on_decision
+  key: autoos:T2-ISOLATE
+- op: edit
+  key: autoos:SEC-ISOSEC
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: autoos:SEC-ISOSEC
+  state: in_review
+  note: 'router D-422: merged on AutoOS main (fe609c42, 9ca464d9, ebd45053, 669f48a0, 41f57ba1)'
+- op: add_evidence
+  key: autoos:SEC-ISOSEC
+  kind: decision
+  ref:
+    id: D-422
+- op: close_on_decision
+  key: autoos:SEC-ISOSEC
