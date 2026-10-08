@@ -1,0 +1,9 @@
+# GEN-RETENTION-PERSON superseded by GEN-RETAIN-AUTO + GEN-ERASE-NOW (D-686); a Closes row cannot close a superseded commit item.
+batch: 2026-10-08-cancel-gen-retention-person
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: beb7a002b0ba0140ec4c056f8d9f544ad39606b007e66c529f5349c20e30fb36
+ops:
+- op: cancel
+  key: workst-gen:GEN-RETENTION-PERSON
+  reason: superseded by workst-gen:GEN-RETAIN-AUTO + GEN-ERASE-NOW (D-686)
