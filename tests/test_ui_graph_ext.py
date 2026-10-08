@@ -134,7 +134,7 @@ process.stdout.write(JSON.stringify({
 def test_t4_graph_style_rules(tmp_path: Path):
     """T4: graphStyleRules with fake env equals literal 29 selectors (incl. the data-guarded width/height rules), ext rules come last, phase-collapsed properties."""
     EXPECTED_SELECTORS = [
-        "node", "node[width][height]", "node.task-node", "node.critical-node", "node.loop-node", "node.exit-node",
+        "node", "node[width][height]", "node.task-node", "node.critical-node", "node.loop-node", "node.more-node", "node.exit-node",
         "node.exit-node.hollow", "node.exit-node.filled", "node.ghost-node, node.ghost-stub",
         "node.gate-node", "node.goal-node", ":parent", "node.project-compound",
         "node.phase-compound", "node.phase-collapsed, node.project-collapsed",
