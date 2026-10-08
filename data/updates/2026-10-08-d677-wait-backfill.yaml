@@ -1,0 +1,586 @@
+# D-677 backfill: wait=answer|task on every open operator item.
+batch: 2026-10-08-d677-wait-backfill
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: c2eeebf0133886ba3a40c5a7f7a310b709d39893ad7b0a689e19c27e2b53a5e2
+ops:
+- op: edit
+  key: autoos:DECIDE-RS-L3-COST
+  fields:
+    wait: answer
+- op: edit
+  key: autoos:RS-META-KEY
+  fields:
+    wait: task
+- op: edit
+  key: autoos:RS-NOTIFY-L1S
+  fields:
+    wait: task
+- op: edit
+  key: autoos:RS-OC-KEY-GLM
+  fields:
+    wait: task
+- op: edit
+  key: autoos:T0-KEYS
+  fields:
+    wait: task
+- op: edit
+  key: autoos:T0-ZEN1
+  fields:
+    wait: task
+- op: edit
+  key: autoos:T5-GRAPH
+  fields:
+    wait: task
+- op: edit
+  key: plangraph:OP-PUBLIC-LOOK
+  fields:
+    wait: task
+- op: edit
+  key: plangraph:PG-M4
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-102B
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-103
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-104
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-109
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-110
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-116
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-123
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-124B
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-130
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-131
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-132
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-133
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-134
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-135
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-28
+  fields:
+    wait: answer
+- op: edit
+  key: routing:OS-30
+  fields:
+    wait: answer
+- op: edit
+  key: routing:OS-31
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-32
+  fields:
+    wait: answer
+- op: edit
+  key: routing:OS-33
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-35
+  fields:
+    wait: answer
+- op: edit
+  key: routing:OS-37
+  fields:
+    wait: answer
+- op: edit
+  key: routing:OS-41B
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-51
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-52
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-53
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-54
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-55
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-56
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-57
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-61
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-62
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-63
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-64
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-65
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-68
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-70B
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-71
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-73
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-76
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-82
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-9
+  fields:
+    wait: answer
+- op: edit
+  key: routing:OS-91
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-96
+  fields:
+    wait: task
+- op: edit
+  key: routing:OS-99
+  fields:
+    wait: task
+- op: edit
+  key: server:DECIDE-ABS-REFRESH
+  fields:
+    wait: answer
+- op: edit
+  key: server:DECIDE-KBASE
+  fields:
+    wait: answer
+- op: edit
+  key: server:DECIDE-PUBLIC-REPOS
+  fields:
+    wait: answer
+- op: edit
+  key: server:MT-001
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-002
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-003
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-005
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-006
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-008
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-009
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-010
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-011
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-012
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-014
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-017
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-018
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-021
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-023
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-024
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-030
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-031
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-039
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-040
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-042
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-043
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-044
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-047
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-048
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-049
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-050
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-052
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-053
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-054
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-055
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-059
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-060
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-061
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-062
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-067
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-069
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-070
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-077
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-081
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-082
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-083
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-085
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-090
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-097
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-099
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-100
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-101
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-105
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-106
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-219
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-220
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-221
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-222
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-225
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-226
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-227
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-228
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-229
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-230
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-231
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-232
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-233
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-234
+  fields:
+    wait: task
+- op: edit
+  key: server:MT-235
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-BOOKLORE-TOKEN
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-CH-P5
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-CUTOVER-STEPS
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-DOCKHAND-EVENTS
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-DOCKHAND-TOKEN
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-FIX-WINDOW
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-FLOORPLAN-INPUT
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-GM-WINDOW
+  fields:
+    wait: answer
+- op: edit
+  key: server:OP-GW-TIERC
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-HEAL-ADOPT
+  fields:
+    wait: answer
+- op: edit
+  key: server:OP-MANUAL-TRIAGE
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-MT216-PROWLARR-ROTATE
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-MT217-COMICVINE
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-OWUI-DEPLOY
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-P9-EDGE-HARDENING
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-PERPLEXITY-VERDICT
+  fields:
+    wait: answer
+- op: edit
+  key: server:OP-PHONE-EDGE
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-QUARANTINE-DELETE
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-UPD-TIERC
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-UPR-TIERC-OK
+  fields:
+    wait: task
+- op: edit
+  key: server:OP-WOLF-SETUP
+  fields:
+    wait: task
+- op: edit
+  key: server:T6-HEAL
+  fields:
+    wait: task
+- op: edit
+  key: server:T6-INFRA
+  fields:
+    wait: task
+- op: edit
+  key: server:T6-PHONE
+  fields:
+    wait: task
