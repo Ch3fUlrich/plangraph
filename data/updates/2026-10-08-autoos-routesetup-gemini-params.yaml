@@ -1,0 +1,53 @@
+# ROUTESETUP delta from workst-L1 (RS-GEMINI-PARAMS); gate list = live list + 1.
+batch: 2026-10-08-autoos-routesetup-gemini-params
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: dda235af437904b9fd71506b70ddd6f20436b9328692250b2d7bb4be0ac5ce14
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: RS-GEMINI-PARAMS
+    kind: lane
+    track: ROUTESETUP
+    owner: autoos-L1-main
+    review_tier: high
+    title: 'Gemini: thinking_level instead of thinking_budget; drop temperature/top_p/top_k'
+    done_criteria: requests to gemini/vertex legs carry thinkingConfig.thinkingLevel (or none) and no thinkingBudget/temperature/topP/topK; patch has a revert path and a test; upstream issue or PR filed
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 6
+    depends_on: []
+    note: 'Google AI Studio notice 2026-10-08: upcoming Gemini models reject thinking_budget (400 INVALID_ARGUMENT), later temperature/top_p/top_k. Measured: OmniRoute 3.8.50 maps reasoning_effort/thinking
+      to generationConfig.thinkingConfig.thinkingBudget (low 1024, medium 10240, high 32768, max 131072) and forwards temperature/topP/topK; 3.8.51 (2026-09-30) predates the notice. Client side: configuration/openhands/config.toml
+      temperature 0.0-0.2 on combos with gemini legs. Map low->low, medium->medium, high/xhigh/max->high, none->minimal.'
+- op: edit
+  key: autoos:PH-ROUTESETUP
+  fields:
+    depends_on:
+    - autoos:RS-AA-SCORES
+    - autoos:RS-CHANGELOG-GATE
+    - autoos:RS-CLEF-PILOT
+    - autoos:RS-FUTURE-MODELS
+    - autoos:RS-GEMINI38-LEGS
+    - autoos:RS-L2-RESEARCHER-1M
+    - autoos:RS-L3-REDESIGN
+    - autoos:RS-LEDGER-WIRING
+    - autoos:RS-LIT-TABLE
+    - autoos:RS-LIVE-SYNC
+    - autoos:RS-META-KEY
+    - autoos:RS-MODELS-DOC
+    - autoos:RS-NESTED-COMBOS
+    - autoos:RS-NOTIFY-L1S
+    - autoos:RS-NSCALE
+    - autoos:RS-OC-KEY-GLM
+    - autoos:RS-OPENCODE-MODELS
+    - autoos:RS-PHASE-GATES
+    - autoos:RS-PLAN-ROWS
+    - autoos:RS-RENAME-CI
+    - autoos:RS-SPAWN-TEMPLATES
+    - autoos:RS-SPAWNER-MCP
+    - autoos:RS-GEMINI-PARAMS
+

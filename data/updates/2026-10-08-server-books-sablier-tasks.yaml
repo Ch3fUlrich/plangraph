@@ -1,0 +1,233 @@
+# server-L1 P1/P2 task list as sub-items (D-649: plangraph-L1 keeps every L1 task in the graph).
+batch: 2026-10-08-server-books-sablier-tasks
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: dda235af437904b9fd71506b70ddd6f20436b9328692250b2d7bb4be0ac5ce14
+ops:
+- op: create
+  item:
+  - project: server
+    id: BK-DIAG
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Books P1.1: diagnose ABR -> ABS gap'
+    done_criteria: root cause recorded in a router D-row
+    description: 'DONE per server-L1: slskd wedged ''Disconnecting'' since 2026-10-07 01:32Z, search errors swallowed by the driver (D-636). server-L1 task list 2026-10-08 (D-636, D-649).'
+  - project: server
+    id: BK-SLSKD-RESTART
+    kind: lane
+    track: BOOKS
+    owner: prox
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Books P1.2: restart slskd'
+    done_criteria: slskd logged in again; router D-row
+    description: 'DONE per server-L1: prox restarted slskd 2026-10-08 11:28Z. server-L1 task list 2026-10-08 (D-636, D-649).'
+  - project: server
+    id: BK-SLSKD-HEALTH
+    kind: lane
+    track: BOOKS
+    owner: prox
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Books P1.3: slskd healthcheck = Soulseek login, autoheal, login-watch mail after 30 min'
+    done_criteria: merged on Server origin/main; seats per D-525
+    description: 'DONE per server-L1: Server 9f2c6a9b (on improve and main). Seat S1 prox. server-L1 task list 2026-10-08 (D-636, D-649).'
+  - project: server
+    id: BK-DRIVER-BREAKER
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Books P1.4: driver counts search errors, circuit breaker (5 in a row -> red), verb histogram, red on ABORT'
+    done_criteria: merged on Server improve with tests; 2 cross-family seats
+    description: Writer run 20261008-112653-...-0704e2. server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: BK-MULTIUSER-TEST
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Books P1.5: multi-user rows_from_abr regression test'
+    done_criteria: test merged with P1.4
+    description: Same writer run as P1.4. server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: BK-ABR-48H-MAIL
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Books P1.6: daily mail for ABR requests unfulfilled > 48 h'
+    done_criteria: merged on Server improve with a test
+    description: Writer run 20261008-112700-...-2aa094. server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: BK-MERGE-IMPROVE
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1
+    estimate_src: default
+    priority: 1
+    depends_on:
+    - server:BK-DRIVER-BREAKER
+    - server:BK-MULTIUSER-TEST
+    - server:BK-ABR-48H-MAIL
+    title: 'Books P1.7: merge P1.4-P1.6 to improve with seats'
+    done_criteria: merged on Server improve, seats recorded (D-525)
+    description: server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: BK-DEPLOY
+    kind: lane
+    track: BOOKS
+    owner: prox
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 1
+    estimate_src: default
+    priority: 1
+    depends_on:
+    - server:BK-MERGE-IMPROVE
+    title: 'Books P1.8: prox deploys the books fixes'
+    done_criteria: deploy task id green
+    description: server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: BK-FULFIL-RUN
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - run-record
+    estimate_h: 3
+    estimate_src: default
+    priority: 1
+    depends_on:
+    - server:BK-DEPLOY
+    - server:BK-SLSKD-RESTART
+    title: 'Books P1.9: usenet-first, German-first fulfil run (georg''s 6 as requested; operator list in German)'
+    done_criteria: 'run record: georg''s 6 requests (EN) and the operator''s list in German (Der Freund, Der Absturz, Die verschlossene Tuer, Die Hexe, Der Ex, Largo) grabbed or reported with reason'
+    description: server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: BK-ABS-VERIFY
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - run-record
+    estimate_h: 2
+    estimate_src: default
+    priority: 1
+    depends_on:
+    - server:BK-FULFIL-RUN
+    title: 'Books P1.10: ABS verification list + per-request state for all open ABR requests'
+    done_criteria: list with one state per open ABR request
+    description: server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: SB-CAUSE
+    kind: lane
+    track: APPS
+    owner: server-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'Sablier P2.1: explain the half-park cause'
+    done_criteria: cause recorded in a router D-row
+    description: 'DONE per server-L1: lone ghost-db expiry; ghost expiry event missing in ~7/60 cycles (D-636). server-L1 task list 2026-10-08 (D-636, D-649).'
+  - project: server
+    id: SB-MAIL-IMPL
+    kind: lane
+    track: APPS
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: 'Sablier P2.2: mail policy (healed = log only; mail on failed heal or > 3 half-parks/day)'
+    done_criteria: merged on Server improve with a test
+    description: Writer run 20261008-112121-...-8cc61c. server-L1 task list 2026-10-08 (D-636, D-649).
+  - project: server
+    id: SB-DOCS
+    kind: lane
+    track: APPS
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:SB-MAIL-IMPL
+    title: 'Sablier P2.3: docs/operations/sablier.md half-park section'
+    done_criteria: merged on Server improve
+    description: server-L1 task list 2026-10-08 (D-636, D-649).
+- op: edit
+  key: server:BOOKS-SLSKD-RECOVERY
+  fields:
+    depends_on:
+    - server:BK-DIAG
+    - server:BK-SLSKD-RESTART
+    - server:BK-SLSKD-HEALTH
+    - server:BK-DRIVER-BREAKER
+    - server:BK-MULTIUSER-TEST
+    - server:BK-ABR-48H-MAIL
+    - server:BK-MERGE-IMPROVE
+    - server:BK-DEPLOY
+    - server:BK-FULFIL-RUN
+    - server:BK-ABS-VERIFY
+- op: edit
+  key: server:SABLIER-MAIL-POLICY
+  fields:
+    depends_on:
+    - server:SB-CAUSE
+    - server:SB-MAIL-IMPL
+    - server:SB-DOCS
+
