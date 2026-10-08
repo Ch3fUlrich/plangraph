@@ -1,0 +1,38 @@
+# great-wiki GW-DEPS-AUDIT under GOAL-GW (routing request 2026-10-08).
+batch: 2026-10-08-gw-deps-audit
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 3718abddab89cbac4d85b6040bda169a92573825902fd205729a60d3dbe0c254
+ops:
+- op: create
+  item:
+  - project: great-wiki
+    id: GW-DEPS-AUDIT
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1
+    estimate_src: router
+    priority: 4
+    depends_on: []
+    title: 'Dependency audit: bump h2 + rustls (RUSTSEC), deny.toml + cargo audit in CI, document rsa Marvin exposure'
+    done_criteria: h2 >= 0.4.15 and rustls >= 0.23.43 locked; deny.toml + cargo audit job in CI (green); doc answers whether the wiki only verifies and never signs with RSA (RUSTSEC-2023-0071 via jsonwebtoken,
+      no fix); smallstr unmaintained noted; routing ACCEPT; merged
+    description: 'routing 2026-10-08: pre-existing on main. Bump h2 0.4.15 (RUSTSEC-2026-0258) and rustls 0.23.43 (RUSTSEC-2026-0285); add deny.toml + cargo audit to CI; document the rsa 0.9.10 Marvin exposure
+      (RUSTSEC-2023-0071 via jsonwebtoken, no fix; answer whether the wiki only verifies and never signs with RSA); smallstr unmaintained noted. lettre 0.11.23 and its transitive deps add no advisories.'
+- op: edit
+  key: great-wiki:GOAL-GW
+  fields:
+    depends_on:
+    - great-wiki:GW-DEPS-AUDIT
+    - great-wiki:GW-DOK-SELECT
+    - great-wiki:GW-HANDOFF-DOC
+    - great-wiki:GW-MUTATE-STALE
+    - great-wiki:GW-REGISTER
+    - great-wiki:GW-TEMPLATES
+    - great-wiki:PH-GW-M6
+    - great-wiki:PH-GW-MOVE
+    - great-wiki:PH-GW-SEARCH
