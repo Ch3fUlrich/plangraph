@@ -1,0 +1,158 @@
+# D-653 rest (server-L1-routing): 400LOC, CHANGELOG-DOCS, SKILLS.
+batch: 2026-10-08-d653-rest
+principal: routing-00
+source: /home/s/code/routing/docs/plan/d653-rest-2026-10-08.md
+source_sha256: 51ff258c6574c88710e520bc0ef3760095f2f9d91ab80faf69b08d565b2d2651
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: AO-400LOC
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 9
+    depends_on:
+    - autoos:AO-L2-PRODTEST
+    - autoos:AO-L2-SKILL
+    title: 'Max 400 lines per file: rule + check-file-size ratchet + CI/ready gate'
+    done_criteria: merged on AutoOS main, CI green
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: routing
+    id: ADOPT-400LOC-ROUTING
+    kind: lane
+    track: SETUP
+    owner: routing-00
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - autoos:AO-400LOC
+    title: 400-line guard adopted in the routing repo
+    done_criteria: guard runs in CI
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: plangraph
+    id: ADOPT-400LOC-PLANGRAPH
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - autoos:AO-400LOC
+    title: 400-line guard adopted in plangraph (page_ui.js 417, page_side.js 518 to split first)
+    done_criteria: guard runs in CI; no file over 400 lines
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: server
+    id: ADOPT-400LOC-SERVER
+    kind: lane
+    track: SETUP
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - autoos:AO-400LOC
+    title: 400-line guard adopted in Server
+    done_criteria: guard runs in CI
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: server
+    id: ADOPT-400LOC-CHAPTARR
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - autoos:AO-400LOC
+    title: 400-line guard adopted in the Chaptarr fork
+    done_criteria: guard runs in CI
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: autoos
+    id: AO-CHANGELOG-DOCS
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: check-changelog-docs + .docs-map
+    done_criteria: merged on AutoOS main, CI green
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: server
+    id: ADOPT-CHANGELOG-SERVER
+    kind: lane
+    track: SETUP
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - autoos:AO-CHANGELOG-DOCS
+    title: CHANGELOG/docs check adopted in Server (first repo)
+    done_criteria: check runs in CI
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+  - project: autoos
+    id: AO-SKILLS
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - autoos:AO-L2-SKILL
+    title: Research/review/implement skills, role tool sets, Field Guide pilot
+    done_criteria: merged on AutoOS main, CI green
+    description: D-653 rest; spec routing docs/plan/d653-rest-2026-10-08.md (cfbc35c).
+- op: edit
+  key: routing:ROUTE-400LOC
+  fields:
+    depends_on:
+    - autoos:AO-400LOC
+    - routing:ADOPT-400LOC-ROUTING
+    - plangraph:ADOPT-400LOC-PLANGRAPH
+    - server:ADOPT-400LOC-SERVER
+    - server:ADOPT-400LOC-CHAPTARR
+- op: edit
+  key: routing:ROUTE-CHANGELOG-DOCS
+  fields:
+    depends_on:
+    - autoos:AO-CHANGELOG-DOCS
+    - server:ADOPT-CHANGELOG-SERVER
+- op: edit
+  key: routing:ROUTE-SKILLS
+  fields:
+    depends_on:
+    - routing:ROUTE-DEPTH-RESEARCH
+    - autoos:AO-SKILLS
+
