@@ -1,0 +1,19 @@
+# Changelog
+
+Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest first.
+
+## 2026-10-08
+
+- **Page (new UI live on plan.ohje):** opens on the collapsed project overview fitted to all hulls; data-guarded
+  width/height styles (no cytoscape mapping warnings); Settings reachable on phone; dead duplicate of 16 functions
+  removed from page_boot.js (04b1d78). Phase filter uses phase||track, `state:` facet is case-insensitive, sidebar
+  tables capped at 300 rows (f856375). Real-browser check PASS at 1440x900, 1280x800, 390x844.
+- **Keeper + md-sync:** supersede rule: the latest router D-row wins a key's `Closes:` sha; same-row conflicts stay
+  invalid and are reported (9a8fd66). Keeper config: plangraph ref = origin/main. Daemon runs as the user unit
+  plangraph-keeper.service.
+- **Sync:** main (a01c8ed: header pages, Table, Q&A, Projects tree, skill plangraph-planning) merged with the live
+  tree; restored `views.warnings` (keeper alerts), dropped stale real-name fixtures, keeper e2e tests on the
+  fictional projects (1286436, 8902d06).
+- **Docs:** review record docs/reviews/2026-10-08-since-1006-seats.md; layered-planning gap table and task-size
+  options docs/proposals/2026-10-08-layered-planning-gaps.md (operator chose size B, D-656).
+- **Plan data:** 2026-10-08 router batches under data/updates/ (see data/updates/QUEUE.md).
