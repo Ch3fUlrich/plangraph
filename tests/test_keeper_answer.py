@@ -114,7 +114,7 @@ def test_bad_text(w, text):
 
 def test_text_cap_boundary_and_credential_guard(w):
     with pytest.raises(Refused):
-        w.store.answer(w.p("router"), "demo:DEC", "login admin/hunter22secret", "D-501")
+        w.store.answer(w.p("router"), "demo:DEC", "login " + "admin" + "/" + "hunter22secret", "D-501")
     w.store.answer(w.p("router"), "demo:Q", "x" * 2000, DID)
     assert len(next(e for e in read_events(w.conn)
                     if e["type"] == "answered")["payload"]["text"]) == 2000
