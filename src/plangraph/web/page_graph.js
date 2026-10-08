@@ -143,7 +143,9 @@
           });
 
           if (it.loop) {
-            var ed = it.loop.exit_decision, decided = !!(ed && vm.decisionById && vm.decisionById[ed]);
+            var edRaw = it.loop.exit_decision;
+            var ed = edRaw && typeof edRaw === "object" ? edRaw.id : edRaw;
+            var decided = !!(ed && vm.decisionById && vm.decisionById[ed]);
             var xCls = "exit-node exit-diamond " + (decided ? "filled" : "hollow") + (filtering && !m ? " dim" : "");
             putNode({
               data: { id: "x:" + it.key, key: it.key, parent: "ph:" + phId, project: it.project, phase: it.phase, label: "exit: " + (ed || ""), exitDecision: ed, decided: decided, width: 100, height: 40, shape: "diamond" },

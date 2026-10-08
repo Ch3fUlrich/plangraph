@@ -68,7 +68,8 @@
     rec.evidence.forEach(function (e) {
       var li = PP.el("li");
       li.appendChild(PP.el("span", "ev-kind", e.kind || "?"));
-      li.appendChild(PP.el("span", "ev-ref", e.ref || ""));
+      var ref = e && e.ref && typeof e.ref === "object" ? (e.ref.id || e.ref.sha || e.ref.run_id || JSON.stringify(e.ref)) : e.ref;
+      li.appendChild(PP.el("span", "ev-ref", ref || ""));
       if (e.verified) li.appendChild(PP.el("span", "ev-ok", "verified"));
       if (e.at) li.appendChild(PP.el("span", "muted", e.at));
       ul.appendChild(li);

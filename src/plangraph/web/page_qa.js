@@ -48,7 +48,7 @@
     var vm = PlanUI.app && PlanUI.app.vm;
     if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());
     if (vm && PlanUI.Sidebar && PlanUI.Sidebar.render) PlanUI.Sidebar.render();
-    else render(vm);
+    render(vm);
   }
 
   /* ---- connections ----------------------------------------------------------- */

@@ -113,14 +113,22 @@
     });
   }
 
+  function decisionRefId(ev) {
+    var r = ev ? ev.ref : null;
+    if (r && typeof r === "object") r = r.id;
+    return typeof r === "string" && r ? r : "";
+  }
+
   function deriveDecisions(items) {
     var order = [], byId = {};
     items.forEach(function (i) {
       (Array.isArray(i.evidence) ? i.evidence : []).forEach(function (ev) {
-        if (!ev || ev.kind !== "decision" || !ev.ref) return;
-        var d = byId[ev.ref];
+        if (!ev || ev.kind !== "decision") return;
+        var id = decisionRefId(ev);
+        if (!id) return;
+        var d = byId[id];
         if (!d) {                                    // first-seen order, first-seen project
-          d = byId[ev.ref] = { id: ev.ref, project: i.project, title: "Decision " + ev.ref,
+          d = byId[id] = { id: id, project: i.project, title: "Decision " + id,
                                text: "", date: str(ev.at).slice(0, 10), items: [] };
           order.push(d);
         }
