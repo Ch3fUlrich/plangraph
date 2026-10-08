@@ -1,0 +1,35 @@
+# PG-FETCH-ON-DEMAND.
+batch: 2026-10-08-pg-fetch-on-demand
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: dab51a56614ad39448ca20dc05fe55a3bd16f2b12bbf850d81b0f96fddc9c543
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: PG-FETCH-ON-DEMAND
+    kind: lane
+    track: PGSSOT
+    owner: plangraph-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: Keeper fetches the item's repo once when commit evidence names an unknown sha (rate-limited)
+    done_criteria: evidence with a just-pushed sha verifies without waiting for md-sync; fetch at most once per repo per minute; test
+    description: 'prox-L1 2026-10-08: ''commit does not exist'' until the 10-min md-sync fetch.'
+- op: edit
+  key: plangraph:PH-M2C-SYNC
+  fields:
+    depends_on:
+    - plangraph:K1-KEEPER
+    - plangraph:KEEPER-REF-PLANGRAPH
+    - plangraph:MD-SYNC-SUPERSEDE
+    - plangraph:PG-CI
+    - plangraph:PG-SPLIT-EXAMPLES-TEST
+    - plangraph:SYNC-MD-IMPORT
+    - plangraph:PG-FETCH-ON-DEMAND
+
