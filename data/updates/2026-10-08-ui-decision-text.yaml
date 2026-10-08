@@ -1,0 +1,42 @@
+# D-673 UI-DECISION-TEXT.
+batch: 2026-10-08-ui-decision-text
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 96575c7567e54205a287b17dd72d41cc44f393ba047c47920d099d5349935b85
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: UI-DECISION-TEXT
+    kind: lane
+    track: UI
+    owner: plangraph-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: Decisions page shows the decision text (keeper snapshot carries it from the decisions log)
+    done_criteria: snapshot has decision_text for referenced D-ids; Decisions table shows the text; tests; browser check
+    description: 'Router D-673 (low priority). workst browser check: the Decision column showed only ''Decision D-182''.'
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    depends_on:
+    - plangraph:GRAPH-UI
+    - plangraph:PROGRESS-PANEL
+    - plangraph:RENDER-NEWUI-DETECT
+    - plangraph:UI-CREATED-AT
+    - plangraph:UI-HASH-STATE
+    - plangraph:UI-NODE-BUDGET
+    - plangraph:UI-OVERVIEW-FIX
+    - plangraph:UI-QA-COUNTS
+    - plangraph:UI-REVIEW-W3
+    - plangraph:UI-SHELL
+    - plangraph:UI-TABLE
+    - plangraph:UI-TESTS-TABLE-QA
+    - plangraph:UI-WRITES
+    - plangraph:UI-DECISION-TEXT
+
