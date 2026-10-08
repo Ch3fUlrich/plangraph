@@ -13,10 +13,9 @@ via routing, Haiku rule, L2 rule (≥ 3 worker runs → L2 via routing).
 - Page: new UI live on plan.ohje (graph overview, table, Q&A, Needs You, Activity, operator-wait colours).
 
 ## In flight
-- **PG-BRIEF**: lane branch `lane/pg-brief` @c675581, sent to server-L1-routing to judge. On ACCEPT: merge into
-  worktree-proposal, push, restart nothing (CLI/MCP read the live tree; daemon serves `show` → restart keeper so HTTP
-  `brief=1` works), tell routing the merge sha.
-- Scratch worktree for it: `/home/s/.claude/jobs/a6454e35/tmp/fix17` (remove after merge with `git worktree remove`).
+- Nothing. PG-BRIEF merged (lane/pg-brief c675581), keeper restarted on it; full suite 1402 passed, 2 pre-existing
+  failures (test_split_examples; test_split_make_public: README.md:79 high-entropy string from a01c8ed) → lane
+  PG-SPLIT-EXAMPLES-TEST.
 
 ## Next (order)
 1. **PG-MODELS** (D-708 A, spec routing-worktrees/server-L1-routing/docs/plan/plangraph-single-source-2026-10-08.md):
