@@ -61,6 +61,9 @@ JS_FILES = (
     "page_graph_view.js",
     "page_table_model.js",
     "page_table_url.js",
+    "page_table_view.js",
+    "page_qa.js",
+    "page_pages.js",
     "page_boot.js",  # T2: boot must be last — it wires the components it finds.
 )
 

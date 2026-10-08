@@ -178,6 +178,9 @@ def test_js_and_css_are_data_driven():
         "page_graph_view.js",
         "page_table_model.js",
         "page_table_url.js",
+        "page_table_view.js",
+        "page_qa.js",
+        "page_pages.js",
         "page_boot.js",
     )
     assert render_mod.CSS_FILES == ("page.css", "page_base.css", "page_graph.css")

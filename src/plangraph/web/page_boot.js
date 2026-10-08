@@ -117,8 +117,6 @@
   function syncSB(ui) {
     var sb = ui.get("sidebar");
     body.setAttribute("data-sbopen", sb.open ? "1" : "0");
-    var t = $("sb-toggle");
-    if (t) t.setAttribute("aria-expanded", sb.open ? "true" : "false");
     var scrim = $("sb-scrim");
     if (scrim) scrim.hidden = !(sb.open && drawer());
   }
@@ -167,6 +165,182 @@
 
   function writeHash() {
     var h = hashEncode(ui.get());
+    var pg = PlanUI.Pages && PlanUI.Pages.current();
+    if (pg && pg !== "graph" && pg !== "table") h += (h ? "&" : "#") + "pg=" + pg;
+    try {
+      if (global.history && global.history.replaceState) {
+        global.history.replaceState(null, "", h || (location.pathname + location.search));
+      } else if (h && location.hash !== h) location.hash = h;
+    } catch (e) { /* file:// quirks: the view still works, links just stay plain */ }
+  }
+
+  /* ---- keyboard map: `/ e c F N Esc` (+ R6 ←/→) -------------------------- */
+  function typing(e) {
+    var t = e.target;
+    return t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+  }
+
+  function nextReady() {
+    var V = PlanUI.app.vm, list = [];
+    V.items.forEach(function (it) { if (it.display === "ready") list.push(it); });
+    if (!list.length) return;
+    var crit = list.filter(function (i) { return i.critical; });
+    if (crit.length) list = crit.concat(list.filter(function (i) { return !i.critical; }));
+    var idx = 0, cur = PP.state.selected;
+    list.some(function (it, i) { if (it.key === cur) { idx = (i + 1) % list.length; return true; } return false; });
+    PP.focusNode(list[idx].key);
+  }
+
+  function toggleExpand() {
+    var k = PP.state.selected;
+    if (!k) return;
+    var next = new Set(ui.get("expanded"));      // ui.expanded survives in the hash (T3)
+    if (next.has(k)) next.delete(k); else next.add(k);
+    ui.set("expanded", next);
+  }
+
+  function collapsePhase() {
+    var V = PlanUI.app.vm, k = PP.state.selected;
+    var rec = k && V.items.get(k);
+    if (!rec || !rec.phase) return;
+    var next = new Set(ui.get("collapsedPhases"));
+    next.add(rec.project + "|" + rec.phase);
+    ui.set("collapsedPhases", next);
+  }
+
+  function moveSelection(dir) {                  // → successor, ← predecessor
+    var rec = PP.state.selected && PlanUI.app.vm.items.get(PP.state.selected);
+    if (!rec) return;
+    var picks = dir > 0 ? rec.unblocks : rec.deps;
+    if (picks && picks.length) PP.focusNode(picks[0]);
+  }
+
+  function clearAll() {
+    if (body.getAttribute("data-search") === "1") body.removeAttribute("data-search");
+    if (ui.get("sidebar").open && drawer()) ui.set("sidebar", { open: false, tab: ui.get("sidebar").tab });
+    PP.selectNode(null);
+    var s = $("search");
+    if (s && s.value) { s.value = ""; ui.set("query", ""); }
+  }
+
+  function onKey(e) {
+    if (e.key === "Escape") {
+      if (typing(e)) e.target.blur();
+      if (is("inbox") || is("menu")) closeOverlay(); else clearAll();  // Esc = #sb-close
+      return;
+    }
+    if (typing(e) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); focusSearch(); }
+    else if (e.key === "e") toggleExpand();
+    else if (e.key === "c") collapsePhase();
+    else if (e.key === "F" || e.key === "f") { if (PP.state.selected) PP.focusNode(PP.state.selected); }
+    else if (e.key === "N" || e.key === "n") nextReady();
+    else if (e.key === "ArrowRight") moveSelection(1);
+    else if (e.key === "ArrowLeft") moveSelection(-1);
+  }
+
+  function focusSearch() {
+    var s = $("search");
+    if (!s) return;
+    var wrap = s.closest ? s.closest(".searchwrap") : null;
+    if (wrap && window.getComputedStyle(wrap).display === "none") body.setAttribute("data-search", "1");
+    s.focus();
+    s.select();
+  }
+
+  /* ---- a11y (T2c): #sb-close, Esc and app.jump all share closeOverlay();
+   * focus then moves to the details-sheet heading when an item is selected,
+   * else to the visible Graph tab (#tab-graph desktop / #tabbar phone). */
+  function focusAfter() {
+    var sheet = $("details");
+    var head = PP.state.selected && sheet && !sheet.hidden && sheet.querySelector
+      ? sheet.querySelector("h2") : null;
+    var top = $("tab-graph");
+    var bar = document.querySelector('#tabbar .tab-btn[data-screen="graph"]');
+    var shown = function (el) { try { return !!(el && el.getClientRects().length); } catch (err) { return false; } };
+    var target = head || (shown(top) ? top : (shown(bar) ? bar : (bar || top)));
+    try { if (!target) return; if (head) target.setAttribute("tabindex", "-1"); target.focus(); }
+    catch (err) { /* focus is best-effort, it never breaks the close */ }
+  }
+
+  function closeOverlay() {              // one exit path: #sb-close, Esc, Jump
+    ui.set("view", "graph"); setScreen("graph"); focusAfter();
+  }
+
+  /* ---- controls ----------------------------------------------------------- */
+  function debounced(fn, ms) {
+    var t = null;
+    return function () {
+      clearTimeout(t);
+      t = setTimeout(fn, ms);
+    };
+  }
+
+  function bindControls() {
+    var s = $("search");
+    if (s) {
+      s.value = ui.get("query");
+      s.addEventListener("input", debounced(function () {
+        if (s.value !== ui.get("query")) ui.set("query", s.value);
+      }, 150));                                // §7 SearchBox debounce
+    }
+    var st = $("search-toggle");
+    if (st) st.addEventListener("click", function () {
+      var on = body.getAttribute("data-search") === "1";
+      if (on) body.removeAttribute("data-search");
+      else { body.setAttribute("data-search", "1"); focusSearch(); }
+      st.setAttribute("aria-expanded", on ? "false" : "true");
+    });
+    var scrim = $("sb-scrim");
+    if (scrim) scrim.hidden = !(sb.open && drawer());
+  }
+
+  function setScreen(name) {
+    body.setAttribute("data-screen", name);
+    var want = is("inbox") || is("menu") ? "" : (ui.get("view") === "table" ? "table" : "graph");
+    Array.prototype.forEach.call(document.querySelectorAll("#tabbar .tab-btn"), function (b) {
+      var on = b.getAttribute("data-screen") === body.getAttribute("data-screen");
+      if (on) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
+    return want;
+  }
+
+  var ui = null;                            // bound in boot()
+
+  function syncView() {
+    var view = ui.get("view") === "table" ? "table" : "graph";
+    var cur = body.getAttribute("data-screen");
+    if (cur !== "inbox" && cur !== "menu") setScreen(view);
+    var g = $("tab-graph"), l = $("tab-list");
+    if (g && l) {
+      g.classList.toggle("active", view !== "table");
+      l.classList.toggle("active", view === "table");
+    }
+  }
+
+  /* cy must be resized whenever a column docks/undocks or the rail collapses. */
+  var lastW = -1;
+  function resizeGraph() {
+    var run = function () {
+      var st = PP.state;
+      if (!st.cy) return;
+      var c = $("cy");
+      st.cy.resize();
+      var w = c ? c.clientWidth : 0;
+      if (w !== lastW) {
+        lastW = w;
+        if (PlanUI.GraphView && typeof PlanUI.GraphView.refreshInitialViewport === "function") PlanUI.GraphView.refreshInitialViewport();
+      }
+    };
+    if (global.requestAnimationFrame) global.requestAnimationFrame(run);
+    else setTimeout(run, 40);
+  }
+
+  function writeHash() {
+    var h = hashEncode(ui.get());
+    var pg = PlanUI.Pages && PlanUI.Pages.current();
+    if (pg && pg !== "graph" && pg !== "table") h += (h ? "&" : "#") + "pg=" + pg;
     try {
       if (global.history && global.history.replaceState) {
         global.history.replaceState(null, "", h || (location.pathname + location.search));
@@ -306,17 +480,9 @@
     Array.prototype.forEach.call(document.querySelectorAll("#tabbar .tab-btn"), function (b) {
       b.addEventListener("click", function () {
         var target = b.getAttribute("data-screen");
-        if (target === "graph" || target === "table") {
-          ui.set("view", target === "table" ? "table" : "graph");
-          ui.set("sidebar", { open: ui.get("sidebar").open, tab: ui.get("sidebar").tab });
-          setScreen(target);
-        } else if (target === "inbox") {
-          ui.set("sidebar", { open: true, tab: "needs" });
-          setScreen("inbox");
-        } else {                                  // Menu → settings (§10)
-          ui.set("sidebar", { open: true, tab: "settings" });
-          setScreen("menu");
-        }
+        if (target === "menu") { setScreen("menu"); return; }
+        if (PlanUI.Pages) PlanUI.Pages.show(target);
+        setScreen(target);
       });
     });
     document.addEventListener("keydown", onKey);
@@ -342,13 +508,14 @@
     ui.patch(patch);
 
     PlanUI.app = { ui: ui, store: ui, vm: vm, jump: function (k) {
-      ui.set("view", "graph"); PP.focusNode(k); setScreen("graph"); focusAfter();
+      ui.set("view", "graph"); if (PlanUI.Pages) PlanUI.Pages.show("graph"); PP.focusNode(k); setScreen("graph"); focusAfter();
     } };
     applySettings(ui.get("settings"));
     syncSB(ui);
     syncView();
 
     PlanUI.Sidebar.mount(ui, vm);      // counts + panels (reads vm/ui only)
+    if (PlanUI.Pages) PlanUI.Pages.mount(ui);
     PlanUI.DetailPanel.mount(ui, vm);  // docked panel, follows ui.sel
 
     /* A12: shell paint = chrome + sidebar counts built, still pre-lib. */
@@ -387,6 +554,13 @@
     PP.initData();                     // idempotent when boot() already parsed
     if (ui.get("view") === "table") PP.setTab("list");
     else PP.setTab("graph");
+    if (PlanUI.Pages) {
+      var m = /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);
+      PlanUI.Pages.onChange = writeHash;
+      var first = m ? m[1] : (ui.get("view") === "table" ? "table" : "graph");
+      PlanUI.Pages.show(first);
+      if (m) setScreen(first);
+    }
     if (PP.state.selected) PP.selectNode(PP.state.selected);
     var c = $("cy");
     lastW = c ? c.clientWidth : 0;

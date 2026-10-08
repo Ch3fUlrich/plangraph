@@ -259,29 +259,15 @@ body { display: flex; flex-direction: column; }
 #sb-scrim { position: fixed; inset: 0; z-index: 34; background: rgba(0, 0, 0, .45); }
 #tabbar { display: none; }
 
-/* ---- ≥ 1200 px: docked sidebar, collapsible to a 56 px icon rail -------- */
-@media (min-width: 1200px) {
-  body[data-sbopen="0"] #sidebar { flex-basis: var(--rail-w); width: var(--rail-w); }
-  body[data-sbopen="0"] .sb-label,
-  body[data-sbopen="0"] .sb-panel { display: none; }
-  body[data-sbopen="0"] .sb-tab { justify-content: center; gap: 4px; padding: 8px 4px; }
-  body[data-sbopen="0"] .sb-body { display: none; }
-  body[data-sbopen="0"] .sb-count {
-    position: absolute; margin-left: 26px; margin-top: -18px;
-    min-width: 18px; font-size: 10px; padding: 0 4px;
-  }
+/* ---- sidebar: always docked ≥ 701 px, user-resizable via #sb-resize ------ */
+.sb-resize {
+  flex: 0 0 6px; margin-left: -3px; z-index: 5; cursor: col-resize; touch-action: none;
+  background: transparent; border-left: 1px solid var(--border);
 }
-
-/* ---- 701–1199 px: overlay drawer --------------------------------------- */
-@media (min-width: 701px) and (max-width: 1199px) {
-  #sidebar {
-    position: fixed; top: 0; bottom: 0; left: 0; z-index: 36;
-    transform: translateX(-102%);
-    transition: transform .18s ease-out;
-    box-shadow: 6px 0 24px rgba(0, 0, 0, .18);
-  }
-  body[data-sbopen="1"] #sidebar { transform: none; }
-}
+.sb-resize:hover, .sb-resize:focus-visible, body.sb-resizing .sb-resize { background: var(--accent); border-left-color: var(--accent); outline: none; }
+body.sb-resizing { cursor: col-resize; user-select: none; }
+.pg { padding: 12px 16px 28px; overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+.pg[hidden] { display: none; }
 
 /* ---- ≤ 700 px phone shell (§10, P1–P5) --------------------------------- */
 @media (max-width: 700px) {
@@ -299,6 +285,7 @@ body { display: flex; flex-direction: column; }
   .top-title h1 { font-size: 15px; }
   .progress { display: none; }
   .tabs { display: none; }              /* the bottom tab bar replaces them */
+  .sb-resize { display: none; }
   .chip { min-height: 44px; display: inline-flex; align-items: center; padding: 6px 14px; }
   #cy { height: 64vh; }
 
@@ -331,7 +318,6 @@ body { display: flex; flex-direction: column; }
      takeover. Keeps D5b (own >= 44 px close control) and D5d (only .sb-body
      scrolls; page locked). */
   #sidebar { display: none; }
-  body[data-screen="inbox"] #sidebar,
   body[data-screen="menu"] #sidebar {
     display: flex; position: fixed;
     top: 0; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom)); left: 0;
@@ -341,7 +327,6 @@ body { display: flex; flex-direction: column; }
     box-shadow: 6px 0 24px rgba(0, 0, 0, .4);
   }
   /* D5b: the overlay gets its own ≥ 44 px close control, back to Graph */
-  body[data-screen="inbox"] #sb-close,
   body[data-screen="menu"] #sb-close {
     display: flex; align-items: center; justify-content: center;
     flex: 0 0 auto; align-self: flex-end;
@@ -352,9 +337,7 @@ body { display: flex; flex-direction: column; }
   }
   /* D5d: the overlay owns the ONLY scrollbar: window page, body and the
      sheet are locked while it is open — only .sb-body scrolls. */
-  body[data-screen="inbox"],
   body[data-screen="menu"] { overflow: hidden; }
-  body[data-screen="inbox"] #details,
   body[data-screen="menu"] #details { display: none; }
   #sb-scrim { display: none; }
 

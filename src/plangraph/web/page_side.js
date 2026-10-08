@@ -285,6 +285,7 @@
 
   /* ---- Decisions & Q&A ---------------------------------------------------- */
   function renderQA() {
+    if (global.PlanUI.QAPage && global.PlanUI.Preview) { global.PlanUI.QAPage.render(VM); return; }
     var box = $("sb-panel-qa");
     if (!box) return;
     clear(box);
@@ -340,6 +341,7 @@
 
   /* ---- Answers ------------------------------------------------------------ */
   function renderAnswers() {
+    if (global.PlanUI.QAPage && global.PlanUI.Preview) return;      // answers live in the Q&A page
     var box = $("sb-panel-answers");
     if (!box) return;
     clear(box);
@@ -439,16 +441,7 @@
     Object.keys(checks).forEach(function (k) { checks[k].checked = !!s[k]; });
   }
 
-  function setAttributes() {
-    var sb = UI.get("sidebar");
-    Array.prototype.forEach.call(document.querySelectorAll(".sb-tab"), function (t) {
-      var on = t.getAttribute("data-tab") === sb.tab;
-      t.setAttribute("aria-selected", String(on));
-    });
-    Array.prototype.forEach.call(document.querySelectorAll(".sb-panel"), function (p) {
-      p.hidden = p.getAttribute("data-panel") !== sb.tab;
-    });
-  }
+  function setAttributes() { /* the sidebar is the project tree only; pages live in the header */ }
 
   function renderCounts() {
     function set(id, n) {
@@ -497,14 +490,6 @@
     UI = ui;
     VM = vm;
     renderAll();
-    Array.prototype.forEach.call(document.querySelectorAll(".sb-tab"), function (t) {
-      t.addEventListener("click", function () {
-        var tab = t.getAttribute("data-tab");
-        UI.set("sidebar", { open: true, tab: tab });
-        renderPanel(tab);
-        setAttributes();
-      });
-    });
     UI.subscribe(function (keys) {
       if (keys.indexOf("query") >= 0) renderAll();
       if (keys.indexOf("settings") >= 0) syncSettings();

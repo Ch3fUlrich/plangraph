@@ -151,6 +151,8 @@
     off[name] = !off[name];
     pushFilters();
     if (global.PlanUI.Sidebar && global.PlanUI.Sidebar.renderProjects) global.PlanUI.Sidebar.renderProjects();
+    if (global.PlanUI.QAPage) global.PlanUI.QAPage.render();
+    if (global.PlanPage.renderTable) global.PlanPage.renderTable();
     return !off[name];
   }
 

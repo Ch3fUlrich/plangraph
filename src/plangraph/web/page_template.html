@@ -12,7 +12,6 @@
 </head>
 <body data-screen="graph" data-sbopen="1" data-textsize="M" data-theme="light">
 <header class="top" role="banner">
-  <button id="sb-toggle" class="icon-btn desktop-only" type="button" aria-controls="sidebar" aria-expanded="true" aria-label="Toggle sidebar">&#9776;</button>
   <button id="search-toggle" class="icon-btn phone-only" type="button" aria-label="Show search" aria-expanded="false">Search</button>
   <div class="top-title">
     <h1>@@PAGE_TITLE@@</h1>
@@ -21,9 +20,12 @@
   <div class="searchwrap">
     <input id="search" type="search" placeholder="Search — press /" aria-label="Search items" autocomplete="off" spellcheck="false">
   </div>
-  <nav class="tabs" role="tablist" aria-label="Views">
-    <button id="tab-graph" type="button" role="tab" aria-selected="true" aria-controls="panel-graph">Graph</button>
-    <button id="tab-list" type="button" role="tab" aria-selected="false" aria-controls="panel-list">Table</button>
+  <nav class="tabs" role="tablist" aria-label="Pages">
+    <button id="tab-graph" data-page="graph" type="button" role="tab" aria-selected="true" aria-controls="panel-graph">Graph</button>
+    <button id="tab-list" data-page="table" type="button" role="tab" aria-selected="false" aria-controls="panel-list">Table</button>
+    <button id="tab-qa" data-page="qa" type="button" role="tab" aria-selected="false" aria-controls="panel-qa"><span class="sb-label">Decisions &amp; Q&amp;A</span><span class="sb-count" id="sb-count-qa" hidden>0</span></button>
+    <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
+    <button id="tab-settings" data-page="settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" aria-label="Settings" title="Settings">&#9881;</button>
   </nav>
   <div class="progress" id="progress">
     <div class="bar" role="img" aria-label="percent done"><span id="progress-bar"></span></div>
@@ -35,34 +37,14 @@
 <div class="layout">
   <aside id="sidebar" aria-label="Sidebar">
     <button id="sb-close" class="sb-close" type="button" aria-label="Back to graph">&#10005;</button>
-    <div class="sb-tabs" role="tablist" aria-label="Sidebar sections">
-      <button class="sb-tab" type="button" role="tab" data-tab="projects" aria-selected="false" aria-controls="sb-panel-projects" title="Projects">
-        <span class="sb-ico" aria-hidden="true">&#9776;</span><span class="sb-label">Projects</span>
-      </button>
-      <button class="sb-tab" type="button" role="tab" data-tab="needs" aria-selected="true" aria-controls="sb-panel-needs" title="Needs You">
-        <span class="sb-ico" aria-hidden="true">!</span><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span>
-      </button>
-      <button class="sb-tab" type="button" role="tab" data-tab="qa" aria-selected="false" aria-controls="sb-panel-qa" title="Decisions &amp; Q&amp;A">
-        <span class="sb-ico" aria-hidden="true">Q</span><span class="sb-label">Decisions &amp; Q&amp;A</span><span class="sb-count" id="sb-count-qa" hidden>0</span>
-      </button>
-      <button class="sb-tab" type="button" role="tab" data-tab="answers" aria-selected="false" aria-controls="sb-panel-answers" title="Answers">
-        <span class="sb-ico" aria-hidden="true">&#10003;</span><span class="sb-label">Answers</span><span class="sb-count" id="sb-count-answers" hidden>0</span>
-      </button>
-      <button class="sb-tab" type="button" role="tab" data-tab="settings" aria-selected="false" aria-controls="sb-panel-settings" title="Settings">
-        <span class="sb-ico" aria-hidden="true">&#9881;</span><span class="sb-label">Settings</span>
-      </button>
-    </div>
     <div class="sb-body">
-      <section id="sb-panel-projects" class="sb-panel" data-panel="projects" role="tabpanel" aria-label="Projects" hidden>
+      <section id="sb-panel-projects" class="sb-panel" data-panel="projects" aria-label="Projects">
         <label class="toggle"><input type="checkbox" id="collapse-done" checked> Collapse done per track</label>
         <div id="project-tree" class="ptree" role="tree" aria-label="Projects, phases and tasks"></div>
       </section>
-      <section id="sb-panel-needs" class="sb-panel" data-panel="needs" role="tabpanel" aria-label="Needs You"></section>
-      <section id="sb-panel-qa" class="sb-panel" data-panel="qa" role="tabpanel" aria-label="Decisions and Q&amp;A" hidden></section>
-      <section id="sb-panel-answers" class="sb-panel" data-panel="answers" role="tabpanel" aria-label="Answers" hidden></section>
-      <section id="sb-panel-settings" class="sb-panel" data-panel="settings" role="tabpanel" aria-label="Settings" hidden></section>
     </div>
   </aside>
+  <div id="sb-resize" class="sb-resize" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
 
   <main>
     <section id="panel-graph" class="tabpanel" role="tabpanel" aria-labelledby="tab-graph">
@@ -74,8 +56,18 @@
     </section>
 
     <section id="panel-list" class="tabpanel" role="tabpanel" aria-labelledby="tab-list" hidden>
-      <p class="t4-note">Table view arrives in T4 — sortable columns, batch priority and export land with it. The legacy list stays below.</p>
       <div id="list-content"></div>
+    </section>
+
+    <section id="panel-qa" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-qa" hidden>
+      <div id="sb-panel-qa" class="pg-body"></div>
+      <div id="sb-panel-answers" class="pg-body"></div>
+    </section>
+    <section id="panel-needs" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-needs" hidden>
+      <div id="sb-panel-needs" class="pg-body"></div>
+    </section>
+    <section id="panel-settings" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <div id="sb-panel-settings" class="pg-body"></div>
     </section>
   </main>
 
@@ -87,8 +79,9 @@
 <nav id="tabbar" aria-label="Main sections">
   <button type="button" class="tab-btn" data-screen="graph" aria-current="page">Graph</button>
   <button type="button" class="tab-btn" data-screen="table">Table</button>
-  <button type="button" class="tab-btn" data-screen="inbox">Inbox<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
-  <button type="button" class="tab-btn" data-screen="menu">Menu</button>
+  <button type="button" class="tab-btn" data-screen="qa">Q&amp;A</button>
+  <button type="button" class="tab-btn" data-screen="needs">Needs You<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
+  <button type="button" class="tab-btn" data-screen="menu">Filter</button>
 </nav>
 
 <script type="application/json" id="snapshot-data">@@SNAPSHOT_JSON@@</script>

@@ -330,7 +330,7 @@
 
   function rerender() {
     PP.renderGraph();
-    renderList();
+    if (PP.renderTable) PP.renderTable(); else renderList();
     PP.renderChips();
     PP.renderLegend();
     PP.renderHeader();
@@ -340,14 +340,10 @@
   function bind() {
     if (bind.done) return;
     bind.done = true;
-    PP.$("tab-graph").addEventListener("click", function () {
-      setTab("graph");
-      var U = UI(); if (U) U.set("view", "graph");       // store ↔ legacy tab stay in step
-    });
-    PP.$("tab-list").addEventListener("click", function () {
-      setTab("list");
-      var U = UI(); if (U) U.set("view", "table");
-    });
+    if (!global.PlanUI || !global.PlanUI.Pages) {      // legacy path without the page router
+      PP.$("tab-graph").addEventListener("click", function () { setTab("graph"); var U = UI(); if (U) U.set("view", "graph"); });
+      PP.$("tab-list").addEventListener("click", function () { setTab("list"); var U = UI(); if (U) U.set("view", "table"); });
+    }
     PP.$("collapse-done").addEventListener("change", function (e) {
       state.collapseDone = !!e.target.checked;
       rerender();

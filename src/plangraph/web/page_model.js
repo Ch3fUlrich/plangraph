@@ -138,6 +138,12 @@
     return Array.isArray(it.depends_on) ? it.depends_on : [];
   }
 
+  function earliestEvidence(it) {
+    var ev = Array.isArray(it.evidence) ? it.evidence : [], best = "";
+    ev.forEach(function (e) { if (e && e.at && (!best || e.at < best)) best = e.at; });
+    return best;
+  }
+
   /* planning | implementation | review. An explicit item `role` wins; otherwise
    * gates are reviews, goals are planning, then the title decides, else implementation. */
   function roleOf(it) {
@@ -219,6 +225,8 @@
       var record = {
         key: it.key, id: it.id, project: it.project, title: it.title,
         role: roleOf(it),
+        claimedBy: it.claimed_by || null, workerRun: it.worker_run || null,
+        createdAt: it.created_at || earliestEvidence(it) || "",
         phase: it.phase || it.track || "", phaseIdx: phaseIdxOf[it.key] || 0,
         kind: it.kind, state: it.state, display: display[it.key],
         owner: it.owner, operator: !!it.operator, priority: num(it.priority),

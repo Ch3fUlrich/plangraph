@@ -6,10 +6,17 @@ HTML page that shows the plan to a human.
 
 ![plangraph page: Projects tree in the sidebar, project/phase graph on the right](docs/screenshot-plan-graph.png)
 
-*The rendered page for the synthetic demo snapshot (4 projects × 5 tracks, 254 items). The
-sidebar Projects tab is a project, phase and task tree in project colours, with planning, implementation and review shown by different symbols and a switch on each project and phase that filters the graph.
-Drag to pan, scroll to zoom, click a card for details, click a project/phase header to
-collapse it.*
+*The rendered page for the synthetic demo snapshot (4 projects x 5 tracks, 254 items). The
+sidebar is only the filter: a project > phase > task tree in project colours (planning, implementation
+and review have different symbols; a switch on each project/phase filters every page). The sidebar
+edge can be dragged to resize it. Pages sit in the header: Graph, Table, Decisions & Q&A, Needs You, Settings.*
+
+![plangraph table page: tasks grouped by state, each group with its own progress bar](docs/screenshot-table.png)
+
+*Table page: dense tables grouped by any column (project, phase, task type, state, agent, dates, links),
+one table and one progress bar per group; hover a decision/question chip for a preview. The Decisions &
+Q&A page connects each decision/question to task, phase and project and lets you answer in the page
+(answers are kept locally and exported as JSON for the keeper).*
 
 ## What is in the repo
 
