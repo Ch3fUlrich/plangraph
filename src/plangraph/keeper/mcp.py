@@ -12,6 +12,7 @@ Tool failures (a refused verb or an unreachable API) are MCP results with
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sys
@@ -269,9 +270,36 @@ def serve(instream, outstream, client=None):
             outstream.flush()
 
 
+
+
+def _is_loopback(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def cleartext_warning(base_url):
+    """A warning when *base_url* would send the bearer token unencrypted.
+
+    Plain ``http`` is fine on loopback (the keeper itself, the ssh relay);
+    anywhere else the token must travel inside TLS (PG-PROXY-ACCESS).
+    """
+    parts = urllib.parse.urlsplit(base_url or "")
+    if parts.scheme != "http" or _is_loopback(parts.hostname or ""):
+        return None
+    return (f"warning: PG_URL {parts.scheme}://{parts.hostname} sends the bearer"
+            " token in clear text; use https (keeper proxy) or loopback")
+
+
 def _default_client():
-    return HttpKeeper(os.environ.get("PG_URL", ""),
-                      os.environ.get("PG_TOKEN_FILE", ""))
+    url = os.environ.get("PG_URL", "")
+    warning = cleartext_warning(url)
+    if warning:
+        sys.stderr.write(warning + "\n")
+    return HttpKeeper(url, os.environ.get("PG_TOKEN_FILE", ""))
 
 
 def main(argv=None):
