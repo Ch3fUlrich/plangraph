@@ -15,6 +15,7 @@ def test_wait_tip_is_wired_to_hover():
     assert 'cy.on("mouseover", "node"' in src
     assert 'data("waitTip")' in src
     assert 'cy.on("mouseout", "node"' in src
+    assert '"mouseleave"' in src  # leaving the canvas from a node clears it too
 
 
 def test_wait_tip_text_is_built_for_dependents():

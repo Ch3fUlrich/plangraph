@@ -15,6 +15,7 @@
     /* D-677: a dependent of an operator-waiting item shows its waitTip as the native tooltip. */
     cy.on("mouseover", "node", function (e) { var c = cy.container(); if (c) c.title = e.target.data("waitTip") || ""; });
     cy.on("mouseout", "node", function () { var c = cy.container(); if (c) c.title = ""; });
+    var cc = cy.container(); if (cc && cc.addEventListener) cc.addEventListener("mouseleave", function () { cc.title = ""; });
     cy.on("vmousedown", function (e) {
       var p = cy.pan();
       pd = { x: e.renderedPosition.x, y: e.renderedPosition.y, pan: { x: p.x, y: p.y }, moved: false, manual: e.target !== cy };
