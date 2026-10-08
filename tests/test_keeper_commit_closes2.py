@@ -265,7 +265,7 @@ def test_closes_with_commits_variations(tmp_path: Path):
 
 
 def test_close_with_conflicting_tokens_refused(tmp_path: Path, git_repo):
-    """(g) a close with conflicting tokens is refused."""
+    """(g) same-row conflicts refuse; cross-row follows the SUPERSEDE RULE (later D wins)."""
     # g1: Single decision with conflicting shas -> key invalid/absent -> close refused
     cell_single = "Closes: demo:A@1111111, demo:A@2222222"
     w1 = _world(tmp_path / "g1", git_repo, cell=cell_single)
@@ -277,7 +277,8 @@ def test_close_with_conflicting_tokens_refused(tmp_path: Path, git_repo):
     assert exc1.value.code == "evidence_unverified"
     w1.close()
 
-    # g2: Multiple decision rows attached with conflicting tokens -> _closes_token_sha raises
+    # g2: Cross-row mismatch -> SUPERSEDE: D-102 wins, so the close is refused
+    # because the attached commit evidence (feature_sha) does not match 2222222.
     d_path = tmp_path / "g2" / "DECISIONS.md"
     d_path.parent.mkdir(parents=True, exist_ok=True)
     d_path.write_text(
@@ -297,8 +298,30 @@ def test_close_with_conflicting_tokens_refused(tmp_path: Path, git_repo):
     with pytest.raises(Refused) as exc2:
         w2.store.close_on_decision(w2.p("router"), KEY, w2.batch_ref)
     assert exc2.value.code == "evidence_unverified"
-    assert f"conflicting Closes tokens for {KEY}" in exc2.value.msg
+    assert f"Closes token {KEY}@2222222 does not match" in exc2.value.msg
+    assert git_repo.feature_sha in exc2.value.msg
     w2.close()
+
+    # g3: Cross-row supersede where the later row names the attached commit
+    # evidence -> the close SUCCEEDS with the later sha.
+    g3_path = tmp_path / "g3" / "DECISIONS.md"
+    g3_path.parent.mkdir(parents=True, exist_ok=True)
+    g3_path.write_text(
+        HEADER
+        + f"| D-101 | demo | Closes: {KEY}@1111111 | router | ok |\n"
+        + f"| D-102 | demo | Closes: {KEY}@{git_repo.feature_sha} | router | ok |\n",
+        encoding="utf-8",
+    )
+    g3_adapter = DecisionsAdapter(g3_path)
+    w3 = _world(tmp_path / "g3", git_repo, adapter=g3_adapter)
+    w3.store.set_legacy_state(w3.p("router"), KEY, "in_review")
+    w3.store.add_evidence_router(w3.p("router"), KEY, "decision", {"id": "D-101"})
+    w3.store.add_evidence_router(w3.p("router"), KEY, "decision", {"id": "D-102"})
+    w3.store.add_evidence_router(w3.p("router"), KEY, "commit", {"sha": git_repo.feature_sha})
+    res3 = w3.store.close_on_decision(w3.p("router"), KEY, w3.batch_ref)
+    assert res3["state"] == "done"
+    assert res3["decision_ids"] == ["D-101", "D-102"]
+    w3.close()
 
 
 def test_missing_git_adapter_fail_closed(tmp_path: Path, git_repo):
@@ -335,6 +358,51 @@ def test_multiple_decision_rows_prefix_pair_closes(tmp_path: Path, git_repo):
     res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
     assert res["state"] == "done"
     assert res["decision_ids"] == ["D-101", "D-102"]
+    w.close()
+
+
+def test_supersede_three_rows_last_wins(tmp_path: Path, git_repo):
+    """SUPERSEDE: D-101@x, D-102@y, D-103@z -> z governs (later D wins)."""
+    d_path = tmp_path / "three" / "DECISIONS.md"
+    d_path.parent.mkdir(parents=True, exist_ok=True)
+    d_path.write_text(
+        HEADER
+        + f"| D-101 | demo | Closes: {KEY}@1111111 | router | ok |\n"
+        + f"| D-102 | demo | Closes: {KEY}@2222222 | router | ok |\n"
+        + f"| D-103 | demo | Closes: {KEY}@{git_repo.feature_sha} | router | ok |\n",
+        encoding="utf-8",
+    )
+    adapter = DecisionsAdapter(d_path)
+    w = _world(tmp_path / "three", git_repo, adapter=adapter)
+    w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": "D-101"})
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": "D-102"})
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": "D-103"})
+    w.store.add_evidence_router(w.p("router"), KEY, "commit", {"sha": git_repo.feature_sha})
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
+    assert res["decision_ids"] == ["D-101", "D-102", "D-103"]
+    w.close()
+
+
+def test_supersede_prefix_compatible_rows_close(tmp_path: Path, git_repo):
+    """Prefix-compatible rows keep today's behaviour (longer wins) under SUPERSEDE."""
+    d_path = tmp_path / "pfx2" / "DECISIONS.md"
+    d_path.parent.mkdir(parents=True, exist_ok=True)
+    d_path.write_text(
+        HEADER
+        + f"| D-101 | demo | Closes: {KEY}@{git_repo.feature_sha} | router | ok |\n"
+        + f"| D-102 | demo | Closes: {KEY}@{git_repo.feature_sha[:7]} | router | ok |\n",
+        encoding="utf-8",
+    )
+    adapter = DecisionsAdapter(d_path)
+    w = _world(tmp_path / "pfx2", git_repo, adapter=adapter)
+    w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": "D-101"})
+    w.store.add_evidence_router(w.p("router"), KEY, "decision", {"id": "D-102"})
+    w.store.add_evidence_router(w.p("router"), KEY, "commit", {"sha": git_repo.feature_sha})
+    res = w.store.close_on_decision(w.p("router"), KEY, w.batch_ref)
+    assert res["state"] == "done"
     w.close()
 
 

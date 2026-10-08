@@ -98,9 +98,20 @@ def sanitize_segment(segment):
 
 
 def collect(text, view, since=1):
-    """Aggregate the router D-rows into per-key intent: (dinfo, invalid_rows)."""
+    """Aggregate the router D-rows into per-key intent: (dinfo, invalid_rows).
+
+    SUPERSEDE RULE (router-approved): rows are processed in D-number order;
+    when several rows name the same key with different, non-prefix-compatible
+    shas, the row with the highest D-number supersedes the earlier ones: only
+    its sha counts (superseded D-ids are recorded in info["superseded"]).
+    A conflict inside one row stays invalid exactly as today: the keeper's
+    closes_with_commits drops such a key (absent/invalid), so it never reaches
+    the per-key merge and the row lands in invalid_rows. Prefix-compatible
+    shas keep today's behaviour (keep the longer).
+    """
     dinfo, invalid_rows = {}, []
-    for num, by, cell in router_drows(text, since):
+    ordered = sorted(router_drows(text, since), key=lambda entry: entry[0])
+    for num, by, cell in ordered:
         d_id = f"D-{num}"
         closes = view.closes_with_commits(d_id)
         if view.has_closes_keyword(d_id) and not closes:
@@ -108,8 +119,11 @@ def collect(text, view, since=1):
         segment = sanitize_segment(models_segment(cell))
         for key, sha in closes.items():
             info = dinfo.setdefault(key, {"dnums": set(), "router_max": num,
-                                          "sha": None, "conflict": False,
-                                          "conflict_d": None, "models": []})
+                                          "sha": None, "sha_dnum": None,
+                                          "conflict": False,
+                                          "conflict_d": None,
+                                          "superseded": [], "models": []})
+            info.setdefault("superseded", [])
             info["dnums"].add(num)
             if num > info["router_max"]:
                 info["router_max"] = num
@@ -117,14 +131,27 @@ def collect(text, view, since=1):
                 current = info["sha"]
                 if current is None:
                     info["sha"] = sha
+                    info["sha_dnum"] = num
                 elif current.lower().startswith(sha.lower()):
                     pass  # keep the longer (earlier) prefix-compatible sha
                 elif sha.lower().startswith(current.lower()):
                     info["sha"] = sha
-                else:
+                    info["sha_dnum"] = num
+                elif num == info.get("sha_dnum"):
+                    # Same D-number with a different non-compatible sha:
+                    # same-row conflict, stays invalid as today.
                     info["conflict"] = True
                     if info["conflict_d"] is None or num > info["conflict_d"]:
                         info["conflict_d"] = num
+                else:
+                    # Cross-row mismatch: later (higher D-number) row wins.
+                    prev = info.get("sha_dnum")
+                    if prev is not None:
+                        prev_id = f"D-{prev}"
+                        if prev_id not in info["superseded"]:
+                            info["superseded"].append(prev_id)
+                    info["sha"] = sha
+                    info["sha_dnum"] = num
             if segment and (num, segment) not in info["models"]:
                 info["models"].append((num, segment))
     return dinfo, invalid_rows
@@ -257,7 +284,12 @@ def _plan_key(plan, key, item, info, gates):
     if state in ("done", "cancelled"):
         return
     if info.get("conflict"):
-        plan.invalid_tokens.append(f"D-{info['conflict_d']}")
+        conflict_d = f"D-{info['conflict_d']}"
+        plan.invalid_tokens.append(conflict_d)
+        # The skipped key must not vanish: surface it as a warning too.
+        plan.warnings.append({"key": key, "decision": conflict_d,
+                              "text": (f"conflicting Closes shas for {key} "
+                                       f"in {conflict_d}; skipped")})
         return
     new_note = _models_note(plan, key, item, info) if state == "open" else None
     kinds = item.get("evidence_kinds") or []

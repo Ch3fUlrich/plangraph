@@ -168,7 +168,16 @@ class CloseMixin:
         return rows, named
 
     def _closes_token_sha(self, key, rows, item=None, now=None):
-        """The commit sha from this key's Closes token in the decision rows, or None."""
+        """The commit sha from this key's Closes token in the decision rows, or None.
+
+        SUPERSEDE RULE (router-approved): attached decision rows are processed
+        in D-number order; when rows name the same key with different,
+        non-prefix-compatible shas, the highest D-number wins (its sha replaces
+        earlier ones, never raising for cross-row differences).
+        A conflict inside one row stays invalid exactly as today: the
+        DecisionsAdapter.closes_with_commits drops such a key, so it never
+        reaches the merge. Prefix-compatible shas keep today's behaviour.
+        """
         if item is None:
             item = self._item(key)
         if item is None:
@@ -178,8 +187,22 @@ class CloseMixin:
         decisions = self._decisions_adapter(item, now)
         if not hasattr(decisions, "closes_with_commits"):
             return None
+
+        def _dnum(row):
+            try:
+                did = (row.get("ref") or {}).get("id")
+            except Exception:  # noqa: BLE001 - malformed row sorts first
+                return 0
+            if isinstance(did, str):
+                text = did.strip().upper()
+                if text.startswith("D-"):
+                    tail = text[2:]
+                    if tail.isdigit():
+                        return int(tail)
+            return 0
+
         resolved_sha = None
-        for row in rows:
+        for row in sorted(rows, key=_dnum):
             decision_id = (row.get("ref") or {}).get("id")
             if not decision_id:
                 continue
@@ -199,8 +222,8 @@ class CloseMixin:
                         elif s_l.startswith(r_l):
                             resolved_sha = sha
                         else:
-                            raise Refused("evidence_unverified",
-                                          f"conflicting Closes tokens for {key}")
+                            # Cross-row mismatch: later (higher D-number) wins.
+                            resolved_sha = sha
         return resolved_sha
 
     def _check_commit_evidence(self, key, item, now, tok=None):

@@ -320,12 +320,19 @@ def test_malformed_closes_keyword_reports_invalid(repo, tmp_path):
 
 
 def test_conflicting_shas_across_rows_are_not_planned(repo, tmp_path):
+    """Later D-row wins on cross-row sha mismatch (SUPERSEDE RULE): D-514's sha governs."""
     text, view = decs(tmp_path,
                       dec_row("D-513", "one", f"demo:CF@{repo.merged[:8]}"),
                       dec_row("D-514", "two", f"demo:CF@{repo.unmerged[:8]}"))
     p = build([item("CF", kinds=("commit",))], text, view, repo)
-    assert p.ops == [] and close_ops(p.ops) == []
-    assert "D-514" in p.invalid_tokens
+    # D-514 supersedes D-513, so the unmerged sha plans in_review, not a close.
+    assert close_ops(p.ops) == []
+    assert [o["op"] for o in p.ops] == ["legacy_state"]
+    assert p.d_in_review == [{"key": "demo:CF", "decision": "D-514",
+                              "sha": repo.unmerged[:8], "reason": "not on main"}]
+    assert p.d_lines == [f"in_review demo:CF: D-514 @{repo.unmerged[:8]} not on main"]
+    assert "D-514" not in p.invalid_tokens
+    assert "D-513" not in p.invalid_tokens
 
 
 def test_prefix_compatible_shas_use_the_last_rows_sha(repo, tmp_path):
@@ -336,5 +343,68 @@ def test_prefix_compatible_shas_use_the_last_rows_sha(repo, tmp_path):
     assert commit_ref(p.ops)["ref"]["sha"] == repo.merged
     assert p.d_closes == [{"key": "demo:PF", "decision": "D-514"}]
     assert sorted(decision_refs(p.ops)) == ["D-513", "D-514"]
+
+
+def test_supersede_three_rows_last_wins(repo, tmp_path):
+    """SUPERSEDE: D-1@x, D-2@y, D-3@z -> z governs (collect + plan)."""
+    text, view = decs(tmp_path,
+                      dec_row("D-513", "one", "demo:THREE@1111111"),
+                      dec_row("D-514", "two", "demo:THREE@2222222"),
+                      dec_row("D-515", "three", "demo:THREE@3333333"))
+    dinfo, invalid = dclose.collect(text, view)
+    dclose.finalize(dinfo)
+    assert dinfo["demo:THREE"]["sha"] == "3333333"
+    assert dinfo["demo:THREE"]["superseded"] == ["D-513", "D-514"]
+    assert dinfo["demo:THREE"]["conflict"] is False
+    assert invalid == []
+    p = build([item("THREE", kinds=("commit",))], text, view, repo)
+    # 3333333 is not a real commit -> fail closed to in_review with the winner.
+    assert p.d_in_review == [{"key": "demo:THREE", "decision": "D-515",
+                              "sha": "3333333", "reason": "not on main"}]
+    assert close_ops(p.ops) == []
+    assert p.invalid_tokens == []
+
+
+def test_supersede_prefix_compatible_keeps_longer(repo, tmp_path):
+    """Prefix-compatible rows keep today's behaviour (longer wins, no conflict)."""
+    text, view = decs(tmp_path,
+                      dec_row("D-513", "one", f"demo:PX@{repo.merged[:7]}"),
+                      dec_row("D-514", "two", f"demo:PX@{repo.merged[:12]}"))
+    dinfo, invalid = dclose.collect(text, view)
+    dclose.finalize(dinfo)
+    assert dinfo["demo:PX"]["sha"] == repo.merged[:12]
+    assert dinfo["demo:PX"]["conflict"] is False
+    assert invalid == []
+    # Reverse D-order still keeps the longer sha.
+    text2, view2 = decs(tmp_path,
+                        dec_row("D-513", "one", f"demo:PY@{repo.merged[:12]}"),
+                        dec_row("D-514", "two", f"demo:PY@{repo.merged[:7]}"))
+    dinfo2, _ = dclose.collect(text2, view2)
+    assert dinfo2["demo:PY"]["sha"] == repo.merged[:12]
+    assert dinfo2["demo:PY"]["conflict"] is False
+
+
+def test_same_row_conflict_skipped_with_warning(repo, tmp_path):
+    """A same-row conflict stays invalid and is now visible as a warning (not silent)."""
+    # Single row naming the same key with two incompatible shas: the keeper
+    # parser drops the key, so the row is invalid.
+    text, view = decs(tmp_path,
+                      dec_row("D-513", "bad", "demo:SC@1111111, demo:SC@2222222"))
+    dinfo, invalid = dclose.collect(text, view)
+    assert invalid == ["D-513"]
+    assert "demo:SC" not in dinfo
+    # The same-row skip through _plan_key surfaces key+decision+reason.
+    conflict_info = {"dnums": {513}, "router_max": 513, "sha": "1111111",
+                     "sha_dnum": 513, "conflict": True, "conflict_d": 513,
+                     "superseded": [], "models": [], "d_ids": ["D-513"],
+                     "max_dnum": 513}
+    p = plan.Plan()
+    dclose.plan(p, {"demo:SC": conflict_info}, ["D-513"],
+                by_key={"demo:SC": item("SC", kinds=("commit",))},
+                pending_keys=set(), repos=repos(repo))
+    assert close_ops(p.ops) == []
+    assert "D-513" in p.invalid_tokens
+    assert any(w["key"] == "demo:SC" and w["decision"] == "D-513"
+               for w in p.warnings)
 
 
