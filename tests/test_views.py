@@ -126,10 +126,10 @@ def test_ready_only_open_items_with_all_deps_done():
 
 def test_ready_excludes_claimed_in_review_and_terminal():
     ready = set(keys(views.ready(load("mini_snapshot.json"))))
-    assert "autoos:A-4" not in ready   # claimed
-    assert "autoos:A-5" not in ready   # in_review
-    assert "autoos:A-1" not in ready   # done
-    assert "autoos:A-8" not in ready   # cancelled
+    assert "borealis:A-4" not in ready   # claimed
+    assert "borealis:A-5" not in ready   # in_review
+    assert "borealis:A-1" not in ready   # done
+    assert "borealis:A-8" not in ready   # cancelled
 
 
 def test_ready_sort_is_priority_then_unblocks_then_estimate_then_key():
@@ -144,9 +144,9 @@ def test_ready_sort_is_priority_then_unblocks_then_estimate_then_key():
 
 def test_ready_project_filter_keeps_cross_project_deps():
     cp = load("cross_project.json")
-    assert keys(views.ready(cp, project="routing")) == ["routing:R1"]
-    assert views.ready(cp, project="autoos") == []
-    assert keys(views.ready(load("mini_snapshot.json"), project="routing")) == ["routing:R-1"]
+    assert keys(views.ready(cp, project="atlas")) == ["atlas:R1"]
+    assert views.ready(cp, project="borealis") == []
+    assert keys(views.ready(load("mini_snapshot.json"), project="atlas")) == ["atlas:R-1"]
 
 
 # ---------------------------------------------------------------- blocked
@@ -161,9 +161,9 @@ def test_blocked_lists_unmet_dependencies():
 
 def test_blocked_cross_project_and_project_filter():
     cp = load("cross_project.json")
-    assert views.blocked(cp) == {"autoos:X": ["routing:R1"],
-                                 "autoos:GOAL": ["autoos:X"]}
-    assert views.blocked(cp, project="routing") == {}
+    assert views.blocked(cp) == {"borealis:X": ["atlas:R1"],
+                                 "borealis:GOAL": ["borealis:X"]}
+    assert views.blocked(cp, project="atlas") == {}
 
 
 def test_blocked_includes_claimed_items():
@@ -192,11 +192,11 @@ def test_waves_done_dependency_is_satisfied():
 
 def test_waves_mini_snapshot():
     assert views.waves(load("mini_snapshot.json")) == [
-        ["autoos:A-10", "autoos:A-3", "autoos:A-4", "routing:R-1"],
-        ["autoos:A-5", "autoos:A-6", "autoos:A-7"],
-        ["autoos:A-11"],
-        ["autoos:A-9"],
-        ["routing:GOAL"],
+        ["atlas:R-1", "borealis:A-10", "borealis:A-3", "borealis:A-4"],
+        ["borealis:A-5", "borealis:A-6", "borealis:A-7"],
+        ["borealis:A-11"],
+        ["borealis:A-9"],
+        ["atlas:GOAL"],
     ]
 
 
@@ -212,14 +212,14 @@ def test_critical_path_diamond():
 
 
 def test_critical_path_project_filter():
-    cp = views.critical_path(load("mini_snapshot.json"), project="routing")
-    assert cp == {"keys": ["routing:R-1", "routing:GOAL"], "hours": 2.0}
+    cp = views.critical_path(load("mini_snapshot.json"), project="atlas")
+    assert cp == {"keys": ["atlas:R-1", "atlas:GOAL"], "hours": 2.0}
 
 
 def test_critical_path_mini():
     cp = views.critical_path(load("mini_snapshot.json"))
-    assert cp["keys"] == ["autoos:A-3", "autoos:A-5", "autoos:A-11",
-                          "autoos:A-9", "routing:GOAL"]
+    assert cp["keys"] == ["borealis:A-3", "borealis:A-5", "borealis:A-11",
+                          "borealis:A-9", "atlas:GOAL"]
     assert cp["hours"] == 15.0
 
 
@@ -237,12 +237,12 @@ def test_slack_diamond():
 def test_slack_mini_zero_on_critical_path():
     items = load("mini_snapshot.json")
     slack = views.slack(items)
-    assert set(slack) == {"autoos:A-3", "autoos:A-4", "autoos:A-5", "autoos:A-6",
-                          "autoos:A-7", "autoos:A-9", "autoos:A-10", "autoos:A-11",
-                          "routing:R-1", "routing:GOAL"}
+    assert set(slack) == {"borealis:A-3", "borealis:A-4", "borealis:A-5", "borealis:A-6",
+                          "borealis:A-7", "borealis:A-9", "borealis:A-10", "borealis:A-11",
+                          "atlas:R-1", "atlas:GOAL"}
     for key in views.critical_path(items)["keys"]:
         assert slack[key] == 0.0
-    assert slack["autoos:A-4"] == 2.0
+    assert slack["borealis:A-4"] == 2.0
 
 
 def test_slack_empty():
@@ -261,7 +261,7 @@ def test_percent_done_excludes_cancelled_and_filters_project():
     items = load("mini_snapshot.json")
     assert views.percent_done(items, by="count") == pytest.approx(100 * 2 / 12)
     assert views.percent_done(items, by="estimate") == pytest.approx(100 * 2 / 30)
-    assert views.percent_done(items, by="count", project="routing") == 0.0
+    assert views.percent_done(items, by="count", project="atlas") == 0.0
 
 
 def test_percent_done_empty_is_zero():
@@ -288,10 +288,10 @@ def test_unblocks_ignores_terminal_dependents():
 
 def test_unblocks_mini():
     ub = views.unblocks(load("mini_snapshot.json"))
-    assert ub["autoos:A-1"] == 1
-    assert ub["autoos:A-2"] == 2
-    assert ub["routing:R-1"] == 2
-    assert ub["routing:GOAL"] == 0
+    assert ub["borealis:A-1"] == 1
+    assert ub["borealis:A-2"] == 2
+    assert ub["atlas:R-1"] == 2
+    assert ub["atlas:GOAL"] == 0
 
 
 # ---------------------------------------------------------------- brief
@@ -304,10 +304,10 @@ def test_brief_line_format():
 def test_brief_respects_n_and_project():
     items = load("mini_snapshot.json")
     assert views.brief(items, n=2) == (
-        "routing:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1\n"
-        "autoos:A-10 | Correct snapshot exporter | est 3h | unblocks 1 | prio 1")
-    assert views.brief(items, project="routing") == (
-        "routing:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1")
+        "atlas:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1\n"
+        "borealis:A-10 | Correct snapshot exporter | est 3h | unblocks 1 | prio 1")
+    assert views.brief(items, project="atlas") == (
+        "atlas:R-1 | Router owns plan definitions | est 2h | unblocks 2 | prio 1")
 
 
 def test_brief_empty_when_nothing_ready():

@@ -129,7 +129,7 @@ def test_cli_writes_file(tmp_path):
     assert out_path.exists()
     written = out_path.read_text(encoding="utf-8")
     assert written.lstrip().lower().startswith("<!doctype html")
-    assert "routing:IMP1" in written
+    assert "atlas:IMP1" in written
 
 
 # --------------------------------------------------------------------------- #
@@ -170,37 +170,37 @@ def test_page_logic_under_node(tmp_path):
 
     states = out["states"]
     # ready = open with all deps done
-    assert states["routing:IMP1"] == "ready"
-    assert states["autoos:WP2"] == "ready"
+    assert states["atlas:IMP1"] == "ready"
+    assert states["borealis:WP2"] == "ready"
     # blocked = open/claimed with an unmet dependency
-    assert states["routing:IMP2"] == "blocked"
-    assert states["routing:IMP3"] == "blocked"
-    assert states["routing:GATE1"] == "blocked"
+    assert states["atlas:IMP2"] == "blocked"
+    assert states["atlas:IMP3"] == "blocked"
+    assert states["atlas:GATE1"] == "blocked"
     # non-computed states pass through
-    assert states["autoos:WP3"] == "claimed"
-    assert states["routing:IMP4"] == "in_review"
-    assert states["routing:IMP5"] == "done"
-    assert states["routing:IMP6"] == "cancelled"
+    assert states["borealis:WP3"] == "claimed"
+    assert states["atlas:IMP4"] == "in_review"
+    assert states["atlas:IMP5"] == "done"
+    assert states["atlas:IMP6"] == "cancelled"
 
     # ready list contains exactly the two ready items
-    assert sorted(out["ready"]) == ["autoos:WP2", "routing:IMP1"]
+    assert sorted(out["ready"]) == ["atlas:IMP1", "borealis:WP2"]
     # blocked-by lists the unmet dependency keys
-    assert out["blocked"]["routing:IMP2"] == ["routing:IMP1"]
-    assert out["blocked"]["routing:IMP3"] == ["routing:IMP1"]
+    assert out["blocked"]["atlas:IMP2"] == ["atlas:IMP1"]
+    assert out["blocked"]["atlas:IMP3"] == ["atlas:IMP1"]
     # in-progress list covers claimed and in_review
-    assert sorted(out["inProgress"]) == ["autoos:WP3", "autoos:WP4", "routing:IMP3", "routing:IMP4"]
+    assert sorted(out["inProgress"]) == ["atlas:IMP3", "atlas:IMP4", "borealis:WP3", "borealis:WP4"]
 
     # critical path: longest remaining path by estimate_h, ends at a goal
     crit = out["critical"]["keys"]
-    assert crit[-1] == "routing:GOAL"
-    assert crit[0] == "routing:IMP1"
+    assert crit[-1] == "atlas:GOAL"
+    assert crit[0] == "atlas:IMP1"
     assert out["critical"]["hours"] == pytest.approx(13.0)
 
     # percent done is a sane fraction and differs by measure
     assert 0.0 < out["pctEstimate"] < 1.0
     assert 0.0 < out["pctCount"] < 1.0
     # IMP1 is waited on by three non-terminal items (IMP2, IMP3, GATE1)
-    assert out["unblocks"]["routing:IMP1"] == 3
+    assert out["unblocks"]["atlas:IMP1"] == 3
     # empty graph is a clean empty result, not an error
     assert out["emptyCrit"] == {"keys": [], "hours": 0}
 

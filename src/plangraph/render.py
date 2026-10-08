@@ -1,8 +1,13 @@
 """Render one self-contained, read-only HTML page from a plan snapshot.
 
-The page inlines three vendored MIT libraries (cytoscape, dagre, cytoscape-dagre)
-and the snapshot JSON, so it makes no network requests and can be published as a
-single artifact and opened from disk or a phone.
+Legacy snapshots inline three vendored MIT libraries (cytoscape, dagre,
+cytoscape-dagre) and the snapshot JSON, so the page makes no network requests
+and can be published as a single artifact. New-UI snapshots (items carrying
+``phase``/``loop`` or a top-level ``questions``/``decisions`` list) are
+**CDN-only in v1** (UI-PLAN §14b): ``cdn=False`` raises a clear
+``RuntimeError`` until elkjs is vendored, while ``cdn=True`` references
+cytoscape 3.34.0 (cdnjs) and elkjs 0.9.3 (jsDelivr) — both ``defer`` — and
+inlines neither.
 
 Display state (``ready`` / ``blocked``) and the critical path are computed in the
 page's own JavaScript from the snapshot, exactly as the SPEC requires. This module
@@ -12,10 +17,9 @@ parallel and the page must stand alone.
 Public API
 ----------
 ``render(snapshot, vendor_dir, *, title=None, cdn=False) -> str``
-    The SPEC entry point. Returns the whole HTML document as one string. With
-    ``cdn=True`` the three vendor libraries are referenced from a CDN instead of
-    inlined (the snapshot data and the page's own JS are still inlined).
-
+    The SPEC entry point. Returns the whole HTML document as one string.
+``cdn_script_tags() -> list[str]``
+    The exact ``<script defer src=…>`` tags used when ``cdn=True``.
 ``main(argv=None) -> int``
     CLI: ``python -m plangraph.render --snapshot S.json --out plan.html [--cdn]``.
 """
@@ -34,23 +38,53 @@ __all__ = ["render", "main", "default_vendor_dir", "cdn_script_tags"]
 #: Assets (template, CSS, JS) shipped next to this module.
 ASSETS_DIR = Path(__file__).resolve().parent / "web"
 
-#: Vendored libraries, in load order (dagre before cytoscape-dagre).
+#: Page code concatenated, in load order, into the one inline ``<script>``
+#: (UI-PLAN: ES5/ES2015, no modules, one namespace). ``page_model/store/search``
+#: are the pure PlanUI core of T1; they have no load-time side effects.
+JS_FILES = (
+    "page.js",
+    "page_ui.js",
+    "page_details.js",
+    "page_model.js",
+    "page_store.js",
+    "page_search.js",
+    "page_side.js",
+    "page_graph.js",
+    "page_graph_ext.js",
+    "page_graph_cluster.js",
+    "page_graph_budget.js",
+    "page_graph_chips.js",
+    "page_graph_focus.js",
+    "page_layout.js",
+    "page_graph_viewport.js",
+    "page_graph_pan.js",
+    "page_graph_view.js",
+    "page_table_model.js",
+    "page_table_url.js",
+    "page_boot.js",  # T2: boot must be last — it wires the components it finds.
+)
+
+#: Stylesheets concatenated into ``@@PAGE_CSS@@``, in load order.
+CSS_FILES = ("page.css", "page_base.css", "page_graph.css")
+
+#: Vendored libraries for the legacy OFFLINE mode, in load order (dagre before
+#: cytoscape-dagre). Kept inline-able because tests/test_render.py requires the
+#: offline page to stay fully self-contained; the CDN mode no longer uses them.
 VENDOR_LIBS = ("cytoscape.min.js", "dagre.min.js", "cytoscape-dagre.js")
 
-#: cdnjs coordinates, in load order, for the two libraries cdnjs hosts. The URL
-#: form is ``<base>/<library>/<version>/<file>``.
+#: cdnjs coordinates for cdn mode: cytoscape only (UI-PLAN §14 — dagre and
+#: cytoscape-dagre are removed vs the legacy page). URL: ``<base>/<lib>/<ver>/<file>``.
 CDN_BASE = "https://cdnjs.cloudflare.com/ajax/libs"
 CDN_LIBS = (
     ("cytoscape", "3.34.0", "cytoscape.min.js"),
-    ("dagre", "0.8.5", "dagre.min.js"),
 )
 
-#: cdnjs does not host ``cytoscape-dagre`` (the cdnjs path 404s, checked
-#: 2026-10-01); jsDelivr serves the npm package directly. Loaded last, after
-#: cytoscape and dagre.
-CDN_DAGRE_URL = (
-    "https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"
-)
+#: elkjs (EPL-2.0) from jsDelivr's npm mirror — the new layout engine (§14a).
+CDN_ELK_URL = "https://cdn.jsdelivr.net/npm/elkjs@0.9.3/lib/elk.bundled.js"
+
+#: The §14b v1 error: offline (inline) mode for new-UI snapshots stays off until
+#: elkjs vendoring (licence EPL-2.0) is accepted or ordered by the router.
+OFFLINE_ERROR = "offline mode not supported by the new UI yet; elkjs vendoring pending"
 
 
 def default_vendor_dir() -> Path:
@@ -93,17 +127,38 @@ def _default_title(items: list) -> str:
     return "Plan graph" if n == 0 else f"Plan graph ({n} items)"
 
 
-def cdn_script_tags() -> list[str]:
-    """The exact ``<script src=…>`` tags used when ``cdn=True``.
+def _new_ui(snapshot: dict) -> bool:
+    """True when *snapshot* carries the new-UI data contract (§14b/§15).
 
-    cytoscape and dagre come from cdnjs; cytoscape-dagre, which cdnjs does not
-    host, comes from jsDelivr and is loaded last so it can see both globals.
+    The new page consumes ``phase``/``loop`` per item and the ``questions`` /
+    ``decisions`` lists; a snapshot carrying none of them (the legacy page
+    fixture, the current keeper exporter output) is rendered on the unchanged
+    offline path. Snapshots that ARE new-UI are CDN-only until elkjs is
+    vendored — ``render(..., cdn=False)`` raises :data:`OFFLINE_ERROR`.
+    """
+    if snapshot.get("questions") is not None or snapshot.get("decisions") is not None:
+        return True
+    items = snapshot.get("items")
+    if isinstance(items, list):
+        return any(
+            isinstance(i, dict) and ("phase" in i or "loop" in i) for i in items
+        )
+    return False
+
+
+def cdn_script_tags() -> list[str]:
+    """The exact ``<script defer src=…>`` tags used when ``cdn=True`` (§14).
+
+    cytoscape 3.34.0 from cdnjs first (it draws nothing until elkjs lands, and
+    both are `defer` so order of execution follows document order), then elkjs
+    0.9.3 from jsDelivr. dagre / cytoscape-dagre tags are gone with the
+    layout-engine swap.
     """
     tags = [
-        f'<script src="{CDN_BASE}/{library}/{version}/{filename}"></script>'
+        f'<script defer src="{CDN_BASE}/{library}/{version}/{filename}"></script>'
         for library, version, filename in CDN_LIBS
     ]
-    tags.append(f'<script src="{CDN_DAGRE_URL}"></script>')
+    tags.append(f'<script defer src="{CDN_ELK_URL}"></script>')
     return tags
 
 
@@ -111,7 +166,7 @@ def _vendor_scripts(vendor_dir: Path, cdn: bool) -> str:
     """The one block substituted for ``@@VENDOR_SCRIPTS@@``.
 
     Inline mode reads and joins the vendored files inside a single ``<script>``
-    (missing files are skipped); CDN mode emits one external tag per library.
+    (missing files are skipped); CDN mode emits one deferred tag per library.
     """
     if cdn:
         return "\n".join(cdn_script_tags())
@@ -133,10 +188,10 @@ def render(
 ) -> str:
     """Return the complete HTML page for *snapshot* as a single string.
 
-    ``vendor_dir`` must contain the three files named in :data:`VENDOR_LIBS`; a
-    missing file is skipped rather than fatal so the page still renders. With
-    ``cdn=True`` those files are not read at all — the page references
-    cytoscape/dagre on cdnjs and cytoscape-dagre on jsDelivr instead.
+    Offline (``cdn=False``): legacy snapshots inline the three files named in
+    :data:`VENDOR_LIBS` (a missing file is skipped rather than fatal); new-UI
+    snapshots raise :data:`OFFLINE_ERROR` (UI-PLAN §14b). With ``cdn=True``
+    no vendor file is read — cytoscape/elkjs come from the CDN instead.
     """
     if not isinstance(snapshot, dict):
         snapshot = {}
@@ -147,18 +202,19 @@ def render(
     safe_snapshot = dict(snapshot)
     safe_snapshot["items"] = items
 
+    if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)
+        raise RuntimeError(OFFLINE_ERROR)
+
     vendor_dir = Path(vendor_dir)
     vendor_scripts = _vendor_scripts(vendor_dir, bool(cdn))
 
-    page_js = "\n;\n".join(
-        _read(ASSETS_DIR / name)
-        for name in ("page.js", "page_ui.js", "page_details.js")
-    )
+    page_js = "\n;\n".join(_read(ASSETS_DIR / name) for name in JS_FILES)
+    page_css = "\n".join(_read(ASSETS_DIR / name) for name in CSS_FILES)
 
     doc = _read(ASSETS_DIR / "page_template.html")
     replacements = {
         "@@PAGE_TITLE@@": html.escape(title or _default_title(items), quote=True),
-        "@@PAGE_CSS@@": _read(ASSETS_DIR / "page.css"),
+        "@@PAGE_CSS@@": page_css,
         "@@VENDOR_SCRIPTS@@": vendor_scripts,
         "@@PAGE_JS@@": page_js,
         "@@SNAPSHOT_JSON@@": _safe_json(safe_snapshot),
@@ -181,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cdn",
         action="store_true",
-        help="reference cytoscape/dagre/cytoscape-dagre from cdnjs instead of inlining them",
+        help="reference cytoscape/elkjs from the CDN instead of inlining (required for new-UI snapshots)",
     )
     args = parser.parse_args(argv)
 

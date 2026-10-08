@@ -7,3 +7,4 @@ out/
 .serena/
 graphify-out/
 logs/
+.playwright-mcp/

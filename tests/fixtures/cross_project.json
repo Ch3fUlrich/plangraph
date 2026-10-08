@@ -2,8 +2,8 @@
   "generated": "2026-10-01T00:00:00Z",
   "head": null,
   "items": [
-    {"project": "routing", "id": "R1", "key": "routing:R1", "title": "Routing prerequisite", "kind": "lane", "track": "T0", "owner": "routing-00", "state": "open", "estimate_h": 2, "depends_on": [], "corrects": null, "priority": 0},
-    {"project": "autoos", "id": "X", "key": "autoos:X", "title": "Cross-project dependent", "kind": "lane", "track": "T2", "owner": "AutoOS L1", "state": "open", "estimate_h": 3, "depends_on": ["routing:R1"], "corrects": null, "priority": 0},
-    {"project": "autoos", "id": "GOAL", "key": "autoos:GOAL", "title": "Autoos goal", "kind": "goal", "track": "T2", "owner": "AutoOS L1", "state": "open", "estimate_h": 0, "depends_on": ["autoos:X"], "corrects": null, "priority": 0}
+    {"project": "atlas", "id": "R1", "key": "atlas:R1", "title": "Atlas prerequisite", "kind": "lane", "track": "T0", "owner": "atlas-lead", "state": "open", "estimate_h": 2, "depends_on": [], "corrects": null, "priority": 0},
+    {"project": "borealis", "id": "X", "key": "borealis:X", "title": "Cross-project dependent", "kind": "lane", "track": "T2", "owner": "Borealis Lead", "state": "open", "estimate_h": 3, "depends_on": ["atlas:R1"], "corrects": null, "priority": 0},
+    {"project": "borealis", "id": "GOAL", "key": "borealis:GOAL", "title": "Borealis goal", "kind": "goal", "track": "T2", "owner": "Borealis Lead", "state": "open", "estimate_h": 0, "depends_on": ["borealis:X"], "corrects": null, "priority": 0}
   ]
 }

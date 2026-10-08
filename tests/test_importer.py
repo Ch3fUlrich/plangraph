@@ -22,31 +22,31 @@ def test_fixtures_load_shape():
     items = load_dir(FIX)
     assert len(items) == 12
     assert [it["key"] for it in items] == sorted(it["key"] for it in items)
-    assert {it["project"] for it in items} == {"routing", "autoos"}
+    assert {it["project"] for it in items} == {"atlas", "borealis"}
     assert sum(it["kind"] == "gate" for it in items) == 1
     assert sum(it["kind"] == "goal" for it in items) == 1
     by = {it["key"]: it for it in items}
     # bare ids are qualified with their own project
-    assert by["routing:R2"]["depends_on"] == ["routing:R1"]
+    assert by["atlas:R2"]["depends_on"] == ["atlas:R1"]
     # cross-project deps are kept verbatim
-    assert by["autoos:A1"]["depends_on"] == ["routing:R2"]
-    assert by["autoos:A6"]["depends_on"] == ["autoos:A5", "routing:C1"]
+    assert by["borealis:A1"]["depends_on"] == ["atlas:R2"]
+    assert by["borealis:A6"]["depends_on"] == ["atlas:C1", "borealis:A5"]
     # legacy in-flight states survive the load
-    assert by["routing:C1"]["state"] == "claimed"
-    assert by["routing:IR1"]["state"] == "in_review"
-    assert by["autoos:A3"]["state"] == "claimed"
-    assert by["autoos:A4"]["state"] == "in_review"
+    assert by["atlas:C1"]["state"] == "claimed"
+    assert by["atlas:IR1"]["state"] == "in_review"
+    assert by["borealis:A3"]["state"] == "claimed"
+    assert by["borealis:A4"]["state"] == "in_review"
 
 
 def test_helper_fields_fold_into_note():
     by = {it["key"]: it for it in load_dir(FIX)}
-    r1 = by["routing:R1"]
+    r1 = by["atlas:R1"]
     assert "rationale" not in r1
     assert r1["note"] == "rationale: Keeps the seam clean."
-    ir1 = by["routing:IR1"]
+    ir1 = by["atlas:IR1"]
     assert ir1["note"].splitlines()[0] == "came from a previous keeper"
     assert "blocked_by: waiting on review" in ir1["note"]
-    assert by["autoos:A3"]["note"] == "plan_ref: plan-v3 section A3"
+    assert by["borealis:A3"]["note"] == "plan_ref: plan-v3 section A3"
 
 
 def test_round_trip(tmp_path):
