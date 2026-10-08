@@ -38,6 +38,17 @@
     var a = answers();
     if (text) a[id] = { text: text, at: new Date().toISOString() }; else delete a[id];
     saveAnswers(a);
+    refresh();
+  }
+
+  /* Recompute the question-derived VM slices, then run the existing render /
+   * count paths so the Q&A table badges, the Needs You list/count and the
+   * phone #inbox-badge follow without a page reload. */
+  function refresh() {
+    var vm = PlanUI.app && PlanUI.app.vm;
+    if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());
+    if (vm && PlanUI.Sidebar && PlanUI.Sidebar.render) PlanUI.Sidebar.render();
+    else render(vm);
   }
 
   /* ---- connections ----------------------------------------------------------- */
@@ -119,11 +130,16 @@
   }
 
   /* ---- questions -------------------------------------------------------------------- */
+  /* One decision point for the row badge: the EFFECTIVE status (a local
+   * answer overrides the snapshot status to "answered"; removing it restores
+   * the snapshot status — PlanUI.qaEffectiveStatus decides). */
   function effective(q) {
-    var a = answers()[q.id];
+    var all = answers(), a = all[q.id];
     if (a) return { status: "answered", answer: a.text, local: true, at: a.at };
-    return { status: q.status, answer: q.answer, local: false };
+    var st = PlanUI.qaEffectiveStatus ? PlanUI.qaEffectiveStatus(q, all) : q.status;
+    return { status: st, answer: q.answer, local: false };
   }
+  function effectiveStatus(q) { return effective(q).status; }
 
   function editor(q, rerender) {
     var box = el("div", "qa-edit");
@@ -195,6 +211,7 @@
 
   function render(vm) {
     vm = vm || (global.PlanUI.app && global.PlanUI.app.vm);
+    if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());  // stored answers apply on first paint too
     var box = document.getElementById("sb-panel-qa");
     if (!box || !vm) return;
     clear(box);
@@ -217,6 +234,6 @@
     if (ans) clear(ans);
   }
 
-  PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer };
+  PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer, refresh: refresh, effectiveStatus: effectiveStatus };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);

@@ -130,6 +130,32 @@
     return order;
   }
 
+  /* EFFECTIVE question status: a local answer (PlanUI.QAPage, localStorage
+   * key plangraph.qa.answers.v1) overrides the snapshot status to "answered";
+   * removing the local answer restores the snapshot status. `local` is the
+   * answers map (id -> {text, at}); pass {} when there are no local answers. */
+  function qaEffectiveStatus(q, local) {
+    if (local && Object.prototype.hasOwnProperty.call(local, q.id) && local[q.id]) return "answered";
+    return q.status;
+  }
+
+  /* Recompute the question-derived slices after a local answer changes, so
+   * Needs You / Answers / badges follow without a reload. Operator items are
+   * kept as-is (only open questions leave needsYou); same (-priority,
+   * -unblocks) order as buildViewModel. Mutates and returns vm. */
+  function refreshQA(vm, local) {
+    local = local || {};
+    var ops = (vm.needsYou || []).filter(function (e) { return e.text === undefined; });
+    var ny = ops.concat((vm.questions || []).filter(function (q) { return qaEffectiveStatus(q, local) === "open"; }));
+    ny.sort(function (a, b) {
+      return num(b.priority) - num(a.priority) ||
+        (b.unblocks ? b.unblocks.length : 0) - (a.unblocks ? a.unblocks.length : 0);
+    });
+    vm.needsYou = ny;
+    vm.answers = (vm.questions || []).filter(function (q) { return qaEffectiveStatus(q, local) === "answered"; });
+    return vm;
+  }
+
   function capitalise(name) {
     return str(name).charAt(0).toUpperCase() + str(name).slice(1).toLowerCase();
   }
@@ -277,6 +303,8 @@
   }
 
   PlanUI.buildViewModel = buildViewModel;
+  PlanUI.qaEffectiveStatus = qaEffectiveStatus;
+  PlanUI.refreshQA = refreshQA;
   PlanUI.naturalCmp = naturalCmp;
 
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;

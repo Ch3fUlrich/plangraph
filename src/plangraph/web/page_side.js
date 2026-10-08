@@ -33,10 +33,19 @@
 
   function join(arr, sep) { return (arr || []).join(sep || ", "); }
 
+  /* EFFECTIVE question status: a local answer overrides the snapshot status
+   * (PlanUI.qaEffectiveStatus decides); falls back to the snapshot status. */
+  function qEff(q) {
+    if (PlanUI.qaEffectiveStatus && PlanUI.QAPage && PlanUI.QAPage.answers)
+      return PlanUI.qaEffectiveStatus(q, PlanUI.QAPage.answers());
+    return q.status;
+  }
+
   /* Item-shaped view of a question so PlanUI.Query.match can run on it (§7). */
   function shapeQ(q) {
-    var answered = q.status === "answered";
-    var term = answered ? "done" : q.status === "cancelled" ? "cancelled" : "open";
+    var st = qEff(q);
+    var answered = st === "answered";
+    var term = answered ? "done" : st === "cancelled" ? "cancelled" : "open";
     return {
       key: q.item || q.id, id: q.id, title: q.text || "", project: q.project || "",
       phase: "", owner: q.asked_by || "", kind: "question",
@@ -320,7 +329,7 @@
     }
 
     var qs = (VM.questions || []).filter(function (q) {
-      return pass(q) && (qaStatus === "all" || q.status === qaStatus);
+      return pass(q) && (qaStatus === "all" || qEff(q) === qaStatus);
     });
     var qTotal = (VM.questions || []).length;
     box.appendChild(el("h3", "sb-h", count("Q&A", qs.length, qTotal)));
@@ -344,8 +353,9 @@
                    { label: "Status", col: "status", cls: "col-status" },
                    { label: "Item", col: "item", cls: "col-links" }];
       box.appendChild(table(qcols, qs.map(function (q) {
-        var st = el("span", "badge badge-" + shapeQ(q).display, q.status);
-        return { v: [q.id, q.text, q.project, q.status, q.item || ""],
+        var es = qEff(q);
+        var st = el("span", "badge badge-" + shapeQ(q).display, es);
+        return { v: [q.id, q.text, q.project, es, q.item || ""],
                  cells: [q.id, q.text, q.project, st, q.item ? keylink(q.item) : "—"] };
       }), "qa", "No rows match the current search."));
     }
