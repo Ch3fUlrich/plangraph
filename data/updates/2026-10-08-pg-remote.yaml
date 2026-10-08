@@ -1,0 +1,30 @@
+# PG-REMOTE.
+batch: 2026-10-08-pg-remote
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 2aa17b4f9b820a8995aa14d9a0f34d30a565a0aeb2eae18e40ebf4362027777b
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: PG-REMOTE
+    kind: lane
+    track: PGSSOT
+    owner: plangraph-L1-main
+    review_tier: high
+    evidence_kinds:
+    - run-record
+    estimate_h: 4
+    estimate_src: default
+    priority: 6
+    depends_on: []
+    title: Keeper reachable from workstation/prox (tailnet bind or authenticated proxy)
+    done_criteria: whoami from workst-L1 + prox-L1
+    description: server-L1-routing, D-708 A follow-up.
+- op: edit
+  key: routing:ROUTE-PG-SSOT
+  fields:
+    depends_on:
+    - routing:ROUTE-PG-PRODTEST
+    - plangraph:PG-REMOTE
+
