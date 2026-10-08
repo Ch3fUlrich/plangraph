@@ -32,7 +32,6 @@ ops:
     - invest:OWN-APCA
     - invest:OWN-AUTH
     - invest:OWN-BF
-    - invest:OWN-DISK
     - invest:OWN-LIVE
     - invest:OWN-PRS
     - invest:OWN-RES
@@ -47,4 +46,3 @@ ops:
 - op: cancel
   key: invest:OWN-DISK
   reason: skipped (D-724)
-
