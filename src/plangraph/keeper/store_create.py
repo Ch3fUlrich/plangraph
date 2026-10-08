@@ -123,7 +123,10 @@ class CreateMixin:
         with self._write():
             for definition in defs:
                 self._insert_item(principal, definition, now)
-        return {"created": keys}
+        result = {"created": keys}
+        if any(not definition.get("description") for definition in defs):
+            result["warnings"] = ["description missing: brief will be empty"]
+        return result
 
     def _tier_for(self, raw, definition, principal):
         """The tier to store: an explicit (validated) value, else the default.

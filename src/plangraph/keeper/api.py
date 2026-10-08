@@ -32,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .. import views
-from . import auth, fmt
+from . import auth, brief, fmt
 from .auth import Principal
 from .errors import Refused
 
@@ -235,8 +235,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                     "unblocks": views.unblocks(store._all_items())}, False
         if name == "show":
             key = store.resolve_key(self._one(query, "key") or extra)
-            info = store.show(principal, key)
-            return (fmt.show_text(info), True) if as_text else (info, False)
+            return brief.show(store, principal, key,
+                              self._one(query, "brief"), as_text, fmt.show_text)
         if name == "blocked":
             data = store.blocked(principal, project=project)
             return (fmt.blocked_text(data), True) if as_text else (data, False)

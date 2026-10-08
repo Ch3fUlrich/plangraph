@@ -31,6 +31,17 @@ def parsed(raw):
     return data.get("result", data) if isinstance(data, dict) else None
 
 
+def warnings(reply):
+    """Warning lines from a create/apply_ops reply (missing descriptions)."""
+    if not isinstance(reply, dict):
+        return []
+    if isinstance(reply.get("warnings"), list):
+        return [f"warning: {warn}" for warn in reply["warnings"]]
+    return [f"warning: {warn}" for entry in (reply.get("results") or [])
+            if isinstance(entry, dict)
+            for warn in (entry.get("warnings") or [])]
+
+
 def refusal_lines(exc, offset, first):
     """The report lines for a refused (and fully rolled back) batch.
 
@@ -61,4 +72,4 @@ def send(session, ops, start, source, digest, errors, op_key):
     if got != sent:
         return 1, [f"error: unreadable or short keeper reply (applied {got!r} "
                    f"of {sent}); batch state unknown, check the keeper"]
-    return 0, []
+    return 0, warnings(reply)

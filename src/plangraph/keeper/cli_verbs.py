@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import views
-from . import fmt
+from . import brief as brief_mod, fmt
 from .credential_guard import mask_all
 from .cli_local import evidence_ref, local_alerts, local_digest, local_show
 
@@ -211,6 +211,7 @@ def cmd_ready(args, session):
 
 
 def cmd_show(args, session):
+    render = brief_mod.brief_text if args.brief else fmt.show_text
     def local():
         try:
             data = local_show(session.local_items(), args.key,
@@ -218,9 +219,11 @@ def cmd_show(args, session):
         except KeyError:
             print(f"not found in the local snapshot: {args.key}", file=sys.stderr)
             return EXIT_REFUSED
-        return _emit(session, data, fmt.show_text)
-    return read(session, "show", {"key": args.key},
-                lambda r: fmt.show_text(r), local)
+        if args.brief:
+            data = brief_mod.build(data, data.get("depends_on"))
+        return _emit(session, data, render)
+    params = {"key": args.key, "brief": 1 if args.brief else None}
+    return read(session, "show", params, lambda r: render(r), local)
 
 
 def cmd_blocked(args, session):
@@ -368,7 +371,7 @@ def cmd_define(args, session):
             if isinstance(definition, dict):
                 definition["review_tier"] = tier
     return write(session, "create_items", {"items": items},
-                 lambda r: f"created {len(r.get('created') or [])} items")
+                 lambda r: fmt.result_text("create_items", r))
 
 
 def cmd_render(args, session):

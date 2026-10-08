@@ -376,7 +376,9 @@ def main(argv=None, out=None, err=None):
         try:
             if opts.per_op:
                 verb, body = build_request(op, source, digest)
-                if atomic.parsed(session.post(verb, body)) is None:
+                reply = atomic.parsed(session.post(verb, body))
+                for text in atomic.warnings(reply): line(text)
+                if reply is None:
                     raise ApiError("error", "unreadable keeper reply "
                                             "(op state unknown)")
         except BatchError as exc:
