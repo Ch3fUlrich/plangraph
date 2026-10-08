@@ -1,0 +1,48 @@
+# workst-gen found item.
+batch: 2026-10-08-workst-gen-found
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 27bd1d4b981b88727a5b03166abfe3d1040d8735e6fe2095ca8af2eaa9a7944e
+ops:
+- op: create
+  item:
+  - project: workst-gen
+    id: GEN-RETENTION-PERSON
+    kind: lane
+    track: GEN
+    owner: workst-L1-gen
+    review_tier: high
+    estimate_h: 2
+    estimate_src: default
+    priority: 3
+    evidence_kinds:
+    - commit+ci
+    depends_on: []
+    title: Expired-person purge also removes their kit rows and counts archive rows
+    done_criteria: 'test: expired person with kits+child rows leaves none; rows_deleted counts kit_data_archives rows; 3-family seats; routing ACCEPT; merged; Actions green'
+    description: workst-L1-gen; gen-analysis docs/superpowers/plans/2026-10-08-fleet-lanes/README.md @648017f.
+- op: edit
+  key: routing:PH-GEN-1003
+  fields:
+    depends_on:
+    - workst-gen:BWERROR
+    - workst-gen:GEN-ATOMIC-SWAP-OBS
+    - workst-gen:GEN-BOTPR-110
+    - workst-gen:GEN-BOTPR-92
+    - workst-gen:GEN-BOTPR-CLOSE
+    - workst-gen:GEN-BOTPR-TESTS
+    - workst-gen:GEN-BWERROR-ACTIONS
+    - workst-gen:GEN-CHANGELOG-CATCHUP
+    - workst-gen:GEN-CIHEALTH
+    - workst-gen:GEN-CLOSEOUT
+    - workst-gen:GEN-FLEET-SWITCH
+    - workst-gen:GEN-HISTORY-REWRITE
+    - workst-gen:GEN-NUMIN
+    - workst-gen:GEN-PERSONID
+    - workst-gen:GEN-QGUARD
+    - workst-gen:GEN-REGISTRY-ROUTE
+    - workst-gen:GEN-SHARELINK-FLAKE
+    - workst-gen:GEN-SWAP-OBS-CLOSE
+    - workst-gen:Q-GEN-PR-OWNER
+    - workst-gen:GEN-RETENTION-PERSON
+

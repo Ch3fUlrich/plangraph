@@ -75,3 +75,4 @@ workst-gen bot-PR lanes (GEN-BOTPR-TESTS, -92, -110, -CLOSE under PH-GEN-1003): 
 D-673 plangraph:UI-DECISION-TEXT under PH-M2C-UI: data/updates/2026-10-08-ui-decision-text.yaml — LIVE 2026-10-08 (2 of 2, verify ok).
 D-677 parked/later sweep (routing OS-123, OS-124B, OS-130..135, OS-116, OS-41B under PH-OPERATOR; autoos AO-HOSTMIRROR, AO-WSCONFIG, AO-SKILLRULES, AO-OCRUNTIME, AO-GROK, AO-SPLIT1, AO-APIDOCS + PH-AO-FLEET; server F48-CLAMAV-TEST; MT-054 parked prio -1): data/updates/2026-10-08-d677-parked.yaml — TRIAL OK; LIVE 2026-10-08 (6 of 6, verify ok; backup keeper.db.pre-d677).
 D-677 wait backfill (wait=answer|task on open operator items; claimed ones skipped): data/updates/2026-10-08-d677-wait-backfill.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-waitfill).
+workst-gen:GEN-RETENTION-PERSON under PH-GEN-1003: data/updates/2026-10-08-workst-gen-found.yaml — LIVE 2026-10-08 (2 of 2, verify ok).
