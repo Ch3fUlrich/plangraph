@@ -221,7 +221,13 @@ def test_legacy_snapshot_has_no_new_ui_markers():
     assert render_mod._new_ui(LEGACY) is False
     assert render_mod._new_ui(NEW) is True
     assert render_mod._new_ui({"items": [{"title": "x", "phase": "dev"}]}) is True
-    assert render_mod._new_ui({"items": [{"title": "x"}], "questions": []}) is True
+    # RENDER-NEWUI-DETECT: decide on content, not key presence. An exporter that
+    # always emits empty lists / phase null has no new-UI data -> offline path.
+    assert render_mod._new_ui({"items": [{"title": "x"}], "questions": []}) is False
+    assert render_mod._new_ui({"items": [{"title": "x"}], "decisions": []}) is False
+    assert render_mod._new_ui({"items": [{"title": "x", "phase": None}]}) is False
+    assert render_mod._new_ui({"items": [{"title": "x"}], "questions": [{"id": "Q-1"}]}) is True
+    assert render_mod._new_ui({"items": [{"title": "x"}], "decisions": [{"id": "D-1"}]}) is True
     assert render_mod._new_ui({"items": [{"title": "x", "loop": 1}]}) is True
     assert render_mod._new_ui({"items": [{"title": "x"}]}) is False
     assert render_mod._new_ui({"items": []}) is False
