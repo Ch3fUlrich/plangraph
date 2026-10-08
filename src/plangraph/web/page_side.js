@@ -131,6 +131,125 @@
     return b;
   }
 
+  /* ---- Projects: project > phase > task tree (filter + navigation) -------- */
+  var ROLE = {                                   // same glyph set everywhere
+    planning: { sym: "\u25C7", label: "Planning" },
+    implementation: { sym: "\u25AD", label: "Implementation" },
+    review: { sym: "\u2B21", label: "Review" }
+  };
+  var expanded = {};                             // "p" or "p|phase" -> true
+
+  function PP() { return global.PlanPage; }
+
+  function eyeBtn(kind, name, label) {
+    var on = PP().isFilterOn ? PP().isFilterOn(kind, name) : true;
+    var b = el("button", "pt-eye" + (on ? " on" : ""), on ? "\u2713" : "");
+    b.type = "button";
+    b.title = (on ? "Hide " : "Show ") + label + " in the graph";
+    b.setAttribute("aria-label", b.title);
+    b.setAttribute("aria-pressed", String(on));
+    b.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (PP().toggleFilter) PP().toggleFilter(kind, name);
+    });
+    return b;
+  }
+
+  function rowHead(open, hasKids) {
+    var c = el("span", "pt-chev", hasKids ? (open ? "\u25BE" : "\u25B8") : "");
+    c.setAttribute("aria-hidden", "true");
+    return c;
+  }
+
+  function taskNode(rec, color) {
+    var li = el("li", "pt-node pt-task");
+    li.setAttribute("role", "none");
+    var b = el("button", "pt-row pt-task-row role-" + rec.role + " kind-" + rec.kind + " state-" + (rec.display || rec.state));
+    b.type = "button";
+    b.setAttribute("role", "treeitem");
+    var r = ROLE[rec.role] || ROLE.implementation;
+    b.title = rec.key + " \u00B7 " + r.label + " \u00B7 " + (rec.display || rec.state);
+    b.setAttribute("aria-label", r.label + ": " + rec.title + ", " + (rec.display || rec.state));
+    b.style.setProperty("--pc", color);
+    b.appendChild(el("span", "pt-sym", r.sym));
+    b.appendChild(el("span", "pt-title", rec.title));
+    if (rec.critical) b.appendChild(el("span", "pt-crit", "\u2605"));
+    b.addEventListener("click", function () { PP().focusNode(rec.key); });
+    li.appendChild(b);
+    return li;
+  }
+
+  function phaseNode(p, ph) {
+    var id = p.name + "|" + ph.name, open = !!expanded[id];
+    var li = el("li", "pt-node pt-phase");
+    li.setAttribute("role", "none");
+    var row = el("div", "pt-line");
+    var b = el("button", "pt-row pt-phase-row" + (PP().isFilterOn && !PP().isFilterOn("phase", ph.name) ? " off" : ""));
+    b.type = "button";
+    b.setAttribute("role", "treeitem");
+    b.setAttribute("aria-expanded", String(open));
+    b.style.setProperty("--pc", p.color);
+    var pct = ph.total ? Math.round(100 * ph.done / ph.total) : 0;
+    b.style.setProperty("--pct", pct + "%");
+    b.appendChild(rowHead(open, true));
+    b.appendChild(el("span", "pt-title", ph.name));
+    b.appendChild(el("span", "pt-count", ph.done + "/" + ph.total));
+    b.addEventListener("click", function () { expanded[id] = !expanded[id]; renderProjects(); });
+    row.appendChild(b);
+    row.appendChild(eyeBtn("phase", ph.name, "phase " + ph.name));
+    li.appendChild(row);
+    if (open) {
+      var ul = el("ul", "pt-list"); ul.setAttribute("role", "group");
+      ph.keys.forEach(function (k) {
+        var rec = VM.items.get(k);
+        if (rec) ul.appendChild(taskNode(rec, p.color));
+      });
+      li.appendChild(ul);
+    }
+    return li;
+  }
+
+  function projectNode(p) {
+    var open = !!expanded[p.name];
+    var li = el("li", "pt-node pt-project");
+    li.setAttribute("role", "none");
+    var row = el("div", "pt-line");
+    var b = el("button", "pt-row pt-project-row" + (PP().isFilterOn && !PP().isFilterOn("project", p.name) ? " off" : ""));
+    b.type = "button";
+    b.setAttribute("role", "treeitem");
+    b.setAttribute("aria-expanded", String(open));
+    b.style.setProperty("--pc", p.color);
+    var tot = 0, done = 0;
+    p.phases.forEach(function (ph) { tot += ph.total; done += ph.done; });
+    b.appendChild(rowHead(open, true));
+    b.appendChild(el("span", "pt-title", p.name));
+    b.appendChild(el("span", "pt-count", done + "/" + tot));
+    b.addEventListener("click", function () { expanded[p.name] = !expanded[p.name]; renderProjects(); });
+    row.appendChild(b);
+    row.appendChild(eyeBtn("project", p.name, "project " + p.name));
+    li.appendChild(row);
+    if (open) {
+      var ul = el("ul", "pt-list"); ul.setAttribute("role", "group");
+      p.phases.forEach(function (ph) { ul.appendChild(phaseNode(p, ph)); });
+      li.appendChild(ul);
+    }
+    return li;
+  }
+
+  function renderProjects() {
+    var box = $("project-tree");
+    if (!box || !VM) return;
+    clear(box);
+    var legend = el("p", "pt-legend");
+    ["planning", "implementation", "review"].forEach(function (k) {
+      legend.appendChild(el("span", "pt-leg", ROLE[k].sym + " " + ROLE[k].label));
+    });
+    box.appendChild(legend);
+    var ul = el("ul", "pt-list pt-root"); ul.setAttribute("role", "group");
+    (VM.projects || []).forEach(function (p) { ul.appendChild(projectNode(p)); });
+    box.appendChild(ul);
+  }
+
   /* ---- Needs You ---------------------------------------------------------- */
   function renderNeeds() {
     var box = $("sb-panel-needs");
@@ -355,7 +474,8 @@
   }
 
   function renderPanel(tab) {
-    if (tab === "qa") renderQA();
+    if (tab === "projects") renderProjects();
+    else if (tab === "qa") renderQA();
     else if (tab === "answers") renderAnswers();
     else if (tab === "settings") renderSettings();
     else renderNeeds();
@@ -363,6 +483,7 @@
 
   function renderAll() {
     renderCounts();
+    renderProjects();
     renderNeeds();
     renderQA();
     renderAnswers();
@@ -394,7 +515,7 @@
     });
   }
 
-  PlanUI.Sidebar = { mount: mount, sync: syncSettings, render: renderAll };
+  PlanUI.Sidebar = { mount: mount, sync: syncSettings, render: renderAll, renderProjects: renderProjects };
 
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);

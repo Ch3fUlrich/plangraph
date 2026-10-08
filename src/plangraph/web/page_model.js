@@ -138,6 +138,19 @@
     return Array.isArray(it.depends_on) ? it.depends_on : [];
   }
 
+  /* planning | implementation | review. An explicit item `role` wins; otherwise
+   * gates are reviews, goals are planning, then the title decides, else implementation. */
+  function roleOf(it) {
+    var r = String(it.role || "").toLowerCase();
+    if (r === "planning" || r === "implementation" || r === "review") return r;
+    if (it.kind === "gate") return "review";
+    if (it.kind === "goal") return "planning";
+    var t = String(it.title || "");
+    if (/\b(review|audit|verify|verification|qa|check)\b/i.test(t)) return "review";
+    if (/\b(plan|planning|research|design|spec|scope|investigate)\b/i.test(t)) return "planning";
+    return "implementation";
+  }
+
   function buildViewModel(snap) {
     var G = graph();
     snap = snap || {};
@@ -205,6 +218,7 @@
       if (!it.key) return;
       var record = {
         key: it.key, id: it.id, project: it.project, title: it.title,
+        role: roleOf(it),
         phase: it.phase || it.track || "", phaseIdx: phaseIdxOf[it.key] || 0,
         kind: it.kind, state: it.state, display: display[it.key],
         owner: it.owner, operator: !!it.operator, priority: num(it.priority),

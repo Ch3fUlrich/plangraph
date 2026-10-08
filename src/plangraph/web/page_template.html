@@ -35,12 +35,10 @@
 <div class="layout">
   <aside id="sidebar" aria-label="Sidebar">
     <button id="sb-close" class="sb-close" type="button" aria-label="Back to graph">&#10005;</button>
-    <details class="sb-filters" id="sb-filters" open>
-      <summary>Filters</summary>
-      <div id="filter-rows" class="filter-rows" aria-label="Project and track filters"></div>
-      <label class="toggle"><input type="checkbox" id="collapse-done" checked> Collapse done per track</label>
-    </details>
     <div class="sb-tabs" role="tablist" aria-label="Sidebar sections">
+      <button class="sb-tab" type="button" role="tab" data-tab="projects" aria-selected="false" aria-controls="sb-panel-projects" title="Projects">
+        <span class="sb-ico" aria-hidden="true">&#9776;</span><span class="sb-label">Projects</span>
+      </button>
       <button class="sb-tab" type="button" role="tab" data-tab="needs" aria-selected="true" aria-controls="sb-panel-needs" title="Needs You">
         <span class="sb-ico" aria-hidden="true">!</span><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span>
       </button>
@@ -55,6 +53,10 @@
       </button>
     </div>
     <div class="sb-body">
+      <section id="sb-panel-projects" class="sb-panel" data-panel="projects" role="tabpanel" aria-label="Projects" hidden>
+        <label class="toggle"><input type="checkbox" id="collapse-done" checked> Collapse done per track</label>
+        <div id="project-tree" class="ptree" role="tree" aria-label="Projects, phases and tasks"></div>
+      </section>
       <section id="sb-panel-needs" class="sb-panel" data-panel="needs" role="tabpanel" aria-label="Needs You"></section>
       <section id="sb-panel-qa" class="sb-panel" data-panel="qa" role="tabpanel" aria-label="Decisions and Q&amp;A" hidden></section>
       <section id="sb-panel-answers" class="sb-panel" data-panel="answers" role="tabpanel" aria-label="Answers" hidden></section>

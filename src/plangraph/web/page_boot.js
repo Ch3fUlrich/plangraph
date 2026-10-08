@@ -65,7 +65,7 @@
   var LS_KEY = "plangraph.ui.settings.v1";
   var SIZES = ["S", "M", "L"], THEMES = ["auto", "light", "dark"];
   var BOOLS = ["showCritical", "showCross", "autoCollapseDone", "animate", "showAllEdges"];
-  var TABS = ["needs", "qa", "answers", "settings"];
+  var TABS = ["projects", "needs", "qa", "answers", "settings"];
   var body = document.body;
 
   function $(id) { return document.getElementById(id); }

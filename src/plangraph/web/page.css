@@ -228,21 +228,34 @@ body {
   }
 }
 
-/* ---- sidebar filter matrix: projects x tracks, project-coloured ------------ */
-.sb-filters { flex: 0 0 auto; max-height: 42%; overflow: auto; border-bottom: 1px solid var(--border); padding: 6px 10px 8px; }
-.sb-filters > summary { cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 2px 0 6px; }
-.sb-filters .toggle { margin-top: 6px; font-size: 12px; }
-.filter-matrix { border-collapse: separate; border-spacing: 2px; width: 100%; table-layout: auto; }
-.filter-matrix th, .filter-matrix td { padding: 0; text-align: center; font-weight: 400; }
-.fm-corner { font-size: 10px; color: var(--muted); text-align: left !important; }
-.fm-head { appearance: none; cursor: pointer; font: inherit; font-size: 10px; color: var(--muted); background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 0 2px; }
-.fm-head.on { color: var(--fg); border-bottom-color: var(--muted); }
-.fm-pname { appearance: none; cursor: pointer; font: inherit; font-size: 12px; font-weight: 600; width: 100%; text-align: left; padding: 3px 6px; border-radius: 5px; color: var(--muted); background: transparent; border: 1px solid var(--pc); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 64px; }
-.fm-pname.on { color: #fff; background: var(--pc); text-shadow: 0 1px 1px rgba(0,0,0,.45); }
-.fm-toggle { appearance: none; cursor: pointer; width: 100%; min-width: 16px; height: 22px; border-radius: 4px; background: transparent; border: 1px solid var(--pc); }
-.fm-toggle.on { background: var(--pc); }
-.fm-pname:focus-visible, .fm-toggle:focus-visible, .fm-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-@media (pointer: coarse) { .fm-toggle, .fm-pname, .fm-head { min-height: 36px; min-width: 36px; } }
-.filter-matrix { table-layout: fixed; }
-.filter-matrix .fm-corner, .filter-matrix .fm-project { width: 70px; }
-.fm-head { padding: 0; width: 100%; }
+/* ---- sidebar Projects tab: project > phase > task tree --------------------- */
+.ptree { margin-top: 8px; }
+.pt-list { list-style: none; margin: 0; padding: 0; }
+.pt-list .pt-list { margin-left: 14px; padding-left: 6px; border-left: 2px solid color-mix(in srgb, var(--pc, var(--border)) 45%, transparent); }
+.pt-node { margin: 3px 0; }
+.pt-line { display: flex; align-items: stretch; gap: 4px; }
+.pt-row { appearance: none; cursor: pointer; font: inherit; text-align: left; display: flex; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.pt-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pt-count { flex: 0 0 auto; font-size: 11px; opacity: .85; }
+.pt-chev { flex: 0 0 12px; font-size: 11px; }
+.pt-project-row { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--pc); background: var(--pc); color: #fff; font-weight: 700; font-size: 13px; text-shadow: 0 1px 1px rgba(0,0,0,.45); }
+.pt-phase-row { padding: 5px 8px; border-radius: 6px; border: 1.5px solid var(--pc); font-size: 12px; color: var(--fg);
+  background: linear-gradient(to right, color-mix(in srgb, var(--pc) 55%, var(--panel)) var(--pct, 0%), var(--panel) var(--pct, 0%)); }
+.pt-row.off { opacity: .45; }
+.pt-eye { appearance: none; cursor: pointer; flex: 0 0 24px; border-radius: 5px; border: 1px solid var(--border); background: transparent; color: var(--fg); font-size: 13px; line-height: 1; }
+.pt-eye.on { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.pt-task-row { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); border-left: 5px solid var(--pc); background: var(--panel); color: var(--fg); font-size: 12px; }
+.pt-task-row.kind-gate { border-radius: 2px; clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%); padding-left: 12px; padding-right: 12px; }
+.pt-task-row.kind-goal { border-width: 2px; border-left-width: 5px; border-color: var(--critical, #cc79a7); }
+.pt-task-row.state-ready { box-shadow: inset 0 -3px 0 var(--state-ready); }
+.pt-task-row.state-blocked { box-shadow: inset 0 -3px 0 var(--state-blocked); }
+.pt-task-row.state-claimed { box-shadow: inset 0 -3px 0 var(--state-claimed); }
+.pt-task-row.state-in_review { box-shadow: inset 0 -3px 0 var(--state-in_review); }
+.pt-task-row.state-open { box-shadow: inset 0 -3px 0 var(--state-open); }
+.pt-task-row.state-done { box-shadow: inset 0 -3px 0 var(--state-done); opacity: .7; }
+.pt-task-row.state-cancelled { box-shadow: inset 0 -3px 0 var(--state-cancelled); opacity: .55; text-decoration: line-through; }
+.pt-sym { flex: 0 0 16px; text-align: center; font-size: 14px; color: var(--pc); }
+.pt-crit { flex: 0 0 auto; color: var(--critical, #cc79a7); }
+.pt-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; margin: 0 0 6px; font-size: 11px; color: var(--muted); }
+.pt-row:focus-visible, .pt-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (pointer: coarse) { .pt-row, .pt-eye { min-height: 40px; } }

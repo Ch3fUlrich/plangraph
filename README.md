@@ -4,10 +4,10 @@ A plan-graph for agent-driven work: items with owner, estimate, dependencies and
 computed **ready / blocked / critical path**; "done" items are locked; and one self-contained
 HTML page that shows the plan to a human.
 
-![plangraph page: filter matrix in the sidebar, project/phase graph on the right](docs/screenshot-plan-graph.png)
+![plangraph page: Projects tree in the sidebar, project/phase graph on the right](docs/screenshot-plan-graph.png)
 
 *The rendered page for the synthetic demo snapshot (4 projects × 5 tracks, 254 items). The
-sidebar filter matrix has one row per project (project colour) and one column per track.
+sidebar Projects tab is a project, phase and task tree in project colours, with planning, implementation and review shown by different symbols and a switch on each project and phase that filters the graph.
 Drag to pan, scroll to zoom, click a card for details, click a project/phase header to
 collapse it.*
 
