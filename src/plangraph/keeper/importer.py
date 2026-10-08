@@ -22,14 +22,14 @@ import yaml
 
 from .errors import Refused
 from .note_fold import DESCRIPTION_CAP, fold_checked as _fold_note
-from .item_fields import check_host
+from .item_fields import check_host, check_wait
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
 
 #: The item fields the importer emits and the exporter writes, in output order.
 _FIELD_ORDER = (
-    "project", "id", "key", "title", "description", "host", "kind", "track",
+    "project", "id", "key", "title", "description", "host", "wait", "kind", "track",
     "owner", "state",
     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
@@ -119,6 +119,7 @@ def _normalise_item(raw, where):
 
     title = _string(raw, "title", key) or ""
     host = check_host(_string(raw, "host", key), key)
+    wait = check_wait(raw.get("wait"), key)
     description = _string(raw, "description", key)
     if description is not None and len(description) > DESCRIPTION_CAP:
         raise _bad(key, f"description exceeds {DESCRIPTION_CAP} characters")
@@ -135,6 +136,7 @@ def _normalise_item(raw, where):
     values = {
         "project": project, "id": identifier, "key": key,
         "title": title, "description": description, "host": host,
+        "wait": wait,
         "kind": kind, "track": track,
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),

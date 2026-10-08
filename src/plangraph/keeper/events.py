@@ -70,7 +70,7 @@ def _new_state():
             "lease_until": None, "reviewer": None, "model": None, "priority": 0,
             "round": 0, "evidence": [], "review_waiver": None,
             "review_tier": "standard", "description": None,
-            "host": None}
+            "host": None, "wait": None}
 
 
 def fold(events):
@@ -94,7 +94,7 @@ def fold(events):
             item["state"] = "open"
             item["epoch"] = 0
             for field in ("priority", "model", "review_tier", "description",
-                          "host"):
+                          "host", "wait"):
                 if field in payload:
                     item[field] = payload[field]
         elif kind == "item_defined":
@@ -102,7 +102,7 @@ def fold(events):
                 item["priority"] = payload["priority"]
             if "review_tier" in payload:
                 item["review_tier"] = payload["review_tier"]
-            for name in ("description", "host"):
+            for name in ("description", "host", "wait"):
                 if name in payload:
                     item[name] = payload[name]
             if "while" in payload:
@@ -232,7 +232,7 @@ def verify_integrity(conn):
     folded = fold(all_events)
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
-        "review_waiver,review_tier,description,host FROM items")}
+        "review_waiver,review_tier,description,host,wait FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -246,7 +246,7 @@ def verify_integrity(conn):
             continue
         for field in ("state", "epoch", "round", "claimed_by", "delegate",
                       "reviewer", "review_waiver", "review_tier", "description",
-                      "host"):
+                      "host", "wait"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",
                                  "field": field, "expected": expected[field],

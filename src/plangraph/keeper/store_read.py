@@ -65,6 +65,9 @@ class ReadMixin:
         return {
             "key": key, "title": item["title"],
             "description": item["description"], "host": item["host"],
+            "wait": item.get("wait"),
+            "waits_on_operator": bool(item.get("operator"))
+            and item.get("state") not in ("done", "cancelled"),
             "project": item["project"],
             "kind": item["kind"], "track": item["track"], "owner": item["owner"],
             "state": item["state"], "priority": item["priority"],
@@ -95,7 +98,10 @@ class ReadMixin:
             out.append({
                 "project": item["project"], "id": item["id"], "key": item["key"],
                 "title": item["title"], "description": item["description"],
-                "host": item["host"], "kind": item["kind"], "track": item["track"],
+                "host": item["host"], "wait": item.get("wait"),
+                "waits_on_operator": bool(item.get("operator"))
+                and item.get("state") not in ("done", "cancelled"),
+                "kind": item["kind"], "track": item["track"],
                 "owner": item["owner"], "state": item["state"],
                 "estimate_h": item["estimate_h"], "estimate_src": item["estimate_src"],
                 "depends_on": item["depends_on"], "corrects": item["corrects"],

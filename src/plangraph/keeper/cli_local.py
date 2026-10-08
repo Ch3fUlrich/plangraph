@@ -47,6 +47,9 @@ def local_show(items, key, aliases=None) -> dict:
                       and o.get("state") not in ("done", "cancelled"))
     return {"key": key, "title": item.get("title"),
             "description": item.get("description"), "host": item.get("host"),
+            "wait": item.get("wait"),
+            "waits_on_operator": bool(item.get("operator"))
+            and item.get("state") not in ("done", "cancelled"),
             "project": item.get("project"),
             "kind": item.get("kind"), "track": item.get("track"),
             "owner": item.get("owner"), "state": item.get("state"),

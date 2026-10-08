@@ -10,7 +10,7 @@ from __future__ import annotations
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
-from .item_fields import check_host
+from .item_fields import check_host, check_wait
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
@@ -37,6 +37,8 @@ class InputMixin:
                 raise Refused("validation", f"{field} exceeds {cap} characters")
         if "host" in fields:
             check_host(fields["host"])
+        if "wait" in fields:
+            check_wait(fields["wait"])
 
     def _normalise(self, raw):
         self._check_text(raw)
@@ -64,7 +66,7 @@ class InputMixin:
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
-            "host": raw.get("host"), "kind": raw.get("kind", "lane"),
+            "host": raw.get("host"), "wait": raw.get("wait"), "kind": raw.get("kind", "lane"),
             "track": raw.get("track"), "owner": raw.get("owner"),
             "owner_family": auth.norm_family(raw.get("owner_family")),
             "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),

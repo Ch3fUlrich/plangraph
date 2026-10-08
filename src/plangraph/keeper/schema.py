@@ -62,6 +62,7 @@ CREATE TABLE items (
     title          TEXT,
     description    TEXT,
     host           TEXT,
+    wait           TEXT,
     kind           TEXT,
     track          TEXT,
     owner          TEXT,
