@@ -87,3 +87,4 @@ D-708 A PG-SSOT + Haiku (14 items under SETUP-IMPROVEMENT-PLAN): data/updates/20
 workst-ebn EBN-EMBEDDING + EBN-REDTRACE-NONBINARY under PH-EBN-1003 (routing relay): data/updates/2026-10-08-ebn-embed-redtrace.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-ebnembed). Closes of EBN-PAPER-N / EBN-EMBEDDING wait for a router D-row.
 D-737 workst-ebn:EBN-PAPER-N + EBN-EMBEDDING closed by decision: data/updates/2026-10-08-d737-ebn-closes.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d737).
 D-721/D-729 (4 keys never in graph: create+close) + D-741 EBN-UNTAGGED-VALIDITY close + EBN-REBINARIZE open: data/updates/2026-10-08-d721-d729-d741.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d741).
+D-742 EBN-REBINARIZE close + D-743 AO-L2-LIVE create+close, AO-L2-SECRETS / AO-ADMISSION-FLOOR open under ROUTE-L2-LAYER: data/updates/2026-10-08-d742-d743.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d743).

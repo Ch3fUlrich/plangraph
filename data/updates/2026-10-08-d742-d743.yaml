@@ -1,0 +1,86 @@
+# D-743: AO-L2-LIVE create+close + follow-ups AO-L2-SECRETS / AO-ADMISSION-FLOOR under ROUTE-L2-LAYER; D-742 EBN-REBINARIZE close.
+batch: 2026-10-08-d742-d743
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 17e13c47cebfb0343f1c946dd33a640c7080e69eb2713e1415daed7f30136a46
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: AO-L2-LIVE
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: L2 launcher live (AO-L2-LIVE)
+    done_criteria: router D-743
+    description: 'Created for the D-743 close: e83ac083 ancestor of origin/main, main CI 37846029790 green; judge accept D-739.'
+  - project: autoos
+    id: AO-L2-SECRETS
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: 'L2 secrets: empty-URL default + key-unreadable canary'
+    done_criteria: merged with tests; routing ACCEPT
+    description: 'Follow-up owed by D-743 (AO-L2-LIVE): empty-URL default and a canary when the key file is unreadable.'
+  - project: autoos
+    id: AO-ADMISSION-FLOOR
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: 'Admission floor: registry 6144 -> 4608'
+    done_criteria: merged with tests; routing ACCEPT
+    description: 'Follow-up owed by D-743: lower the registry admission floor 6144 -> 4608.'
+- op: edit
+  key: routing:ROUTE-L2-LAYER
+  fields:
+    depends_on:
+    - autoos:AO-ADMISSION-FLOOR
+    - autoos:AO-L2-LAUNCH
+    - autoos:AO-L2-LIVE
+    - autoos:AO-L2-PRODTEST
+    - autoos:AO-L2-SECRETS
+    - autoos:AO-L2-SKILL
+    - autoos:AO-ROLE-GATE
+- op: legacy_state
+  key: autoos:AO-L2-LIVE
+  state: in_review
+  note: router D-743
+- op: add_evidence
+  key: autoos:AO-L2-LIVE
+  kind: decision
+  ref:
+    id: D-743
+- op: close_on_decision
+  key: autoos:AO-L2-LIVE
+- op: legacy_state
+  key: workst-ebn:EBN-REBINARIZE
+  state: in_review
+  note: router D-742 (agent-reported)
+- op: add_evidence
+  key: workst-ebn:EBN-REBINARIZE
+  kind: decision
+  ref:
+    id: D-742
+- op: close_on_decision
+  key: workst-ebn:EBN-REBINARIZE
