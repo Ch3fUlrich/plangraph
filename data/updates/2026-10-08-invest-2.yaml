@@ -1,0 +1,50 @@
+# invest-L1 update 2.
+batch: 2026-10-08-invest-2
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 5d627fe7377a7cc3ee331c5035066c12fab6537d1a8b30299c3f17c77e27f50b
+ops:
+- op: create
+  item:
+  - project: invest
+    id: INV-SIMRES
+    kind: lane
+    track: INVEST
+    owner: invest-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: Simulated reserve flag for the paper stage
+    done_criteria: merged on origin/main with tests
+    description: invest-L1, D-710; design run 20261008-185605-inv-simres-design-671008.
+- op: edit
+  key: invest:PH-INVEST
+  fields:
+    depends_on:
+    - invest:INV-ALRT
+    - invest:INV-CIBX
+    - invest:INV-HYG
+    - invest:INV-PERF
+    - invest:OWN-APCA
+    - invest:OWN-AUTH
+    - invest:OWN-BF
+    - invest:OWN-DISK
+    - invest:OWN-LIVE
+    - invest:OWN-PRS
+    - invest:OWN-RES
+    - invest:INV-SIMRES
+- op: edit
+  key: invest:OWN-AUTH
+  fields:
+    note: 'PARKED (D-724): placeholder; Authelia owner view later.'
+- op: priority
+  key: invest:OWN-AUTH
+  priority: -1
+- op: cancel
+  key: invest:OWN-DISK
+  reason: skipped (D-724)
+
