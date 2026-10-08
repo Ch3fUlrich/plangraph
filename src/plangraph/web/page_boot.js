@@ -19,44 +19,7 @@
 
   var PlanUI = (global.PlanUI = global.PlanUI || {});
 
-  /* ---- pure hash codec (§3 `#v=table&sel=atlas:T-31&q=…`) ---------------- */
-  function enc(v) {
-    try { return encodeURIComponent(v); } catch (e) { return ""; }
-  }
-  function dec(v) {
-    try { return decodeURIComponent(v); } catch (e) { return v; }
-  }
-  /* state-like {view, sel, query, sidebar:{open,tab}} → "#…", defaults omitted */
-  function hashEncode(st) {
-    if (!st) return "";
-    var p = [];
-    if (st.view === "table") p.push("v=table");
-    if (st.sel) p.push("sel=" + enc(st.sel));
-    if (st.query) p.push("q=" + enc(st.query));
-    var sb = st.sidebar || {};
-    if (sb.tab && sb.tab !== "needs") p.push("sb=" + enc(sb.tab));
-    if (sb.open === false) p.push("so=0");
-    return p.length ? "#" + p.join("&") : "";
-  }
-  /* "#…" → partial patch object; malformed input never throws (R6) */
-  function hashDecode(str) {
-    var out = {};
-    var s = String(str == null ? "" : str).replace(/^#/, "");
-    if (!s) return out;
-    s.split("&").forEach(function (pair) {
-      var i = pair.indexOf("=");
-      if (i < 1) return;
-      var k = pair.slice(0, i), v = dec(pair.slice(i + 1));
-      if (k === "v") out.view = v === "table" ? "table" : "graph";
-      else if (k === "sel") out.sel = v;
-      else if (k === "q") out.query = v;
-      else if (k === "sb") out.tab = v;
-      else if (k === "so") out.open = v !== "0";
-    });
-    return out;
-  }
-  PlanUI.hashEncode = hashEncode;
-  PlanUI.hashDecode = hashDecode;
+  /* Hash codec lives in page_store.js (loaded before this file): PlanUI.hashEncode/hashDecode. */
 
   if (typeof document === "undefined") return;
   var PP = global.PlanPage;
@@ -164,7 +127,7 @@
   }
 
   function writeHash() {
-    var h = hashEncode(ui.get());
+    var h = PlanUI.hashEncode(ui.get());
     var pg = PlanUI.Pages && PlanUI.Pages.current();
     if (pg && pg !== "graph" && pg !== "table") h += (h ? "&" : "#") + "pg=" + pg;
     try {
@@ -194,7 +157,7 @@
   function toggleExpand() {
     var k = PP.state.selected;
     if (!k) return;
-    var next = new Set(ui.get("expanded"));      // ui.expanded survives in the hash (T3)
+    var next = new Set(ui.get("expanded"));      // round-trips via the hash codec
     if (next.has(k)) next.delete(k); else next.add(k);
     ui.set("expanded", next);
   }
@@ -322,11 +285,17 @@
     var initial = { settings: readSettings() };
     ui = new PlanUI.Store(initial);    // defaults + our `settings` object on top
 
-    var h = hashDecode(location.hash); // restore BEFORE subscribing (no echo)
+    var h = PlanUI.hashDecode(location.hash); // restore BEFORE subscribing (no echo)
     var patch = {};
     if (h.view) patch.view = h.view;
     if (h.sel) { patch.sel = h.sel; PP.state.selected = h.sel; }
     if (h.query) patch.query = h.query;
+    if (h.collapsedPhases) patch.collapsedPhases = h.collapsedPhases;
+    if (h.collapsedProjects) patch.collapsedProjects = h.collapsedProjects;
+    if (h.expanded) patch.expanded = h.expanded;
+    if (h.focusProject) patch.focusProject = h.focusProject;
+    if (h.filters) patch.filters = h.filters;
+    if (h.matchMode) patch.matchMode = h.matchMode;
     patch.sidebar = {
       open: h.open === false ? false : true,
       tab: TABS.indexOf(h.tab) >= 0 ? h.tab : "needs"
