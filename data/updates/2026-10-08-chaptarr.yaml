@@ -1,0 +1,460 @@
+# Chaptarr track (chaptarr-L1 D-634, revised D-635; router order D-638): 24 items (incl. 6 gates) + GOAL edit + T-008 re-scope + OP-CH-DECIDE closed on D-635.
+batch: 2026-10-08-chaptarr
+principal: routing-00
+source: /home/s/code/routing/docs/plan/graph-updates-2026-10-08-chaptarr.md
+source_sha256: e1d70fb7e52d0164fa9d75ed6b7d20a5e75531981ad08efa9777f8e095d2432a
+ops:
+- op: create
+  item:
+  - project: server
+    id: OP-CH-DECIDE
+    kind: lane
+    track: CHAPTARR
+    owner: operator
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on: []
+    title: Operator decisions D1-D5 on the Chaptarr plan
+    done_criteria: operator answers D1-D5 recorded in a router D-row (D-635)
+    description: D1 overview operator-only; D2 per-book table + ebook intake, open models for Chaptarr code; D3/D4 importers kept, cutover after 2 weeks; D5 full upstream PRs. Created and closed on D-635.
+    operator: true
+  - project: server
+    id: CH-LEDGER
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:OP-CH-DECIDE
+    title: Append-only book request ledger (SQLite) + schema + state view
+    done_criteria: tests green, merged
+    description: Ledger in $APPS_ROOT/book-requests (NVMe bind mount) + schema + state view; unit tests. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-INTAKE-EBOOK
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-LEDGER
+    title: Ebook/comic/manga/magazine request form behind Authelia writing to the ledger
+    done_criteria: tests green; one test request from the form appears in the ledger with requester + type + language
+    description: Requester = Remote-User; writes 'requested' events into the ledger only. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-BRIDGE-RO
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 6
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-LEDGER
+    - server:CH-INTAKE-EBOOK
+    title: 'Bridge playbook read-only: ABR all users -> ledger, status report'
+    done_criteria: 3 consecutive scheduled runs, ledger count == ABR request count
+    description: Status report per state/user; ebook intake already writes to the ledger. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-BACKUP
+    kind: lane
+    track: CHAPTARR
+    owner: prox
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 2
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-LEDGER
+    title: Ledger + ABR DB in the media.vm app backup; restore test
+    done_criteria: restore task id with matching counts
+    description: Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: PH-CH-INTAKE
+    kind: gate
+    track: CHAPTARR
+    owner: routing-00
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-BRIDGE-RO
+    - server:CH-BACKUP
+    title: 'Chaptarr P1 done: no request can be lost'
+    done_criteria: CH-BRIDGE-RO and CH-BACKUP done
+    description: Chaptarr plan D-634/D-635 (Server t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-CONFIG
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 8
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CHAPTARR-ENV
+    - server:OP-CH-DECIDE
+    title: 'Chaptarr config: metadata profiles, SAB clients by tag, path mapping, notifications, pinned image'
+    done_criteria: all clients/indexers isValid; one sandbox grab per shelf lands in the right category
+    description: Owner server-L1-main + prox. Metadata profiles (deu,eng), 4 SAB audio clients by tag, remote path mapping, rename/retag off, ntfy notifications, image tag pinned; config export (no secrets)
+      in Server. Reuses CHAPTARR-ENV. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-LIBSCAN
+    kind: lane
+    track: CHAPTARR
+    owner: prox
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 12
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-CONFIG
+    - server:PH-BOOKS
+    title: Real libraries indexed read-only in Chaptarr, one shelf per off-peak run
+    done_criteria: 4 ABS shelves + ebook library in Chaptarr within 2 % of ABS/Calibre counts, no NFS wedge
+    description: Estimate 12 h + scan time; staged per shelf (NFS wedge risk). Needs PH-BOOKS (Prowlarr key rotation + BookLore/scan tokens). Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md,
+      t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-BRIDGE-APPLY
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 8
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:PH-CH-INTAKE
+    - server:CH-CONFIG
+    - server:T6-MEDIA
+    title: 'Bridge --apply: requests into Chaptarr with req-<user> + lane tags, search off'
+    done_criteria: every open request visible with its tag; 20-request sample status correct
+    description: Status derived (Chaptarr+SAB+ABS); absorbs abr_abs_reconcile (old template retired). T6-MEDIA write rules apply. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan
+      b96260e6).
+  - project: server
+    id: CH-TABLE
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 16
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-LIBSCAN
+    title: Per-book read/listen/format/language table inside Chaptarr (public fork)
+    done_criteria: unit + UI tests green (ebook-only, audio-only, both, multi-language); table shows the real library; 20-book spot check vs ABS/Calibre correct; site-data grep of the fork clean
+    description: D2. Book resource field read/listen, formats, languages; book-index columns + filters, details panel; fork image built by CI, pinned by digest on media.vm. Free/open models may implement
+      + review; no site data. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-ALERTS
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 4
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-BRIDGE-APPLY
+    title: 'Book request alerts to ntfy: LOST, stuck > 7 d, no_source > 30 d, ledger/ABR drift'
+    done_criteria: each alert fired once in a test run
+    description: Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: PH-CH-OVERVIEW
+    kind: gate
+    track: CHAPTARR
+    owner: routing-00
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-LIBSCAN
+    - server:CH-TABLE
+    - server:CH-BRIDGE-APPLY
+    - server:CH-ALERTS
+    title: 'Chaptarr P2-P4 done: overview of all requests + library'
+    done_criteria: operator goal (overview of all requests + library) met
+    description: Chaptarr plan D-634/D-635 (Server t6/chaptarr-plan b96260e6).
+  - project: server
+    id: OP-CH-P5
+    kind: lane
+    track: CHAPTARR
+    owner: operator
+    review_tier: standard
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:PH-CH-OVERVIEW
+    title: 'Operator GO/NO-GO: Chaptarr drives acquisition + importer cutover'
+    done_criteria: a router D-row records the GO or NO-GO, taken after 2 weeks of using the overview; NO-GO cancels the P5 items
+    description: 'D3/D4 (D-635): current importers stay until then. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).'
+    operator: true
+  - project: server
+    id: CH-SLSK
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:OP-CH-P5
+    title: Soulseek fallback ported into chaptarr_sidecar.py
+    done_criteria: tests green + one supervised dry-run on a sourceless title
+    description: Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-PARITY
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - run-record
+    estimate_h: 8
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-SLSK
+    - server:CH-LIBSCAN
+    title: Sandbox parity vs current drivers (German-first, 4 shelves, series/magazine completeness)
+    done_criteria: parity report, deviations explained
+    description: Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-CUTOVER-AUDIO
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 6
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-PARITY
+    - server:T6-MEDIA
+    title: Audiobook lane cutover to Chaptarr search (slsk_audiobook_acquire off)
+    done_criteria: 7 days under cap, no duplicate grabs, rollback tested
+    description: Owner server-L1-main + prox; estimate 6 h + 7 d soak; importer per D3. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-CUTOVER-EBOOK
+    kind: lane
+    track: CHAPTARR
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 6
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-CUTOVER-AUDIO
+    title: Ebook/comic/manga/magazine lane cutover to Chaptarr (book_acquire)
+    done_criteria: 7 days under cap, no duplicate grabs, rollback tested
+    description: Owner server-L1-main + prox; estimate 6 h + 7 d soak. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: PH-CH-DRIVE
+    kind: gate
+    track: CHAPTARR
+    owner: routing-00
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-CUTOVER-EBOOK
+    title: Chaptarr P5 done (or cancelled by OP-CH-P5)
+    done_criteria: CH-CUTOVER-EBOOK done or the P5 items cancelled by a NO-GO
+    description: Chaptarr plan D-634/D-635 (Server t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-UP-77
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 12
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:OP-CH-DECIDE
+    title: 'Upstream PR: grab budget for Chaptarr issue #77'
+    done_criteria: PR opened with green CI + tests; item closes when merged or declined
+    description: 'D5 full upstream PR: rolling cap, rate-limit back-off, stop after N failures; open models allowed; no site data. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md,
+      t6/chaptarr-plan b96260e6).'
+  - project: server
+    id: CH-UP-MULTILANG
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 16
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:T-008
+    - server:OP-CH-DECIDE
+    title: 'Upstream PR: per-language monitored editions (DE + EN of one title)'
+    done_criteria: PR opened with green CI + tests for both media types; closes when merged or declined
+    description: D5; short design note on an issue first (changes a core invariant); open models allowed. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-UP-ABRLIST
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 12
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-UP-MULTILANG
+    - server:PH-CH-OVERVIEW
+    title: 'Upstream PR: generic AudioBookRequest ImportList provider'
+    done_criteria: PR opened with green CI; closes when merged or declined
+    description: D5; tests with audiobooks + ebooks. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: CH-UP-TABLE
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:CH-TABLE
+    title: Upstream PR of the per-book read/listen/format/language table
+    done_criteria: PR opened with green CI; closes when merged or declined; on merge the homelab returns to the release image
+    description: D5; generic, no site data. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan b96260e6).
+  - project: server
+    id: PH-CH-UPSTREAM
+    kind: gate
+    track: CHAPTARR
+    owner: routing-00
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:T-008
+    - server:CH-UP-77
+    - server:CH-UP-MULTILANG
+    - server:CH-UP-ABRLIST
+    - server:CH-UP-TABLE
+    title: 'Chaptarr P6 done: upstream PRs'
+    done_criteria: all upstream items closed (maintainer-paced, non-blocking for the operator goal)
+    description: Chaptarr plan D-634/D-635 (Server t6/chaptarr-plan b96260e6).
+  - project: server
+    id: PH-CHAPTARR
+    kind: gate
+    track: CHAPTARR
+    owner: routing-00
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 0
+    depends_on:
+    - server:PH-CH-INTAKE
+    - server:PH-CH-OVERVIEW
+    - server:PH-CH-DRIVE
+    - server:PH-CH-UPSTREAM
+    title: Track CHAPTARR done
+    done_criteria: all four Chaptarr phase gates done
+    description: 'Budget 400k tokens. Estimate 15-18 agent days. Planning only: no item starts before the operator''s GO. Chaptarr plan D-634/D-635 (Server docs/plans/chaptarr-plan-2026-10.md, t6/chaptarr-plan
+      b96260e6).'
+- op: edit
+  key: server:T-008
+  fields:
+    description: 'Re-scoped (D-635 batch d99459a): upstream PR #97 only (no nagging); the feature-branch part moves to CH-SLSK / CH-UP-MULTILANG. Dependency of PH-CH-UPSTREAM and CH-UP-MULTILANG. PR #97
+      OPEN, no review (gh 2026-10-08).'
+    done_criteria: 'upstream PR #97 merged or declined'
+- op: edit
+  key: server:GOAL
+  fields:
+    depends_on:
+    - server:PH-BOOKS
+    - server:PH-DEPLOYSAFE
+    - server:PH-DETECT
+    - server:PH-DOCS
+    - server:PH-FIX
+    - server:PH-GATEWAY
+    - server:PH-GRAPHMOVE
+    - server:PH-HA
+    - server:PH-HEAL
+    - server:PH-HEAL-LIVE
+    - server:PH-HEALTH
+    - server:PH-INFRA
+    - server:PH-LEDGER
+    - server:PH-LITELLM-RETIRE
+    - server:PH-MAINT
+    - server:PH-MANUAL
+    - server:PH-MEDIA
+    - server:PH-OWUI
+    - server:PH-OWUIEXT
+    - server:PH-PLANS
+    - server:PH-UPDATES
+    - server:PH-UPDATESRUN
+    - server:PH-VOICE
+    - server:PH-CHAPTARR
+- op: legacy_state
+  key: server:OP-CH-DECIDE
+  state: in_review
+  note: 'router D-635: operator answered D1-D5 on 2026-10-08'
+- op: add_evidence
+  key: server:OP-CH-DECIDE
+  kind: decision
+  ref:
+    id: D-635
+- op: close_on_decision
+  key: server:OP-CH-DECIDE
+
