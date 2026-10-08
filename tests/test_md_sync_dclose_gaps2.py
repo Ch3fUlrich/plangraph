@@ -137,6 +137,7 @@ def test_gap_r5_credential_shaped_segment_is_masked(repo, tmp_path):
 
 
 def test_gap_r5_no_models_line_for_conflicting_sha_row(repo, tmp_path):
+    """Later D-row wins on conflicting shas (SUPERSEDE RULE): D-506 governs, models still copied."""
     rows = (
         dec_row("D-505", "work Models: segA", f"demo:CODE-1@{repo.merged[:8]}")
         + dec_row("D-506", "work Models: segB", f"demo:CODE-1@{repo.unmerged[:8]}")
@@ -144,14 +145,20 @@ def test_gap_r5_no_models_line_for_conflicting_sha_row(repo, tmp_path):
     text, view = decs(tmp_path, rows)
     p = build([item("CODE-1", kinds=("commit",))], text, view, repo)
 
+    # D-506 supersedes D-505: the unmerged sha plans in_review, not a close.
+    assert p.d_in_review == [{"key": "demo:CODE-1", "decision": "D-506",
+                              "sha": repo.unmerged[:8], "reason": "not on main"}]
+    assert "D-505" not in p.invalid_tokens and "D-506" not in p.invalid_tokens
+
     out = io.StringIO()
     md_sync.report(p, out, dry=True)
     report_text = out.getvalue()
-    assert "models demo:CODE-1" not in report_text
+    assert f"in_review demo:CODE-1: D-506 @{repo.unmerged[:8]} not on main" in report_text
+    assert "models demo:CODE-1" in report_text
 
     st = md_sync.status_doc("dry")
     md_sync.fill_status(st, p)
-    assert not any(m.get("key") == "demo:CODE-1" for m in st.get("models", []))
+    assert any(m.get("key") == "demo:CODE-1" for m in st.get("models", []))
 
 
 def test_gap_r5_not_in_graph_counted_in_close_skipped(repo, tmp_path):
@@ -218,7 +225,3 @@ def test_gap_r7_status_file_fields_shape(repo, tmp_path):
                for m in st["models"])
     for entry in st["models"]:
         assert set(entry.keys()) == {"key", "decision", "text"}
-
-
-
-

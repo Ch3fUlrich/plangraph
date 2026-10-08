@@ -263,8 +263,9 @@ def _contribute_drows(plan, key, ident, decisions, view, dinfo):
     roll back the whole batch, so it is dropped and reported ``close_skipped``
     (the same pre-check the ordinary ANSWERS close gets).
     """
-    info = dinfo.setdefault(key, {"dnums": set(), "sha": None, "conflict": False,
-                                  "conflict_d": None, "models": []})
+    info = dinfo.setdefault(key, {"dnums": set(), "sha": None, "sha_dnum": None,
+                                   "conflict": False, "conflict_d": None,
+                                   "superseded": [], "models": []})
     for dec in decisions:
         if view is not None and view.has_closes_keyword(dec) \
                 and key not in view.closes(dec):
