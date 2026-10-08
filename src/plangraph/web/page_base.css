@@ -380,3 +380,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---- Activity page (D-696): range presets, per-project counts, groups --- */
+.act-range{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 12px}
+.act-range button[aria-pressed="true"]{background:var(--accent);color:var(--bg)}
+.act-counts{width:100%;border-collapse:collapse;font-size:12px}
+.act-counts th,.act-counts td{padding:5px 6px;text-align:left;border-bottom:1px solid var(--border);overflow-wrap:anywhere}
+.act-group{margin:10px 0;border:1px solid var(--border);border-radius:8px}
+.act-group summary{min-height:44px;display:flex;align-items:center;padding:6px 10px;cursor:pointer;font-weight:600}
+.act-row{display:flex;gap:8px;align-items:baseline;padding:6px 10px;border-top:1px dashed var(--border)}
+.act-title{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
+.act-time{font-size:11px;color:var(--muted);white-space:nowrap}
+.act-empty{margin:16px 0;color:var(--muted)}
+.sb-menu{padding:10px 12px 0}
+.sb-menu button{width:100%;min-height:44px}

@@ -1,6 +1,7 @@
 /* PlanUI.Pages — the header page router and the sidebar resize handle.
  *
- * Pages: graph | table | qa (Decisions & Q&A) | needs (Needs You) | settings.
+ * Pages: graph | table | qa (Decisions & Q&A) | needs (Needs You) |
+ * activity (Activity) | settings.
  * graph/table stay in the store (`ui.view`); qa/needs/settings are plain pages
  * remembered in the hash as `pg=`. The sidebar holds only the project filter
  * tree, so nothing here touches it except its width.
@@ -11,8 +12,8 @@
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
 
-  var PANELS = { graph: "panel-graph", table: "panel-list", qa: "panel-qa", needs: "panel-needs", settings: "panel-settings" };
-  var TABS = { graph: "tab-graph", table: "tab-list", qa: "tab-qa", needs: "tab-needs", settings: "tab-settings" };
+  var PANELS = { graph: "panel-graph", table: "panel-list", qa: "panel-qa", needs: "panel-needs", activity: "panel-activity", settings: "panel-settings" };
+  var TABS = { graph: "tab-graph", table: "tab-list", qa: "tab-qa", needs: "tab-needs", activity: "tab-activity", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
 
@@ -38,6 +39,7 @@
     document.body.setAttribute("data-page", name);
     if (name === "table" && PP && PP.renderTable) PP.renderTable();
     if (name === "graph" && PP && PP.state && PP.state.cy) { try { PP.state.cy.resize(); } catch (e) { /* not ready */ } }
+    if (name === "activity" && PlanUI.ActivityPage && PlanUI.ActivityPage.render) PlanUI.ActivityPage.render();
     if (PlanUI.Pages.onChange) PlanUI.Pages.onChange(name);
   }
 
@@ -87,9 +89,15 @@
 
   function mount(store) {
     ui = store;
+    var bound = {};
     Object.keys(TABS).forEach(function (k) {
+      bound[TABS[k]] = true;
       var t = $(TABS[k]);
       if (t) t.addEventListener("click", function () { show(k); });
+    });
+    /* The phone menu drawer (#sidebar) reaches pages with no tabbar entry. */
+    Array.prototype.forEach.call(document.querySelectorAll('[data-page="activity"]'), function (b) {
+      if (b && !bound[b.getAttribute("id")]) b.addEventListener("click", function () { show("activity"); });
     });
     bindResize();
   }
