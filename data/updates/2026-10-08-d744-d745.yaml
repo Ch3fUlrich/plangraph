@@ -1,0 +1,80 @@
+# D-744 + D-745 (PG-MODELS close): EBN-REDTRACE-NONBINARY close; EBN-PROVIDER-PACK operator/provider question (pack §4/§6).
+batch: 2026-10-08-d744
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 0b4718abb7bdfb5525a98b34d13a088ac193934a63bd07645481d0b6a5a287e7
+ops:
+- op: create
+  item:
+  - project: workst-ebn
+    id: EBN-PROVIDER-PACK
+    kind: lane
+    track: EBN
+    owner: operator
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    operator: true
+    wait: answer
+    title: 'OP/provider: pack §4/§6 - how red traces were binarised; red-cell dF/F exports'
+    done_criteria: provider answer recorded in a router D-row
+    description: 'workst-L1-ebn via routing 2026-10-08 (D-744): ask the data provider how the stored red traces were binarised (pack §4) and for the red-cell dF/F exports (§6). Until answered: classifier
+      deployed on red traces only.'
+- op: edit
+  key: routing:PH-EBN-1003
+  fields:
+    depends_on:
+    - workst-ebn:EBN-COMPUTE-LOWPRIO
+    - workst-ebn:EBN-DON011187-TRANSFER
+    - workst-ebn:EBN-EMBEDDING
+    - workst-ebn:EBN-LOAO-CV
+    - workst-ebn:EBN-MISMATCH-EXPLAINED
+    - workst-ebn:EBN-PAPER-N
+    - workst-ebn:EBN-PROVIDER-PACK
+    - workst-ebn:EBN-REBINARIZE
+    - workst-ebn:EBN-REDCELL-CLASSIFIER
+    - workst-ebn:EBN-REDTRACE-NONBINARY
+    - workst-ebn:EBN-UNTAGGED-VALIDITY
+    - workst-ebn:P0-BLIND-EYE-TEST
+    - workst-ebn:P1-AUDIT-REAL-DATA
+    - workst-ebn:P2-CELL-OUT-REDO
+    - workst-ebn:P3-DIAG-REVIEW
+    - workst-ebn:P4-CLASSIFIER-COMPARISON
+- op: legacy_state
+  key: workst-ebn:EBN-REDTRACE-NONBINARY
+  state: in_review
+  note: router D-744 (agent-reported, ebn f91a800)
+- op: add_evidence
+  key: workst-ebn:EBN-REDTRACE-NONBINARY
+  kind: decision
+  ref:
+    id: D-744
+- op: close_on_decision
+  key: workst-ebn:EBN-REDTRACE-NONBINARY
+- op: edit
+  key: plangraph:PG-MODELS
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: legacy_state
+  key: plangraph:PG-MODELS
+  state: in_review
+  note: router D-745 (judge ACCEPT server-L1-routing)
+- op: add_evidence
+  key: plangraph:PG-MODELS
+  kind: decision
+  ref:
+    id: D-745
+- op: add_evidence
+  key: plangraph:PG-MODELS
+  kind: commit
+  repo: plangraph
+  ref:
+    commit: e2b07d9606787b970c3ebf497881044ba23b6adf
+- op: close_on_decision
+  key: plangraph:PG-MODELS
