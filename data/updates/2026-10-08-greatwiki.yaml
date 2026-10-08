@@ -1,0 +1,464 @@
+# great-wiki plan (D-709, greatwiki-L1).
+batch: 2026-10-08-greatwiki
+principal: routing-00
+source: /home/s/code/routing/docs/plan/graph-updates-2026-10-08-greatwiki.md
+source_sha256: ba0fe5669bc774a91caae28e9c71db7b17385e3816ef30990c5fa80c131fd802
+ops:
+- op: create
+  item:
+  - project: great-wiki
+    id: GW-SHIP-MOVE
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1.0
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: gates (fmt/clippy/test, web check+vitest, `just mutate`) on `7076841`; push to origin+forgejo main
+    done_criteria: CI green both forges
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: OP-GW-MOVE-DEFAULTS
+    kind: lane
+    track: GW
+    owner: operator
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 0.5
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'OK the 3 defaults ADR 0023 settled w/o owner: written grants travel with moved pages; top level needs instance admin; address segment separate from ti'
+    done_criteria: 'OK the 3 defaults ADR 0023 settled w/o owner: written grants travel with moved pages; top level needs instance admin; address segment separate from title'
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+    operator: true
+    wait: answer
+  - project: great-wiki
+    id: GW-DEPLOY-MOVE
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 1.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    - great-wiki:OP-GW-MOVE-DEFAULTS
+    title: deploy to prod
+    done_criteria: Semaphore task id + browser check of move + 307 forward
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md). Owner greatwiki-L1 + prox.
+  - project: great-wiki
+    id: GW-MOVE-SOCKET
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: re-authorise open editing socket by document id (move no longer closes it)
+    done_criteria: re-authorise open editing socket by document id (move no longer closes it)
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-MOVE-SUBROUTES
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: forward sub-routes (`/alt/history` …), same reader-only rule (ADR 0022)
+    done_criteria: forward sub-routes (`/alt/history` …), same reader-only rule (ADR 0022)
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-MOVE-HARNESS
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: behaviour-harness group for move dialog (`just behaviour`)
+    done_criteria: behaviour-harness group for move dialog (`just behaviour`)
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-MOVE-DRAG
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 6.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-MOVE-HARNESS
+    title: sidebar drag opens same dialog
+    done_criteria: sidebar drag opens same dialog
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: PH-GW-MOVE
+    kind: gate
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-DEPLOY-MOVE
+    - great-wiki:GW-MOVE-SOCKET
+    - great-wiki:GW-MOVE-SUBROUTES
+    - great-wiki:GW-MOVE-HARNESS
+    - great-wiki:GW-MOVE-DRAG
+    title: rename/move complete
+    done_criteria: rename/move complete
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-SEARCH-INDEX
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: 'M7: FTS5 (`unicode61 remove_diacritics=2`, BM25 weights) behind `SearchIndex`, kept current on save/move/trash'
+    done_criteria: 'M7: FTS5 (`unicode61 remove_diacritics=2`, BM25 weights) behind `SearchIndex`, kept current on save/move/trash'
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-SEARCH-API
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SEARCH-INDEX
+    title: pages/topics/tasks result groups, snippets with marked term, one permission check per hit via existing accessors only; mutation-tested
+    done_criteria: pages/topics/tasks result groups, snippets with marked term, one permission check per hit via existing accessors only; mutation-tested
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-SEARCH-UI
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SEARCH-API
+    title: search box + grouped results; behaviour checks + screenshots
+    done_criteria: search box + grouped results; behaviour checks + screenshots
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: PH-GW-SEARCH
+    kind: gate
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SEARCH-UI
+    title: M7 (search only; assistant out of scope) done
+    done_criteria: M7 (search only; assistant out of scope) done
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-MAIL-RELAY
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - run-record
+    estimate_h: 2.0
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: find homelab SMTP relay (Authelia/health mails) in Server repo; prove cloud.vm reaches it
+    done_criteria: test mail delivered
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md). Owner greatwiki-L1 + server-L1.
+  - project: great-wiki
+    id: GW-EVENT-BUS
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 12.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: 'M6 bus, 4 producers: replies/mentions, edits on my pages, task assigned/due, admin: invites accepted + grant changes; events filtered per reader'
+    done_criteria: 'M6 bus, 4 producers: replies/mentions, edits on my pages, task assigned/due, admin: invites accepted + grant changes; events filtered per reader'
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-COMMENTS
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 16.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-EVENT-BUS
+    title: passage-anchored (orphan, never delete) + page thread; any reader comments; filtered per document
+    done_criteria: passage-anchored (orphan, never delete) + page thread; any reader comments; filtered per document
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-COMMENTS-RESOLVE
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 4.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-COMMENTS
+    title: resolve/collapse, kept in history, no author delete
+    done_criteria: resolve/collapse, kept in history, no author delete
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-NOTIF-VIEW
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-EVENT-BUS
+    title: notifications view + header badge
+    done_criteria: notifications view + header badge
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-DIGEST
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-EVENT-BUS
+    - great-wiki:GW-MAIL-RELAY
+    title: daily digest via relay, no own provider secret
+    done_criteria: daily digest via relay, no own provider secret
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: PH-GW-M6
+    kind: gate
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-COMMENTS-RESOLVE
+    - great-wiki:GW-NOTIF-VIEW
+    - great-wiki:GW-DIGEST
+    title: M6 done
+    done_criteria: M6 done
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-TEMPLATES
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 8.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: page templates (decided, unscoped — design note first)
+    done_criteria: page templates (decided, unscoped — design note first)
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-REGISTER
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2.0
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: editor du/Sie register consistency
+    done_criteria: editor du/Sie register consistency
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GW-DOK-SELECT
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - run-record
+    estimate_h: 1.0
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: the `dok:` SELECT on production DB (read-only)
+    done_criteria: the `dok:` SELECT on production DB (read-only)
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md). Owner greatwiki-L1 + prox.
+  - project: great-wiki
+    id: GW-HANDOFF-DOC
+    kind: lane
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1.0
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:GW-SHIP-MOVE
+    title: '`docs/operations/SESSION-HANDOFF.md` is 2026-08-08, stale; refresh'
+    done_criteria: '`docs/operations/SESSION-HANDOFF.md` is 2026-08-08, stale; refresh'
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+  - project: great-wiki
+    id: GOAL-GW
+    kind: gate
+    track: GW
+    owner: greatwiki-L1-main
+    review_tier: standard
+    evidence_kinds: []
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - great-wiki:PH-GW-MOVE
+    - great-wiki:PH-GW-SEARCH
+    - great-wiki:PH-GW-M6
+    - great-wiki:GW-TEMPLATES
+    - great-wiki:GW-REGISTER
+    - great-wiki:GW-DOK-SELECT
+    - great-wiki:GW-HANDOFF-DOC
+    title: great-wiki ready for family users (M6+M7)
+    done_criteria: great-wiki ready for family users (M6+M7)
+    description: D-709, greatwiki-L1 plan (routing docs/plan/graph-updates-2026-10-08-greatwiki.md).
+- op: edit
+  key: routing:GOAL
+  fields:
+    depends_on:
+    - autoos:OP-MANAGE-KEY
+    - autoos:OP-WS-RELAUNCH
+    - autoos:ORCH-L2-LAUNCHER
+    - autoos:ORCH-REVIEW-TIERS
+    - autoos:PH-MCP-ONE
+    - autoos:PH-OPS-20261002
+    - autoos:PH-WS-SHIFT
+    - autoos:SEC-ISOSEC
+    - autoos:T1-COMBO-LAYERS
+    - autoos:T1-CREDIT
+    - autoos:T1-JEV
+    - autoos:T1-MM
+    - autoos:T1-NOISE
+    - autoos:T1-UPGRADE
+    - autoos:T1-WEBTOOLS
+    - autoos:T1-ZEN
+    - autoos:T2-COMPACT
+    - autoos:T2-ISOLATE
+    - autoos:T2-LEAN
+    - autoos:T2-MCPLIFE
+    - autoos:T2-RECORD-GAPS
+    - autoos:T2-RESEARCHCARD
+    - autoos:T2-TASKSESSION
+    - autoos:T3-CLEAN
+    - autoos:T3-PRINCIPLES
+    - autoos:T3-SCRUB
+    - autoos:T3-SPLIT
+    - autoos:T3-WIN
+    - invest:PH-INVEST
+    - plangraph:PG-M4
+    - routing:GATE-P3
+    - routing:PH-AUDIT-1002
+    - routing:PH-EBN-1003
+    - routing:PH-FLEET-1003
+    - routing:PH-GEN-1003
+    - routing:PH-OPERATOR
+    - routing:PH-SERVER-1003
+    - routing:SETUP-IMPROVEMENT-PLAN
+    - server:GOAL
+    - server:GW-FOLLOWUP
+    - server:GW-MCP-ROLLOUT
+    - server:OP-DOCKHAND-REVOKE
+    - server:OP-FRITZ-V6
+    - server:SEC-EDGE-GW-INVEST
+    - server:SEC-MINIO
+    - server:SEC-OIDC
+    - server:SEC-SESSION-SECRETS
+    - server:SEC-TIER-A
+    - server:T6-DETECT
+    - server:T6-FIX
+    - server:T6-GRAPHMOVE-CUTOVER
+    - server:T6-INFRA
+    - server:T6-IPV6
+    - server:T6-LEDGER
+    - server:T6-MEDIA
+    - server:T6-PHONE
+    - server:T6-SECRETS
+    - server:T6-UPDATES-IMPL
+    - workstation:OP-GROK-STEPS
+    - great-wiki:GOAL-GW
+
