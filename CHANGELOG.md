@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-08
 
+- **Activity page (D-696):** keeper snapshot carries 31 days of state events (b8c731b); header page Activity with
+  24 h / 7 d / 30 d / custom ranges, counts + lists per project (workst browser PASS). Render drops whole-line JS comments.
 - **Operator waits (D-677):** keeper item field `wait` = answer|task (537d063); md-sync sets it from QUESTIONS.md,
   imports priority-table rows and suffixed OS ids (f7e59d1); page outlines items/phases/projects amber (answer) or
   violet (task), legend, Needs You badges, dependent tooltip (1f1d044, 2cd6d37). Decision text on the Decisions
