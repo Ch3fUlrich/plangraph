@@ -12,6 +12,7 @@ Tool failures (a refused verb or an unreachable API) are MCP results with
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import sys
@@ -269,7 +270,15 @@ def serve(instream, outstream, client=None):
             outstream.flush()
 
 
-_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def _is_loopback(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def cleartext_warning(base_url):
@@ -279,7 +288,7 @@ def cleartext_warning(base_url):
     anywhere else the token must travel inside TLS (PG-PROXY-ACCESS).
     """
     parts = urllib.parse.urlsplit(base_url or "")
-    if parts.scheme != "http" or (parts.hostname or "") in _LOOPBACK:
+    if parts.scheme != "http" or _is_loopback(parts.hostname or ""):
         return None
     return (f"warning: PG_URL {parts.scheme}://{parts.hostname} sends the bearer"
             " token in clear text; use https (keeper proxy) or loopback")

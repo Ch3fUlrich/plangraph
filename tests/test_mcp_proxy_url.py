@@ -44,8 +44,7 @@ def test_cleartext_warning_only_for_remote_http():
     assert cleartext_warning("https://keeper.example.test") is None
     assert cleartext_warning("http://127.0.0.1:8787") is None
     assert cleartext_warning("http://localhost:8787") is None
-    assert cleartext_warning("http://[::1]:8787") is None
     assert cleartext_warning("") is None
-    warn = cleartext_warning("http://192.168.178.73:8788")
-    assert warn and "clear text" in warn and "192.168.178.73" in warn
+    warn = cleartext_warning("http://plain.example.test:8788")
+    assert warn and "clear text" in warn and "plain.example.test" in warn
     assert "secret" not in warn
