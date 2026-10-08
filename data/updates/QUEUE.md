@@ -83,3 +83,4 @@ D-696 plangraph:UI-ACTIVITY-DATA -> UI-ACTIVITY-PAGE under PH-M2C-UI: data/updat
 workst-ebn 6 items (3 done-by-decision pending a router row; 2 operator answer waits) + workst-gen GEN-REDACT (D-697) / GEN-ID-GUARD: data/updates/2026-10-08-ebn-gen-d697.yaml — LIVE 2026-10-08.
 invest (new project): 4 INV lanes + 7 OWN operator items (wait set) under invest:PH-INVEST -> routing:GOAL: data/updates/2026-10-08-invest.yaml — TRIAL OK; LIVE 2026-10-08 (verify ok; backup keeper.db.pre-invest).
 great-wiki (D-709, new project): 20 lanes + 4 gates, GOAL-GW under routing:GOAL: data/updates/2026-10-08-greatwiki.yaml — TRIAL OK (ready = the 5 named); LIVE 2026-10-08 (verify ok; backup keeper.db.pre-greatwiki).
+D-708 A PG-SSOT + Haiku (14 items under SETUP-IMPROVEMENT-PLAN): data/updates/2026-10-08-d708-pg-ssot.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d708).
