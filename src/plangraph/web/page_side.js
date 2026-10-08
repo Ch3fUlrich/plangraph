@@ -91,66 +91,8 @@
     return "var(--muted)";
   }
 
-  /* ---- tiny sortable table ------------------------------------------------ */
-  var MAX_ROWS = 300;  // per table, "+N more" beyond (matches page_table_view.js)
-  function table(cols, rows, tkey, emptyMsg) {
-    var t = el("table", "sb-table"), s = sortState[tkey]; t.id = tkey + "-table";
-    var tr = el("tr");
-    cols.forEach(function (c) {
-      var th = el("th", c.cls), b = el("button", null, c.label);
-      th.setAttribute("aria-sort", s.col === c.col ? (s.dir === "asc" ? "ascending" : "descending") : "none");
-      b.type = "button";
-      b.addEventListener("click", function () {
-        if (s.col === c.col) s.dir = s.dir === "asc" ? "desc" : "asc";
-        else { s.col = c.col; s.dir = "asc"; }
-        renderPanel(UI.get("sidebar").tab);
-      });
-      th.appendChild(b); tr.appendChild(th);
-    });
-    var thead = el("thead"); thead.appendChild(tr); t.appendChild(thead);
-    var body = el("tbody"), idx = -1;
-    cols.forEach(function (c, i) { if (c.col && c.col === s.col) idx = i; });
-    if (!rows.length) {
-      var td = el("td", null, emptyMsg); td.colSpan = cols.length;
-      var er = el("tr"); er.appendChild(td); body.appendChild(er);
-    }
-    if (idx >= 0) rows.sort(function (a, b) {
-      var r = natural(a.v[idx], b.v[idx]);
-      if (!r && a.v[0] !== b.v[0]) r = natural(a.v[0], b.v[0]);
-      return s.dir === "asc" ? r : -r;
-    });
-    var limit = Math.min(rows.length, MAX_ROWS);
-    for (var i = 0; i < limit; i++) {
-      var r = rows[i];
-      var rr = el("tr");
-      r.cells.forEach(function (c) {
-        var td = el("td");
-        if (c && c.nodeType) td.appendChild(c); else td.textContent = c == null ? "" : String(c);
-        rr.appendChild(td);
-      });
-      body.appendChild(rr);
-    }
-    if (rows.length > MAX_ROWS) {
-      var moreTr = el("tr");
-      var moreTd = el("td", null, "+" + (rows.length - MAX_ROWS) + " more");
-      moreTd.colSpan = cols.length;
-      moreTd.style.textAlign = "center";
-      moreTd.style.color = "var(--muted)";
-      moreTr.appendChild(moreTd);
-      body.appendChild(moreTr);
-    }
-    t.appendChild(body);
-    return t;
-  }
-
-  function keylink(key) {
-    var ok = !!(VM && VM.items.has(key));
-    var b = el("button", "keylink", key);
-    b.type = "button"; b.title = ok ? VM.humanize(key) : "not in this snapshot";
-    if (ok) b.addEventListener("click", function () { global.PlanPage.focusNode(key); });
-    else { b.disabled = true; b.className += " unknown"; }
-    return b;
-  }
+  /* The sortable table, keylink, and Needs/Q&A/Answers renderers live in
+   * page_side_tables.js (PlanUI.SideTables) — shared base below. */
 
   /* ---- Projects: project > phase > task tree (filter + navigation) -------- */
   var ROLE = {                                   // same glyph set everywhere
@@ -271,121 +213,6 @@
     box.appendChild(ul);
   }
 
-  /* ---- Needs You ---------------------------------------------------------- */
-  function renderNeeds() {
-    var box = $("sb-panel-needs");
-    if (!box) return;
-    clear(box);
-    var rows = (VM.needsYou || []).filter(pass);
-    box.appendChild(el("h3", "sb-h", "Needs You (" + rows.length + ")"));
-    if (!rows.length) {
-      box.appendChild(el("p", "sb-empty", (VM.needsYou || []).length ? "No rows match the current search." : "Nothing needs you right now."));
-      return;
-    }
-    rows.forEach(function (e) {
-      var rec = shaped(e), isQ = e.text !== undefined;
-      var row = el("div", "ny-row"), dot = el("span", "ny-dot");
-      dot.style.background = projectColor(rec.project);
-      row.appendChild(dot);
-      var main = el("div", "ny-main");
-      main.appendChild(el("span", "ny-title", isQ ? "Q: " + (e.text || "") : (rec.title || rec.key)));
-      var meta = isQ
-        ? join([e.id, e.project, "asked by " + (e.asked_by || "—"), e.item || ""])
-        : join([rec.key, rec.display, "prio " + rec.priority,
-                 rec.unblocks && rec.unblocks.length ? "unblocks " + rec.unblocks.length : ""], " · ");
-      main.appendChild(el("span", "ny-meta", meta));
-      row.appendChild(main);
-      var jump = el("button", "jump", "Jump");
-      jump.type = "button";
-      jump.setAttribute("aria-label", "Jump to " + (rec.key || ""));
-      jump.addEventListener("click", function () { var a = global.PlanUI.app; (a && a.jump ? a.jump : global.PlanPage.focusNode)(rec.key); });
-      row.appendChild(jump);
-      box.appendChild(row);
-    });
-  }
-
-  /* ---- Decisions & Q&A ---------------------------------------------------- */
-  function renderQA() {
-    if (global.PlanUI.QAPage && global.PlanUI.Preview) { global.PlanUI.QAPage.render(VM); return; }
-    var box = $("sb-panel-qa");
-    if (!box) return;
-    clear(box);
-    var dTotal = (VM.decisions || []).length;
-    var ds = dTotal ? (VM.decisions || []).filter(pass) : [];
-    box.appendChild(el("h3", "sb-h", count("Decisions", ds.length, dTotal)));
-    if (!(VM.decisions || []).length) {
-      box.appendChild(el("p", "sb-empty", "No data in this snapshot"));
-    } else {
-      var dcols = [{ label: "ID", col: "id", cls: "col-id" },
-                   { label: "Title", col: "title" },
-                   { label: "Project", col: "project", cls: "col-proj" },
-                   { label: "Date", col: "date", cls: "col-date" },
-                   { label: "Links", col: "links", cls: "col-links" }];
-      box.appendChild(table(dcols, ds.map(function (d) {
-        var links = (d.items || []).map(function (k) { return String(k).split(":").pop(); });
-        return { v: [d.id, d.title, d.project, d.date, links.length],
-                 cells: [d.id, d.title, d.project, d.date, links.length ? join(links) : "—"] };
-      }), "decisions", "No rows match the current search."));
-    }
-
-    var qs = (VM.questions || []).filter(function (q) {
-      return pass(q) && (qaStatus === "all" || qEff(q) === qaStatus);
-    });
-    var qTotal = (VM.questions || []).length;
-    box.appendChild(el("h3", "sb-h", count("Q&A", qs.length, qTotal)));
-    var seg = el("div", "seg");
-    seg.setAttribute("role", "group");
-    seg.setAttribute("aria-label", "Question status");
-    [["all", "All"], ["open", "Open"], ["answered", "Answered"]].forEach(function (opt) {
-      var b = el("button", null, opt[1]);
-      b.type = "button";
-      b.setAttribute("aria-pressed", String(qaStatus === opt[0]));
-      b.addEventListener("click", function () { qaStatus = opt[0]; renderPanel("qa"); });
-      seg.appendChild(b);
-    });
-    box.appendChild(seg);
-    if (!(VM.questions || []).length) {
-      box.appendChild(el("p", "sb-empty", "No data in this snapshot"));
-    } else {
-      var qcols = [{ label: "ID", col: "id", cls: "col-id" },
-                   { label: "Question", col: "text" },
-                   { label: "Project", col: "project", cls: "col-proj" },
-                   { label: "Status", col: "status", cls: "col-status" },
-                   { label: "Item", col: "item", cls: "col-links" }];
-      box.appendChild(table(qcols, qs.map(function (q) {
-        var es = qEff(q);
-        var st = el("span", "badge badge-" + shapeQ(q).display, es);
-        return { v: [q.id, q.text, q.project, es, q.item || ""],
-                 cells: [q.id, q.text, q.project, st, q.item ? keylink(q.item) : "—"] };
-      }), "qa", "No rows match the current search."));
-    }
-  }
-
-  /* ---- Answers ------------------------------------------------------------ */
-  function renderAnswers() {
-    if (global.PlanUI.QAPage && global.PlanUI.Preview) return;      // answers live in the Q&A page
-    var box = $("sb-panel-answers");
-    if (!box) return;
-    clear(box);
-    if (!(VM.questions || []).length) {
-      box.appendChild(el("p", "sb-empty", "No data in this snapshot"));
-      return;
-    }
-    var rows = (VM.answers || []).filter(pass);
-    box.appendChild(el("h3", "sb-h", "Answers (" + rows.length + ")"));
-    if (!rows.length) {
-      box.appendChild(el("p", "sb-empty", (VM.answers || []).length ? "No rows match the current search." : "No answered questions yet."));
-      return;
-    }
-    rows.forEach(function (q) {
-      var row = el("div", "ans-row");
-      row.appendChild(el("span", "ans-q", join([q.id, q.project], " · ") + " — " + (q.text || "")));
-      row.appendChild(el("span", "ans-a", q.answer || "(no answer text)"));
-      if (q.item) row.appendChild(el("span", "ans-meta", "Item: " + q.item));
-      box.appendChild(row);
-    });
-  }
-
   /* ---- Settings ----------------------------------------------------------- */
   function seg(opts, current, onPick, label) {
     var s = el("div", "seg");
@@ -490,18 +317,18 @@
 
   function renderPanel(tab) {
     if (tab === "projects") renderProjects();
-    else if (tab === "qa") renderQA();
-    else if (tab === "answers") renderAnswers();
+    else if (tab === "qa") PlanUI.SideTables.renderQA();
+    else if (tab === "answers") PlanUI.SideTables.renderAnswers();
     else if (tab === "settings") renderSettings();
-    else renderNeeds();
+    else PlanUI.SideTables.renderNeeds();
   }
 
   function renderAll() {
     renderCounts();
     renderProjects();
-    renderNeeds();
-    renderQA();
-    renderAnswers();
+    PlanUI.SideTables.renderNeeds();
+    PlanUI.SideTables.renderQA();
+    PlanUI.SideTables.renderAnswers();
     renderSettings();
     syncSettings();
     setAttributes();
@@ -521,6 +348,20 @@
       }
     });
   }
+
+  /* Shared base for page_side_tables.js (PlanUI.SideTables): helpers plus live
+   * accessors — UI/VM are set on mount, sortState/qaStatus mutate in place. */
+  PlanUI._sideBase = {
+    $: $, el: el, clear: clear, join: join,
+    qEff: qEff, shapeQ: shapeQ, shaped: shaped, pass: pass,
+    natural: natural, count: count, projectColor: projectColor,
+    sortState: sortState,
+    ui: function () { return UI; },
+    vm: function () { return VM; },
+    qa: function () { return qaStatus; },
+    setQa: function (v) { qaStatus = v; },
+    renderPanel: renderPanel
+  };
 
   PlanUI.Sidebar = { mount: mount, sync: syncSettings, render: renderAll, renderProjects: renderProjects };
 

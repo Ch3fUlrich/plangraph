@@ -223,6 +223,7 @@ function main() {
   require(WEB + "/page_store.js");
   require(WEB + "/page_search.js");
   require(WEB + "/page_side.js");
+  require(WEB + "/page_side_tables.js");
   PlanUI.Preview = { attach: function () {} };   // hover popups need no DOM here
   require(WEB + "/page_qa.js");
 

@@ -44,11 +44,13 @@ ASSETS_DIR = Path(__file__).resolve().parent / "web"
 JS_FILES = (
     "page.js",
     "page_ui.js",
+    "page_ui_filters.js",
     "page_details.js",
     "page_model.js",
     "page_store.js",
     "page_search.js",
     "page_side.js",
+    "page_side_tables.js",
     "page_graph.js",
     "page_graph_ext.js",
     "page_graph_cluster.js",

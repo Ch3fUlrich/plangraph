@@ -120,61 +120,8 @@
     return b;
   }
 
-  /* Tracks of ONE project, in first-appearance (phase progression) order.
-   Uses effective phase (phase || track) so phase-only snapshots work. */
-  function tracksOf(p) {
-    var seen = {}, out = [];
-    state.items.forEach(function (it) {
-      if (it.project === p) {
-        var ph = effectivePhase(it);
-        if (ph && !seen[ph]) {
-          seen[ph] = true;
-          out.push(ph);
-        }
-      }
-    });
-    return out;
-  }
-
-  /* Mirror the Projects-tab switches into the store's allow-lists (empty set =
-   * no filter) so the graph, which reads ui.filters, hides what is off. */
-  function pushFilters() {
-    var app = global.PlanUI && global.PlanUI.app, ui = app && app.ui;
-    if (!ui || typeof ui.patch !== "function") return;
-    var NONE = "__none__";
-    function allow(all, off) {
-      var on = all.filter(function (x) { return !off[x]; });
-      if (on.length === all.length) return new Set();
-      return new Set(on.length ? on : [NONE]);
-    }
-    // Build phase list from effective phases (phase || track) across all items
-    var allPhases = uniqueSorted(state.items.map(function (it) { return effectivePhase(it); }));
-    var cur = ui.get("filters") || {};
-    var f = Object.assign({}, cur, { projects: allow(state.projects, state.projectsOff), phases: allow(allPhases, state.tracksOff) });
-    var active = f.projects.size > 0 || f.phases.size > 0;
-    ui.patch({ filters: f, matchMode: active ? "hide" : "dim" });
-  }
-
-  /* kind: "project" | "phase"; returns the new on/off. Phases are global by name. */
-  function toggleFilter(kind, name) {
-    var off = kind === "project" ? state.projectsOff : state.tracksOff;
-    off[name] = !off[name];
-    pushFilters();
-    if (global.PlanUI.Sidebar && global.PlanUI.Sidebar.renderProjects) global.PlanUI.Sidebar.renderProjects();
-    if (global.PlanUI.QAPage) global.PlanUI.QAPage.render();
-    if (global.PlanPage.renderTable) global.PlanPage.renderTable();
-    return !off[name];
-  }
-
-  function isOn(kind, name) {
-    return !(kind === "project" ? state.projectsOff : state.tracksOff)[name];
-  }
-
-  /* The old chip/matrix filter UI lives in the sidebar Projects tab now. */
-  function renderChips() {
-    if (global.PlanUI.Sidebar && global.PlanUI.Sidebar.renderProjects) global.PlanUI.Sidebar.renderProjects();
-  }
-
+  /* The project/phase filter helpers (tracksOf/pushFilters/toggleFilter and
+   * the chip stub) live in page_ui_filters.js — same PlanPage hooks. */
   function renderLegend() {
     var box = $("legend");
     clear(box);
@@ -408,9 +355,7 @@
     visibleItems: visibleItems,
     recompute: recompute,
     renderHeader: renderHeader,
-    renderChips: renderChips,
-    toggleFilter: toggleFilter,
-    isFilterOn: isOn,
+    /* toggleFilter/isFilterOn/renderChips attach here from page_ui_filters.js. */
     renderLegend: renderLegend,
     renderGraph: renderGraph
   };

@@ -181,6 +181,7 @@ global.PlanUI = {
 require(WEB + "/page.js");
 require(WEB + "/page_model.js");
 require(WEB + "/page_ui.js");
+require(WEB + "/page_ui_filters.js");
 
 // Now use the REAL PlanPage from page_ui.js (it overwrites global.PlanPage)
 var PlanPage = global.PlanPage;
@@ -355,6 +356,7 @@ var PlanUI = require(WEB + "/page_model.js");
 require(WEB + "/page_store.js");
 require(WEB + "/page_search.js");
 require(WEB + "/page_side.js");
+require(WEB + "/page_side_tables.js");
 
 var snap = JSON.parse(fs.readFileSync(FIXTURE, "utf8"));
 var vm = PlanUI.buildViewModel(snap);

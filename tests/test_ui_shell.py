@@ -235,6 +235,7 @@ function main() {
   require(WEB + "/page_store.js");
   require(WEB + "/page_search.js");
   require(WEB + "/page_side.js");            // PlanUI.Sidebar (D4 table ids)
+  require(WEB + "/page_side_tables.js");     // PlanUI.SideTables (sidebar tables)
   require(WEB + "/page_details.js");         // PlanUI.DetailPanel (D6 mount)
 
   var ui = new PlanUI.Store({});

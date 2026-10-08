@@ -258,6 +258,7 @@ function main() {
   require(WEB + "/page_store.js");
   require(WEB + "/page_search.js");
   require(WEB + "/page_side.js");
+  require(WEB + "/page_side_tables.js");
   PlanUI.Preview = { attach: function () {} };
   require(WEB + "/page_qa.js");
   win.PlanPage = global.PlanPage;
