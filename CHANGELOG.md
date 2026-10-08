@@ -4,6 +4,9 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-08
 
+- **UI lanes (L2-ui) + keeper proxy files:** table created column from snapshot created_at, node budget 200 per
+  expanded phase with a '+N more' node, render new-UI detection on content (97d0ded). Keeper proxy (not live):
+  nginx sidecar with mutual TLS + edge allowlist, mint-certs.sh for the shared internal hop CA (b00ea79, D-759 A).
 - **PG-FETCH-ON-DEMAND / PG-SPLIT-EXAMPLES-TEST / PG-CI:** keeper fetches a stale origin/* clone once per repo per
   60 s when commit evidence misses (b8ea51b); examples regenerated + README pointer reworded, full suite 0 failures
   (5c029fa); GitHub Actions pytest on push/PR (fffd19f, run 37850230244 green).
