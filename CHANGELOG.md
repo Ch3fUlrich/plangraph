@@ -4,6 +4,9 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-08
 
+- **Page (later 2026-10-08):** Q&A answers update counts and row badges live (797c428, 2d53adb); URL hash keeps
+  collapse/focus/filter state (59ff024); tests for table view, Q&A page, sidebar resize (f06ceb6); page_side.js /
+  page_ui.js split under 400 lines + size guard (ef4c67f); Decisions table reads keeper ref objects (2d53adb).
 - **Page (new UI live on plan.ohje):** opens on the collapsed project overview fitted to all hulls; data-guarded
   width/height styles (no cytoscape mapping warnings); Settings reachable on phone; dead duplicate of 16 functions
   removed from page_boot.js (04b1d78). Phase filter uses phase||track, `state:` facet is case-insensitive, sidebar

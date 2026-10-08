@@ -15,10 +15,8 @@ Nothing (no writers, no cron). Keeper = plangraph-keeper.service on the supersed
 D-649/650 (5), D-653 routing (9), plangraph reality (10 fix lanes). Backups keeper.db.pre-* (newest by ls -t).
 
 ## Next (in order)
-1. Routing: ff origin/main to the live tip; Closes D-row (UI-TABLE-MODEL, UI-OVERVIEW-FIX, GRAPH-UI-BUILD, GRAPH-UI-VISCHECK,
-   GRAPH-UI-RESEARCH, K1-KEEPER@8cdad08, autoos:D655-LEG-PROBE); later UI-REVIEW-W3@f856375, MD-SYNC-SUPERSEDE@9a8fd66.
-2. Open lanes: UI-QA-COUNTS, UI-TESTS-TABLE-QA, UI-CREATED-AT, UI-HASH-STATE, UI-NODE-BUDGET, RENDER-NEWUI-DETECT,
-   ADOPT-400LOC-PLANGRAPH (split page_ui.js/page_side.js), MODEL-KINDS (+ D-656 keeper gaps).
+1. Routing: ff main → 2d53adb; Closes ADOPT-400LOC-PLANGRAPH@ef4c67f.
+2. Open lanes: UI-CREATED-AT, UI-NODE-BUDGET, RENDER-NEWUI-DETECT, MODEL-KINDS (+ D-656 gaps); proposed UI-DECISION-TEXT.
 3. After autoos-L1 lands layered-planning (D-646): 3-line pointer in skills/plangraph-planning.
 
 ## Catch-up (D-653, 2026-10-08)
