@@ -179,6 +179,7 @@
       { selector: "node.task-node", style: { "background-fill": "linear-gradient", "background-gradient-direction": "to-right", "background-gradient-stop-colors": function (el) { var c = el.data("color") || "#2f6f4f"; return c + " " + c + " " + panel + " " + panel; }, "background-gradient-stop-positions": "0% 2.5% 2.5% 100%" } },
       { selector: "node.critical-node", style: { "border-color": crit, "border-width": 3 } },
       { selector: "node.loop-node", style: { "border-style": "double", "border-width": 4 } },
+      { selector: "node.more-node", style: { "border-style": "dotted", "border-width": 2, "border-color": mut, "background-fill": "solid", "font-style": "italic" } },
       { selector: "node.exit-node", style: { shape: "diamond", width: 100, height: 40, "font-size": 11, "text-wrap": "ellipsis", "text-max-width": 90, "background-fill": "solid" } },
       { selector: "node.exit-node.hollow", style: { "background-color": panel, "border-color": cv("--state-open") || "#e69f00", color: fg } },
       { selector: "node.exit-node.filled", style: { "background-color": cv("--state-ready") || "#009e73", "border-color": cv("--state-ready") || "#009e73", color: "#ffffff" } },
