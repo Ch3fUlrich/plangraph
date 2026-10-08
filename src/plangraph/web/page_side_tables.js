@@ -102,6 +102,13 @@
         : base.join([rec.key, rec.display, "prio " + rec.priority,
                  rec.unblocks && rec.unblocks.length ? "unblocks " + rec.unblocks.length : ""], " · ");
       main.appendChild(el("span", "ny-meta", meta));
+      var kind = isQ ? "answer" : e.wait;
+      if (kind) {   // D-677
+        var badge = el("span", "tc-badge", kind === "answer" ? "Needs your answer" : "Needs your task");
+        badge.style.background = "var(--wait-" + kind + ")";
+        badge.style.color = "#fff";
+        main.appendChild(badge);
+      }
       row.appendChild(main);
       var jump = el("button", "jump", "Jump");
       jump.type = "button";

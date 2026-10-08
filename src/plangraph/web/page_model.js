@@ -194,6 +194,22 @@
     return "implementation";
   }
 
+  /* D-677 waits on the operator: explicit `wait` wins, else operator-owned
+   * items wait "answer" iff ["decision"] is the sole evidence kind and the
+   * item is question-shaped, otherwise "task". */
+  function waitKind(item) {
+    if (!item || typeof item !== "object" || item.state === "done" || item.state === "cancelled") return null;
+    if (item.wait === "answer" || item.wait === "task") return item.wait;
+    if (item.operator !== true) return null;
+    var ek = Array.isArray(item.evidence_kinds) ? item.evidence_kinds.slice() : [];
+    if (!ek.length && Array.isArray(item.evidence))
+      item.evidence.forEach(function (ev) { if (ev && ev.kind) ek.push(ev.kind); });
+    var id = str(item.id), t = str(item.title);
+    if (ek.length === 1 && ek[0] === "decision" && (id.indexOf("Q-") === 0 ||
+        id.indexOf("DECIDE") === 0 || t.indexOf("Q:") === 0 || t.indexOf("DECIDE") === 0)) return "answer";
+    return "task";
+  }
+
   function buildViewModel(snap) {
     var G = graph();
     snap = snap || {};
@@ -277,10 +293,48 @@
         updatedAt: it.updated_at || "",
         crossDeps: depsOf(it).filter(function (d) {
           return !!idx[d] && idx[d].project !== it.project;   // deps in other projects
-        })
+        }),
+        wait: waitKind(it)   // D-677
       };
       items.set(it.key, record);
       if (record.operator && !G.isTerminal(it)) needsItems.push(record);
+    });
+
+    var waitByKey = {};                       // D-677 waits roll-up + blocked-on-operator
+    items.forEach(function (rec) { waitByKey[rec.key] = rec.wait; });
+    items.forEach(function (rec) {
+      rec.blockedOnOperator = rec.wait ? null : blockedVia(rec.key);
+    });
+    function topWait(keys) {
+      var t = false;
+      for (var i = 0; i < keys.length; i++) {
+        if (waitByKey[keys[i]] === "answer") return "answer";
+        if (waitByKey[keys[i]] === "task") t = true;
+      }
+      return t ? "task" : null;
+    }
+    function blockedVia(key) {
+      var seen = {}, lvl = items.get(key) ? items.get(key).deps.slice() : [], nx, hit, j, k;
+      seen[key] = true;
+      while (lvl.length) {
+        nx = []; hit = null;
+        for (j = 0; j < lvl.length; j++) {
+          k = lvl[j];
+          if (seen[k] || !items.has(k)) continue;
+          seen[k] = true;
+          if (waitByKey[k] === "answer") return { kind: "answer", via: k };
+          if (waitByKey[k] === "task" && !hit) hit = k;
+          items.get(k).deps.forEach(function (d) { if (!seen[d]) nx.push(d); });
+        }
+        if (hit) return { kind: "task", via: hit };
+        lvl = nx;
+      }
+      return null;
+    }
+    projects.forEach(function (p) {
+      var all = [];
+      (p.phases || []).forEach(function (f) { f.wait = topWait(f.keys || []); all = all.concat(f.keys || []); });
+      p.wait = topWait(all);
     });
 
     /* needsYou = operator items (non-terminal) first, then open questions,
@@ -314,6 +368,7 @@
   }
 
   PlanUI.buildViewModel = buildViewModel;
+  PlanUI.waitKind = waitKind;
   PlanUI.qaEffectiveStatus = qaEffectiveStatus;
   PlanUI.refreshQA = refreshQA;
   PlanUI.naturalCmp = naturalCmp;

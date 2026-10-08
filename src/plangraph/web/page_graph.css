@@ -123,3 +123,7 @@
   margin: 0;
 }
 
+/* D-677 operator-wait tokens. */
+:root{--wait-answer:#b45309;--wait-task:#7c3aed}
+@media (prefers-color-scheme:dark){:root{--wait-answer:#e69f00;--wait-task:#a78bfa}}
+

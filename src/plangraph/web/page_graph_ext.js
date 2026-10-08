@@ -157,6 +157,13 @@
 
   PlanUI.GraphExt = GraphExt;
 
+  /* D-677 wait outlines. */
+  GraphExt.register({ id: "operator-wait", styles: function (env) {
+    var cv = (env && env.cssVar) || function () { return ""; };
+    return [{ selector: "node.wait-answer", style: { "outline-width": 3, "outline-color": cv("--wait-answer") || "#b45309" } },
+      { selector: "node.wait-task", style: { "outline-width": 3, "outline-color": cv("--wait-task") || "#7c3aed" } }];
+  } });
+
   function graphStyleRules(env) {
     var cv = (env && typeof env.cssVar === "function") ? env.cssVar : function () { return ""; };
     var fg = cv("--fg") || "#15171c",

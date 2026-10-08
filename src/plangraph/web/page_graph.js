@@ -90,14 +90,14 @@
       if (isProjCol) {
         putNode({
           data: { id: "pc:" + proj.name, project: proj.name, label: pLabel, total: tot, done: done, percent: pct, keys: allKeys, width: 300, height: 72 },
-          classes: "project-collapsed" + (filtering && !projMatch ? " dim" : "")
+          classes: "project-collapsed" + (proj.wait ? " wait-" + proj.wait : "") + (filtering && !projMatch ? " dim" : "")
         });
         return;
       }
 
       putNode({
         data: { id: "p:" + proj.name, project: proj.name, label: pLabel, color: proj.color, total: tot, done: done, percent: pct },
-        classes: "project-compound" + (filtering && !projMatch ? " dim" : "")
+        classes: "project-compound" + (proj.wait ? " wait-" + proj.wait : "") + (filtering && !projMatch ? " dim" : "")
       });
 
       (proj.phases || []).forEach(function (ph) {
@@ -111,14 +111,14 @@
         if (isPhCol) {
           putNode({
             data: { id: "phc:" + phId, parent: "p:" + proj.name, project: proj.name, phase: ph.name, label: phLabel, total: ph.total, done: ph.done, keys: pKeys.slice(), width: 300, height: 72 },
-            classes: "phase-collapsed" + (filtering && !phMatch ? " dim" : "")
+            classes: "phase-collapsed" + (ph.wait ? " wait-" + ph.wait : "") + (filtering && !phMatch ? " dim" : "")
           });
           return;
         }
 
         putNode({
           data: { id: "ph:" + phId, parent: "p:" + proj.name, project: proj.name, phase: ph.name, label: phLabel, total: ph.total, done: ph.done },
-          classes: "phase-compound" + (filtering && !phMatch ? " dim" : "")
+          classes: "phase-compound" + (ph.wait ? " wait-" + ph.wait : "") + (filtering && !phMatch ? " dim" : "")
         });
 
         pKeys.forEach(function (k) {
@@ -133,12 +133,14 @@
           if (it.kind === "gate") cls.push("gate-node");
           if (it.kind === "goal") cls.push("goal-node");
           if (it.operator) cls.push("operator-node");
+          if (it.wait) cls.push("wait-" + it.wait);   // D-677
           if (it.critical) cls.push("critical-node");
           if (it.display) cls.push("state-" + it.display);
           if (filtering && !m) cls.push("dim");
 
           putNode({
-            data: { id: "t:" + it.key, key: it.key, parent: "ph:" + phId, project: it.project, phase: it.phase, label: prefix + (it.title || ""), title: it.title, display: it.display, state: it.state, kind: it.kind, operator: !!it.operator, critical: !!it.critical, width: 240, height: 64, color: proj.color },
+            data: { id: "t:" + it.key, key: it.key, parent: "ph:" + phId, project: it.project, phase: it.phase, label: prefix + (it.title || ""), title: it.title, display: it.display, state: it.state, kind: it.kind, operator: !!it.operator, critical: !!it.critical, width: 240, height: 64, color: proj.color,
+              waitTip: it.blockedOnOperator ? ("waits on operator (" + it.blockedOnOperator.kind + ") via " + it.blockedOnOperator.via) : null },
             classes: cls.join(" ")
           });
 

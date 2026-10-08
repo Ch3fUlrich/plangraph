@@ -134,7 +134,8 @@
       ["state-done", "done"],
       ["state-cancelled", "cancelled"],
       ["critical", "critical path"],
-      ["group", "done (collapsed)"]
+      ["group", "done (collapsed)"],
+      ["wait-answer", "Needs your answer"], ["wait-task", "Needs your task"]   // D-677
     ].forEach(function (pair) {
       var item = el("span", "legend-item");
       var sw = el("span", "swatch");
