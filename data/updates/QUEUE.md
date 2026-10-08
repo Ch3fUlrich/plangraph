@@ -84,3 +84,4 @@ workst-ebn 6 items (3 done-by-decision pending a router row; 2 operator answer w
 invest (new project): 4 INV lanes + 7 OWN operator items (wait set) under invest:PH-INVEST -> routing:GOAL: data/updates/2026-10-08-invest.yaml — TRIAL OK; LIVE 2026-10-08 (verify ok; backup keeper.db.pre-invest).
 great-wiki (D-709, new project): 20 lanes + 4 gates, GOAL-GW under routing:GOAL: data/updates/2026-10-08-greatwiki.yaml — TRIAL OK (ready = the 5 named); LIVE 2026-10-08 (verify ok; backup keeper.db.pre-greatwiki).
 D-708 A PG-SSOT + Haiku (14 items under SETUP-IMPROVEMENT-PLAN): data/updates/2026-10-08-d708-pg-ssot.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d708).
+workst-ebn EBN-EMBEDDING + EBN-REDTRACE-NONBINARY under PH-EBN-1003 (routing relay): data/updates/2026-10-08-ebn-embed-redtrace.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-ebnembed). Closes of EBN-PAPER-N / EBN-EMBEDDING wait for a router D-row.
