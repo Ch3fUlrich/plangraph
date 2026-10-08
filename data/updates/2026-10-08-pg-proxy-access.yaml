@@ -1,0 +1,31 @@
+# D-713 PG-PROXY-ACCESS.
+batch: 2026-10-08-pg-proxy-access
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: e313fa75f76347aaee10b626c1da32eb79c2f5c7e20bb4687ad7067f1f7c3c7e
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: PG-PROXY-ACCESS
+    kind: lane
+    track: PGSSOT
+    owner: plangraph-L1-main
+    review_tier: high
+    evidence_kinds:
+    - run-record
+    estimate_h: 4
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: Keeper reachable through the reverse proxy with an encrypted header, like omnigraph (replaces the tailnet interim)
+    done_criteria: whoami from workst-L1 + prox-L1 through the proxy; tailscale serve on :8787 turned off
+    description: 'D-713: reuse omnigraph''s server/sync setup logic. Interim = tailnet + ssh relay (D-713).'
+- op: edit
+  key: routing:ROUTE-PG-SSOT
+  fields:
+    depends_on:
+    - plangraph:PG-REMOTE
+    - routing:ROUTE-PG-PRODTEST
+    - plangraph:PG-PROXY-ACCESS
+
