@@ -81,3 +81,4 @@ D-678 autoos:AO-ADMISSION (+ AO-ADMISSION-2) under PH-FLEET-1003: data/updates/2
 workst-gen D-686 (GEN-RETAIN-AUTO -> GEN-ERASE-NOW -> GEN-PRIVACY-TEXT, GEN-QGUARD-TRANSFER, GEN-I18N-REFUSALS; GEN-RETENTION-PERSON note superseded): data/updates/2026-10-08-workst-gen-d686.yaml — LIVE 2026-10-08 (3 of 3, verify ok).
 D-696 plangraph:UI-ACTIVITY-DATA -> UI-ACTIVITY-PAGE under PH-M2C-UI: data/updates/2026-10-08-d696-activity.yaml — LIVE 2026-10-08.
 workst-ebn 6 items (3 done-by-decision pending a router row; 2 operator answer waits) + workst-gen GEN-REDACT (D-697) / GEN-ID-GUARD: data/updates/2026-10-08-ebn-gen-d697.yaml — LIVE 2026-10-08.
+invest (new project): 4 INV lanes + 7 OWN operator items (wait set) under invest:PH-INVEST -> routing:GOAL: data/updates/2026-10-08-invest.yaml — TRIAL OK; LIVE 2026-10-08 (verify ok; backup keeper.db.pre-invest).
