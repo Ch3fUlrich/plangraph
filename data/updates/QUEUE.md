@@ -89,4 +89,4 @@ D-737 workst-ebn:EBN-PAPER-N + EBN-EMBEDDING closed by decision: data/updates/20
 D-721/D-729 (4 keys never in graph: create+close) + D-741 EBN-UNTAGGED-VALIDITY close + EBN-REBINARIZE open: data/updates/2026-10-08-d721-d729-d741.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d741).
 D-742 EBN-REBINARIZE close + D-743 AO-L2-LIVE create+close, AO-L2-SECRETS / AO-ADMISSION-FLOOR open under ROUTE-L2-LAYER: data/updates/2026-10-08-d742-d743.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d743).
 D-744 EBN-REDTRACE-NONBINARY close + EBN-PROVIDER-PACK (operator, wait answer); D-745 PG-MODELS close (commit e2b07d9): data/updates/2026-10-08-d744-d745.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d744).
-D-749 PG-FETCH-ON-DEMAND close (commit b8ea51b): data/updates/2026-10-08-d749.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d749).
+D-749 PG-FETCH-ON-DEMAND: closed by md-sync (D-row pass); manual batch not needed (removed).
