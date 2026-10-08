@@ -78,3 +78,4 @@ D-677 wait backfill (wait=answer|task on open operator items; claimed ones skipp
 workst-gen:GEN-RETENTION-PERSON under PH-GEN-1003: data/updates/2026-10-08-workst-gen-found.yaml — LIVE 2026-10-08 (2 of 2, verify ok).
 D-683 server ABR-TRUSTED-GROUP, ACC-GROUPS-T1 -> T2 -> DEPLOY under PH-SERVER-1003: data/updates/2026-10-08-d683-groups.yaml — LIVE 2026-10-08 (2 of 2, verify ok).
 D-678 autoos:AO-ADMISSION (+ AO-ADMISSION-2) under PH-FLEET-1003: data/updates/2026-10-08-ao-admission.yaml — LIVE 2026-10-08.
+workst-gen D-686 (GEN-RETAIN-AUTO -> GEN-ERASE-NOW -> GEN-PRIVACY-TEXT, GEN-QGUARD-TRANSFER, GEN-I18N-REFUSALS; GEN-RETENTION-PERSON note superseded): data/updates/2026-10-08-workst-gen-d686.yaml — LIVE 2026-10-08 (3 of 3, verify ok).
