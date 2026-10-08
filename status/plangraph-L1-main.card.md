@@ -25,6 +25,10 @@ Blocker: keeper.json plangraph ref = local `main` (f610d98, the initial commit) 
 3. Open lanes: UI-QA-COUNTS, UI-TESTS-TABLE-QA, UI-CREATED-AT, UI-HASH-STATE, UI-NODE-BUDGET, RENDER-NEWUI-DETECT.
 4. After autoos-L1 lands layered-planning (D-646): 3-line pointer in skills/plangraph-planning.
 
+## Catch-up (D-653, 2026-10-08)
+ZCode stand-in (10-05/06) work is on origin (ded3a03, 2d9d0b5); no keeper writes. Parked WIP 8dfa483 (G2b step 6) and
+672eac3 (TB1) only survive as bundles in /home/s/fleet/taildrop/plangraph/ (ui-build clone gone); superseded by 6677ce5.
+
 ## Rules that bite most
 Plan data never goes to free legs: writers and seats get a code-only git repo (src/tests/tools only). Writers and seats
 come from different families (the spawner reports the writer family). Never delete this worktree (the units run it).
