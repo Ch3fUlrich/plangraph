@@ -73,7 +73,8 @@ def _new_state():
             "round": 0, "evidence": [], "review_waiver": None,
             "review_tier": "standard", "description": None,
             "host": None, "wait": None, "layer": None, "role": None,
-            "agent_id": None, "phase_kind": None, "writer_model": None,
+            "agent_id": None, "phase_kind": None, "fixes": None,
+            "writer_model": None,
             "seat_models": None, "run_ids": None}
 
 
@@ -277,7 +278,7 @@ def verify_integrity(conn):
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
         "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
-        "phase_kind,writer_model,seat_models,run_ids FROM items")}
+        "phase_kind,fixes,writer_model,seat_models,run_ids FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -292,7 +293,7 @@ def verify_integrity(conn):
         for field in ("state", "epoch", "round", "claimed_by", "delegate",
                       "reviewer", "review_waiver", "review_tier", "description",
                       "host", "wait", "layer", "role", "agent_id",
-                      "phase_kind", "writer_model", "seat_models",
+                      "phase_kind", "fixes", "writer_model", "seat_models",
                       "run_ids"):
             if row[field] != expected[field]:
                 problems.append({"key": key, "code": "cache_mismatch",

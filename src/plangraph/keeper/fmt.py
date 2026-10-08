@@ -49,6 +49,9 @@ def show_text(info: dict) -> str:
         lines.append(f"host {info['host']}")
     if info.get("wait"):
         lines.append(f"wait {info['wait']}")
+    if info.get("fixes") or info.get("fixed_by"):
+        lines.append(f"fixes {info.get('fixes') or '-'} fixed_by "
+                     f"{','.join(info.get('fixed_by') or []) or '-'}")
     model = " ".join(f"{n} {info[n]}" for n in ("layer", "role", "agent_id", "phase_kind")
                      if info.get(n))
     if model:

@@ -97,6 +97,8 @@
    "evidence_kinds": [
     "decision"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "L-1",
    "key": "lighthouse:L-1",
@@ -148,6 +150,8 @@
    "evidence_kinds": [
     "decision"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "L-2",
    "key": "lighthouse:L-2",
@@ -200,6 +204,8 @@
    "evidence_kinds": [
     "commit+ci"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "L-3",
    "key": "lighthouse:L-3",
@@ -252,6 +258,8 @@
    "evidence_kinds": [
     "decision"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "GOAL",
    "key": "orchard:GOAL",
@@ -301,6 +309,8 @@
    "evidence_kinds": [
     "decision"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "O-1",
    "key": "orchard:O-1",
@@ -352,6 +362,8 @@
    "evidence_kinds": [
     "decision"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "O-2",
    "key": "orchard:O-2",
@@ -403,6 +415,8 @@
    "evidence_kinds": [
     "commit+ci"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "O-3",
    "key": "orchard:O-3",
@@ -454,6 +468,8 @@
    "evidence_kinds": [
     "decision"
    ],
+   "fixed_by": [],
+   "fixes": null,
    "host": null,
    "id": "O-4",
    "key": "orchard:O-4",

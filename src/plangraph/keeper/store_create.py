@@ -15,6 +15,7 @@ import re
 from .auth import validate_family
 from .errors import Refused
 from .credential_guard import guard
+from .item_fixes import check_fix_limit
 from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_model_fields
 from .note_fold import fold_checked
 from .store_tiers import (
@@ -29,19 +30,19 @@ from .store_tiers import (
 )
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
-             "phase_kind", "estimate_h", "done_criteria", "evidence_kinds",
+             "phase_kind", "fixes", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
-     "agent_id", "phase_kind", "kind", "track", "owner", "owner_family",
+     "agent_id", "phase_kind", "fixes", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
-                 "agent_id", "phase_kind", "kind", "track", "owner",
+                 "agent_id", "phase_kind", "fixes", "kind", "track", "owner",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
@@ -123,6 +124,7 @@ class CreateMixin:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
         before = self._all_items()
+        check_fix_limit(before + defs, set(keys))
         self._validate_change(before + defs, before, affected=keys)
         with self._write():
             for definition in defs:
@@ -167,6 +169,7 @@ class CreateMixin:
             "host": definition.get("host"),
             "wait": definition.get("wait"),
             **{name: definition.get(name) for name in MODEL_FIELDS},
+            "fixes": definition.get("fixes"),
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
             "owner": definition.get("owner"),
             "owner_family": definition.get("owner_family"),
@@ -269,6 +272,11 @@ class CreateMixin:
                     raise Refused("forbidden",
                                   "cross-project dependency needs the router")
                 me["depends_on"] = deps
+            elif field == "fixes" and value is not None:
+                if not isinstance(value, str) or not value:
+                    raise Refused("validation", "fixes must be a key string or null")
+                value = fields["fixes"] = me["fixes"] = self._qualify(
+                    item["project"], value)
             else:
                 me[field] = value
         if "review_tier" not in fields and me.get("review_tier") == "standard":
@@ -283,6 +291,7 @@ class CreateMixin:
                    for value in renamed):
                 fields["review_tier"] = "high"
                 me["review_tier"] = "high"
+        check_fix_limit(candidate, {key})
         self._validate_change(candidate, before, affected={key})
         assignments = [field for field in fields if field != "depends_on"]
         with self._write():

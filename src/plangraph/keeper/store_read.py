@@ -136,7 +136,10 @@ class ReadMixin:
             "delegate": item["delegate"], "lease_until": item["lease_until"],
             "reviewer": item["reviewer"], "done_criteria": item["done_criteria"],
             "review_waiver": item.get("review_waiver"), "reviews": reviews,
-            "corrects": item["corrects"], "depends_on": deps,
+            "corrects": item["corrects"], "fixes": item.get("fixes"),
+            "fixed_by": sorted(o["key"] for o in index.values()
+                               if o.get("fixes") == key),
+            "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
         info.update(self._run_derived(key, item))
@@ -176,10 +179,12 @@ class ReadMixin:
 
     def _snapshot(self, now):
         items = self._all_items()
-        corrected = {}
+        corrected, fixed = {}, {}
         for item in items:
             if item["corrects"]:
                 corrected.setdefault(item["corrects"], []).append(item["key"])
+            if item.get("fixes"):
+                fixed.setdefault(item["fixes"], []).append(item["key"])
         created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
         out = []
         for item in items:
@@ -210,6 +215,8 @@ class ReadMixin:
                              for r in self._evidence(item["key"])],
                 "updated_at": item["updated_at"],
                 "corrected_by": sorted(corrected.get(item["key"], [])),
+                "fixes": item.get("fixes"),
+                "fixed_by": sorted(fixed.get(item["key"], [])),
                 "writer_model": item.get("writer_model"),
                 "seat_models": _decode_models(item.get("seat_models")),
                 "run_ids": _decode_run_ids(item.get("run_ids")),

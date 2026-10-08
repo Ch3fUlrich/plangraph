@@ -65,6 +65,11 @@ class InputMixin:
         corrects = raw.get("corrects")
         if corrects:
             corrects = self._qualify(project, corrects)
+        fixes = raw.get("fixes")
+        if fixes is not None:
+            if not isinstance(fixes, str) or not fixes:
+                raise Refused("validation", f"{key}: fixes must be a key string or null")
+            fixes = self._qualify(project, fixes)
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
@@ -78,7 +83,7 @@ class InputMixin:
             "operator": bool(raw.get("operator")),
             "priority": int(raw.get("priority") or 0),
             "source": raw.get("source"), "note": self._folded_note(raw, key),
-            "corrects": corrects, "depends_on": deps,
+            "corrects": corrects, "fixes": fixes, "depends_on": deps,
             "state": raw.get("state", "open"),
         }
 

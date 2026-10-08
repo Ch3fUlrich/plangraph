@@ -30,7 +30,7 @@ __all__ = ["load_dir", "export_yaml"]
 #: The item fields the importer emits and the exporter writes, in output order.
 _FIELD_ORDER = (
     "project", "id", "key", "title", "description", "host", "wait", "layer", "role",
-    "agent_id", "phase_kind", "kind", "track", "owner", "state",
+    "agent_id", "phase_kind", "fixes", "kind", "track", "owner", "state",
     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
     "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
 )
@@ -115,6 +115,13 @@ def _normalise_item(raw, where):
         raise _bad(key, "corrects must be a string")
     else:
         corrects = _qualify(project, corrects)
+    fixes = raw.get("fixes")
+    if fixes in (None, ""):
+        fixes = None
+    elif not isinstance(fixes, str):
+        raise _bad(key, "fixes must be a string")
+    else:
+        fixes = _qualify(project, fixes)
     kinds = _string_list(raw, "evidence_kinds", key) or ["any"]
 
     title = _string(raw, "title", key) or ""
@@ -137,7 +144,7 @@ def _normalise_item(raw, where):
     values = {
         "project": project, "id": identifier, "key": key,
         "title": title, "description": description, "host": host,
-        "wait": wait, **{name: raw.get(name) for name in MODEL_FIELDS},
+        "wait": wait, "fixes": fixes, **{name: raw.get(name) for name in MODEL_FIELDS},
         "kind": kind, "track": track,
         "owner": _string(raw, "owner", key), "state": state,
         "estimate_h": estimate, "estimate_src": _string(raw, "estimate_src", key),

@@ -53,7 +53,7 @@ def check_wait(value, key=None):
 
 #: Optional columns folded from ``item_created``/``item_defined`` payloads.
 SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
-                "phase_kind")
+                "phase_kind", "fixes")
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
 MODEL_FIELDS = ("layer", "role", "agent_id", "phase_kind")
 

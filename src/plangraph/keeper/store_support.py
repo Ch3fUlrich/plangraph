@@ -15,6 +15,7 @@ from .. import views
 from . import events
 from .errors import Refused
 from .evidence_types import Context
+from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
 
@@ -155,6 +156,9 @@ class SupportMixin:
             done = self._batch.verified(item, kind, ref)
             if done is not None:
                 return done
+        if kind == "error":  # always unverified, no I/O: never injected
+            ref = check_error_ref(ref)
+            return ErrorRecordVerifier().verify(item, ref, None)
         verifier = self.verifiers.get(kind)
         if verifier is None:
             raise Refused("validation", f"unknown evidence kind {kind!r}")

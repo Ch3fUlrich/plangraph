@@ -78,7 +78,8 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "seat_models", "TEXT"),
                   ("items", "run_ids", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
-                  ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"))
+                  ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
+                  ("items", "fixes", "TEXT"))
 
 
 def _upgrade(conn):

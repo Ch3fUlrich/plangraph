@@ -67,6 +67,7 @@ CREATE TABLE items (
     role           TEXT,
     agent_id       TEXT,
     phase_kind     TEXT,
+    fixes          TEXT,
     kind           TEXT,
     track          TEXT,
     owner          TEXT,

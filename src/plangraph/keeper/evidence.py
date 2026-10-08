@@ -33,6 +33,7 @@ from .evidence_decisions import DecisionsAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_runs import RunRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError
+from .item_fixes import ErrorRecordVerifier
 from .evidence_types import (
     DEFAULT_SKEW_S,
     Context,
@@ -347,6 +348,7 @@ VERIFIERS: dict[str, Any] = {
         RunRecordVerifier(),
         SemaphoreTaskVerifier(),
         DecisionVerifier(),
+        ErrorRecordVerifier(),
     )
 }
 
