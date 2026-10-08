@@ -19,7 +19,7 @@ Report only to `routing` (the router session). One short message per milestone o
 ## What runs by itself on coding.vm (do not restart without a reason)
 - Keeper daemon: `127.0.0.1:8787`. Config `~/.local/share/plangraph/keeper.json`. DB `keeper.db` in the same folder (`keeper.db.pre-*` are backups).
 - md-sync: user units `plangraph-md-sync.timer` (every 10 min) and `.path`. It reads routing markdown and writes to the keeper. Status file: `~/.local/share/plangraph/md-sync.status.json`.
-- Page render: `plangraph-render.timer` (every 5 min). It writes `/home/s/code/plangraph/out/plan-cdn.html`. Edge: plan.ohje.ooguy.com (Authelia). The page shows the OLD UI until the operator OKs GRAPH-UI. Do not deploy the new UI yourself.
+- Page render: `plangraph-render.timer` (every 5 min). It writes `/home/s/code/plangraph/out/plan-cdn.html`. Edge: plan.ohje.ooguy.com (Authelia). Since 2026-10-08 (D-639) the page shows the NEW UI (live tree = main + fixes; browser check PASS).
 - IMPORTANT: the services run code from THIS worktree: `/home/s/code/plangraph/.claude/worktrees/proposal` (branch `worktree-proposal`). Never delete this folder. Never leave it half-edited.
 - Check units: `systemctl --user list-units 'plangraph*' --no-legend`. Logs: `journalctl --user -u plangraph-md-sync.service -n 30`.
 
