@@ -66,6 +66,8 @@
     }
     return false;
   }
+  /* Times come from snapshot.activity events (keeper events table), not from
+   * item.createdAt, which is empty for most items. */
   /* Ranges end at the render time (snapshot.generated); without it, at the
    * latest activity event; last resort the wall clock. */
   function nowMs(snap) {
