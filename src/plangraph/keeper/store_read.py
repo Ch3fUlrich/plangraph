@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from .. import views
+from .brief import build as _build_brief
 from .errors import Refused
 
 _DONE = "done"
@@ -29,7 +30,9 @@ class ReadMixin:
                          lambda now: views.brief(self._all_items(),
                                                  project=project, n=n))
 
-    def show(self, principal, key):
+    def show(self, principal, key, brief=False):
+        if brief:
+            return self._run(principal, "show", key, lambda now: self._brief(key))
         return self._run(principal, "show", key, lambda now: self._show(key))
 
     def blocked(self, principal, project=None):
@@ -87,6 +90,14 @@ class ReadMixin:
             "corrects": item["corrects"], "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
+
+    def _brief(self, key):
+        """The short task brief: identity, state, requirements, latest note."""
+        item = self._get_or_refuse(key)
+        index = {it["key"]: it for it in self._all_items()}
+        deps = [{"key": dep, "state": index.get(dep, {}).get("state")}
+                for dep in item.get("depends_on") or []]
+        return _build_brief(item, deps)
 
     # ---------------------------------------------------------- snapshot
     def snapshot(self, principal):

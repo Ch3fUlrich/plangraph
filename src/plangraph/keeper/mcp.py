@@ -38,8 +38,8 @@ def _tool(name, description, props=None, required=()):
 TOOLS = (
     _tool("ready", "Open items whose deps are done.",
           {"project": {"type": "string"}, "n": {"type": "integer"}}),
-    _tool("show", "One item, compact.",
-          {"key": {"type": "string"}}, ("key",)),
+    _tool("show", "One item, compact; brief=true for the short task brief.",
+          {"key": {"type": "string"}, "brief": {"type": "boolean"}}, ("key",)),
     _tool("claim", "Claim a ready item; optional lease seconds.",
           {"key": {"type": "string"}, "lease_s": {"type": "integer"}}, ("key",)),
     _tool("delegate", "Hand a claimed item to a worker principal.",

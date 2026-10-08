@@ -7,11 +7,12 @@ is always the fallback; every helper only summarises what the store returned.
 from __future__ import annotations
 
 from .. import views
+from .brief import brief_text
 
 __all__ = [
-    "ready_text", "show_text", "blocked_text", "alerts_text", "waves_text",
-    "critical_text", "percent_text", "digest_text", "whoami_text",
-    "snapshot_text", "result_text",
+    "ready_text", "show_text", "brief_text", "blocked_text", "alerts_text",
+    "waves_text", "critical_text", "percent_text", "digest_text",
+    "whoami_text", "snapshot_text", "result_text",
 ]
 
 
@@ -138,7 +139,10 @@ def result_text(verb: str, result) -> str:
     """The smallest useful line for a write verb's result."""
     if isinstance(result, dict):
         if "created" in result:
-            return f"created {len(result['created'])} items"
+            text = f"created {len(result['created'])} items"
+            for warning in result.get("warnings") or []:
+                text += f" | warning: {warning}"
+            return text
         if verb == "claim":
             return (f"{result.get('key')} claimed epoch {result.get('epoch')} "
                     f"lease {result.get('lease_until')}")

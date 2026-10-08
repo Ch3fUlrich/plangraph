@@ -56,7 +56,9 @@ def local_show(items, key, aliases=None) -> dict:
             "priority": item.get("priority"), "epoch": item.get("epoch"),
             "claimed_by": item.get("claimed_by"), "delegate": item.get("delegate"),
             "lease_until": item.get("lease_until"), "reviewer": item.get("reviewer"),
-            "done_criteria": item.get("done_criteria"),
+            "done_criteria": item.get("done_criteria"), "note": item.get("note"),
+            "review_tier": item.get("review_tier"),
+            "evidence_kinds": item.get("evidence_kinds"),
             "corrects": item.get("corrects"), "depends_on": deps,
             "unblocks": unblocks, "evidence": item.get("evidence") or []}
 

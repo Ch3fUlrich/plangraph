@@ -64,6 +64,8 @@ def _add_reads(sub):
 
     show = _p(sub, "show", help="one item, compact")
     show.add_argument("key")
+    show.add_argument("--brief", action="store_true",
+                      help="short task brief instead of the full item")
 
     blocked = _p(sub, "blocked", help="open items and their unmet deps")
     blocked.add_argument("--project")
