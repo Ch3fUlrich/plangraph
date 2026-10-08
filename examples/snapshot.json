@@ -1,5 +1,82 @@
 {
+ "activity": [
+  {
+   "actor": "router",
+   "key": "lighthouse:L-1",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "lighthouse:L-1",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "claimed"
+  },
+  {
+   "actor": "router",
+   "key": "lighthouse:L-1",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "submitted"
+  },
+  {
+   "actor": "router",
+   "key": "lighthouse:L-2",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "lighthouse:L-3",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "orchard:GOAL",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "orchard:O-1",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "orchard:O-1",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "claimed"
+  },
+  {
+   "actor": "router",
+   "key": "orchard:O-2",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "orchard:O-3",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  },
+  {
+   "actor": "router",
+   "key": "orchard:O-4",
+   "state": "open",
+   "ts": "2026-01-01T00:00:00Z",
+   "type": "item_created"
+  }
+ ],
  "aliases": {},
+ "decision_text": {},
  "generated": "2026-01-01T00:00:00Z",
  "head": null,
  "items": [
@@ -7,8 +84,10 @@
    "claimed_by": "Grace (fictional)",
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [],
    "description": null,
+   "done_at": null,
    "done_criteria": "Chart reviewed.",
    "epoch": 1,
    "estimate_h": 4.0,
@@ -22,6 +101,7 @@
    "key": "lighthouse:L-1",
    "kind": "lane",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": "rationale: Needed before any beacon timing.",
    "operator": false,
@@ -30,23 +110,31 @@
    "project": "lighthouse",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/lighthouse.md#L-1",
    "state": "in_review",
    "title": "Chart the harbour approaches",
    "track": "T1",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [
     "lighthouse:L-1"
    ],
    "description": null,
+   "done_at": null,
    "done_criteria": "Pattern table approved.",
    "epoch": 0,
    "estimate_h": 3.0,
@@ -60,6 +148,7 @@
    "key": "lighthouse:L-2",
    "kind": "lane",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": false,
@@ -68,24 +157,32 @@
    "project": "lighthouse",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/lighthouse.md#L-2",
    "state": "open",
    "title": "Specify the beacon flash pattern",
    "track": "T1",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [
     "lighthouse:L-2",
     "orchard:O-2"
    ],
    "description": null,
+   "done_at": null,
    "done_criteria": "Generator output matches the pattern table.",
    "epoch": 0,
    "estimate_h": 6.0,
@@ -99,6 +196,7 @@
    "key": "lighthouse:L-3",
    "kind": "lane",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": false,
@@ -107,24 +205,32 @@
    "project": "lighthouse",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/lighthouse.md#L-3",
    "state": "open",
    "title": "Implement the pattern generator",
    "track": "T2",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [
     "lighthouse:L-3",
     "orchard:O-4"
    ],
    "description": null,
+   "done_at": null,
    "done_criteria": "Both projects delivered.",
    "epoch": 0,
    "estimate_h": 0.0,
@@ -138,6 +244,7 @@
    "key": "orchard:GOAL",
    "kind": "goal",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": false,
@@ -146,21 +253,29 @@
    "project": "orchard",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/orchard.md#GOAL",
    "state": "open",
    "title": "First fictional harvest planned",
    "track": "goal",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": "Ada (fictional)",
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [],
    "description": null,
+   "done_at": null,
    "done_criteria": "Catalogue list is reviewed.",
    "epoch": 1,
    "estimate_h": 2.0,
@@ -174,6 +289,7 @@
    "key": "orchard:O-1",
    "kind": "lane",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": false,
@@ -182,23 +298,31 @@
    "project": "orchard",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/orchard.md#O-1",
    "state": "claimed",
    "title": "Survey the seed catalogue",
    "track": "T1",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [
     "orchard:O-1"
    ],
    "description": null,
+   "done_at": null,
    "done_criteria": "Format document is approved.",
    "epoch": 0,
    "estimate_h": 3.0,
@@ -212,6 +336,7 @@
    "key": "orchard:O-2",
    "kind": "lane",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": false,
@@ -220,23 +345,31 @@
    "project": "orchard",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/orchard.md#O-2",
    "state": "open",
    "title": "Design the watering schedule format",
    "track": "T1",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [
     "orchard:O-2"
    ],
    "description": null,
+   "done_at": null,
    "done_criteria": "Validator rejects overlapping waterings.",
    "epoch": 0,
    "estimate_h": 5.0,
@@ -250,6 +383,7 @@
    "key": "orchard:O-3",
    "kind": "lane",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": false,
@@ -258,23 +392,31 @@
    "project": "orchard",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/orchard.md#O-3",
    "state": "open",
    "title": "Build the schedule validator",
    "track": "T2",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": false,
+   "worker_run": null,
+   "writer_model": null
   },
   {
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
+   "created_at": "2026-01-01T00:00:00Z",
    "depends_on": [
     "orchard:O-3"
    ],
    "description": null,
+   "done_at": null,
    "done_criteria": "Budget approved by the operator.",
    "epoch": 0,
    "estimate_h": 0.0,
@@ -288,6 +430,7 @@
    "key": "orchard:O-4",
    "kind": "gate",
    "lease_until": null,
+   "merged": false,
    "model": null,
    "note": null,
    "operator": true,
@@ -296,14 +439,20 @@
    "project": "orchard",
    "review_tier": "standard",
    "review_waiver": null,
+   "reviewed": false,
    "reviewer_run": null,
    "reviews": [],
+   "run_ids": [],
+   "seat_models": null,
    "source": "plans/orchard.md#O-4",
    "state": "open",
    "title": "Approve the harvest budget",
    "track": "T3",
    "updated_at": "2026-01-01T00:00:00Z",
-   "worker_run": null
+   "wait": null,
+   "waits_on_operator": true,
+   "worker_run": null,
+   "writer_model": null
   }
  ]
 }
