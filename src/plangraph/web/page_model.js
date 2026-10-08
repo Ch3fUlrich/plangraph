@@ -187,8 +187,8 @@
     planner: "planning", researcher: "planning", implementer: "implementation",
     operator: "implementation", reviewer: "review" };
   function roleOf(it) {
-    var r = ROLE_ALIAS[String(it.role || "").toLowerCase()];   // keeper role: planner/implementer/...
-    if (r) return r;
+    var k = String(it.role || "").toLowerCase();   // keeper role: planner/implementer/...
+    if (Object.prototype.hasOwnProperty.call(ROLE_ALIAS, k)) return ROLE_ALIAS[k];
     if (it.kind === "gate") return "review";
     if (it.kind === "goal") return "planning";
     var t = String(it.title || "");
