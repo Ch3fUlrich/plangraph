@@ -134,20 +134,21 @@ def _default_title(items: list) -> str:
 
 
 def _new_ui(snapshot: dict) -> bool:
-    """True when *snapshot* carries the new-UI data contract (§14b/§15).
+    """True when *snapshot* carries new-UI CONTENT (§14b/§15).
 
     The new page consumes ``phase``/``loop`` per item and the ``questions`` /
-    ``decisions`` lists; a snapshot carrying none of them (the legacy page
-    fixture, the current keeper exporter output) is rendered on the unchanged
-    offline path. Snapshots that ARE new-UI are CDN-only until elkjs is
-    vendored — ``render(..., cdn=False)`` raises :data:`OFFLINE_ERROR`.
+    ``decisions`` lists. Detection is on content, not key presence: empty
+    lists and ``phase: null`` (what the keeper exporter emits) keep the
+    unchanged offline path. Snapshots that ARE new-UI are CDN-only until
+    elkjs is vendored — ``render(..., cdn=False)`` raises :data:`OFFLINE_ERROR`.
     """
-    if snapshot.get("questions") is not None or snapshot.get("decisions") is not None:
-        return True
+    for key in ("questions", "decisions"):
+        if snapshot.get(key):
+            return True
     items = snapshot.get("items")
     if isinstance(items, list):
         return any(
-            isinstance(i, dict) and ("phase" in i or "loop" in i) for i in items
+            isinstance(i, dict) and (i.get("phase") or i.get("loop")) for i in items
         )
     return False
 
