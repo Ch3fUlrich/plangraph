@@ -1,0 +1,154 @@
+# server-L1-routing items (D-653).
+batch: 2026-10-08-routing-setup-items
+principal: routing-00
+source: /home/s/code/routing/docs/plan/operator-input-2026-10-08-routing.md
+source_sha256: 2ab4e65269086305a849f3232330eeb271cc015a0a794694d920ca3a4e901951
+ops:
+- op: create
+  item:
+  - project: routing
+    id: ROUTE-COMBO-PROPOSAL
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: &id001
+    - decision
+    estimate_h: 4
+    estimate_src: default
+    priority: 9
+    depends_on: []
+    title: L1/L2/L3 model combos from the AA intelligence index + cost/task; Opus/Sonnet/Haiku rules; caching L0-L2
+    done_criteria: table sent to routing; operator decision logged in a D-row
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-OC-L2L3
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 8
+    estimate_src: default
+    priority: 5
+    depends_on:
+    - routing:ROUTE-COMBO-PROPOSAL
+    title: OpenCode orchestrates L2+L3 in production (GLM coding, DeepSeek, MiMo, Kimi, Google AI Pro subscriptions)
+    done_criteria: proposal accepted + production test green
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-OC-L1
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 6
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - routing:ROUTE-OC-L2L3
+    title: OpenCode orchestrates L1 (>= 1M ctx, about Opus-medium, <= Claude cost)
+    done_criteria: proposal accepted + production test green
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-DEPTH-RESEARCH
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 6
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: 'Literature eval: orchestration depth (<= 3 layers), stacked review lenses, stigmergy, orchestrator tax, harness feedforward/feedback, ide-agent-kit/antfarm, Pi Durable'
+    done_criteria: research doc + proposal to routing
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-CLEF
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 3
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'Proposal: Clef/Clef Flash decision models for L0 pre-routing + L3 model choice'
+    done_criteria: proposal to routing
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-SKILLS
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 6
+    estimate_src: default
+    priority: 3
+    depends_on:
+    - routing:ROUTE-DEPTH-RESEARCH
+    title: Research/review skills, L2 research profile, oh-my-claudecode skill import to AutoOS, spawner delegation templates
+    done_criteria: skills imported/reviewed; proposal accepted
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-400LOC
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 9
+    depends_on: []
+    title: 'coding-principles rule: max 400 lines per file + a test guard in all projects'
+    done_criteria: rule merged in coding-principles; guard test green in each repo
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-CHANGELOG-DOCS
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 4
+    depends_on: []
+    title: Every project change lands in CHANGELOG.md + docs (esp. Server)
+    done_criteria: rule + check per repo
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+  - project: routing
+    id: ROUTE-L1-CATCHUP
+    kind: lane
+    track: SETUP
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds: *id001
+    estimate_h: 4
+    estimate_src: default
+    priority: 5
+    depends_on: []
+    title: L1s review progress made during the rate limit (Sonnet medium subagents), update plans + graph, resume via unattended-orchestration
+    done_criteria: each L1 reports caught up; graph updated
+    description: D-653, server-L1-routing; source docs/plan/operator-input-2026-10-08-routing.md.
+- op: edit
+  key: routing:SETUP-IMPROVEMENT-PLAN
+  fields:
+    depends_on:
+    - routing:ROUTE-COMBO-PROPOSAL
+    - routing:ROUTE-OC-L2L3
+    - routing:ROUTE-OC-L1
+    - routing:ROUTE-DEPTH-RESEARCH
+    - routing:ROUTE-CLEF
+    - routing:ROUTE-SKILLS
+    - routing:ROUTE-400LOC
+    - routing:ROUTE-CHANGELOG-DOCS
+    - routing:ROUTE-L1-CATCHUP
+
