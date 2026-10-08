@@ -27,13 +27,13 @@ SRC = ROOT / "src"
 FIXTURE = ROOT / "tests" / "fixtures" / "import_mini"
 OUT = ROOT / "tests" / "out"
 
-KEY = "routing:R1"
+KEY = "atlas:R1"
 PRINCIPALS = (
     ("router", "router", [], None),
-    ("l1", "l1", ["routing", "autoos"], "teamA"),
-    ("worker", "worker", ["routing", "autoos"], "teamB"),
-    ("reviewer", "reviewer", ["routing", "autoos"], "teamC"),  # other family
-    ("reviewer2", "reviewer", ["routing", "autoos"], "teamR"),  # D-219 seat 2
+    ("l1", "l1", ["atlas", "borealis"], "teamA"),
+    ("worker", "worker", ["atlas", "borealis"], "teamB"),
+    ("reviewer", "reviewer", ["atlas", "borealis"], "teamC"),  # other family
+    ("reviewer2", "reviewer", ["atlas", "borealis"], "teamR"),  # D-219 seat 2
 )
 EVIDENCE = ("decision", "commit+ci", "run-record", "semaphore-task")
 
@@ -226,9 +226,9 @@ def test_full_lifecycle_done_is_locked_and_audited(tmp_path):
 
         router = e2e.tokens["router"]
         attempts = [
-            ("/v1/create_items", router, {"items": [{"project": "routing",
+            ("/v1/create_items", router, {"items": [{"project": "atlas",
                                                      "id": "R1"}]}),
-            ("/v1/import_items", router, {"items": [{"project": "routing",
+            ("/v1/import_items", router, {"items": [{"project": "atlas",
                                                      "id": "R1"}]}),
             ("/v1/edit_definition", router,
              {"key": KEY, "fields": {"title": "changed"}}),
@@ -281,7 +281,7 @@ def test_cli_snapshot_fallback_read_only(tmp_path, monkeypatch):
         assert code == 0
         assert "READ-ONLY fallback (keeper unreachable)" in err
         assert KEY in out  # answered from plan.snapshot.json, not the API
-        code, out, err = run_cli(["claim", "routing:R2"])
+        code, out, err = run_cli(["claim", "atlas:R2"])
         assert code == 3 and "unreachable" in err
     finally:
         e2e.close()
