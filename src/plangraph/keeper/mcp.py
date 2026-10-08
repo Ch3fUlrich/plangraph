@@ -269,9 +269,28 @@ def serve(instream, outstream, client=None):
             outstream.flush()
 
 
+_LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def cleartext_warning(base_url):
+    """A warning when *base_url* would send the bearer token unencrypted.
+
+    Plain ``http`` is fine on loopback (the keeper itself, the ssh relay);
+    anywhere else the token must travel inside TLS (PG-PROXY-ACCESS).
+    """
+    parts = urllib.parse.urlsplit(base_url or "")
+    if parts.scheme != "http" or (parts.hostname or "") in _LOOPBACK:
+        return None
+    return (f"warning: PG_URL {parts.scheme}://{parts.hostname} sends the bearer"
+            " token in clear text; use https (keeper proxy) or loopback")
+
+
 def _default_client():
-    return HttpKeeper(os.environ.get("PG_URL", ""),
-                      os.environ.get("PG_TOKEN_FILE", ""))
+    url = os.environ.get("PG_URL", "")
+    warning = cleartext_warning(url)
+    if warning:
+        sys.stderr.write(warning + "\n")
+    return HttpKeeper(url, os.environ.get("PG_TOKEN_FILE", ""))
 
 
 def main(argv=None):
