@@ -1,0 +1,274 @@
+# D-721/D-729 keys were never in the graph (md-sync: not in graph): create + close. D-741 closes
+# EBN-UNTAGGED-VALIDITY (agent-reported, ebn 728ae64). EBN-REBINARIZE created open (no Closes yet).
+batch: 2026-10-08-d721-d729-d741
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: dc1dc9c188d9719d94e2b24c743ffe2132c850d1c1f796fd3feb2cf76edf70c7
+ops:
+- op: create
+  item:
+  - project: autoos
+    id: AO-PRICE-GAP
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: Price gap fix (AO PRICE-GAP)
+    done_criteria: router D-721
+    description: 'Created for the D-721 close: accepted at 5bd7fc46 (ancestor of origin/main, CI green).'
+  - project: autoos
+    id: OVHCODER-DROP
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: Drop the OVH coder leg
+    done_criteria: router D-721
+    description: 'Created for the D-721 close: accepted at a4f81759 (ancestor of origin/main, CI green).'
+  - project: server
+    id: EN-USENET-LANE
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: Usenet lane (EN)
+    done_criteria: router D-729
+    description: 'Created for the D-729 close: accepted at f41dad0f (+ seat follow-up 443bddc3).'
+  - project: server
+    id: ABR-AUTODL-OFF
+    kind: lane
+    track: BOOKS
+    owner: server-L1-main
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: ABR quality_auto_download off
+    done_criteria: router D-729
+    description: 'Created for the D-729 close: f41dad0f; live setting per prox report (D-695).'
+  - project: workst-ebn
+    id: EBN-REBINARIZE
+    kind: lane
+    track: EBN
+    owner: workst-L1-ebn
+    review_tier: none
+    evidence_kinds:
+    - decision
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: Re-binarize red traces with the paper method
+    done_criteria: router D-row Closes
+    description: 'workst-L1-ebn via routing 2026-10-08: DONE (agent report) - paper method reproduces upphase; no scale reproduces the stored red traces. Close waits for a router D-row. Exploratory finding
+      (not a result until replicated): event-length-only set LOAO 0.894 p 1/462. L1 decision: deploy classifier on red traces only until the provider answers pack 4/6.'
+- op: edit
+  key: routing:PH-FLEET-1003
+  fields:
+    depends_on:
+    - autoos:AO-ADMISSION
+    - autoos:AO-ADMISSION-2
+    - autoos:AO-AUTOFIX
+    - autoos:AO-PRICE-GAP
+    - autoos:AO-REPORT-SCHEMA
+    - autoos:AO-SPAWN-FANOUT
+    - autoos:AO-TERSE
+    - autoos:AO-WRITER-FAMILY
+    - autoos:BASHGUARD-ORCH-HARDEN
+    - autoos:COMBO-REFRESH
+    - autoos:COMBO-REFRESH-A4
+    - autoos:COST-GATE-ACTIVATE
+    - autoos:COST-GATE-CULTURE-FIX
+    - autoos:COST-GUARD
+    - autoos:D655-LEG-PROBE
+    - autoos:FAMILY-TRACK
+    - autoos:FLEET-HOOKS
+    - autoos:G-KEEPER
+    - autoos:LAUNCHER-CPU-GATE
+    - autoos:LAYERED-PLANNING-MOVE
+    - autoos:LEAN-MCP
+    - autoos:MCP-STDIN
+    - autoos:O1-OPENCODE-SESSIONS
+    - autoos:O2-FLEET-BUS-MCP
+    - autoos:O3-GKEEPER-OPENCODE
+    - autoos:O4-BASHGUARD-PLUGIN
+    - autoos:O5-LEAN-MCP-PILOT
+    - autoos:O6-ROUTING-ON-OPENCODE
+    - autoos:OC-HEARTBEAT
+    - autoos:OC-PILOT
+    - autoos:OC-RENDER-KEYS
+    - autoos:OC-START-BACKOFF
+    - autoos:OMNI-AUTOOS3-U2
+    - autoos:OVH-GUARD
+    - autoos:OVH-PRICE-ROWS
+    - autoos:OVH-TEXT
+    - autoos:OVHCODER-DROP
+    - autoos:PH-AO-FLEET
+    - autoos:PH-ROUTESETUP
+    - autoos:PROBE-LEDGER-ATOMIC
+    - autoos:PUBLIC-IDS-SCRUB
+    - autoos:PUSHGATE-TIGHTEN
+    - autoos:ROUTE-FRESH
+    - autoos:RUNNER-SCALE-20
+    - autoos:SKILL-TERSE-PEER
+    - autoos:SPAWN-LONGPATH
+    - autoos:SPAWNER-F0-CWD
+    - autoos:U12
+    - autoos:U13
+    - autoos:WIN-PROMPT
+    - autoos:WIN-PROMPT-LINTFIX
+    - autoos:WORKST-L0-FAILOVER
+    - autoos:ZCODE-CLIENT-LANE-Z
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on:
+    - routing:OS-102B
+    - server:ABR-AUTODL-OFF
+    - server:ABR-TRUSTED-GROUP
+    - server:ACC-GROUPS-DEPLOY
+    - server:ACC-GROUPS-T1
+    - server:ACC-GROUPS-T2
+    - server:ACCOUNTS-PWSTORE
+    - server:ACCOUNTS-PWSTORE-F40
+    - server:BACKUP-HARDEN
+    - server:BACKUP-RENDER-TEST
+    - server:BACKUP-SQLITE-LABEL-FIX
+    - server:BOOKS-SLSKD-RECOVERY
+    - server:CHAPTARR-ENV
+    - server:CI-VM-ONDEMAND
+    - server:CROWDSEC-ABS-ANCHOR
+    - server:CROWDSEC-ENFORCE
+    - server:CS-CADDY
+    - server:CS-CADDY-PII
+    - server:DH-DOCS
+    - server:EN-USENET-LANE
+    - server:F48-CLAMAV-TEST
+    - server:GW-LOGS-REWORK
+    - server:GW-NFS-COUNTS
+    - server:GW-SEMAPHORE-HARDEN
+    - server:HA-CLEANUP
+    - server:HA-DOCS-SPLIT
+    - server:HA-STT-FREE
+    - server:HA-STT-FREE-ENV
+    - server:HA-STT-WS
+    - server:HA-WS-INSTALLED
+    - server:HEAL-LLM-REPOINT
+    - server:IDS-HOMENET
+    - server:IDS-READSHAPE
+    - server:IDS-SCHEDULE-ON
+    - server:IDS-V6SRC
+    - server:MCP-SERVERS-ADOPT
+    - server:MEALIE-CAP
+    - server:OVERLAY-VERSION-GUARD
+    - server:OVG-RENDER-TEST
+    - server:OWUI-PYODIDE
+    - server:PH-TWOARMED
+    - server:PLAN-LAN-TEST
+    - server:PLAN-VHOST
+    - server:PROX-STABLE-NAME
+    - server:PRUNE-WEEKLY
+    - server:SABLIER-MAIL-POLICY
+    - server:SQLITE-ONLINE-BACKUP
+    - server:STREAMING-BACKUP
+    - server:UPR-LOG-B1
+    - server:UPR-LOG-B2
+    - server:VIDEO-CAP
+    - server:VM-IPV6-RA
+- op: edit
+  key: routing:PH-EBN-1003
+  fields:
+    depends_on:
+    - workst-ebn:EBN-COMPUTE-LOWPRIO
+    - workst-ebn:EBN-DON011187-TRANSFER
+    - workst-ebn:EBN-EMBEDDING
+    - workst-ebn:EBN-LOAO-CV
+    - workst-ebn:EBN-MISMATCH-EXPLAINED
+    - workst-ebn:EBN-PAPER-N
+    - workst-ebn:EBN-REBINARIZE
+    - workst-ebn:EBN-REDCELL-CLASSIFIER
+    - workst-ebn:EBN-REDTRACE-NONBINARY
+    - workst-ebn:EBN-UNTAGGED-VALIDITY
+    - workst-ebn:P0-BLIND-EYE-TEST
+    - workst-ebn:P1-AUDIT-REAL-DATA
+    - workst-ebn:P2-CELL-OUT-REDO
+    - workst-ebn:P3-DIAG-REVIEW
+    - workst-ebn:P4-CLASSIFIER-COMPARISON
+- op: legacy_state
+  key: autoos:AO-PRICE-GAP
+  state: in_review
+  note: router D-721
+- op: add_evidence
+  key: autoos:AO-PRICE-GAP
+  kind: decision
+  ref:
+    id: D-721
+- op: close_on_decision
+  key: autoos:AO-PRICE-GAP
+- op: legacy_state
+  key: autoos:OVHCODER-DROP
+  state: in_review
+  note: router D-721
+- op: add_evidence
+  key: autoos:OVHCODER-DROP
+  kind: decision
+  ref:
+    id: D-721
+- op: close_on_decision
+  key: autoos:OVHCODER-DROP
+- op: legacy_state
+  key: server:EN-USENET-LANE
+  state: in_review
+  note: router D-729
+- op: add_evidence
+  key: server:EN-USENET-LANE
+  kind: decision
+  ref:
+    id: D-729
+- op: close_on_decision
+  key: server:EN-USENET-LANE
+- op: legacy_state
+  key: server:ABR-AUTODL-OFF
+  state: in_review
+  note: router D-729
+- op: add_evidence
+  key: server:ABR-AUTODL-OFF
+  kind: decision
+  ref:
+    id: D-729
+- op: close_on_decision
+  key: server:ABR-AUTODL-OFF
+- op: edit
+  key: workst-ebn:EBN-UNTAGGED-VALIDITY
+  fields:
+    review_tier: none
+    evidence_kinds:
+    - decision
+- op: add_evidence
+  key: workst-ebn:EBN-UNTAGGED-VALIDITY
+  kind: decision
+  ref:
+    id: D-741
+- op: close_on_decision
+  key: workst-ebn:EBN-UNTAGGED-VALIDITY
