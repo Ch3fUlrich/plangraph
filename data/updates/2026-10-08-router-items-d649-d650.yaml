@@ -1,0 +1,235 @@
+# Router items D-649/D-650 (routing message 2026-10-08).
+batch: 2026-10-08-router-items-d649-d650
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 7e4dab3459b96fb59876e255b0c5ef61756f4d0693d848263fb706581a40c162
+ops:
+- op: create
+  item:
+  - project: server
+    id: MCP-SERVERS-ADOPT
+    kind: lane
+    track: APPS
+    owner: server-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: -1
+    depends_on: []
+    title: 'MCP servers adopted as code: pinned SERENA/OMNIGRAPH image digests, committed .env refs, graph snapshot'
+    done_criteria: merged on Server origin/main; needs the operator window OS-134
+    description: Router D-649/D-650 (low priority; operator window OS-134).
+  - project: server
+    id: PRUNE-WEEKLY
+    kind: lane
+    track: UPDATESRUN
+    owner: prox
+    review_tier: standard
+    evidence_kinds:
+    - semaphore-task
+    estimate_h: 3
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: 'Weekly prune: AutoOS sandboxes > 7 d, ~/.claude/jobs/*/tmp > 3 d, Semaphore clones idle > 14 d'
+    done_criteria: scheduled task green twice; dry-run list reviewed before the first delete
+    description: Router D-649/D-650; prox is building it.
+  - project: autoos
+    id: SKILL-TERSE-PEER
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 2
+    depends_on: []
+    title: D-649 terse-peer rules in unattended-orchestration + spawner task prefix
+    done_criteria: merged on AutoOS main with CI green and a seat
+    description: 'Router D-649 (operator: terse exact messages, minimal output, router only for coordination/decisions/progress/incidents, L1s talk directly when dependent).'
+  - project: autoos
+    id: LAYERED-PLANNING-MOVE
+    kind: lane
+    track: SPAWNER
+    owner: autoos-L1-main
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: default
+    priority: 2
+    depends_on: []
+    title: Move plangraph-planning to AutoOS .agents/skills/layered-planning (generic), index + unattended-orchestration refs
+    done_criteria: merged on AutoOS main; listed in repository-index; superpowers planning skills referenced, not restated; 3 seat fixes folded (aliases, planned fields, provisional task size)
+    description: Router D-646 (operator chose option A). plangraph keeps docs/PLANNING-HIERARCHY.md and adds a 3-line pointer after the move.
+  - project: routing
+    id: SETUP-IMPROVEMENT-PLAN
+    kind: lane
+    track: OPS
+    owner: server-L1-routing
+    review_tier: standard
+    evidence_kinds:
+    - decision
+    estimate_h: 4
+    estimate_src: default
+    priority: 1
+    depends_on: []
+    title: Setup improvement plan
+    done_criteria: plan reviewed and recorded in a router D-row
+    description: Router D-649/D-650; owner server-L1-routing.
+- op: edit
+  key: routing:PH-SERVER-1003
+  fields:
+    depends_on:
+    - routing:OS-102B
+    - server:ACCOUNTS-PWSTORE
+    - server:ACCOUNTS-PWSTORE-F40
+    - server:BACKUP-HARDEN
+    - server:BACKUP-RENDER-TEST
+    - server:BACKUP-SQLITE-LABEL-FIX
+    - server:BOOKS-SLSKD-RECOVERY
+    - server:CHAPTARR-ENV
+    - server:CROWDSEC-ABS-ANCHOR
+    - server:CROWDSEC-ENFORCE
+    - server:CS-CADDY
+    - server:CS-CADDY-PII
+    - server:DH-DOCS
+    - server:GW-LOGS-REWORK
+    - server:GW-NFS-COUNTS
+    - server:GW-SEMAPHORE-HARDEN
+    - server:HA-CLEANUP
+    - server:HA-DOCS-SPLIT
+    - server:HA-STT-FREE
+    - server:HA-STT-FREE-ENV
+    - server:HA-STT-WS
+    - server:HA-WS-INSTALLED
+    - server:HEAL-LLM-REPOINT
+    - server:IDS-HOMENET
+    - server:IDS-READSHAPE
+    - server:IDS-SCHEDULE-ON
+    - server:IDS-V6SRC
+    - server:MEALIE-CAP
+    - server:OVERLAY-VERSION-GUARD
+    - server:OVG-RENDER-TEST
+    - server:OWUI-PYODIDE
+    - server:PH-TWOARMED
+    - server:PLAN-LAN-TEST
+    - server:PLAN-VHOST
+    - server:PROX-STABLE-NAME
+    - server:SABLIER-MAIL-POLICY
+    - server:SQLITE-ONLINE-BACKUP
+    - server:STREAMING-BACKUP
+    - server:UPR-LOG-B1
+    - server:UPR-LOG-B2
+    - server:VIDEO-CAP
+    - server:VM-IPV6-RA
+    - server:MCP-SERVERS-ADOPT
+    - server:PRUNE-WEEKLY
+- op: edit
+  key: routing:PH-FLEET-1003
+  fields:
+    depends_on:
+    - autoos:COMBO-REFRESH
+    - autoos:COMBO-REFRESH-A4
+    - autoos:COST-GATE-ACTIVATE
+    - autoos:COST-GATE-CULTURE-FIX
+    - autoos:COST-GUARD
+    - autoos:FAMILY-TRACK
+    - autoos:FLEET-HOOKS
+    - autoos:G-KEEPER
+    - autoos:LAUNCHER-CPU-GATE
+    - autoos:LEAN-MCP
+    - autoos:MCP-STDIN
+    - autoos:O1-OPENCODE-SESSIONS
+    - autoos:O2-FLEET-BUS-MCP
+    - autoos:O3-GKEEPER-OPENCODE
+    - autoos:O4-BASHGUARD-PLUGIN
+    - autoos:O5-LEAN-MCP-PILOT
+    - autoos:O6-ROUTING-ON-OPENCODE
+    - autoos:OC-HEARTBEAT
+    - autoos:OC-PILOT
+    - autoos:OC-RENDER-KEYS
+    - autoos:OC-START-BACKOFF
+    - autoos:OMNI-AUTOOS3-U2
+    - autoos:OVH-GUARD
+    - autoos:OVH-PRICE-ROWS
+    - autoos:OVH-TEXT
+    - autoos:PH-ROUTESETUP
+    - autoos:ROUTE-FRESH
+    - autoos:RUNNER-SCALE-20
+    - autoos:SPAWNER-F0-CWD
+    - autoos:U12
+    - autoos:U13
+    - autoos:WIN-PROMPT
+    - autoos:WIN-PROMPT-LINTFIX
+    - autoos:WORKST-L0-FAILOVER
+    - autoos:ZCODE-CLIENT-LANE-Z
+    - autoos:SKILL-TERSE-PEER
+    - autoos:LAYERED-PLANNING-MOVE
+- op: edit
+  key: routing:GOAL
+  fields:
+    depends_on:
+    - autoos:OP-MANAGE-KEY
+    - autoos:OP-WS-RELAUNCH
+    - autoos:ORCH-L2-LAUNCHER
+    - autoos:ORCH-REVIEW-TIERS
+    - autoos:PH-MCP-ONE
+    - autoos:PH-OPS-20261002
+    - autoos:PH-WS-SHIFT
+    - autoos:SEC-ISOSEC
+    - autoos:T1-COMBO-LAYERS
+    - autoos:T1-CREDIT
+    - autoos:T1-JEV
+    - autoos:T1-MM
+    - autoos:T1-NOISE
+    - autoos:T1-UPGRADE
+    - autoos:T1-WEBTOOLS
+    - autoos:T1-ZEN
+    - autoos:T2-COMPACT
+    - autoos:T2-ISOLATE
+    - autoos:T2-LEAN
+    - autoos:T2-MCPLIFE
+    - autoos:T2-RECORD-GAPS
+    - autoos:T2-RESEARCHCARD
+    - autoos:T2-TASKSESSION
+    - autoos:T3-CLEAN
+    - autoos:T3-PRINCIPLES
+    - autoos:T3-SCRUB
+    - autoos:T3-SPLIT
+    - autoos:T3-WIN
+    - plangraph:PG-M4
+    - routing:GATE-P3
+    - routing:PH-AUDIT-1002
+    - routing:PH-EBN-1003
+    - routing:PH-FLEET-1003
+    - routing:PH-GEN-1003
+    - routing:PH-OPERATOR
+    - routing:PH-SERVER-1003
+    - server:GOAL
+    - server:GW-FOLLOWUP
+    - server:GW-MCP-ROLLOUT
+    - server:OP-DOCKHAND-REVOKE
+    - server:OP-FRITZ-V6
+    - server:SEC-EDGE-GW-INVEST
+    - server:SEC-MINIO
+    - server:SEC-OIDC
+    - server:SEC-SESSION-SECRETS
+    - server:SEC-TIER-A
+    - server:T6-DETECT
+    - server:T6-FIX
+    - server:T6-GRAPHMOVE-CUTOVER
+    - server:T6-INFRA
+    - server:T6-IPV6
+    - server:T6-LEDGER
+    - server:T6-MEDIA
+    - server:T6-PHONE
+    - server:T6-SECRETS
+    - server:T6-UPDATES-IMPL
+    - workstation:OP-GROK-STEPS
+    - routing:SETUP-IMPROVEMENT-PLAN
+
