@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .evidence_types import Result, valid_commit_ref
 
@@ -94,10 +96,16 @@ class GitAdapter:
         *,
         git: str = "git",
         timeout: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+        fetch_interval: float = 60.0,
     ) -> None:
         self._repos = dict(repos or {})
         self._git = git
         self._timeout = float(timeout)
+        self._clock = clock
+        self._fetch_interval = float(fetch_interval)
+        self._fetch_lock = threading.Lock()
+        self._last_fetch: dict[str, float] = {}
 
     # -- config -------------------------------------------------------------
     def repo_path(self, project: str) -> str | None:
@@ -121,22 +129,96 @@ class GitAdapter:
         return f"GitAdapter(projects={sorted(self._repos)!r})"
 
     # -- plumbing -----------------------------------------------------------
-    def _run(self, repo: str, args: list[str]) -> subprocess.CompletedProcess:
+    def _run(
+        self,
+        repo: str,
+        args: list[str],
+        *,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess:
         return subprocess.run(
             [self._git, *args],
             cwd=repo,
             capture_output=True,
             text=True,
-            timeout=self._timeout,
+            timeout=self._timeout if timeout is None else float(timeout),
             check=False,
         )
+
+    # -- fetch on demand ----------------------------------------------------
+    def _fetch_remote(self, repo: str) -> str | None:
+        """Return the remote to fetch for *repo*, or ``None`` when no fetch applies.
+
+        The repo is matched to a registered project by ``repo_path(project) ==
+        repo``; only entries whose ref is remote-tracking (contains ``/``) are
+        ever fetched, and the remote (text before the first ``/``) must pass
+        :func:`valid_ref`.
+        """
+        try:
+            target = str(repo)
+        except Exception:
+            return None
+        ref: str | None = None
+        try:
+            for project in self._repos:
+                if self.repo_path(project) == target:
+                    ref = self.repo_ref(project)
+                    break
+        except Exception:
+            return None
+        if not ref or "/" not in ref:
+            return None
+        remote = ref.split("/", 1)[0]
+        if not remote or not valid_ref(remote):
+            return None
+        return remote
+
+    def _maybe_fetch(self, repo: str) -> bool:
+        """Fetch the registered remote for *repo* if one is due; True if fetched ok.
+
+        At most one fetch per repo path per ``fetch_interval`` seconds
+        (thread-safe, shared by ``commit_exists`` and ``is_ancestor``). Fetch
+        failures and timeouts never raise: they count as "no fetch" (False).
+        """
+        remote = self._fetch_remote(repo)
+        if remote is None:
+            return False
+        try:
+            now = float(self._clock())
+        except Exception:
+            return False
+        key = str(repo)
+        with self._fetch_lock:
+            last = self._last_fetch.get(key)
+            if last is not None and (now - last) < self._fetch_interval:
+                return False
+            self._last_fetch[key] = now
+        try:
+            proc = self._run(
+                repo,
+                ["fetch", "--quiet", "--", remote],
+                timeout=min(self._timeout, 20.0),
+            )
+        except Exception:
+            return False
+        return proc.returncode == 0
 
     # -- operations ---------------------------------------------------------
     def commit_exists(self, repo: str, sha: str) -> bool:
         if not valid_commit_ref(sha):
             return False
         proc = self._run(repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"])
-        return proc.returncode == 0
+        if proc.returncode == 0:
+            return True
+        if not self._maybe_fetch(repo):
+            return False
+        try:
+            retry = self._run(
+                repo, ["cat-file", "-e", "--end-of-options", f"{sha}^{{commit}}"]
+            )
+        except Exception:
+            return False
+        return retry.returncode == 0
 
     def resolve_commit(self, repo: str, sha: str) -> str | None:
         """Resolve *sha* to a full 40-hex commit id, or None."""
@@ -148,7 +230,19 @@ class GitAdapter:
         proc = self._run(
             repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref]
         )
-        return proc.returncode == 0
+        if proc.returncode == 0:
+            return True
+        if "/" not in ref:
+            return False
+        if not self._maybe_fetch(repo):
+            return False
+        try:
+            retry = self._run(
+                repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref]
+            )
+        except Exception:
+            return False
+        return retry.returncode == 0
 
     def is_ancestor_of_main(self, repo: str, sha: str) -> bool:
         return self.is_ancestor(repo, sha, "main")
