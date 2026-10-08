@@ -195,8 +195,8 @@ def fold(events):
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")
-        elif kind == "closed_on_decision":
-            # X7b: the router's decision close is the tier-`none` equivalent of
+        elif kind in ("closed_on_decision", "answered"):
+            # X7b (and MK-ANSWER's ``answered``): the router's decision close is the tier-`none` equivalent of
             # a passed review -- same final state, same lock, same attribution.
             item["state"] = "done"
             item["reviewer"] = event.get("actor")

@@ -10,7 +10,8 @@ from __future__ import annotations
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
-from .item_fields import MODEL_FIELDS, check_host, check_model_fields, check_wait
+from .item_fields import (MODEL_FIELDS, check_host, check_kind, check_model_fields,
+                          check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
@@ -60,7 +61,9 @@ class InputMixin:
                 raise Refused("validation",
                               "depends_on entries must be strings")
             deps.append(self._qualify(project, dep))
-        kind = raw.get("kind", "lane")
+        kind = check_kind(raw.get("kind", "lane"), key)
+        operator, wait = kind_defaults(raw, kind)
+        check_wait(wait, key)
         check_model_fields(raw, kind, key)
         corrects = raw.get("corrects")
         if corrects:
@@ -73,14 +76,14 @@ class InputMixin:
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
-            "host": raw.get("host"), "wait": raw.get("wait"), "kind": kind,
+            "host": raw.get("host"), "wait": wait, "kind": kind,
             **{name: raw.get(name) for name in MODEL_FIELDS},
             "track": raw.get("track"), "owner": raw.get("owner"),
             "owner_family": auth.norm_family(raw.get("owner_family")),
             "estimate_h": raw.get("estimate_h"), "estimate_src": raw.get("estimate_src"),
             "done_criteria": raw.get("done_criteria"),
             "evidence_kinds": list(raw.get("evidence_kinds") or ["any"]),
-            "operator": bool(raw.get("operator")),
+            "operator": bool(operator),
             "priority": int(raw.get("priority") or 0),
             "source": raw.get("source"), "note": self._folded_note(raw, key),
             "corrects": corrects, "fixes": fixes, "depends_on": deps,

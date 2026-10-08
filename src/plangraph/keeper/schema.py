@@ -23,7 +23,7 @@ EVENT_TYPES = (
     "lease_expired", "evidence_added", "submitted", "changes_requested",
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
-    "waiver_set", "legacy_state_set", "run_recorded",
+    "waiver_set", "legacy_state_set", "run_recorded", "answered",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -156,11 +156,12 @@ CREATE TABLE audit_findings (
 # Only ``review_passed`` and ``closed_on_decision`` lock: a ``review_verdict``
 # keeps the item in review until the second, independent passing verdict emits
 # ``review_passed``, and a ``waiver_set`` (D-217) is an ordinary non-locking
-# event.  A router ``closed_on_decision`` (X7b, tier ``none``) is final the same
+# event.  A router ``closed_on_decision`` (X7b, tier ``none``) and an ``answered``
+# (MK-ANSWER, question/decision items) are final the same
 # way, so every trigger that froze a reviewed item freezes that one too.
 _LOCKED = (
     "EXISTS (SELECT 1 FROM events e WHERE e.key = {k}"
-    " AND e.type IN ('review_passed','closed_on_decision'))"
+    " AND e.type IN ('review_passed','closed_on_decision','answered'))"
     " OR EXISTS (SELECT 1 FROM items i WHERE i.key = {k} AND i.state = 'cancelled')"
 )
 

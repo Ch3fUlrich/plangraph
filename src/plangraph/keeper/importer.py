@@ -22,7 +22,8 @@ import yaml
 
 from .errors import Refused
 from .note_fold import DESCRIPTION_CAP, fold_checked as _fold_note
-from .item_fields import MODEL_FIELDS, check_host, check_model_fields, check_wait
+from .item_fields import (KIND_DEFAULTS, MODEL_FIELDS, check_host, check_kind,
+                          check_model_fields, check_wait, kind_defaults)
 from .store_create import default_review_tier, validated_review_tier
 
 __all__ = ["load_dir", "export_yaml"]
@@ -36,7 +37,6 @@ _FIELD_ORDER = (
 )
 _FIELDS = frozenset(_FIELD_ORDER)
 _IMPORT_STATES = ("open", "claimed", "in_review")
-_KINDS = ("lane", "gate", "goal")
 REQUIRED = ("project", "id")
 
 
@@ -86,9 +86,7 @@ def _normalise_item(raw, where):
     if declared is not None and declared != key:
         raise _bad(key, f"key {declared!r} != {key!r}")
 
-    kind = raw.get("kind", "lane")
-    if kind not in _KINDS:
-        raise _bad(key, f"kind {kind!r} is not one of {_KINDS}")
+    kind = check_kind(raw.get("kind", "lane"), key)
     state = raw.get("state", "open")
     if state not in _IMPORT_STATES:
         raise _bad(key, f"state {state!r} is not importable")
@@ -102,9 +100,10 @@ def _normalise_item(raw, where):
         priority = 0
     if isinstance(priority, bool) or not isinstance(priority, int):
         raise _bad(key, "priority must be an integer")
-    operator = raw.get("operator", False)
-    if not isinstance(operator, bool):
+    operator = raw.get("operator")
+    if operator is not None and not isinstance(operator, bool):
         raise _bad(key, "operator must be a boolean")
+    operator, wait_raw = kind_defaults(raw, kind)
 
     depends = sorted(_qualify(project, dep)
                      for dep in _string_list(raw, "depends_on", key))
@@ -126,7 +125,7 @@ def _normalise_item(raw, where):
 
     title = _string(raw, "title", key) or ""
     host = check_host(_string(raw, "host", key), key)
-    wait = check_wait(raw.get("wait"), key)
+    wait = check_wait(wait_raw, key)
     check_model_fields(raw, kind, key)
     description = _string(raw, "description", key)
     if description is not None and len(description) > DESCRIPTION_CAP:
@@ -219,8 +218,8 @@ def _export_record(item):
     record = {}
     for field in _FIELD_ORDER:
         value = item.get(field)
-        if value is None:
-            continue
+        if value is None and not (field == "wait" and item.get("kind") in KIND_DEFAULTS):
+            continue  # a kind with a default wait keeps an explicit null
         if field == "depends_on":
             if not value:
                 continue

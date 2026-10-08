@@ -42,7 +42,7 @@ __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
 MAX_BODY = 1024 * 1024  # 1 MiB
 
 from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
-from .api_routes import ROUTER_VERBS, TEXT_DEFAULT as _TEXT_DEFAULT
+from .api_routes import READ_CALLS, ROUTER_VERBS, TEXT_DEFAULT as _TEXT_DEFAULT
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
 
 
@@ -259,8 +259,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "snapshot":
             data = store.snapshot(principal)
             return (fmt.snapshot_text(data), True) if as_text else (data, False)
-        if name in ("aliases", "whoami"):
-            data = getattr(store, name)(principal)
+        if name in READ_CALLS:
+            data = READ_CALLS[name](store, principal, project)
             text = getattr(fmt, name + "_text")
             return (text(data), True) if as_text else (data, False)
         raise Refused("not_found", f"no read verb {name!r}")

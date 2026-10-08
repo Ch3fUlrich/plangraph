@@ -11,6 +11,10 @@ MODEL-KINDS adds four optional model-of-work fields: ``layer`` (L1/L2/L3), ``rol
 (planner/implementer/reviewer/researcher/operator), ``agent_id`` (the agent that
 runs the item, <= ``AGENT_ID_CAP`` chars of ``[A-Za-z0-9._:@-]``) and ``phase_kind``
 (planning/work, gate items only).
+
+MODEL-KINDS: ``KINDS`` lists the item kinds.  ``question``, ``decision`` and
+``operator_task`` wait on the operator: ``kind_defaults`` gives their create-time
+``operator`` / ``wait`` defaults (explicit values always win).
 """
 from __future__ import annotations
 
@@ -107,3 +111,30 @@ def check_model_fields(fields, kind, key=None):
             where = f"{key}: " if key else ""
             raise Refused("validation",
                           f"{where}phase_kind is only allowed on gate items")
+
+
+#: Item kinds.  The last three wait on the operator and block dependents like a lane.
+KINDS = ("lane", "gate", "goal", "question", "decision", "operator_task")
+#: kind -> (operator, wait) used when the definition does not say.
+KIND_DEFAULTS = {"question": (True, "answer"), "decision": (True, "answer"),
+                 "operator_task": (True, "task")}
+
+
+def check_kind(value, key=None):
+    """Return *value* if it is one of ``KINDS``, else refuse ``validation``."""
+    if not isinstance(value, str) or value not in KINDS:
+        where = f"{key}: " if key else ""
+        raise Refused("validation", f"{where}kind {value!r} is not one of {KINDS}")
+    return value
+
+
+def kind_defaults(raw, kind):
+    """``(operator, wait)`` for a definition *raw* of *kind*.
+
+    A key present in *raw* wins (``wait: null`` is an explicit "no wait"); an
+    ``operator`` of null counts as absent.
+    """
+    op_default, wait_default = KIND_DEFAULTS.get(kind, (False, None))
+    operator = raw.get("operator")
+    return (op_default if operator is None else operator,
+            raw["wait"] if "wait" in raw else wait_default)

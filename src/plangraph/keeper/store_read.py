@@ -16,7 +16,7 @@ from .item_fields import MODEL_FIELDS
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
 _MERGED_KINDS = ("commit+ci", "commit")
-_TS_TYPES = ("review_passed", "closed_on_decision", "item_created")
+_TS_TYPES = ("review_passed", "closed_on_decision", "answered", "item_created")
 
 
 def _decode_models(value):
@@ -39,7 +39,7 @@ def _decode_run_ids(value):
     return list(parsed) if isinstance(parsed, list) else []
 
 _ACTIVITY_TYPES = ("item_created", "legacy_state_set", "closed_on_decision",
-                   "cancelled", "claimed", "submitted", "review_passed",
+                   "answered", "cancelled", "claimed", "submitted", "review_passed",
                    "changes_requested")
 _ACTIVITY_WINDOW_S = 31 * 86400
 _ACTIVITY_CAP = 5000
@@ -88,7 +88,7 @@ class ReadMixin:
         done_at, created_ts, reviewed = None, None, False
         for row in self.conn.execute(
                 "SELECT type,ts FROM events WHERE key=? AND type IN"
-                " ('review_passed','closed_on_decision','item_created')"
+                " ('review_passed','closed_on_decision','answered','item_created')"
                 " ORDER BY seq", (key,)):
             if row["type"] == "item_created" and created_ts is None:
                 created_ts = row["ts"]
@@ -96,7 +96,7 @@ class ReadMixin:
                 reviewed = True
                 if done_at is None:
                     done_at = row["ts"]
-            elif row["type"] == "closed_on_decision" and done_at is None:
+            elif row["type"] in ("closed_on_decision", "answered") and done_at is None:
                 done_at = row["ts"]
         rows = evidence if evidence is not None else self._evidence(key)
         merged = any(r.get("verified") and r.get("kind") in _MERGED_KINDS
@@ -163,7 +163,7 @@ class ReadMixin:
         created, done, reviewed = {}, {}, set()
         for row in self.conn.execute(
                 "SELECT key,type,ts FROM events WHERE type IN"
-                " ('review_passed','closed_on_decision','item_created')"
+                " ('review_passed','closed_on_decision','answered','item_created')"
                 " ORDER BY seq"):
             if row["type"] == "item_created":
                 created.setdefault(row["key"], row["ts"])
