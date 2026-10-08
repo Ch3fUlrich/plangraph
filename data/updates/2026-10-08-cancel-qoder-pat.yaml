@@ -1,0 +1,29 @@
+# Withdraw autoos:OS-QODER-PAT (server-L1-routing 2026-10-08).
+batch: 2026-10-08-cancel-qoder-pat
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 6f3cfa09ddc8c81f87bde8f8697167c33ecc6af0e008b78e5f97d98ff9671414
+ops:
+- op: edit
+  key: routing:SETUP-IMPROVEMENT-PLAN
+  fields:
+    depends_on:
+    - autoos:AO-CENTRAL-APPLY
+    - autoos:AO-DENYLEGS
+    - autoos:AO-LENS-REVIEW
+    - autoos:AO-PROBE-D657
+    - routing:ROUTE-400LOC
+    - routing:ROUTE-CHANGELOG-DOCS
+    - routing:ROUTE-CLEF
+    - routing:ROUTE-CLEF-SHADOW
+    - routing:ROUTE-COMBO-PROPOSAL
+    - routing:ROUTE-DEPTH-RESEARCH
+    - routing:ROUTE-JEV-TRIAL
+    - routing:ROUTE-L1-CATCHUP
+    - routing:ROUTE-OC-L1
+    - routing:ROUTE-OC-L2L3
+    - routing:ROUTE-SKILLS
+- op: cancel
+  key: autoos:OS-QODER-PAT
+  reason: 'WITHDRAWN: Qoder PAT fails; qoder only as spawner CLI client (combo-proposal-v2 7b ccdaa4f, server-L1-routing)'
+
