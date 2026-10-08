@@ -15,6 +15,9 @@ Design: `docs/proposals/2026-10-08-pg-proxy-access.md`. Same pattern as omnigrap
    }
    ```
    No Authelia (it would block MCP clients). Auth = the keeper's per-principal bearer, inside TLS.
+   The Caddy -> sidecar hop is plain HTTP on the LAN (as omnigraph's). Mitigations: the sidecar accepts only the
+   edge IP (192.168.178.76, check it) and 127.0.0.1; optional at go-live: an OPNsense rule allowing 8788 only
+   from the edge. A TLS hop (Caddy `transport http { tls }` + sidecar cert) is the follow-up if routing wants it.
 3. Check from each remote L1: MCP env `PG_URL=https://keeper.ohje.ooguy.com`,
    `PG_TOKEN_FILE=~/.config/plangraph/<name>.token` → `whoami` answers with its principal.
 4. PG-PROXY-CUTOVER: `tailscale serve --https=8787 off`; remove the ssh relay forced command for prox-L1.
