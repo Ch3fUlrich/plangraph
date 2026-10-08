@@ -64,8 +64,12 @@
     return out.sort();
   }
 
+  function effectivePhase(it) {
+    return it.phase || it.track || "";
+  }
+
   function visible(it) {
-    return !state.projectsOff[it.project] && !state.tracksOff[it.track];
+    return !state.projectsOff[it.project] && !state.tracksOff[effectivePhase(it)];
   }
 
   function visibleItems() {
@@ -116,13 +120,17 @@
     return b;
   }
 
-  /* Tracks of ONE project, in first-appearance (phase progression) order. */
+  /* Tracks of ONE project, in first-appearance (phase progression) order.
+   Uses effective phase (phase || track) so phase-only snapshots work. */
   function tracksOf(p) {
     var seen = {}, out = [];
     state.items.forEach(function (it) {
-      if (it.project === p && it.track && !seen[it.track]) {
-        seen[it.track] = true;
-        out.push(it.track);
+      if (it.project === p) {
+        var ph = effectivePhase(it);
+        if (ph && !seen[ph]) {
+          seen[ph] = true;
+          out.push(ph);
+        }
       }
     });
     return out;
@@ -139,8 +147,10 @@
       if (on.length === all.length) return new Set();
       return new Set(on.length ? on : [NONE]);
     }
+    // Build phase list from effective phases (phase || track) across all items
+    var allPhases = uniqueSorted(state.items.map(function (it) { return effectivePhase(it); }));
     var cur = ui.get("filters") || {};
-    var f = Object.assign({}, cur, { projects: allow(state.projects, state.projectsOff), phases: allow(state.tracks, state.tracksOff) });
+    var f = Object.assign({}, cur, { projects: allow(state.projects, state.projectsOff), phases: allow(allPhases, state.tracksOff) });
     var active = f.projects.size > 0 || f.phases.size > 0;
     ui.patch({ filters: f, matchMode: active ? "hide" : "dim" });
   }

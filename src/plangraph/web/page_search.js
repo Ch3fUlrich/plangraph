@@ -34,7 +34,11 @@
   function facetFn(name, arg) {
     var a = lo(arg);
     var fn;
-    if (name === "state") fn = function (i) { return i.display === arg; };
+    if (name === "state") {
+      // Normalize: case-insensitive, accept "in-review"/"in review" as "in_review"
+      var norm = a.replace(/\s+/g, "_").replace(/-/g, "_");
+      fn = function (i) { return lo(i.display) === norm; };
+    }
     if (name === "owner" || name === "project" || name === "phase") {
       var f = name;
       fn = function (i) { return has(i, f, a); };

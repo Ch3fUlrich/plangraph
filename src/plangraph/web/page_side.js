@@ -83,6 +83,7 @@
   }
 
   /* ---- tiny sortable table ------------------------------------------------ */
+  var MAX_ROWS = 300;  // per table, "+N more" beyond (matches page_table_view.js)
   function table(cols, rows, tkey, emptyMsg) {
     var t = el("table", "sb-table"), s = sortState[tkey]; t.id = tkey + "-table";
     var tr = el("tr");
@@ -109,7 +110,9 @@
       if (!r && a.v[0] !== b.v[0]) r = natural(a.v[0], b.v[0]);
       return s.dir === "asc" ? r : -r;
     });
-    rows.forEach(function (r) {
+    var limit = Math.min(rows.length, MAX_ROWS);
+    for (var i = 0; i < limit; i++) {
+      var r = rows[i];
       var rr = el("tr");
       r.cells.forEach(function (c) {
         var td = el("td");
@@ -117,7 +120,16 @@
         rr.appendChild(td);
       });
       body.appendChild(rr);
-    });
+    }
+    if (rows.length > MAX_ROWS) {
+      var moreTr = el("tr");
+      var moreTd = el("td", null, "+" + (rows.length - MAX_ROWS) + " more");
+      moreTd.colSpan = cols.length;
+      moreTd.style.textAlign = "center";
+      moreTd.style.color = "var(--muted)";
+      moreTr.appendChild(moreTd);
+      body.appendChild(moreTr);
+    }
     t.appendChild(body);
     return t;
   }
