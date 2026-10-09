@@ -62,7 +62,7 @@ def test_new_question_creates_lane_gate_and_goal_link():
     creates = [o["item"] for o in p.ops if o["op"] == "create"]
     lane = creates[0]
     assert lane == {
-        "project": "routing", "id": "Q-N1", "title": "Q: New thing", "kind": "lane",
+        "project": "routing", "id": "Q-N1", "title": "Q: New thing", "kind": "question",
         "track": "QUESTIONS", "owner": "operator", "operator": True,
         "evidence_kinds": ["decision"], "review_tier": "none", "depends_on": [],
         "description": "more words", "source": "md-sync", "wait": "answer"}
@@ -353,3 +353,11 @@ def test_without_a_decisions_view_the_close_is_planned_like_before():
     p = build(answers=answer("X", ["D-10"]), items=[live("demo", "X")])
     assert p.close_skipped == []
     assert p.counts["close_on_decision"] == 1
+
+
+def test_sync_md_import_new_rows_get_model_kinds():
+    step = mp.Question("OS-77", "step", "Restart the box", "", "Steps", "task")
+    p = build(list(q("- Q-N1 **Ask?** words\n")) + [step])
+    kinds = {o["item"]["id"]: (o["item"]["kind"], o["item"].get("wait"))
+             for o in p.ops if o["op"] == "create" and o["item"]["id"] != "PH-OPERATOR"}
+    assert kinds == {"Q-N1": ("question", "answer"), "OS-77": ("operator_task", "task")}

@@ -362,3 +362,23 @@ def test_original_value_never_reaches_stdout_or_stderr(world, srv, token, site,
     for original in ("add/" + "commitx", "login see " + "add/" + "commitx"):
         assert original not in captured.out
         assert original not in captured.err
+
+
+def test_sync_md_import_questions_are_question_kind_and_land_in_answers(world, srv, token, site):
+    """SYNC-MD-IMPORT: a new QUESTIONS row is a MODEL-KINDS question (or operator
+    step), and an answered row lands in Answers (keeper read + snapshot) with its
+    D-id, even though md-sync closes it by decision (no answer text in the keeper)."""
+    sync(site, srv, token, "--apply")
+    kinds = dict(rows(world, "SELECT key, kind FROM items WHERE track='QUESTIONS' AND kind!='gate'"))
+    assert kinds["routing:Q-ALPHA"] == "question"
+    assert set(kinds.values()) <= {"question", "operator_task"}
+    reader = world.p("reader")
+    got = {r["key"]: r for r in world.store.answers(reader)}
+    alpha = got["routing:Q-ALPHA"]
+    assert alpha["decision_id"].startswith("D-")
+    assert alpha["answer"].startswith("answered by D-")
+    assert alpha["done_at"]
+    assert "routing:Q-GHOST" not in got          # still open
+    snap = {i["key"]: i for i in world.store.snapshot(reader)["items"]}
+    assert snap["routing:Q-ALPHA"]["answer"]["decision_id"] == alpha["decision_id"]
+    assert snap["routing:Q-GHOST"]["answer"] is None

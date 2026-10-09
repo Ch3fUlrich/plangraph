@@ -359,7 +359,8 @@ def needs_you(items, project=None, ub=None):
 def answers(items, project=None):
     """Answered question/decision items, newest first.
 
-    An item is answered when it is ``done`` and carries ``answer`` (``{"text",
+    An item is answered when it is a question/decision (or a QUESTIONS row that
+    is not an operator task, SYNC-MD-IMPORT), ``done`` and carries ``answer`` (``{"text",
     "decision_id"}``) and ``done_at`` (the store joins them from the ``answered``
     event).  A row whose item is named by another live item's ``corrects`` gets
     ``superseded_by`` (sorted keys of those items).
@@ -371,7 +372,10 @@ def answers(items, project=None):
     rows = []
     for it in items:
         answer = it.get("answer")
-        if (it.get("kind") not in ("question", "decision") or _state(it) != "done"
+        asked = (it.get("kind") in ("question", "decision")
+                 or (it.get("track") == "QUESTIONS" and it.get("wait") != "task"
+                     and it.get("kind") not in ("gate", "goal", "operator_task")))
+        if (not asked or _state(it) != "done"
                 or not answer
                 or (project is not None and it.get("project") != project)):
             continue

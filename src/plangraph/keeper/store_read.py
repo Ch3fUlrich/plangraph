@@ -192,6 +192,7 @@ class ReadMixin:
             if item.get("fixes"):
                 fixed.setdefault(item["fixes"], []).append(item["key"])
         created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
+        answers = self.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
         out = []
         for item in items:
             reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
@@ -231,6 +232,9 @@ class ReadMixin:
                 "done_at": done_ts.get(item["key"]),
                 "reviewed": item["key"] in reviewed_keys,
                 "merged": item["key"] in merged_keys,
+                "answer": ({"text": answers[item["key"]]["text"],
+                            "decision_id": answers[item["key"]]["decision_id"]}
+                           if item["key"] in answers else None),
             })
         head = self.conn.execute(
             "SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
