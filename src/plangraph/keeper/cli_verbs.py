@@ -138,9 +138,13 @@ class Session:
 
     def local_snapshot(self) -> dict:
         try:   # M2B: the signature must verify when a snapshot_pubkey is configured
-            return read_snapshot(self.snapshot_path(), getattr(self.config, "snapshot_pubkey", None))
+            snap = read_snapshot(self.snapshot_path(), getattr(self.config, "snapshot_pubkey", None))
         except (OSError, SignError) as exc:
             raise Unreachable(f"no usable local snapshot at {self.snapshot_path()}: {exc}") from exc
+        from .snapshot_pull import behind_mark   # PG-LOCAL-COPY: a half-installed pull is not served
+        if behind_mark(self.snapshot_path(), snap):
+            raise Unreachable(f"local copy at {self.snapshot_path()} is older than the last pull; run pg sync pull")
+        return snap
 
     def local_items(self):
         return self.local_snapshot().get("items") or []
