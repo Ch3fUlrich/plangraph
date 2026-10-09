@@ -5,8 +5,9 @@
 events, so a raw ``UPDATE run_tokens SET revoked_at=NULL`` (un-revoke), a forged row,
 a deleted row or a changed binding (key/role/run/epoch) shows in ``verify_integrity``.
 
-Residual (documented): writer heartbeats renew ``expires_at`` without an event, so the
-expiry is only checked against the hard cap (``created_at`` + 24 h).
+Residual (documented): writer heartbeats renew ``expires_at`` without an event, so a writer
+token's expiry is only checked against the hard cap (mint event time + 24 h); reviewer tokens
+never renew and must keep their minted expiry exactly.
 """
 from __future__ import annotations
 
@@ -48,7 +49,8 @@ def fold_tokens(events):
             tokens[payload.get("token_id")] = {"key": key, "role": role, "run_id": run_id,
                                                "epoch": epoch, "revoked": False,
                                                "minted_at": ts, "revoked_at": None,
-                                               "token_sha256": payload.get("token_sha256")}
+                                               "token_sha256": payload.get("token_sha256"),
+                                               "expires_at": payload.get("expires_at")}
         elif kind in REVOKE_ALL:
             revoke(lambda t: t["key"] == key, ts)
         elif kind == "submitted":
@@ -103,6 +105,10 @@ def verify_tokens(conn, events):
         if row["created_at"] != want["minted_at"]:          # anchored to the hash-chained event
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "created_at",
                              "expected": want["minted_at"], "got": row["created_at"]})
+        if want["role"] != "writer" and row["expires_at"] != want["expires_at"]:
+            # only writer heartbeats renew; any other token keeps its minted expiry exactly
+            problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",
+                             "expected": want["expires_at"], "got": row["expires_at"]})
         created, expires = _ts(want["minted_at"]), _ts(row["expires_at"])
         if created is None or expires is None or expires > created + MAX_LIFE_S:
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",

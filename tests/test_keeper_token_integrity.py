@@ -126,3 +126,11 @@ def test_mint_event_without_a_hash_is_flagged():
            "payload": {"token_id": 1, "role": "writer", "run_id": "r", "epoch": 1}}]
     got = [(p["code"], p["field"]) for p in token_fold.verify_tokens(conn, ev)]
     assert ("token_mismatch", "token_sha256") in got
+
+
+def test_reviewer_expiry_extension_within_the_cap_is_flagged(w):
+    to_review(w)
+    mint(w, "l1main", "demo:A", "reviewer", "rv1")
+    assert problems(w) == []
+    raw(w, "UPDATE run_tokens SET expires_at=datetime(created_at, '+23 hours') || 'Z' WHERE role='reviewer'")
+    assert ("token_mismatch", "expires_at") in problems(w)
