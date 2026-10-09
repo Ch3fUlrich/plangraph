@@ -173,6 +173,8 @@ def parse_options(step, why=""):
         part = part.lstrip("*").strip()
         label, _, consequence = part.partition("=")
         label, consequence = label.strip(), consequence.strip()
+        if any(ord(c) < 32 for c in label + consequence):
+            return step, None                 # the keeper would refuse it: keep the text instead
         oid = _slug(label)
         if not label or oid in seen or len(label) > 60 or len(consequence) > 160:
             return step, None

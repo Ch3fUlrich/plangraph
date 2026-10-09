@@ -46,6 +46,7 @@ def test_parse_options_full():
 @pytest.mark.parametrize("bad", [
     "Options: a = x; ; b = y", "Options: *a; *b", "Options: a; a = dup",
     "Options: " + "; ".join(f"o{i}" for i in range(9)), "Options: " + "x" * 61,
+    "Options: a = bad\x01; b",
     "no block here"])
 def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
     rest, ch = mp.parse_options(bad)
@@ -78,7 +79,7 @@ def choices(**kw):
 
 
 @pytest.mark.parametrize("bad", [
-    {"default": "zzz"}, {"options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]},
+    {"default": "zzz"}, {"default": []}, {"default": 1}, {"options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]},
     {"options": [{"id": "A B", "label": "A"}]}, {"options": [{"id": "a", "label": "x" * 61}]},
     {"options": [{"id": "a", "label": "line\nbreak"}]}, {"deadline": "2026-13-40"},
     {"deadline": "tomorrow"}, {"extra": 1},
@@ -197,3 +198,10 @@ def test_md_sync_imports_choices_idempotently_and_names_unmatched_rows(w, srv, s
     sync(site, srv, w, tmp_path, "--apply")
     assert w.store.show(r, "routing:Q-MAIL")["choices"]["default"] == "own-sender"
     assert w.store.verify_integrity() == []
+
+
+def test_variant_suffix_ids_are_matched_not_unmatched():
+    """``OS-70 (3b)`` is a variant tag of OS-70 (documented md-sync rule), so it is not 'unmatched'."""
+    text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
+            "| 1 | OS-1 (verify) | TASK | a | b | c |\n")
+    assert mp.unmatched_rows(text) == []

@@ -162,8 +162,8 @@ def _choice_text(name, value, cap, where):
 def check_choices(value, kind, key=None):
     """Canonical JSON text of ``{options, default, deadline, blocks}`` or ``None``.
 
-    ``options``: 1..MAX_OPTIONS ``{id, label, consequence}`` (ids unique, ``[a-z0-9-]``);
-    ``default``: one option id or null; ``deadline``: ``YYYY-MM-DD`` or null;
+    ``options``: 0..MAX_OPTIONS ``{id, label, consequence}`` (ids unique, ``[a-z0-9-]``; an
+    operator task may carry only a deadline/blocks); ``default``: one option id or null; ``deadline``: ``YYYY-MM-DD`` or null;
     ``blocks``: short text or null.  Only question/decision/operator_task items.
     """
     if value is None:
@@ -198,7 +198,7 @@ def check_choices(value, kind, key=None):
                                                 CONSEQUENCE_CAP, where)
         out["options"].append(entry)
     default = value.get("default")
-    if default is not None and default not in seen:
+    if default is not None and (not isinstance(default, str) or default not in seen):
         raise Refused("validation", f"{where}choices default must be one of the option ids")
     out["default"] = default
     deadline = value.get("deadline")
