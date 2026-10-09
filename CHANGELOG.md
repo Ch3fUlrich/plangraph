@@ -2,6 +2,12 @@
 
 Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest first.
 
+## 2026-10-09
+
+- **SYNC-MD-IMPORT + md-sync Kind column:** QUESTIONS rows become question/operator_task, answered rows in
+  Answers with D-ids (d931e98, cc138a6). **FU-X7-LOWS:** keyword prefix fix + evidence-shape integrity check
+  (2119ae6). **PROGRESS-PANEL** (ec7b30d), **UI-TABLE-PHONE** (946cceb), **UI-MORE-NODE-EXPAND** (46abd5a).
+
 ## 2026-10-08
 
 - **MODEL-KINDS (D-231/D-292/D-656):** item kinds question/decision/operator_task (operator/wait defaults), fields
