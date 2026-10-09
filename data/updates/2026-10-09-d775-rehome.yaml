@@ -1,0 +1,14 @@
+# D-775: rehome the released workstation T5 items to autoos (host=workstation, no owner change).
+batch: 2026-10-09-d775-rehome
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 71ec2add9a31cf98f8d4440a1eb09c4c81ad83a2d224e797d65aca3addba9681
+ops:
+- op: rehome
+  key: workstation:T5-BRANCHES
+  new_project: autoos
+  host: workstation
+- op: rehome
+  key: workstation:T5-GROK-L2
+  new_project: autoos
+  host: workstation
