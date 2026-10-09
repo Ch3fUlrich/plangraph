@@ -76,6 +76,8 @@ class OutboxMixin:
             return self.verdict(principal, key, bool(body.get("ok")), body.get("reason") or "")
         raise Refused("forbidden", f"{verb!r} cannot be replayed")
 
+    # Note: the HTTP server serialises every request under one lock, so two replays of the
+    # same id never interleave between the outbox_seen check and the insert.
     def _seen(self, principal, eid, verb, key, result):
         with self._write():
             self.conn.execute(
@@ -89,7 +91,7 @@ class OutboxMixin:
         """System only: push leases + live token expiries past *frm* out by *gap_s*."""
         if getattr(principal, "role", None) != "system":
             raise Refused("forbidden", "only the keeper records an outage")
-        gap = int(gap_s)
+        gap = min(int(gap_s), 86400)            # hard cap, as outage.OUTAGE_MAX_S
         if gap <= 0:
             return {"gap_s": 0}
         now = self.now()

@@ -130,3 +130,27 @@ def test_client_queues_without_the_token_and_replay_keeps_unanswered(tmp_path, m
     assert left == ids[1:]
     monkeypatch.delenv("PG_OUTBOX")
     assert outbox.on_unreachable("heartbeat", {}, "down") == 3
+
+
+def test_outage_gap_is_capped_and_untrusted_stamps_are_ignored(w, tmp_path):
+    cfg = SimpleNamespace(db=str(tmp_path / "keeper.db"), reap_interval=60)
+    outage.stamp(cfg)
+    path = outage.alive_path(cfg)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    now = w.store.now()
+    os.utime(path, (0, 0))                                         # an ancient / forged stamp
+    assert outage.check_and_record(w.store, SYSTEM, cfg, now=now)["gap_s"] == outage.OUTAGE_MAX_S
+    os.utime(path, (now - 900, now - 900))
+    os.chmod(path, 0o666)                                          # writable by others: ignored
+    assert outage.check_and_record(w.store, SYSTEM, cfg, now=now) is None
+    os.utime(path, (now + 3600, now + 3600))                       # from the future: ignored
+    assert outage.check_and_record(w.store, SYSTEM, cfg, now=now) is None
+    assert w.store.record_outage(SYSTEM, 10 ** 9, now, now)["gap_s"] == 86400
+
+
+def test_malformed_replay_bodies_are_validation_not_500(w):
+    epoch, tok, p = claimed_with_token(w)
+    out = w.store.replay(p, [{"id": eid(1), "verb": "add_evidence",
+                              "body": {"key": "demo:A", "epoch": "e", "kind": 123, "ref": "x"}},
+                             {"id": eid(2), "verb": "heartbeat", "body": "not a dict"}])
+    assert all(r in ("validation", "forbidden", "epoch_stale") for r in results(out))

@@ -10,7 +10,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-__all__ = ["alive_path", "stamp", "check_and_record"]
+__all__ = ["alive_path", "stamp", "check_and_record", "OUTAGE_MAX_S"]
+
+#: Never extend leases/tokens by more than this, whatever the stamp says (a forged or
+#: ancient stamp, clock skew): the run-token hard cap is 24 h anyway.
+OUTAGE_MAX_S = 86400
 
 
 def alive_path(cfg) -> Path:
@@ -20,9 +24,17 @@ def alive_path(cfg) -> Path:
 def stamp(cfg) -> None:
     path = alive_path(cfg)
     try:
-        path.touch()
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT, 0o600)
+        os.close(fd)
+        os.chmod(path, 0o600)
+        os.utime(path)
     except OSError:
         pass
+
+
+def _trusted(st) -> bool:
+    """Only our own, not group/other-writable stamp counts (the data dir is 0700 too)."""
+    return st.st_uid == os.getuid() and not (st.st_mode & 0o022)
 
 
 def check_and_record(store, system, cfg, now=None):
@@ -30,11 +42,15 @@ def check_and_record(store, system, cfg, now=None):
     path = alive_path(cfg)
     now = store.now() if now is None else float(now)
     try:
-        last = path.stat().st_mtime
+        st = path.stat()
     except OSError:
         stamp(cfg)
         return None
-    gap = now - last
+    last = st.st_mtime
+    if not _trusted(st) or last > now:        # tampered or from the future: no grace at all
+        stamp(cfg)
+        return None
+    gap = min(now - last, OUTAGE_MAX_S)
     limit = 2 * float(getattr(cfg, "reap_interval", 60)) + 30
     result = None
     if gap > limit:
