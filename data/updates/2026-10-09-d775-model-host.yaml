@@ -1,0 +1,10 @@
+# D-775: MODEL-HOST done criterion amended (terminal workstation rows stay as history).
+batch: 2026-10-09-d775-model-host
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 3a9502d0de4f51bac978d9075ff6c9fdedba9088437c9f269c218ea7892d2e73
+ops:
+- op: edit
+  key: plangraph:MODEL-HOST
+  fields:
+    done_criteria: 'no open/active workstation item; terminal rows stay as history, every old workstation:* key resolves via the alias map in API, CLI and batches; tests both ways (D-775)'

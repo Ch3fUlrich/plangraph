@@ -97,3 +97,4 @@ MODEL-KINDS split (MK-FIELDS, MK-KINDS, MK-ANSWER, MK-READS, MK-FIXES-ERROR): da
 great-wiki:GW-DEPS-AUDIT under GOAL-GW: data/updates/2026-10-08-gw-deps-audit.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-gwdeps).
 D-765 autoos:AO-L2-GATE-TIER under AO-L2-PRODTEST + autoos:AO-PG-MCP-WIRE under ROUTE-PG-SSOT: data/updates/2026-10-08-d765-autoos.yaml — LIVE 2026-10-08 (verify ok; backup keeper.db.pre-d765).
 D-770 workst-gen GEN-AUDITLOG-SCHEMA + GEN-SQLITE-CONN-SWALLOW under PH-GEN-1003: data/updates/2026-10-09-workst-gen-audit.yaml — LIVE 2026-10-09 (verify ok; backup keeper.db.pre-d770).
+D-775 MODEL-HOST done criterion amended: data/updates/2026-10-09-d775-model-host.yaml — LIVE 2026-10-09 (verify ok).
