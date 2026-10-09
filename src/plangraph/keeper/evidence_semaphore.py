@@ -1,7 +1,8 @@
 """Semaphore-task adapter for evidence kind ``semaphore-task``.
 
-The API shape is UNVERIFIED (docs/KEEPER.md says so): ship with an injected
-fetcher and verify the live shape later. The real fetcher takes the base URL
+Endpoint: ``GET {base}/api/project/{project_id}/tasks/{task_id}`` (Semaphore UI
+API, bearer token). Both ids are positive integers; the project must be listed in
+``$PG_SEMAPHORE_PROJECTS`` (fail closed). The real fetcher takes the base URL
 from ``$PG_SEMAPHORE_URL`` and the bearer token from the file named by
 ``$PG_SEMAPHORE_TOKEN_FILE``. The token is read per call and never stored on the
 adapter, never logged, and never included in a raised message or in ``repr``.
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -27,6 +29,26 @@ _MAX_RESPONSE_BYTES = 1024 * 1024
 
 class SemaphoreError(RuntimeError):
     """A failure that is safe to show: it never carries the token."""
+
+
+def positive_int(value: Any) -> int | None:
+    """``value`` as a positive int (int or digit-only string), else None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str) and value.isascii() and value.isdigit():
+        return int(value) or None
+    return None
+
+
+def _allowed_projects() -> frozenset[int]:
+    """``$PG_SEMAPHORE_PROJECTS`` (comma-separated positive ints); fail closed."""
+    raw = os.environ.get("PG_SEMAPHORE_PROJECTS", "")
+    ids = [positive_int(part.strip()) for part in raw.split(",")] if raw.strip() else []
+    if not ids or any(i is None for i in ids):
+        raise SemaphoreError("semaphore project allowlist not configured")
+    return frozenset(ids)
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -42,15 +64,18 @@ class SemaphoreAdapter:
 
     def __init__(
         self,
-        fetch: Callable[[str], dict] | None = None,
+        fetch: Callable[[int, int], dict] | None = None,
         *,
         timeout: float = 30.0,
     ) -> None:
         self._fetch = fetch or self._http_fetch
         self._timeout = float(timeout)
 
-    def get(self, task_id: str) -> dict:
-        return self._fetch(str(task_id))
+    def get(self, task_id: Any, project_id: Any) -> dict:
+        task, project = positive_int(task_id), positive_int(project_id)
+        if task is None or project is None:
+            raise SemaphoreError("task_id and project_id must be positive integers")
+        return self._fetch(task, project)
 
     def __repr__(self) -> str:
         # Deliberately opaque: never mention the base URL or a token.
@@ -61,7 +86,7 @@ class SemaphoreAdapter:
         return urllib.request.build_opener(_NoRedirect())
 
     # -- real fetcher -------------------------------------------------------
-    def _http_fetch(self, task_id: str) -> dict:
+    def _http_fetch(self, task_id: int, project_id: int) -> dict:
         base = os.environ.get("PG_SEMAPHORE_URL", "").rstrip("/")
         token_file = os.environ.get("PG_SEMAPHORE_TOKEN_FILE", "")
         if not base:
@@ -80,7 +105,14 @@ class SemaphoreAdapter:
         if not token:
             raise SemaphoreError("the semaphore token file is empty")
 
-        url = f"{base}/api/tasks/{quote(task_id, safe='')}"
+        allowed = _allowed_projects()
+        if project_id not in allowed:
+            raise SemaphoreError("project not allowed")
+
+        url = (
+            f"{base}/api/project/{quote(str(project_id), safe='')}"
+            f"/tasks/{quote(str(task_id), safe='')}"
+        )
         request = urllib.request.Request(
             url,
             headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
@@ -90,6 +122,11 @@ class SemaphoreAdapter:
                 raw = response.read(_MAX_RESPONSE_BYTES + 1)
         except SemaphoreError:
             raise
+        except urllib.error.HTTPError as exc:
+            code = exc.code if isinstance(exc.code, int) else 0
+            if code in (401, 403):
+                raise SemaphoreError(f"semaphore auth refused ({code})") from None
+            raise SemaphoreError(f"semaphore request failed (HTTP {code})") from None
         except Exception as exc:  # noqa: BLE001 - sanitise every transport error
             # `from None` drops the cause, whose text may contain the token.
             raise SemaphoreError(

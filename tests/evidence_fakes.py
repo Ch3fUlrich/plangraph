@@ -106,10 +106,11 @@ class FakeRuns:
 
 class FakeSemaphore:
     def __init__(self, data: dict | None = None, error: Exception | None = None):
-        self.data = data if data is not None else {"status": "success"}
+        self.data = data if data is not None else {"status": "success", "id": 5, "project_id": 1, "template_id": 7}
         self.error = error
 
-    def get(self, task_id):
+    def get(self, task_id, project_id):
+        self.calls = getattr(self, 'calls', []) + [(task_id, project_id)]
         if self.error:
             raise self.error
         return self.data

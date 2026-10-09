@@ -226,6 +226,7 @@ def test_semaphore_refuses_redirects_without_leaking(monkeypatch, tmp_path):
     token_file.write_text("SUPERSECRETTOKEN", encoding="utf-8")
     monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
 
     handler = evidence_semaphore._NoRedirect()
     with pytest.raises(SemaphoreError) as excinfo:
@@ -240,6 +241,7 @@ def test_semaphore_refuses_redirect_end_to_end(monkeypatch, tmp_path):
     token_file.write_text("SUPERSECRETTOKEN", encoding="utf-8")
     monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
 
     class Resp:
         status = 302
@@ -261,7 +263,7 @@ def test_semaphore_refuses_redirect_end_to_end(monkeypatch, tmp_path):
 
     monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
     with pytest.raises(SemaphoreError):
-        SemaphoreAdapter().get("task-1")
+        SemaphoreAdapter().get(5, 1)
 
 
 @pytest.mark.parametrize("bad_base", [
@@ -273,8 +275,9 @@ def test_semaphore_rejects_unsafe_base_urls(monkeypatch, tmp_path, bad_base):
     token_file.write_text("t", encoding="utf-8")
     monkeypatch.setenv("PG_SEMAPHORE_URL", bad_base)
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
     with pytest.raises(SemaphoreError):
-        SemaphoreAdapter().get("task-1")
+        SemaphoreAdapter().get(5, 1)
 
 
 def test_semaphore_caps_response_size(monkeypatch, tmp_path):
@@ -282,6 +285,7 @@ def test_semaphore_caps_response_size(monkeypatch, tmp_path):
     token_file.write_text("t", encoding="utf-8")
     monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
 
     class Resp:
         def __enter__(self):
@@ -299,7 +303,7 @@ def test_semaphore_caps_response_size(monkeypatch, tmp_path):
 
     monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
     with pytest.raises(SemaphoreError):
-        SemaphoreAdapter().get("task-1")
+        SemaphoreAdapter().get(5, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -309,7 +313,7 @@ def test_semaphore_caps_response_size(monkeypatch, tmp_path):
 @pytest.mark.parametrize("kind,ref", [
     ("commit+ci", {"commit": SHA}),
     ("run-record", {"run_id": "run-1"}),
-    ("semaphore-task", {"task_id": "t-1"}),
+    ("semaphore-task", {"task_id": 5, "project_id": 1, "template": 7}),
     ("decision", {"id": "D-209"}),
 ])
 def test_verifier_never_raises_when_an_adapter_breaks(kind, ref):

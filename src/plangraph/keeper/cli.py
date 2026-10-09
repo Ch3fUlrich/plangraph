@@ -114,6 +114,8 @@ def _add_writes(sub):
     evidence.add_argument("--commit")
     evidence.add_argument("--run")
     evidence.add_argument("--task")
+    evidence.add_argument("--project", help="semaphore project id (semaphore-task)")
+    evidence.add_argument("--template", help="semaphore template id (semaphore-task)")
     evidence.add_argument("--decision")
 
     verdict = _p(sub, "verdict", help="pass or send back a review")
