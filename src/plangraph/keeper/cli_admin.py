@@ -129,7 +129,39 @@ def _cmd_export(args, cfg) -> int:
     return 0
 
 
+def _cmd_snapshot_keygen(args, cfg) -> int:
+    """M2B: create the snapshot signing key pair (private 0600; never printed)."""
+    from . import snapshot_sign
+    try:
+        snapshot_sign.keygen(args.private, args.public)
+    except snapshot_sign.SignError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"key pair written: private {args.private} (0600), public {args.public}")
+    return 0
+
+
+def _cmd_verify_snapshot(args, cfg) -> int:
+    """M2B: exit 0 iff the snapshot's detached signature verifies under the public key."""
+    from . import snapshot_io
+    path = args.snapshot or (cfg.snapshot if cfg else None)
+    pubkey = args.pubkey or (getattr(cfg, "snapshot_pubkey", None) if cfg else None)
+    if not path or not pubkey:
+        print("need --snapshot and --pubkey (or snapshot / snapshot_pubkey in the config)",
+              file=sys.stderr)
+        return 2
+    try:
+        snapshot_io.read_snapshot(path, pubkey)
+    except (OSError, snapshot_io.SignError) as exc:
+        print(f"snapshot NOT verified: {exc}", file=sys.stderr)
+        return 1
+    print("snapshot signature ok")
+    return 0
+
+
 _COMMANDS = {
+    "snapshot-keygen": _cmd_snapshot_keygen,
+    "verify-snapshot": _cmd_verify_snapshot,
     "init": _cmd_init,
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,

@@ -204,3 +204,13 @@ lock as it always did.
 never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field; `description` is its own column, cap 2000) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
 characters of `credential|password|passwd|pwd|login`; there are no exemptions, so rephrase paths and URLs near credential words.
 `pg render` masks any match that is already stored as `[redacted]` and prints `render: masked N credential-shaped string(s)` on stderr.
+
+## Signed snapshot (M2B-SIGNED-SNAPSHOT, D-789)
+
+Optional keeper config keys: `signing_key` (ed25519 private key, PEM, mode 600, on the keeper host only) and
+`snapshot_pubkey` (its public key, for readers). With `signing_key` set the keeper writes `plan.snapshot.json.sig`
+(base64 ed25519 signature over `b"plangraph-snapshot-v1\n"` + the exact snapshot bytes) before each snapshot; a reader
+with `snapshot_pubkey` (the CLI's local fallback, `pg admin verify-snapshot`) refuses an unsigned, tampered or
+foreign-key snapshot. Keys: `pg admin snapshot-keygen --private P --public Q` (refuses to overwrite; never prints keys).
+Dependency: `cryptography >= 41.0.7` (Apache-2.0 OR BSD-3-Clause; Ubuntu `python3-cryptography`), imported only when
+signing or verifying is configured. Going live (key generation + config) is a parked operator/router step.

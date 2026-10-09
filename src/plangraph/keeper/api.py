@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .. import views
+from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from . import auth, brief, fmt
 from .auth import Principal
 from .errors import Refused
@@ -49,25 +50,6 @@ from .api_routes import WRITE_VERBS as _WRITE_VERBS
 # --------------------------------------------------------------------------- #
 # snapshot rewriting
 # --------------------------------------------------------------------------- #
-
-def write_snapshot(server, principal) -> None:
-    """Rewrite ``plan.snapshot.json`` atomically (temp file then rename)."""
-    path = Path(server.config.snapshot)
-    data = server.store.snapshot(principal)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
 
 # --------------------------------------------------------------------------- #
 # request handler

@@ -1,10 +1,9 @@
 """CLI verbs: talk to the API with urllib and fall back to the local snapshot.
 
 The token is read from ``PG_TOKEN_FILE`` (mode 600), never from argv and never
-printed.  Exit codes follow the contract: 0 ok, 2 refused, 3 unreachable.  On
-an unreachable keeper a *read* verb is answered from the local
-``plan.snapshot.json`` with :mod:`plangraph.views` and a one-line notice on
-stderr; a write verb only exits 3.
+printed.  Exit codes: 0 ok, 2 refused, 3 unreachable.  On an unreachable keeper a
+*read* verb is answered from the local ``plan.snapshot.json`` (signature-checked when
+configured, M2B) with :mod:`plangraph.views` + a stderr notice; a write only exits 3.
 """
 from __future__ import annotations
 
@@ -21,6 +20,7 @@ from pathlib import Path
 from .. import views
 from . import brief as brief_mod, fmt
 from .credential_guard import mask_all
+from .snapshot_io import SignError, read_snapshot
 from .cli_local import evidence_ref, local_alerts, local_digest, local_show
 
 __all__ = ["Session", "RefusedCli", "Unreachable", "parse_duration",
@@ -137,10 +137,10 @@ class Session:
         return Path(cfg.snapshot) if cfg else Path("plan.snapshot.json")
 
     def local_snapshot(self) -> dict:
-        path = self.snapshot_path()
-        if not path.is_file():
-            raise Unreachable(f"no local snapshot at {path}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:   # M2B: the signature must verify when a snapshot_pubkey is configured
+            return read_snapshot(self.snapshot_path(), getattr(self.config, "snapshot_pubkey", None))
+        except (OSError, SignError) as exc:
+            raise Unreachable(f"no usable local snapshot at {self.snapshot_path()}: {exc}") from exc
 
     def local_items(self):
         return self.local_snapshot().get("items") or []

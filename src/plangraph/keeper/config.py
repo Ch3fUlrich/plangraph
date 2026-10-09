@@ -66,6 +66,11 @@ class Config:
                 raise ConfigError(f"repo {proj!r} entry must be a path string or dict")
         self.runs_dir = data.get("runs_dir")
         self.decisions_file = data.get("decisions_file")
+        # M2B-SIGNED-SNAPSHOT: the keeper signs with signing_key; readers verify with snapshot_pubkey.
+        self.signing_key = (str(self._resolve(data["signing_key"]))
+                            if data.get("signing_key") else None)
+        self.snapshot_pubkey = (str(self._resolve(data["snapshot_pubkey"]))
+                                if data.get("snapshot_pubkey") else None)
         self.ci = dict(data.get("ci") or {})
         # X7b: the directories ``close_on_decision`` may read a batch file from.
         # Empty means the verb always refuses, so an unconfigured deployment
