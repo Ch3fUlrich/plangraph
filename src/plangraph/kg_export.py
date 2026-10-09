@@ -171,9 +171,11 @@ def _fetch_graph(transport, graph, need_types, deadline=None):
         if deadline is not None and time.monotonic() > deadline:
             raise KgError(f"graph {graph}: deadline")
         rows = transport(graph, name, text, None)
-        if isinstance(rows, list) and len(rows) >= MAX_ROWS:
+        if not isinstance(rows, list):
+            raise KgError(f"graph {graph}: bad rows")
+        if len(rows) >= MAX_ROWS:
             limited.append(name)  # the server cut the page: absent nodes may only be missing from it
-        return rows
+        return rows[:MAX_ROWS]
 
     for typ in _NODE_Q:
         if typ not in LISTED_TYPES and typ not in need_types:
@@ -280,7 +282,7 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
             out[ref] = node
             cur = current_of(ref)
             node["current"] = cur
-            sups = by_ref[ref][1].get(node["slug"])
+            sups = by_ref[ref][1].get(node["slug"]) if node["type"] == "Decision" else None
             if sups:
                 nxt = f"{node['graph']}:Decision:{_pick_successor(sups, fetched[node['graph']][0])}"
                 node["superseded_by"] = nxt if nxt in by_ref else None

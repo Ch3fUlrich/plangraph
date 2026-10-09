@@ -548,3 +548,25 @@ def test_very_long_chain_does_not_recurse():
     exp, _d, _e = build([item("p1:A", ["g:Decision:d0"])], data)
     assert exp["nodes"]["g:Decision:d0"]["current"] == f"g:Decision:d{n}"  # whole chain resolved
     assert "g:Decision:d1" in exp["nodes"]
+
+
+def test_rows_beyond_the_cap_are_ignored():
+    rows = [{"n.slug": f"d{i}", "n.title": "t", "n.status": "accepted", "n.rationale": None} for i in range(kg.MAX_ROWS + 50)]
+    data = {"g": dict(GRAPH, kg_decision=rows, kg_supersedes=[], kg_decided_in=[])}
+    exp, _d, _e = build([], data, extra_graphs=["g"], max_listed=10**6)
+    assert sum(1 for n in exp["nodes"].values() if n["type"] == "Decision") == kg.MAX_ROWS
+
+
+def test_non_list_rows_are_a_graph_error():
+    class T(Fake):
+        def __call__(self, *a):
+            return {"oops": 1}
+    exp, _d, errors = kg.build_export([item("p1:A", ["g:Rule:r-1"])], T({"g": GRAPH}))
+    assert errors and exp["unresolved_graphs"] == ["g"]
+
+
+def test_supersedes_only_applies_to_decisions():
+    data = {"g": dict(GRAPH, kg_rule=[{"n.slug": "d-old", "n.statement": "Same slug rule", "n.severity": "must"}])}
+    exp, _d, _e = build([item("p1:A", ["g:Rule:d-old"])], data)
+    assert exp["nodes"]["g:Rule:d-old"]["superseded_by"] is None
+    assert exp["nodes"]["g:Rule:d-old"]["current"] == "g:Rule:d-old"
