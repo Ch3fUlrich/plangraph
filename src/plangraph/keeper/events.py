@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 
 from .item_fields import SMALL_FIELDS
 
@@ -331,13 +332,15 @@ def verify_integrity(conn):
                              "got": {"count": got_total,
                                      "verified": got_verified}})
         else:
-            want_shape = sorted((e["epoch"], e["kind"], bool(e["verified"]))
-                                for e in expected["evidence"])
-            got_shape = sorted(shapes.get(key, []), key=repr)
-            if sorted(want_shape, key=repr) != got_shape:
+            # Counter, not sorted(): epochs/kinds may mix None with values.
+            want_shape = Counter((e["epoch"], e["kind"], bool(e["verified"]))
+                                 for e in expected["evidence"])
+            got_shape = Counter(shapes.get(key, []))
+            if want_shape != got_shape:
                 problems.append({"key": key, "code": "evidence_mismatch",
                                  "field": "evidence_shape",
-                                 "expected": want_shape, "got": got_shape})
+                                 "expected": sorted(want_shape.elements(), key=repr),
+                                 "got": sorted(got_shape.elements(), key=repr)})
     for key in cached:
         if key not in folded:
             problems.append({"key": key, "code": "cache_extra",

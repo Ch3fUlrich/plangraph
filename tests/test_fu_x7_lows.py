@@ -80,3 +80,13 @@ def test_l1_may_raise_none_to_standard_but_not_lower(tmp_path):
         assert world.store.show(r, "demo:S")["review_tier"] == "standard"
     finally:
         world.close()
+
+
+def test_verify_survives_a_null_epoch_next_to_an_int(w):
+    to_in_review(w, "demo:A", kind="decision")
+    raw = sqlite3.connect(str(w.path))
+    raw.execute("INSERT INTO evidence(key,epoch,kind,ref,verified) VALUES('demo:A',NULL,'decision','{}',0)")
+    raw.commit()
+    raw.close()
+    probs = w.store.verify_integrity()   # must not raise on None vs int
+    assert {p["field"] for p in probs} == {"evidence"}
