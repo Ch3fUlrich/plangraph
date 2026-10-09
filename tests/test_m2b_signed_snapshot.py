@@ -100,3 +100,41 @@ def test_admin_verify_snapshot_exit_codes(keys, tmp_path, capsys):
     os.unlink(path + ".sig")
     assert cli_admin._cmd_verify_snapshot(Namespace(snapshot=path, pubkey=str(pub)), None) == 1
     assert cli_admin._cmd_verify_snapshot(Namespace(snapshot=None, pubkey=None), None) == 2
+
+
+def test_keygen_refuses_same_path_and_symlinks(tmp_path):
+    with pytest.raises(snapshot_sign.SignError, match="differ"):
+        snapshot_sign.keygen(tmp_path / "k", tmp_path / "k")
+    (tmp_path / "target").write_text("x")
+    os.symlink(tmp_path / "target", tmp_path / "link.pub")
+    with pytest.raises(snapshot_sign.SignError, match="overwrite"):
+        snapshot_sign.keygen(tmp_path / "new.key", tmp_path / "link.pub")
+    assert not (tmp_path / "new.key").exists()
+
+
+def test_public_key_mode_is_explicit(tmp_path):
+    old = os.umask(0)
+    try:
+        snapshot_sign.keygen(tmp_path / "a.key", tmp_path / "a.pub")
+    finally:
+        os.umask(old)
+    assert stat.S_IMODE((tmp_path / "a.pub").stat().st_mode) == 0o644
+    assert stat.S_IMODE((tmp_path / "a.key").stat().st_mode) == 0o600
+
+
+def test_symlinked_private_key_is_refused(keys, tmp_path):
+    priv, _ = keys
+    link = tmp_path / "link.key"
+    os.symlink(priv, link)
+    with pytest.raises(snapshot_sign.SignError, match="not readable"):
+        snapshot_sign.sign(b"x", link)
+
+
+def test_non_ascii_signature_is_invalid_not_a_crash(keys, tmp_path, capsys):
+    priv, pub = keys
+    snapshot_io.write_snapshot(_server(tmp_path, str(priv)), None)
+    path = tmp_path / "plan.snapshot.json"
+    snapshot_sign.sig_path(path).write_bytes(b"\xff" * 88)
+    with pytest.raises(snapshot_sign.SignError):
+        snapshot_io.read_snapshot(path, str(pub))
+    assert cli_admin._cmd_verify_snapshot(Namespace(snapshot=str(path), pubkey=str(pub)), None) == 1

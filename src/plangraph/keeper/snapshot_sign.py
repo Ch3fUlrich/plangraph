@@ -41,13 +41,19 @@ def sig_path(snapshot_path) -> Path:
 def _private_key(path):
     serialization, ed25519 = _ed25519()
     path = Path(path)
+    # One open, then fstat + read on that same fd: no stat-then-read window, no symlink.
     try:
-        mode = path.stat().st_mode
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError as exc:
         raise SignError(f"signing key not readable: {path}") from exc
-    if mode & (stat.S_IRWXG | stat.S_IRWXO):
-        raise SignError(f"signing key {path} must not be accessible by group/other (chmod 600)")
-    key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+    with os.fdopen(fd, "rb") as handle:
+        if os.fstat(handle.fileno()).st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+            raise SignError(f"signing key {path} must not be accessible by group/other (chmod 600)")
+        pem = handle.read()
+    try:
+        key = serialization.load_pem_private_key(pem, password=None)
+    except (ValueError, TypeError) as exc:
+        raise SignError("signing key is not a readable PEM private key") from exc
     if not isinstance(key, ed25519.Ed25519PrivateKey):
         raise SignError("signing key is not an ed25519 private key")
     return key
@@ -68,8 +74,10 @@ def keygen(private_path, public_path) -> None:
     """Create a new key pair; refuses to overwrite either file."""
     serialization, ed25519 = _ed25519()
     private_path, public_path = Path(private_path), Path(public_path)
+    if os.path.abspath(private_path) == os.path.abspath(public_path):
+        raise SignError("private and public key paths must differ")
     for p in (private_path, public_path):
-        if p.exists():
+        if p.exists() or p.is_symlink():
             raise SignError(f"refusing to overwrite {p}")
     key = ed25519.Ed25519PrivateKey.generate()
     pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
@@ -77,8 +85,10 @@ def keygen(private_path, public_path) -> None:
     fd = os.open(str(private_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as handle:
         handle.write(pem)
-    public_path.write_bytes(key.public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+    fd = os.open(str(public_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    with os.fdopen(fd, "wb") as handle:   # O_EXCL + explicit mode: no overwrite, umask-proof
+        handle.write(key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
 
 
 def sign(data: bytes, private_path) -> str:
