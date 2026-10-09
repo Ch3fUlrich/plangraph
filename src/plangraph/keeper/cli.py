@@ -184,6 +184,13 @@ def _add_admin(sub):
     export = commands.add_parser("export")
     export.add_argument("dir")
 
+    keygen = commands.add_parser("snapshot-keygen", help="M2B: snapshot signing key pair")
+    keygen.add_argument("--private", required=True)
+    keygen.add_argument("--public", required=True)
+    vsnap = commands.add_parser("verify-snapshot", help="M2B: check the snapshot signature")
+    vsnap.add_argument("--snapshot")
+    vsnap.add_argument("--pubkey")
+
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="pg", description="Keeper client.")
