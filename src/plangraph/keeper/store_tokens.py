@@ -21,6 +21,7 @@ as the event that makes a token stale (``_revoke_for_event``, called from
 """
 from __future__ import annotations
 
+import re
 import secrets
 
 from . import auth
@@ -79,13 +80,17 @@ class TokensMixin:
         except Exception:  # noqa: BLE001 - unreadable record fails closed
             raise Refused("evidence_unverified",
                           f"could not read run {run_id}") from None
+        if not isinstance(job, dict):
+            raise Refused("evidence_unverified", f"run {run_id} record is malformed")
         request = job.get("request") if isinstance(job.get("request"), dict) else {}
         haystack = " ".join(str(part) for part in (request.get("title"),
                                                    job.get("task"))
                             if part is not None)
         needles = [n for n in (item.get("key"), item.get("id"))
                    if isinstance(n, str) and n]
-        if not any(needle in haystack for needle in needles):
+        # whole-token match: ``demo:A`` must not match ``demo:AB`` or ``xdemo:A``
+        if not any(re.search(r"(?<![\w:.-])" + re.escape(needle) + r"(?![\w.-])",
+                             haystack) for needle in needles):
             raise Refused("evidence_unverified",
                           f"run {run_id} does not mention {item['key']}")
         return job

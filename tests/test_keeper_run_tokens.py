@@ -8,7 +8,7 @@ from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
 
-RUNS = {"w1": "demo:A", "w2": "demo:A", "rv1": "demo:A", "rv2": "demo:A",
+RUNS = {"prefix": "demo:AB", "w1": "demo:A", "w2": "demo:A", "rv1": "demo:A", "rv2": "demo:A",
         "other": "demo:B", "nofam": "demo:A"}
 FAMILY = {"rv1": "teamC", "rv2": "teamR"}
 
@@ -119,6 +119,7 @@ def test_run_token_cannot_mint(w):
 @pytest.mark.parametrize("role,run,state_ok,expect", [
     ("writer", "nope", True, "evidence_unverified"),
     ("writer", "other", True, "evidence_unverified"),   # run is for demo:B
+    ("writer", "prefix", True, "evidence_unverified"),  # demo:AB is not demo:A
     ("writer", "bad id!", True, "validation"),
     ("owner", "w1", True, "validation"),
     ("reviewer", "rv1", True, "bad_state"),             # still claimed
@@ -128,6 +129,13 @@ def test_mint_refusals(w, role, run, state_ok, expect):
     if state_ok:
         to_claimed(w, "demo:A")
     assert code(mint, w, "l1main", "demo:A", role, run) == expect
+
+
+def test_mint_malformed_job_refused(w):
+    to_claimed(w, "demo:A")
+    w.store.ctx = {"runs": type("R", (), {"valid_run_id": lambda s, r: True,
+                                          "job": lambda s, r: ["not", "a", "dict"]})()}
+    assert code(mint, w, "l1main", "demo:A", "writer", "w1") == "evidence_unverified"
 
 
 def test_mint_without_run_record_refused(w):
