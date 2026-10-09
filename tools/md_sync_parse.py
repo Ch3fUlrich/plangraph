@@ -164,6 +164,14 @@ def parse_options(step, why=""):
     match = _OPTIONS_RE.search(step or "")
     if not match:
         return step, None
+    if re.search(r"Deadline:", match.group("opts")):   # a Deadline that did not parse: keep the text
+        return step, None
+    if match.group("deadline"):
+        from datetime import date
+        try:
+            date.fromisoformat(match.group("deadline"))
+        except ValueError:
+            return step, None
     options, default, seen = [], None, set()
     for part in match.group("opts").split(";"):
         part = part.strip()
@@ -173,7 +181,7 @@ def parse_options(step, why=""):
         part = part.lstrip("*").strip()
         label, _, consequence = part.partition("=")
         label, consequence = label.strip(), consequence.strip()
-        if any(ord(c) < 32 for c in label + consequence):
+        if any(ord(c) < 32 or 127 <= ord(c) < 160 for c in label + consequence):
             return step, None                 # the keeper would refuse it: keep the text instead
         oid = _slug(label)
         if not label or oid in seen or len(label) > 60 or len(consequence) > 160:

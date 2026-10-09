@@ -152,7 +152,7 @@ _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 def _choice_text(name, value, cap, where):
     if not isinstance(value, str) or not value.strip() or len(value) > cap:
         raise Refused("validation", f"{where}choices {name} must be 1-{cap} characters")
-    if any(ord(c) < 32 for c in value):
+    if any(ord(c) < 32 or 127 <= ord(c) < 160 for c in value):   # C0, DEL, C1
         raise Refused("validation", f"{where}choices {name} must not contain control characters")
     from .credential_guard import guard
     guard(f"choices {name}", value)
@@ -180,7 +180,8 @@ def check_choices(value, kind, key=None):
     if not isinstance(value, dict) or not set(value) <= {"options", "default", "deadline", "blocks"}:
         raise Refused("validation", f"{where}choices must be an object with options/default/deadline/blocks")
     out = {"options": [], "default": None, "deadline": None, "blocks": None}
-    options = value.get("options") or []
+    options = value.get("options")
+    options = [] if options is None else options
     if not isinstance(options, list) or len(options) > MAX_OPTIONS:
         raise Refused("validation", f"{where}choices options must be a list of <= {MAX_OPTIONS}")
     seen = set()

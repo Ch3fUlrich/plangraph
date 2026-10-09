@@ -46,7 +46,8 @@ def test_parse_options_full():
 @pytest.mark.parametrize("bad", [
     "Options: a = x; ; b = y", "Options: *a; *b", "Options: a; a = dup",
     "Options: " + "; ".join(f"o{i}" for i in range(9)), "Options: " + "x" * 61,
-    "Options: a = bad\x01; b",
+    "Options: a = bad\x01; b", "Options: a = x. Deadline: tomorrow",
+    "Options: a = x. Deadline: 2026-13-40", "Options: a = del\x7f",
     "no block here"])
 def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
     rest, ch = mp.parse_options(bad)
@@ -79,7 +80,8 @@ def choices(**kw):
 
 
 @pytest.mark.parametrize("bad", [
-    {"default": "zzz"}, {"default": []}, {"default": 1}, {"options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]},
+    {"default": "zzz"}, {"default": []}, {"default": 1}, {"options": 0}, {"options": ""},
+    {"options": [{"id": "a", "label": "a\x7f"}]}, {"options": [{"id": "a", "label": "a\x85"}]}, {"options": [{"id": "a", "label": "A"}, {"id": "a", "label": "B"}]},
     {"options": [{"id": "A B", "label": "A"}]}, {"options": [{"id": "a", "label": "x" * 61}]},
     {"options": [{"id": "a", "label": "line\nbreak"}]}, {"deadline": "2026-13-40"},
     {"deadline": "tomorrow"}, {"extra": 1},
