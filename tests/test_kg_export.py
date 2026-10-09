@@ -164,10 +164,12 @@ def _env(tmp_path, **extra):
 def test_off_without_token_env(tmp_path):
     out = tmp_path / "site"
     out.mkdir()
-    res = kg.run([item("p1:A", ["g:Rule:r-1"])], out, env={}, transport=Fake({}))
+    f = Fake({})
+    res = kg.run([item("p1:A", ["g:Rule:r-1"])], out, env={}, transport=f)
     assert res == 0
     assert json.loads((out / "kg-export.json").read_text()) == {"enabled": False}
-    assert not (out / "kg-export-status.json").exists() or json.loads((out / "kg-export-status.json").read_text())["enabled"] is False
+    assert json.loads((out / "kg-export-status.json").read_text())["enabled"] is False
+    assert f.calls == []
 
 
 def test_off_with_missing_or_empty_token_file(tmp_path):
@@ -544,5 +546,5 @@ def test_very_long_chain_does_not_recurse():
     dec = [{"n.slug": f"d{i}", "n.title": f"t{i}", "n.status": "accepted", "n.rationale": None} for i in range(n + 1)]
     data = {"g": dict(GRAPH, kg_decision=dec, kg_supersedes=sup, kg_decided_in=[])}
     exp, _d, _e = build([item("p1:A", ["g:Decision:d0"])], data)
-    assert exp["nodes"]["g:Decision:d0"]["current"] == f"g:Decision:d{kg.MAX_CHAIN}"  # chain walk is capped
+    assert exp["nodes"]["g:Decision:d0"]["current"] == f"g:Decision:d{n}"  # whole chain resolved
     assert "g:Decision:d1" in exp["nodes"]

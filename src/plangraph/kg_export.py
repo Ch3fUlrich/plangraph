@@ -31,7 +31,6 @@ EXCERPT_MAX = 240
 TITLE_MAX = 300
 MAX_LISTED = 1500          # per graph, listed (non-referenced) nodes
 MAX_ROWS = 5000
-MAX_CHAIN = 20
 MAX_GRAPHS = 12
 DEADLINE_S = 60.0
 LISTED_TYPES = ("Decision", "Rule", "Component")
@@ -252,20 +251,24 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
             by_ref[f"{g}:{typ}:{slug}"] = (node, sups)
     limited = sorted(g for g, v in fetched.items() if v[2])
 
+    memo = {}
+
     def current_of(ref):
-        node, sups = by_ref[ref]
-        seen, cur = {ref}, ref
-        for _ in range(MAX_CHAIN):
-            n, s = by_ref[cur]
-            nxt = s.get(n["slug"]) if n["type"] == "Decision" else None
-            if not nxt:
+        """End of the Supersedes chain from *ref*; cycle-safe, memoised so a long chain costs O(n) overall."""
+        path, cur = [], ref
+        while cur not in memo:
+            path.append(cur)
+            n = by_ref[cur][0]
+            nxt = by_ref[cur][1].get(n["slug"]) if n["type"] == "Decision" else None
+            cand = f"{n['graph']}:Decision:{_pick_successor(nxt, fetched[n['graph']][0])}" if nxt else None
+            if not cand or cand not in by_ref or cand in path:
+                memo[cur] = cur
                 break
-            cand = f"{n['graph']}:Decision:{_pick_successor(nxt, fetched[n['graph']][0])}"
-            if cand not in by_ref or cand in seen:
-                break
-            seen.add(cand)
             cur = cand
-        return cur
+        end = memo[cur]
+        for r in path:
+            memo[r] = end
+        return end
 
     def add(ref):
         stack = [ref]  # iterative: a long supersession chain must not hit the recursion limit
