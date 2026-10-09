@@ -231,7 +231,7 @@ def unmatched_rows(text):
         ids = _TABLE_ID_RE.findall(cells[1])
         # exactly one id, optionally followed by one parenthesised variant tag ("OS-70 (3b)")
         if len(ids) != 1 or not _ONE_ID_CELL.fullmatch(cells[1].strip()):
-            out.append(cells[1][:80])
+            out.append(cells[1])          # full text: the caller redacts, then truncates
     return out
 
 

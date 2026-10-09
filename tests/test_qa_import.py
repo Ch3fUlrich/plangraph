@@ -251,3 +251,12 @@ def test_masked_id_never_collides_with_a_real_id():
                                  "default": "x", "deadline": None, "blocks": None}, plan)
     ids = [o["id"] for o in out["options"]]
     assert len(ids) == len(set(ids)) and out["default"] == ids[0] != "masked-1"
+
+
+def test_unmatched_cells_are_redacted_before_truncation(w, srv, site, tmp_path):
+    long_secret = "ab" * 60                                   # a 120-char hex-ish run
+    text = (site / "QUESTIONS.md").read_text().replace("some row (verify)", f"row {long_secret}")
+    (site / "QUESTIONS.md").write_text(text)
+    rc, out, status = sync(site, srv, w, tmp_path, "--dry-run")
+    (cell,) = status["unmatched"]
+    assert "abab" * 4 not in cell and len(cell) <= 80
