@@ -50,9 +50,11 @@ def _read(path):
             line = line.strip()
             if line:
                 try:
-                    entries.append(json.loads(line))
+                    entry = json.loads(line)
                 except ValueError:
                     continue            # a damaged line is dropped, never sent
+                if isinstance(entry, dict):
+                    entries.append(entry)
     return entries
 
 

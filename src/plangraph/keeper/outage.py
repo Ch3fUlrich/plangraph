@@ -52,8 +52,7 @@ def check_and_record(store, system, cfg, now=None):
         return None
     gap = min(now - last, OUTAGE_MAX_S)
     limit = 2 * float(getattr(cfg, "reap_interval", 60)) + 30
-    result = None
-    if gap > limit:
-        result = store.record_outage(system, int(gap), last, now)
-    stamp(cfg)
-    return result
+    stamp(cfg)          # first: a crash after this can only lose the grace, never repeat it
+    if gap <= limit:
+        return None
+    return store.record_outage(system, int(gap), last, now)   # idempotent per outage start

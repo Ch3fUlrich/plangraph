@@ -154,3 +154,27 @@ def test_malformed_replay_bodies_are_validation_not_500(w):
                               "body": {"key": "demo:A", "epoch": "e", "kind": 123, "ref": "x"}},
                              {"id": eid(2), "verb": "heartbeat", "body": "not a dict"}])
     assert all(r in ("validation", "forbidden", "epoch_stale") for r in results(out))
+
+
+def test_outage_is_applied_once_per_start(w):
+    claimed_with_token(w)
+    now = w.store.now()
+    exp = lambda: w.conn.execute("SELECT expires_at FROM run_tokens").fetchone()[0]
+    w.store.record_outage(SYSTEM, 600, now - 700, now)
+    once = exp()
+    assert w.store.record_outage(SYSTEM, 600, now - 700, now)["duplicate"] is True
+    assert exp() == once and events(w, "outage_recorded") == 1
+    assert verify_integrity(w.conn) == []
+
+
+def test_client_drops_non_object_lines(tmp_path, monkeypatch):
+    path = tmp_path / "outbox.jsonl"
+    path.write_text('"just a string"\n[1, 2]\n{"id": "%s", "verb": "heartbeat", "body": {}}\n' % ("a" * 32))
+    monkeypatch.setenv("PG_OUTBOX", str(path))
+
+    class Session:
+        def call(self, method, verb, body=None):
+            assert len(body["entries"]) == 1
+            return {"results": [{"id": "a" * 32, "result": "ok"}]}
+    assert outbox.cmd_replay(None, Session()) == 0
+    assert path.read_text() == ""

@@ -14,7 +14,7 @@ from __future__ import annotations
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL"]
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
 

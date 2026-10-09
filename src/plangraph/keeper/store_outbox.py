@@ -20,6 +20,7 @@ honoured for the outage duration (PROPOSAL §3) and ``verify_integrity`` replays
 """
 from __future__ import annotations
 
+import json
 import re
 
 from . import auth
@@ -97,6 +98,10 @@ class OutboxMixin:
         now = self.now()
         frm_iso, to_iso = self._iso(frm), self._iso(to)
         with self._write():
+            for row in self.conn.execute(
+                    "SELECT payload FROM events WHERE type='outage_recorded'"):
+                if json.loads(row["payload"] or "{}").get("from") == frm_iso:
+                    return {"gap_s": 0, "duplicate": True}   # this outage was already applied
             leases = [(r["key"], r["lease_until"]) for r in self.conn.execute(
                 "SELECT key, lease_until FROM items WHERE state='claimed'"
                 " AND lease_until IS NOT NULL AND lease_until > ?", (frm_iso,))]
