@@ -111,6 +111,22 @@ def test_semaphore_id_and_project_mismatch():
     assert verify("semaphore-task", REF, _sem(project_id=2)).ok is False
 
 
+@pytest.mark.parametrize("drop", ["id", "project_id", "template_id"])
+def test_semaphore_reply_missing_an_id_fails_closed(drop):
+    data = {"status": "success", "id": 5, "project_id": 1, "template_id": 7}
+    del data[drop]
+    assert verify("semaphore-task", REF, make_ctx(semaphore=FakeSemaphore(data))).ok is False
+
+
+def test_semaphore_positive_int_bounds():
+    from plangraph.keeper.evidence_semaphore import positive_int
+    assert positive_int("9223372036854775807") == 2**63 - 1
+    assert positive_int(2**63) is None
+    assert positive_int("9" * 20) is None
+    assert positive_int("9" * 5000) is None
+    assert positive_int(" 5") is None
+
+
 @pytest.mark.parametrize("ref", [
     {"task_id": 5, "template": 7}, {"task_id": 5, "template": 7, "project_id": ""},
     {"task_id": 5, "project_id": "abc"}, {"task_id": 5, "project_id": 0},

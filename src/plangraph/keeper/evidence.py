@@ -297,9 +297,11 @@ class SemaphoreTaskVerifier:
         if not isinstance(data, dict):
             return _fail(f"semaphore task {task_id} returned no task object", ref)
 
-        if "id" in data and positive_int(data["id"]) != task_id:
+        # Both ids are required in the answer: a reply that omits them is not
+        # proof about *this* task (fail closed, seat finding).
+        if positive_int(data.get("id")) != task_id:
             return _fail(f"semaphore response is for a different task than {task_id}", ref)
-        if "project_id" in data and positive_int(data["project_id"]) != project_id:
+        if positive_int(data.get("project_id")) != project_id:
             return _fail(f"semaphore task {task_id} belongs to a different project", ref)
 
         status = data.get("status", data.get("state"))

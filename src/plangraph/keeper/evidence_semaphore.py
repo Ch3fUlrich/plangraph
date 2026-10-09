@@ -31,14 +31,19 @@ class SemaphoreError(RuntimeError):
     """A failure that is safe to show: it never carries the token."""
 
 
+_MAX_ID = 2**63 - 1  # Semaphore ids are int64; anything larger is not an id.
+
+
 def positive_int(value: Any) -> int | None:
-    """``value`` as a positive int (int or digit-only string), else None."""
+    """``value`` as a positive int64 (int or digit-only string), else None."""
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, str) and value.isascii() and value.isdigit():
-        return int(value) or None
+    if isinstance(value, str):
+        if not (value.isascii() and value.isdigit() and len(value) <= 19):
+            return None
+        value = int(value)
+    if isinstance(value, int) and 0 < value <= _MAX_ID:
+        return value
     return None
 
 

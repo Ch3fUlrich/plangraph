@@ -255,7 +255,7 @@ def _env(monkeypatch, tmp_path, projects):
     return seen
 
 
-@pytest.mark.parametrize("value", [None, "", "  ", "abc", "1,x", "0", "1,,2", "-1"])
+@pytest.mark.parametrize("value", [None, "", "  ", "abc", "1,x", "0", "1,,2", "-1", "9" * 5000])
 def test_semaphore_allowlist_fails_closed(monkeypatch, tmp_path, value):
     seen = _env(monkeypatch, tmp_path, value)
     with pytest.raises(SemaphoreError, match="semaphore project allowlist not configured"):
