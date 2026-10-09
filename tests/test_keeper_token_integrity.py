@@ -106,3 +106,9 @@ def test_duplicate_token_id_in_events_is_flagged():
           {"key": "p:A", "type": "token_minted", "ts": "t2",
            "payload": {"token_id": 1, "role": "writer", "run_id": "s", "epoch": 1}}]
     assert token_fold.fold_tokens(ev)["__dupes__"] == [1]
+
+
+def test_swapped_token_hash_is_flagged(w):
+    claimed_with_token(w)
+    raw(w, "UPDATE run_tokens SET token_sha256='0' || substr(token_sha256, 2)")
+    assert ("token_mismatch", "token_sha256") in problems(w)

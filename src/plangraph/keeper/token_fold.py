@@ -47,7 +47,8 @@ def fold_tokens(events):
                 dupes.append(payload.get("token_id"))      # ids are AUTOINCREMENT: never reused
             tokens[payload.get("token_id")] = {"key": key, "role": role, "run_id": run_id,
                                                "epoch": epoch, "revoked": False,
-                                               "minted_at": ts, "revoked_at": None}
+                                               "minted_at": ts, "revoked_at": None,
+                                               "token_sha256": payload.get("token_sha256")}
         elif kind in REVOKE_ALL:
             revoke(lambda t: t["key"] == key, ts)
         elif kind == "submitted":
@@ -72,7 +73,8 @@ def verify_tokens(conn, events):
     """Problems (``{key, code, field, expected, got}``) between ``run_tokens`` and the fold."""
     try:
         rows = {r["id"]: r for r in conn.execute(
-            "SELECT id,key,role,run_id,epoch,created_at,expires_at,revoked_at FROM run_tokens")}
+            "SELECT id,key,role,run_id,epoch,created_at,expires_at,revoked_at,token_sha256"
+            " FROM run_tokens")}
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
             raise                     # anything else must surface, never a silent clean
@@ -86,7 +88,8 @@ def verify_tokens(conn, events):
             problems.append({"key": want["key"], "code": "token_missing", "field": "run_tokens",
                              "expected": tid, "got": None})
             continue
-        for field in ("key", "role", "run_id", "epoch"):
+        fields = ("key", "role", "run_id", "epoch") + (("token_sha256",) if want["token_sha256"] else ())
+        for field in fields:
             if row[field] != want[field]:
                 problems.append({"key": want["key"], "code": "token_mismatch", "field": field,
                                  "expected": want[field], "got": row[field]})
