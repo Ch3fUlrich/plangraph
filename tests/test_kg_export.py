@@ -28,7 +28,7 @@ class Fake:
         if graph in self.fail:
             raise kg.KgError(f"graph {graph}: boom")
         if graph not in self.data:
-            raise kg.KgError(f"graph {graph}: HTTP 404")
+            raise kg.KgError(f"graph {graph}: HTTP 404", missing=True)
         return list(_rows(self.data[graph], name))
 
 
@@ -379,3 +379,79 @@ def test_render_cli_survives_exporter_crash(tmp_path, monkeypatch):
     tok.write_text(TOKEN)
     rc, site = _render_cli(tmp_path, monkeypatch, {"PG_KG_URL": "http://127.0.0.1:1", "PG_KG_TOKEN_FILE": str(tok)})
     assert rc == 0 and (site / "plan.html").exists()
+
+
+# ---- review round 1 fixes ------------------------------------------------------
+
+class _Redir(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    hits = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        _Redir.hits.append((self.server.server_address[1], self.path, self.headers.get("Authorization")))
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        if self.server.role == "first":
+            self.send_response(307)
+            self.send_header("Location", f"http://127.0.0.1:{self.server.other}/graphs/g/query")
+            self.send_header("Content-Length", "0")
+        else:
+            self.send_response(200)
+            self.send_header("Content-Length", "11")
+            self.end_headers()
+            self.wfile.write(b'{"rows":[]}')
+            return
+        self.end_headers()
+
+
+def test_client_never_follows_redirects_or_forwards_token():
+    _Redir.hits = []
+    a, b = ThreadingHTTPServer(("127.0.0.1", 0), _Redir), ThreadingHTTPServer(("127.0.0.1", 0), _Redir)
+    a.role, b.role, a.other = "first", "second", b.server_address[1]
+    for s in (a, b):
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(kg.KgError) as e:
+            kg.OmnigraphClient(f"http://127.0.0.1:{a.server_address[1]}", TOKEN, timeout=3)("g", "kg_x", "q")
+        assert "307" in str(e.value) and TOKEN not in str(e.value)
+        assert [h[0] for h in _Redir.hits] == [a.server_address[1]]  # the redirect target was never contacted
+    finally:
+        for s in (a, b):
+            s.shutdown()
+            s.server_close()
+
+
+def test_deadline_checked_before_every_query():
+    f = Fake({"g": GRAPH})
+    exp, _d, errors = kg.build_export([item("p1:A", ["g:Rule:r-1"])], f, deadline=0)  # already past
+    assert f.calls == [] and errors and "deadline" in errors[0]["error"]
+
+
+def test_transient_failure_keeps_previous_export_but_missing_graph_does_not(tmp_path):
+    env = _env(tmp_path)
+    prev = {"enabled": True, "nodes": {"old": {}}}
+    (tmp_path / "kg-export.json").write_text(json.dumps(prev))
+    refs = [item("p1:A", ["g:Rule:r-1", "h:Rule:r-2"])]
+    # g ok, h transient failure -> keep previous
+    kg.run(refs, tmp_path, env=env, transport=Fake({"g": GRAPH, "h": GRAPH}, fail=["h"]))
+    assert json.loads((tmp_path / "kg-export.json").read_text()) == prev
+    # h absent (404) is not transient -> new export written, h unresolved
+    kg.run(refs, tmp_path, env=env, transport=Fake({"g": GRAPH}))
+    new = json.loads((tmp_path / "kg-export.json").read_text())
+    assert "g:Rule:r-1" in new["nodes"] and new["unresolved_graphs"] == ["h"]
+
+
+def test_node_in_several_projects_listed_under_each():
+    data = {"g": dict(GRAPH, kg_constrains_project=[{"n.slug": "r-1", "p.slug": "p1"}, {"n.slug": "r-1", "p.slug": "p2"}])}
+    exp, _d, _e = build([], data, extra_graphs=["g"])
+    assert "g:Rule:r-1" in exp["projects"]["p1"]["nodes"] and "g:Rule:r-1" in exp["projects"]["p2"]["nodes"]
+    assert exp["nodes"]["g:Rule:r-1"]["projects"] == ["p1", "p2"]
+
+
+def test_single_fixed_tmp_name(tmp_path):
+    kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
+    kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]

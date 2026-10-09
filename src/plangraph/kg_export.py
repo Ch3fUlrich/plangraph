@@ -69,7 +69,21 @@ _EDGE_Q = {
 
 
 class KgError(Exception):
-    """An Omnigraph read failed. The message never carries the token."""
+    """An Omnigraph read failed. The message never carries the token. ``missing``: the graph does not exist."""
+
+    def __init__(self, message, missing=False):
+        super().__init__(message)
+        self.missing = missing
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: the bearer token must only ever go to the configured host."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 # --------------------------------------------------------------------------- #
@@ -89,10 +103,10 @@ class OmnigraphClient:
             "Content-Type": "application/json", "Accept": "application/json",
             "Authorization": f"Bearer {self._token}"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:  # noqa: S310 (scheme checked)
+            with _OPENER.open(req, timeout=self.timeout) as resp:  # scheme checked; redirects refused
                 raw = resp.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
-            raise KgError(f"graph {graph}: HTTP {exc.code}") from None
+            raise KgError(f"graph {graph}: HTTP {exc.code}", missing=exc.code == 404) from None
         except (urllib.error.URLError, OSError, ValueError) as exc:
             raise KgError(f"graph {graph}: {type(exc).__name__}") from None
         if len(raw) > MAX_RESPONSE_BYTES:
@@ -125,7 +139,7 @@ def _node_rows(rows):
 def _make_node(graph, typ, row):
     slug = _slug(row)
     node = {"graph": graph, "type": typ, "slug": slug, "title": None, "status": None, "severity": None,
-            "kind": None, "excerpt": None, "project": None, "superseded_by": None, "current": None}
+            "kind": None, "excerpt": None, "project": None, "projects": [], "superseded_by": None, "current": None}
     if typ == "Decision":
         node["title"], node["status"] = _clean(row.get("n.title"), TITLE_MAX), _clean(row.get("n.status"), 20)
         node["excerpt"] = _clean(row.get("n.rationale"), EXCERPT_MAX)
@@ -142,19 +156,25 @@ def _make_node(graph, typ, row):
     return node
 
 
-def _fetch_graph(transport, graph, need_types):
+def _fetch_graph(transport, graph, need_types, deadline=None):
     """({(Type, slug): node}, {slug: [superseded-by slugs]}) for one graph; raises KgError."""
     nodes, hub = {}, {}
+
+    def call(name, text):
+        if deadline is not None and time.monotonic() > deadline:
+            raise KgError(f"graph {graph}: deadline")
+        return transport(graph, name, text, None)
+
     for typ in _NODE_Q:
         if typ not in LISTED_TYPES and typ not in need_types:
             continue
         name, text = _NODE_Q[typ]
-        for row in _node_rows(transport(graph, name, text, None)):
+        for row in _node_rows(call(name, text)):
             nodes[(typ, _slug(row))] = _make_node(graph, typ, row)
     for typ, (name, text) in _EDGE_Q.items():
         if typ not in ("supersedes",) and not any(t == typ for t, _ in nodes):
             continue
-        for row in transport(graph, name, text, None):
+        for row in call(name, text):
             if not isinstance(row, dict):
                 continue
             if typ == "supersedes":
@@ -168,6 +188,7 @@ def _fetch_graph(transport, graph, need_types):
     for (typ, slug), node in nodes.items():
         projs = sorted(set(hub.get((typ, slug), [])))
         node["project"] = projs[0] if projs else None
+        node["projects"] = projs
     return nodes, {s: sorted(set(v)) for (k, s), v in hub.items() if k == "sup"}
 
 
@@ -204,9 +225,9 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
             errors.append({"graph": g, "error": "deadline"})
             continue
         try:
-            fetched[g] = _fetch_graph(transport, g, wanted.get(g, set()))
+            fetched[g] = _fetch_graph(transport, g, wanted.get(g, set()), deadline)
         except KgError as exc:
-            errors.append({"graph": g, "error": str(exc)[:200]})
+            errors.append({"graph": g, "error": str(exc)[:200], "missing": bool(exc.missing)})
     failed = sorted(e["graph"] for e in errors)
 
     def ref_of(n):
@@ -285,8 +306,9 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
 
     projects = {}
     for ref, node in out.items():
-        if node["project"] and (node["type"] in LISTED_TYPES):
-            projects.setdefault(node["project"], set()).add(ref)
+        if node["type"] in LISTED_TYPES:
+            for proj in node["projects"]:
+                projects.setdefault(proj, set()).add(ref)
     for key, refs in item_refs.items():
         proj = next((it.get("project") for it in items if isinstance(it, dict) and it.get("key") == key), None)
         if isinstance(proj, str):
@@ -310,13 +332,20 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
 
 # --------------------------------------------------------------------------- #
 def _atomic_write(path: Path, text: str):
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.tmp")  # fixed name: a crash leaves at most one, replaced next run
     try:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, path)
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+def _enabled_file(path):
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")).get("enabled") is True
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _read_token(path):
@@ -344,9 +373,9 @@ def run(items, out_dir, env=None, transport=None):
         extra = [g.strip() for g in (env.get("PG_KG_GRAPHS") or "").split(",") if g.strip()]
         export, dangling, errors = build_export(
             items, transport, extra, deadline=time.monotonic() + DEADLINE_S)
-        attempted = len(export["graphs"]) + len(errors)
         ok = not errors
-        if attempted and not export["graphs"]:  # nothing readable: keep the previous export
+        previous = (out_dir / EXPORT_NAME).exists() and _enabled_file(out_dir / EXPORT_NAME)
+        if previous and any(not e.get("missing") for e in errors):  # transient failure: keep the last good export
             pass
         else:
             from .keeper.credential_guard import mask_all
