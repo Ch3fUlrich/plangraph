@@ -1,4 +1,4 @@
-# workst-gen audit lanes (workst-L1-gen batch, routing D-770) under PH-GEN-1003.
+# workst-gen audit lanes (workst-L1-gen batch, routing D-770) under PH-GEN-1003 (cancelled GEN-RETENTION-PERSON dep dropped from the gate).
 batch: 2026-10-09-workst-gen-audit
 principal: routing-00
 source: /home/s/code/routing/docs/decisions-log.md
@@ -64,7 +64,6 @@ ops:
     - workst-gen:GEN-REDACT
     - workst-gen:GEN-REGISTRY-ROUTE
     - workst-gen:GEN-RETAIN-AUTO
-    - workst-gen:GEN-RETENTION-PERSON
     - workst-gen:GEN-SHARELINK-FLAKE
     - workst-gen:GEN-SQLITE-CONN-SWALLOW
     - workst-gen:GEN-SWAP-OBS-CLOSE
