@@ -78,7 +78,7 @@ def _pull(reader, fetch):
 # ----------------------------------------------------------------- serve side
 def test_serve_emits_only_the_signed_envelope(keeper, capsys, monkeypatch):
     keeper.write(5)
-    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "cat /etc/passwd; sh")
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", "cat ~/.ssh/id_ed25519; sh")
     assert snapshot_serve.main(["--config", str(keeper.cfg)]) == 0
     out = capsys.readouterr().out
     assert out.count("\n") == 1

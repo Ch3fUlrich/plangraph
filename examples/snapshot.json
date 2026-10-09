@@ -79,6 +79,7 @@
  "decision_text": {},
  "generated": "2026-01-01T00:00:00Z",
  "head": null,
+ "head_seq": 11,
  "items": [
   {
    "agent_id": null,
