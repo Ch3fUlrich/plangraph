@@ -57,7 +57,7 @@ def _close_on_decision(store, principal, body, need):
 
 
 def _withdraw_review(store, principal, body, need):
-    return store.withdraw_review(principal, need(body, "key"), need(body, "decision_id"))
+    return store.withdraw_review(principal, body.get("key"), body.get("decision_id"))  # role first (403)
 
 
 def _set_legacy_state(store, principal, body, need):

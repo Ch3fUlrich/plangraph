@@ -300,7 +300,7 @@ def test_mcp_stdio_against_live_api(tmp_path):
              "params": {"name": "ready", "arguments": {"n": 50}}},
         ])
         listing, ready = [json.loads(line) for line in out.splitlines() if line]
-        assert len(listing["result"]["tools"]) == 29
+        assert len(listing["result"]["tools"]) == 30
         assert ready["result"]["isError"] is False
         assert KEY in ready["result"]["content"][0]["text"]
         assert e2e.tokens["router"] not in out
