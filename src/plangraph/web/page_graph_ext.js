@@ -163,9 +163,9 @@
     if (!cy || typeof cy.on !== "function") return;
     cy.on("tap", "node.more-node", function (evt) {
       var d = evt.target.data(), ui = ctx.ui();
-      if (!d || !d.phId || !ui) return;
+      if (!d || !d.phId || d.phId === "__proto__" || !ui) return;
       var cur = ui.get("moreShown") || {}, ms = {};
-      Object.keys(cur).forEach(function (p) { ms[p] = cur[p]; });
+      Object.keys(cur).forEach(function (p) { if (p !== "__proto__") ms[p] = cur[p]; });
       ms[d.phId] = PlanUI.moreShown({ moreShown: cur }, d.phId) + PlanUI.nodeBudget(ui.get());
       ui.set("moreShown", ms);
     });

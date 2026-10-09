@@ -335,7 +335,7 @@
     var idx = keys ? keys.indexOf(key) : -1;
     if (idx >= nodeBudget(ui) && idx + 1 > nodeBudget(ui) + moreShown(ui, phId)) {
       var ms = {};
-      Object.keys((ui && ui.moreShown) || {}).forEach(function (p) { ms[p] = ui.moreShown[p]; });
+      Object.keys((ui && ui.moreShown) || {}).forEach(function (p) { if (p !== "__proto__") ms[p] = ui.moreShown[p]; });
       ms[phId] = idx + 1;
       patch.moreShown = ms;
     }
