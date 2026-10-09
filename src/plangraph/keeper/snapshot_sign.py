@@ -42,8 +42,10 @@ def _private_key(path):
     serialization, ed25519 = _ed25519()
     path = Path(path)
     # One open, then fstat + read on that same fd: no stat-then-read window, no symlink.
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise SignError("this platform has no O_NOFOLLOW; refusing to read the signing key")
     try:
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
     except OSError as exc:
         raise SignError(f"signing key not readable: {path}") from exc
     with os.fdopen(fd, "rb") as handle:
