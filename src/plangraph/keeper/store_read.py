@@ -12,7 +12,7 @@ from .. import views
 from ..views_progress import progress
 from .brief import build as _build_brief
 from .errors import Refused
-from .item_fields import MODEL_FIELDS
+from .item_fields import MODEL_FIELDS, parse_choices
 
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
@@ -132,6 +132,7 @@ class ReadMixin:
             "description": item["description"], "host": item["host"],
             "wait": item.get("wait"),
             **{name: item.get(name) for name in MODEL_FIELDS},
+            "choices": parse_choices(item.get("choices")),
             "waits_on_operator": bool(item.get("operator"))
             and item.get("state") not in ("done", "cancelled"),
             "project": item["project"],
@@ -202,6 +203,7 @@ class ReadMixin:
                 "title": item["title"], "description": item["description"],
                 "host": item["host"], "wait": item.get("wait"),
                 **{name: item.get(name) for name in MODEL_FIELDS},
+                "choices": parse_choices(item.get("choices")),
                 "waits_on_operator": bool(item.get("operator"))
                 and item.get("state") not in ("done", "cancelled"),
                 "kind": item["kind"], "track": item["track"],

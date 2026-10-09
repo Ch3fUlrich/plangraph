@@ -57,7 +57,7 @@ def check_wait(value, key=None):
 
 #: Optional columns folded from ``item_created``/``item_defined`` payloads.
 SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
-                "phase_kind", "fixes")
+                "phase_kind", "fixes", "choices")
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
 MODEL_FIELDS = ("layer", "role", "agent_id", "phase_kind")
 
@@ -138,3 +138,95 @@ def kind_defaults(raw, kind):
     operator = raw.get("operator")
     return (op_default if operator is None else operator,
             raw["wait"] if "wait" in raw else wait_default)
+
+
+# --------------------------------------------------------------------------- #
+# QA-IMPORT (D-865): structured choices of an operator question / task.
+CHOICE_KINDS = ("question", "decision", "operator_task")
+MAX_OPTIONS = 8
+OPTION_ID_CAP, LABEL_CAP, CONSEQUENCE_CAP, BLOCKS_CAP = 40, 60, 160, 200
+_OPTION_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _choice_text(name, value, cap, where):
+    if not isinstance(value, str) or not value.strip() or len(value) > cap:
+        raise Refused("validation", f"{where}choices {name} must be 1-{cap} characters")
+    if any(ord(c) < 32 for c in value):
+        raise Refused("validation", f"{where}choices {name} must not contain control characters")
+    from .credential_guard import guard
+    guard(f"choices {name}", value)
+    return value.strip()
+
+
+def check_choices(value, kind, key=None):
+    """Canonical JSON text of ``{options, default, deadline, blocks}`` or ``None``.
+
+    ``options``: 1..MAX_OPTIONS ``{id, label, consequence}`` (ids unique, ``[a-z0-9-]``);
+    ``default``: one option id or null; ``deadline``: ``YYYY-MM-DD`` or null;
+    ``blocks``: short text or null.  Only question/decision/operator_task items.
+    """
+    if value is None:
+        return None
+    where = f"{key}: " if key else ""
+    if kind not in CHOICE_KINDS:
+        raise Refused("validation", f"{where}choices only on {list(CHOICE_KINDS)} items")
+    if isinstance(value, str):
+        import json
+        try:
+            value = json.loads(value)
+        except ValueError as exc:
+            raise Refused("validation", f"{where}choices must be an object") from exc
+    if not isinstance(value, dict) or not set(value) <= {"options", "default", "deadline", "blocks"}:
+        raise Refused("validation", f"{where}choices must be an object with options/default/deadline/blocks")
+    out = {"options": [], "default": None, "deadline": None, "blocks": None}
+    options = value.get("options") or []
+    if not isinstance(options, list) or len(options) > MAX_OPTIONS:
+        raise Refused("validation", f"{where}choices options must be a list of <= {MAX_OPTIONS}")
+    seen = set()
+    for opt in options:
+        if not isinstance(opt, dict) or not set(opt) <= {"id", "label", "consequence"}:
+            raise Refused("validation", f"{where}choices option must be {{id, label, consequence}}")
+        oid = opt.get("id")
+        if not isinstance(oid, str) or len(oid) > OPTION_ID_CAP or not _OPTION_ID.fullmatch(oid) \
+                or oid in seen:
+            raise Refused("validation", f"{where}choices option id must be unique [a-z0-9-]+")
+        seen.add(oid)
+        entry = {"id": oid, "label": _choice_text("label", opt.get("label"), LABEL_CAP, where)}
+        if opt.get("consequence") is not None:
+            entry["consequence"] = _choice_text("consequence", opt["consequence"],
+                                                CONSEQUENCE_CAP, where)
+        out["options"].append(entry)
+    default = value.get("default")
+    if default is not None and default not in seen:
+        raise Refused("validation", f"{where}choices default must be one of the option ids")
+    out["default"] = default
+    deadline = value.get("deadline")
+    if deadline is not None:
+        if not isinstance(deadline, str) or not _DATE.fullmatch(deadline):
+            raise Refused("validation", f"{where}choices deadline must be YYYY-MM-DD")
+        from datetime import date
+        try:
+            date.fromisoformat(deadline)
+        except ValueError as exc:
+            raise Refused("validation", f"{where}choices deadline is not a date") from exc
+    out["deadline"] = deadline
+    if value.get("blocks") is not None:
+        out["blocks"] = _choice_text("blocks", value["blocks"], BLOCKS_CAP, where)
+    if not out["options"] and out["default"] is None and out["deadline"] is None \
+            and out["blocks"] is None:
+        return None
+    import json
+    return json.dumps(out, sort_keys=True, separators=(",", ":"))
+
+
+def parse_choices(text):
+    """The stored JSON text as a dict (``None`` when absent or unreadable)."""
+    if not text:
+        return None
+    import json
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None

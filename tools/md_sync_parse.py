@@ -2,7 +2,8 @@
 import re
 from collections import namedtuple
 
-Question = namedtuple("Question", "id kind title description heading wait")
+Question = namedtuple("Question", "id kind title description heading wait choices",
+                      defaults=(None,))
 Answer = namedtuple("Answer", "id decisions date text")
 Skipped = namedtuple("Skipped", "id reason")
 
@@ -143,6 +144,74 @@ def _table_rows(text):
     return out
 
 
+#: QA-IMPORT: ``Options: a = consequence; *b = consequence. Deadline: 2026-10-12`` at the end
+#: of the "Exact step" cell (``*`` marks the default; ``;`` separates, a table cell cannot hold ``|``).
+_OPTIONS_RE = re.compile(r"(?:^|\s)Options:\s*(?P<opts>.+?)"
+                         r"(?:\.?\s*Deadline:\s*(?P<deadline>[0-9]{4}-[0-9]{2}-[0-9]{2}))?\.?\s*$")
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slug(label):
+    return _SLUG_RE.sub("-", label.lower()).strip("-")[:40] or "option"
+
+
+def parse_options(step, why=""):
+    """``(step without the Options block, choices dict or None)``.
+
+    A malformed block (empty labels, duplicate ids, > 8 options) is left in the
+    step text and yields no choices, so a typo never drops the operator's words.
+    """
+    match = _OPTIONS_RE.search(step or "")
+    if not match:
+        return step, None
+    options, default, seen = [], None, set()
+    for part in match.group("opts").split(";"):
+        part = part.strip()
+        if not part:
+            return step, None
+        marked = part.startswith("*")
+        part = part.lstrip("*").strip()
+        label, _, consequence = part.partition("=")
+        label, consequence = label.strip(), consequence.strip()
+        oid = _slug(label)
+        if not label or oid in seen or len(label) > 60 or len(consequence) > 160:
+            return step, None
+        seen.add(oid)
+        entry = {"id": oid, "label": label}
+        if consequence:
+            entry["consequence"] = consequence
+        options.append(entry)
+        if marked:
+            if default is not None:
+                return step, None
+            default = oid
+    if not options or len(options) > 8:
+        return step, None
+    blocks = (why or "").strip()[:200] or None
+    rest = step[:match.start()].rstrip(" .;:")
+    return rest, {"options": options, "default": default,
+                  "deadline": match.group("deadline"), "blocks": blocks}
+
+
+def unmatched_rows(text):
+    """QA-IMPORT: data rows of the QUESTIONS tables whose ID cell is not exactly one id."""
+    out, fenced = [], False
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if _FENCE_RE.match(line):
+            fenced = not fenced
+            continue
+        stripped = line.strip()
+        if fenced or not stripped.startswith("|") or line.startswith(("    ", "\t")):
+            continue
+        cells = [p.strip() for p in stripped.split("|")[1:]]
+        if len(cells) < 5 or set(cells[1]) <= set("-: ") or cells[1].lower() == "id":
+            continue
+        if len(_TABLE_ID_RE.findall(cells[1])) != 1:
+            out.append(cells[1][:80])
+    return out
+
+
 def parse_questions(text):
     bullets = []
     for heading, match, body in _entries(text, _BULLET_RE):
@@ -167,13 +236,14 @@ def parse_questions(text):
         prefix = "OP: " if kind == "op" else "Q: "
         full_title = (prefix + title)[:TITLE_CAP]
         step, where = step.strip(), where.strip()
+        step, choices = parse_options(step, why)
         if step and where:
             description = f"{step} — {where}"
         else:
             description = step or where
         wait = (_KIND_CELLS[kind_cell] if kind_cell
                 else _classify_wait(ident, kind, full_title, why))
-        tables.append(Question(ident, kind, full_title, description, heading, wait))
+        tables.append(Question(ident, kind, full_title, description, heading, wait, choices))
     return tables + bullets
 
 

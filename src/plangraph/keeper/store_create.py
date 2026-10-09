@@ -16,7 +16,7 @@ from .auth import validate_family
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
-from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_model_fields
+from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_model_fields
 from .note_fold import fold_checked
 from .store_tiers import (
     REVIEW_TIERS,
@@ -30,7 +30,7 @@ from .store_tiers import (
 )
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
-             "phase_kind", "fixes", "estimate_h", "done_criteria", "evidence_kinds",
+             "phase_kind", "fixes", "choices", "estimate_h", "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
@@ -42,7 +42,7 @@ KNOWN_ITEM_FIELDS = frozenset(
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
-                 "agent_id", "phase_kind", "fixes", "kind", "track", "owner",
+                 "agent_id", "phase_kind", "fixes", "choices", "kind", "track", "owner",
                  "owner_family",
                  "estimate_h", "estimate_src", "done_criteria", "evidence_kinds",
                  "operator", "priority", "review_tier", "source", "note",
@@ -170,6 +170,7 @@ class CreateMixin:
             "wait": definition.get("wait"),
             **{name: definition.get(name) for name in MODEL_FIELDS},
             "fixes": definition.get("fixes"),
+            "choices": definition.get("choices"),
             "kind": definition.get("kind", "lane"), "track": definition.get("track"),
             "owner": definition.get("owner"),
             "owner_family": definition.get("owner_family"),
@@ -272,6 +273,9 @@ class CreateMixin:
                     raise Refused("forbidden",
                                   "cross-project dependency needs the router")
                 me["depends_on"] = deps
+            elif field == "choices":
+                value = fields["choices"] = me["choices"] = check_choices(
+                    value, item["kind"], key)
             elif field == "fixes" and value is not None:
                 if not isinstance(value, str) or not value:
                     raise Refused("validation", "fixes must be a key string or null")

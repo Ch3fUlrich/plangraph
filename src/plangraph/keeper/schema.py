@@ -109,6 +109,7 @@ CREATE TABLE items (
     agent_id       TEXT,
     phase_kind     TEXT,
     fixes          TEXT,
+    choices        TEXT,
     kind           TEXT,
     track          TEXT,
     owner          TEXT,

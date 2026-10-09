@@ -10,7 +10,7 @@ from __future__ import annotations
 from . import auth
 from .credential_guard import GUARDED_FIELDS, guard
 from .errors import Refused
-from .item_fields import (MODEL_FIELDS, check_host, check_kind, check_model_fields,
+from .item_fields import (MODEL_FIELDS, check_choices, check_host, check_kind, check_model_fields,
                           check_wait, kind_defaults)
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
@@ -87,6 +87,7 @@ class InputMixin:
             "priority": int(raw.get("priority") or 0),
             "source": raw.get("source"), "note": self._folded_note(raw, key),
             "corrects": corrects, "fixes": fixes, "depends_on": deps,
+            "choices": check_choices(raw.get("choices"), kind, key),
             "state": raw.get("state", "open"),
         }
 

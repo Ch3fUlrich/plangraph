@@ -352,8 +352,17 @@ def needs_you(items, project=None, ub=None):
     return [{"key": it["key"], "project": it.get("project"),
              "title": it.get("title", ""), "kind": it.get("kind"),
              "state": _state(it), "wait": it.get("wait"),
-             "priority": _prio(it), "unblocks": ub.get(it["key"], 0)}
+             "priority": _prio(it), "unblocks": ub.get(it["key"], 0),
+             "choices": _choices(it.get("choices"))}
             for it in picked]
+
+
+def _choices(value):
+    """QA-IMPORT: the structured options of a question (dict from a snapshot, JSON text from the DB)."""
+    if isinstance(value, dict) or value is None:
+        return value
+    from .keeper.item_fields import parse_choices
+    return parse_choices(value)
 
 
 def answers(items, project=None):

@@ -80,7 +80,7 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "run_ids", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
-                  ("items", "fixes", "TEXT"))
+                  ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)

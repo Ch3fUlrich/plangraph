@@ -258,3 +258,13 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
 - Hosts without a timer (prox, D-844: the Proxmox host runs no daemons/timers) pull ON DEMAND; the L1 there does:
   1. at the START of every plan-touching task: `PG_CONFIG=~/.config/plangraph/reader.json PYTHONPATH=src python3 -m plangraph.keeper.cli sync pull`
   2. AGAIN right after its plan update (claim, evidence, submit, edit, batch) went through, so the local copy shows the keeper's result.
+
+## Operator question choices (QA-IMPORT, D-865)
+
+question / decision / operator_task items may carry `choices` = `{options: [{id, label, consequence}], default,
+deadline, blocks}` (<= 8 options, ids `[a-z0-9-]`, label <= 60, consequence <= 160, deadline `YYYY-MM-DD`, text
+credential-guarded, no control characters); create/edit set it, `show`, the snapshot and `needs_you` return it.
+md-sync reads it from the end of a QUESTIONS.md "Exact step" cell:
+`Options: enable = mail goes out as your Gmail; own sender = needs a new mailbox; *stay disabled = nothing changes. Deadline: 2026-10-12`
+(`*` = default, `;` separates; a malformed block stays plain text). Rows whose ID cell is not exactly one id are
+listed in the md-sync status file under `unmatched`.
