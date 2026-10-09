@@ -102,7 +102,8 @@
     // (except operator steps, wait=task) are questions too.
     return str(item.title).slice(0, 2) === "Q:" || /^Q-/.test(str(item.id)) ||
       item.kind === "question" || item.kind === "decision" ||
-      (item.track === "QUESTIONS" && item.kind !== "gate" && item.wait !== "task");
+      (item.track === "QUESTIONS" && item.wait !== "task" &&
+       item.kind !== "gate" && item.kind !== "goal" && item.kind !== "operator_task");
   }
 
   function questionStatus(state) {

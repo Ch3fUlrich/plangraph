@@ -28,6 +28,7 @@ var vm = PlanUI.buildViewModel({ items: [
                answer: { text: "answered by D-7", decision_id: "D-7" } }),
   it("OS-2", { track: "QUESTIONS", wait: "task" }),
   it("PH-OPERATOR", { track: "QUESTIONS", kind: "gate" }),
+  it("OS-3", { track: "QUESTIONS", kind: "operator_task", wait: null }),
   it("ASK", { kind: "question", wait: "answer" }),
   it("DEC", { kind: "decision", state: "done", answer: { text: "go", decision_id: "D-9" } }),
   it("PLAIN", {})
