@@ -208,6 +208,33 @@ def test_pull_needs_a_pubkey(keeper, reader):
         _pull(reader, _serve(keeper))
 
 
+def test_lost_or_lowered_high_water_mark_still_refuses_rollback(keeper, reader):
+    keeper.write(9)
+    _pull(reader, _serve(keeper))
+    hwm = snapshot_pull.hwm_path(reader.snap)
+    keeper.write(7)
+    hwm.unlink()                                             # mark lost: the local copy counts
+    with pytest.raises(snapshot_pull.PullError, match="older"):
+        _pull(reader, _serve(keeper))
+    hwm.write_text(json.dumps({"head_seq": 1, "head": "h1"}))   # mark lowered: still the copy
+    with pytest.raises(snapshot_pull.PullError, match="older"):
+        _pull(reader, _serve(keeper))
+
+
+def test_every_rename_is_followed_by_a_directory_fsync(keeper, reader, monkeypatch):
+    keeper.write(3)
+    events = []
+    real_replace, real_fsync_dir = os.replace, snapshot_pull._fsync_dir
+    monkeypatch.setattr(snapshot_pull.os, "replace",
+                        lambda a, b: (events.append(("replace", Path(b).name)), real_replace(a, b)))
+    monkeypatch.setattr(snapshot_pull, "_fsync_dir",
+                        lambda d: (events.append(("fsync", None)), real_fsync_dir(d)))
+    _pull(reader, _serve(keeper))
+    names = [n for kind, n in events if kind == "replace"]
+    assert names == ["plan.snapshot.json.hwm", "plan.snapshot.json.sig", "plan.snapshot.json"]
+    assert [k for k, _ in events] == ["replace", "fsync"] * 3
+
+
 def test_corrupt_high_water_mark_fails_closed(keeper, reader):
     keeper.write(3)
     _pull(reader, _serve(keeper))
@@ -294,3 +321,14 @@ def test_keeper_snapshot_carries_head_seq(tmp_path):
         assert (snap["head_seq"], snap["head"]) == (last[0], last[1]) and last[0] > 0
     finally:
         world.close()
+
+
+def test_reader_fallback_refuses_a_copy_behind_the_mark(keeper, reader):
+    from plangraph.keeper.cli_verbs import Session, Unreachable
+    keeper.write(4)
+    _pull(reader, _serve(keeper))
+    session = Session(config_path=str(reader.cfg))
+    assert session.local_snapshot()["head_seq"] == 4
+    snapshot_pull.hwm_path(reader.snap).write_text(json.dumps({"head_seq": 6, "head": "h6"}))
+    with pytest.raises(Unreachable, match="older than the last pull"):
+        session.local_snapshot()

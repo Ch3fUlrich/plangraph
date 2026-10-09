@@ -4,9 +4,10 @@ Fetches the keeper's signed snapshot over ssh (the pull key's forced command is
 ``snapshot_serve``), verifies the signature with ``snapshot_pubkey``, refuses a copy
 older than the newest one this host has seen (``head_seq`` high-water mark, kept in
 ``<snapshot>.hwm``) or a different head at the same sequence, then installs it:
-high-water mark, signature, snapshot, each by temp file + rename.  A crash leaves the
-old copy, or a signature mismatch the reader refuses (fail closed), never an
-unverified or older copy.  Reader config (mode 600)::
+high-water mark, signature, snapshot, each by temp file + fsync + rename + directory
+fsync, in that order.  A crash leaves the previous copy (stale, still signed) or a
+signature mismatch the reader refuses (fail closed), never an unverified copy, and the
+mark keeps a later pull from accepting anything older.  Reader config (mode 600)::
 
     {"snapshot": "~/.local/share/plangraph/plan.snapshot.json",
      "snapshot_pubkey": "~/.config/plangraph/snapshot-signing.pub",
@@ -28,7 +29,7 @@ from pathlib import Path
 
 from . import snapshot_serve, snapshot_sign
 
-__all__ = ["PullError", "Unreachable", "pull", "ssh_argv", "hwm_path", "TIMEOUT_S"]
+__all__ = ["PullError", "Unreachable", "pull", "ssh_argv", "hwm_path", "behind_mark", "TIMEOUT_S"]
 
 TIMEOUT_S = 120
 _HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$")
@@ -45,6 +46,22 @@ class Unreachable(Exception):
 
 def hwm_path(snapshot) -> Path:
     return Path(str(snapshot) + ".hwm")
+
+
+def behind_mark(snapshot, snap) -> bool:
+    """True when a high-water mark exists and *snap* (the parsed local copy) is older than it
+    or unreadable as such: a pull crashed between the mark and the snapshot (fail closed)."""
+    hwm = hwm_path(snapshot)
+    if not (hwm.exists() or hwm.is_symlink()):
+        return False
+    try:
+        fd = os.open(str(hwm), os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as handle:
+            mark = json.loads(handle.read(4096).decode("utf-8"))["head_seq"]
+    except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError):
+        return True
+    seq = snap.get("head_seq") if isinstance(snap, dict) else None
+    return not isinstance(seq, int) or isinstance(seq, bool) or not isinstance(mark, int) or seq < mark
 
 
 def ssh_argv(pull: dict) -> list:
@@ -120,8 +137,20 @@ def _parse(data: bytes, pubkey):
     return body, env["sig"], seq, head
 
 
+def _local_seq(path, pubkey):
+    from .snapshot_io import read_snapshot
+    try:
+        snap = read_snapshot(path, pubkey)
+    except (OSError, snapshot_sign.SignError, ValueError):
+        return -1, None
+    seq = snap.get("head_seq") if isinstance(snap, dict) else None
+    return (seq, snap.get("head")) if isinstance(seq, int) and not isinstance(seq, bool) else (-1, None)
+
+
 def _current(path, pubkey):
-    """(head_seq, head) this host has already accepted: the high-water mark, else the local copy."""
+    """(head_seq, head) this host has already accepted: the higher of the high-water mark and
+    the verified local copy, so neither a lost nor a lowered mark lets an older copy back in."""
+    best = _local_seq(path, pubkey)
     hwm = hwm_path(path)
     if hwm.exists() or hwm.is_symlink():
         try:
@@ -131,16 +160,11 @@ def _current(path, pubkey):
             seq, head = mark["head_seq"], mark["head"]
             if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
                 raise ValueError("bad head_seq")
-            return seq, head
         except (OSError, ValueError, KeyError, TypeError, UnicodeDecodeError) as exc:
             raise PullError(f"high-water mark {hwm} unreadable; check it, then remove it to re-seed") from exc
-    from .snapshot_io import read_snapshot
-    try:
-        snap = read_snapshot(path, pubkey)
-    except (OSError, snapshot_sign.SignError, ValueError):
-        return -1, None
-    seq = snap.get("head_seq") if isinstance(snap, dict) else None
-    return (seq, snap.get("head")) if isinstance(seq, int) and not isinstance(seq, bool) else (-1, None)
+        if seq > best[0]:
+            best = (seq, head)
+    return best
 
 
 def _install(path: Path, data: bytes) -> None:
@@ -152,12 +176,21 @@ def _install(path: Path, data: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(tmp, path)
+        _fsync_dir(path.parent)   # each rename durable before the next: the order survives a power cut
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+
+
+def _fsync_dir(directory) -> None:
+    dfd = os.open(str(directory), os.O_RDONLY)
+    try:
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def pull(cfg, *, fetch=_fetch) -> str:
@@ -184,11 +217,6 @@ def pull(cfg, *, fetch=_fetch) -> str:
         _install(hwm_path(path), json.dumps({"head_seq": seq, "head": head}).encode("utf-8"))
         _install(snapshot_sign.sig_path(path), sig.encode("ascii"))
         _install(path, body)
-        dfd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(dfd)
-        finally:
-            os.close(dfd)
     finally:
         os.close(lock_fd)
     return f"local copy at head_seq {seq}" + (" (unchanged)" if seq == cur_seq else f" (was {max(cur_seq, 0)})")
