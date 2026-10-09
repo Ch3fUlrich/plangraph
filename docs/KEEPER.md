@@ -255,3 +255,6 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
   "user": "s", "identity": "~/.ssh/pg-snapshot-pull", "port": 22}}`. The keeper's ssh host key must
   already be in the reader's `~/.ssh/known_hosts` under that address (no trust on first use).
 - Operator steps: plangraph-data `docs/proposals/2026-10-09-d818-local-copy.md`.
+- Hosts without a timer (prox, D-844: the Proxmox host runs no daemons/timers) pull ON DEMAND; the L1 there does:
+  1. at the START of every plan-touching task: `PG_CONFIG=~/.config/plangraph/reader.json PYTHONPATH=src python3 -m plangraph.keeper.cli sync pull`
+  2. AGAIN right after its plan update (claim, evidence, submit, edit, batch) went through, so the local copy shows the keeper's result.
