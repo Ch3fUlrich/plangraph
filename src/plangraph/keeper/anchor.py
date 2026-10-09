@@ -262,6 +262,8 @@ class Anchorer:
         return answer
 
     def tick(self, conn):
+        if conn.in_transaction:          # never anchor a head this connection has not committed
+            return None
         seq, _ = _head(conn)
         if seq <= self.last_seq:
             return None

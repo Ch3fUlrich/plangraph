@@ -604,3 +604,61 @@ def test_file_mode_deleted_log_after_anchors_is_refused(w, tmp_path):
     Path(cfg["anchor_file"]).unlink()
     with pytest.raises(anchor.AnchorError, match="lost records"):
         anchor.check_start(w.conn, cfg)
+
+
+# ------------------------------------------------------ round-5 seat findings
+def test_file_mode_emptied_log_after_anchors_is_refused(w, tmp_path):
+    seed(w, [("A", [])])
+    cfg = file_cfg(tmp_path)
+    anchor.Anchorer(cfg, clock=lambda: 1000.0).record(w.conn, "start")
+    Path(cfg["anchor_file"]).write_text("")
+    with pytest.raises(anchor.AnchorError, match="lost records"):
+        anchor.check_start(w.conn, cfg)
+
+
+def test_invalid_utf8_record_is_refused_not_crashing(tmp_path):
+    out = io.BytesIO()
+    line = b'{"v":1,"seq":1,"head":"' + b"0" * 64 + b'","ts":"\xff","reason":"done"}\n'
+    assert anchord.serve_one(tmp_path / "a.log", io.BytesIO(line), out) == 1
+    assert out.getvalue().startswith(b"refused:")
+
+
+def test_tick_with_an_unreachable_service_never_raises(w, tmp_path):
+    (key,) = seed(w, [("A", [])])
+    err = io.StringIO()
+    clock = [1000.0]
+    a = anchor.Anchorer({"anchor_socket": str(tmp_path / "missing.sock"),
+                         "anchor_log": str(tmp_path / "x.log")}, clock=lambda: clock[0], err=err,
+                        last=None)
+    to_claimed(w, key)
+    clock[0] += anchor.HOURLY_S
+    assert a.tick(w.conn) is None and "anchor not written" in err.getvalue()
+
+
+def test_tick_skips_while_the_same_connection_has_an_open_transaction(w, tmp_path):
+    seed(w, [("A", [])])
+    cfg = file_cfg(tmp_path)
+    clock = [1000.0]
+    a = anchor.Anchorer(cfg, clock=lambda: clock[0])
+    a.record(w.conn, "start")
+    before = anchor.latest(cfg["anchor_file"])["seq"]
+    w.conn.execute("BEGIN")
+    try:
+        w.conn.execute("INSERT INTO events (ts, type, payload, prev_hash, hash) VALUES (?,?,?,?,?)",
+                       ("2026-10-09T10:00:00Z", "closed_on_decision", "{}", "x", "f" * 64))
+        clock[0] += anchor.HOURLY_S
+        assert a.tick(w.conn) is None
+    finally:
+        w.conn.execute("ROLLBACK")
+    assert anchor.latest(cfg["anchor_file"])["seq"] == before
+
+
+def test_hourly_tick_without_new_events_writes_nothing(w, tmp_path):
+    seed(w, [("A", [])])
+    cfg = file_cfg(tmp_path)
+    clock = [1000.0]
+    a = anchor.Anchorer(cfg, clock=lambda: clock[0])
+    a.record(w.conn, "start")
+    clock[0] += 2 * anchor.HOURLY_S
+    assert a.tick(w.conn) is None
+    assert len(anchor.read_records(cfg["anchor_file"])[0]) == 1
