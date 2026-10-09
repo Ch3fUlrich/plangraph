@@ -38,8 +38,7 @@ def run(cfg, *, host=None, port=None, ready=None):
                       batch_roots=cfg.batch_roots)
         server = api.make_server(store, cfg, host=host, port=port)
         if anchor.enabled(cfg):   # M2B-ANCHOR: refuse a rolled-back or forked DB before serving
-            anchor.check_start(conn, cfg)
-            server.anchorer = anchor.Anchorer(cfg)
+            server.anchorer = anchor.Anchorer(cfg, last=anchor.check_start(conn, cfg))
         outage.check_and_record(store, server.system, cfg)   # M2B-OUTBOX: freeze clocks over a downtime
         if server.anchorer is not None:
             server.anchorer.record(conn, "start")

@@ -318,6 +318,9 @@ def test_garbage_lines_do_not_hide_a_valid_anchor(w, tmp_path):
     log.write_bytes(b"not json\n" + json.dumps(rec(seq + 4, "a" * 64)).encode() + b"\n\xff\xfe\n")
     with pytest.raises(anchor.AnchorError, match="behind"):
         anchor.check_start(w.conn, {"anchor_file": str(log)})
+    log.write_bytes(b"not json\n{\"v\":1\n")                         # garbage only
+    with pytest.raises(anchor.AnchorError, match="no valid record"):
+        anchor.check_start(w.conn, {"anchor_file": str(log)})
 
 
 def test_torn_last_line_does_not_swallow_the_next_record(tmp_path):
@@ -334,24 +337,34 @@ def test_non_ascii_record_is_refused(tmp_path):
     assert anchord.serve_one(tmp_path / "a.log", io.BytesIO(line + b"\n"), out) == 1
 
 
-def test_concurrent_writers_stay_monotonic(tmp_path):
-    log = tmp_path / "a.log"
-    errors = []
+_WRITER = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import anchord
+log, start = sys.argv[2], int(sys.argv[3])
+ok = []
+for seq in range(start, 200, 4):
+    rec = {"v": 1, "seq": seq, "head": format(seq, "064x"), "ts": "2026-10-09T10:00:00Z", "reason": "done"}
+    try:
+        if anchord.append(log, rec) == "ok":
+            ok.append(seq)
+    except anchord.AnchorRefused:
+        pass
+print(json.dumps(ok))
+"""
 
-    def write(seq):
-        try:
-            anchord.append(log, rec(seq))
-        except anchord.AnchorRefused:
-            pass
-        except Exception as exc:   # pragma: no cover
-            errors.append(exc)
-    threads = [threading.Thread(target=write, args=(s,)) for s in range(1, 41)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    seqs = [json.loads(l)["seq"] for l in log.read_text().splitlines()]
-    assert not errors and seqs == sorted(seqs) and len(seqs) == len(set(seqs)) and 40 in seqs
+
+def test_concurrent_processes_never_lose_an_ok_or_tear_a_line(tmp_path):
+    """Separate PROCESSES (flock is per open file): every 'ok' answer is in the log, in order."""
+    log = tmp_path / "a.log"
+    lib = str(ROOT / "src/plangraph/keeper")
+    procs = [subprocess.Popen([sys.executable, "-I", "-c", _WRITER, lib, str(log), str(p)],
+                              stdout=subprocess.PIPE) for p in range(1, 5)]
+    oks = sorted(s for proc in procs for s in json.loads(proc.communicate(timeout=60)[0]))
+    lines = log.read_text().splitlines()
+    seqs = [json.loads(line)["seq"] for line in lines]          # every line parses: none torn
+    assert seqs == sorted(seqs) and len(seqs) == len(set(seqs))
+    assert seqs == oks and len(oks) >= 4
 
 
 def test_symlinked_anchor_log_fails_closed_at_start(w, tmp_path):
@@ -396,16 +409,68 @@ def test_refusing_service_is_logged_once_and_backs_off(w, service):
     assert err.getvalue().count("anchor not written") == 1
 
 
+def _directives(path):
+    return {line.strip() for line in path.read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")}
+
+
 def test_unit_files_keep_the_sandbox():
-    sock = (ROOT / "deploy/pganchor/pganchor.socket").read_text()
-    svc = (ROOT / "deploy/pganchor/pganchor@.service").read_text()
-    for line in ("Accept=yes", "SocketMode=0660", "SocketUser=pganchor", "SocketGroup=s",
-                 "MaxConnections="):
-        assert line in sock
-    for line in ("User=pganchor", "ProtectSystem=strict", "ReadWritePaths=/var/lib/pganchor",
-                 "PrivateNetwork=yes", "NoNewPrivileges=yes", "RuntimeMaxSec=", "CapabilityBoundingSet=",
-                 "ProtectHome=yes", "python3 -I /usr/local/lib/pganchor/anchord.py"):
-        assert line in svc
+    sock = _directives(ROOT / "deploy/pganchor/pganchor.socket")
+    svc = _directives(ROOT / "deploy/pganchor/pganchor@.service")
+    assert {"Accept=yes", "SocketMode=0660", "SocketUser=pganchor", "SocketGroup=s",
+            "MaxConnections=8", "ListenStream=/run/pganchor/anchor.sock"} <= sock
+    assert {"User=pganchor", "Group=pganchor", "ProtectSystem=strict",
+            "ReadWritePaths=/var/lib/pganchor", "PrivateNetwork=yes", "NoNewPrivileges=yes",
+            "RuntimeMaxSec=10", "CapabilityBoundingSet=", "ProtectHome=yes",
+            "RestrictAddressFamilies=AF_UNIX",
+            "ExecStart=/usr/bin/python3 -I /usr/local/lib/pganchor/anchord.py --log /var/lib/pganchor/anchor.log"} <= svc
+    assert not any(line.startswith(("AmbientCapabilities", "User=root")) for line in svc)
+
+
+def test_reaper_anchors_under_the_server_lock_after_its_writes(tmp_path):
+    """The reaper calls tick only while holding the server lock, after reap + snapshot (committed)."""
+    from types import SimpleNamespace
+    from plangraph.keeper import api
+    order = []
+    lock = __import__("threading").RLock()
+
+    class FakeAnchorer:
+        def tick(self, conn):
+            order.append(("tick", lock._is_owned()))
+    store = SimpleNamespace(reap=lambda p: order.append(("reap", lock._is_owned())), conn=None)
+    server = SimpleNamespace(lock=lock, store=store, system=None, anchorer=FakeAnchorer(),
+                             config=SimpleNamespace(reap_interval=0.01, db=str(tmp_path / "k.db"),
+                                                    snapshot=str(tmp_path / "s.json"), signing_key=None))
+    api_write = api.write_snapshot
+    api.write_snapshot = lambda srv, p: order.append(("snapshot", lock._is_owned()))
+    try:
+        reaper = api.Reaper(server)
+        reaper.start()
+        for _ in range(200):
+            if any(o[0] == "tick" for o in order):
+                break
+            __import__("time").sleep(0.01)
+        reaper.stop()
+    finally:
+        api.write_snapshot = api_write
+    first = [o[0] for o in order][:3]
+    assert first == ["reap", "snapshot", "tick"] and all(owned for _, owned in order[:3])
+
+
+def test_silent_service_times_out_quickly(tmp_path):
+    """A service that accepts but never answers costs <= ~1 s under the lock, then raises."""
+    import time as _t
+    path = str(tmp_path / "silent.sock")
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(path)
+    srv.listen(1)
+    try:
+        start = _t.monotonic()
+        with pytest.raises(anchor.AnchorError):
+            anchor.submit({"anchor_socket": path, "anchor_log": str(tmp_path / "x")}, rec(1))
+        assert _t.monotonic() - start < 3
+    finally:
+        srv.close()
 
 
 def test_anchor_tag_pushes_only_its_own_tag(tmp_path):
@@ -426,3 +491,18 @@ def test_anchor_tag_pushes_only_its_own_tag(tmp_path):
     assert anchor_tag.main(["--repo", str(repo), "--anchor-log", str(log), "--push"], now=now) == 0
     tags = _git("tag", "-l", cwd=origin).stdout.split()
     assert tags == ["anchor-20261010"] and not (tmp_path / "PWNED").exists()
+
+
+def test_record_slipped_in_after_the_start_check_is_refused_loudly(w, service):
+    """Round-2 seat S-V1: the floor comes from check_start's single read, not a re-read."""
+    seed(w, [("A", [])])
+    Path(service["anchor_log"]).write_text("")                 # operator step A2: empty log exists
+    last = anchor.check_start(w.conn, service)                 # empty service log: None
+    anchor.submit(service, rec(999999, "a" * 64, "start"))      # forged after the check
+    err = io.StringIO()
+    a = anchor.Anchorer(service, err=err, last=last)
+    assert a.last_seq == 0
+    assert a.record(w.conn, "start") is None                    # refused by the service ...
+    assert "older" in err.getvalue()                           # ... and reported, not silent
+    with pytest.raises(anchor.AnchorError, match="behind"):     # next start refuses
+        anchor.check_start(w.conn, service)

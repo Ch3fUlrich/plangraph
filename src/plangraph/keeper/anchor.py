@@ -35,6 +35,9 @@ _SOCKET_TIMEOUT_S = 1.0     # held under the server lock: keep it short
 RETRY_AFTER_S = 300         # after a failed write, the reaper skips anchoring this long
 
 
+_UNSET = object()
+
+
 class AnchorError(RuntimeError):
     """The DB contradicts the anchor log (rollback/fork) or an anchor cannot be written."""
 
@@ -134,8 +137,11 @@ def check_start(conn, cfg):
     path = _log_path(cfg)
     if cfg.get("anchor_socket") and not os.path.lexists(path):
         raise AnchorError(f"anchor log {path} missing (operator step A2 creates it): refused")
-    problems = verify(conn, path)
-    last = latest(path)
+    records, bad = read_records(path)          # ONE read: the log cannot change between checks
+    problems = _verify_records(conn, records, bad)
+    last = max(records, key=lambda r: r["seq"]) if records else None
+    if not records and bad:
+        raise AnchorError(f"anchor log {path} has {bad} malformed line(s) and no valid record: refused")
     for problem in problems:
         if problem["code"] == "anchor_ahead":
             raise AnchorError(f"keeper.db head_seq {problem['db_head_seq']} is behind the anchored "
@@ -149,6 +155,10 @@ def check_start(conn, cfg):
 def verify(conn, path):
     """Problems of the whole anchor log against the chain (empty = consistent)."""
     records, bad = read_records(path)
+    return _verify_records(conn, records, bad)
+
+
+def _verify_records(conn, records, bad):
     problems = [{"code": "anchor_malformed", "count": bad}] if bad else []
     seq_now, _ = _head(conn)
     prev = 0
@@ -181,9 +191,13 @@ def append_only(path):
 class Anchorer:
     """Keeper-side schedule: an anchor at start, after done transitions, hourly."""
 
-    def __init__(self, cfg, clock=time.time, err=sys.stderr):
+    def __init__(self, cfg, clock=time.time, err=sys.stderr, last=_UNSET):
+        """*last*: the newest record (or None) from check_start's single read (the daemon
+        passes it), so a record slipped in after the check is refused at the next write
+        instead of silently raising the floor."""
         self.cfg, self.clock, self.err = cfg, clock, err
-        last = latest(_log_path(cfg))
+        if last is _UNSET:
+            last = latest(_log_path(cfg))
         self.last_seq = last["seq"] if last else 0
         self.last_ts = self.clock() if last else 0.0
         self.error = None
