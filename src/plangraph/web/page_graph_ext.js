@@ -157,6 +157,20 @@
 
   PlanUI.GraphExt = GraphExt;
 
+  /* UI-MORE-NODE-EXPAND: a tap on "+N more" shows the next budget of that phase's tasks. */
+  GraphExt.register({ id: "more-node-expand", bind: function (ctx) {
+    var cy = ctx && ctx.cy;
+    if (!cy || typeof cy.on !== "function") return;
+    cy.on("tap", "node.more-node", function (evt) {
+      var d = evt.target.data(), ui = ctx.ui();
+      if (!d || !d.phId || d.phId === "__proto__" || !ui) return;
+      var cur = ui.get("moreShown") || {}, ms = {};
+      Object.keys(cur).forEach(function (p) { if (p !== "__proto__") ms[p] = cur[p]; });
+      ms[d.phId] = PlanUI.moreShown({ moreShown: cur }, d.phId) + PlanUI.nodeBudget(ui.get());
+      ui.set("moreShown", ms);
+    });
+  } });
+
   /* D-677 wait outlines. */
   GraphExt.register({ id: "operator-wait", styles: function (env) {
     var cv = (env && env.cssVar) || function () { return ""; };
