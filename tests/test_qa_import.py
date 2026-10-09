@@ -48,7 +48,7 @@ def test_parse_options_full():
     "Options: " + "; ".join(f"o{i}" for i in range(9)), "Options: " + "x" * 61,
     "Options: a = bad\x01; b", "Options: a = x. Deadline: tomorrow",
     "Options: a = x. Deadline: 2026-13-40", "Options: a = del\x7f",
-    "Options: a = x. deadline : tomorrow",
+    "Options: a = x. deadline : tomorrow", "review Options: old; Options: a = x; *b",
     "no block here"])
 def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
     rest, ch = mp.parse_options(bad)
@@ -235,3 +235,9 @@ def test_masked_choices_renames_a_credential_shaped_id():
 def test_deadline_keyword_is_case_insensitive():
     rest, ch = mp.parse_options("Options: a = x; *b. deadline: 2026-10-12")
     assert ch["deadline"] == "2026-10-12" and ch["default"] == "b"
+
+
+def test_empty_id_cell_is_unmatched():
+    text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
+            "| 1 |  | TASK | a | b | c |\n")
+    assert mp.unmatched_rows(text) == ["(empty id cell)"]

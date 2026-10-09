@@ -161,6 +161,8 @@ def parse_options(step, why=""):
     A malformed block (empty labels, duplicate ids, > 8 options) is left in the
     step text and yields no choices, so a typo never drops the operator's words.
     """
+    if len(re.findall(r"(?i)(?:^|\s)Options:", step or "")) > 1:
+        return step, None                     # two blocks: ambiguous, keep the operator's text
     match = _OPTIONS_RE.search(step or "")
     if not match:
         return step, None
@@ -220,7 +222,11 @@ def unmatched_rows(text):
         if fenced or not stripped.startswith("|") or line.startswith(("    ", "\t")):
             continue
         cells = [p.strip() for p in stripped.split("|")[1:]]
-        if len(cells) < 5 or set(cells[1]) <= set("-: ") or cells[1].lower() == "id":
+        if len(cells) < 5 or cells[1].lower() == "id" \
+                or all(set(c) <= set("-: ") for c in cells if c):   # header / separator row
+            continue
+        if not cells[1]:
+            out.append("(empty id cell)")
             continue
         ids = _TABLE_ID_RE.findall(cells[1])
         # exactly one id, optionally followed by one parenthesised variant tag ("OS-70 (3b)")
