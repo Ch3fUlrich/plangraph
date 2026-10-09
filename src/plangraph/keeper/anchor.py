@@ -77,6 +77,20 @@ def latest(path):
     return max(records, key=lambda r: r["seq"]) if records else None
 
 
+def _marker(path):
+    return f"{path}.seen"
+
+
+def _seen_seq(path) -> int:
+    """Interim file mode: the highest seq this keeper wrote (detection only, same user)."""
+    try:
+        with open(_marker(path), "rb") as handle:
+            value = int(handle.read(32).decode("ascii").strip() or 0)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return 0
+    return max(0, value)
+
+
 def _keeper_can_write(path) -> bool:
     """True when this process could rewrite/replace the production log (owner, mode or dir)."""
     try:
@@ -151,6 +165,10 @@ def check_start(conn, cfg):
         raise AnchorError(f"anchor log {path} or its directory is writable by the keeper's user: "
                           "the log must belong to pganchor (operator steps A1-A2): refused")
     records, bad = read_records(path)          # ONE read: the log cannot change between checks
+    if not cfg.get("anchor_socket"):           # interim file mode: a deleted/emptied log is noticed
+        seen = _seen_seq(path)
+        if seen and not any(r["seq"] >= seen for r in records):
+            raise AnchorError(f"anchor file {path} lost records (marker says seq {seen}): refused")
     problems = _verify_records(conn, records, bad)
     last = max(records, key=lambda r: r["seq"]) if records else None
     if not records and bad:
@@ -233,6 +251,14 @@ class Anchorer:
             return None
         self.error, self.retry_at = None, 0.0
         self.last_seq, self.last_ts = seq, self.clock()
+        if not self.cfg.get("anchor_socket"):
+            try:
+                tmp = f"{_marker(_log_path(self.cfg))}.tmp"
+                with open(tmp, "w", encoding="ascii") as handle:
+                    handle.write(str(seq))
+                os.replace(tmp, _marker(_log_path(self.cfg)))
+            except OSError:
+                pass
         return answer
 
     def tick(self, conn):

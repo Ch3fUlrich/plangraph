@@ -552,3 +552,55 @@ def test_an_uncommitted_head_is_never_anchored(w, tmp_path):
     finally:
         other.execute("ROLLBACK")
         other.close()
+
+
+# ------------------------------------------------------ round-4 seat findings
+def test_rewritten_chain_with_a_forged_newer_anchor_is_refused(w, tmp_path):
+    """Real rewrite: the event at the genuine anchor changes and a forged newer anchor matches the new tip."""
+    import sqlite3
+    seed(w, [("A", [])])
+    seq, head = _head(w)
+    log = tmp_path / "a.log"
+    anchord.append(log, rec(seq, head))                          # genuine anchor
+    raw = sqlite3.connect(w.path)
+    raw.execute("DROP TRIGGER IF EXISTS trg_events_append_only_update")
+    raw.execute("UPDATE events SET hash=? WHERE seq=?", ("e" * 64, seq))   # rewritten history
+    raw.execute("INSERT INTO events (ts, type, payload, prev_hash, hash) VALUES (?,?,?,?,?)",
+                ("2026-10-09T10:00:00Z", "closed_on_decision", "{}", "e" * 64, "d" * 64))
+    raw.commit()
+    raw.close()
+    anchord.append(log, rec(seq + 1, "d" * 64))                  # forged newer anchor = new tip
+    with pytest.raises(anchor.AnchorError, match="fork or rewrite"):
+        anchor.check_start(w.conn, {"anchor_file": str(log)})
+
+
+def test_socket_mode_refuses_a_writable_directory(w, tmp_path, monkeypatch):
+    """A read-only log in a directory the keeper can write is still replaceable: refused."""
+    seed(w, [("A", [])])
+    d = tmp_path / "pganchor"
+    d.mkdir()
+    log = d / "anchor.log"
+    log.write_text("")
+    log.chmod(0o444)
+    monkeypatch.setattr(anchor.os, "geteuid", lambda: 0xFFFF)     # the log is "not ours"
+    with pytest.raises(anchor.AnchorError, match="writable by the keeper"):
+        anchor.check_start(w.conn, {"anchor_socket": str(tmp_path / "s.sock"), "anchor_log": str(log)})
+
+
+def test_unit_files_have_each_key_directive_exactly_once():
+    """systemd: the LAST directive wins, so a later override must not exist (seat T-V4)."""
+    for name in ("pganchor.socket", "pganchor@.service"):
+        lines = [l.strip().split("=", 1)[0] for l in (ROOT / "deploy/pganchor" / name).read_text().splitlines()
+                 if "=" in l and not l.lstrip().startswith("#")]
+        dup = {k for k in lines if lines.count(k) > 1}
+        assert not dup, f"{name}: repeated directives {dup}"
+
+
+def test_file_mode_deleted_log_after_anchors_is_refused(w, tmp_path):
+    seed(w, [("A", [])])
+    cfg = file_cfg(tmp_path)
+    a = anchor.Anchorer(cfg, clock=lambda: 1000.0)
+    assert a.record(w.conn, "start") == "ok"
+    Path(cfg["anchor_file"]).unlink()
+    with pytest.raises(anchor.AnchorError, match="lost records"):
+        anchor.check_start(w.conn, cfg)
