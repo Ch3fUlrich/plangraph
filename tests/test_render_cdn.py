@@ -183,12 +183,14 @@ def test_js_and_css_are_data_driven():
         "page_table_url.js",
         "page_table_view.js",
         "page_qa.js",
+        "page_kg.js",
+        "page_kg_tab.js",
         "page_pages.js",
         "page_activity.js",
         "page_progress.js",
         "page_boot.js",
     )
-    assert render_mod.CSS_FILES == ("page.css", "page_base.css", "page_graph.css")
+    assert render_mod.CSS_FILES == ("page.css", "page_base.css", "page_graph.css", "page_kg.css")
     for name in (*render_mod.JS_FILES, *render_mod.CSS_FILES):
         assert (render_mod.ASSETS_DIR / name).is_file()
 

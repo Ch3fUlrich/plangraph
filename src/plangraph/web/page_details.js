@@ -179,6 +179,8 @@
     }
     body.appendChild(PP.el("h3", null, "Evidence"));
     body.appendChild(evidenceList(rec));
+    var kg = PlanUI.Knowledge && PlanUI.Knowledge.block(key);   // PG-KG-UI: hidden without an export
+    if (kg) body.appendChild(kg);
     body.appendChild(actions(rec));
   }
 
