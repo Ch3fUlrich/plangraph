@@ -191,3 +191,27 @@ def result_text(verb: str, result) -> str:
             return (f"reaped {len(result.get('expired') or [])} expired, "
                     f"{len(result.get('overdue') or [])} overdue")
     return str(result)
+
+
+def progress_text(data) -> str:
+    """PROGRESS-PANEL text: one block per project, one line per phase."""
+    lines = []
+    for p in (data or {}).get("projects") or []:
+        st = p.get("states") or {}
+        lines.append(
+            f"{p['project']} | {p['pct_count']}% ({p['done']}/{p['total']}) | "
+            f"{p['pct_hours']}% h, {p['hours_left']} h left | "
+            f"open {st.get('open', 0)} claimed {st.get('claimed', 0)} "
+            f"in_review {st.get('in_review', 0)} | operator {p['operator_open']} | "
+            f"updated {p.get('last_update') or '-'}")
+        for ph in p.get("phases") or []:
+            lines.append(f"  {ph['phase']} | {ph['pct_count']}% ({ph['done']}/{ph['total']})"
+                         f" | {ph['hours_left']} h left")
+        for r in p.get("running") or []:
+            lines.append(f"  running {r['key']} | {r.get('owner') or '-'} | {r['state']}"
+                         f" | model {r.get('model') or 'unknown'}")
+    total = (data or {}).get("total")
+    if total:
+        lines.append(f"total | {total['pct_count']}% ({total['done']}/{total['total']}) | "
+                     f"{total['hours_left']} h left")
+    return "\n".join(lines) or "no items"

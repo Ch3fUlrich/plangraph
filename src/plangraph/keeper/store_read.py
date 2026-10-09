@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 from .. import views
+from ..views_progress import progress
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS
@@ -75,6 +76,11 @@ class ReadMixin:
         return self._run(principal, "percent", None,
                          lambda now: views.percent_done(self._all_items(), by=by,
                                                         project=project))
+
+    def progress(self, principal, project=None):
+        """PROGRESS-PANEL: per-project / per-phase progress of the snapshot rows."""
+        return self._run(principal, "progress", None,
+                         lambda now: progress(self._snapshot(now)["items"], project=project))
 
     def whoami(self, principal):
         return self._run(principal, "whoami", None,
@@ -232,7 +238,8 @@ class ReadMixin:
                 "items": out,
                 "aliases": {a["old"]: a["new"] for a in self._aliases()},
                 "activity": self._activity(now),
-                "decision_text": self._decision_text(items, now)}
+                "decision_text": self._decision_text(items, now),
+                "progress": progress(out)}   # PROGRESS-PANEL: the page's static panel
 
     def _activity(self, now):
         """Compact ``events`` feed for the last 31 days, oldest first."""
