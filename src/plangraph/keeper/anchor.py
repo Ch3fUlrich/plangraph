@@ -59,8 +59,11 @@ def read_records(path):
         return [], 0
     except OSError as exc:                    # symlink (ELOOP), permissions: fail closed
         raise AnchorError(f"anchor log unreadable: {type(exc).__name__}") from exc
-    with os.fdopen(fd, "rb") as handle:
-        data = handle.read()
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            data = handle.read()
+    except OSError as exc:                    # a directory, an I/O error: fail closed, never crash
+        raise AnchorError(f"anchor log unreadable: {type(exc).__name__}") from exc
     records, bad = [], 0
     for raw in data.split(b"\n"):
         if not raw.strip():

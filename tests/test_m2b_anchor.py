@@ -662,3 +662,12 @@ def test_hourly_tick_without_new_events_writes_nothing(w, tmp_path):
     clock[0] += 2 * anchor.HOURLY_S
     assert a.tick(w.conn) is None
     assert len(anchor.read_records(cfg["anchor_file"])[0]) == 1
+
+
+def test_anchor_log_that_is_a_directory_fails_closed(w, tmp_path, capsys):
+    """Round-6 seat S-V5: a directory as the log raises AnchorError (daemon exits 1), never crashes."""
+    seed(w, [("A", [])])
+    d = tmp_path / "logdir"
+    d.mkdir()
+    with pytest.raises(anchor.AnchorError, match="unreadable"):
+        anchor.check_start(w.conn, {"anchor_file": str(d)})
