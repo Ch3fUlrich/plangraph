@@ -48,6 +48,7 @@ def test_parse_options_full():
     "Options: " + "; ".join(f"o{i}" for i in range(9)), "Options: " + "x" * 61,
     "Options: a = bad\x01; b", "Options: a = x. Deadline: tomorrow",
     "Options: a = x. Deadline: 2026-13-40", "Options: a = del\x7f",
+    "Options: a = x. deadline : tomorrow",
     "no block here"])
 def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
     rest, ch = mp.parse_options(bad)
@@ -229,3 +230,8 @@ def test_masked_choices_renames_a_credential_shaped_id():
                                  "default": "x/abcdefgh", "deadline": None, "blocks": None}, plan)
     assert out["options"][0]["id"] == "masked-1" and out["default"] == "masked-1"
     assert "hunter2" not in json.dumps(out)
+
+
+def test_deadline_keyword_is_case_insensitive():
+    rest, ch = mp.parse_options("Options: a = x; *b. deadline: 2026-10-12")
+    assert ch["deadline"] == "2026-10-12" and ch["default"] == "b"

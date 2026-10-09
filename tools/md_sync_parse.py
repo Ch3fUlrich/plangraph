@@ -147,7 +147,7 @@ def _table_rows(text):
 #: QA-IMPORT: ``Options: a = consequence; *b = consequence. Deadline: 2026-10-12`` at the end
 #: of the "Exact step" cell (``*`` marks the default; ``;`` separates, a table cell cannot hold ``|``).
 _OPTIONS_RE = re.compile(r"(?:^|\s)Options:\s*(?P<opts>.+?)"
-                         r"(?:\.?\s*Deadline:\s*(?P<deadline>[0-9]{4}-[0-9]{2}-[0-9]{2}))?\.?\s*$")
+                         r"(?:\.?\s*Deadline:\s*(?P<deadline>[0-9]{4}-[0-9]{2}-[0-9]{2}))?\.?\s*$", re.IGNORECASE)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -164,7 +164,7 @@ def parse_options(step, why=""):
     match = _OPTIONS_RE.search(step or "")
     if not match:
         return step, None
-    if re.search(r"Deadline:", match.group("opts")):   # a Deadline that did not parse: keep the text
+    if re.search(r"deadline\s*:", match.group("opts"), re.IGNORECASE):   # a Deadline that did not parse: keep the text
         return step, None
     if match.group("deadline"):
         from datetime import date
