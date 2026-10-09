@@ -36,6 +36,7 @@ HANDLERS = {
     "verdict": cli_verbs.cmd_verdict,
     "cancel": cli_verbs.cmd_cancel,
     "waive": cli_verbs.cmd_waive,
+    "withdraw": cli_verbs.cmd_withdraw,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
@@ -128,6 +129,10 @@ def _add_writes(sub):
     waive = _p(sub, "waive", help="router: waive the second reviewer family")
     waive.add_argument("key")
     waive.add_argument("decision_id", metavar="D-NNN")
+
+    withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review")
+    withdraw.add_argument("key")
+    withdraw.add_argument("decision_id", metavar="D-NNN")
 
     close = _p(sub, "close", help="router: close a tier-none item on a decision batch")
     close.add_argument("key")

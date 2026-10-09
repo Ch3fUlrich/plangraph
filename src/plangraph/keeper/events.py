@@ -195,6 +195,10 @@ def fold(events):
                 item["lease_until"] = None
             else:
                 item["lease_until"] = payload.get("lease_until")
+        elif kind == "review_withdrawn":   # PG-WITHDRAW-REVIEW: back to the claimant, fresh lease
+            item["state"] = "claimed"
+            item["reviewer"] = None
+            item["lease_until"] = payload.get("lease_until")
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")

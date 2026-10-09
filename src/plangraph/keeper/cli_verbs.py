@@ -345,6 +345,12 @@ def cmd_waive(args, session):
                  lambda r: f"{r.get('key')} waiver {r.get('review_waiver')}")
 
 
+def cmd_withdraw(args, session):
+    return write(session, "withdraw_review",
+                 {"key": args.key, "decision_id": args.decision_id},
+                 lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
+
+
 def cmd_close(args, session):
     return write(session, "close_on_decision",
                  {"key": args.key, "batch_ref": args.batch},

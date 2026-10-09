@@ -258,3 +258,12 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
 - Hosts without a timer (prox, D-844: the Proxmox host runs no daemons/timers) pull ON DEMAND; the L1 there does:
   1. at the START of every plan-touching task: `PG_CONFIG=~/.config/plangraph/reader.json PYTHONPATH=src python3 -m plangraph.keeper.cli sync pull`
   2. AGAIN right after its plan update (claim, evidence, submit, edit, batch) went through, so the local copy shows the keeper's result.
+
+## Withdraw from review (PG-WITHDRAW-REVIEW, D-867)
+
+`withdraw_review(key, decision_id)` (router only; `pg withdraw KEY D-NNN`, MCP `withdraw_review`) moves an
+`in_review` item back to `claimed` (same epoch, fresh default lease, reviewer cleared) with one hash-chained
+`review_withdrawn` event and revokes the item's live run tokens. The decision must name the key in `Closes:`, and
+the item must be decision-closable: its evidence kinds include `decision`, or its done-criteria ask for no
+commit/merge/CI/seats. It never records a verdict; the claimant then attaches decision evidence and the router
+closes it on the decision.
