@@ -1,0 +1,35 @@
+# D-783: server HEAL-GUARD-RESIDUALS (after HEAL-FIX-POLICY) under PH-HEAL-LIVE.
+batch: 2026-10-09-d783-heal-guard
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 4bd661c27e2e783abffe964be7e273047e925705f0002ca0e74b13e44441bae1
+ops:
+- op: create
+  item:
+  - project: server
+    id: HEAL-GUARD-RESIDUALS
+    kind: lane
+    track: HEAL
+    owner: server-L1-main
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 2
+    estimate_src: default
+    priority: 4
+    depends_on:
+    - server:HEAL-FIX-POLICY
+    title: 'fix-access-guard residuals: dirty-worktree check, dns/ufw/oidc/ldap globs + terms, catch-all exit 2, tier-c regex anchor'
+    done_criteria: 'scripts/fix-access-guard.py: dirty-worktree check for any head ref resolving to HEAD; *dns*/*ufw*/*oidc*/*ldap* path globs + oidc/ldap content terms; catch-all -> exit 2 (never exit
+      1); tier-c regex \Z anchor; a test for each; 2 non-Claude seats (distinct families) on the final head; routing ACCEPT; merged'
+    description: D-783 via server-L1 (access guard follow-ups after HEAL-FIX-POLICY @b52d4d3a).
+- op: edit
+  key: server:PH-HEAL-LIVE
+  fields:
+    depends_on:
+    - server:GW-HEAL-DEPLOY
+    - server:HEAL-FIX-POLICY
+    - server:HEAL-GUARD-RESIDUALS
+    - server:HEAL-RESCORE
+    - server:HEAL-ROUTING
+    - server:HEAL-RUNNER-MERGE
