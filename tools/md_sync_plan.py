@@ -229,7 +229,11 @@ def _masked_choices(choices, plan):
                 entry[name] = text
         if entry.get("label") != opt.get("label") or credential_guard.find_shapes(opt["id"]):
             # the id is a slug of the label: a masked label means a secret-derived id
-            entry["id"] = f"masked-{len(out['options']) + 1}"
+            taken = {o["id"] for o in choices.get("options") or []} | {o["id"] for o in out["options"]}
+            n = 1
+            while f"masked-{n}" in taken:
+                n += 1
+            entry["id"] = f"masked-{n}"
             if out["default"] == opt["id"]:
                 out["default"] = entry["id"]
         out["options"].append(entry)

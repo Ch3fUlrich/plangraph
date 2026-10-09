@@ -241,3 +241,13 @@ def test_empty_id_cell_is_unmatched():
     text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
             "| 1 |  | TASK | a | b | c |\n")
     assert mp.unmatched_rows(text) == ["(empty id cell)"]
+
+
+def test_masked_id_never_collides_with_a_real_id():
+    import md_sync_plan as mplan
+    plan = mplan.Plan()
+    secret = "log" + "in admin/hunter2secret"
+    out = mplan._masked_choices({"options": [{"id": "x", "label": secret}, {"id": "masked-1", "label": "masked 1"}],
+                                 "default": "x", "deadline": None, "blocks": None}, plan)
+    ids = [o["id"] for o in out["options"]]
+    assert len(ids) == len(set(ids)) and out["default"] == ids[0] != "masked-1"
