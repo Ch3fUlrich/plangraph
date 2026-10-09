@@ -382,3 +382,21 @@ def test_upgrade_creates_table_on_old_db(tmp_path):
     with pytest.raises(sqlite3.DatabaseError):
         conn.execute("CREATE TABLE evil(x)")
     conn.close()
+
+
+def test_token_never_on_stdout_stderr_or_logs(w, capfd, caplog):
+    """No store operation prints or logs the plaintext token (only the CLI door prints it, by design)."""
+    import logging
+    caplog.set_level(logging.DEBUG)
+    epoch, tok, p = claimed_with_token(w)
+    w.store.heartbeat(p, "demo:A", epoch)
+    w.store.add_evidence(p, "demo:A", epoch, "decision", {"id": "D-1"})
+    w.store.submit(p, "demo:A", epoch)
+    code(rp, w, tok)                                   # revoked: refused, message must not echo it
+    out, err = capfd.readouterr()
+    assert tok not in out and tok not in err
+    assert tok not in caplog.text
+    try:
+        rp(w, tok)
+    except Refused as exc:
+        assert tok not in str(exc)
