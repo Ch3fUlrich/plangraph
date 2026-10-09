@@ -119,3 +119,21 @@ def test_second_run_is_empty():
                   description=entries[i].description, wait=entries[i].wait)
              for i in entries]
     assert build(questions(), items).ops == []
+
+
+def test_kind_column_sets_wait_and_keeps_the_other_cells():
+    """QUESTIONS.md 2026-10-09: ``| Prio | ID | Kind | why | step | where |``."""
+    text = ("| Prio | ID | Kind | Why | Step | Where |\n|---|---|---|---|---|---|\n"
+            "| 1 | Q-A | TASK | Restart the box | do it | host |\n"
+            "| 2 | Q-B | ANSWER | Pick a name? | reply | chat |\n"
+            "| 3 | OS-9 | answer | Choose | x | y |\n")
+    got = {q.id: (q.wait, q.title, q.description) for q in mp.parse_questions(text)}
+    assert got == {"Q-A": ("task", "Q: Restart the box", "do it — host"),
+                   "Q-B": ("answer", "Q: Pick a name?", "reply — chat"),
+                   "OS-9": ("answer", "OP: Choose", "x — y")}
+
+
+def test_old_five_column_table_still_classifies_by_rule():
+    text = "| 1 | OS-5 | Restart the box | do it | host |\n"
+    (q,) = mp.parse_questions(text)
+    assert (q.wait, q.title, q.description) == ("task", "OP: Restart the box", "do it — host")

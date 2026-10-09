@@ -86,11 +86,14 @@ def _classify_wait(ident, kind, title, raw):
     return "task"
 
 
+#: the explicit Kind cell of a priority-table row -> wait
+_KIND_CELLS = {"TASK": "task", "ANSWER": "answer"}
+
 _TABLE_ID_RE = re.compile(r"(?i)(OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)")
 
 
 def _table_rows(text):
-    """``(heading, id, why, step, where)`` per priority-table data row.
+    """``(heading, id, why, step, where, kind)`` per priority-table data row.
 
     Shape: ``| <anything> | OS-123 | <why> | <exact step> | <where> |``.
     Rows before the table header count too; a header/separator row has no
@@ -123,7 +126,13 @@ def _table_rows(text):
         ids = _TABLE_ID_RE.findall(cells[1])
         if len(ids) != 1:
             continue
-        out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4]))
+        # Optional Kind column (QUESTIONS.md since 2026-10-09): ``| Prio | ID | Kind | why | step | where |``.
+        kind = cells[2].strip().upper() if cells[2].strip().upper() in _KIND_CELLS else None
+        if kind is not None:
+            cells = cells[:2] + cells[3:]
+            if len(cells) < 5:
+                cells += [""] * (5 - len(cells))
+        out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4], kind))
     return out
 
 
@@ -142,7 +151,7 @@ def parse_questions(text):
     won = {entry.id for entry in bullets}
     tables = []
     seen_table = set()
-    for heading, ident, why, step, where in _table_rows(text):
+    for heading, ident, why, step, where, kind_cell in _table_rows(text):
         if ident in won or ident in seen_table:
             continue
         seen_table.add(ident)
@@ -155,8 +164,9 @@ def parse_questions(text):
             description = f"{step} — {where}"
         else:
             description = step or where
-        tables.append(Question(ident, kind, full_title, description, heading,
-                               _classify_wait(ident, kind, full_title, why)))
+        wait = (_KIND_CELLS[kind_cell] if kind_cell
+                else _classify_wait(ident, kind, full_title, why))
+        tables.append(Question(ident, kind, full_title, description, heading, wait))
     return tables + bullets
 
 
