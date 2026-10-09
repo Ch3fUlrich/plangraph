@@ -12,15 +12,15 @@
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
 
-  var PANELS = { graph: "panel-graph", table: "panel-list", qa: "panel-qa", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", settings: "panel-settings" };
-  var TABS = { graph: "tab-graph", table: "tab-list", qa: "tab-qa", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", settings: "tab-settings" };
+  var PANELS = { graph: "panel-graph", table: "panel-list", qa: "panel-qa", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", knowledge: "panel-knowledge", settings: "panel-settings" };
+  var TABS = { graph: "tab-graph", table: "tab-list", qa: "tab-qa", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", knowledge: "tab-knowledge", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
 
   function $(id) { return document.getElementById(id); }
 
   function show(name) {
-    if (!PANELS[name]) name = "graph";
+    if (!PANELS[name] || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
     cur = name;
     var PP = global.PlanPage;
     if (name === "graph" || name === "table") {
@@ -41,6 +41,7 @@
     if (name === "graph" && PP && PP.state && PP.state.cy) { try { PP.state.cy.resize(); } catch (e) { /* not ready */ } }
     if (name === "activity" && PlanUI.ActivityPage && PlanUI.ActivityPage.render) PlanUI.ActivityPage.render();
     if (name === "progress" && PlanUI.ProgressPage && PlanUI.ProgressPage.render) PlanUI.ProgressPage.render();
+    if (name === "knowledge" && PlanUI.KnowledgePage) PlanUI.KnowledgePage.render();
     if (PlanUI.Pages.onChange) PlanUI.Pages.onChange(name);
   }
 

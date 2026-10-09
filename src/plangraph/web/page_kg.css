@@ -1,0 +1,12 @@
+/* PG-KG-UI: Knowledge block (item details) and Knowledge tab. */
+.kg-block { margin-top: 12px; }
+.kg-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.kg-node { border: 1px solid var(--line, #8884); border-radius: 6px; padding: 6px 8px; overflow-wrap: anywhere; }
+.kg-type { font-size: 11px; text-transform: uppercase; opacity: .7; margin-right: 6px; }
+.kg-title { margin-right: 6px; }
+.kg-status { font-size: 12px; border: 1px solid currentColor; border-radius: 10px; padding: 0 6px; opacity: .8; }
+.kg-superseded { margin-top: 4px; font-size: 13px; text-decoration: none; opacity: .85; }
+.kg-dangling, .kg-unavailable { font-size: 13px; opacity: .8; border-style: dashed; }
+.kg-excerpt { margin: 4px 0 0; font-size: 13px; opacity: .85; }
+.kg-items { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px; }
+.kg-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
