@@ -20,7 +20,10 @@ def evidence_ref(args) -> dict:
     if kind == "run-record":
         return {"run_id": args.run}
     if kind == "semaphore-task":
-        return {"task_id": args.task}
+        ref = {"task_id": args.task, "project_id": getattr(args, "project", None)}
+        if getattr(args, "template", None):
+            ref["template"] = args.template
+        return ref
     if kind == "decision":
         return {"id": args.decision}
     ref = {}

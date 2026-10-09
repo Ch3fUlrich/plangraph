@@ -32,7 +32,7 @@ from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_runs import RunRecordAdapter
-from .evidence_semaphore import SemaphoreAdapter, SemaphoreError
+from .evidence_semaphore import SemaphoreAdapter, SemaphoreError, positive_int
 from .item_fixes import ErrorRecordVerifier
 from .evidence_types import (
     DEFAULT_SKEW_S,
@@ -113,22 +113,6 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
             return result[0], result[1]
     single = git.commit_time(repo, commit)
     return single, single
-
-
-def _template_matches(data: dict, expected: Any) -> bool:
-    wanted = str(expected)
-    candidates: list[Any] = []
-    for key in ("template_id", "template_name"):
-        if key in data:
-            candidates.append(data[key])
-    template = data.get("template")
-    if isinstance(template, dict):
-        for key in ("id", "name"):
-            if key in template:
-                candidates.append(template[key])
-    elif template is not None:
-        candidates.append(template)
-    return any(str(candidate) == wanted for candidate in candidates)
 
 
 # --------------------------------------------------------------------------- #
@@ -285,14 +269,27 @@ class SemaphoreTaskVerifier:
     @_guarded
     def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
         ref = _ref(ref)
-        task_id = ref.get("task_id")
-        if task_id is None or task_id == "":
+        raw_task, raw_project = ref.get("task_id"), ref.get("project_id")
+        if raw_task is None or raw_task == "":
             return _fail("semaphore-task requires a 'task_id'", ref)
+        if raw_project is None or raw_project == "":
+            return _fail("semaphore-task requires a 'project_id'", ref)
+        task_id, project_id = positive_int(raw_task), positive_int(raw_project)
+        if task_id is None:
+            return _fail("semaphore-task 'task_id' must be a positive integer", ref)
+        if project_id is None:
+            return _fail("semaphore-task 'project_id' must be a positive integer", ref)
+        template = ref.get("template")
+        if template is None or template == "":
+            return _fail("semaphore-task requires a 'template' (template id)", ref)
+        want_template = positive_int(template)
+        if want_template is None:
+            return _fail("template name check unsupported; pass the template id", ref)
         if ctx.semaphore is None:
             return _fail("no semaphore adapter available", ref)
 
         try:
-            data = ctx.semaphore.get(task_id)
+            data = ctx.semaphore.get(task_id, project_id)
         except SemaphoreError as exc:
             return _fail(f"semaphore fetch failed ({type(exc).__name__})", ref)
         except Exception as exc:  # noqa: BLE001 - never surface the raw message
@@ -300,12 +297,18 @@ class SemaphoreTaskVerifier:
         if not isinstance(data, dict):
             return _fail(f"semaphore task {task_id} returned no task object", ref)
 
+        # Both ids are required in the answer: a reply that omits them is not
+        # proof about *this* task (fail closed, seat finding).
+        if positive_int(data.get("id")) != task_id:
+            return _fail(f"semaphore response is for a different task than {task_id}", ref)
+        if positive_int(data.get("project_id")) != project_id:
+            return _fail(f"semaphore task {task_id} belongs to a different project", ref)
+
         status = data.get("status", data.get("state"))
         if str(status) != "success":
             return _fail(f"semaphore task {task_id} is not success (status={status!r})", ref)
 
-        template = ref.get("template")
-        if template is not None and not _template_matches(data, template):
+        if positive_int(data.get("template_id")) != want_template:
             return _fail(f"semaphore task {task_id} used a different template", ref)
         return Result(True, f"semaphore task {task_id} succeeded", ref)
 

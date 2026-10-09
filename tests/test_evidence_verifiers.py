@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from evidence_fakes import ITEM, FakeDecisions, FakeRuns, FakeSemaphore, make_ctx, verify
 from plangraph.keeper import evidence as ev
 
@@ -65,43 +66,95 @@ def test_run_record_missing_exit_file():
 # semaphore-task
 # --------------------------------------------------------------------------- #
 
+REF = {"task_id": 5, "project_id": 1, "template": 7}
+
+
+def _sem(**data):
+    base = {"status": "success", "id": 5, "project_id": 1, "template_id": 7}
+    base.update(data)
+    return make_ctx(semaphore=FakeSemaphore(base))
+
+
 def test_semaphore_pass():
-    assert verify("semaphore-task", {"task_id": "t-1"}, make_ctx()).ok is True
+    ctx = make_ctx()
+    assert verify("semaphore-task", REF, ctx).ok is True
+    assert ctx.semaphore.calls == [(5, 1)]
 
 
-def test_semaphore_pass_template_id():
-    ctx = make_ctx(semaphore=FakeSemaphore({"status": "success", "template": {"id": 7, "name": "x"}}))
-    assert verify("semaphore-task", {"task_id": "t-1", "template": 7}, ctx).ok is True
+def test_semaphore_digit_strings_accepted():
+    ctx = make_ctx()
+    assert verify("semaphore-task", {"task_id": "5", "project_id": "1", "template": "7"}, ctx).ok is True
+    assert ctx.semaphore.calls == [(5, 1)]
 
 
-def test_semaphore_pass_template_name():
-    ctx = make_ctx(semaphore=FakeSemaphore({"status": "success", "template": {"id": 7, "name": "deploy"}}))
-    assert verify("semaphore-task", {"task_id": "t-1", "template": "deploy"}, ctx).ok is True
+def test_semaphore_template_id_match_and_mismatch():
+    assert verify("semaphore-task", REF, _sem()).ok is True
+    assert verify("semaphore-task", {**REF, "template": "7"}, _sem()).ok is True
+    res = verify("semaphore-task", {**REF, "template": 8}, _sem())
+    assert res.ok is False and "template" in res.detail
+
+
+def test_semaphore_template_name_refused():
+    res = verify("semaphore-task", {**REF, "template": "deploy"}, _sem())
+    assert res.ok is False
+    assert "template name check unsupported; pass the template id" in res.detail
 
 
 def test_semaphore_not_success():
-    ctx = make_ctx(semaphore=FakeSemaphore({"status": "failed"}))
-    res = verify("semaphore-task", {"task_id": "t-1"}, ctx)
+    res = verify("semaphore-task", REF, _sem(status="failed"))
     assert res.ok is False
-    assert "failed" in res.detail.lower() or "status" in res.detail.lower()
+    assert "failed" in res.detail
 
 
-def test_semaphore_wrong_template():
-    ctx = make_ctx(semaphore=FakeSemaphore({"status": "success", "template": {"id": 7, "name": "x"}}))
-    res = verify("semaphore-task", {"task_id": "t-1", "template": "other"}, ctx)
+def test_semaphore_id_and_project_mismatch():
+    assert verify("semaphore-task", REF, _sem(id=6)).ok is False
+    assert verify("semaphore-task", REF, _sem(project_id=2)).ok is False
+
+
+@pytest.mark.parametrize("drop", ["id", "project_id", "template_id"])
+def test_semaphore_reply_missing_an_id_fails_closed(drop):
+    data = {"status": "success", "id": 5, "project_id": 1, "template_id": 7}
+    del data[drop]
+    assert verify("semaphore-task", REF, make_ctx(semaphore=FakeSemaphore(data))).ok is False
+
+
+def test_semaphore_positive_int_bounds():
+    from plangraph.keeper.evidence_semaphore import positive_int
+    assert positive_int("9223372036854775807") == 2**63 - 1
+    assert positive_int(2**63) is None
+    assert positive_int("9" * 20) is None
+    assert positive_int("9" * 5000) is None
+    assert positive_int(" 5") is None
+
+
+@pytest.mark.parametrize("ref", [
+    {"task_id": 5, "template": 7}, {"task_id": 5, "template": 7, "project_id": ""},
+    {"task_id": 5, "project_id": "abc"}, {"task_id": 5, "project_id": 0},
+    {"task_id": 5, "project_id": -1}, {"task_id": 5, "project_id": True},
+    {"task_id": "t-1", "project_id": 1}, {"task_id": 0, "project_id": 1},
+    {"task_id": "5/../x", "project_id": 1},
+])
+def test_semaphore_bad_ids_fail_without_fetch(ref):
+    ctx = make_ctx()
+    res = verify("semaphore-task", ref, ctx)
     assert res.ok is False
-    assert "template" in res.detail.lower()
+    assert not hasattr(ctx.semaphore, "calls")
+
+
+def test_semaphore_missing_project_id_message():
+    res = verify("semaphore-task", {"task_id": 5}, make_ctx())
+    assert "semaphore-task requires a 'project_id'" in res.detail
 
 
 def test_semaphore_fetch_error_is_sanitised():
     ctx = make_ctx(semaphore=FakeSemaphore(error=RuntimeError("SUPERSECRET")))
-    res = verify("semaphore-task", {"task_id": "t-1"}, ctx)
+    res = verify("semaphore-task", REF, ctx)
     assert res.ok is False
     assert "SUPERSECRET" not in res.detail
 
 
 def test_semaphore_missing_task_id():
-    res = verify("semaphore-task", {}, make_ctx())
+    res = verify("semaphore-task", {"project_id": 1}, make_ctx())
     assert res.ok is False
     assert "task_id" in res.detail
 
@@ -160,3 +213,14 @@ def test_default_context_accepts_object_config():
     config = SimpleNamespace(repos={}, ci={}, runs_dir=None, decisions_file=None)
     ctx = ev.default_context(config, now=1.0)
     assert ctx.git.repo_path("anything") is None
+
+
+def test_semaphore_template_required():
+    res = verify("semaphore-task", {"task_id": 5, "project_id": 1}, make_ctx())
+    assert res.ok is False
+    assert "semaphore-task requires a 'template' (template id)" in res.detail
+
+
+def test_semaphore_response_without_template_id_fails():
+    ctx = make_ctx(semaphore=FakeSemaphore({"status": "success", "id": 5, "project_id": 1}))
+    assert verify("semaphore-task", REF, ctx).ok is False

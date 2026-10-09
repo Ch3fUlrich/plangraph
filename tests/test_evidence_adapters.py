@@ -108,6 +108,7 @@ def test_semaphore_real_fetcher_does_not_leak_token(monkeypatch, tmp_path):
     token_file.write_text("SUPERSECRETTOKEN", encoding="utf-8")
     monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
 
     seen: dict = {}
 
@@ -120,11 +121,11 @@ def test_semaphore_real_fetcher_does_not_leak_token(monkeypatch, tmp_path):
     monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
     adapter = SemaphoreAdapter()
     with pytest.raises(SemaphoreError) as excinfo:
-        adapter.get("task-1")
+        adapter.get(5, 1)
     assert "SUPERSECRETTOKEN" not in str(excinfo.value)
     assert "SUPERSECRETTOKEN" not in repr(adapter)
     assert seen["url"].startswith("https://semaphore.invalid")
-    assert "task-1" in seen["url"]
+    assert seen["url"] == "https://semaphore.invalid/api/project/1/tasks/5"
     assert seen["headers"].get("authorization") == "Bearer SUPERSECRETTOKEN"
 
 
@@ -132,14 +133,15 @@ def test_semaphore_missing_env_raises_sanitised(monkeypatch):
     monkeypatch.delenv("PG_SEMAPHORE_URL", raising=False)
     monkeypatch.delenv("PG_SEMAPHORE_TOKEN_FILE", raising=False)
     with pytest.raises(SemaphoreError):
-        SemaphoreAdapter().get("task-1")
+        SemaphoreAdapter().get(5, 1)
 
 
 def test_semaphore_missing_token_file_raises_sanitised(monkeypatch, tmp_path):
     monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(tmp_path / "missing"))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
     with pytest.raises(SemaphoreError):
-        SemaphoreAdapter().get("task-1")
+        SemaphoreAdapter().get(5, 1)
 
 
 def test_semaphore_parses_json(monkeypatch, tmp_path):
@@ -147,6 +149,7 @@ def test_semaphore_parses_json(monkeypatch, tmp_path):
     token_file.write_text("t", encoding="utf-8")
     monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid/")
     monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
 
     class Resp:
         def __enter__(self):
@@ -163,7 +166,7 @@ def test_semaphore_parses_json(monkeypatch, tmp_path):
             return Resp()
 
     monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
-    assert SemaphoreAdapter().get("task-1") == {"status": "success"}
+    assert SemaphoreAdapter().get(5, 1) == {"status": "success"}
 
 
 # --------------------------------------------------------------------------- #
@@ -207,3 +210,82 @@ def test_parse_trailers_handles_blank_and_missing():
     assert parsed["Plan-Item"] == "routing:X"
     assert parsed["Co-authored-by"] == "A <a@b>"
     assert parse_trailers("") == {}
+
+
+def test_semaphore_adapter_quotes_ids_and_rejects_non_integers(monkeypatch, tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text("TOK", encoding="utf-8")
+    monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
+    monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", "1")
+    seen = []
+
+    class Opener:
+        def open(self, req, timeout=None):
+            seen.append(req.full_url)
+            raise urllib.error.URLError("x")
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
+    for bad in (("a/b", 1), (5, "../x"), (0, 1), (5, -2), (5, True)):
+        with pytest.raises(SemaphoreError):
+            SemaphoreAdapter().get(*bad)
+    assert seen == []
+    with pytest.raises(SemaphoreError):
+        SemaphoreAdapter().get("5", "1")
+    assert seen == ["https://semaphore.invalid/api/project/1/tasks/5"]
+
+
+def _env(monkeypatch, tmp_path, projects):
+    token_file = tmp_path / "token"
+    token_file.write_text("TOK", encoding="utf-8")
+    monkeypatch.setenv("PG_SEMAPHORE_URL", "https://semaphore.invalid")
+    monkeypatch.setenv("PG_SEMAPHORE_TOKEN_FILE", str(token_file))
+    if projects is None:
+        monkeypatch.delenv("PG_SEMAPHORE_PROJECTS", raising=False)
+    else:
+        monkeypatch.setenv("PG_SEMAPHORE_PROJECTS", projects)
+    seen = []
+
+    class Opener:
+        def open(self, req, timeout=None):
+            seen.append(req.full_url)
+            raise urllib.error.URLError("x")
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
+    return seen
+
+
+@pytest.mark.parametrize("value", [None, "", "  ", "abc", "1,x", "0", "1,,2", "-1", "9" * 5000])
+def test_semaphore_allowlist_fails_closed(monkeypatch, tmp_path, value):
+    seen = _env(monkeypatch, tmp_path, value)
+    with pytest.raises(SemaphoreError, match="semaphore project allowlist not configured"):
+        SemaphoreAdapter().get(5, 1)
+    assert seen == []
+
+
+def test_semaphore_project_not_in_allowlist(monkeypatch, tmp_path):
+    seen = _env(monkeypatch, tmp_path, "1, 3")
+    with pytest.raises(SemaphoreError, match="project not allowed"):
+        SemaphoreAdapter().get(5, 2)
+    assert seen == []
+    with pytest.raises(SemaphoreError, match="transport|request failed"):
+        SemaphoreAdapter().get(5, 3)
+    assert seen == ["https://semaphore.invalid/api/project/3/tasks/5"]
+
+
+@pytest.mark.parametrize("code,msg", [
+    (401, "semaphore auth refused (401)"), (403, "semaphore auth refused (403)"),
+    (500, "semaphore request failed (HTTP 500)"), (404, "semaphore request failed (HTTP 404)"),
+])
+def test_semaphore_http_errors_distinct_and_token_free(monkeypatch, tmp_path, code, msg):
+    _env(monkeypatch, tmp_path, "1")
+
+    class Opener:
+        def open(self, req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, code, "TOK reason", {"x": "TOK"}, None)
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *h: Opener())
+    with pytest.raises(SemaphoreError) as excinfo:
+        SemaphoreAdapter().get(5, 1)
+    assert str(excinfo.value) == msg
+    assert "TOK" not in str(excinfo.value)
