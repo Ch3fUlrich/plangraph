@@ -12,7 +12,7 @@ never renew and must keep their minted expiry exactly.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 __all__ = ["fold_tokens", "verify_tokens"]
 
@@ -38,6 +38,11 @@ def fold_tokens(events):
     for ev in events:
         key, kind, ts = ev.get("key"), ev.get("type"), ev.get("ts")
         payload = ev.get("payload") or {}
+        if kind == "outage_recorded":            # M2B-OUTBOX: live tokens pushed out by the gap
+            for tid in payload.get("tokens") or []:
+                if tid in tokens:
+                    tokens[tid]["grace_s"] += int(payload.get("gap_s") or 0)
+            continue
         if key is None:
             continue
         if kind == "token_minted":
@@ -50,7 +55,7 @@ def fold_tokens(events):
                                                "epoch": epoch, "revoked": False,
                                                "minted_at": ts, "revoked_at": None,
                                                "token_sha256": payload.get("token_sha256"),
-                                               "expires_at": payload.get("expires_at")}
+                                               "expires_at": payload.get("expires_at"), "grace_s": 0}
         elif kind in REVOKE_ALL:
             revoke(lambda t: t["key"] == key, ts)
         elif kind == "submitted":
@@ -105,12 +110,17 @@ def verify_tokens(conn, events):
         if row["created_at"] != want["minted_at"]:          # anchored to the hash-chained event
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "created_at",
                              "expected": want["minted_at"], "got": row["created_at"]})
-        if want["role"] != "writer" and row["expires_at"] != want["expires_at"]:
+        want_exp = want["expires_at"]
+        if want["grace_s"] and want_exp:
+            base = _ts(want_exp)
+            want_exp = (datetime.fromtimestamp(base + want["grace_s"], tz=timezone.utc)
+                        .replace(microsecond=0).isoformat().replace("+00:00", "Z")) if base else want_exp
+        if want["role"] != "writer" and row["expires_at"] != want_exp:
             # only writer heartbeats renew; any other token keeps its minted expiry exactly
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",
-                             "expected": want["expires_at"], "got": row["expires_at"]})
+                             "expected": want_exp, "got": row["expires_at"]})
         created, expires = _ts(want["minted_at"]), _ts(row["expires_at"])
-        if created is None or expires is None or expires > created + MAX_LIFE_S:
+        if created is None or expires is None or expires > created + MAX_LIFE_S + want["grace_s"]:
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",
                              "expected": f"<= created_at + {MAX_LIFE_S}s", "got": row["expires_at"]})
     for tid, row in rows.items():

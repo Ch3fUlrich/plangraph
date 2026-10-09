@@ -20,7 +20,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "rehome", "record_run", "answer", "mint_run_token"}
+               "rehome", "record_run", "answer", "mint_run_token", "replay"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 #: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
@@ -34,7 +34,7 @@ READ_CALLS = {
 }
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
-RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict"})
+RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay"})
 
 
 def run_gate(principal, name):
@@ -89,7 +89,12 @@ def _mint_run_token(store, principal, body, need):
                                 need(body, "role"), need(body, "run_id"))
 
 
+def _replay(store, principal, body, need):
+    return store.replay(principal, need(body, "entries"))   # M2B-OUTBOX: run tokens only
+
+
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
+                "replay": _replay,
                 "close_on_decision": _close_on_decision,
                 "answer": _answer,
                 "rehome": _rehome,

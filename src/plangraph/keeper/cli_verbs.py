@@ -18,7 +18,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import views
-from . import brief as brief_mod, fmt
+from . import brief as brief_mod, fmt, outbox
 from .credential_guard import mask_all
 from .snapshot_io import SignError, read_snapshot
 from .cli_local import evidence_ref, local_alerts, local_digest, local_show
@@ -183,9 +183,8 @@ def write(session, verb, body, renderer=None) -> int:
                      renderer or (lambda r: fmt.result_text(verb, r)))
     except RefusedCli as exc:
         return _refuse(exc)
-    except Unreachable as exc:
-        print(f"keeper unreachable: {exc}", file=sys.stderr)
-        return EXIT_UNREACHABLE
+    except Unreachable as exc:   # M2B-OUTBOX: a run token with PG_OUTBOX queues instead
+        return outbox.on_unreachable(verb, body, exc, exit_unreachable=EXIT_UNREACHABLE)
 
 
 def _epoch(session, key) -> int:

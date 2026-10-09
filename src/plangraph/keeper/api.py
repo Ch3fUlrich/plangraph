@@ -32,6 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .. import views
+from . import outage
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from . import api_routes, auth, brief, fmt
 from .auth import Principal, RunPrincipal
@@ -332,6 +333,7 @@ class Reaper(threading.Thread):
                 with self.server.lock:
                     self.server.store.reap(self.server.system)
                     write_snapshot(self.server, self.server.system)
+                    outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
             except Exception:  # noqa: BLE001 - the reaper never dies loudly
                 continue
 

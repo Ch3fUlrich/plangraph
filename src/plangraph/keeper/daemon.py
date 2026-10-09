@@ -12,7 +12,7 @@ import signal
 import sys
 import threading
 
-from . import api, config as config_mod, db as kdb
+from . import api, config as config_mod, db as kdb, outage
 from .errors import KeeperLocked
 from .store import Store
 
@@ -37,6 +37,7 @@ def run(cfg, *, host=None, port=None, ready=None):
         store = Store(conn, ctx=config_mod.verifier_context(cfg),
                       batch_roots=cfg.batch_roots)
         server = api.make_server(store, cfg, host=host, port=port)
+        outage.check_and_record(store, server.system, cfg)   # M2B-OUTBOX: freeze clocks over a downtime
         server.start_reaper()
         stop = threading.Event()
         _install_signals(stop)
