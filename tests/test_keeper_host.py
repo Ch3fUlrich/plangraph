@@ -40,8 +40,8 @@ def test_bad_host_refused(w, bad):
 
 
 def test_edit_host_and_integrity(w):
-    w.store.edit_definition(w.p("router"), "demo:A", {"host": "coding.vm"})
-    assert _item(w, "demo:A")["host"] == "coding.vm"
+    w.store.edit_definition(w.p("router"), "demo:A", {"host": "example-host"})
+    assert _item(w, "demo:A")["host"] == "example-host"
     assert verify_integrity(w.conn) == []
     w.store.edit_definition(w.p("router"), "demo:A", {"host": None})
     assert _item(w, "demo:A")["host"] is None

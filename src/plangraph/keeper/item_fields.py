@@ -1,6 +1,6 @@
 """Validation of the small first-class item fields (MODEL-HOST, D-677).
 
-``host`` names the machine an item runs on (``workstation``, ``coding.vm``).  It
+``host`` names the machine an item runs on (``workstation``, ``example-host``).  It
 is a HOST, not a project: nullable, ``[a-z0-9._-]+``, at most ``HOST_CAP`` chars.
 
 ``wait`` says what an operator-waiting item waits for: ``answer`` (a
