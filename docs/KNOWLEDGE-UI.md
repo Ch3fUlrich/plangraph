@@ -19,3 +19,7 @@ the render job writes beside the page (PG-KG-EXPORT, see `docs/KEEPER.md`). The 
 
 Files: `src/plangraph/web/page_kg.js` (data, item block, loader), `page_kg_tab.js` (tab), `page_kg.css`;
 wired in `render.py` (`JS_FILES`, `CSS_FILES`), `page_pages.js`, `page_details.js`, `page_template.html`.
+
+Size: the new-UI page budget (`tests/test_ui_pure.py`, A13/V3/§12) went from 500 KB to 520 KB; the Knowledge code adds about
+11 KB inline. Caps in the loader: 8000 nodes, 20000 keys per map, 40 refs per item, 200 items per node; item keys must
+look like `project:id`, graph names are <= 64 chars. An export without nodes is treated as disabled.

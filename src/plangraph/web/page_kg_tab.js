@@ -35,7 +35,7 @@
     sel.setAttribute("aria-label", "Project");
     names.forEach(function (p) {
       var o = el("option", null, p);
-      o.setAttribute("value", p);
+      o.value = p;
       sel.appendChild(o);
     });
     sel.value = cur;

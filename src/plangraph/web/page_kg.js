@@ -11,7 +11,8 @@
   if (typeof document === "undefined") return;
 
   var REF = /^[a-z0-9][a-z0-9-]{0,62}:(Decision|Rule|Convention|Component|Preference|Project):[a-z0-9][a-z0-9._-]{0,127}$/;
-  var MAX_NODES = 8000, MAX_ITEM_REFS = 40, MAX_REV = 200, FILE = "kg-export.json";
+  var MAX_NODES = 8000, MAX_KEYS = 20000, MAX_ITEM_REFS = 40, MAX_REV = 200, FILE = "kg-export.json";
+  var ITEM_KEY = /^[\w.-]{1,100}:[\w.-]{1,100}$/;
   var data = null;
 
   function el(tag, cls, text) {
@@ -43,20 +44,21 @@
         status: str(n.status, 20), severity: str(n.severity, 10), kind: str(n.kind, 60), excerpt: str(n.excerpt, 300),
         project: str(n.project, 100), superseded_by: ref(n.superseded_by), current: ref(n.current) || k };
     });
-    if (isObj(raw.items)) Object.keys(raw.items).forEach(function (k) {
+    if (isObj(raw.items)) Object.keys(raw.items).slice(0, MAX_KEYS).forEach(function (k) {
       var refs = list(raw.items[k], MAX_ITEM_REFS, ref);
-      if (k.length <= 200 && refs.length) d.items[k] = refs;
+      if (ITEM_KEY.test(k) && refs.length) d.items[k] = refs;
     });
-    if (isObj(raw.reverse)) Object.keys(raw.reverse).forEach(function (k) {
-      if (ref(k)) d.reverse[k] = list(raw.reverse[k], MAX_REV, function (s) { return typeof s === "string" && s.length <= 200 ? s : ""; });
+    if (isObj(raw.reverse)) Object.keys(raw.reverse).slice(0, MAX_KEYS).forEach(function (k) {
+      if (ref(k)) d.reverse[k] = list(raw.reverse[k], MAX_REV, function (s) { return typeof s === "string" && ITEM_KEY.test(s) ? s : ""; });
     });
-    if (isObj(raw.projects)) Object.keys(raw.projects).forEach(function (k) {
+    if (isObj(raw.projects)) Object.keys(raw.projects).slice(0, 2000).forEach(function (k) {
       var p = raw.projects[k];
       if (k.length <= 100 && isObj(p)) d.projects[k] = list(p.nodes, MAX_NODES, ref);
     });
-    list(raw.graphs, 50, function (g) { return typeof g === "string" ? g : ""; }).forEach(function (g) { d.graphs[g] = true; });
-    list(raw.unresolved_graphs, 50, function (g) { return typeof g === "string" ? g : ""; }).forEach(function (g) { d.unresolved[g] = true; });
-    return Object.keys(d.nodes).length || Object.keys(d.items).length ? d : null;   // nothing to show: hidden
+    function gname(g) { return typeof g === "string" && g.length <= 64 ? g : ""; }
+    list(raw.graphs, 50, gname).forEach(function (g) { d.graphs[g] = true; });
+    list(raw.unresolved_graphs, 50, gname).forEach(function (g) { d.unresolved[g] = true; });
+    return Object.keys(d.nodes).length ? d : null;                  // no nodes: nothing to show, hidden
   }
 
   function label(n) { return n.type === "Rule" ? n.severity : n.type === "Component" ? n.kind : n.status; }
@@ -76,7 +78,7 @@
     li.appendChild(el("strong", "kg-title", n.title));
     if (label(n)) li.appendChild(el("span", "kg-status", label(n)));
     if (isSuperseded(n)) {
-      var cur = n.current !== n.ref ? data.nodes[n.current] : null;
+      var cur = data.nodes[n.current !== n.ref ? n.current : n.superseded_by];
       li.appendChild(el("div", "kg-superseded", cur
         ? "superseded → " + cur.title + (label(cur) ? " (" + label(cur) + ")" : "")
         : "superseded (no successor in the export)"));

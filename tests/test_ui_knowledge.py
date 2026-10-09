@@ -150,7 +150,7 @@ function main() {
   out.tabPanelHidden = panel.hidden;
   out.tabSelected = tab.getAttribute("aria-selected");
   var sel = all(panel, function (n) { return n.tagName === "SELECT"; })[0];
-  out.optionValues = sel ? all(sel, function (n) { return n.tagName === "OPTION"; }).map(function (o) { return o.getAttribute("value"); }) : null;
+  out.optionValues = sel ? all(sel, function (n) { return n.tagName === "OPTION"; }).map(function (o) { return o.value; }) : null;
   out.p1Text = panel.textContent;
   out.p1Rows = byClass(panel, "kg-node").length;
   var revBtn = all(panel, function (n) { return n.tagName === "BUTTON" && cls(n, "keylink"); });
@@ -163,6 +163,24 @@ function main() {
   if (k) k.click();
   out.selectedFromTab = PlanPage.state.selected;
   out.noInnerHtml = innerHtmlWrites;
+
+  /* 5b. hostile / odd exports */
+  var odd = JSON.parse(JSON.stringify(EXPORT));
+  odd.nodes["g:Decision:d-old"].current = "g:Decision:d-old";            /* current missing -> use superseded_by */
+  odd.reverse["g:Decision:d-new"] = ["p1:A", "not-a-real-key", "x".repeat(300) + ":y", {}];
+  odd.projects['p" onmouseover=alert(1) x="'] = { nodes: ["g:Decision:d-new"] };
+  K.setData(odd);
+  PlanPage.selectNode("p1:A");
+  out.supersededNamed = byClass(doc.getElementById("details"), "kg-superseded").map(function (n) { return n.textContent; });
+  PlanUI.Pages.show("knowledge");
+  var sel2 = all(panel, function (n) { return n.tagName === "SELECT"; })[0];
+  out.oddOptions = all(sel2, function (n) { return n.tagName === "OPTION"; }).map(function (o) { return o.value; });
+  out.oddKeys = all(panel, function (n) { return n.tagName === "BUTTON" && cls(n, "keylink"); }).map(function (b) { return b.textContent; });
+  out.attrValueWrites = all(panel, function (n) { return n.tagName === "OPTION" && n.attributes.value !== undefined; }).length;
+  var noNodes = JSON.parse(JSON.stringify(EXPORT)); noNodes.nodes = {};
+  K.setData(noNodes);
+  out.noNodesHidden = tab.hidden;
+  K.setData(EXPORT);
 
   /* 6. disabling while on the tab falls back to the graph */
   PlanUI.Pages.show("knowledge");
@@ -311,3 +329,12 @@ def test_disable_while_open_falls_back(out):
 def test_load_tolerates_failures_and_reads_sibling_file(out):
     assert out["loadSeq"] == [["404", True], ["net", True], ["badjson", True], ["ok", False]]
     assert out["fetchUrl"] == "GET kg-export.json"
+
+
+@need_node
+def test_hostile_export_details(out):
+    assert out["supersededNamed"] == ["superseded \u2192 New way (accepted)"]
+    assert 'p" onmouseover=alert(1) x="' in out["oddOptions"]
+    assert out["attrValueWrites"] == 0  # option values go through the property, not setAttribute
+    assert "not-a-real-key" not in out["oddKeys"] and not any(len(k) > 250 for k in out["oddKeys"])
+    assert out["noNodesHidden"] is True
