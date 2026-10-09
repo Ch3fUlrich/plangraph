@@ -76,4 +76,4 @@ interface stops moving.
 
 ## Status
 
-Work in progress. See `docs/HANDOFF.md` and the newest `docs/CONTINUATION-*.md` note for what is next.
+Work in progress. Plans, batches, status and handoffs live in a separate private data repository (SPLIT-DATA-REPO).
