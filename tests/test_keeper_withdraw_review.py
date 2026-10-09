@@ -105,6 +105,10 @@ def test_withdraw_revokes_live_tokens_of_the_item():
     (("commit+ci",), "upstream issue filed"),          # code kind, harmless words
     (("semaphore-task",), "change committed and merged"),   # inflections
     (("semaphore-task",), "open a PR upstream"),
+    (("semaphore-task",), "open PRs upstream"),
+    (("semaphore-task",), "2 CIs must pass"),
+    (("semaphore-task",), "open a pull-request"),
+    (("semaphore-task",), "open pull requests"),
 ])
 def test_code_kinds_or_commit_words_refuse(tmp_path, kinds, criteria):
     world = World(tmp_path)

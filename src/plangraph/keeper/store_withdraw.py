@@ -18,7 +18,8 @@ from .errors import Refused
 
 __all__ = ["WithdrawMixin"]
 
-_COMMIT_WORDS = re.compile(r"\b(?:commit\w*|merg\w*|sha\w*|ci|seats?|pr|pull request)\b", re.IGNORECASE)
+_COMMIT_WORDS = re.compile(r"\b(?:commit\w*|merg\w*|sha\w*|ci\w*|seats?|prs?|pull[\s_-]*requests?)\b",
+                           re.IGNORECASE)
 #: Evidence kinds that never imply code work; anything else (commit, commit+ci, a future
 #: kind) counts as a code lane, so the allowlist fails closed.
 _NON_CODE_KINDS = frozenset({"decision", "semaphore-task", "run-record"})
