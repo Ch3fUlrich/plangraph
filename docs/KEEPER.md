@@ -307,3 +307,35 @@ Decision / Rule / Convention / Component / Preference / Project (no Task: plan w
 Validated for syntax only, stored sorted and de-duplicated, folded from item events, returned by show/snapshot.
 Set by create/edit (L1 own project, router anywhere; MCP `create`/`edit`). The keeper never calls Omnigraph: the
 render-time export (PG-KG-EXPORT) resolves refs, follows Supersedes to the current node and reports dangling refs.
+
+## Knowledge export (PG-KG-EXPORT, D-879)
+
+`pg render --out DIR/plan.html` also runs `plangraph.kg_export` (no new service, no listener): it reads Omnigraph
+read-only (`POST <base>/graphs/<graph>/query`, bearer token) and writes `DIR/kg-export.json` (atomic). Off by default:
+
+| env | meaning |
+|---|---|
+| `PG_KG_URL` | Omnigraph base URL (http/https). Unset -> export off |
+| `PG_KG_TOKEN_FILE` | file (0600) holding the read-only token. Unset, missing or empty -> export off |
+| `PG_KG_GRAPHS` | optional comma list of extra graph ids exported in full (graphs named by `kg_refs` are always read) |
+| `PG_KG_STATUS_FILE` | optional status path (default `DIR/kg-export-status.json`) |
+
+Off writes `{"enabled": false}` and exits 0. Any Omnigraph failure exits 0 too (the page renders). A transient failure
+(timeout, 5xx, auth, deadline) keeps the last good export; a graph that does not exist (HTTP 404) does not freeze it and
+is listed in `unresolved_graphs`. Redirects are never followed and environment proxies are ignored (the token goes only to the configured host).
+A query that returns the full 5000-row page sets `truncated` and reports refs missing from that graph as `unresolved_graphs`,
+not dangling. The token is never logged or written; timeouts 8 s per call, 60 s overall,
+responses capped at 8 MB, the 60 s deadline is checked before every query, <= 12 graphs, <= 1500 listed nodes per graph (`truncated: true` when cut).
+
+`kg-export.json` (enabled): `generated`, `graphs`, `unresolved_graphs` (graph unreadable/absent: refs not judged),
+`truncated`, `nodes` {`graph:Type:slug` -> `{graph,type,slug,title,status,severity,kind,excerpt (<=240),project (first hub),
+projects (all hubs),superseded_by,current}`}, `items` {item key -> refs}, `reverse` {node ref -> item keys; a superseded ref also lists its
+items under the current node}, `projects` {plan project -> `{nodes:[refs]}`: nodes whose Omnigraph Project hub slug equals
+the plan project plus nodes its items reference}. `current` follows `Supersedes` to the end of the chain (cycle-safe) to the live node;
+`superseded_by` is the direct successor (the accepted one when several Decisions supersede the same node; every link of a chain is exported). Listed per-project knowledge = accepted/proposed Decisions, Rules, Components.
+Text is raw data: the page must render it with `textContent`. Credential-shaped strings are masked as in `pg render`.
+
+**Dangling-ref status file** (`kg-export-status.json`, for routerctl; the routerctl flag belongs to routing/autoos):
+`{enabled, generated, ok, kept_previous, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
+`dangling` = the graph was read and holds no node for the ref (computed from the fresh read even when `kept_previous` is true, so it can name refs the kept export does not contain); refs into unreadable graphs are `unresolved_graphs`, not dangling.
+Go-live = a read-only Omnigraph token file from prox plus the two env vars on the render host (not part of this lane).

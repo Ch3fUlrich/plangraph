@@ -406,4 +406,6 @@ def cmd_render(args, session):
     if out.parent and not out.parent.exists():
         out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(document, encoding="utf-8")
+    from .. import kg_export  # PG-KG-EXPORT: read-only, off without a token, never fails the render
+    kg_export.run(snapshot.get("items") or [], out.parent)
     return EXIT_OK
