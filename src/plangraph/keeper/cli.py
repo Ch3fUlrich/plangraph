@@ -7,6 +7,7 @@ on the keeper host.  Exit codes: 0 ok, 2 refused, 3 unreachable.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from . import cli_admin, cli_names, cli_progress, cli_token, cli_verbs
@@ -204,13 +205,36 @@ def build_parser():
     _add_reads(sub)
     _add_writes(sub)
     _add_admin(sub)
+    sync = sub.add_parser("sync", help="D-818: refresh this host's signed local plan copy")
+    sync.add_argument("sync_command", choices=["pull"])
     return parser
+
+
+def _cmd_sync(args) -> int:
+    """``pg sync pull``: 0 installed, 1 refused, 3 keeper unreachable (copy unchanged)."""
+    from . import config as config_mod, snapshot_pull
+    path = args.config or os.environ.get("PG_CONFIG")
+    if not path:
+        print("pg sync needs --config or PG_CONFIG (the reader config)", file=sys.stderr)
+        return 2
+    try:
+        print(snapshot_pull.pull(config_mod.load_config(path)))
+    except snapshot_pull.Unreachable as exc:
+        print(f"unreachable: {exc}; local copy unchanged", file=sys.stderr)
+        return 3
+    except (OSError, config_mod.ConfigError, snapshot_pull.PullError,
+            snapshot_pull.snapshot_sign.SignError) as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "admin":
         return cli_admin.dispatch(args)
+    if args.command == "sync":
+        return _cmd_sync(args)
     session = Session(json_mode=args.json, config_path=args.config)
     return HANDLERS[args.command](args, session)
 

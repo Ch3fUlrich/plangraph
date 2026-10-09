@@ -1,0 +1,9 @@
+[Unit]
+Description=plangraph local plan copy: pull + verify the keeper's signed snapshot (D-818)
+
+[Service]
+Type=oneshot
+# Reader host: a read-only plangraph checkout at ~/code/plangraph; adjust the path if it lives elsewhere.
+Environment=PYTHONPATH=%h/code/plangraph/src
+Environment=PG_CONFIG=%h/.config/plangraph/reader.json
+ExecStart=/usr/bin/python3 -m plangraph.keeper.cli sync pull

@@ -229,3 +229,29 @@ PG_CONFIG=~/.local/share/plangraph/keeper.json PYTHONPATH=src python3 -m plangra
 ```
 Readers on other hosts get only the `.pub` file and `snapshot_pubkey` in their config. The keeper unit itself is
 `deploy/systemd/plangraph-keeper.service` (persistent user unit, enabled; Linger=yes).
+
+## Local plan copies on other hosts (PG-LOCAL-COPY, D-818)
+
+Other hosts never run a keeper: they keep a verified LOCAL COPY of the signed snapshot, pulled before
+and after every update and every 5 minutes (`deploy/systemd/pg-snapshot-pull.{service,timer}`).
+Writes still go to the keeper through the host's existing channel; a run token's writes queue in the
+outbox while the keeper is unreachable (M2B-OUTBOX).
+
+- Keeper side: `python3 -m plangraph.keeper.snapshot_serve --config keeper.json` is the forced
+  command of a `restrict` authorized_keys line (one pull key per host). It prints one JSON line
+  `{"format": "plangraph-snapshot-pull-v1", "snapshot": <base64>, "sig": <base64>}` and nothing
+  else, ignores `SSH_ORIGINAL_COMMAND` and stdin, opens files with `O_NOFOLLOW`, and serves nothing
+  unless signing is configured and the snapshot verifies.
+- Reader side: `pg --config reader.json sync pull` runs a locked-down ssh (`-F none`, BatchMode,
+  StrictHostKeyChecking, no agent/X11/forwarding/tty, host after `--`, every config value validated),
+  verifies the signature with `snapshot_pubkey`, refuses a copy older than the newest one seen
+  (`head_seq`, kept in `<snapshot>.hwm`) or a different head at the same `head_seq`, then installs
+  high-water mark, signature, snapshot (temp + fsync + rename each; one pull at a time via
+  `<snapshot>.lock`). Exit 0 installed, 1 refused, 3 unreachable (copy unchanged). Reads with the
+  keeper unreachable use this copy (`pg` exit-3 fallback, signature checked).
+- Snapshots carry `head_seq` (the last event's seq) for the rollback check. Config paths may use `~`.
+- Reader config (mode 600): `{"snapshot": "~/.local/share/plangraph/plan.snapshot.json",
+  "snapshot_pubkey": "~/.config/plangraph/snapshot-signing.pub", "pull": {"host": "<keeper address>",
+  "user": "s", "identity": "~/.ssh/pg-snapshot-pull", "port": 22}}`. The keeper's ssh host key must
+  already be in the reader's `~/.ssh/known_hosts` under that address (no trust on first use).
+- Operator steps: plangraph-data `docs/proposals/2026-10-09-d818-local-copy.md`.

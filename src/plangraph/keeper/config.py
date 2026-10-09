@@ -94,7 +94,7 @@ class Config:
 
     # ------------------------------------------------------------- helpers
     def _resolve(self, value) -> Path:
-        path = Path(value)
+        path = Path(value).expanduser()   # "~/..." in keeper.json / reader.json (D-818 steps)
         return path if path.is_absolute() else (self._base / path)
 
     @staticmethod
