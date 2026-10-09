@@ -322,7 +322,9 @@ read-only (`POST <base>/graphs/<graph>/query`, bearer token) and writes `DIR/kg-
 
 Off writes `{"enabled": false}` and exits 0. Any Omnigraph failure exits 0 too (the page renders). A transient failure
 (timeout, 5xx, auth, deadline) keeps the last good export; a graph that does not exist (HTTP 404) does not freeze it and
-is listed in `unresolved_graphs`. Redirects are never followed (the token goes only to the configured host). The token is never logged or written; timeouts 8 s per call, 60 s overall,
+is listed in `unresolved_graphs`. Redirects are never followed and environment proxies are ignored (the token goes only to the configured host).
+A query that returns the full 5000-row page sets `truncated` and reports refs missing from that graph as `unresolved_graphs`,
+not dangling. The token is never logged or written; timeouts 8 s per call, 60 s overall,
 responses capped at 8 MB, the 60 s deadline is checked before every query, <= 12 graphs, <= 1500 listed nodes per graph (`truncated: true` when cut).
 
 `kg-export.json` (enabled): `generated`, `graphs`, `unresolved_graphs` (graph unreadable/absent: refs not judged),
@@ -334,6 +336,6 @@ the plan project plus nodes its items reference}. `current` follows `Supersedes`
 Text is raw data: the page must render it with `textContent`. Credential-shaped strings are masked as in `pg render`.
 
 **Dangling-ref status file** (`kg-export-status.json`, for routerctl; the routerctl flag belongs to routing/autoos):
-`{enabled, generated, ok, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
+`{enabled, generated, ok, kept_previous, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
 `dangling` = the graph was read and holds no node for the ref; refs into unreadable graphs are `unresolved_graphs`, not dangling.
 Go-live = a read-only Omnigraph token file from prox plus the two env vars on the render host (not part of this lane).

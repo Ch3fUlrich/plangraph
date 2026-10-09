@@ -229,8 +229,7 @@ def test_no_refs_no_graphs_no_calls(tmp_path):
 
 def test_atomic_write_no_tmp_left(tmp_path):
     kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
-    assert sorted(p.name for p in tmp_path.iterdir() if p.name.startswith("kg-")) == \
-        ["kg-export-status.json", "kg-export.json"]
+    assert sorted(p.name for p in tmp_path.iterdir() if p.name != "tok") == ["kg-export-status.json", "kg-export.json"]
 
 
 def test_credential_shaped_text_masked(tmp_path):
@@ -455,3 +454,42 @@ def test_single_fixed_tmp_name(tmp_path):
     kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
     kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
     assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_client_ignores_environment_proxy(stub, monkeypatch):
+    other = _H.seen
+    srv2 = ThreadingHTTPServer(("127.0.0.1", 0), _Redir)  # stands in for a proxy; any hit is a leak
+    srv2.role = "second"
+    _Redir.hits = []
+    threading.Thread(target=srv2.serve_forever, daemon=True).start()
+    monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{srv2.server_address[1]}")
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{srv2.server_address[1]}")
+    try:
+        kg.OmnigraphClient(stub, TOKEN, timeout=3)("g", "kg_x", "q")
+        assert _Redir.hits == [] and other
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+
+def test_non_list_kg_refs_do_not_abort_the_export():
+    items = [{"key": "p1:A", "kg_refs": 7}, {"key": "p1:B", "kg_refs": "g:Rule:r-1"}, item("p1:C", ["g:Rule:r-1"])]
+    exp, _d, _e = build(items)
+    assert exp["items"] == {"p1:C": ["g:Rule:r-1"]}
+
+
+def test_row_limit_hit_marks_missing_refs_unresolved_not_dangling():
+    rows = [{"n.slug": f"d{i}", "n.title": "t", "n.status": "accepted", "n.rationale": None} for i in range(kg.MAX_ROWS)]
+    data = {"g": dict(GRAPH, kg_decision=rows, kg_supersedes=[], kg_decided_in=[])}
+    exp, dangling, _e = build([item("p1:A", ["g:Decision:beyond-the-cut"])], data, max_listed=3)
+    assert dangling == [] and exp["unresolved_graphs"] == ["g"] and exp["truncated"] is True
+
+
+def test_status_describes_the_kept_export(tmp_path):
+    env = _env(tmp_path, PG_KG_GRAPHS="g")
+    kg.run([item("p1:A", ["g:Rule:r-1"])], tmp_path, env=env, transport=Fake({"g": GRAPH}))
+    good = json.loads((tmp_path / "kg-export.json").read_text())
+    kg.run([item("p1:A", ["g:Rule:r-1"])], tmp_path, env=env, transport=Fake({"g": GRAPH}, fail=["g"]))
+    st = json.loads((tmp_path / "kg-export-status.json").read_text())
+    assert st["kept_previous"] is True and st["ok"] is False
+    assert st["nodes"] == len(good["nodes"]) and st["graphs"] == good["graphs"]

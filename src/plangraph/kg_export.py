@@ -83,7 +83,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirect)
+# no ProxyHandler: the bearer token must not go to an environment proxy either
+_OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
 
 # --------------------------------------------------------------------------- #
@@ -157,13 +158,16 @@ def _make_node(graph, typ, row):
 
 
 def _fetch_graph(transport, graph, need_types, deadline=None):
-    """({(Type, slug): node}, {slug: [superseded-by slugs]}) for one graph; raises KgError."""
-    nodes, hub = {}, {}
+    """({(Type, slug): node}, {slug: [superseded-by slugs]}, row_limit_hit) for one graph; raises KgError."""
+    nodes, hub, limited = {}, {}, []
 
     def call(name, text):
         if deadline is not None and time.monotonic() > deadline:
             raise KgError(f"graph {graph}: deadline")
-        return transport(graph, name, text, None)
+        rows = transport(graph, name, text, None)
+        if isinstance(rows, list) and len(rows) >= MAX_ROWS:
+            limited.append(name)  # the server cut the page: absent nodes may only be missing from it
+        return rows
 
     for typ in _NODE_Q:
         if typ not in LISTED_TYPES and typ not in need_types:
@@ -189,7 +193,7 @@ def _fetch_graph(transport, graph, need_types, deadline=None):
         projs = sorted(set(hub.get((typ, slug), [])))
         node["project"] = projs[0] if projs else None
         node["projects"] = projs
-    return nodes, {s: sorted(set(v)) for (k, s), v in hub.items() if k == "sup"}
+    return nodes, {s: sorted(set(v)) for (k, s), v in hub.items() if k == "sup"}, bool(limited)
 
 
 def _pick_successor(cands, nodes):
@@ -207,14 +211,16 @@ def parse_ref(ref):
 
 def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadline=None):
     """(export dict, dangling list, errors list). Read-only; ``transport(graph, name, text, params) -> rows``."""
-    wanted, item_refs = {}, {}
+    wanted, item_refs, item_project = {}, {}, {}
     for it in items:
         key = it.get("key") if isinstance(it, dict) else None
         if not isinstance(key, str):
             continue
-        refs = [r for r in (it.get("kg_refs") or []) if parse_ref(r)]
+        raw = it.get("kg_refs")
+        refs = [r for r in (raw if isinstance(raw, (list, tuple)) else []) if parse_ref(r)]
         if refs:
             item_refs[key] = sorted(set(refs))
+            item_project[key] = it.get("project")
         for r in refs:
             g, t, _s = parse_ref(r)
             wanted.setdefault(g, set()).add(t)
@@ -234,9 +240,10 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
         return f"{n['graph']}:{n['type']}:{n['slug']}"
 
     out, by_ref = {}, {}
-    for g, (nodes, sups) in fetched.items():
+    for g, (nodes, sups, _lim) in fetched.items():
         for (typ, slug), node in nodes.items():
             by_ref[f"{g}:{typ}:{slug}"] = (node, sups)
+    limited = sorted(g for g, v in fetched.items() if v[2])
 
     def current_of(ref):
         node, sups = by_ref[ref]
@@ -271,7 +278,7 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
     for key, refs in item_refs.items():
         for r in refs:
             g = parse_ref(r)[0]
-            if g in failed or g not in fetched:
+            if g in failed or g not in fetched or (r not in by_ref and g in limited):
                 unresolved.add(g)
             elif r in by_ref:
                 add(r)
@@ -280,7 +287,7 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
 
     # per-project knowledge: listed (non-referenced) nodes, capped per graph
     truncated, listed = False, {}
-    for g, (nodes, _s) in fetched.items():
+    for g, (nodes, _s, _l) in fetched.items():
         n = 0
         for (typ, slug), node in sorted(nodes.items()):
             if typ not in LISTED_TYPES:
@@ -310,7 +317,7 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
             for proj in node["projects"]:
                 projects.setdefault(proj, set()).add(ref)
     for key, refs in item_refs.items():
-        proj = next((it.get("project") for it in items if isinstance(it, dict) and it.get("key") == key), None)
+        proj = item_project.get(key)
         if isinstance(proj, str):
             for r in refs:
                 if r in out:
@@ -320,7 +327,7 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "graphs": sorted(fetched),
         "unresolved_graphs": sorted(unresolved | set(failed)),
-        "truncated": truncated,
+        "truncated": truncated or bool(limited),
         "nodes": dict(sorted(out.items())),
         "items": dict(sorted(item_refs.items())),
         "reverse": reverse,
@@ -341,11 +348,13 @@ def _atomic_write(path: Path, text: str):
             tmp.unlink()
 
 
-def _enabled_file(path):
+def _read_enabled(path):
+    """The enabled export on disk as a dict, else None."""
     try:
-        return json.loads(Path(path).read_text(encoding="utf-8")).get("enabled") is True
-    except (OSError, ValueError, AttributeError):
-        return False
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) and data.get("enabled") is True else None
 
 
 def _read_token(path):
@@ -374,17 +383,19 @@ def run(items, out_dir, env=None, transport=None):
         export, dangling, errors = build_export(
             items, transport, extra, deadline=time.monotonic() + DEADLINE_S)
         ok = not errors
-        previous = (out_dir / EXPORT_NAME).exists() and _enabled_file(out_dir / EXPORT_NAME)
-        if previous and any(not e.get("missing") for e in errors):  # transient failure: keep the last good export
-            pass
+        kept = None
+        prev = _read_enabled(out_dir / EXPORT_NAME)
+        if prev is not None and any(not e.get("missing") for e in errors):  # transient failure: keep the last good export
+            kept = prev
         else:
             from .keeper.credential_guard import mask_all
             export, _n = mask_all(export)
             _atomic_write(out_dir / EXPORT_NAME, json.dumps(export, separators=(",", ":"), sort_keys=True))
         _atomic_write(status_path, json.dumps({
-            "enabled": True, "generated": now, "ok": ok, "errors": errors,
-            "graphs": export["graphs"], "nodes": len(export["nodes"]), "dangling": dangling,
-            "unresolved_graphs": export["unresolved_graphs"]}, indent=1, sort_keys=True))
+            "enabled": True, "generated": now, "ok": ok, "errors": errors, "kept_previous": kept is not None,
+            "graphs": (kept or export).get("graphs", []), "nodes": len((kept or export).get("nodes", {})),
+            "dangling": dangling, "unresolved_graphs": (kept or export).get("unresolved_graphs", [])},
+            indent=1, sort_keys=True))
     except Exception as exc:  # noqa: BLE001 - the export must never break the render
         print(f"kg-export: skipped ({type(exc).__name__})", file=sys.stderr)
     return 0
