@@ -99,3 +99,30 @@ def test_withdraw_revokes_live_tokens_of_the_item():
     from plangraph.keeper import store_tokens, token_fold
     assert "review_withdrawn" in store_tokens._REVOKE_ALL
     assert store_tokens._REVOKE_ALL == token_fold.REVOKE_ALL
+
+
+@pytest.mark.parametrize("kinds,criteria", [
+    (("commit+ci",), "upstream issue filed"),          # code kind, harmless words
+    (("semaphore-task",), "change committed and merged"),   # inflections
+    (("semaphore-task",), "open a PR upstream"),
+])
+def test_code_kinds_or_commit_words_refuse(tmp_path, kinds, criteria):
+    world = World(tmp_path)
+    try:
+        world.store.create_items(world.p("router"), [
+            defn("X", evidence_kinds=kinds, done_criteria=criteria), defn("G", ["X"], kind="goal")])
+        world.store.ctx = SimpleNamespace(decisions=_decisions(tmp_path, "| D-900 | c | Closes: demo:X |\n"))
+        to_in_review(world, "demo:X", kind=kinds[0],
+                     ref={"sha": "a" * 40} if "commit" in kinds[0] else {"template": 1, "task": 2})
+        with pytest.raises(Refused) as exc:
+            world.store.withdraw_review(world.p("router"), "demo:X", "D-900")
+        assert exc.value.code == "forbidden"
+    finally:
+        world.close()
+
+
+def test_router_can_make_a_code_item_decision_closable_first(w):
+    """The documented path for an issue-only item that was filed as commit+ci: tier edit, then withdraw."""
+    to_in_review(w, "demo:CODE", kind="commit+ci", ref={"sha": "a" * 40})
+    w.store.edit_definition(w.p("router"), "demo:CODE", {"evidence_kinds": ["decision"], "review_tier": "none"})
+    assert w.store.withdraw_review(w.p("router"), "demo:CODE", "D-900")["state"] == "claimed"

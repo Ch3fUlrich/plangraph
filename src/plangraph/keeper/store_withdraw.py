@@ -18,7 +18,8 @@ from .errors import Refused
 
 __all__ = ["WithdrawMixin"]
 
-_COMMIT_WORDS = re.compile(r"\b(?:commit|merged?|sha|ci|seats?)\b", re.IGNORECASE)
+_COMMIT_WORDS = re.compile(r"\b(?:commit\w*|merg\w*|sha\w*|ci|seats?|pr|pull request)\b", re.IGNORECASE)
+_CODE_KINDS = re.compile(r"commit|ci", re.IGNORECASE)
 
 
 class WithdrawMixin:
@@ -37,7 +38,11 @@ class WithdrawMixin:
         if item["state"] != "in_review":
             raise Refused("bad_state", f"{key} is {item['state']}, not in_review")
         kinds = item.get("evidence_kinds") or []
-        if "decision" not in kinds and _COMMIT_WORDS.search(item.get("done_criteria") or ""):
+        # Eligible: decision is an accepted evidence kind, or neither a code evidence kind
+        # (commit, commit+ci, ...) nor commit/merge/CI/seat words in the done-criteria.
+        code_lane = any(_CODE_KINDS.search(k) for k in kinds) \
+            or _COMMIT_WORDS.search(item.get("done_criteria") or "")
+        if "decision" not in kinds and code_lane:
             raise Refused("forbidden",
                           f"{key} needs commit/review evidence; withdraw only decision-closable items")
         decisions = self._decisions_adapter(item, now)
