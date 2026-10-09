@@ -198,6 +198,8 @@ def parse_options(step, why=""):
     if not options or len(options) > 8:
         return step, None
     blocks = (why or "").strip()[:200] or None
+    if blocks and any(ord(c) < 32 or 127 <= ord(c) < 160 for c in blocks):
+        blocks = None                       # derived context only: drop it, keep the choices
     rest = step[:match.start()].rstrip(" .;:")
     return rest, {"options": options, "default": default,
                   "deadline": match.group("deadline"), "blocks": blocks}

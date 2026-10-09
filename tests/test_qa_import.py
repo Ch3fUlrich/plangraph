@@ -87,7 +87,8 @@ def choices(**kw):
     {"deadline": "tomorrow"}, {"extra": 1},
     {"options": [{"id": "a", "label": "A", "html": "<b>"}]},
     {"options": [{"id": f"o{i}", "label": "x"} for i in range(9)], "default": None},
-    {"blocks": "log" + "in admin/" + "hunter2" + "secret"}])
+    {"blocks": "log" + "in admin/" + "hunter2" + "secret"},
+    {"options": [{"id": "log" + "in-admin/hunter2secret", "label": "safe"}]}])
 def test_check_choices_refuses(bad):
     with pytest.raises(Refused):
         check_choices(choices(**bad), "question")
@@ -207,3 +208,8 @@ def test_variant_suffix_ids_are_matched_not_unmatched():
     text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
             "| 1 | OS-1 (verify) | TASK | a | b | c |\n")
     assert mp.unmatched_rows(text) == []
+
+
+def test_control_chars_in_the_why_cell_drop_blocks_not_choices():
+    rest, ch = mp.parse_options("Options: a = x; *b", "why\x01")
+    assert ch is not None and ch["blocks"] is None and ch["default"] == "b"

@@ -193,6 +193,8 @@ def check_choices(value, kind, key=None):
                 or oid in seen:
             raise Refused("validation", f"{where}choices option id must be unique [a-z0-9-]+")
         seen.add(oid)
+        from .credential_guard import guard
+        guard("choices option id", oid)
         entry = {"id": oid, "label": _choice_text("label", opt.get("label"), LABEL_CAP, where)}
         if opt.get("consequence") is not None:
             entry["consequence"] = _choice_text("consequence", opt["consequence"],
