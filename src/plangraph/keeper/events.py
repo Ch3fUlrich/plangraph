@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 
 from .item_fields import SMALL_FIELDS
 
@@ -282,6 +283,12 @@ def verify_integrity(conn):
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
+    # FU-X7-LOWS: compare each row's (epoch, kind, verified), not only the counts,
+    # so a raw UPDATE that relabels a kind or moves a row to another epoch shows.
+    shapes = {}
+    for row in conn.execute("SELECT key, epoch, kind, verified FROM evidence"):
+        shapes.setdefault(row["key"], []).append(
+            (row["epoch"], row["kind"], bool(row["verified"])))
     problems = []
     for key, expected in folded.items():
         row = cached.get(key)
@@ -324,6 +331,16 @@ def verify_integrity(conn):
                                           "verified": want_verified},
                              "got": {"count": got_total,
                                      "verified": got_verified}})
+        else:
+            # Counter, not sorted(): epochs/kinds may mix None with values.
+            want_shape = Counter((e["epoch"], e["kind"], bool(e["verified"]))
+                                 for e in expected["evidence"])
+            got_shape = Counter(shapes.get(key, []))
+            if want_shape != got_shape:
+                problems.append({"key": key, "code": "evidence_mismatch",
+                                 "field": "evidence_shape",
+                                 "expected": sorted(want_shape.elements(), key=repr),
+                                 "got": sorted(got_shape.elements(), key=repr)})
     for key in cached:
         if key not in folded:
             problems.append({"key": key, "code": "cache_extra",

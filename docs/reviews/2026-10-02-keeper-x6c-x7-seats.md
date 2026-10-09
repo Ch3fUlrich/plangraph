@@ -37,3 +37,16 @@ FIRST (security, fail-open): a `Closes:` keyword present but no valid key → mu
 apply_batch usage string omits --allow-no-whoami · batch-path confinement re-check inside the lock · legacy in_review needs evidence first
 (intended) · L1 none→standard test (doc test) · apply_batch router-only/resolve_source (by design) · verify_integrity ignores evidence
 kind/epoch and `model` is not folded · `X-Waives:` matches the keyword regex · earlier round lows listed in the r3/r4 L2 reports.
+
+## FU-X7-LOWS resolution (2026-10-09, plangraph-L1)
+| low | outcome |
+|---|---|
+| apply_batch usage string omits --allow-no-whoami | already fixed (usage lists it) |
+| batch-path confinement re-check inside the lock | already fixed: `close_on_decision` re-reads + re-confines the batch under `_write()` (store_close.py `_read_batch` at the second call) |
+| legacy in_review needs evidence first | by design (X7c: the router attaches decision evidence before the close) |
+| L1 none→standard doc test | added: tests/test_fu_x7_lows.py (L1 may raise none→standard, may not lower standard→none) |
+| apply_batch router-only / resolve_source | by design (batches are router-attributed, D-388) |
+| verify_integrity ignores evidence kind/epoch | fixed: per-row (epoch, kind, verified) compared (`evidence_shape`); live DB copy agrees (0 problems) |
+| `model` is not folded | by design: `items.model` is unused (0 rows); writer/seat models are the folded PG-MODELS columns |
+| `X-Waives:` matches the keyword regex | fixed: Waives:/Closes: must not follow a letter, digit, `-` or `_`; live decisions log: same 119 Closes rows |
+| earlier r3/r4 L2 report lows | not recoverable (L2 job dirs gone); the later seat rounds (2026-10-08 since-1006 record) supersede them |
