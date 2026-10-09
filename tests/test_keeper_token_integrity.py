@@ -112,3 +112,17 @@ def test_swapped_token_hash_is_flagged(w):
     claimed_with_token(w)
     raw(w, "UPDATE run_tokens SET token_sha256='0' || substr(token_sha256, 2)")
     assert ("token_mismatch", "token_sha256") in problems(w)
+
+
+def test_mint_event_without_a_hash_is_flagged():
+    import sqlite3 as _s
+    conn = _s.connect(":memory:")
+    conn.row_factory = _s.Row
+    conn.execute("CREATE TABLE run_tokens (id INTEGER PRIMARY KEY, key, role, run_id, epoch, created_at,"
+                 " expires_at, revoked_at, token_sha256)")
+    conn.execute("INSERT INTO run_tokens VALUES (1,'p:A','writer','r',1,'2026-10-09T00:00:00Z',"
+                 "'2026-10-09T01:00:00Z',NULL,'abc')")
+    ev = [{"key": "p:A", "type": "token_minted", "ts": "2026-10-09T00:00:00Z",
+           "payload": {"token_id": 1, "role": "writer", "run_id": "r", "epoch": 1}}]
+    got = [(p["code"], p["field"]) for p in token_fold.verify_tokens(conn, ev)]
+    assert ("token_mismatch", "token_sha256") in got

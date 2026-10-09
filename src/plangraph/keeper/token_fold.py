@@ -88,8 +88,9 @@ def verify_tokens(conn, events):
             problems.append({"key": want["key"], "code": "token_missing", "field": "run_tokens",
                              "expected": tid, "got": None})
             continue
-        fields = ("key", "role", "run_id", "epoch") + (("token_sha256",) if want["token_sha256"] else ())
-        for field in fields:
+        # Strict: every mint chains its hash (the live keeper minted none before this lane), so an
+        # event without one cannot anchor the row and is itself a problem.
+        for field in ("key", "role", "run_id", "epoch", "token_sha256"):
             if row[field] != want[field]:
                 problems.append({"key": want["key"], "code": "token_mismatch", "field": field,
                                  "expected": want[field], "got": row[field]})
