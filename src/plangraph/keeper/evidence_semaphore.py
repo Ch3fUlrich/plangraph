@@ -88,7 +88,9 @@ class SemaphoreAdapter:
 
     @staticmethod
     def _opener() -> urllib.request.OpenerDirector:
-        return urllib.request.build_opener(_NoRedirect())
+        # An empty ProxyHandler: build_opener would otherwise add one that reads
+        # HTTP(S)_PROXY from the environment and send the bearer through it.
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
     # -- real fetcher -------------------------------------------------------
     def _http_fetch(self, task_id: int, project_id: int) -> dict:

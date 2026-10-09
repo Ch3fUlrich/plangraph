@@ -350,3 +350,19 @@ def test_dispatch_never_raises_on_unhashable_kind():
     res = ev.verify([], ITEM, {}, make_ctx())
     assert res.ok is False
     assert res.detail == "TypeError"
+
+
+def test_semaphore_opener_ignores_proxy_env(monkeypatch):
+    # The bearer must never be sent to a proxy named by the environment.
+    import urllib.request
+    from plangraph.keeper.evidence_semaphore import SemaphoreAdapter
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+    opener = SemaphoreAdapter._opener()
+    proxies = [h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)]
+    # An empty ProxyHandler registers no *_open method, so none stays installed;
+    # the default env-reading one must not be there either.
+    assert all(h.proxies == {} for h in proxies)
+    default = urllib.request.build_opener()
+    assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies
+               for h in default.handlers)  # the env really is read by default
