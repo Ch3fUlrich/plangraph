@@ -5,7 +5,9 @@ ap = argparse.ArgumentParser(); ap.add_argument('plan'); ap.add_argument('--base
 a = ap.parse_args()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 items = {}
-for f in sorted(glob.glob(ROOT + '/data/plan-v3/*.yaml')):
+_REPO = ROOT.split('/.claude/worktrees/')[0]  # a worktree's main checkout
+DATA = os.environ.get('PG_DATA_DIR') or os.path.join(os.path.dirname(_REPO), 'plangraph-data')  # SPLIT-DATA-REPO
+for f in sorted(glob.glob(DATA + '/data/plan-v3/*.yaml')):
     for it in (yaml.safe_load(open(f)) or {}).get('items', []):
         items[f"{it['project']}:{it['id']}"] = dict(it)
 def q(p, d): return d if ':' in d else f'{p}:{d}'

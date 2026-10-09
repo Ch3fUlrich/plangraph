@@ -18,13 +18,17 @@ Checks:
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 import graphlib
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
-IMPORT_DIR = ROOT / "data" / "plan-v3"
+# SPLIT-DATA-REPO: plan data lives in the private plangraph-data repo (sibling checkout or PG_DATA_DIR).
+_REPO = ROOT.parents[2] if ROOT.parent.name == "worktrees" and ROOT.parents[1].name == ".claude" else ROOT
+DATA = Path(os.environ.get("PG_DATA_DIR") or _REPO.parent / "plangraph-data")
+IMPORT_DIR = DATA / "data" / "plan-v3"
 GLOB = "*.yaml"
 GOAL_KEY = "routing:GOAL"
 TERMINAL = {"done", "cancelled"}
