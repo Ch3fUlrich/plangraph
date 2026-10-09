@@ -192,8 +192,13 @@ def test_verify_flags_mismatch_ahead_order_and_garbage(w, tmp_path):
 
 # ------------------------------------------------------------ socket mode
 @pytest.fixture
-def service(tmp_path):
-    """A temp Unix socket served by anchord.serve_one, as pganchor@.service would."""
+def service(tmp_path, monkeypatch):
+    """A temp Unix socket served by anchord.serve_one, as pganchor@.service would.
+
+    The temp log belongs to the test user; production refuses that (see
+    test_socket_mode_refuses_a_log_the_keeper_can_write), so the ownership check is
+    neutralised here only."""
+    monkeypatch.setattr(anchor, "_keeper_can_write", lambda path: False)
     sock_path = str(tmp_path / "anchor.sock")
     log = tmp_path / "svc" / "anchor.log"
     log.parent.mkdir()
@@ -506,3 +511,44 @@ def test_record_slipped_in_after_the_start_check_is_refused_loudly(w, service):
     assert "older" in err.getvalue()                           # ... and reported, not silent
     with pytest.raises(anchor.AnchorError, match="behind"):     # next start refuses
         anchor.check_start(w.conn, service)
+
+
+def test_socket_mode_refuses_a_log_the_keeper_can_write(w, tmp_path):
+    """Round-3 seat T-V2: a pganchor log writable by the keeper's user is an install error."""
+    seed(w, [("A", [])])
+    log = tmp_path / "anchor.log"
+    log.write_text("")                                      # owned by the test (= keeper) user
+    with pytest.raises(anchor.AnchorError, match="writable by the keeper"):
+        anchor.check_start(w.conn, {"anchor_socket": str(tmp_path / "s.sock"), "anchor_log": str(log)})
+
+
+def test_short_writes_still_write_the_whole_record(tmp_path, monkeypatch):
+    """Round-3 seat T-V3: os.write may return less than asked; the record must still be whole."""
+    real_write = os.write
+    monkeypatch.setattr(anchord.os, "write", lambda fd, data: real_write(fd, bytes(data[:3])))
+    log = tmp_path / "a.log"
+    log.write_bytes(json.dumps(rec(1)).encode())             # torn tail, no newline
+    assert anchord.append(log, rec(2)) == "ok"
+    records, bad = anchor.read_records(log)
+    assert [r["seq"] for r in records] == [1, 2] and bad == 0
+
+
+def test_an_uncommitted_head_is_never_anchored(w, tmp_path):
+    """Round-3 seat T-V6: another connection's open transaction is invisible to the anchorer."""
+    import sqlite3
+    seed(w, [("A", [])])
+    cfg = file_cfg(tmp_path)
+    a = anchor.Anchorer(cfg, clock=lambda: 1000.0)
+    a.record(w.conn, "start")
+    committed, _ = _head(w)
+    other = sqlite3.connect(w.path, isolation_level=None)
+    other.execute("BEGIN IMMEDIATE")
+    other.execute("INSERT INTO events (ts, type, payload, prev_hash, hash) VALUES (?,?,?,?,?)",
+                  ("2026-10-09T10:00:00Z", "closed_on_decision", "{}", "x", "f" * 64))
+    try:
+        a.clock = lambda: 1000.0 + anchor.HOURLY_S
+        assert a.tick(w.conn) is None                            # head unchanged for this conn
+        assert anchor.latest(cfg["anchor_file"])["seq"] == committed
+    finally:
+        other.execute("ROLLBACK")
+        other.close()

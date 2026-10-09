@@ -77,6 +77,16 @@ def latest(path):
     return max(records, key=lambda r: r["seq"]) if records else None
 
 
+def _keeper_can_write(path) -> bool:
+    """True when this process could rewrite/replace the production log (owner, mode or dir)."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return (st.st_uid == os.geteuid() or os.access(path, os.W_OK)
+            or os.access(os.path.dirname(os.path.abspath(path)), os.W_OK))
+
+
 def _head(conn):
     row = conn.execute("SELECT seq, hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
     return (row[0], row[1]) if row else (0, None)
@@ -137,6 +147,9 @@ def check_start(conn, cfg):
     path = _log_path(cfg)
     if cfg.get("anchor_socket") and not os.path.lexists(path):
         raise AnchorError(f"anchor log {path} missing (operator step A2 creates it): refused")
+    if cfg.get("anchor_socket") and _keeper_can_write(path):
+        raise AnchorError(f"anchor log {path} or its directory is writable by the keeper's user: "
+                          "the log must belong to pganchor (operator steps A1-A2): refused")
     records, bad = read_records(path)          # ONE read: the log cannot change between checks
     problems = _verify_records(conn, records, bad)
     last = max(records, key=lambda r: r["seq"]) if records else None
