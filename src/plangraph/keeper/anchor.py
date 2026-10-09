@@ -27,11 +27,12 @@ from datetime import datetime, timezone
 from . import anchord
 
 __all__ = ["AnchorError", "enabled", "read_records", "latest", "submit", "check_start",
-           "verify", "append_only", "Anchorer", "HOURLY_S", "DONE_TYPES"]
+           "verify", "append_only", "Anchorer", "HOURLY_S", "DONE_TYPES", "RETRY_AFTER_S"]
 
 HOURLY_S = 3600
 DONE_TYPES = ("review_passed", "closed_on_decision", "answered")
-_SOCKET_TIMEOUT_S = 5.0
+_SOCKET_TIMEOUT_S = 1.0     # held under the server lock: keep it short
+RETRY_AFTER_S = 300         # after a failed write, the reaper skips anchoring this long
 
 
 class AnchorError(RuntimeError):
@@ -53,6 +54,8 @@ def read_records(path):
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
         return [], 0
+    except OSError as exc:                    # symlink (ELOOP), permissions: fail closed
+        raise AnchorError(f"anchor log unreadable: {type(exc).__name__}") from exc
     with os.fdopen(fd, "rb") as handle:
         data = handle.read()
     records, bad = [], 0
@@ -119,18 +122,27 @@ def submit(cfg, rec) -> str:
 
 
 def check_start(conn, cfg):
-    """Raise AnchorError when the DB is behind or forked from the newest anchor."""
+    """Raise AnchorError when the DB contradicts ANY anchor (behind, forked, rewritten).
+
+    Checking every record, not only the newest, means a forged higher anchor cannot
+    whitewash a rewritten chain: the earlier genuine anchors still have to match.
+    """
     if not enabled(cfg):
         return None
-    last = latest(_log_path(cfg))
-    if last is None:
-        return None
-    seq, _ = _head(conn)
-    if seq < last["seq"]:
-        raise AnchorError(f"keeper.db head_seq {seq} is behind the anchored seq {last['seq']} "
-                          f"({last['ts']}): rolled-back DB refused")
-    if _hash_at(conn, last["seq"]) != last["head"]:
-        raise AnchorError(f"keeper.db event {last['seq']} differs from the anchored head: fork refused")
+    if cfg.get("anchor_socket") and not cfg.get("anchor_log"):
+        raise AnchorError("anchor_socket needs anchor_log (the file the start check reads)")
+    path = _log_path(cfg)
+    if cfg.get("anchor_socket") and not os.path.lexists(path):
+        raise AnchorError(f"anchor log {path} missing (operator step A2 creates it): refused")
+    problems = verify(conn, path)
+    last = latest(path)
+    for problem in problems:
+        if problem["code"] == "anchor_ahead":
+            raise AnchorError(f"keeper.db head_seq {problem['db_head_seq']} is behind the anchored "
+                              f"seq {problem['seq']}: rolled-back DB refused")
+        if problem["code"] == "anchor_mismatch":
+            raise AnchorError(f"keeper.db event {problem['seq']} differs from its anchor: "
+                              "fork or rewrite refused")
     return last
 
 
@@ -175,11 +187,14 @@ class Anchorer:
         self.last_seq = last["seq"] if last else 0
         self.last_ts = self.clock() if last else 0.0
         self.error = None
+        self.retry_at = 0.0
 
     def record(self, conn, reason):
         seq, head = _head(conn)
         if not head or seq <= self.last_seq:   # nothing new since the newest anchor
             return None
+        if reason != "start" and self.clock() < self.retry_at:
+            return None                        # back off: a down service must not stall requests
         rec = {"v": 1, "seq": seq, "head": head, "ts": _iso(self.clock()), "reason": reason}
         try:
             answer = submit(self.cfg, rec)
@@ -187,8 +202,9 @@ class Anchorer:
             if str(exc) != self.error:
                 self.err.write(f"keeper: anchor not written: {exc}\n")
             self.error = str(exc)
+            self.retry_at = self.clock() + RETRY_AFTER_S
             return None
-        self.error = None
+        self.error, self.retry_at = None, 0.0
         self.last_seq, self.last_ts = seq, self.clock()
         return answer
 

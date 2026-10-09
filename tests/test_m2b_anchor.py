@@ -33,21 +33,32 @@ LIVE_TOOLS = ("systemctl", "docker", "ssh", "curl")
 
 @pytest.fixture(autouse=True)
 def stub_live_tools(tmp_path, monkeypatch):
+    """PATH = stubs + a bin dir holding ONLY the tools these tests need (no real live tool)."""
     stubs = tmp_path / "stubs"
     stubs.mkdir()
     for tool in LIVE_TOOLS:
         path = stubs / tool
         path.write_text(f"#!/bin/sh\necho called > {stubs}/{tool}.CALLED\nexit 97\n")
         path.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{stubs}:{os.environ['PATH']}")
+    needed = tmp_path / "bin"
+    needed.mkdir()
+    for tool in ("git", "sh", "env"):
+        real = shutil.which(tool)
+        if real:
+            (needed / tool).symlink_to(real)
+    (needed / "python3").symlink_to(sys.executable)
+    monkeypatch.setenv("PATH", f"{stubs}:{needed}")
     yield stubs
     called = [t for t in LIVE_TOOLS if (stubs / f"{t}.CALLED").exists()]
     assert not called, f"live tool invoked from the anchor code: {called}"
 
 
 def test_guard_live_tools_are_stubbed(stub_live_tools):
+    """Fails if ANY PATH entry offers a real systemctl/docker/ssh/curl (D-852)."""
     for tool in LIVE_TOOLS:
-        assert shutil.which(tool) == str(stub_live_tools / tool), f"real {tool} reachable"
+        hits = [os.path.join(d, tool) for d in os.environ["PATH"].split(os.pathsep)
+                if os.path.exists(os.path.join(d, tool))]
+        assert hits == [str(stub_live_tools / tool)], f"real {tool} reachable: {hits}"
 
 
 def rec(seq, head=None, reason="done"):
@@ -280,3 +291,138 @@ def test_anchor_tag_without_records_fails(tmp_path):
     sys.path.insert(0, str(ROOT / "tools"))
     import anchor_tag
     assert anchor_tag.main(["--repo", str(tmp_path), "--anchor-log", str(tmp_path / "none")]) == 1
+
+
+# ------------------------------------------------------ round-1 seat findings
+def test_forged_higher_anchor_cannot_whitewash_a_rewritten_chain(w, tmp_path):
+    """Every anchor must match, not only the newest (seat S-V1/V2)."""
+    seed(w, [("A", [])])
+    cfg = file_cfg(tmp_path)
+    seq, head = _head(w)
+    anchord.append(cfg["anchor_file"], rec(seq, head))
+    # the chain is rewritten at seq (simulated by an anchor that disagrees there) and a
+    # forged newer anchor names the rewritten head: the older anchor still refuses.
+    anchord.append(cfg["anchor_file"], rec(seq + 1, "9" * 64))
+    with pytest.raises(anchor.AnchorError):
+        anchor.check_start(w.conn, cfg)
+    log = tmp_path / "forged.log"
+    log.write_text(json.dumps(rec(seq, "1" * 64)) + "\n" + json.dumps(rec(seq, head)) + "\n")
+    with pytest.raises(anchor.AnchorError, match="fork or rewrite"):
+        anchor.check_start(w.conn, {"anchor_file": str(log)})
+
+
+def test_garbage_lines_do_not_hide_a_valid_anchor(w, tmp_path):
+    seed(w, [("A", [])])
+    seq, _ = _head(w)
+    log = tmp_path / "a.log"
+    log.write_bytes(b"not json\n" + json.dumps(rec(seq + 4, "a" * 64)).encode() + b"\n\xff\xfe\n")
+    with pytest.raises(anchor.AnchorError, match="behind"):
+        anchor.check_start(w.conn, {"anchor_file": str(log)})
+
+
+def test_torn_last_line_does_not_swallow_the_next_record(tmp_path):
+    log = tmp_path / "a.log"
+    log.write_bytes(json.dumps(rec(5)).encode() + b"\n" + b'{"v":1,"seq":6')   # crash mid-write
+    assert anchord.append(log, rec(7)) == "ok"
+    records, bad = anchor.read_records(log)
+    assert [r["seq"] for r in records] == [5, 7] and bad == 1
+
+
+def test_non_ascii_record_is_refused(tmp_path):
+    out = io.BytesIO()
+    line = json.dumps({**rec(1), "ts": "2026-10-09T10:00:00Z\u00e9"}, ensure_ascii=False).encode("utf-8")
+    assert anchord.serve_one(tmp_path / "a.log", io.BytesIO(line + b"\n"), out) == 1
+
+
+def test_concurrent_writers_stay_monotonic(tmp_path):
+    log = tmp_path / "a.log"
+    errors = []
+
+    def write(seq):
+        try:
+            anchord.append(log, rec(seq))
+        except anchord.AnchorRefused:
+            pass
+        except Exception as exc:   # pragma: no cover
+            errors.append(exc)
+    threads = [threading.Thread(target=write, args=(s,)) for s in range(1, 41)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    seqs = [json.loads(l)["seq"] for l in log.read_text().splitlines()]
+    assert not errors and seqs == sorted(seqs) and len(seqs) == len(set(seqs)) and 40 in seqs
+
+
+def test_symlinked_anchor_log_fails_closed_at_start(w, tmp_path):
+    seed(w, [("A", [])])
+    real = tmp_path / "real.log"
+    real.write_text("")
+    link = tmp_path / "a.log"
+    link.symlink_to(real)
+    with pytest.raises(anchor.AnchorError, match="unreadable"):
+        anchor.check_start(w.conn, {"anchor_file": str(link)})
+
+
+def test_socket_mode_refuses_a_missing_log_or_no_log_path(w, tmp_path):
+    seed(w, [("A", [])])
+    with pytest.raises(anchor.AnchorError, match="missing"):
+        anchor.check_start(w.conn, {"anchor_socket": str(tmp_path / "s.sock"),
+                                    "anchor_log": str(tmp_path / "nope.log")})
+    with pytest.raises(anchor.AnchorError, match="needs anchor_log"):
+        anchor.check_start(w.conn, {"anchor_socket": str(tmp_path / "s.sock")})
+
+
+def test_refusing_service_is_logged_once_and_backs_off(w, service):
+    seed(w, [("A", [])])
+    seq, head = _head(w)
+    anchor.submit(service, rec(seq + 50, "c" * 64))          # service log now ahead: it refuses
+    err = io.StringIO()
+    clock = [5000.0]
+    a = anchor.Anchorer(service, clock=lambda: clock[0], err=err)
+    a.last_seq = 0
+    assert a.record(w.conn, "start") is None
+    assert "older" in err.getvalue()
+    calls = []
+    real_submit = anchor.submit
+    anchor.submit = lambda cfg, r: calls.append(r) or real_submit(cfg, r)
+    try:
+        assert a.record(w.conn, "hourly") is None and calls == []   # backing off, no call
+        clock[0] += anchor.RETRY_AFTER_S
+        a.record(w.conn, "hourly")
+        assert len(calls) == 1                                       # retried after the back-off
+    finally:
+        anchor.submit = real_submit
+    assert err.getvalue().count("anchor not written") == 1
+
+
+def test_unit_files_keep_the_sandbox():
+    sock = (ROOT / "deploy/pganchor/pganchor.socket").read_text()
+    svc = (ROOT / "deploy/pganchor/pganchor@.service").read_text()
+    for line in ("Accept=yes", "SocketMode=0660", "SocketUser=pganchor", "SocketGroup=s",
+                 "MaxConnections="):
+        assert line in sock
+    for line in ("User=pganchor", "ProtectSystem=strict", "ReadWritePaths=/var/lib/pganchor",
+                 "PrivateNetwork=yes", "NoNewPrivileges=yes", "RuntimeMaxSec=", "CapabilityBoundingSet=",
+                 "ProtectHome=yes", "python3 -I /usr/local/lib/pganchor/anchord.py"):
+        assert line in svc
+
+
+def test_anchor_tag_pushes_only_its_own_tag(tmp_path):
+    sys.path.insert(0, str(ROOT / "tools"))
+    import anchor_tag
+    origin = tmp_path / "origin.git"
+    _git("init", "-q", "--bare", str(origin), cwd=tmp_path)
+    repo = tmp_path / "data; touch PWNED"
+    _git("init", "-q", str(repo), cwd=tmp_path)
+    (repo / "f").write_text("x")
+    _git("add", "f", cwd=repo)
+    _git("-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-qm", "c", cwd=repo)
+    _git("remote", "add", "origin", str(origin), cwd=repo)
+    _git("tag", "unrelated", cwd=repo)
+    log = tmp_path / "anchor.log"
+    anchord.append(log, rec(3))
+    now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    assert anchor_tag.main(["--repo", str(repo), "--anchor-log", str(log), "--push"], now=now) == 0
+    tags = _git("tag", "-l", cwd=origin).stdout.split()
+    assert tags == ["anchor-20261010"] and not (tmp_path / "PWNED").exists()

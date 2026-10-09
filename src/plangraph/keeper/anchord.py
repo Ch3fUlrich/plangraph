@@ -96,7 +96,14 @@ def append(path, rec: dict) -> str:
                     raise AnchorRefused(f"different head at the anchored seq {rec['seq']}")
                 return "ok duplicate"
         line = json.dumps(rec, sort_keys=True, separators=(",", ":")).encode("ascii") + b"\n"
-        os.write(fd, line)
+        size = os.fstat(fd).st_size
+        if size:
+            os.lseek(fd, size - 1, os.SEEK_SET)
+            if os.read(fd, 1) != b"\n":      # a torn last line must not swallow this record
+                line = b"\n" + line
+        view = memoryview(line)
+        while view:                           # short writes: write the whole record or raise
+            view = view[os.write(fd, view):]
         os.fsync(fd)
         return "ok"
     finally:
