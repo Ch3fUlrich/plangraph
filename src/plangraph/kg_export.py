@@ -105,7 +105,14 @@ class OmnigraphClient:
             "Authorization": f"Bearer {self._token}"})
         try:
             with _OPENER.open(req, timeout=self.timeout) as resp:  # scheme checked; redirects refused
-                raw = resp.read(MAX_RESPONSE_BYTES + 1)
+                raw, t_end = b"", time.monotonic() + 3 * self.timeout   # total budget: a slow drip cannot hold the render
+                while len(raw) <= MAX_RESPONSE_BYTES:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    raw += chunk
+                    if time.monotonic() > t_end:
+                        raise KgError(f"graph {graph}: read too slow")
         except urllib.error.HTTPError as exc:
             raise KgError(f"graph {graph}: HTTP {exc.code}", missing=exc.code == 404) from None
         except (urllib.error.URLError, OSError, ValueError) as exc:
@@ -271,6 +278,8 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
         if sups:
             nxt = f"{node['graph']}:Decision:{_pick_successor(sups, fetched[node['graph']][0])}"
             node["superseded_by"] = nxt if nxt in by_ref else None
+            if node["superseded_by"]:
+                add(nxt)  # intermediate links of a chain must be in the export too
         if cur != ref:
             add(cur)
 

@@ -493,3 +493,46 @@ def test_status_describes_the_kept_export(tmp_path):
     st = json.loads((tmp_path / "kg-export-status.json").read_text())
     assert st["kept_previous"] is True and st["ok"] is False
     assert st["nodes"] == len(good["nodes"]) and st["graphs"] == good["graphs"]
+
+
+def test_chain_exports_every_link():
+    data = {"g": dict(GRAPH, kg_supersedes=[{"a.slug": "d-new", "b.slug": "d-old"}, {"a.slug": "d-other", "b.slug": "d-new"}])}
+    exp, _d, _e = build([item("p1:A", ["g:Decision:d-old"])], data)
+    n = exp["nodes"]
+    assert n["g:Decision:d-old"]["superseded_by"] == "g:Decision:d-new" and "g:Decision:d-new" in n
+    assert n["g:Decision:d-new"]["superseded_by"] == "g:Decision:d-other" and "g:Decision:d-other" in n
+
+
+class _Drip(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        import time
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        self.send_response(200)
+        self.send_header("Content-Length", "400000")
+        self.end_headers()
+        try:
+            for _ in range(40):
+                self.wfile.write(b" " * 10000)
+                self.wfile.flush()
+                time.sleep(0.1)
+        except OSError:
+            pass
+
+
+def test_slow_drip_response_hits_total_budget():
+    import time
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Drip)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        t0 = time.monotonic()
+        with pytest.raises(kg.KgError, match="too slow"):
+            kg.OmnigraphClient(f"http://127.0.0.1:{srv.server_address[1]}", TOKEN, timeout=0.3)("g", "kg_x", "q")
+        assert time.monotonic() - t0 < 3.0
+    finally:
+        srv.shutdown()
+        srv.server_close()
