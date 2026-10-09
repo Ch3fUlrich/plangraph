@@ -7,6 +7,8 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+from .errors import Refused
+
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
            "ROUTER_VERBS", "READ_CALLS"]
 
@@ -18,7 +20,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "rehome", "record_run", "answer"}
+               "rehome", "record_run", "answer", "mint_run_token"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 #: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
@@ -30,6 +32,16 @@ READ_CALLS = {
     "answers": lambda store, who, project: store.answers(who, project=project),
     "progress": lambda store, who, project: store.progress(who, project=project),
 }
+
+#: M2B: the only verbs a run token may even reach (the store narrows per role).
+RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict"})
+
+
+def run_gate(principal, name):
+    """A run token is refused (403) before any body parsing outside its verbs."""
+    if getattr(principal, "token_id", None) is not None and name not in RUN_VERBS:
+        raise Refused("forbidden", "a run token may not call this verb")
+
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
@@ -71,7 +83,14 @@ def _answer(store, principal, body, need):
                         body.get("decision_id"))
 
 
-ROUTER_VERBS = {"close_on_decision": _close_on_decision,
+def _mint_run_token(store, principal, body, need):
+    # router or an l1 of the item's project: the store decides which
+    return store.mint_run_token(principal, need(body, "key"),
+                                need(body, "role"), need(body, "run_id"))
+
+
+ROUTER_VERBS = {"mint_run_token": _mint_run_token,
+                "close_on_decision": _close_on_decision,
                 "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,

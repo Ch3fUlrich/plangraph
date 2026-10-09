@@ -95,9 +95,11 @@ class SupportMixin:
         return events.verify_integrity(self.conn)
 
     def _append(self, principal, key, type, payload, now):
-        return events.append_event(
+        out = events.append_event(
             self.conn, iso(now), getattr(principal, "name", None),
             getattr(principal, "role", None), None, key, type, payload)
+        self._revoke_for_event(principal, key, type, now)
+        return out
 
     # -------------------------------------------------------------- reads
     def _item(self, key):

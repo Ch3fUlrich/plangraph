@@ -189,7 +189,7 @@ def write(session, verb, body, renderer=None) -> int:
 
 
 def _epoch(session, key) -> int:
-    return int(session.call("GET", "show", {"key": key})["epoch"])
+    return int(os.environ.get("PG_EPOCH") or session.call("GET", "show", {"key": key})["epoch"])
 
 
 # --------------------------------------------------------------------------- #
