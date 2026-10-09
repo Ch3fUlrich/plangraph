@@ -332,7 +332,7 @@ responses capped at 8 MB, the 60 s deadline is checked before every query, <= 12
 projects (all hubs),superseded_by,current}`}, `items` {item key -> refs}, `reverse` {node ref -> item keys; a superseded ref also lists its
 items under the current node}, `projects` {plan project -> `{nodes:[refs]}`: nodes whose Omnigraph Project hub slug equals
 the plan project plus nodes its items reference}. `current` follows `Supersedes` (<= 20 hops, cycle-safe) to the live node;
-`superseded_by` is the direct successor. Listed per-project knowledge = accepted/proposed Decisions, Rules, Components.
+`superseded_by` is the direct successor (the accepted one when several Decisions supersede the same node; every link of a chain is exported). Listed per-project knowledge = accepted/proposed Decisions, Rules, Components.
 Text is raw data: the page must render it with `textContent`. Credential-shaped strings are masked as in `pg render`.
 
 **Dangling-ref status file** (`kg-export-status.json`, for routerctl; the routerctl flag belongs to routing/autoos):

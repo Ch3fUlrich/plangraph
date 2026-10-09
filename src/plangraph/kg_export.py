@@ -268,20 +268,23 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
         return cur
 
     def add(ref):
-        if ref in out or ref not in by_ref:
-            return
-        node = dict(by_ref[ref][0])
-        out[ref] = node
-        cur = current_of(ref)
-        node["current"] = cur
-        sups = by_ref[ref][1].get(node["slug"])
-        if sups:
-            nxt = f"{node['graph']}:Decision:{_pick_successor(sups, fetched[node['graph']][0])}"
-            node["superseded_by"] = nxt if nxt in by_ref else None
-            if node["superseded_by"]:
-                add(nxt)  # intermediate links of a chain must be in the export too
-        if cur != ref:
-            add(cur)
+        stack = [ref]  # iterative: a long supersession chain must not hit the recursion limit
+        while stack:
+            ref = stack.pop()
+            if ref in out or ref not in by_ref:
+                continue
+            node = dict(by_ref[ref][0])
+            out[ref] = node
+            cur = current_of(ref)
+            node["current"] = cur
+            sups = by_ref[ref][1].get(node["slug"])
+            if sups:
+                nxt = f"{node['graph']}:Decision:{_pick_successor(sups, fetched[node['graph']][0])}"
+                node["superseded_by"] = nxt if nxt in by_ref else None
+                if node["superseded_by"]:
+                    stack.append(nxt)  # intermediate links of a chain must be in the export too
+            if cur != ref:
+                stack.append(cur)
 
     dangling, unresolved = {}, set()
     for key, refs in item_refs.items():

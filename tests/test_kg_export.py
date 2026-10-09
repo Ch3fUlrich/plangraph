@@ -536,3 +536,13 @@ def test_slow_drip_response_hits_total_budget():
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_very_long_chain_does_not_recurse():
+    n = 3000
+    sup = [{"a.slug": f"d{i + 1}", "b.slug": f"d{i}"} for i in range(n)]
+    dec = [{"n.slug": f"d{i}", "n.title": f"t{i}", "n.status": "accepted", "n.rationale": None} for i in range(n + 1)]
+    data = {"g": dict(GRAPH, kg_decision=dec, kg_supersedes=sup, kg_decided_in=[])}
+    exp, _d, _e = build([item("p1:A", ["g:Decision:d0"])], data)
+    assert exp["nodes"]["g:Decision:d0"]["current"] == f"g:Decision:d{kg.MAX_CHAIN}"  # chain walk is capped
+    assert "g:Decision:d1" in exp["nodes"]
