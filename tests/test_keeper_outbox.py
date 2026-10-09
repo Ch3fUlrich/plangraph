@@ -178,3 +178,73 @@ def test_client_drops_non_object_lines(tmp_path, monkeypatch):
             return {"results": [{"id": "a" * 32, "result": "ok"}]}
     assert outbox.cmd_replay(None, Session()) == 0
     assert path.read_text() == ""
+
+
+def test_per_token_replay_limit(w, monkeypatch):
+    from plangraph.keeper import store_outbox
+    epoch, tok, p = claimed_with_token(w)
+    monkeypatch.setattr(store_outbox, "MAX_SEEN_PER_TOKEN", 3)
+    w.store.replay(p, [entry(i, "heartbeat", epoch) for i in range(3)])
+    assert code(w.store.replay, p, [entry(9, "heartbeat", epoch)]) == "conflict"
+
+
+def test_client_refuses_symlinked_outbox(tmp_path, monkeypatch):
+    target = tmp_path / "victim"
+    target.write_text("keep me\n")
+    link = tmp_path / "outbox.jsonl"
+    os.symlink(target, link)
+    monkeypatch.setenv("PG_OUTBOX", str(link))
+    with pytest.raises(OSError):
+        outbox.on_unreachable("heartbeat", {"key": "demo:A", "epoch": 1}, "down")
+    assert target.read_text() == "keep me\n"
+
+
+def test_foreign_owner_stamp_is_ignored(w, tmp_path, monkeypatch):
+    cfg = SimpleNamespace(db=str(tmp_path / "keeper.db"), reap_interval=60)
+    outage.stamp(cfg)
+    now = w.store.now()
+    os.utime(outage.alive_path(cfg), (now - 900, now - 900))
+    other = os.getuid() + 1
+    monkeypatch.setattr(outage.os, "getuid", lambda: other)        # the stamp is "not ours"
+    assert outage.check_and_record(w.store, SYSTEM, cfg, now=now) is None
+
+
+def test_extension_without_the_outage_event_is_flagged(w):
+    from plangraph.keeper import auth as _auth
+    from test_keeper_run_tokens import to_review
+    to_review(w)
+    mint(w, "l1main", "demo:A", "reviewer", "rv1")
+    raw = sqlite3.connect(str(w.path))
+    raw.execute("UPDATE run_tokens SET expires_at=datetime(expires_at, '+600 seconds') || 'Z'"
+                " WHERE role='reviewer'")
+    raw.commit()
+    raw.close()
+    assert any(p["field"] == "expires_at" for p in verify_integrity(w.conn))   # no grace without the event
+
+
+def test_concurrent_http_replays_of_one_id_run_once(tmp_path):
+    import threading
+    from door_util import Doors
+    from keeper_util import World, seed, to_claimed
+    from test_keeper_run_tokens import FakeRuns
+    world = World(tmp_path)
+    seed(world, [("A", []), ("B", [])])
+    world.store.ctx = {"runs": FakeRuns()}
+    doors = Doors(world, tmp_path)
+    try:
+        epoch = to_claimed(world, "demo:A")
+        world.tokens["runw"] = doors.http("l1main", "POST", "/v1/mint_run_token",
+                                          {"key": "demo:A", "role": "writer", "run_id": "w1"})[1]["token"]
+        payload = {"entries": [entry(7, "heartbeat", epoch)]}
+        got = []
+        threads = [threading.Thread(target=lambda: got.append(
+            doors.http("runw", "POST", "/v1/replay", payload)[1]["results"][0]["result"]))
+            for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert sorted(got) == ["duplicate", "duplicate", "duplicate", "ok"]
+    finally:
+        doors.close()
+        world.close()

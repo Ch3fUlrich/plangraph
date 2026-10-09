@@ -29,6 +29,8 @@ from .errors import Refused
 __all__ = ["OutboxMixin", "MAX_ENTRIES"]
 
 MAX_ENTRIES = 100
+#: Per run token: a token cannot grow outbox_seen without bound (its life is <= 24 h anyway).
+MAX_SEEN_PER_TOKEN = 1000
 _ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 
 
@@ -40,6 +42,10 @@ class OutboxMixin:
             raise Refused("forbidden", "only a run token may replay an outbox")
         if not isinstance(entries, list) or not entries or len(entries) > MAX_ENTRIES:
             raise Refused("validation", f"entries must be a list of 1..{MAX_ENTRIES}")
+        used = self.conn.execute("SELECT COUNT(*) FROM outbox_seen WHERE token_id=?",
+                                 (principal.token_id,)).fetchone()[0]
+        if used + len(entries) > MAX_SEEN_PER_TOKEN:
+            raise Refused("conflict", f"outbox limit of {MAX_SEEN_PER_TOKEN} entries per run token")
         results = []
         for entry in entries:
             results.append(self._replay_one(principal, entry))

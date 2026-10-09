@@ -36,7 +36,7 @@ def on_unreachable(verb, body, exc, *, exit_unreachable=3) -> int:
         return exit_unreachable
     entry = {"id": secrets.token_hex(16), "verb": verb, "body": body,
              "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")
     print(f"keeper unreachable: queued {verb} in the outbox ({entry['id']})", file=sys.stderr)
@@ -45,7 +45,8 @@ def on_unreachable(verb, body, exc, *, exit_unreachable=3) -> int:
 
 def _read(path):
     entries = []
-    with open(path, encoding="utf-8") as handle:
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if line:
@@ -80,8 +81,8 @@ def cmd_replay(args, session) -> int:
         return 2
     finally:
         left = [e for e in entries if e.get("id") not in answered]
-        tmp = path + ".tmp"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        tmp = f"{path}.{secrets.token_hex(8)}.tmp"     # fresh name, never an existing link
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.writelines(json.dumps(e, sort_keys=True) + "\n" for e in left)
         os.replace(tmp, path)

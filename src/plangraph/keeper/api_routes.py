@@ -90,7 +90,7 @@ def _mint_run_token(store, principal, body, need):
 
 
 def _replay(store, principal, body, need):
-    return store.replay(principal, need(body, "entries"))   # M2B-OUTBOX: run tokens only
+    return store.replay(principal, body.get("entries"))   # M2B-OUTBOX: principal checked first (403)
 
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
