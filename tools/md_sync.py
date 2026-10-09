@@ -59,7 +59,7 @@ def status_doc(mode):
     return {"ts": None, "mode": mode, "ops": 0, "applied": False,
             "skipped": 0, "refused": 0, "gone": 0, "redactions": 0,
             "close_skipped": [], "d_closes": [], "d_in_review": [],
-            "warnings": [], "models": [], "error": None}
+            "warnings": [], "models": [], "unmatched": [], "error": None}
 
 
 def fill_status(status, plan):
@@ -240,6 +240,9 @@ def main(argv=None, out=None, err=None):
             return stop(2, f"error: {exc}")
     digest = hashlib.sha256(texts["answers"]).hexdigest()
     questions = mp.parse_questions(texts["questions"].decode("utf-8", "replace"))
+    # QA-IMPORT: rows whose ID cell is not one id never become items: name them (redacted).
+    status["unmatched"] = [mplan.credential_guard.mask(mp.redact(cell)[0])[0][:80] for cell in
+                           mp.unmatched_rows(texts["questions"].decode("utf-8", "replace"))]
     answers, skipped = mp.parse_answers(texts["answers"].decode("utf-8", "replace"))
     decisions_text = texts["decisions"].decode("utf-8", "replace")
     decisions = mp.parse_decisions(decisions_text)

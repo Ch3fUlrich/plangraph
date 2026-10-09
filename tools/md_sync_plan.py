@@ -20,6 +20,7 @@ if _SRC not in sys.path:
 
 from plangraph.keeper import credential_guard  # noqa: E402  (D-405)
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
+from plangraph.keeper.item_fields import CHOICE_KINDS  # noqa: E402
 
 import md_sync_dclose  # noqa: E402  (D-505: router D-rows with Closes key@sha)
 
@@ -162,6 +163,9 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                 lane["wait"] = want_create
             if desc:
                 lane["description"] = desc
+            choices = _masked_choices(getattr(entry, "choices", None), plan)
+            if choices:
+                lane["choices"] = choices
             plan.add({"op": "create", "item": lane})
             key = f"{PROJECT}:{entry.id}"
             pending[entry.id] = key
@@ -183,6 +187,15 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                 # Claimed/in-review items are not editable here at all: this
                 # branch only runs for open items, so no extra guard is needed.
                 fields["wait"] = want
+            want_choices = _masked_choices(getattr(entry, "choices", None), plan)
+            if item.get("kind") not in CHOICE_KINDS:
+                # A legacy kind (e.g. a pre-kinds 'lane' OS row) cannot carry choices;
+                # sending them would make the keeper refuse the whole batch.
+                if want_choices:
+                    plan.warnings.append({"key": item["key"], "decision": None,
+                                          "text": f"choices ignored on kind {item.get('kind')!r}"})
+            elif (item.get("choices") or None) != want_choices:
+                fields["choices"] = want_choices
             if fields:
                 plan.add({"op": "edit", "key": item["key"], "fields": fields})
     _link(plan, state, new_lanes)
@@ -205,6 +218,38 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
             plan.gone.append(item["key"])
     _mask_guarded(plan)
     return plan
+
+
+def _masked_choices(choices, plan):
+    """QA-IMPORT: the parsed choices with credential-shaped text masked (never refused)."""
+    if not choices:
+        return None
+    out = {"options": [], "default": choices.get("default"),
+           "deadline": choices.get("deadline"), "blocks": None}
+    for opt in choices.get("options") or []:
+        entry = {"id": opt["id"]}
+        for name in ("label", "consequence"):
+            if opt.get(name):
+                text, n = mp.redact(opt[name])
+                text, m = credential_guard.mask(text)
+                plan.redactions += n + m
+                entry[name] = text
+        if entry.get("label") != opt.get("label") or credential_guard.find_shapes(opt["id"]):
+            # the id is a slug of the label: a masked label means a secret-derived id
+            taken = {o["id"] for o in choices.get("options") or []} | {o["id"] for o in out["options"]}
+            n = 1
+            while f"masked-{n}" in taken:
+                n += 1
+            entry["id"] = f"masked-{n}"
+            if out["default"] == opt["id"]:
+                out["default"] = entry["id"]
+        out["options"].append(entry)
+    if choices.get("blocks"):
+        text, n = mp.redact(choices["blocks"])
+        text, m = credential_guard.mask(text)
+        plan.redactions += n + m
+        out["blocks"] = text
+    return out
 
 
 def _mask_guarded(plan):
