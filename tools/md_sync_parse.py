@@ -127,11 +127,11 @@ def _table_rows(text):
         if len(ids) != 1:
             continue
         # Optional Kind column (QUESTIONS.md since 2026-10-09): ``| Prio | ID | Kind | why | step | where |``.
-        kind = cells[2].strip().upper() if cells[2].strip().upper() in _KIND_CELLS else None
-        if kind is not None:
+        # Only a 6+-cell row has one: a 5-cell row whose why text is "TASK" stays a why.
+        kind = None
+        if len(cells) >= 6 and cells[2].strip().upper() in _KIND_CELLS:
+            kind = cells[2].strip().upper()
             cells = cells[:2] + cells[3:]
-            if len(cells) < 5:
-                cells += [""] * (5 - len(cells))
         out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4], kind))
     return out
 

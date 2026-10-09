@@ -137,3 +137,8 @@ def test_old_five_column_table_still_classifies_by_rule():
     text = "| 1 | OS-5 | Restart the box | do it | host |\n"
     (q,) = mp.parse_questions(text)
     assert (q.wait, q.title, q.description) == ("task", "OP: Restart the box", "do it — host")
+
+
+def test_five_column_row_whose_why_is_task_is_not_shifted():
+    (q,) = mp.parse_questions("| 1 | Q-1 | TASK | Actual step | Actual where |\n")
+    assert (q.title, q.description) == ("Q: TASK", "Actual step — Actual where")
