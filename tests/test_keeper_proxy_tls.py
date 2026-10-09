@@ -11,7 +11,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 PROXY = ROOT / "deploy" / "keeper-proxy"
 
-pytestmark = pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl missing")
+pytestmark = [pytest.mark.skipif(shutil.which("openssl") is None, reason="openssl missing"),
+              pytest.mark.skipif(not PROXY.is_dir(), reason="deploy/ is private (not in the public tree)")]
 
 
 def _text(cert):
@@ -91,9 +92,9 @@ def test_nginx_requires_client_certs_and_modern_tls():
 
 def test_caddy_snippet_pins_the_ca_and_name_and_never_skips_verify():
     readme = (PROXY / "README.md").read_text(encoding="utf-8")
-    assert "reverse_proxy https://coding.vm:8788" in readme
+    assert re.search(r"reverse_proxy https://[\w.-]+:8788", readme)
     assert "tls_trust_pool file /usr/local/etc/caddy/internal-ca/ca.crt" in readme
-    assert "tls_server_name coding.vm" in readme
+    assert re.search(r"tls_server_name [\w.-]+\n", readme)
     assert "tls_client_auth" in readme
     snippet = readme.split("```", 2)[1]
     assert "insecure_skip_verify" not in snippet

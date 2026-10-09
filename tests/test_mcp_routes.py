@@ -2,7 +2,7 @@
 
 Regression: the `evidence` and `priority` tools posted to /evidence and
 /priority, which do not exist (the API verbs are add_evidence / set_priority),
-so workers could not attach evidence through the MCP (prox-L1, 2026-10-08).
+so workers could not attach evidence through the MCP (an L1 on another host, 2026-10-08).
 """
 from plangraph.keeper import api_routes, mcp
 

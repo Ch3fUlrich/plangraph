@@ -21,7 +21,7 @@ class _Opener:
 
     def open(self, request, timeout=None):
         self.requests.append(request)
-        return _Resp(b"routing-00 router")
+        return _Resp(b"router-1 router")
 
 
 def test_https_base_url_with_prefix_builds_v1_urls(tmp_path):
@@ -30,7 +30,7 @@ def test_https_base_url_with_prefix_builds_v1_urls(tmp_path):
     opener = _Opener()
     client = HttpKeeper("https://keeper.example.test/", str(token), opener=opener)
     text, err = client.call("GET", "whoami", {})
-    assert (text, err) == ("routing-00 router", False)
+    assert (text, err) == ("router-1 router", False)
     req = opener.requests[0]
     assert req.full_url.startswith("https://keeper.example.test/v1/whoami?")
     assert req.get_header("Authorization") == "Bearer secret-token"

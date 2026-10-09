@@ -38,13 +38,25 @@ message = "Initial public history of plangraph"
 [scrub]
 # Extra regexes / allowances for scrub_check (keep real hostnames in a PRIVATE rules
 # file passed with --rules, not here):
-hostname_patterns = []
+# Fleet host/principal names fail closed in the public tree (server-L1-routing, SPLIT-DATA-REPO judgement).
+hostname_patterns = ["coding\\.vm", "routing-00", "prox-L1"]
 allow_email_domains = []
 
 # Vendored third-party code: minified JS trips entropy/IP/e-mail heuristics.
 [[scrub.allow]]
 path = "vendor/**"
 rules = ["ipv4", "ipv6", "email", "high-entropy", "token-shape", "hostname", "credential-shape"]
+
+# md-sync accepts the router's D-row 'by' spelling routing-00 (D-722): functional, reviewed.
+[[scrub.allow]]
+path = "tools/md_sync_dclose.py"
+rules = ["hostname"]
+[[scrub.allow]]
+path = "tools/split/manifest.toml"
+rules = ["hostname"]
+[[scrub.allow]]
+path = "tests/test_md_sync_router_by.py"
+rules = ["hostname"]
 
 # Tests that deliberately contain obviously fake credential strings (reviewed, synthetic).
 [[scrub.allow]]
