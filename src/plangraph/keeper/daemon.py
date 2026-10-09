@@ -12,7 +12,7 @@ import signal
 import sys
 import threading
 
-from . import api, config as config_mod, db as kdb, outage
+from . import anchor, api, config as config_mod, db as kdb, outage
 from .errors import KeeperLocked
 from .store import Store
 
@@ -37,7 +37,12 @@ def run(cfg, *, host=None, port=None, ready=None):
         store = Store(conn, ctx=config_mod.verifier_context(cfg),
                       batch_roots=cfg.batch_roots)
         server = api.make_server(store, cfg, host=host, port=port)
+        if anchor.enabled(cfg):   # M2B-ANCHOR: refuse a rolled-back or forked DB before serving
+            anchor.check_start(conn, cfg)
+            server.anchorer = anchor.Anchorer(cfg)
         outage.check_and_record(store, server.system, cfg)   # M2B-OUTBOX: freeze clocks over a downtime
+        if server.anchorer is not None:
+            server.anchorer.record(conn, "start")
         server.start_reaper()
         stop = threading.Event()
         _install_signals(stop)
@@ -76,6 +81,9 @@ def main(argv=None) -> int:
         return run(cfg, host=args.host, port=args.port)
     except KeeperLocked as exc:
         print(f"keeper locked: {exc}", file=sys.stderr)
+        return 1
+    except anchor.AnchorError as exc:
+        print(f"keeper: REFUSED by the anchor log: {exc}", file=sys.stderr)
         return 1
     except RuntimeError as exc:
         print(f"keeper: {exc}", file=sys.stderr)

@@ -334,6 +334,8 @@ class Reaper(threading.Thread):
                     self.server.store.reap(self.server.system)
                     write_snapshot(self.server, self.server.system)
                     outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
+                    if self.server.anchorer is not None:      # M2B-ANCHOR: done transitions + hourly
+                        self.server.anchorer.tick(self.server.store.conn)
             except Exception:  # noqa: BLE001 - the reaper never dies loudly
                 continue
 
@@ -355,6 +357,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.lock = threading.RLock()
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
+        self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
         super().__init__(address, KeeperHandler)
 
     def start_reaper(self):
