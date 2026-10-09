@@ -26,31 +26,38 @@ RUN_PREFIX = "run:"
 def fold_tokens(events):
     """``token_id -> {key, role, run_id, epoch, revoked}`` from the event chain."""
     tokens = {}
+    dupes = []
 
-    def revoke(pred):
+    def revoke(pred, ts):
         for tok in tokens.values():
             if not tok["revoked"] and pred(tok):
                 tok["revoked"] = True
+                tok["revoked_at"] = ts
 
     for ev in events:
-        key, kind = ev.get("key"), ev.get("type")
+        key, kind, ts = ev.get("key"), ev.get("type"), ev.get("ts")
         payload = ev.get("payload") or {}
         if key is None:
             continue
         if kind == "token_minted":
             role, run_id, epoch = payload.get("role"), payload.get("run_id"), payload.get("epoch")
             # re-mint: the store first revokes the live token of the same (key, epoch, role, run)
-            revoke(lambda t: (t["key"], t["epoch"], t["role"], t["run_id"]) == (key, epoch, role, run_id))
+            revoke(lambda t: (t["key"], t["epoch"], t["role"], t["run_id"]) == (key, epoch, role, run_id), ts)
+            if payload.get("token_id") in tokens:
+                dupes.append(payload.get("token_id"))      # ids are AUTOINCREMENT: never reused
             tokens[payload.get("token_id")] = {"key": key, "role": role, "run_id": run_id,
                                                "epoch": epoch, "revoked": False,
-                                               "minted_at": ev.get("ts")}
+                                               "minted_at": ts, "revoked_at": None}
         elif kind in REVOKE_ALL:
-            revoke(lambda t: t["key"] == key)
+            revoke(lambda t: t["key"] == key, ts)
         elif kind == "submitted":
-            revoke(lambda t: t["key"] == key and t["role"] == "writer")
+            revoke(lambda t: t["key"] == key and t["role"] == "writer", ts)
         elif kind == "review_verdict" and str(ev.get("actor") or "").startswith(RUN_PREFIX):
             run_id = str(ev["actor"])[len(RUN_PREFIX):]
-            revoke(lambda t: t["key"] == key and t["role"] == "reviewer" and t["run_id"] == run_id)
+            # At most one live reviewer token per (key, run): a re-mint revokes the previous one and a
+            # new epoch (claimed/legacy_state_set) revokes all, so this equals the store's id match.
+            revoke(lambda t: t["key"] == key and t["role"] == "reviewer" and t["run_id"] == run_id, ts)
+    tokens["__dupes__"] = dupes
     return tokens
 
 
@@ -71,7 +78,8 @@ def verify_tokens(conn, events):
             raise                     # anything else must surface, never a silent clean
         rows = {}                     # a DB from before M2B-RUN-TOKENS (minted tokens still checked)
     folded = fold_tokens(events)
-    problems = []
+    problems = [{"key": None, "code": "token_mismatch", "field": "token_id",
+                 "expected": "unique", "got": tid} for tid in folded.pop("__dupes__", [])]
     for tid, want in folded.items():
         row = rows.get(tid)
         if row is None:
@@ -85,6 +93,9 @@ def verify_tokens(conn, events):
         if (row["revoked_at"] is not None) != want["revoked"]:
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "revoked",
                              "expected": want["revoked"], "got": row["revoked_at"] is not None})
+        elif want["revoked"] and row["revoked_at"] != want["revoked_at"]:
+            problems.append({"key": want["key"], "code": "token_mismatch", "field": "revoked_at",
+                             "expected": want["revoked_at"], "got": row["revoked_at"]})
         if row["created_at"] != want["minted_at"]:          # anchored to the hash-chained event
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "created_at",
                              "expected": want["minted_at"], "got": row["created_at"]})

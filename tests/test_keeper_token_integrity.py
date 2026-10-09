@@ -90,3 +90,19 @@ def test_a_broken_table_is_not_a_silent_clean(w):
     import pytest
     with pytest.raises(sqlite3.OperationalError):
         verify_integrity(w.conn)
+
+
+def test_changed_revocation_time_is_flagged(w):
+    claimed_with_token(w)
+    w.store.release(w.p("l1main"), "demo:A", 1)
+    assert problems(w) == []
+    raw(w, "UPDATE run_tokens SET revoked_at='2001-01-01T00:00:00Z'")
+    assert ("token_mismatch", "revoked_at") in problems(w)
+
+
+def test_duplicate_token_id_in_events_is_flagged():
+    ev = [{"key": "p:A", "type": "token_minted", "ts": "t1",
+           "payload": {"token_id": 1, "role": "writer", "run_id": "r", "epoch": 1}},
+          {"key": "p:A", "type": "token_minted", "ts": "t2",
+           "payload": {"token_id": 1, "role": "writer", "run_id": "s", "epoch": 1}}]
+    assert token_fold.fold_tokens(ev)["__dupes__"] == [1]
