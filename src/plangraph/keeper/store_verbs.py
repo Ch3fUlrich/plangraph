@@ -163,7 +163,6 @@ class VerbsMixin:
             raise Refused("bad_state", f"{key} is {item['state']}, not claimed")
         self._actor_or_delegate(principal, item)
         self._epoch_ok(item, epoch)
-        lease = self._iso(now + self.default_lease)
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -172,6 +171,11 @@ class VerbsMixin:
                 raise Refused("conflict",
                               f"{key} is {fresh['state']}, not claimed")
             self._actor_or_delegate(principal, fresh)
+            # D-837: a heartbeat extends, never shortens - a claim may hold a lease longer than
+            # the default (claim lease_s), and the fold expects the cache lease >= the claimed one.
+            current = self._parse_iso(fresh["lease_until"]) if fresh["lease_until"] else None
+            lease = self._iso(max(now + self.default_lease,
+                                  current.timestamp() if current is not None else 0))
             cursor = self.conn.execute(
                 "UPDATE items SET lease_until=?, updated_at=?"
                 " WHERE key=? AND state='claimed' AND epoch=?",
