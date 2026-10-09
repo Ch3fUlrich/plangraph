@@ -1,5 +1,6 @@
 """Parsers and redaction for md_sync (QUESTIONS.md, ANSWERS.md, decisions-log.md)."""
 import re
+import unicodedata
 from collections import namedtuple
 
 Question = namedtuple("Question", "id kind title description heading wait choices",
@@ -20,6 +21,12 @@ _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 TITLE_MAX = 120
 TITLE_CAP = 200
 
+
+
+def is_control(c):
+    """Same rule as plangraph.keeper.item_fields.is_control (kept in sync by a test): the
+    parser must never emit choices the keeper refuses, or the whole md-sync batch is refused."""
+    return ord(c) < 32 or 127 <= ord(c) < 160 or unicodedata.category(c) in ("Cf", "Zl", "Zp")
 
 def _entries(text, bullet_re):
     """Yield ``(heading, match, lines)``: a top-level ID bullet plus its body."""
@@ -182,7 +189,7 @@ def parse_options(step, why=""):
         marked = part.startswith("*")
         part = part.lstrip("*").strip()
         label, _, consequence = part.partition("=")
-        if any(ord(c) < 32 or 127 <= ord(c) < 160 for c in label + consequence):
+        if any(is_control(c) for c in label + consequence):
             return step, None                 # checked before trimming: a tab is a control too
         label, consequence = label.strip(), consequence.strip()
         oid = _slug(label)

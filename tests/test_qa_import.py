@@ -87,6 +87,8 @@ def choices(**kw):
     {"options": [{"id": "A B", "label": "A"}]}, {"options": [{"id": "a", "label": "x" * 61}]},
     {"options": [{"id": "a", "label": "line\nbreak"}]}, {"deadline": "2026-13-40"},
     {"deadline": "tomorrow"}, {"extra": 1},
+    {"options": [{"id": "a", "label": "a\u200bb"}]}, {"options": [{"id": "a", "label": "a\u2028b"}]},
+    {"options": [{"id": "a", "label": "a\u202eb"}]},
     {"options": [{"id": "a", "label": "A", "html": "<b>"}]},
     {"options": [{"id": f"o{i}", "label": "x"} for i in range(9)], "default": None},
     {"blocks": "log" + "in admin/" + "hunter2" + "secret"},
@@ -267,3 +269,33 @@ def test_a_data_row_whose_id_cell_says_id_is_unmatched():
     text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
             "| 1 | id | TASK | a | b | c |\n")
     assert mp.unmatched_rows(text) == ["id"]
+
+
+def test_options_on_a_legacy_lane_row_warn_and_do_not_stall_md_sync(w, srv, site, tmp_path):
+    """51 open routing OS rows are legacy kind 'lane'; an Options block on one must not make the
+    keeper refuse the whole md-sync batch (choices are only for operator kinds)."""
+    r = w.p("router")
+    w.store.create_items(r, [defn("OS-901", project="routing", source="md-sync",
+                                  title="legacy row", deps=[]),
+                             defn("GOAL2", project="routing", kind="goal", deps=["routing:OS-901"])])
+    with open(site / "QUESTIONS.md", "a", encoding="utf-8") as fh:
+        fh.write(f"| 2 | OS-901 | ANSWER | legacy row | {STEP} | any |\n")
+    rc, out, status = sync(site, srv, w, tmp_path, "--apply")
+    assert status["error"] is None
+    assert "OS-901" not in " ".join(str(x) for x in status.get("refused_ops", [])) and "refused OS-901" not in out
+    assert w.store.show(r, "routing:OS-901").get("choices") in (None, {})
+    assert w.store.show(r, "routing:Q-MAIL")["choices"]["default"] == "stay-disabled"
+    assert any(x["key"] == "routing:OS-901" and "choices" in x["text"] for x in status["warnings"])
+
+
+@pytest.mark.parametrize("ch", ["\u200b", "\u2028", "\u202e"])
+def test_parser_refuses_what_the_keeper_refuses(ch):
+    """md-sync must never send choices the keeper rejects (that would refuse the whole batch)."""
+    rest, parsed = mp.parse_options(f"Options: a{ch}b = x; *c", "why")
+    assert parsed is None
+
+
+def test_parser_and_keeper_control_rules_agree():
+    from plangraph.keeper.item_fields import is_control as keeper_is_control
+    sample = [chr(i) for i in range(0, 0x3000)] + ["\ufeff", "\U000e0001"]
+    assert [mp.is_control(c) for c in sample] == [keeper_is_control(c) for c in sample]

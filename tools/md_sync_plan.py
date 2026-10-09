@@ -20,6 +20,7 @@ if _SRC not in sys.path:
 
 from plangraph.keeper import credential_guard  # noqa: E402  (D-405)
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
+from plangraph.keeper.item_fields import CHOICE_KINDS  # noqa: E402
 
 import md_sync_dclose  # noqa: E402  (D-505: router D-rows with Closes key@sha)
 
@@ -187,7 +188,13 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                 # branch only runs for open items, so no extra guard is needed.
                 fields["wait"] = want
             want_choices = _masked_choices(getattr(entry, "choices", None), plan)
-            if (item.get("choices") or None) != want_choices:
+            if item.get("kind") not in CHOICE_KINDS:
+                # A legacy kind (e.g. a pre-kinds 'lane' OS row) cannot carry choices;
+                # sending them would make the keeper refuse the whole batch.
+                if want_choices:
+                    plan.warnings.append({"key": item["key"], "decision": None,
+                                          "text": f"choices ignored on kind {item.get('kind')!r}"})
+            elif (item.get("choices") or None) != want_choices:
                 fields["choices"] = want_choices
             if fields:
                 plan.add({"op": "edit", "key": item["key"], "fields": fields})

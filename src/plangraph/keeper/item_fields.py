@@ -149,10 +149,16 @@ _OPTION_ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
+def is_control(c):
+    """C0, DEL, C1, and invisible format/separator characters (ZWSP, bidi marks, U+2028/9)."""
+    import unicodedata
+    return ord(c) < 32 or 127 <= ord(c) < 160 or unicodedata.category(c) in ("Cf", "Zl", "Zp")
+
+
 def _choice_text(name, value, cap, where):
     if not isinstance(value, str) or not value.strip() or len(value) > cap:
         raise Refused("validation", f"{where}choices {name} must be 1-{cap} characters")
-    if any(ord(c) < 32 or 127 <= ord(c) < 160 for c in value):   # C0, DEL, C1
+    if any(is_control(c) for c in value):
         raise Refused("validation", f"{where}choices {name} must not contain control characters")
     from .credential_guard import guard
     guard(f"choices {name}", value)
