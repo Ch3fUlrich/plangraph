@@ -195,6 +195,7 @@ def _add_admin(sub):
     vsnap = commands.add_parser("verify-snapshot", help="M2B: check the snapshot signature")
     vsnap.add_argument("--snapshot")
     vsnap.add_argument("--pubkey")
+    commands.add_parser("verify-anchor", help="M2B: check the anchor log against the chain")
 
 
 def build_parser():

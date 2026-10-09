@@ -258,3 +258,25 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
 - Hosts without a timer (prox, D-844: the Proxmox host runs no daemons/timers) pull ON DEMAND; the L1 there does:
   1. at the START of every plan-touching task: `PG_CONFIG=~/.config/plangraph/reader.json PYTHONPATH=src python3 -m plangraph.keeper.cli sync pull`
   2. AGAIN right after its plan update (claim, evidence, submit, edit, batch) went through, so the local copy shows the keeper's result.
+
+## Hash-chain anchor (M2B-ANCHOR, D-789 D1)
+
+The keeper writes the chain head `{"v": 1, "seq", "head", "ts", "reason"}` to an append-only anchor log outside the
+DB: at start (`start`), within one reap interval of every done transition (`done`: review_passed,
+closed_on_decision, answered) and hourly while the head moves (`hourly`). At start it REFUSES a DB whose head_seq
+is behind the newest anchor (rolled-back file) or whose event at the anchored seq has another hash (fork):
+`keeper: REFUSED by the anchor log: …`, exit 1. Restoring an older `keeper.db` backup is therefore refused once
+newer anchors exist; that is the point. An anchor write that fails is logged once and retried on the next tick;
+it never stops the keeper.
+
+- Production (`anchor_socket` + `anchor_log`): a second user `pganchor` owns `/var/lib/pganchor/anchor.log`. The
+  keeper connects to `/run/pganchor/anchor.sock` (`deploy/pganchor/pganchor.socket`, Accept=yes, group of the
+  keeper's user, 0660). Each connection starts `pganchor@.service` (User=pganchor, sandboxed, no network), which
+  runs a copy of `src/plangraph/keeper/anchord.py` (stdlib only, one file) and appends one record unless it is
+  older than the last one or forks it. The keeper cannot rewrite or truncate the log.
+- Interim (`anchor_file`): the keeper appends itself, detection only; the operator sets `chattr +a` on the file.
+- `pg admin verify-anchor`: every record against the chain (`anchor_mismatch`, `anchor_ahead`, `anchor_order`,
+  `anchor_malformed`), the start check, and the interim file's append-only flag.
+- Daily tag: `tools/anchor_tag.py --repo ~/code/plangraph-data --anchor-log <log> [--push]` tags the data repo
+  `anchor-YYYYMMDD` with the newest record (scheduling it is an operator/L1 step).
+- Operator install steps: plangraph-data `docs/proposals/2026-10-09-m2b-anchor-install.md`.

@@ -141,6 +141,36 @@ def _cmd_snapshot_keygen(args, cfg) -> int:
     return 0
 
 
+def _cmd_verify_anchor(args, cfg) -> int:
+    """M2B-ANCHOR: every anchor record must match the chain; reports the interim +a flag."""
+    from . import anchor
+    if not anchor.enabled(cfg):
+        print("anchors not configured (anchor_socket + anchor_log, or anchor_file)", file=sys.stderr)
+        return 2
+    path = anchor._log_path(cfg)
+    conn = _open(cfg)
+    try:
+        problems = anchor.verify(conn, path)
+        last = anchor.latest(path)
+        try:
+            anchor.check_start(conn, cfg)
+        except anchor.AnchorError as exc:
+            problems.append({"code": "anchor_start_refused", "msg": str(exc)})
+    finally:
+        conn.close()
+    for problem in problems:
+        print(problem)
+    if cfg.get("anchor_file") and not cfg.get("anchor_socket"):
+        flag = anchor.append_only(path)
+        print("interim anchor file: append-only flag "
+              + {True: "set", False: "NOT set (operator: chattr +a)", None: "unknown"}[flag])
+    if problems:
+        print(f"{len(problems)} anchor problem(s)", file=sys.stderr)
+        return 2
+    print(f"anchors ok: newest seq {last['seq'] if last else '-'}")
+    return 0
+
+
 def _cmd_verify_snapshot(args, cfg) -> int:
     """M2B: exit 0 iff the snapshot's detached signature verifies under the public key."""
     from . import snapshot_io
@@ -162,6 +192,7 @@ def _cmd_verify_snapshot(args, cfg) -> int:
 _COMMANDS = {
     "snapshot-keygen": _cmd_snapshot_keygen,
     "verify-snapshot": _cmd_verify_snapshot,
+    "verify-anchor": _cmd_verify_anchor,
     "init": _cmd_init,
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,
