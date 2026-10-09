@@ -12,9 +12,9 @@ moves a row *onto* a locked key is as forbidden as one that moves it off.
 from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
-           "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL"]
+           "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL"]
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
 
@@ -24,7 +24,7 @@ EVENT_TYPES = (
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
-    "token_minted",
+    "token_minted", "outage_recorded",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -66,6 +66,24 @@ CREATE TABLE IF NOT EXISTS run_tokens (
     revoked_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_run_tokens_key ON run_tokens(key);
+"""
+
+#: M2B-OUTBOX: replayed offline entries, deduplicated by the client-generated id.
+OUTBOX_DDL = """
+CREATE TABLE IF NOT EXISTS outbox_seen (
+    entry_id   TEXT PRIMARY KEY,
+    token_id   INTEGER NOT NULL,
+    verb       TEXT NOT NULL,
+    key        TEXT,
+    result     TEXT NOT NULL,
+    seen_at    TEXT NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS trg_outbox_seen_append_only_update
+BEFORE UPDATE ON outbox_seen
+BEGIN SELECT RAISE(ABORT, 'outbox_seen is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_outbox_seen_append_only_delete
+BEFORE DELETE ON outbox_seen
+BEGIN SELECT RAISE(ABORT, 'outbox_seen is append-only'); END;
 """
 
 TABLES = """
@@ -296,4 +314,4 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL
+SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL

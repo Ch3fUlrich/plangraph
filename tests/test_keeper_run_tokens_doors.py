@@ -57,7 +57,7 @@ def test_http_run_token_is_403_everywhere_else(d):
         status, _ = d.http("runw", "GET", f"/v1/{verb}?key=demo:A")
         assert status == 403, verb
     for verb in sorted(api_routes.WRITE_VERBS - {"heartbeat", "add_evidence",
-                                                  "submit"}):
+                                                  "submit", "replay"}):  # replay: M2B-OUTBOX
         status, _ = d.http("runw", "POST", f"/v1/{verb}",
                            {"key": "demo:A", "epoch": epoch, "role": "writer",
                             "run_id": "w1", "ok": True})  # malformed or not: 403
