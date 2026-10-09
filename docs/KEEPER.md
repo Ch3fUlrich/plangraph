@@ -214,3 +214,18 @@ with `snapshot_pubkey` (the CLI's local fallback, `pg admin verify-snapshot`) re
 foreign-key snapshot. Keys: `pg admin snapshot-keygen --private P --public Q` (refuses to overwrite; never prints keys).
 Dependency: `cryptography >= 41.0.7` (Apache-2.0 OR BSD-3-Clause; Ubuntu `python3-cryptography`), imported only when
 signing or verifying is configured. Going live (key generation + config) is a parked operator/router step.
+
+### Going live with the signed snapshot (operator step Q-PG-SNAPSHOT-KEYGEN)
+
+On the keeper host, as the keeper's user (keys never leave the host; nothing is printed):
+```
+cd ~/code/plangraph/.claude/worktrees/proposal
+PG_CONFIG=~/.local/share/plangraph/keeper.json PYTHONPATH=src python3 -m plangraph.keeper.cli admin snapshot-keygen \
+    --private ~/.config/plangraph/snapshot-signing.key --public ~/.config/plangraph/snapshot-signing.pub
+# keeper.json: add  "signing_key": "~/.config/plangraph/snapshot-signing.key",
+#                   "snapshot_pubkey": "~/.config/plangraph/snapshot-signing.pub"
+systemctl --user restart plangraph-keeper.service
+PG_CONFIG=~/.local/share/plangraph/keeper.json PYTHONPATH=src python3 -m plangraph.keeper.cli admin verify-snapshot
+```
+Readers on other hosts get only the `.pub` file and `snapshot_pubkey` in their config. The keeper unit itself is
+`deploy/systemd/plangraph-keeper.service` (persistent user unit, enabled; Linger=yes).
