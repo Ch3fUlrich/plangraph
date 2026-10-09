@@ -99,6 +99,34 @@ def test_outage_extends_leases_and_tokens_and_verify_follows(w):
     assert code(w.store.record_outage, w.p("router"), 10, now, now) == "forbidden"
 
 
+def test_outage_grace_is_capped_per_token_across_restarts(w):
+    """Repeated outages cannot keep one token alive: total grace per token <= 24 h (seat V7)."""
+    epoch, tok, p = claimed_with_token(w)
+    exp0 = w.conn.execute("SELECT expires_at FROM run_tokens").fetchone()[0]
+    now = w.store.now()
+    assert w.store.record_outage(SYSTEM, 50000, now - 10, now)["tokens"] == 1
+    exp1 = w.conn.execute("SELECT expires_at FROM run_tokens").fetchone()[0]
+    assert exp1 > exp0
+    out = w.store.record_outage(SYSTEM, 50000, now + 5, now + 10)   # 100000 s total > cap
+    assert out["tokens"] == 0 and out["leases"] == 1                 # leases still follow
+    assert w.conn.execute("SELECT expires_at FROM run_tokens").fetchone()[0] == exp1
+    assert verify_integrity(w.conn) == []
+
+
+def test_verify_flags_grace_over_the_cap(w):
+    from plangraph.keeper import token_fold
+    epoch, tok, p = claimed_with_token(w)
+    now = w.store.now()
+    w.store.record_outage(SYSTEM, 3600, now - 10, now)
+    assert verify_integrity(w.conn) == []
+    old = token_fold.MAX_GRACE_S
+    token_fold.MAX_GRACE_S = 60
+    try:
+        assert any(pr.get("field") == "grace_s" for pr in verify_integrity(w.conn))
+    finally:
+        token_fold.MAX_GRACE_S = old
+
+
 def test_check_and_record_uses_the_alive_stamp(w, tmp_path):
     cfg = SimpleNamespace(db=str(tmp_path / "keeper.db"), reap_interval=60)
     assert outage.check_and_record(w.store, SYSTEM, cfg) is None   # first start: stamp only

@@ -31,6 +31,7 @@ __all__ = ["OutboxMixin", "MAX_ENTRIES"]
 MAX_ENTRIES = 100
 #: Per run token: a token cannot grow outbox_seen without bound (its life is <= 24 h anyway).
 MAX_SEEN_PER_TOKEN = 1000
+TOKEN_GRACE_MAX_S = 86400      # total outage grace one run token can ever receive
 _ID_RE = re.compile(r"[0-9a-f]{32}\Z")
 
 
@@ -104,19 +105,26 @@ class OutboxMixin:
         now = self.now()
         frm_iso, to_iso = self._iso(frm), self._iso(to)
         with self._write():
+            granted = {}                          # token id -> outage grace already given
             for row in self.conn.execute(
                     "SELECT payload FROM events WHERE type='outage_recorded'"):
-                if json.loads(row["payload"] or "{}").get("from") == frm_iso:
+                prior = json.loads(row["payload"] or "{}")
+                if prior.get("from") == frm_iso:
                     return {"gap_s": 0, "duplicate": True}   # this outage was already applied
+                for tid in prior.get("tokens") or []:
+                    granted[tid] = granted.get(tid, 0) + int(prior.get("gap_s") or 0)
             leases = [(r["key"], r["lease_until"]) for r in self.conn.execute(
                 "SELECT key, lease_until FROM items WHERE state='claimed'"
                 " AND lease_until IS NOT NULL AND lease_until > ?", (frm_iso,))]
             for key, lease in leases:
                 self.conn.execute("UPDATE items SET lease_until=? WHERE key=?",
                                   (self._shift(lease, gap), key))
+            # Grace is cumulative per token and capped: repeated restarts cannot keep a token alive
+            # past mint + 24 h + TOKEN_GRACE_MAX_S; a token over the cap is simply not extended.
             toks = [(r["id"], r["expires_at"]) for r in self.conn.execute(
                 "SELECT id, expires_at FROM run_tokens WHERE revoked_at IS NULL"
-                " AND expires_at > ?", (frm_iso,))]
+                " AND expires_at > ?", (frm_iso,))
+                if granted.get(r["id"], 0) + gap <= TOKEN_GRACE_MAX_S]
             for tid, exp in toks:
                 self.conn.execute("UPDATE run_tokens SET expires_at=? WHERE id=?",
                                   (self._shift(exp, gap), tid))

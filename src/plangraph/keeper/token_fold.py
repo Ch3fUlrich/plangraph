@@ -21,6 +21,7 @@ REVOKE_ALL = frozenset({
     "claimed", "released", "lease_expired", "cancelled", "review_passed",
     "closed_on_decision", "answered", "changes_requested", "legacy_state_set"})
 MAX_LIFE_S = 86400
+MAX_GRACE_S = 86400   # cumulative outage grace per token, as store_outbox.TOKEN_GRACE_MAX_S
 RUN_PREFIX = "run:"
 
 
@@ -119,6 +120,9 @@ def verify_tokens(conn, events):
             # only writer heartbeats renew; any other token keeps its minted expiry exactly
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",
                              "expected": want_exp, "got": row["expires_at"]})
+        if want["grace_s"] > MAX_GRACE_S:   # the keeper never grants more (store_outbox cap)
+            problems.append({"key": want["key"], "code": "token_mismatch", "field": "grace_s",
+                             "expected": f"<= {MAX_GRACE_S}s", "got": want["grace_s"]})
         created, expires = _ts(want["minted_at"]), _ts(row["expires_at"])
         if created is None or expires is None or expires > created + MAX_LIFE_S + want["grace_s"]:
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",
