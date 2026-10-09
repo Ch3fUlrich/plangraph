@@ -61,6 +61,8 @@ python3 tools/split/make_public.py --source . --check \
     --rules PRIVATE/scrub/rules.toml --words PRIVATE/scrub/words.txt
 
 # 3. build the fresh public repo (refuses on any hit and writes nothing; --out must not exist or be empty)
+#    PRECONDITION for the real public push: gitleaks is installed and on PATH (no --no-gitleaks, no
+#    "gitleaks missing" warning in the output), and the private rules file is passed with --rules.
 python3 tools/split/make_public.py --source . --out ../plangraph-public \
     --rules PRIVATE/scrub/rules.toml --words PRIVATE/scrub/words.txt
 ```
