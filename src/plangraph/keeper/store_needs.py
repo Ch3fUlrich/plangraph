@@ -39,7 +39,8 @@ class NeedsMixin:
             if isinstance(did, str) and did and did not in decisions.setdefault(row["key"], []):
                 decisions[row["key"]].append(did)
         for row in self.conn.execute(
-                "SELECT key FROM items WHERE state='done' AND track='QUESTIONS'"):
+                "SELECT key FROM items WHERE state='done' AND track='QUESTIONS'"
+                " AND kind NOT IN ('gate', 'goal')"):
             ids = decisions.get(row["key"])
             if ids:
                 out[row["key"]] = {"text": "answered by " + ", ".join(ids),

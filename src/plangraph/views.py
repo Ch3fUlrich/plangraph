@@ -373,7 +373,8 @@ def answers(items, project=None):
     for it in items:
         answer = it.get("answer")
         asked = (it.get("kind") in ("question", "decision")
-                 or (it.get("track") == "QUESTIONS" and it.get("wait") != "task"))
+                 or (it.get("track") == "QUESTIONS" and it.get("wait") != "task"
+                     and it.get("kind") not in ("gate", "goal", "operator_task")))
         if (not asked or _state(it) != "done"
                 or not answer
                 or (project is not None and it.get("project") != project)):

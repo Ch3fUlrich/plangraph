@@ -164,3 +164,14 @@ def test_http_and_mcp_doors(w, tmp_path):
     assert mcp._ROUTES["needs_you"] == ("GET", "needs_you")
     assert mcp._ROUTES["answers"] == ("GET", "answers")
     assert {"needs_you", "answers"} <= {t["name"] for t in mcp.TOOLS}
+
+
+
+def test_answers_questions_track_rows_but_not_gates_or_steps():
+    """SYNC-MD-IMPORT: QUESTIONS rows count, the gate and operator steps never do."""
+    ans = {"text": "answered by D-1", "decision_id": "D-1"}
+    items = [_it("r:OS-1", track="QUESTIONS", wait="answer", state="done", answer=ans, done_at="t1"),
+             _it("r:OS-2", track="QUESTIONS", wait="task", state="done", answer=ans, done_at="t2"),
+             _it("r:PH-OPERATOR", track="QUESTIONS", kind="gate", state="done", answer=ans, done_at="t3"),
+             _it("r:OS-3", track="QUESTIONS", kind="operator_task", state="done", answer=ans, done_at="t4")]
+    assert [r["key"] for r in views.answers(items)] == ["r:OS-1"]
