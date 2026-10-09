@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from .errors import Refused
 from .schema import ROLES
 
-__all__ = ["Principal", "add_principal", "authenticate", "revoke",
+__all__ = ["Principal", "RunPrincipal", "RUN_PREFIX", "add_principal", "authenticate", "revoke",
            "get_principal", "list_principals", "hash_token", "norm_family",
            "validate_family"]
 
@@ -27,6 +27,27 @@ class Principal:
     role: str
     projects: list = field(default_factory=list)
     family: str | None = None
+
+
+#: Synthetic run-token principals are named ``run:<run_id>``; no stored
+#: principal may use that prefix, so the name proves the token path.
+RUN_PREFIX = "run:"
+
+
+@dataclass
+class RunPrincipal(Principal):
+    """M2B-RUN-TOKENS: what a run token authenticates as.
+
+    Bound to one item, one epoch and one role (``writer`` acts as a ``worker``
+    on heartbeat/evidence/submit, ``reviewer`` on verdict).  The store, not the
+    token row alone, decides every use (``Store._check_run_principal``).
+    """
+
+    token_id: int = 0
+    key: str = ""
+    epoch: int = 0
+    token_role: str = ""
+    run_id: str = ""
 
 
 def hash_token(token: str) -> str:
@@ -90,6 +111,8 @@ def add_principal(conn, name, role, projects, family=None) -> str:
     """
     if role not in ROLES:
         raise Refused("validation", f"unknown role {role!r}")
+    if not isinstance(name, str) or name.startswith(RUN_PREFIX):
+        raise Refused("validation", f"principal name may not start with {RUN_PREFIX!r}")
     family = validate_family(family)
     if isinstance(projects, (str, bytes)) or not hasattr(projects, "__iter__"):
         raise Refused("validation", "projects must be a list of strings")
@@ -117,8 +140,28 @@ def authenticate(conn, token) -> Principal:
         "SELECT name,role,projects,family FROM principals"
         " WHERE token_sha256=? AND active=1", (hash_token(token),)).fetchone()
     if row is None:
-        raise Refused("forbidden", "unknown or revoked token")
+        return _authenticate_run(conn, token)
     return _as_principal(row)
+
+
+def _authenticate_run(conn, token) -> RunPrincipal:
+    """A run token resolves to its synthetic principal, or the request is refused.
+
+    Expiry, epoch and item-state checks are the store's job at use time (they
+    need its clock and are audited); an unknown or already revoked hash is
+    refused here, so a revoked token never even becomes an audit actor.
+    """
+    row = conn.execute(
+        "SELECT id,key,project,epoch,role,run_id,family,revoked_at FROM run_tokens"
+        " WHERE token_sha256=?", (hash_token(token),)).fetchone()
+    if row is None or row["revoked_at"] is not None:
+        raise Refused("forbidden", "unknown or revoked token")
+    writer = row["role"] == "writer"
+    return RunPrincipal(f"{RUN_PREFIX}{row['run_id']}",
+                        "worker" if writer else "reviewer", [row["project"]],
+                        None if writer else norm_family(row["family"]),
+                        row["id"], row["key"], row["epoch"], row["role"],
+                        row["run_id"])
 
 
 def get_principal(conn, name) -> Principal | None:

@@ -12,7 +12,7 @@ moves a row *onto* a locked key is as forbidden as one that moves it off.
 from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
-           "EVENT_TYPES", "ROLES"]
+           "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL"]
 
 SCHEMA_VERSION = 8
 
@@ -24,6 +24,7 @@ EVENT_TYPES = (
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
+    "token_minted",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -43,6 +44,28 @@ BEGIN SELECT RAISE(ABORT, 'aliases are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trg_aliases_append_only_delete
 BEFORE DELETE ON aliases
 BEGIN SELECT RAISE(ABORT, 'aliases are append-only'); END;
+"""
+
+#: M2B-RUN-TOKENS: keeper-issued run tokens.  Only the sha256 of a token is
+#: stored.  Not item cache: ``events.fold`` and ``verify_integrity`` ignore it
+#: (the ``token_minted`` event carries no token value).  ``IF NOT EXISTS`` so
+#: ``db._upgrade`` can install it at open on an older database.
+RUN_TOKENS_DDL = """
+CREATE TABLE IF NOT EXISTS run_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    key          TEXT NOT NULL,
+    project      TEXT NOT NULL,
+    epoch        INTEGER NOT NULL,
+    role         TEXT NOT NULL CHECK (role IN ('writer','reviewer')),
+    run_id       TEXT NOT NULL,
+    family       TEXT,
+    minted_by    TEXT,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_run_tokens_key ON run_tokens(key);
 """
 
 TABLES = """
@@ -273,4 +296,4 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = TABLES + TRIGGERS + ALIASES_DDL
+SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL

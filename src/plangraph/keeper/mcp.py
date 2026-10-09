@@ -103,6 +103,9 @@ TOOLS = (
     _tool("edit", "Edit an open item: l1 own project only, router anywhere; locked once done/cancelled.",
           {"key": {"type": "string"}, "fields": {"type": "object"}},
           ("key", "fields")),
+    _tool("mint_run_token", "Router/l1: mint a run-bound token (writer|reviewer) for a claimed/in_review item; shown once.",
+          {"key": {"type": "string"}, "role": {"type": "string"},
+           "run_id": {"type": "string"}}, ("key", "role", "run_id")),
     _tool("record_run", "Spawner: record which models ran on a claimed item.",
           {"key": {"type": "string"}, "run": {"type": "object"}},
           ("key", "run")),
@@ -127,6 +130,7 @@ _ROUTES = {
     "digest": ("GET", "digest"), "whoami": ("GET", "whoami"),
     "create": ("POST", "create_items"), "edit": ("POST", "edit_definition"),
     "record_run": ("POST", "record_run"),
+    "mint_run_token": ("POST", "mint_run_token"),
 }
 
 

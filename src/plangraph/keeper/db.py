@@ -13,7 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from .errors import KeeperLocked
-from .schema import ALIASES_DDL, SCHEMA, TRIGGERS
+from .schema import ALIASES_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock"]
 
@@ -111,6 +111,7 @@ def _upgrade(conn):
         if column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.executescript(ALIASES_DDL)
+    conn.executescript(RUN_TOKENS_DDL)
     _upgrade_lock_triggers(conn)
 
 

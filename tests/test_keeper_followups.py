@@ -251,7 +251,8 @@ def test_allow_new_does_not_cover_items_other_ops_create(w):
     assert snap(w) == before
 
 
-@pytest.mark.parametrize("verb", sorted(ROUTER_VERBS))
+# mint_run_token is router-or-l1 (own project), covered in test_keeper_run_tokens*
+@pytest.mark.parametrize("verb", sorted(set(ROUTER_VERBS) - {"mint_run_token"}))
 def test_router_verbs_are_routed_writes(world, srv, verb):
     assert verb in WRITE_VERBS
     import json

@@ -16,7 +16,11 @@ SignError = snapshot_sign.SignError
 def write_snapshot(server, principal) -> None:
     """Rewrite ``plan.snapshot.json`` atomically (temp file then rename)."""
     path = Path(server.config.snapshot)
-    body = json.dumps(server.store.snapshot(principal)).encode("utf-8")
+    # A run-token principal (M2B-RUN-TOKENS) may only act on its item: the snapshot is
+    # role-agnostic, so it is built as the system principal, as the reaper does.
+    from .auth import RunPrincipal
+    who = server.system if isinstance(principal, RunPrincipal) else principal
+    body = json.dumps(server.store.snapshot(who)).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     key = getattr(server.config, "signing_key", None)
     if key:   # M2B: signature then snapshot; a reader in the gap retries once. A crash between the

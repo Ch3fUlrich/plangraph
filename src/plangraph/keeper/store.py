@@ -35,6 +35,7 @@ from .store_reap import ReapMixin
 from .store_review import ReviewMixin
 from .store_runs import RunsMixin
 from .store_support import SupportMixin, iso, parse_iso
+from .store_tokens import TokensMixin
 from .store_verbs import VerbsMixin
 from .store_waiver import WaiverMixin
 
@@ -58,7 +59,8 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
-            NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin):
+            NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
+            TokensMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -168,7 +170,10 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         """Authorise/execute *fn*; audit success and every refusal."""
         now = self.now()
         try:
-            self._check_principal(principal)
+            if isinstance(principal, auth.RunPrincipal):
+                self._check_run_principal(principal, action, key, now)
+            else:
+                self._check_principal(principal)
             result = fn(now)
         except Refused as exc:
             self._audit(principal, action, key, False, exc.code, exc.msg, now)
@@ -260,6 +265,13 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                       " add_evidence_router")
 
     def _actor_or_delegate(self, principal, item):
+        if isinstance(principal, auth.RunPrincipal):
+            # M2B: a writer run token acts for the claim it is bound to (key
+            # and epoch were re-checked in ``_run`` before this verb ran).
+            if (principal.token_role == "writer"
+                    and principal.key == item["key"]):
+                return
+            raise Refused("forbidden", "run token is bound to another item")
         if principal.name not in (item["claimed_by"], item["delegate"]):
             raise Refused("forbidden", "only the claimant or delegate may do this")
 

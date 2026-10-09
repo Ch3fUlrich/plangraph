@@ -33,15 +33,14 @@ from pathlib import Path
 
 from .. import views
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
-from . import auth, brief, fmt
-from .auth import Principal
+from . import api_routes, auth, brief, fmt
+from .auth import Principal, RunPrincipal
 from .errors import Refused
 
 __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
            "make_server", "write_snapshot"]
 
 MAX_BODY = 1024 * 1024  # 1 MiB
-
 from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
 from .api_routes import READ_CALLS, ROUTER_VERBS, TEXT_DEFAULT as _TEXT_DEFAULT
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
@@ -113,6 +112,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 self._json(401, {"error": exc.code, "msg": exc.msg})
                 return
             try:
+                api_routes.run_gate(principal, name)
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
                 else:

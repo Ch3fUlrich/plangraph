@@ -177,6 +177,8 @@ class VerbsMixin:
                 " WHERE key=? AND state='claimed' AND epoch=?",
                 (lease, self._iso(now), key, epoch))
             self._race_guard(cursor, key, "claimed", epoch)
+            if isinstance(principal, auth.RunPrincipal):
+                self._extend_run_token(principal, dict(fresh, lease_until=lease), now)
         return {"key": key, "epoch": epoch, "lease_until": lease}
 
     def release(self, principal, key, epoch):
