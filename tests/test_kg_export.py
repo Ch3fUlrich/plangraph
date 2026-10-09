@@ -625,7 +625,8 @@ def test_run_enforces_the_total_deadline(tmp_path, monkeypatch):
 
 def test_mode_is_set_on_the_descriptor_not_the_path(tmp_path, monkeypatch):
     called = []
+    env = _env(tmp_path)  # the fixture itself chmods the token file; patch only around run()
     monkeypatch.setattr(kg.os, "chmod", lambda *a, **k: called.append(a))
-    kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
+    kg.run([], tmp_path, env=env, transport=Fake({}))
     assert called == []
     assert ((tmp_path / "kg-export.json").stat().st_mode & 0o777) == 0o644
