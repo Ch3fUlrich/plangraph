@@ -186,7 +186,7 @@ def parse_options(step, why=""):
         if any(ord(c) < 32 or 127 <= ord(c) < 160 for c in label + consequence):
             return step, None                 # the keeper would refuse it: keep the text instead
         oid = _slug(label)
-        if not label or oid in seen or len(label) > 60 or len(consequence) > 160:
+        if not re.search(r"[A-Za-z0-9]", label) or oid in seen or len(label) > 60 or len(consequence) > 160:
             return step, None
         seen.add(oid)
         entry = {"id": oid, "label": label}
@@ -222,7 +222,7 @@ def unmatched_rows(text):
         if fenced or not stripped.startswith("|") or line.startswith(("    ", "\t")):
             continue
         cells = [p.strip() for p in stripped.split("|")[1:]]
-        if len(cells) < 5 or cells[1].lower() == "id" \
+        if len(cells) < 5 or (cells[1].lower() == "id" and cells[0].lower() in ("prio", "priority", "")) \
                 or all(set(c) <= set("-: ") for c in cells if c):   # header / separator row
             continue
         if not cells[1]:

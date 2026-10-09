@@ -49,6 +49,7 @@ def test_parse_options_full():
     "Options: a = bad\x01; b", "Options: a = x. Deadline: tomorrow",
     "Options: a = x. Deadline: 2026-13-40", "Options: a = del\x7f",
     "Options: a = x. deadline : tomorrow", "review Options: old; Options: a = x; *b",
+    "Options: . Deadline: 2026-10-12", "Options: -- = y",
     "no block here"])
 def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
     rest, ch = mp.parse_options(bad)
@@ -260,3 +261,9 @@ def test_unmatched_cells_are_redacted_before_truncation(w, srv, site, tmp_path):
     rc, out, status = sync(site, srv, w, tmp_path, "--dry-run")
     (cell,) = status["unmatched"]
     assert "abab" * 4 not in cell and len(cell) <= 80
+
+
+def test_a_data_row_whose_id_cell_says_id_is_unmatched():
+    text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
+            "| 1 | id | TASK | a | b | c |\n")
+    assert mp.unmatched_rows(text) == ["id"]
