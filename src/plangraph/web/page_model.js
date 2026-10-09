@@ -98,7 +98,11 @@
    * (any project); snapshots carrying an explicit `questions` list pass
    * through untouched. */
   function questionOf(item) {
-    return str(item.title).slice(0, 2) === "Q:" || /^Q-/.test(str(item.id));
+    // SYNC-MD-IMPORT: kind question/decision (MODEL-KINDS) and the md-sync QUESTIONS rows
+    // (except operator steps, wait=task) are questions too.
+    return str(item.title).slice(0, 2) === "Q:" || /^Q-/.test(str(item.id)) ||
+      item.kind === "question" || item.kind === "decision" ||
+      (item.track === "QUESTIONS" && item.kind !== "gate" && item.wait !== "task");
   }
 
   function questionStatus(state) {
@@ -109,7 +113,9 @@
     return items.filter(questionOf).map(function (i) {
       return { id: i.id, project: i.project, text: i.title, asked_by: i.owner,
                status: questionStatus(i.state), item: i.key,
-               answer: i.state === "done" && i.done_criteria != null ? i.done_criteria : null };
+               answer: i.answer && i.answer.text ? str(i.answer.text) :
+                 (i.state === "done" && i.done_criteria != null ? i.done_criteria : null),
+               decision: i.answer && i.answer.decision_id ? str(i.answer.decision_id) : null };
     });
   }
 

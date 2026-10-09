@@ -82,6 +82,7 @@
  "items": [
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": "Grace (fictional)",
    "corrected_by": [],
    "corrects": null,
@@ -133,6 +134,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
@@ -186,6 +188,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
@@ -240,6 +243,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
@@ -294,6 +298,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": "Ada (fictional)",
    "corrected_by": [],
    "corrects": null,
@@ -345,6 +350,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
@@ -398,6 +404,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,
@@ -451,6 +458,7 @@
   },
   {
    "agent_id": null,
+   "answer": null,
    "claimed_by": null,
    "corrected_by": [],
    "corrects": null,

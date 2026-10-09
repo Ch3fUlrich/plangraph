@@ -151,11 +151,13 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
         desc = _fit(desc)
         item = _find(by_id, entry.id)
         if item is None:
+            want_create = getattr(entry, "wait", None)
+            # SYNC-MD-IMPORT: a new row is a MODEL-KINDS question (or operator step).
             lane = {"project": PROJECT, "id": entry.id, "title": title,
-                    "kind": "lane", "track": "QUESTIONS", "owner": "operator",
+                    "kind": "operator_task" if want_create == "task" else "question",
+                    "track": "QUESTIONS", "owner": "operator",
                     "operator": True, "evidence_kinds": ["decision"],
                     "review_tier": "none", "depends_on": [], "source": SOURCE}
-            want_create = getattr(entry, "wait", None)
             if want_create is not None:
                 lane["wait"] = want_create
             if desc:
