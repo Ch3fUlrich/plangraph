@@ -182,9 +182,9 @@ def parse_options(step, why=""):
         marked = part.startswith("*")
         part = part.lstrip("*").strip()
         label, _, consequence = part.partition("=")
-        label, consequence = label.strip(), consequence.strip()
         if any(ord(c) < 32 or 127 <= ord(c) < 160 for c in label + consequence):
-            return step, None                 # the keeper would refuse it: keep the text instead
+            return step, None                 # checked before trimming: a tab is a control too
+        label, consequence = label.strip(), consequence.strip()
         oid = _slug(label)
         if not re.search(r"[A-Za-z0-9]", label) or oid in seen or len(label) > 60 or len(consequence) > 160:
             return step, None

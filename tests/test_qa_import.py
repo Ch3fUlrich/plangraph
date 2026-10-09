@@ -49,7 +49,7 @@ def test_parse_options_full():
     "Options: a = bad\x01; b", "Options: a = x. Deadline: tomorrow",
     "Options: a = x. Deadline: 2026-13-40", "Options: a = del\x7f",
     "Options: a = x. deadline : tomorrow", "review Options: old; Options: a = x; *b",
-    "Options: . Deadline: 2026-10-12", "Options: -- = y",
+    "Options: . Deadline: 2026-10-12", "Options: -- = y", "Options: a = x; *b = \ty",
     "no block here"])
 def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
     rest, ch = mp.parse_options(bad)
