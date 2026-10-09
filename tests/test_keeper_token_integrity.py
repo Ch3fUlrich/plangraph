@@ -110,7 +110,9 @@ def test_duplicate_token_id_in_events_is_flagged():
 
 def test_swapped_token_hash_is_flagged(w):
     claimed_with_token(w)
-    raw(w, "UPDATE run_tokens SET token_sha256='0' || substr(token_sha256, 2)")
+    # a fixed foreign hash (flipping one character was a no-op 1 time in 16)
+    raw(w, "UPDATE run_tokens SET token_sha256=CASE WHEN token_sha256='" + "a" * 64 + "' THEN '"
+        + "b" * 64 + "' ELSE '" + "a" * 64 + "' END")
     assert ("token_mismatch", "token_sha256") in problems(w)
 
 
