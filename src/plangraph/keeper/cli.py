@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import cli_admin, cli_names, cli_verbs
+from . import cli_admin, cli_names, cli_progress, cli_verbs
 from .cli_verbs import Session
 
 __all__ = ["main", "build_parser"]
@@ -47,6 +47,7 @@ HANDLERS = {
     "critical": cli_verbs.cmd_critical,
     "percent": cli_verbs.cmd_percent,
     "alerts": cli_verbs.cmd_alerts,
+    "progress": cli_progress.cmd_progress,
     "digest": cli_verbs.cmd_digest,
     "snapshot": cli_verbs.cmd_snapshot,
     "whoami": cli_verbs.cmd_whoami,
@@ -83,6 +84,7 @@ def _add_reads(sub):
     alerts.add_argument("--project")
 
     _p(sub, "digest", help="per-project counts (router)")
+    cli_progress.add_parser(sub, _p)
     _p(sub, "snapshot", help="the plan snapshot")
     _p(sub, "whoami", help="the token's principal")
 

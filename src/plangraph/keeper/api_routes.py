@@ -12,7 +12,7 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
-              "answers"}
+              "answers", "progress"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
@@ -28,6 +28,7 @@ READ_CALLS = {
     "whoami": lambda store, who, project: store.whoami(who),
     "needs_you": lambda store, who, project: store.needs_you(who, project=project),
     "answers": lambda store, who, project: store.answers(who, project=project),
+    "progress": lambda store, who, project: store.progress(who, project=project),
 }
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,

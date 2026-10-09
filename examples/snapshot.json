@@ -502,5 +502,118 @@
    "worker_run": null,
    "writer_model": null
   }
- ]
+ ],
+ "progress": {
+  "projects": [
+   {
+    "done": 0,
+    "hours_done": 0.0,
+    "hours_left": 13.0,
+    "hours_total": 13.0,
+    "last_update": "2026-01-01T00:00:00Z",
+    "operator_open": 0,
+    "pct_count": 0.0,
+    "pct_hours": 0.0,
+    "phases": [
+     {
+      "done": 0,
+      "hours_done": 0.0,
+      "hours_left": 7.0,
+      "hours_total": 7.0,
+      "pct_count": 0.0,
+      "pct_hours": 0.0,
+      "phase": "T1",
+      "total": 2
+     },
+     {
+      "done": 0,
+      "hours_done": 0.0,
+      "hours_left": 6.0,
+      "hours_total": 6.0,
+      "pct_count": 0.0,
+      "pct_hours": 0.0,
+      "phase": "T2",
+      "total": 1
+     }
+    ],
+    "project": "lighthouse",
+    "running": [
+     {
+      "key": "lighthouse:L-1",
+      "model": null,
+      "owner": "Grace (fictional)",
+      "state": "in_review",
+      "title": "Chart the harbour approaches"
+     }
+    ],
+    "states": {
+     "cancelled": 0,
+     "claimed": 0,
+     "done": 0,
+     "in_review": 1,
+     "open": 2
+    },
+    "total": 3
+   },
+   {
+    "done": 0,
+    "hours_done": 0.0,
+    "hours_left": 10.0,
+    "hours_total": 10.0,
+    "last_update": "2026-01-01T00:00:00Z",
+    "operator_open": 0,
+    "pct_count": 0.0,
+    "pct_hours": 0.0,
+    "phases": [
+     {
+      "done": 0,
+      "hours_done": 0.0,
+      "hours_left": 5.0,
+      "hours_total": 5.0,
+      "pct_count": 0.0,
+      "pct_hours": 0.0,
+      "phase": "T1",
+      "total": 2
+     },
+     {
+      "done": 0,
+      "hours_done": 0.0,
+      "hours_left": 5.0,
+      "hours_total": 5.0,
+      "pct_count": 0.0,
+      "pct_hours": 0.0,
+      "phase": "T2",
+      "total": 1
+     }
+    ],
+    "project": "orchard",
+    "running": [
+     {
+      "key": "orchard:O-1",
+      "model": null,
+      "owner": "Ada (fictional)",
+      "state": "claimed",
+      "title": "Survey the seed catalogue"
+     }
+    ],
+    "states": {
+     "cancelled": 0,
+     "claimed": 1,
+     "done": 0,
+     "in_review": 0,
+     "open": 2
+    },
+    "total": 3
+   }
+  ],
+  "total": {
+   "done": 0,
+   "hours_done": 0.0,
+   "hours_left": 23.0,
+   "hours_total": 23.0,
+   "pct_count": 0.0,
+   "pct_hours": 0.0,
+   "total": 6
+  }
+ }
 }

@@ -26,6 +26,7 @@
     <button id="tab-qa" data-page="qa" type="button" role="tab" aria-selected="false" aria-controls="panel-qa"><span class="sb-label">Decisions &amp; Q&amp;A</span><span class="sb-count" id="sb-count-qa" hidden>0</span></button>
     <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
     <button id="tab-activity" data-page="activity" type="button" role="tab" aria-selected="false" aria-controls="panel-activity">Activity</button>
+    <button id="tab-progress" data-page="progress" type="button" role="tab" aria-selected="false" aria-controls="panel-progress">Progress</button>
     <button id="tab-settings" data-page="settings" type="button" role="tab" aria-selected="false" aria-controls="panel-settings" aria-label="Settings" title="Settings">&#9881;</button>
   </nav>
   <div class="progress" id="progress">
@@ -40,6 +41,7 @@
     <button id="sb-close" class="sb-close" type="button" aria-label="Back to graph">&#10005;</button>
     <nav class="sb-menu" aria-label="Pages">
       <button id="sb-activity" data-page="activity" type="button">Activity</button>
+      <button id="sb-progress" data-page="progress" type="button">Progress</button>
     </nav>
     <div class="sb-body">
       <section id="sb-panel-projects" class="sb-panel" data-panel="projects" aria-label="Projects">
@@ -72,6 +74,9 @@
     </section>
     <section id="panel-activity" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-activity" hidden>
       <div id="sb-panel-activity" class="pg-body"></div>
+    </section>
+    <section id="panel-progress" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-progress" hidden>
+      <div id="sb-panel-progress" class="pg-body"></div>
     </section>
     <section id="panel-settings" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-settings" hidden>
       <div id="sb-panel-settings" class="pg-body"></div>
