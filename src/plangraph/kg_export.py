@@ -363,9 +363,11 @@ def _atomic_write(path: Path, text: str):
         if os.path.lexists(tmp):
             os.unlink(tmp)
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        os.fchmod(fd, 0o644)  # on the descriptor: never follows a path swapped in after open (round-9 seat)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
-        os.chmod(tmp, 0o644)
+        # Residual, by design: a writer of out_dir can swap the tmp path before this rename, but such a
+        # writer can replace the published file directly anyway; the page treats it as untrusted data.
         os.replace(tmp, path)  # replaces a symlink at the target itself, never its referent
     finally:
         if os.path.lexists(tmp):

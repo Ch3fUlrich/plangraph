@@ -621,3 +621,11 @@ def test_run_enforces_the_total_deadline(tmp_path, monkeypatch):
     kg.run(items, tmp_path, env=_env(tmp_path), transport=Fake({"g": {}}))
     status = json.loads((tmp_path / "kg-export-status.json").read_text())
     assert any(e.get("error") == "deadline" for e in status["errors"])
+
+
+def test_mode_is_set_on_the_descriptor_not_the_path(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(kg.os, "chmod", lambda *a, **k: called.append(a))
+    kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
+    assert called == []
+    assert ((tmp_path / "kg-export.json").stat().st_mode & 0o777) == 0o644
