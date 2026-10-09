@@ -42,10 +42,10 @@ def test_http_mint_and_use(d):
     assert os.path.exists(snap)                      # snapshot still refreshed
     assert d.http("runw", "POST", "/v1/submit",
                   {"key": "demo:A", "epoch": epoch})[0] == 200
-    # replay after submit
+    # replay after submit: the revoked token no longer authenticates at all
     status, err = d.http("runw", "POST", "/v1/submit",
                          {"key": "demo:A", "epoch": epoch})
-    assert status == 403 and err["error"] == "forbidden"
+    assert status == 401 and err["error"] == "forbidden"
 
 
 def test_http_run_token_is_403_everywhere_else(d):

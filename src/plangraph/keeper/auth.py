@@ -148,12 +148,13 @@ def _authenticate_run(conn, token) -> RunPrincipal:
     """A run token resolves to its synthetic principal, or the request is refused.
 
     Expiry, epoch and item-state checks are the store's job at use time (they
-    need its clock and are audited); only an unknown hash is refused here.
+    need its clock and are audited); an unknown or already revoked hash is
+    refused here, so a revoked token never even becomes an audit actor.
     """
     row = conn.execute(
-        "SELECT id,key,project,epoch,role,run_id,family FROM run_tokens"
+        "SELECT id,key,project,epoch,role,run_id,family,revoked_at FROM run_tokens"
         " WHERE token_sha256=?", (hash_token(token),)).fetchone()
-    if row is None:
+    if row is None or row["revoked_at"] is not None:
         raise Refused("forbidden", "unknown or revoked token")
     writer = row["role"] == "writer"
     return RunPrincipal(f"{RUN_PREFIX}{row['run_id']}",

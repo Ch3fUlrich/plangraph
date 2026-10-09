@@ -153,7 +153,7 @@ def test_remint_same_run_revokes_previous(w):
     t1 = mint(w, "l1main", "demo:A", "writer", "w1")["token"]
     t2 = mint(w, "l1main", "demo:A", "writer", "w1")["token"]
     assert revoked(w, t1) and not revoked(w, t2)
-    assert code(w.store.heartbeat, rp(w, t1), "demo:A", 1) == "forbidden"
+    assert code(rp, w, t1) == "forbidden"   # revoked: refused at authentication
 
 
 # ------------------------------------------------------------ writer use
@@ -284,7 +284,7 @@ def test_close_revokes_reviewer_and_writer(w):
     tok = mint(w, "l1main", "demo:A", "reviewer", "rv1")["token"]
     w.store.verdict(w.p("reviewer"), "demo:A", True)          # done
     assert revoked(w, tok)
-    assert code(w.store.verdict, rp(w, tok), "demo:A", True) == "forbidden"
+    assert code(rp, w, tok) == "forbidden"   # revoked: refused at authentication
 
 
 def test_token_without_stored_row_in_audit(w):
@@ -335,7 +335,7 @@ def test_reviewer_changes_requested_revokes_all(w):
     p = rp(w, out["token"])
     assert w.store.verdict(p, "demo:A", False, "no")["state"] == "claimed"
     assert revoked(w, out["token"]) and revoked(w, other)
-    assert code(w.store.verdict, rp(w, other), "demo:A", True) == "forbidden"
+    assert code(rp, w, other) == "forbidden"   # revoked: refused at authentication
 
 
 def test_reviewer_token_on_other_item_or_state(w):
