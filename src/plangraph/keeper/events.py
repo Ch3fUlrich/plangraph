@@ -12,6 +12,8 @@ import hashlib
 import json
 from collections import Counter
 
+from .token_fold import verify_tokens
+
 from .item_fields import SMALL_FIELDS
 
 __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
@@ -345,6 +347,7 @@ def verify_integrity(conn):
         if key not in folded:
             problems.append({"key": key, "code": "cache_extra",
                              "field": None, "expected": None, "got": None})
+    problems.extend(verify_tokens(conn, all_events))   # M2B-TOKEN-INTEGRITY
     want = folded_aliases(all_events)
     have = {r["old_key"]: r["new_key"]
             for r in conn.execute("SELECT old_key,new_key FROM aliases")}
