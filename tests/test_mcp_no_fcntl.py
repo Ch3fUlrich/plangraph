@@ -2,14 +2,19 @@
 
 ``plangraph.keeper`` loads its store core lazily, so ``python -m
 plangraph.keeper.mcp`` pulls in only the stdlib HTTP client.  Each check runs
-in a fresh interpreter with ``fcntl`` blocked; no network, no keeper.
+in a fresh interpreter with ``fcntl`` blocked, except the name-resolution check,
+which unblocks it to load the whole surface (POSIX hosts only); no network, no
+keeper.
 """
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
 
@@ -54,6 +59,8 @@ def test_mcp_module_entry_starts_without_fcntl():
     assert proc.stdout.strip().endswith("ok")
 
 
+@pytest.mark.skipif(importlib.util.find_spec("fcntl") is None,
+                    reason="loading the DB layer needs fcntl (POSIX)")
 def test_package_names_still_resolve_lazily():
     proc = _run_path(
         "sys.modules.pop('fcntl')\n"
