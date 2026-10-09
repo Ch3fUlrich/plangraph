@@ -280,3 +280,12 @@ it never stops the keeper.
 - Daily tag: `tools/anchor_tag.py --repo ~/code/plangraph-data --anchor-log <log> [--push]` tags the data repo
   `anchor-YYYYMMDD` with the newest record (scheduling it is an operator/L1 step).
 - Operator install steps: plangraph-data `docs/proposals/2026-10-09-m2b-anchor-install.md`.
+
+## Withdraw from review (PG-WITHDRAW-REVIEW, D-867)
+
+`withdraw_review(key, decision_id)` (router only; `pg withdraw KEY D-NNN`, MCP `withdraw_review`) moves an
+`in_review` item back to `claimed` (same epoch, fresh default lease, reviewer cleared) with one hash-chained
+`review_withdrawn` event and revokes the item's live run tokens. The decision must name the key in `Closes:`, and
+the item must be decision-closable: its evidence kinds include `decision`, or its done-criteria ask for no
+commit/merge/CI/seats. It never records a verdict; the claimant then attaches decision evidence and the router
+closes it on the decision.

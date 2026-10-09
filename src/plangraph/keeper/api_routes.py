@@ -20,7 +20,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "rehome", "record_run", "answer", "mint_run_token", "replay"}
+               "rehome", "record_run", "answer", "mint_run_token", "replay",
+               "withdraw_review"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 #: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
@@ -53,6 +54,10 @@ STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
 def _close_on_decision(store, principal, body, need):
     return store.close_on_decision(principal, need(body, "key"),
                                    need(body, "batch_ref"))
+
+
+def _withdraw_review(store, principal, body, need):
+    return store.withdraw_review(principal, body.get("key"), body.get("decision_id"))  # role first (403)
 
 
 def _set_legacy_state(store, principal, body, need):
@@ -96,6 +101,7 @@ def _replay(store, principal, body, need):
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
+                "withdraw_review": _withdraw_review,
                 "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
