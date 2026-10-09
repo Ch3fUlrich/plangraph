@@ -10,6 +10,7 @@ expiry is only checked against the hard cap (``created_at`` + 24 h).
 """
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
 __all__ = ["fold_tokens", "verify_tokens"]
@@ -41,7 +42,8 @@ def fold_tokens(events):
             # re-mint: the store first revokes the live token of the same (key, epoch, role, run)
             revoke(lambda t: (t["key"], t["epoch"], t["role"], t["run_id"]) == (key, epoch, role, run_id))
             tokens[payload.get("token_id")] = {"key": key, "role": role, "run_id": run_id,
-                                               "epoch": epoch, "revoked": False}
+                                               "epoch": epoch, "revoked": False,
+                                               "minted_at": ev.get("ts")}
         elif kind in REVOKE_ALL:
             revoke(lambda t: t["key"] == key)
         elif kind == "submitted":
@@ -64,8 +66,10 @@ def verify_tokens(conn, events):
     try:
         rows = {r["id"]: r for r in conn.execute(
             "SELECT id,key,role,run_id,epoch,created_at,expires_at,revoked_at FROM run_tokens")}
-    except Exception:  # noqa: BLE001 - a DB from before M2B-RUN-TOKENS has no table
-        rows = {}
+    except sqlite3.OperationalError as exc:
+        if "no such table" not in str(exc):
+            raise                     # anything else must surface, never a silent clean
+        rows = {}                     # a DB from before M2B-RUN-TOKENS (minted tokens still checked)
     folded = fold_tokens(events)
     problems = []
     for tid, want in folded.items():
@@ -81,7 +85,10 @@ def verify_tokens(conn, events):
         if (row["revoked_at"] is not None) != want["revoked"]:
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "revoked",
                              "expected": want["revoked"], "got": row["revoked_at"] is not None})
-        created, expires = _ts(row["created_at"]), _ts(row["expires_at"])
+        if row["created_at"] != want["minted_at"]:          # anchored to the hash-chained event
+            problems.append({"key": want["key"], "code": "token_mismatch", "field": "created_at",
+                             "expected": want["minted_at"], "got": row["created_at"]})
+        created, expires = _ts(want["minted_at"]), _ts(row["expires_at"])
         if created is None or expires is None or expires > created + MAX_LIFE_S:
             problems.append({"key": want["key"], "code": "token_mismatch", "field": "expires_at",
                              "expected": f"<= created_at + {MAX_LIFE_S}s", "got": row["expires_at"]})

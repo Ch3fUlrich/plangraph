@@ -75,3 +75,18 @@ def test_fold_without_table_or_tokens_is_clean(tmp_path):
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     assert token_fold.verify_tokens(conn, []) == []
+
+
+def test_moving_created_at_to_extend_the_cap_is_flagged(w):
+    claimed_with_token(w)
+    raw(w, "UPDATE run_tokens SET created_at='2099-01-01T00:00:00Z', expires_at='2099-01-01T23:59:59Z'")
+    got = problems(w)
+    assert ("token_mismatch", "created_at") in got and ("token_mismatch", "expires_at") in got
+
+
+def test_a_broken_table_is_not_a_silent_clean(w):
+    claimed_with_token(w)
+    raw(w, "ALTER TABLE run_tokens RENAME COLUMN revoked_at TO gone")
+    import pytest
+    with pytest.raises(sqlite3.OperationalError):
+        verify_integrity(w.conn)
