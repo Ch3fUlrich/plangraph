@@ -111,11 +111,12 @@
 
   function deriveQuestions(items) {
     return items.filter(questionOf).map(function (i) {
-      return { id: i.id, project: i.project, text: i.title, asked_by: i.owner,
-               status: questionStatus(i.state), item: i.key,
-               answer: i.answer && i.answer.text ? str(i.answer.text) :
-                 (i.state === "done" && i.done_criteria != null ? i.done_criteria : null),
-               decision: i.answer && i.answer.decision_id ? str(i.answer.decision_id) : null };
+      var q = { id: i.id, project: i.project, text: i.title, asked_by: i.owner,
+                status: questionStatus(i.state), item: i.key,
+                answer: i.answer && i.answer.text ? str(i.answer.text) :
+                  (i.state === "done" && i.done_criteria != null ? i.done_criteria : null) };
+      if (i.answer && i.answer.decision_id) q.decision = str(i.answer.decision_id);   // keeper answer (SYNC-MD-IMPORT)
+      return q;
     });
   }
 
