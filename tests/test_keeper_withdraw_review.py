@@ -126,3 +126,13 @@ def test_router_can_make_a_code_item_decision_closable_first(w):
     to_in_review(w, "demo:CODE", kind="commit+ci", ref={"sha": "a" * 40})
     w.store.edit_definition(w.p("router"), "demo:CODE", {"evidence_kinds": ["decision"], "review_tier": "none"})
     assert w.store.withdraw_review(w.p("router"), "demo:CODE", "D-900")["state"] == "claimed"
+
+
+def test_eligibility_is_an_allowlist_of_non_code_kinds():
+    """Round-2 seat: any evidence kind outside decision/semaphore-task/run-record counts as code."""
+    from plangraph.keeper import store_withdraw
+    assert store_withdraw._NON_CODE_KINDS == {"decision", "semaphore-task", "run-record"}
+    from plangraph.keeper.evidence import VERIFIERS
+    for kind in VERIFIERS:
+        if kind not in store_withdraw._NON_CODE_KINDS:
+            assert kind in ("commit", "commit+ci", "error"), kind   # all refused (fail closed)
