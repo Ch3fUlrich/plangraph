@@ -65,6 +65,8 @@ JS_FILES = (
     "page_table_url.js",
     "page_table_view.js",
     "page_qa.js",
+    "page_kg.js",
+    "page_kg_tab.js",
     "page_pages.js",
     "page_activity.js",
     "page_progress.js",
@@ -72,7 +74,7 @@ JS_FILES = (
 )
 
 #: Stylesheets concatenated into ``@@PAGE_CSS@@``, in load order.
-CSS_FILES = ("page.css", "page_base.css", "page_graph.css")
+CSS_FILES = ("page.css", "page_base.css", "page_graph.css", "page_kg.css")
 
 #: Vendored libraries for the legacy OFFLINE mode, in load order (dagre before
 #: cytoscape-dagre). Kept inline-able because tests/test_render.py requires the
