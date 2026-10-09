@@ -110,6 +110,7 @@ CREATE TABLE items (
     phase_kind     TEXT,
     fixes          TEXT,
     choices        TEXT,
+    kg_refs        TEXT,
     kind           TEXT,
     track          TEXT,
     owner          TEXT,

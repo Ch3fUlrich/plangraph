@@ -57,7 +57,7 @@ def check_wait(value, key=None):
 
 #: Optional columns folded from ``item_created``/``item_defined`` payloads.
 SMALL_FIELDS = ("description", "host", "wait", "layer", "role", "agent_id",
-                "phase_kind", "fixes", "choices")
+                "phase_kind", "fixes", "choices", "kg_refs")
 #: The MODEL-KINDS subset of ``SMALL_FIELDS``.
 MODEL_FIELDS = ("layer", "role", "agent_id", "phase_kind")
 
@@ -233,3 +233,50 @@ def parse_choices(text):
     except (TypeError, ValueError):
         return None
     return value if isinstance(value, dict) else None
+
+
+# --------------------------------------------------------------------------- #
+# PG-KG-REFS (D-879): references from a plan item to Omnigraph knowledge nodes.
+KG_TYPES = ("Decision", "Rule", "Convention", "Component", "Preference", "Project")
+MAX_KG_REFS = 20
+_KG_REF = re.compile(r"[a-z0-9][a-z0-9-]{0,62}:(?:" + "|".join(KG_TYPES) + r"):[a-z0-9][a-z0-9._-]{0,127}")
+
+
+def check_kg_refs(value, key=None):
+    """Canonical JSON text of a sorted, de-duplicated list of ``graph:Type:slug`` refs, or ``None``.
+
+    Syntax only: the keeper never calls Omnigraph (the render-time export reports dangling refs).
+    """
+    if value is None:
+        return None
+    where = f"{key}: " if key else ""
+    if isinstance(value, str):
+        import json
+        try:
+            value = json.loads(value)
+        except ValueError as exc:
+            raise Refused("validation", f"{where}kg_refs must be a list") from exc
+    if not isinstance(value, list) or len(value) > MAX_KG_REFS:
+        raise Refused("validation", f"{where}kg_refs must be a list of <= {MAX_KG_REFS} refs")
+    refs = set()
+    for ref in value:
+        if not isinstance(ref, str) or not _KG_REF.fullmatch(ref):
+            raise Refused("validation",
+                          f"{where}kg_refs entries must be graph:Type:slug with Type in {list(KG_TYPES)}")
+        refs.add(ref)
+    if not refs:
+        return None
+    import json
+    return json.dumps(sorted(refs), separators=(",", ":"))
+
+
+def parse_kg_refs(text):
+    """The stored JSON text as a list (``[]`` when absent or unreadable)."""
+    if not text:
+        return []
+    import json
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []

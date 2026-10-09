@@ -268,3 +268,11 @@ md-sync reads it from the end of a QUESTIONS.md "Exact step" cell:
 `Options: enable = mail goes out as your Gmail; own sender = needs a new mailbox; *stay disabled = nothing changes. Deadline: 2026-10-12`
 (`*` = default, `;` separates; a malformed block stays plain text). Rows whose ID cell is not exactly one id are
 listed in the md-sync status file under `unmatched`.
+
+## Knowledge refs (PG-KG-REFS, D-879)
+
+Any item may carry `kg_refs`: <= 20 references `"<graph>:<Type>:<slug>"` to Omnigraph knowledge nodes, Type in
+Decision / Rule / Convention / Component / Preference / Project (no Task: plan work lives in the plan graph).
+Validated for syntax only, stored sorted and de-duplicated, folded from item events, returned by show/snapshot.
+Set by create/edit (L1 own project, router anywhere; MCP `create`/`edit`). The keeper never calls Omnigraph: the
+render-time export (PG-KG-EXPORT) resolves refs, follows Supersedes to the current node and reports dangling refs.
