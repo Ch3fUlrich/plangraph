@@ -96,3 +96,34 @@ def test_search_hits_come_first_and_folded_hits_still_count(out):
     small = out["searchSmall"]
     assert small["tasks"] == 1 and small["more"]["hiddenMatches"] > 0
     assert small["counts"]["nodes"] == 1 + small["more"]["hiddenMatches"]
+
+
+TAP_JS = r"""
+"use strict";
+require(process.argv[2]); var PlanUI = require(process.argv[3]);
+require(process.argv[4]); require(process.argv[5]); require(process.argv[6]); require(process.argv[7]);
+var handler = null, sets = [];
+var cy = { on: function (ev, sel, fn) { if (ev === "tap" && sel === "node.more-node") handler = fn; } };
+var state = { settings: {}, moreShown: { "big|P1": 200 } };
+var ui = { get: function (k) { return k ? state[k] : state; }, set: function (k, v) { sets.push([k, v]); state[k] = v; } };
+PlanUI.GraphExt.call("bind", null, { cy: cy, ui: function () { return ui; } });
+var ok = !!handler;
+handler({ target: { data: function () { return { phId: "big|P1" }; } } });
+handler({ target: { data: function () { return { phId: "other|X" }; } } });
+handler({ target: { data: function () { return {}; } } });
+process.stdout.write(JSON.stringify({ bound: ok, sets: sets }));
+"""
+
+
+@need_node
+def test_tap_on_more_node_adds_one_budget_per_phase(tmp_path):
+    rp = tmp_path / "t.js"
+    rp.write_text(TAP_JS, encoding="utf-8")
+    cmd = ["node", str(rp), str(WEB / "page.js"), str(WEB / "page_model.js"), str(WEB / "page_store.js"),
+           str(WEB / "page_search.js"), str(WEB / "page_graph.js"), str(WEB / "page_graph_ext.js")]
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=str(ROOT))
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    got = json.loads(proc.stdout)
+    assert got["bound"]
+    assert got["sets"] == [["moreShown", {"big|P1": 400}],
+                           ["moreShown", {"big|P1": 400, "other|X": 200}]]
