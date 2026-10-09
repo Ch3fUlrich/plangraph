@@ -237,8 +237,9 @@ class ReadMixin:
                            if item["key"] in answers else None),
             })
         head = self.conn.execute(
-            "SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
+            "SELECT hash, seq FROM events ORDER BY seq DESC LIMIT 1").fetchone()
         return {"generated": self._iso(now), "head": head[0] if head else None,
+                "head_seq": head[1] if head else 0,   # PG-LOCAL-COPY: readers refuse an older copy
                 "items": out,
                 "aliases": {a["old"]: a["new"] for a in self._aliases()},
                 "activity": self._activity(now),
