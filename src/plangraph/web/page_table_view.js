@@ -180,6 +180,8 @@
     var tdL = el("td", "tc-links");
     (r._links || []).forEach(function (l) { tdL.appendChild(linkChip(l)); });
     tr.appendChild(tdL);
+    /* UI-TABLE-PHONE: below 600 px each row is a card; the cell label comes from data-label. */
+    for (var ci = 0; ci < COLS.length && ci < tr.childNodes.length; ci++) tr.childNodes[ci].setAttribute("data-label", COLS[ci].label);
     return tr;
   }
 
@@ -249,6 +251,18 @@
     if (!view.group) none.selected = true;
     sel.addEventListener("change", function () { view.group = sel.value; render(); });
     lab.appendChild(sel); bar.appendChild(lab);
+    /* Phone cards hide the header sort buttons, so sorting needs its own control (CSS shows it < 601 px). */
+    var slab = el("label", "tt-sortlab", "Sort by "), ssel = el("select", "tt-sel tt-sort");
+    ssel.setAttribute("aria-label", "Sort table by column");
+    COLS.forEach(function (c) {
+      [["asc", " ▲"], ["desc", " ▼"]].forEach(function (d) {
+        var o = el("option", null, c.label + d[1]); o.value = c.id + ":" + d[0];
+        if (view.sort.col === c.id && view.sort.dir === d[0]) o.selected = true;
+        ssel.appendChild(o);
+      });
+    });
+    ssel.addEventListener("change", function () { var v = ssel.value.split(":"); view.sort = { col: v[0], dir: v[1] }; render(); });
+    slab.appendChild(ssel); bar.appendChild(slab);
     bar.appendChild(el("span", "tt-count", rows.length + " of " + all.length + " tasks"));
     var ca = el("button", "tt-btn", "Collapse all"); ca.type = "button";
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";

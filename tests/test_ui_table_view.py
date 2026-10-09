@@ -275,6 +275,19 @@ function main() {
               rows: secs.length ? qsa(secs[0], "tbody tr").length : 0,
               moreText: more.length ? more[0].textContent : null };
 
+  /* UI-TABLE-PHONE: every cell carries its column label; the sort select re-sorts. */
+  var firstRow = qsa(box2, "tbody tr")[0];
+  out.labels = firstRow ? firstRow.childNodes.map(function (td) { return td.getAttribute("data-label"); }) : [];
+  var sortSel = qsa(box2, "select.tt-sort")[0];
+  out.sortOptions = sortSel ? qsa(sortSel, "option").length : 0;
+  if (sortSel) {
+    sortSel.value = "task:desc";
+    (sortSel.listeners.change || []).forEach(function (f) { f({}); });
+  }
+  out.sortAfter = PlanUI.TablePage.view.sort;
+  var firstAfter = qsa(doc.getElementById("list-content"), "tbody tr")[0];
+  out.firstTitleAfter = firstAfter ? firstAfter.getAttribute("data-key") : null;
+
   /* Hover preview: HTML-looking title must arrive as text. */
   var anchor = doc.createElement("button");
   doc.body.appendChild(anchor);
@@ -367,3 +380,22 @@ def test_preview_chip_text_comes_from_text_content(tmp_path):
     assert pv["hidden"] is False
     assert "<b>x</b>" in (pv["text"] or ""), pv["text"]  # literal text, not markup
     assert pv["bolds"] == 0, "title parsed as HTML"
+
+
+@need_node
+def test_phone_cards_have_labels_and_a_sort_select(tmp_path):
+    out = run_node(tmp_path)
+    assert out["labels"] == ["Project", "Phase", "Task", "State", "Agent", "Created / modified",
+                             "Previous", "Next", "Decisions & questions"]
+    assert out["sortOptions"] == 2 * 9
+    assert out["sortAfter"] == {"col": "task", "dir": "desc"}
+    assert out["firstTitleAfter"] == "big:B-999"   # natural sort, descending
+
+
+def test_phone_css_turns_rows_into_cards_below_600px():
+    css = (WEB / "page.css").read_text(encoding="utf-8")
+    block = css[css.index("@media (max-width: 600px)"):]
+    assert ".tt thead { display: none; }" in block
+    assert "content: attr(data-label)" in block
+    assert ".tt-sortlab { display: inline-flex;" in block
+    assert css.index(".tt-sortlab { display: none; }") < css.index("@media (max-width: 600px)")
