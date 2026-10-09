@@ -100,7 +100,7 @@ def _table_rows(text):
     id in its 2nd cell.  ``OS-70 (3b)`` yields ``OS-70``; a 2nd cell with
     two or more ids (``OS-56, OS-51, ...``) is skipped.
     """
-    out, heading, fenced = [], None, False
+    out, heading, fenced, kind_col = [], None, False, False
     for raw in text.splitlines():
         line = raw.rstrip()
         if _FENCE_RE.match(line):
@@ -114,6 +114,7 @@ def _table_rows(text):
             continue
         stripped = line.strip()
         if not stripped.startswith("|"):
+            kind_col = False     # a table ended: the next one declares its own header
             continue
         if line.startswith("    ") or line.startswith("\t"):
             continue
@@ -123,15 +124,21 @@ def _table_rows(text):
         cells = [p.strip() for p in parts]
         if len(cells) < 5:
             continue
+        if cells[1].strip().lower() == "id":
+            # Optional Kind column (QUESTIONS.md since 2026-10-09), declared by the header:
+            # ``| Prio | ID | Kind | why | step | where |``.
+            kind_col = len(cells) >= 3 and cells[2].strip().lower() == "kind"
+            continue
         ids = _TABLE_ID_RE.findall(cells[1])
         if len(ids) != 1:
             continue
-        # Optional Kind column (QUESTIONS.md since 2026-10-09): ``| Prio | ID | Kind | why | step | where |``.
-        # Only a 6+-cell row has one: a 5-cell row whose why text is "TASK" stays a why.
         kind = None
-        if len(cells) >= 6 and cells[2].strip().upper() in _KIND_CELLS:
-            kind = cells[2].strip().upper()
-            cells = cells[:2] + cells[3:]
+        if kind_col or (len(cells) >= 6 and cells[2].strip().upper() in _KIND_CELLS):
+            value = cells[2].strip().upper()
+            kind = value if value in _KIND_CELLS else None   # unknown -> the rule decides
+            cells = cells[:2] + cells[3:] + [""]
+            if len(cells) < 5:
+                continue
         out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4], kind))
     return out
 

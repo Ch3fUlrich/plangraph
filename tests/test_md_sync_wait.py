@@ -142,3 +142,18 @@ def test_old_five_column_table_still_classifies_by_rule():
 def test_five_column_row_whose_why_is_task_is_not_shifted():
     (q,) = mp.parse_questions("| 1 | Q-1 | TASK | Actual step | Actual where |\n")
     assert (q.title, q.description) == ("Q: TASK", "Actual step — Actual where")
+
+
+def test_kind_header_shifts_even_an_unknown_kind_value():
+    text = ("| Prio | ID | Kind | Why | Step | Where |\n|---|---|---|---|---|---|\n"
+            "| 1 | Q-1 | todo | Why text | Step text | Where text |\n")
+    (q,) = mp.parse_questions(text)
+    assert (q.title, q.description, q.wait) == ("Q: Why text", "Step text — Where text", "answer")
+
+
+def test_kind_header_does_not_leak_into_the_next_table():
+    text = ("| Prio | ID | Kind | Why | Step | Where |\n|---|---|---|---|---|---|\n"
+            "| 1 | Q-1 | TASK | a | b | c |\n\nprose\n\n"
+            "| 1 | OS-2 | Restart the box | do it | host |\n")
+    got = {q.id: (q.title, q.wait) for q in mp.parse_questions(text)}
+    assert got == {"Q-1": ("Q: a", "task"), "OS-2": ("OP: Restart the box", "task")}
