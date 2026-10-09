@@ -319,3 +319,19 @@ body {
 .qa-export { margin: 6px 0; }
 tr.flash { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .pg-body .seg { margin: 4px 0; }
+/* UI-TABLE-PHONE: cards below 600 px (labels from data-label), sticky group headers, sort select. */
+.tt-sortlab { display: none; }
+@media (max-width: 600px) {
+  .tt-sortlab { display: inline-flex; align-items: center; gap: 4px; }
+  .tt-bar select, .tt-bar button { min-height: 40px; }
+  .tg-scroll { overflow-x: visible; }
+  .tt thead { display: none; }
+  .tt, .tt tbody, .tt tr, .tt td { display: block; width: 100%; box-sizing: border-box; }
+  .tt tr { margin: 8px 0; padding: 6px 8px; border: 1px solid var(--border); border-left: 4px solid var(--pc, var(--accent)); border-radius: 8px; background: var(--bg); }
+  .tt td { border-top: 0; padding: 3px 0; display: flex; gap: 8px; align-items: baseline; min-height: 24px; overflow-wrap: anywhere; }
+  .tt td::before { content: attr(data-label); flex: 0 0 96px; font-size: 11px; color: var(--muted); }
+  .tt td.tc-task { font-size: 14px; }
+  .tt td.tc-task .tc-open, .tt td.tc-task .tc-go { min-height: 40px; }
+  .tg-head { top: 0; flex-wrap: wrap; }
+  .tg-bar { flex-basis: 100%; margin-left: 0; }
+}

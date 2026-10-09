@@ -328,6 +328,22 @@ body {
 .qa-export { margin: 6px 0; }
 tr.flash { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .pg-body .seg { margin: 4px 0; }
+/* UI-TABLE-PHONE: cards below 600 px (labels from data-label), sticky group headers, sort select. */
+.tt-sortlab { display: none; }
+@media (max-width: 600px) {
+  .tt-sortlab { display: inline-flex; align-items: center; gap: 4px; }
+  .tt-bar select, .tt-bar button { min-height: 40px; }
+  .tg-scroll { overflow-x: visible; }
+  .tt thead { display: none; }
+  .tt, .tt tbody, .tt tr, .tt td { display: block; width: 100%; box-sizing: border-box; }
+  .tt tr { margin: 8px 0; padding: 6px 8px; border: 1px solid var(--border); border-left: 4px solid var(--pc, var(--accent)); border-radius: 8px; background: var(--bg); }
+  .tt td { border-top: 0; padding: 3px 0; display: flex; gap: 8px; align-items: baseline; min-height: 24px; overflow-wrap: anywhere; }
+  .tt td::before { content: attr(data-label); flex: 0 0 96px; font-size: 11px; color: var(--muted); }
+  .tt td.tc-task { font-size: 14px; }
+  .tt td.tc-task .tc-open, .tt td.tc-task .tc-go { min-height: 40px; }
+  .tg-head { top: 0; flex-wrap: wrap; }
+  .tg-bar { flex-basis: 100%; margin-left: 0; }
+}
 
 /* plangraph page chrome (T2) — loaded AFTER page.css, so it wins the cascade.
    UI-PLAN §11: root 16 px (S 15 / L 18), project palette P1–P8, state palette
@@ -6784,6 +6800,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var tdL = el("td", "tc-links");
     (r._links || []).forEach(function (l) { tdL.appendChild(linkChip(l)); });
     tr.appendChild(tdL);
+    for (var ci = 0; ci < COLS.length && ci < tr.childNodes.length; ci++) tr.childNodes[ci].setAttribute("data-label", COLS[ci].label);
     return tr;
   }
 
@@ -6852,6 +6869,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (!view.group) none.selected = true;
     sel.addEventListener("change", function () { view.group = sel.value; render(); });
     lab.appendChild(sel); bar.appendChild(lab);
+    var slab = el("label", "tt-sortlab", "Sort by "), ssel = el("select", "tt-sel tt-sort");
+    ssel.setAttribute("aria-label", "Sort table by column");
+    COLS.forEach(function (c) {
+      [["asc", " ▲"], ["desc", " ▼"]].forEach(function (d) {
+        var o = el("option", null, c.label + d[1]); o.value = c.id + ":" + d[0];
+        if (view.sort.col === c.id && view.sort.dir === d[0]) o.selected = true;
+        ssel.appendChild(o);
+      });
+    });
+    ssel.addEventListener("change", function () { var v = ssel.value.split(":"); view.sort = { col: v[0], dir: v[1] }; render(); });
+    slab.appendChild(ssel); bar.appendChild(slab);
     bar.appendChild(el("span", "tt-count", rows.length + " of " + all.length + " tasks"));
     var ca = el("button", "tt-btn", "Collapse all"); ca.type = "button";
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
