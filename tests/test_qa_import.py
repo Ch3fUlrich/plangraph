@@ -59,9 +59,9 @@ def test_malformed_block_keeps_the_text_and_yields_no_choices(bad):
 def test_unmatched_rows_are_named():
     text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
             "| 1 | OS-1 | TASK | a | b | c |\n"
-            "| 1 | prox-L1-main approval (verify) | ANSWER | a | b | c |\n"
+            "| 1 | site-L1-main approval (verify) | ANSWER | a | b | c |\n"
             "| 2 | OS-5, OS-6 | TASK | a | b | c |\n")
-    assert mp.unmatched_rows(text) == ["prox-L1-main approval (verify)", "OS-5, OS-6"]
+    assert mp.unmatched_rows(text) == ["site-L1-main approval (verify)", "OS-5, OS-6"]
 
 
 def test_table_row_carries_choices():
