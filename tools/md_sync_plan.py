@@ -227,6 +227,11 @@ def _masked_choices(choices, plan):
                 text, m = credential_guard.mask(text)
                 plan.redactions += n + m
                 entry[name] = text
+        if entry.get("label") != opt.get("label") or credential_guard.find_shapes(opt["id"]):
+            # the id is a slug of the label: a masked label means a secret-derived id
+            entry["id"] = f"masked-{len(out['options']) + 1}"
+            if out["default"] == opt["id"]:
+                out["default"] = entry["id"]
         out["options"].append(entry)
     if choices.get("blocks"):
         text, n = mp.redact(choices["blocks"])

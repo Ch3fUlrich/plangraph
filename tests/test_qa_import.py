@@ -88,7 +88,7 @@ def choices(**kw):
     {"options": [{"id": "a", "label": "A", "html": "<b>"}]},
     {"options": [{"id": f"o{i}", "label": "x"} for i in range(9)], "default": None},
     {"blocks": "log" + "in admin/" + "hunter2" + "secret"},
-    {"options": [{"id": "log" + "in-admin/hunter2secret", "label": "safe"}]}])
+    {"options": [{"id": "log" + "in-admin-x", "label": "pass" + "word abc/defghij1"}]}])
 def test_check_choices_refuses(bad):
     with pytest.raises(Refused):
         check_choices(choices(**bad), "question")
@@ -213,3 +213,19 @@ def test_variant_suffix_ids_are_matched_not_unmatched():
 def test_control_chars_in_the_why_cell_drop_blocks_not_choices():
     rest, ch = mp.parse_options("Options: a = x; *b", "why\x01")
     assert ch is not None and ch["blocks"] is None and ch["default"] == "b"
+
+
+def test_variant_tag_with_extra_text_is_unmatched():
+    text = ("| Prio | ID | Kind | why | step | where |\n|---|---|---|---|---|---|\n"
+            "| 1 | OS-1 (verify) extra | TASK | a | b | c |\n")
+    assert mp.unmatched_rows(text) == ["OS-1 (verify) extra"]
+
+
+def test_masked_choices_renames_a_credential_shaped_id():
+    import md_sync_plan as mplan
+    plan = mplan.Plan()
+    secret = "log" + "in admin/hunter2secret"
+    out = mplan._masked_choices({"options": [{"id": "x/abcdefgh", "label": secret}],
+                                 "default": "x/abcdefgh", "deadline": None, "blocks": None}, plan)
+    assert out["options"][0]["id"] == "masked-1" and out["default"] == "masked-1"
+    assert "hunter2" not in json.dumps(out)

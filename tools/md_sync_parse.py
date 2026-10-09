@@ -205,6 +205,9 @@ def parse_options(step, why=""):
                   "deadline": match.group("deadline"), "blocks": blocks}
 
 
+_ONE_ID_CELL = re.compile(r"(?i)(?:OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)(?:\s*\([^()]{1,40}\))?")
+
+
 def unmatched_rows(text):
     """QA-IMPORT: data rows of the QUESTIONS tables whose ID cell is not exactly one id."""
     out, fenced = [], False
@@ -219,7 +222,9 @@ def unmatched_rows(text):
         cells = [p.strip() for p in stripped.split("|")[1:]]
         if len(cells) < 5 or set(cells[1]) <= set("-: ") or cells[1].lower() == "id":
             continue
-        if len(_TABLE_ID_RE.findall(cells[1])) != 1:
+        ids = _TABLE_ID_RE.findall(cells[1])
+        # exactly one id, optionally followed by one parenthesised variant tag ("OS-70 (3b)")
+        if len(ids) != 1 or not _ONE_ID_CELL.fullmatch(cells[1].strip()):
             out.append(cells[1][:80])
     return out
 
