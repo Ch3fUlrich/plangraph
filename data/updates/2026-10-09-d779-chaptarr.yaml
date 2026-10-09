@@ -1,0 +1,49 @@
+# D-779: chaptarr CH-UP-IMAGESHARP + CH-P1-TESTGAPS under PH-CHAPTARR.
+batch: 2026-10-09-d779-chaptarr
+principal: routing-00
+source: /home/s/code/routing/docs/decisions-log.md
+source_sha256: 10eefeff71dc328fc0f20b1935c30878a194497caccb75e46e12921ae891b777
+ops:
+- op: create
+  item:
+  - project: server
+    id: CH-UP-IMAGESHARP
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 'Upstream Chaptarr: ImageSharp 3.1.12 high advisories break NuGet restore'
+    done_criteria: upstream issue filed, or a PR if a pure version bump with green tests
+    description: 'D-779 via chaptarr-L1. Upstream develop pins SixLabors.ImageSharp 3.1.12 (high: GHSA-j3p4-wp97-rph4, GHSA-j9gm-c75j-xc9q, GHSA-jjfr-hcj7-qf5w; moderate: GHSA-gwg2-r3hj-4w44, GHSA-wmxv-xphr-5c9g);
+      NuGetAudit warnings-as-errors break restore. Public code.'
+  - project: server
+    id: CH-P1-TESTGAPS
+    kind: lane
+    track: CHAPTARR
+    owner: chaptarr-L1
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 1
+    estimate_src: default
+    priority: 3
+    depends_on: []
+    title: 7 coverage gaps from seat 20261009-003449 (empty-DB counts, bridge lost count, intake limits)
+    done_criteria: tests added, suite green, merged
+    description: 'D-779 via chaptarr-L1: empty-DB counts, bridge lost count, intake author/isbn/note/language limits.'
+- op: edit
+  key: server:PH-CHAPTARR
+  fields:
+    depends_on:
+    - server:CH-P1-TESTGAPS
+    - server:CH-UP-IMAGESHARP
+    - server:PH-CH-DRIVE
+    - server:PH-CH-INTAKE
+    - server:PH-CH-OVERVIEW
+    - server:PH-CH-UPSTREAM

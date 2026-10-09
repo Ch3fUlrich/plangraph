@@ -100,3 +100,4 @@ D-770 workst-gen GEN-AUDITLOG-SCHEMA + GEN-SQLITE-CONN-SWALLOW under PH-GEN-1003
 D-775 MODEL-HOST done criterion amended: data/updates/2026-10-09-d775-model-host.yaml — LIVE 2026-10-09 (verify ok).
 D-775 rehome workstation:T5-BRANCHES + T5-GROK-L2 -> autoos (host workstation, router release first): data/updates/2026-10-09-d775-rehome.yaml — LIVE 2026-10-09 (verify ok; backup keeper.db.pre-d775rehome).
 D-777 autoos AO-APPLY-EMPTY-COMBO, AO-PROBE-397B-TOOLS, AO-WS-OVH-PROBE, AO-PRICE-GPTOSS120B + AO-WRITER-GUARDS criterion: data/updates/2026-10-09-d777-autoos.yaml — LIVE 2026-10-09 (verify ok).
+D-779 server:CH-UP-IMAGESHARP + CH-P1-TESTGAPS under PH-CHAPTARR: data/updates/2026-10-09-d779-chaptarr.yaml — LIVE 2026-10-09 (verify ok).
