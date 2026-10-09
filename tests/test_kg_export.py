@@ -272,6 +272,13 @@ class _H(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        elif _H.mode == "401echo":
+            echo = json.dumps({"error": self.headers.get("Authorization")}).encode()
+            self.send_response(401)
+            self.send_header("Content-Length", str(len(echo)))
+            self.end_headers()
+            self.wfile.write(echo)
+            return
         elif _H.mode == "slow":
             import time
             time.sleep(1.5)
@@ -570,3 +577,47 @@ def test_supersedes_only_applies_to_decisions():
     exp, _d, _e = build([item("p1:A", ["g:Rule:d-old"])], data)
     assert exp["nodes"]["g:Rule:d-old"]["superseded_by"] is None
     assert exp["nodes"]["g:Rule:d-old"]["current"] == "g:Rule:d-old"
+
+
+# --- round-8 attacker seat: symlinks, echoed tokens, path-like graph names, run deadline ---
+def test_symlink_at_tmp_path_is_not_followed(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    (tmp_path / ".kg-export.json.tmp").symlink_to(victim)
+    (tmp_path / ".kg-export-status.json.tmp").symlink_to(victim)
+    kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
+    assert victim.read_text() == "keep me"
+    out = tmp_path / "kg-export.json"
+    assert out.is_file() and not out.is_symlink()
+    assert (out.stat().st_mode & 0o777) == 0o644
+
+
+def test_symlink_at_target_is_replaced_not_followed(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    (tmp_path / "kg-export.json").symlink_to(victim)
+    kg.run([], tmp_path, env=_env(tmp_path), transport=Fake({}))
+    assert victim.read_text() == "keep me"
+    assert not (tmp_path / "kg-export.json").is_symlink()
+
+
+def test_401_body_echoing_the_token_never_reaches_the_error(stub):
+    _H.mode = "401echo"
+    with pytest.raises(kg.KgError) as exc:
+        kg.OmnigraphClient(stub, TOKEN, timeout=3)("g", "kg_x", "q")
+    assert TOKEN not in str(exc.value) and "401" in str(exc.value)
+
+
+def test_path_like_graph_names_are_never_queried():
+    fake = Fake({})
+    items = [{"key": "p:A", "kg_refs": ["a/../admin:Decision:x", "a?x=1:Rule:y", "A:Rule:y"]}]
+    kg.build_export(items, fake)
+    assert all(re.fullmatch(r"[a-z0-9][a-z0-9-]*", c[0]) for c in fake.calls)
+
+
+def test_run_enforces_the_total_deadline(tmp_path, monkeypatch):
+    monkeypatch.setattr(kg, "DEADLINE_S", -1)
+    items = [{"key": "p:A", "kg_refs": ["g:Decision:x"]}]
+    kg.run(items, tmp_path, env=_env(tmp_path), transport=Fake({"g": {}}))
+    status = json.loads((tmp_path / "kg-export-status.json").read_text())
+    assert any(e.get("error") == "deadline" for e in status["errors"])

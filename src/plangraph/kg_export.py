@@ -358,11 +358,18 @@ def build_export(items, transport, extra_graphs=(), max_listed=MAX_LISTED, deadl
 def _atomic_write(path: Path, text: str):
     tmp = path.with_name(f".{path.name}.tmp")  # fixed name: a crash leaves at most one, replaced next run
     try:
-        tmp.write_text(text, encoding="utf-8")
-        os.replace(tmp, path)
+        # A stale tmp (or a planted symlink) is removed, never opened; O_EXCL|O_NOFOLLOW then
+        # refuses a symlink re-planted in between (round-8 seat). Mode is explicit, not umask.
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, path)  # replaces a symlink at the target itself, never its referent
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
 
 
 def _read_enabled(path):
