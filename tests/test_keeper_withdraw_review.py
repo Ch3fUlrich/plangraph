@@ -61,11 +61,9 @@ def test_semaphore_item_with_no_commit_criteria_is_withdrawable(w):
     assert w.store.withdraw_review(w.p("router"), "demo:RUN", "D-900")["state"] == "claimed"
 
 
-@pytest.mark.parametrize("who", ["l1main", "reviewer", "worker", "reader", "system"])
+@pytest.mark.parametrize("who", ["l1main", "l1other", "reviewer", "workerA", "reader", "system"])
 def test_only_the_router_may_withdraw(w, who):
     to_in_review(w, "demo:ISSUE")
-    if who not in w.principals:
-        pytest.skip(f"no {who} principal in the fixture")
     with pytest.raises(Refused) as exc:
         w.store.withdraw_review(w.p(who), "demo:ISSUE", "D-900")
     assert exc.value.code == "forbidden"
