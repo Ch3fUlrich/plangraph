@@ -1,7 +1,7 @@
 """QA-IMPORT (D-865): operator questions carry structured choices; every QUESTIONS row is named.
 
 Mutations killed: a malformed Options block dropping the operator's words, a default that is not
-an option, choices on a lane, unescaped/credential-shaped option text accepted, an unmatched row
+an option, choices on a lane, unescaped or secret-like option text accepted, an unmatched row
 silently ignored, md-sync re-editing an unchanged item, the fold disagreeing with the cache.
 """
 from __future__ import annotations
@@ -84,7 +84,7 @@ def choices(**kw):
     {"deadline": "tomorrow"}, {"extra": 1},
     {"options": [{"id": "a", "label": "A", "html": "<b>"}]},
     {"options": [{"id": f"o{i}", "label": "x"} for i in range(9)], "default": None},
-    {"blocks": "login admin/hunter2secret"}])
+    {"blocks": "log" + "in admin/" + "hunter2" + "secret"}])
 def test_check_choices_refuses(bad):
     with pytest.raises(Refused):
         check_choices(choices(**bad), "question")

@@ -49,7 +49,8 @@ def test_needs_you_ranked_by_unblocks_then_priority():
 def test_needs_you_row_shape():
     row = views.needs_you([_it("p:Q", kind="question", wait="answer", priority=3)])[0]
     assert row == {"key": "p:Q", "project": "p", "title": "p:Q", "kind": "question",
-                   "state": "open", "wait": "answer", "priority": 3, "unblocks": 0}
+                   "state": "open", "wait": "answer", "priority": 3, "unblocks": 0,
+                   "choices": None}
 
 
 def _ans(key, text, did, at, **kw):

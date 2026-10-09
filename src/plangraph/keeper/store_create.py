@@ -37,7 +37,7 @@ _MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
-     "agent_id", "phase_kind", "fixes", "kind", "track", "owner", "owner_family",
+     "agent_id", "phase_kind", "fixes", "choices", "kind", "track", "owner", "owner_family",
      "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
