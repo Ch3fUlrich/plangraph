@@ -14,7 +14,6 @@ from __future__ import annotations
 import io
 import json
 import os
-import socket
 import sys
 import threading
 from pathlib import Path
@@ -111,6 +110,17 @@ def test_choice_text_is_sanitised_deadline_and_star_labels():
     assert [o["label"] for o in got["options"]] == ["urgent", "later"]
     ok = arch.questions_md([row("routing:Q-Z", choices={**CHOICES, "deadline": "2026-02-03"})], {})
     assert "Deadline: 2026-02-03" in ok
+
+
+def test_documented_lossy_round_trip_decision_kind_and_custom_option_ids():
+    """The file format has only ANSWER/TASK and slug ids: pinned so a change is deliberate."""
+    rows = [row("routing:Q-D", "Q: pick", kind="decision", wait="answer",
+                choices={"options": [{"id": "keep", "label": "Stay Disabled", "consequence": "x"}],
+                         "default": "keep", "deadline": None, "blocks": None})]
+    text = arch.questions_md(rows, {})
+    assert "| ANSWER |" in text and "*Stay Disabled" in text
+    got = {q.id: q for q in mp.parse_questions(text)}["Q-D"]
+    assert got.wait == "answer" and got.choices["default"] == "stay-disabled"
 
 
 def test_non_matching_ids_are_listed_but_flagged():
@@ -211,19 +221,19 @@ def test_status_file_records_the_archive_run(srv, token, tmp_path):
     assert doc["error"] is None and doc["ts"]
 
 
-def test_unreachable_keeper_leaves_the_file_alone_and_reports(tmp_path):
+def test_unreachable_keeper_leaves_the_file_alone_and_reports(tmp_path, monkeypatch):
     target = tmp_path / "QUESTIONS.md"
     target.write_text("keep me", encoding="utf-8")
     tok = tmp_path / "t"
     tok.write_text("x" * 20, encoding="utf-8")
     os.chmod(tok, 0o600)
     status = tmp_path / "status.json"
-    with socket.socket() as probe:                        # a port nothing listens on
-        probe.bind(("127.0.0.1", 0))
-        dead = probe.getsockname()[1]
+    def down(self, verb):
+        raise md_sync.apply_batch.ApiError("unreachable", "URLError")
+    monkeypatch.setattr(md_sync.apply_batch.Session, "get", down)   # no socket, no port race
     out, err = io.StringIO(), io.StringIO()
     rc = md_sync.main(["--archive-answers", "--questions-out", str(target), "--apply",
-                       "--url", f"http://127.0.0.1:{dead}", "--token-file", str(tok),
+                       "--url", "http://keeper.invalid", "--token-file", str(tok),
                        "--status-file", str(status)], out=out, err=err)
     assert rc == 2 and target.read_text(encoding="utf-8") == "keep me"
     assert json.loads(status.read_text(encoding="utf-8"))["error"].startswith("error: cannot read")
