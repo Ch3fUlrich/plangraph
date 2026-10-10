@@ -16,9 +16,17 @@ __all__ = [
 ]
 
 
-def ready_text(items, project=None, n=10, unblocks=None, owner=None, agent=False) -> str:
+def ready_text(items, project=None, n=10, unblocks=None, owner=None, agent=False,
+               server_items=False) -> str:
     """The brief; *unblocks* is the server's full-graph map (the ``items`` of a
-    JSON ``ready`` reply are only the ready subset, so recounting there is 0)."""
+    JSON ``ready`` reply are only the ready subset, so recounting there is 0).
+
+    *server_items*: ``items`` is a ``ready`` reply, already filtered, ordered and
+    capped by the keeper; print it as-is.  Re-filtering would re-check
+    dependencies against the reply subset and drop items whose done dependency
+    is not in it (PG-CLI-READY-FIX).  The offline snapshot path keeps the filter."""
+    if server_items:
+        return views.brief_rows(items, unblocks or {})
     return views.brief(items, project=project, n=n, ub=unblocks, owner=owner, agent=agent)
 
 
