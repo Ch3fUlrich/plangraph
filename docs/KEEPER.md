@@ -339,3 +339,11 @@ Text is raw data: the page must render it with `textContent`. Credential-shaped 
 `{enabled, generated, ok, kept_previous, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
 `dangling` = the graph was read and holds no node for the ref (computed from the fresh read even when `kept_previous` is true, so it can name refs the kept export does not contain); refs into unreadable graphs are `unresolved_graphs`, not dangling.
 Go-live = a read-only Omnigraph token file from prox plus the two env vars on the render host (not part of this lane).
+
+## Next item for a heartbeat (PG-READY-OWNER, D-953)
+
+`pg ready --project P --mine --agent -n 1` (HTTP `GET /v1/ready?project=P&mine=1&agent=1&n=1`, MCP `ready` with
+`mine`/`agent`) returns the best item the caller can start now: state `open`, every dependency `done`, owned by the caller
+(`--owner NAME` for another principal), operator steps excluded (`operator` flag or kind question/decision/
+operator_task), ordered by (-priority, -unblocks, estimate, key). Then `pg claim KEY --lease 2h`. Offline (keeper
+unreachable) the CLI answers from the snapshot; `--mine` then cannot resolve the caller and lists all owners.

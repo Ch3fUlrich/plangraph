@@ -49,10 +49,12 @@ _ACTIVITY_CAP = 5000
 class ReadMixin:
     """Read-only verbs; any authenticated principal may call them."""
 
-    def ready(self, principal, project=None, n=10):
+    def ready(self, principal, project=None, n=10, owner=None, mine=False, agent=False):
+        """D-953: ``mine`` = items owned by the caller; ``agent`` drops operator steps."""
+        owner = principal.name if mine else owner
         return self._run(principal, "ready", None,
-                         lambda now: views.brief(self._all_items(),
-                                                 project=project, n=n))
+                         lambda now: views.brief(self._all_items(), project=project, n=n,
+                                                 owner=owner, agent=bool(agent)))
 
     def show(self, principal, key, brief=False):
         if brief:

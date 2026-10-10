@@ -208,10 +208,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
 
         if name == "ready":
             n = None if self._one(query, "all") else int(self._one(query, "n", 10))
-            text = store.ready(principal, project=project, n=n)
+            mine = self._one(query, "mine") in ("1", "true")
+            agent = self._one(query, "agent") in ("1", "true")
+            owner = principal.name if mine else self._one(query, "owner")
+            text = store.ready(principal, project=project, n=n, owner=owner, agent=agent)
             if as_text:
                 return text, True
-            items = views.ready(store._all_items(), project=project)
+            items = views.ready(store._all_items(), project=project, owner=owner, agent=agent)
             if n is not None:
                 items = items[:int(n)]
             return {"items": items,
