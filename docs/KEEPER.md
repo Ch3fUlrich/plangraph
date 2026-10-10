@@ -346,5 +346,5 @@ The router may `edit` `review_tier` / `evidence_kinds` of a `claimed` or `in_rev
 edit of a non-open item is refused). Fleet rule (routing, 2026-10-10): use it ONLY for ops/config items that produced no
 code commit, and only with a D-row naming the key in `Closes:`; md-sync then closes the item on that decision. It is
 audited: the hash-chained `item_defined` event records `"while": "<state>"` and the new tier
-(`pg log <key>` / the events table), so a retier during review is visible. `withdraw_review` stays the path for items
+(the keeper `events` table; the activity page shows recent events), so a retier during review is visible. `withdraw_review` stays the path for items
 that are decision-closable by their own definition.
