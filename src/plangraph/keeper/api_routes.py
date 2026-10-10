@@ -21,7 +21,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
-               "withdraw_review"}
+               "withdraw_review", "set_kind"}
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
 
 #: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
@@ -65,6 +65,10 @@ def _set_legacy_state(store, principal, body, need):
                                   need(body, "state"), body.get("note", ""))
 
 
+def _set_kind(store, principal, body, need):
+    return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
+
+
 def _apply_ops(store, principal, body, need):
     return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"))
 
@@ -102,6 +106,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
                 "withdraw_review": _withdraw_review,
+                "set_kind": _set_kind,
                 "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,

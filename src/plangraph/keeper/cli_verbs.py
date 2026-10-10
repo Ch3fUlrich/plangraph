@@ -360,6 +360,11 @@ def cmd_withdraw(args, session):
                  lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
 
 
+def cmd_set_kind(args, session):
+    return write(session, "set_kind", {"key": args.key, "kind": args.kind},
+                 lambda r: f"{r.get('key')} kind {r.get('was')} -> {r.get('kind')}")
+
+
 def cmd_close(args, session):
     return write(session, "close_on_decision",
                  {"key": args.key, "batch_ref": args.batch},

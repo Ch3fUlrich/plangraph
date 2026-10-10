@@ -42,6 +42,7 @@ _OPS = {
     "cancel": {"op", "key", "reason"},
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
+    "set_kind": {"op", "key", "kind"},
 }
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               sqlite3.ProgrammingError)
@@ -141,6 +142,8 @@ class OpsMixin:
             n = op.get("priority")
             if isinstance(n, bool) or not isinstance(n, int):
                 raise Refused("validation", "priority must be an integer")
+        if name == "set_kind" and not isinstance(op.get("kind"), str):
+            raise Refused("validation", "set_kind needs a kind")
         if name == "close_on_decision" and not isinstance(batch_ref, str):
             raise Refused("validation", "close_on_decision needs a batch_ref")
 
@@ -201,6 +204,8 @@ class OpsMixin:
             return self._close_on_decision(principal, key, batch_ref, now)
         if name == "priority":
             return self._priority(principal, key, op["priority"], now)
+        if name == "set_kind":
+            return self._set_kind(principal, key, op["kind"], now)
         if name == "rehome":
             return self._rehome(principal, key, op.get("new_project"),
                                 op.get("host"), now)

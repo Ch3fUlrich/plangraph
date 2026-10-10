@@ -24,7 +24,7 @@ EVENT_TYPES = (
     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
-    "token_minted", "outage_recorded", "review_withdrawn",
+    "token_minted", "outage_recorded", "review_withdrawn", "kind_set",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as

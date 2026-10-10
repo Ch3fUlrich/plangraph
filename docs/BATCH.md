@@ -25,6 +25,7 @@ ops:                       # applied in order
   - {op: cancel, key: project:ID, reason: ...}
   - {op: priority, key: project:ID, priority: <int>}   # router set_priority, same transaction
   - {op: rehome, key: project:ID, new_project: <project>, host: <host or omit>}
+  - {op: set_kind, key: project:ID, kind: question|operator_task}   # router: open lane -> operator item
 ```
 
 `rehome` only moves OPEN, non-done items (the keeper refuses others) and records an alias `old -> new`.
