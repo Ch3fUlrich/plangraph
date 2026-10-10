@@ -254,8 +254,8 @@ outbox while the keeper is unreachable (M2B-OUTBOX).
   "snapshot_pubkey": "~/.config/plangraph/snapshot-signing.pub", "pull": {"host": "<keeper address>",
   "user": "s", "identity": "~/.ssh/pg-snapshot-pull", "port": 22}}`. The keeper's ssh host key must
   already be in the reader's `~/.ssh/known_hosts` under that address (no trust on first use).
-- Operator steps: plangraph-data `docs/proposals/2026-10-09-d818-local-copy.md`.
-- Hosts without a timer (prox, D-844: the Proxmox host runs no daemons/timers) pull ON DEMAND; the L1 there does:
+- Operator steps: the data repo `docs/proposals/2026-10-09-d818-local-copy.md`.
+- Hosts without a timer (e.g. a hypervisor host that runs no daemons/timers) pull ON DEMAND; the L1 there does:
   1. at the START of every plan-touching task: `PG_CONFIG=~/.config/plangraph/reader.json PYTHONPATH=src python3 -m plangraph.keeper.cli sync pull`
   2. AGAIN right after its plan update (claim, evidence, submit, edit, batch) went through, so the local copy shows the keeper's result.
 
@@ -277,9 +277,9 @@ it never stops the keeper.
 - Interim (`anchor_file`): the keeper appends itself, detection only; the operator sets `chattr +a` on the file.
 - `pg admin verify-anchor`: every record against the chain (`anchor_mismatch`, `anchor_ahead`, `anchor_order`,
   `anchor_malformed`), the start check, and the interim file's append-only flag.
-- Daily tag: `tools/anchor_tag.py --repo ~/code/plangraph-data --anchor-log <log> [--push]` tags the data repo
+- Daily tag: `tools/anchor_tag.py --repo ~/code/<data-repo> --anchor-log <log> [--push]` tags the data repo
   `anchor-YYYYMMDD` with the newest record (scheduling it is an operator/L1 step).
-- Operator install steps: plangraph-data `docs/proposals/2026-10-09-m2b-anchor-install.md`.
+- Operator install steps: the data repo `docs/proposals/2026-10-09-m2b-anchor-install.md`.
 
 ## Withdraw from review (PG-WITHDRAW-REVIEW, D-867)
 
@@ -338,7 +338,7 @@ Text is raw data: the page must render it with `textContent`. Credential-shaped 
 **Dangling-ref status file** (`kg-export-status.json`, for routerctl; the routerctl flag belongs to routing/autoos):
 `{enabled, generated, ok, kept_previous, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
 `dangling` = the graph was read and holds no node for the ref (computed from the fresh read even when `kept_previous` is true, so it can name refs the kept export does not contain); refs into unreadable graphs are `unresolved_graphs`, not dangling.
-Go-live = a read-only Omnigraph token file from prox plus the two env vars on the render host (not part of this lane).
+Go-live = a read-only Omnigraph token file from the hypervisor host plus the two env vars on the render host (not part of this lane).
 
 ## Router retier of an in-review item (D-950 rule)
 

@@ -37,7 +37,7 @@ needs no build step. Cytoscape and dagre are vendored in `vendor/`; the page loa
 from a CDN when rendered with `--cdn` (offline mode is not yet available for the new UI).
 
 ```bash
-git clone https://github.com/Ch3fUlrich/plangraph.git
+git clone https://github.com/<owner>/plangraph.git
 cd plangraph
 pip install pytest
 PYTHONPATH=src python -m plangraph.render --snapshot examples/snapshot.json --out plan.html --cdn

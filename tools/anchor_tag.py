@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """M2B-ANCHOR: daily git tag of the newest anchor in the private data repo.
 
-    anchor_tag.py --repo ~/code/plangraph-data --anchor-log /var/lib/pganchor/anchor.log [--push]
+    anchor_tag.py --repo ~/code/<data-repo> --anchor-log /var/lib/pganchor/anchor.log [--push]
 
 Tag ``anchor-YYYYMMDD`` (UTC day) on the data repo's HEAD, message = the anchor record
 (seq, head, ts, reason).  An existing tag for the day is left alone (exit 0).  ``--push``

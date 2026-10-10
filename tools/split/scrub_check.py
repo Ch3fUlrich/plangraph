@@ -126,17 +126,26 @@ def glob_re(pattern, ci=False):
     return re.compile(rx, re.IGNORECASE if ci else 0)
 
 
+_ALNUM = r"[^\W_]"  # a unicode letter or digit; "_" and "-" are token boundaries
+
+
 def _load_words(path):
+    """Compile the private word list: case-insensitive, whole-token (no letter/digit
+    right before or after), ``re:`` lines are regexes.  A bad entry raises ValueError
+    naming its line number only (the entry itself is never echoed)."""
     pats = []
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+    for n, raw in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), 1):
         w = raw.strip()
         if not w or w.startswith("#"):
             continue
-        if w.startswith("re:"):
-            pats.append(re.compile(w[3:], re.IGNORECASE))
-        else:
-            pats.append(re.compile(r"(?<![A-Za-z0-9])" + re.escape(w) + r"(?![A-Za-z0-9])",
-                                   re.IGNORECASE))
+        try:
+            if w.startswith("re:"):
+                pats.append(re.compile(w[3:], re.IGNORECASE))
+            else:
+                pats.append(re.compile(rf"(?<!{_ALNUM})" + re.escape(w) + rf"(?!{_ALNUM})",
+                                       re.IGNORECASE))
+        except (re.error, OverflowError, RecursionError, MemoryError):
+            raise ValueError(f"bad regex in word list line {n}") from None
     return pats
 
 
@@ -295,7 +304,11 @@ def main(argv=None):
         cfg = build_config(words_file=args.words, rules_files=args.rules)
     except (OSError, ValueError, re.error, tomllib.TOMLDecodeError) as exc:
         print(f"scrub_check: bad config: {type(exc).__name__}", file=sys.stderr)
+        if isinstance(exc, ValueError) and "word list line" in str(exc):
+            print(f"scrub_check: {exc}", file=sys.stderr)
         return 2
+    if not args.words and not args.resolve:
+        print("scrub_check: warning: no --words, the private-word rule is inactive", file=sys.stderr)
     if args.resolve:
         found = [p.relative_to(args.tree).as_posix() for p in sorted(Path(args.tree).rglob("*"))
                  if path_tag(p.relative_to(args.tree).as_posix()) == f"<path-hash:{args.resolve}>"]

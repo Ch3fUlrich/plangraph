@@ -2,8 +2,13 @@
 """Build the public plangraph tree: allow-listed copy + fresh one-commit history.
 
     make_public.py --source CHECKOUT --out NEWDIR [--manifest tools/split/manifest.toml]
-                   [--rules rules.toml] [--words private_words.txt]
+                   [--rules rules.toml] (--words private_words.txt | --no-words)
                    [--gitleaks PATH | --no-gitleaks] [--date ISO] [--check]
+
+The private names list (``--words``) is REQUIRED, also for ``--check``: the build
+refuses without it, unless the explicit dev flag ``--no-words`` is given (prints a
+warning; never use it for the real public build).  A missing, unreadable, empty or
+malformed list is a usage error (exit 2) that names the file or line, never an entry.
 
 Only paths the manifest allow-lists are copied (the source's ``.git`` is never
 read), then the staged tree must pass: no deny-listed path, no symlink,
@@ -18,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -30,6 +36,7 @@ import scrub_check as sc  # noqa: E402
 from scrub_check import glob_re  # noqa: E402,F401  (re-exported)
 
 DEFAULT_MANIFEST = Path(__file__).resolve().with_name("manifest.toml")
+DEFAULT_LEAKS_CONFIG = Path(__file__).resolve().with_name("gitleaks.toml")
 
 
 class UsageError(Exception):
@@ -109,17 +116,19 @@ def _tree_rel(name, tree, pathmod=os.path):
     return "<outside>" if rel == ".." or rel.startswith(".." + pathmod.sep) or pathmod.isabs(rel) else rel
 
 
-def run_gitleaks(tree, binary):
+def run_gitleaks(tree, binary, config=None):
     """``(hits, warning)``; findings are reduced to file:line + rule id."""
     exe = binary or shutil.which("gitleaks")
     if not exe:
         return [], "gitleaks not installed: skipped (scrub_check still ran)"
     report = Path(tempfile.mkdtemp(prefix="gl-")) / "r.json"
     try:
-        rc = subprocess.run([exe, "detect", "--no-git", "--redact", "--no-banner",
+        cfg = ["-c", str(Path(config).resolve())] if config else []
+        # cwd=tree and -s . : findings carry tree-relative paths, so the allowlist can anchor at ^tests/
+        rc = subprocess.run([str(Path(exe).resolve()), "detect", "--no-git", "--redact", "--no-banner", *cfg,
                              "--exit-code", "1", "--report-format", "json",
-                             "--report-path", str(report), "-s", str(tree)],
-                            capture_output=True, stdin=subprocess.DEVNULL).returncode
+                             "--report-path", str(report), "-s", "."],
+                            cwd=tree, capture_output=True, stdin=subprocess.DEVNULL).returncode
         data = json.loads(report.read_text() or "[]") if report.exists() else []
     except (OSError, ValueError) as exc:
         return [sc.Hit("gitleaks", 0, f"error:{type(exc).__name__}")], None
@@ -145,7 +154,7 @@ def verify(tree, files, manifest, args):
     hits += scrub_hits
     warns = [f"{sc.path_tag(s)}: binary file not scanned" for s in skipped]
     if not args.no_gitleaks:
-        gl, warn = run_gitleaks(tree, args.gitleaks)
+        gl, warn = run_gitleaks(tree, args.gitleaks, args.leaks_config)
         hits += gl
         warns += [warn] if warn else []
     return hits, warns, cfg["_words"]
@@ -171,8 +180,31 @@ def fresh_repo(tree, manifest, date):
     git("commit", "-q", "-m", c.get("message", "Initial public history"))
 
 
+def check_words(args):
+    """Usage-error unless a usable private word list (or the explicit dev flag) is given."""
+    if args.words and args.no_words:
+        raise UsageError("--words and --no-words are mutually exclusive")
+    if args.no_words:
+        print("warning: --no-words: private-word check skipped (dev build, not for the public push)",
+              file=sys.stderr)
+        return
+    if not args.words:
+        raise UsageError("--words PATH is required (private names list); --no-words is dev only")
+    try:
+        n = len(sc._load_words(args.words))
+    except OSError as exc:
+        raise UsageError(f"cannot read words file {args.words}: {type(exc).__name__}")
+    except UnicodeDecodeError:
+        raise UsageError(f"words file {args.words} is not valid UTF-8")
+    except ValueError as exc:  # bad regex: the message holds the line number only
+        raise UsageError(f"words file {args.words}: {exc}")
+    if n == 0:
+        raise UsageError(f"words file {args.words} has no entries")
+
+
 def build(args):
     manifest = load_manifest(args.manifest)
+    check_words(args)
     source = Path(args.source).resolve()
     out = Path(args.out).resolve() if args.out else None
     if not source.is_dir():
@@ -215,8 +247,12 @@ def main(argv=None):
     ap.add_argument("--out")
     ap.add_argument("--manifest", default=str(DEFAULT_MANIFEST))
     ap.add_argument("--rules", action="append", default=[])
-    ap.add_argument("--words")
+    ap.add_argument("--words", help="private names list (required; stays private)")
+    ap.add_argument("--no-words", action="store_true",
+                    help="DEV ONLY: skip the private-word check (never for the real public build)")
     ap.add_argument("--gitleaks", help="path of the gitleaks binary (default: PATH lookup)")
+    ap.add_argument("--leaks-config", default=str(DEFAULT_LEAKS_CONFIG),
+                    help="gitleaks config (default: tools/split/gitleaks.toml, reviewed test-fixture allowlist)")
     ap.add_argument("--no-gitleaks", action="store_true")
     ap.add_argument("--date", help="fixed commit date (ISO 8601) for reproducible builds")
     ap.add_argument("--check", action="store_true", help="build in a temp dir, report, delete")
@@ -226,7 +262,8 @@ def main(argv=None):
     except UsageError as exc:
         print(f"make_public: {exc}", file=sys.stderr)
         return 2
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError, re.error, tomllib.TOMLDecodeError,
+            subprocess.CalledProcessError) as exc:
         print(f"make_public: error: {type(exc).__name__}", file=sys.stderr)
         return 2
 
