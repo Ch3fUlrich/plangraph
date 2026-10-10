@@ -30,6 +30,7 @@ HEADER = ("# QUESTIONS\n\n"
           "`pg answers`.\n\n## Open operator items\n\n")
 TABLE_HEAD = "| Prio | ID | Kind | Why | Exact step | Where |\n|---|---|---|---|---|---|\n"
 _PREFIX = re.compile(r"^(?:Q|OP):\s*")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 def _cell(text):
@@ -39,11 +40,15 @@ def _cell(text):
 
 
 def _label(text):
-    return _cell(text).replace(";", ",").replace("=", "-")
+    return _cell(text).replace(";", ",").replace("=", "-").lstrip("* ")
 
 
 def _options(choices):
-    """``Options: a = c; *b = c. Deadline: D`` (the block ``parse_options`` reads back), or ``""``."""
+    """``Options: a = c; *b = c. Deadline: D`` (the block ``parse_options`` reads back), or ``""``.
+
+    The Kind column only says ANSWER / TASK and option ids are re-derived from the labels
+    (``parse_options`` slugs them), so a decision's kind and a custom option id do not survive
+    a round trip; the keeper stays the source of truth."""
     if not isinstance(choices, dict) or not choices.get("options"):
         return ""
     parts = []
@@ -53,7 +58,7 @@ def _options(choices):
             text += " = " + _cell(option["consequence"]).replace(";", ",")
         parts.append(text)
     block = "Options: " + "; ".join(parts)
-    if choices.get("deadline"):
+    if _DATE.fullmatch(str(choices.get("deadline") or "")):
         block += f". Deadline: {choices['deadline']}"
     return block
 
