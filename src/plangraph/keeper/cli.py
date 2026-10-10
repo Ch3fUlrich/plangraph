@@ -10,7 +10,7 @@ import argparse
 import os
 import sys
 
-from . import cli_admin, cli_names, cli_progress, cli_token, cli_verbs, outbox
+from . import cli_admin, cli_changelog, cli_names, cli_progress, cli_token, cli_verbs, outbox
 from .cli_verbs import Session
 
 __all__ = ["main", "build_parser"]
@@ -51,6 +51,7 @@ HANDLERS = {
     "percent": cli_verbs.cmd_percent,
     "alerts": cli_verbs.cmd_alerts,
     "progress": cli_progress.cmd_progress,
+    "changelog": cli_changelog.cmd_changelog,
     "replay": outbox.cmd_replay,
     "token": cli_token.cmd_token,
     "digest": cli_verbs.cmd_digest,
@@ -94,6 +95,7 @@ def _add_reads(sub):
 
     _p(sub, "digest", help="per-project counts (router)")
     cli_progress.add_parser(sub, _p)
+    cli_changelog.add_parser(sub, _p)
     outbox.add_parser(sub, _p)
     cli_token.add_parser(sub, _p)
     _p(sub, "snapshot", help="the plan snapshot")

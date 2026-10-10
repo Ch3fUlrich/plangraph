@@ -14,7 +14,7 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
-              "answers", "progress"}
+              "answers", "progress", "changelog"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
@@ -22,7 +22,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "set_kind"}
-TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases"}
+TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog"}
 
 #: Simple read verbs: ``(store, principal, project) -> data``; the text formatter
 #: is ``fmt.<name>_text``.
