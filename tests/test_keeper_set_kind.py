@@ -156,6 +156,26 @@ def test_integrity_sees_a_raw_operator_tamper(w):
                for p in w.store.verify_integrity())
 
 
+def test_untouched_items_have_no_kind_in_the_fold_and_verify_clean(w):
+    folded = events.fold(events.read_events(w.conn))
+    assert folded["demo:A"]["kind"] is None and folded["demo:A"]["operator"] is None
+    assert w.store.verify_integrity() == []
+    raw = sqlite3.connect(w.path)      # legacy rows (no kind_set) are not compared, as before this verb
+    raw.execute("UPDATE items SET kind='gate' WHERE key='demo:B'")
+    raw.commit()
+    raw.close()
+    assert not any(p.get("field") == "kind" for p in w.store.verify_integrity())
+
+
+def test_run_tokens_may_not_call_set_kind():
+    from types import SimpleNamespace
+    from plangraph.keeper import api_routes
+    with pytest.raises(Refused) as exc:
+        api_routes.run_gate(SimpleNamespace(token_id=3), "set_kind")
+    assert exc.value.code == "forbidden"
+    assert "set_kind" not in api_routes.RUN_VERBS
+
+
 def test_fold_replays_the_event():
     events_ = [{"key": "p:X", "type": "item_created", "payload": {"state": "open"}, "actor": "r"},
                {"key": "p:X", "type": "kind_set", "actor": "r",
@@ -189,6 +209,10 @@ def test_http_door(w, doors):
     status, _ = doors.http("l1main", "POST", "/v1/set_kind",
                            {"key": "demo:B", "kind": "question", "extra": 1})
     assert status == 403
+    for bad_kind in (3, ["question"], {"k": 1}, None, True):
+        status, _ = doors.http("router", "POST", "/v1/set_kind",
+                               {"key": "demo:B", "kind": bad_kind})
+        assert status == 400, bad_kind
     status, _ = doors.http("router", "POST", "/v1/set_kind",
                            {"key": "demo:B", "kind": "goal"})
     assert status == 400 and _row(w, "demo:B")["kind"] == "lane"
