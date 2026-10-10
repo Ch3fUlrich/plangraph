@@ -22,17 +22,20 @@ from .store_support import parse_iso
 __all__ = ["parse_since", "build", "render", "referenced_decisions"]
 
 _TEXT_CAP = 100
+_SEQ_DIGITS = 15      # an event seq never needs more; keeps int() away from megadigit strings
 _CLOSE_VIA = {"review_passed": "review", "closed_on_decision": "decision"}
 
 
 def parse_since(value):
     """``("seq", n, label)`` or ``("date", datetime, label)``; refuses anything else."""
-    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+    if isinstance(value, int) and not isinstance(value, bool) and 0 <= value < 10 ** _SEQ_DIGITS:
         value = str(value)
     if not isinstance(value, str) or not value.strip():
         raise Refused("validation", "since is required: an event seq or a date")
     text = value.strip()
     if text.isascii() and text.isdigit():
+        if len(text) > _SEQ_DIGITS:
+            raise Refused("validation", f"since seq {text[:20]}... is too large")
         return "seq", int(text), f"seq {int(text)}"
     moment = None
     try:
@@ -94,7 +97,8 @@ def build(events, since, titles, decision_texts, head_seq):
                      "decisions": _decisions(ids, decision_texts)}
         elif etype == "answered" and key is not None:
             entry = {**base, "type": "answered", "via": "answer",
-                     "decisions": _decisions([payload.get("decision_id")], decision_texts)}
+                     "decisions": _decisions([payload["decision_id"]] if payload.get("decision_id") else [],
+                                             decision_texts)}
         elif etype == "cancelled" and key is not None:
             entry = {**base, "type": "cancelled", "reason": payload.get("reason") or ""}
         elif etype == "outage_recorded":
@@ -115,21 +119,23 @@ def _one_line(text, cap=_TEXT_CAP):
 def _decision_detail(entry):
     parts = []
     for dec in entry["decisions"]:
-        parts.append(f"{dec['id']}: {_one_line(dec['text'])}" if dec.get("text") else dec["id"])
+        ident = _one_line(dec["id"], 40)
+        parts.append(f"{ident}: {_one_line(dec['text'])}" if dec.get("text") else ident)
     return "; ".join(parts)
 
 
 def _detail(entry):
     kind = entry["type"]
     if kind == "created":
-        extra = f", rehomed from {entry['rehomed_from']}" if entry.get("rehomed_from") else ""
-        return f"by {entry['by']}{extra}"
+        extra = (f", rehomed from {_one_line(entry['rehomed_from'], 80)}"
+                 if entry.get("rehomed_from") else "")
+        return f"by {_one_line(entry['by'], 60)}{extra}"
     if kind == "closed":
         if entry["via"] == "review":
-            return f"review by {entry['by']}"
+            return f"review by {_one_line(entry['by'], 60)}"
         return f"decision {_decision_detail(entry)}".rstrip()
     if kind == "answered":
-        return _decision_detail(entry) or f"by {entry['by']}"
+        return _decision_detail(entry) or f"by {_one_line(entry['by'], 60)}"
     if kind == "cancelled":
         return _one_line(entry["reason"]) or "-"
     return f"down {entry['gap_s']}s | leases {entry['leases']}, tokens {entry['tokens']}"
@@ -160,7 +166,8 @@ def render(data) -> str:
             continue
         counts[entry["type"]] += 1
         lines.append(f"{entry['ts'][11:16]}Z #{entry['seq']} {entry['type']:<9} "
-                     f"{entry['key']} | {entry['title'] or ''} | {_detail(entry)}")
+                     f"{_one_line(entry['key'], 120)} | {_one_line(entry['title'] or '', 160)} | "
+                     f"{_detail(entry)}")
     lines.append("totals: " + ", ".join(f"{name} {counts[name]}" for name in _ORDER)
                  + f", restarts {restarts}")
     return "\n".join(lines)

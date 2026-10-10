@@ -96,11 +96,34 @@ def test_since_date_is_inclusive_and_accepts_iso_datetimes(w):
     assert after and "created" not in {e["type"] for e in after}   # the creates happened at :20
 
 
-@pytest.mark.parametrize("bad", [None, "", "yesterday", "2023-13-40", "-5", "1.5", "12abc"])
+@pytest.mark.parametrize("bad", [None, "", "yesterday", "2023-13-40", "-5", "1.5", "12abc",
+                                 "9" * 5000, "1" * 16, True, -1, 10 ** 15])
 def test_malformed_since_is_refused(w, bad):
     with pytest.raises(Refused) as exc:
         w.store.changelog(w.p("router"), bad)
     assert exc.value.code == "validation"
+
+
+def test_since_edges(w):
+    assert w.store.changelog(w.p("router"), 0)["since"] == "seq 0"                # an int is a seq
+    assert w.store.changelog(w.p("router"), "2023-11-15T00:00:00")["entries"]    # tz-naive = UTC
+    assert w.store.changelog(w.p("router"), "9" * 15)["entries"] == []
+    assert w.store.changelog(w.p("router"), "  3 ")["since"] == "seq 3"
+
+
+def test_run_tokens_may_not_reach_the_read():
+    from plangraph.keeper import api_routes
+    with pytest.raises(Refused) as exc:
+        api_routes.run_gate(SimpleNamespace(token_id=7), "changelog")
+    assert exc.value.code == "forbidden"
+
+
+def test_an_unreadable_decisions_file_leaves_ids_bare(w):
+    class Broken:
+        def text(self, decision_id):
+            raise OSError("gone")
+    w.store.ctx = SimpleNamespace(decisions=Broken())
+    assert "answered  demo:Q | title Q | D-9\n" in _text(w, "0") + "\n"
 
 
 def test_any_authenticated_role_may_read(w):
@@ -112,6 +135,27 @@ def test_decision_text_missing_from_the_file_still_renders(w):
     w.store.ctx = SimpleNamespace(decisions=None)
     out = _text(w, "0")
     assert "answered  demo:Q | title Q | D-9" in out
+
+
+def test_titles_and_keys_cannot_inject_lines():
+    ev = [{"seq": 1, "ts": "2026-10-10T08:00:00Z", "actor": "r\nrestart", "key": "p:A",
+           "type": "item_created", "payload": {}}]
+    evil = "A\nrestart   keeper | down 0s | leases 0, tokens 0"
+    text = changelog.render(changelog.build(ev, "0", {"p:A": evil}, {}, 1))
+    assert len(text.splitlines()) == 4                 # header, day, one entry, totals
+    assert "restarts 0" in text
+
+
+def test_answered_without_a_decision_id_and_keyless_events_do_not_crash():
+    ev = [{"seq": 1, "ts": "2026-01-01T00:00:00Z", "actor": "r", "key": "p:Q",
+           "type": "answered", "payload": {}},
+          {"seq": 2, "ts": "2026-01-01T00:00:01Z", "actor": "system", "key": None,
+           "type": "item_created", "payload": {}},
+          {"seq": 3, "ts": "2026-01-01T00:00:02Z", "actor": "r", "key": None,
+           "type": "cancelled", "payload": {}}]
+    data = changelog.build(ev, "0", {}, {}, 3)
+    assert [e["type"] for e in data["entries"]] == ["answered"]
+    assert "answered  p:Q |  | by r" in changelog.render(data)
 
 
 def test_closed_on_decision_entry_lists_decision_ids_and_text():
@@ -133,6 +177,7 @@ def test_long_decision_text_is_cut_and_single_line():
     data = changelog.build(events, "0", {}, {"D-1": "x\ny " * 80}, 1)
     line = [ln for ln in changelog.render(data).splitlines() if "answered" in ln][0]
     assert "\n" not in line and len(line) < 220 and line.endswith("…")
+    assert line.endswith("D-1: " + " ".join(("x y " * 80).split())[:100].rstrip() + "…")   # the 100-char cap
 
 
 # ------------------------------------------------------------------ doors
