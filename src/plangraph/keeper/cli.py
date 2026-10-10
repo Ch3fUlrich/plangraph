@@ -37,6 +37,7 @@ HANDLERS = {
     "cancel": cli_verbs.cmd_cancel,
     "waive": cli_verbs.cmd_waive,
     "withdraw": cli_verbs.cmd_withdraw,
+    "set-kind": cli_verbs.cmd_set_kind,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
@@ -139,6 +140,10 @@ def _add_writes(sub):
     withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review")
     withdraw.add_argument("key")
     withdraw.add_argument("decision_id", metavar="D-NNN")
+
+    set_kind = _p(sub, "set-kind", help="router: turn an open lane into a question / operator_task")
+    set_kind.add_argument("key")
+    set_kind.add_argument("kind", help="question or operator_task (the keeper checks)")
 
     close = _p(sub, "close", help="router: close a tier-none item on a decision batch")
     close.add_argument("key")

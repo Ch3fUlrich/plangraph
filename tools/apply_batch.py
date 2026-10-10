@@ -25,6 +25,7 @@ OP_SPECS = {
     "cancel": (["key"], {}),
     "priority": (["key", "priority"], {"priority": int}),
     "rehome": (["key", "new_project"], {"new_project": str}),
+    "set_kind": (["key", "kind"], {"kind": str}),
 }
 OP_ALLOWED = {
     "create": {"op", "item"},
@@ -35,6 +36,7 @@ OP_ALLOWED = {
     "cancel": {"op", "key", "reason"},
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
+    "set_kind": {"op", "key", "kind"},
 }
 TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops"}
 LEGACY_STATES = ("claimed", "in_review")
@@ -174,6 +176,8 @@ def build_request(op, source, digest):
         return "cancel", {"key": op["key"], "reason": op.get("reason", "")}
     if name == "priority":
         return "set_priority", {"key": op["key"], "n": op["priority"]}
+    if name == "set_kind":
+        return "set_kind", {"key": op["key"], "kind": op["kind"]}
     if name == "rehome":
         return "rehome", {"key": op["key"], "new_project": op["new_project"],
                           "host": op.get("host")}
