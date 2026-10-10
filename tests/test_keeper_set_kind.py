@@ -146,16 +146,28 @@ def test_integrity_sees_a_raw_wait_tamper(w):
     assert any(p["field"] == "wait" and p["key"] == "demo:A" for p in w.store.verify_integrity())
 
 
+def test_integrity_sees_a_raw_operator_tamper(w):
+    w.store.set_kind(w.p("router"), "demo:A", "operator_task")
+    raw = sqlite3.connect(w.path)
+    raw.execute("UPDATE items SET operator=0 WHERE key='demo:A'")
+    raw.commit()
+    raw.close()
+    assert any(p["field"] == "operator" and p["key"] == "demo:A"
+               for p in w.store.verify_integrity())
+
+
 def test_fold_replays_the_event():
     events_ = [{"key": "p:X", "type": "item_created", "payload": {"state": "open"}, "actor": "r"},
                {"key": "p:X", "type": "kind_set", "actor": "r",
                 "payload": {"kind": "question", "was": "lane", "operator": True, "wait": "answer"}}]
     state = events.fold(events_)["p:X"]
-    assert state["kind"] == "question" and state["wait"] == "answer"
+    assert state["kind"] == "question" and state["wait"] == "answer" and state["operator"] is True
 
 
 def test_the_snapshot_and_views_see_the_new_kind(w):
     w.store.set_kind(w.p("router"), "demo:A", "question")
+    snap = {i["key"]: i for i in w.store.snapshot(w.p("reader"))["items"]}
+    assert snap["demo:A"]["kind"] == "question" and snap["demo:B"]["kind"] == "lane"
     item = next(i for i in w.store._all_items() if i["key"] == "demo:A")
     assert item["kind"] == "question"
     assert "demo:A" not in [i["key"] for i in views.ready([item], agent=True)]
@@ -171,6 +183,12 @@ def test_http_door(w, doors):
     assert status == 200 and body["kind"] == "question" and body["was"] == "lane"
     status, body = doors.http("router", "POST", "/v1/set_kind", {"key": "demo:B"})
     assert status == 400                              # kind is required
+    status, _ = doors.http("router", "POST", "/v1/set_kind",
+                           {"key": "demo:B", "kind": "question", "extra": 1})
+    assert status == 400 and _row(w, "demo:B")["kind"] == "lane"   # parity with apply_ops/batch
+    status, _ = doors.http("l1main", "POST", "/v1/set_kind",
+                           {"key": "demo:B", "kind": "question", "extra": 1})
+    assert status == 403
     status, _ = doors.http("router", "POST", "/v1/set_kind",
                            {"key": "demo:B", "kind": "goal"})
     assert status == 400 and _row(w, "demo:B")["kind"] == "lane"
@@ -193,6 +211,14 @@ def test_mcp_door(w, doors):
     assert tool["inputSchema"]["required"] == ["key", "kind"]
     assert second["result"]["isError"] is False
     assert _row(w, "demo:A")["kind"] == "question"
+    out = io.StringIO()
+    tok.write_text(w.tok("l1main"), encoding="utf-8")
+    serve(io.StringIO(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                                  "params": {"name": "set_kind", "arguments": {
+                                      "key": "demo:B", "kind": "question"}}}) + "\n"),
+          out, HttpKeeper(doors.url, str(tok), timeout=10))
+    assert json.loads(out.getvalue())["result"]["isError"] is True
+    assert _row(w, "demo:B")["kind"] == "lane"
 
 
 # ------------------------------------------------------------------ CLI

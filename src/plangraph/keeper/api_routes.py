@@ -66,6 +66,9 @@ def _set_legacy_state(store, principal, body, need):
 
 
 def _set_kind(store, principal, body, need):
+    extra = set(body) - {"key", "kind"}
+    if extra and getattr(principal, "role", None) == "router":   # a non-router gets 403 first
+        raise Refused("validation", f"unexpected fields {sorted(extra)}")
     return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
 
 

@@ -79,7 +79,7 @@ def _new_state():
             "agent_id": None, "phase_kind": None, "fixes": None,
             "writer_model": None,
             "seat_models": None, "run_ids": None,
-            "kind": None}   # None = no kind_set event: the cache's kind is not compared
+            "kind": None, "operator": None}   # None = no kind_set event: not compared
 
 
 def _dump(value) -> str:
@@ -239,6 +239,7 @@ def fold(events):
         elif kind == "kind_set":   # PG-SET-KIND: lane -> question | operator_task
             item["kind"] = payload.get("kind", item["kind"])
             item["wait"] = payload.get("wait", item["wait"])
+            item["operator"] = payload.get("operator", item["operator"])
         elif kind == "run_recorded":
             _fold_run(item, payload)
         elif kind == "evidence_added":
@@ -289,7 +290,7 @@ def verify_integrity(conn):
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
         "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
-        "phase_kind,fixes,writer_model,seat_models,run_ids,kind FROM items")}
+        "phase_kind,fixes,writer_model,seat_models,run_ids,kind,operator FROM items")}
     counted = {row["key"]: row for row in conn.execute(
         "SELECT key, COUNT(*) AS total, COALESCE(SUM(verified), 0) AS verified"
         " FROM evidence GROUP BY key")}
@@ -319,6 +320,9 @@ def verify_integrity(conn):
         if expected["kind"] is not None and row["kind"] != expected["kind"]:   # PG-SET-KIND
             problems.append({"key": key, "code": "cache_mismatch", "field": "kind",
                              "expected": expected["kind"], "got": row["kind"]})
+        if expected["operator"] is not None and bool(row["operator"]) != bool(expected["operator"]):
+            problems.append({"key": key, "code": "cache_mismatch", "field": "operator",
+                             "expected": bool(expected["operator"]), "got": bool(row["operator"])})
         # ``heartbeat`` extends a lease without emitting an event, so the cache
         # may legitimately be *later* than the fold; clearing it or rolling it
         # back is not.  (The store should emit a heartbeat event; until then
