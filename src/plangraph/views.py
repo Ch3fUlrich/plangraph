@@ -331,10 +331,14 @@ def brief(items, project=None, n=10, ub=None, owner=None, agent=False):
     rows = ready(items, project=project, ub=ub, owner=owner, agent=agent)
     if n is not None:
         rows = rows[:max(0, int(n))]
-    lines = [f"{it['key']} | {it.get('title', '')} | "
-             f"est {_est(it):g}h | unblocks {ub.get(it['key'], 0)} | "
-             f"prio {_prio(it)}" for it in rows]
-    return "\n".join(lines)
+    return brief_rows(rows, ub)
+
+
+def brief_rows(rows, ub):
+    """The :func:`brief` lines for *rows* exactly as given (no filtering, no cap)."""
+    return "\n".join(f"{it['key']} | {it.get('title', '')} | "
+                     f"est {_est(it):g}h | unblocks {ub.get(it['key'], 0)} | "
+                     f"prio {_prio(it)}" for it in rows)
 
 
 #: MK-READS: kinds that always wait on the operator, whatever their ``operator`` flag.
