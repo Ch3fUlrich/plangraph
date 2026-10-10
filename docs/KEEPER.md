@@ -338,4 +338,4 @@ Text is raw data: the page must render it with `textContent`. Credential-shaped 
 **Dangling-ref status file** (`kg-export-status.json`, for routerctl; the routerctl flag belongs to routing/autoos):
 `{enabled, generated, ok, kept_previous, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
 `dangling` = the graph was read and holds no node for the ref (computed from the fresh read even when `kept_previous` is true, so it can name refs the kept export does not contain); refs into unreadable graphs are `unresolved_graphs`, not dangling.
-Go-live = a read-only Omnigraph token file from the keeper host plus the two env vars on the render host (not part of this lane).
+Go-live = a read-only Omnigraph token file from the hypervisor host plus the two env vars on the render host (not part of this lane).

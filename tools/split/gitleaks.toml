@@ -13,9 +13,9 @@ description = "synthetic demo credential in md_sync fixtures and tests (reviewed
 condition = "AND"
 targetRules = ["generic-api-key"]  # required: without it only the paths are applied, not the values
 paths = [
-  '''(?:^|/)tests/fixtures/md_sync/sample_questions\.md$''',
-  '''(?:^|/)tests/test_md_sync_parse\.py$''',
-  '''(?:^|/)tests/test_md_sync_plan\.py$''',
+  '''^tests/fixtures/md_sync/sample_questions\.md$''',
+  '''^tests/test_md_sync_parse\.py$''',
+  '''^tests/test_md_sync_plan\.py$''',
 ]
 regexes = ['''^(?:Zx81kQ92LmPq77Vb|AbCd1234Efgh)$''']
 
@@ -23,5 +23,5 @@ regexes = ['''^(?:Zx81kQ92LmPq77Vb|AbCd1234Efgh)$''']
 description = "synthetic secret in the credential-guard test (reviewed 2026-10-10)"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''(?:^|/)tests/test_keeper_credential_guard\.py$''']
+paths = ['''^tests/test_keeper_credential_guard\.py$''']
 regexes = ['''^svcacct/Zq9xk2LmPw$''']

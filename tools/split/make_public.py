@@ -123,11 +123,12 @@ def run_gitleaks(tree, binary, config=None):
         return [], "gitleaks not installed: skipped (scrub_check still ran)"
     report = Path(tempfile.mkdtemp(prefix="gl-")) / "r.json"
     try:
-        cfg = ["-c", str(config)] if config else []
-        rc = subprocess.run([exe, "detect", "--no-git", "--redact", "--no-banner", *cfg,
+        cfg = ["-c", str(Path(config).resolve())] if config else []
+        # cwd=tree and -s . : findings carry tree-relative paths, so the allowlist can anchor at ^tests/
+        rc = subprocess.run([str(Path(exe).resolve()), "detect", "--no-git", "--redact", "--no-banner", *cfg,
                              "--exit-code", "1", "--report-format", "json",
-                             "--report-path", str(report), "-s", str(tree)],
-                            capture_output=True, stdin=subprocess.DEVNULL).returncode
+                             "--report-path", str(report), "-s", "."],
+                            cwd=tree, capture_output=True, stdin=subprocess.DEVNULL).returncode
         data = json.loads(report.read_text() or "[]") if report.exists() else []
     except (OSError, ValueError) as exc:
         return [sc.Hit("gitleaks", 0, f"error:{type(exc).__name__}")], None

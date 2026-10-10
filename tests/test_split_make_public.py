@@ -353,11 +353,16 @@ def test_leaks_allowlist_only_names_test_paths():
     cfg = tomllib.loads(LEAKS_CFG.read_text())
     assert cfg["extend"]["useDefault"] is True
     lists = cfg["allowlists"]
-    assert lists
+    assert len(lists) == 2  # a new entry must be reviewed here
+    assert sorted(p for al in lists for p in al["paths"]) == sorted([
+        r"^tests/fixtures/md_sync/sample_questions\.md$", r"^tests/test_md_sync_parse\.py$",
+        r"^tests/test_md_sync_plan\.py$", r"^tests/test_keeper_cred" + r"ential_guard\.py$"])
+    assert sorted(al["regexes"][0] for al in lists) == sorted([
+        "^(?:Zx81kQ92LmPq77Vb|AbCd1234Efgh)$", "^svcacct/" + "Zq9xk2LmPw$"])
     for al in lists:
         assert al["condition"] == "AND" and al["targetRules"] == ["generic-api-key"]
         assert al["regexes"] and al["paths"]
-        assert all(p.startswith("(?:^|/)tests/") and p.endswith("$") for p in al["paths"])
+        assert all(p.startswith("^tests/") and p.endswith("$") for p in al["paths"])
         assert all(r.startswith("^") and r.endswith("$") for r in al["regexes"])
 
 
@@ -375,5 +380,23 @@ def test_leaks_allowlist_exempts_exact_fixture_only(tmp_path):
     assert scan("tests/test_md_sync_parse.py", line, None) != []          # rule fires without it
     assert scan("tests/test_md_sync_parse.py", line) == []                # exact path + value
     assert scan("src/pkg/real.py", line) != []                            # non-test path: never exempt
+    assert scan("src/tests/test_md_sync_parse.py", line) != []            # nested tests/ is not the root one
     other = "Rotate the demo token: " + "Qw7" + "ErT" + "9yUi" + "Op2AsD" + "\n"
     assert scan("tests/test_md_sync_parse.py", other) != []               # other value, same path
+
+
+def test_words_path_that_is_a_directory_is_refused(tmp_path, src, manifest, capsys):
+    assert _main(src, tmp_path / "pub", manifest, "--check", "--words", str(tmp_path)) == 2
+    assert "cannot read words file" in capsys.readouterr().err
+
+
+def test_gitleaks_path_with_private_word_is_hashed(tmp_path, src, manifest, capsys):
+    w = _words(tmp_path, "Zan" + "dor\nre:lab-" + r"\d+" + "\n")
+    fake = _fake_gitleaks(tmp_path, [{"File": "@SRC@/src/pkg/Zan" + "dor_key.py", "StartLine": 2,
+                                      "RuleID": "generic-api-key", "Secret": "S"}])
+    assert mp.main(["--source", str(src), "--out", str(tmp_path / "pub"), "--manifest", str(manifest),
+                    "--words", w, "--gitleaks", str(fake)]) == 1
+    cap = capsys.readouterr()
+    text = cap.out + cap.err
+    assert "<path-hash:" in text and ":2: gitleaks:generic-api-key" in text
+    assert "zandor" not in text.lower() and "lab-" not in text
