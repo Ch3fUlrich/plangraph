@@ -177,7 +177,7 @@ def test_close_skipped_is_planned_away_and_recorded(world, srv, token, site, tmp
 
     doc = status_of(status)
     assert list(doc) == ["ts", "mode", "ops", "applied", "skipped", "refused",
-                         "gone", "redactions", "close_skipped", "d_closes",
+                         "gone", "redactions", "close_skipped", "choices_skipped", "d_closes",
                          "d_in_review", "warnings", "models", "unmatched", "error"]
     assert doc["mode"] == "dry" and doc["applied"] is False and doc["error"] is None
     assert doc["close_skipped"] == [{"id": "Q-ALPHA", "decision": "D-10",

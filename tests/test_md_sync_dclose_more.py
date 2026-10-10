@@ -214,7 +214,7 @@ def test_report_lines_summary_and_status_shape(repo, tmp_path):
     md_sync.fill_status(status, p)
     assert list(status) == ["ts", "mode", "ops", "applied", "skipped",
                             "refused", "gone", "redactions", "close_skipped",
-                            "d_closes", "d_in_review", "warnings", "models", "unmatched", "error"]
+                            "choices_skipped", "d_closes", "d_in_review", "warnings", "models", "unmatched", "error"]
     assert status["d_closes"] == [
         {"key": "demo:CODE-1", "decision": "D-505"},
         {"key": "demo:DEC-1", "decision": "D-510"}]

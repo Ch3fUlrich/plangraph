@@ -58,7 +58,7 @@ def status_doc(mode):
     """The status file's shape with a run's counters at zero (fixed key order)."""
     return {"ts": None, "mode": mode, "ops": 0, "applied": False,
             "skipped": 0, "refused": 0, "gone": 0, "redactions": 0,
-            "close_skipped": [], "d_closes": [], "d_in_review": [],
+            "close_skipped": [], "choices_skipped": [], "d_closes": [], "d_in_review": [],
             "warnings": [], "models": [], "unmatched": [], "error": None}
 
 
@@ -76,6 +76,9 @@ def fill_status(status, plan):
     ] + [
         {"id": ident, "decision": dec, "key": key, "reason": reason}
         for ident, dec, key, reason in plan.dclose_skipped
+    ]
+    status["choices_skipped"] = [
+        {"key": key, "state": st} for key, st in plan.choices_skipped
     ]
     status["d_closes"] = [{"key": c["key"], "decision": c["decision"]}
                           for c in plan.d_closes]
@@ -164,6 +167,8 @@ def report(plan, out, dry):
         out.write(f"refused {ident}: {why}\n")
     for ident, decision, key in plan.close_skipped:
         out.write(f"close-skipped {ident}: {decision} Closes does not list {key}\n")
+    for key, st in plan.choices_skipped:
+        out.write(f"choices-skipped {key}: {st}\n")
     for key in plan.gone:
         out.write(f"gone {key}: not in QUESTIONS and not answered (not cancelled)\n")
     for line in plan.d_lines:

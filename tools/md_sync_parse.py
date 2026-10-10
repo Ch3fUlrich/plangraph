@@ -3,8 +3,8 @@ import re
 import unicodedata
 from collections import namedtuple
 
-Question = namedtuple("Question", "id kind title description heading wait choices",
-                      defaults=(None,))
+Question = namedtuple("Question", "id kind title description heading wait choices parent options_malformed",
+                      defaults=(None, None, False))
 Answer = namedtuple("Answer", "id decisions date text")
 Skipped = namedtuple("Skipped", "id reason")
 
@@ -101,14 +101,18 @@ _TABLE_ID_RE = re.compile(r"(?i)(OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)")
 
 
 def _table_rows(text):
-    """``(heading, id, why, step, where, kind)`` per priority-table data row.
+    """``(heading, id, why, step, where, kind, parent)`` per priority-table data row.
 
     Shape: ``| <anything> | OS-123 | <why> | <exact step> | <where> |``.
     Rows before the table header count too; a header/separator row has no
     id in its 2nd cell.  ``OS-70 (3b)`` yields ``OS-70``; a 2nd cell with
     two or more ids (``OS-56, OS-51, ...``) is skipped.
+    Optional ``Kind``/``Parent`` columns are declared by the header
+    (``| Prio | ID | Kind | Parent | why | step | where |``, either order,
+    either absent) and removed before the positional why/step/where mapping.
     """
-    out, heading, fenced, kind_col = [], None, False, False
+    out, heading, fenced = [], None, False
+    opt_order = []
     for raw in text.splitlines():
         line = raw.rstrip()
         if _FENCE_RE.match(line):
@@ -122,7 +126,7 @@ def _table_rows(text):
             continue
         stripped = line.strip()
         if not stripped.startswith("|"):
-            kind_col = False     # a table ended: the next one declares its own header
+            opt_order = []     # a table ended: the next one declares its own header
             continue
         if line.startswith("    ") or line.startswith("\t"):
             continue
@@ -133,21 +137,42 @@ def _table_rows(text):
         if len(cells) < 5:
             continue
         if cells[1].strip().lower() == "id":
-            # Optional Kind column (QUESTIONS.md since 2026-10-09), declared by the header:
-            # ``| Prio | ID | Kind | why | step | where |``.
-            kind_col = len(cells) >= 3 and cells[2].strip().lower() == "kind"
+            # Optional Kind/Parent columns, declared by header name.
+            lowers = [c.strip().lower() for c in cells]
+            # optional columns live between ID and the final why/step/where trio
+            if len(cells) > 5:
+                opt_order = [n for n in lowers[2:len(cells) - 3]
+                             if n in ("kind", "parent")]
+            else:
+                opt_order = []
             continue
         ids = _TABLE_ID_RE.findall(cells[1])
         if len(ids) != 1:
             continue
-        kind = None
-        if kind_col or (len(cells) >= 6 and cells[2].strip().upper() in _KIND_CELLS):
-            value = cells[2].strip().upper()
-            kind = value if value in _KIND_CELLS else None   # unknown -> the rule decides
-            cells = cells[:2] + cells[3:] + [""]
-            if len(cells) < 5:
+        kind, parent = None, None
+        if opt_order:
+            n_opt = len(opt_order)
+            if len(cells) < 5 + n_opt:
                 continue
-        out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4], kind))
+            for j, name in enumerate(opt_order):
+                value = cells[2 + j].strip()
+                if name == "kind":
+                    upper = value.upper()
+                    kind = upper if upper in _KIND_CELLS else None
+                else:
+                    parent = value or None
+            rest = cells[:2] + cells[2 + n_opt:]
+            if len(rest) < 5:
+                continue
+            out.append((heading, _norm_id(ids[0]), rest[2], rest[3], rest[4], kind, parent))
+        else:
+            if len(cells) >= 6 and cells[2].strip().upper() in _KIND_CELLS:
+                value = cells[2].strip().upper()
+                kind = value if value in _KIND_CELLS else None   # unknown -> the rule decides
+                cells = cells[:2] + cells[3:] + [""]
+                if len(cells) < 5:
+                    continue
+            out.append((heading, _norm_id(ids[0]), cells[2], cells[3], cells[4], kind, None))
     return out
 
 
@@ -214,6 +239,29 @@ def parse_options(step, why=""):
                   "deadline": match.group("deadline"), "blocks": blocks}
 
 
+#: optional ``Parent: <key>`` token at the end of the step cell (like Options:).
+#: ``<key>`` is ``project:ID`` or a bare ID; stripped from the description.
+_PARENT_RE = re.compile(r"(?:^|\s)Parent:\s*(?P<key>[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?)\s*\.?\s*$",
+                        re.IGNORECASE)
+
+
+def has_options_block(step):
+    """Whether the step cell carries an ``Options:`` block (valid or not)."""
+    return bool(re.search(r"(?i)(?:^|\s)Options:", step or ""))
+
+
+def parse_parent(step):
+    """``(step without the Parent token, parent key or None)``."""
+    match = _PARENT_RE.search(step or "")
+    if not match:
+        return step, None
+    key = match.group("key").strip()
+    if not key:
+        return step, None
+    rest = step[:match.start()].rstrip(" .;:")
+    return rest, key
+
+
 _ONE_ID_CELL = re.compile(r"(?i)(?:OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)(?:\s*\([^()]{1,40}\))?")
 
 
@@ -257,7 +305,7 @@ def parse_questions(text):
     won = {entry.id for entry in bullets}
     tables = []
     seen_table = set()
-    for heading, ident, why, step, where, kind_cell in _table_rows(text):
+    for heading, ident, why, step, where, kind_cell, parent_cell in _table_rows(text):
         if ident in won or ident in seen_table:
             continue
         seen_table.add(ident)
@@ -266,14 +314,20 @@ def parse_questions(text):
         prefix = "OP: " if kind == "op" else "Q: "
         full_title = (prefix + title)[:TITLE_CAP]
         step, where = step.strip(), where.strip()
+        raw_step = step
         step, choices = parse_options(step, why)
+        malformed = has_options_block(raw_step) and choices is None
+        step, token_parent = parse_parent(step)
+        parent = (parent_cell.strip() if parent_cell and parent_cell.strip()
+                  else token_parent)
         if step and where:
             description = f"{step} — {where}"
         else:
             description = step or where
         wait = (_KIND_CELLS[kind_cell] if kind_cell
                 else _classify_wait(ident, kind, full_title, why))
-        tables.append(Question(ident, kind, full_title, description, heading, wait, choices))
+        tables.append(Question(ident, kind, full_title, description, heading, wait, choices,
+                               parent, malformed))
     return tables + bullets
 
 
