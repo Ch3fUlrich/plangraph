@@ -74,7 +74,10 @@ See `references/task-contract.md` for the brief template.
 2. Merge into one plan with phases, tasks, edges and risks.
 3. Three reviewers with different lenses (correctness/feasibility, risk/security,
    simplicity/cost), at least one from a different model family than the planner.
-4. Refine; record what was accepted and rejected. Output: an approved plan in the plan graph.
+4. Refine; record what was accepted and rejected. Output: an approved plan in the plan graph, delivered ONLY as a
+   plan-graph batch (`data/updates/<date>-<name>.yaml`, create/edit/priority ops, applied by the plangraph L1 after a
+   router OK). Prose plans are input; the batch is the output, and heartbeats take their next task from `pg ready`
+   (DECISIONS 5.10, D-953).
 
 **Work phase (Layer 2, high effort).**
 1. Optional: 1-2 detail researchers for facts the plan lacks.
