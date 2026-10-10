@@ -9,7 +9,7 @@ Routes (contract):
 
 * ``POST /v1/<write-verb>``   JSON body in, JSON out
 * ``GET  /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,
-  snapshot,whoami,health}``
+  snapshot,whoami,health}`` and ``/v1/audit-meta`` (router/L1)
 * ``GET /v1/health`` is open; everything else needs ``Authorization: Bearer``.
 * ``?fmt=text`` gives the compact form (the default for ``ready``, ``show``,
   ``alerts`` and ``blocked``); otherwise JSON.
@@ -34,7 +34,7 @@ from pathlib import Path
 from .. import views
 from . import outage
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
-from . import api_routes, auth, brief, changelog, fmt
+from . import api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
 from .errors import Refused
 
@@ -248,6 +248,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "changelog":
             data = store.changelog(principal, self._one(query, "since"))
             return (changelog.render(data), True) if as_text else (data, False)
+        if name == "audit-meta":
+            data = store.audit_meta(principal, project=project,
+                                    stale_days=self._one(query, "stale_days"))
+            return (audit_meta.render(data), True) if as_text else (data, False)
         if name in READ_CALLS:
             data = READ_CALLS[name](store, principal, project)
             text = getattr(fmt, name + "_text")

@@ -67,6 +67,7 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
 | `close_on_decision(p, key, batch_ref)` | router only | **`review_tier='none'` items only (X7b)** — see "Legacy and decision closes" |
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
+| `audit_meta(p, project=None, stale_days=3)` | router (any project); l1 (own projects) | read-only plan-metadata audit: missing `description`/`estimate_h`/`done_criteria`/`owner` + stale claims. See "Plan metadata audit" |
 **D-228 review tiers (operator; supersedes the single-verdict `done` above, and the flat "exactly TWO reviewers" reading of D-219):** how many passing verdicts `done` needs is a per-item `review_tier` (`'standard'`|`'high'`|`'none'` — `none` never gets a verdict at all, it is closed on a decision; see "Legacy and decision closes"), named at definition time by the **L0 router** or the **L1 project orchestrator** (`create_items`/`import_items`, `edit_definition`) — **only the L0 router may lower it** (a non-router `high`→`standard` edit is `forbidden`; raising is open to L1) **and only the L0 router may name `none`** (a non-router `none` is `forbidden`). The **L2 phase orchestrator** never sets or changes a tier; reviews belong to the **L3 task group** (writer + reviewers). With no explicit tier, `default_review_tier` picks `high` for project `plangraph` and for any item whose id/title/track matches a risk keyword (`secret(s)`, `key(s)`, `security`, `gateway`, `omniroute`, `deploy`, `keeper`, `fence`), else `standard`.
 
 Both tiers record one `review_verdict` event per passing verdict (current epoch/submission round) and re-verify ALL evidence with the same logic inside the same write lock, so a stale-evidence refusal never depends on which seat spoke first. `standard`: **one** passing verdict is enough — the reviewer must be a distinct principal (not the claimant, not the delegate) whose normalised non-blank family differs from the writer's (`_reviewer_family_ok`, fail closed on a blank family on either side) — and the item goes `done` + `review_passed` immediately. `high`: unchanged D-219 — one implementer plus exactly TWO reviewers, no extra Sonnet final; `done` only when two distinct reviewers from two distinct RESOLVED families have both passed, a third verdict is refused (`conflict`). Waiver path (D-217, e.g. the second family's seat is down > 1 h): router-only `waive_second_family(key, decision_id)` — requires a verified `decision` record D-id **whose DECISIONS.md row contains `Waives: <project:ID>` for exactly that key** (X6c3: whole-token match, so `Waives: demo:A` does not waive `demo:AB`; one D-row may list several `Waives:` tokens; tokens inside fenced/indented code blocks do not count) — lets the two verdicts share a family; the waiver is recorded in the event, shown by `show`, `digest` and the snapshot (`review_waiver: D-217`). Waiving a `standard` item is refused (`bad_state`). A `verdict(ok=False)` from either seat of either tier returns the item to `claimed` and voids the round's verdicts. Per-item `reviews_required` is fixed at 2 for `high` and 1 for `standard` (not editable).
@@ -144,7 +145,8 @@ and stores nothing.  Unknown project (no `repos` entry), missing repo and any gi
 fail closed as unverified.
 
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
-`POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}`;
+`POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
+`GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, repos
@@ -154,7 +156,7 @@ meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for C
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
 `evidence KEY --kind K --commit SHA | --run ID | --task N | --decision D-NNN`, `submit KEY`, `verdict KEY --pass|--changes "why"`,
 `waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …`, `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
-`render --out F [--cdn]`; admin (local, on the keeper host): `pg admin init|add-principal|revoke|verify|import DIR|export DIR`.
+`render --out F [--cdn]`, `audit-meta [--project P] [--stale-days N] [--skeleton DIR]`; admin (local, on the keeper host): `pg admin init|add-principal|revoke|verify|import DIR|export DIR`.
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).
 
@@ -369,3 +371,73 @@ without a gap leaves no event). Decision ids carry the DECISION cell of their ro
 ISO datetime (entries at or after it, UTC). The text is a pure function of the events: header
 `changelog since X | head #N | M entries`, `## YYYY-MM-DD` groups, `HH:MMZ #seq type key | title | detail` lines, a
 `totals:` line (`no changes` when empty). Freezing the result into CHANGELOG.md is a manual step.
+
+## Plan metadata audit (PG-AUDIT-META, D-1012/D-1013)
+
+`audit_meta(principal, project=None, stale_days=3)` (`store_audit_meta.py`; the pure logic, the text render and the
+skeleton writer are `audit_meta.py`) answers two questions from the keeper's own rows: which items lack the metadata a
+worker needs before it can start, and which claims have gone quiet. Nothing is fetched: no git, no network, and the age
+of a claim is measured against the **injected clock**, never the wall clock. Doors: CLI
+`pg audit-meta [--project P] [--stale-days N] [--skeleton DIR]`, HTTP `GET /v1/audit-meta?project=&stale_days=`
+(text by default, `fmt=json` for the data below), MCP read tool `audit_meta` (`project`, `stale_days`).
+Roles: **router and l1 only** — any other role is `forbidden` (403), as is a run token (`run_gate`). An l1 sees only its
+own projects; `--project` naming another one is refused with the same `forbidden` every other cross-project request uses,
+and the message names only the project — never its keys or counts. `stale_days` is validated (whole number, 1..9999)
+**before** anything is read, so a bad value costs no query. A successful read is exit 0 and one `audit_log` row like every
+verb, refusal included.
+
+### Missing metadata
+
+Only `open` and `claimed` items are audited: an `in_review` item is with its reviewer, and `done`/`cancelled` items are
+locked and cannot be edited. A field is missing when it is NULL or whitespace-only.
+
+| field | kinds not audited | also missing when |
+|---|---|---|
+| `description` | none | — |
+| `estimate_h` | `gate`, `question`, `decision`, `operator_task` | `estimate_src` is the `default` marker (SPEC: the plan stated no number, the stored figure is a placeholder) |
+| `done_criteria` | `gate`, `question`, `decision`, `operator_task` | — |
+| `owner` | none | — |
+
+A gate is a checkpoint and an operator kind waits on an answer or a task, so neither is estimated work; every kind is
+still audited for `description` and `owner`, which every item needs. Per project each field reports `{field, count,
+keys}` with the keys sorted; `missing_items` counts an item once however many fields it lacks; `stubs` carries one
+skeleton entry per such item (`key`, `title`, `state`, `fields`, `current` — the four audited values as cells).
+`totals` repeats `{projects, audited, fields, missing_items, stale_items}` across the caller's scope.
+
+### Stale claims
+
+A `claimed` item whose **newest event** is older than `stale_days` days. A `heartbeat` extends the lease without
+appending an event, so a claim that only keeps its lease alive still ages out here: that is what `renew` means below.
+Groups are keyed by `claimed_by`, falling back to `owner` when it is empty (a legacy import claims by an owner string)
+and to `(none)` when both are, sorted by holder then key; each entry is `{key, claimed_by, last_ts, age_days, action}`.
+The suggested action is the first match:
+
+| action | when | what the router does |
+|---|---|---|
+| `close-by-D-row` | the key carries verified `commit` or `commit+ci` evidence — exactly the snapshot's `merged` rule, read from the `evidence` table, so the audit stays cheap and read-only (no git call; an unverified or non-commit row never triggers it) | the work is on `main`: write the decision that names the key in `Closes:` and close it (or review it, if its tier is not `none`) |
+| `release` | no claimant name, or a name that is not a stored principal, or the last event is older than **2×N** days | the claim is held by nobody the keeper can reach, or has been quiet twice over: `pg release` it back to the pool |
+| `renew` | otherwise (known claimant, between N and 2N days quiet) | probably still live work: ask for a heartbeat, or release it if the answer does not come |
+
+The text is a pure function of the rows and the injected `now`: header `audit-meta now <iso> | stale-days N | projects
+a, b`, one `P: missing X items \| stale Y claims` block per project with a `field  count  keys` line for each audited
+field (`-` when none), a `  stale HOLDER (n)` group and `    KEY  last TS  age Nd  -> action` lines, then a `totals:`
+line. `--json` carries the same data, byte-for-byte equivalent.
+
+### `pg audit-meta --skeleton DIR`
+
+The verb only returns data; the CLI writes the files. One `<project>.BATCH.yaml` per project **that has findings**
+(silent projects write nothing), plus its sibling note, and the directory is created if missing; the written paths go to
+stderr so stdout stays the text (or `--json`, which still writes the files). The YAML is `docs/BATCH.md` shape
+(`batch: audit-meta-<project>`, `principal: router`, `source: <project>.BATCH.md`, `source_sha256`, `ops:`), and
+`source_sha256` is computed over the note's bytes as they are written, so `python3 tools/apply_batch.py DIR/P.BATCH.yaml
+--dry-run` (validation and digest check, no HTTP) accepts it — which the tests prove by importing `tools/apply_batch.py`.
+Project names are made filesystem-safe (`[^A-Za-z0-9._-]` → `_`).
+
+Exactly one `op: edit` per item, listing only the missing fields, each value an empty string: `apply_batch`'s validator
+accepts `""` (checked), so the stub parses as-is and the emptiness is the point — nothing here proposes a value. Two YAML
+comments precede each op: the item's `key | title | state` + the missing fields, and its current `description=… |
+estimate_h=… | done_criteria=… | owner=…`. The note file explains all of that and two caveats: `principal: router` is a
+placeholder (an applier needs a router token of that name; an l1 has no batch door and edits with `pg define --edit`),
+and an item listed as `state claimed` cannot be edited until it is released, because `edit_definition` only accepts
+`open` items.
+
