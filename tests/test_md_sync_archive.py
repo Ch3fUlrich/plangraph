@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -95,6 +96,21 @@ def test_cells_are_safe_one_line_and_credential_free():
     assert parsed["Q-X"].title.startswith("Q: a ") and "\n" not in parsed["Q-X"].title
     opts = parsed["Q-Y"].choices["options"]
     assert len(opts) == 1 and ";" not in opts[0]["label"] and "=" not in opts[0]["label"]
+
+
+def test_choice_text_is_sanitised_deadline_and_star_labels():
+    hexrun = "0123456789abcdef" * 3
+    rows = [row("routing:Q-Z", choices={"options": [
+        {"id": "a", "label": "*urgent", "consequence": "x"},
+        {"id": "b", "label": "later", "consequence": "y"}], "default": "b",
+        "deadline": f"2026-01-01 | leak\n{hexrun}", "blocks": None})]
+    text = arch.questions_md(rows, {})
+    assert hexrun not in text and "leak" not in text and text.count("\n") == len(text.splitlines())
+    got = {q.id: q for q in mp.parse_questions(text)}["Q-Z"].choices
+    assert got["default"] == "later" and got["deadline"] is None
+    assert [o["label"] for o in got["options"]] == ["urgent", "later"]
+    ok = arch.questions_md([row("routing:Q-Z", choices={**CHOICES, "deadline": "2026-02-03"})], {})
+    assert "Deadline: 2026-02-03" in ok
 
 
 def test_non_matching_ids_are_listed_but_flagged():
@@ -202,9 +218,12 @@ def test_unreachable_keeper_leaves_the_file_alone_and_reports(tmp_path):
     tok.write_text("x" * 20, encoding="utf-8")
     os.chmod(tok, 0o600)
     status = tmp_path / "status.json"
+    with socket.socket() as probe:                        # a port nothing listens on
+        probe.bind(("127.0.0.1", 0))
+        dead = probe.getsockname()[1]
     out, err = io.StringIO(), io.StringIO()
     rc = md_sync.main(["--archive-answers", "--questions-out", str(target), "--apply",
-                       "--url", "http://127.0.0.1:9", "--token-file", str(tok),
+                       "--url", f"http://127.0.0.1:{dead}", "--token-file", str(tok),
                        "--status-file", str(status)], out=out, err=err)
     assert rc == 2 and target.read_text(encoding="utf-8") == "keep me"
     assert json.loads(status.read_text(encoding="utf-8"))["error"].startswith("error: cannot read")
