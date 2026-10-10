@@ -120,3 +120,12 @@ def test_mcp_schema_has_filters():
     from plangraph.keeper import mcp
     tool = next(t for t in mcp.TOOLS if t["name"] == "ready")
     assert {"owner", "mine", "agent"} <= set(tool["inputSchema"]["properties"])
+
+
+def test_api_accepts_mcp_style_booleans(srv):
+    """MCP urlencodes JSON true as 'True'; the API must treat it as true."""
+    server, w = srv
+    text = _get(server, w, "project=demo&mine=True&agent=True")
+    assert text.startswith("demo:MINE |") and "THEIRS" not in text and "demo:Q" not in text
+    text = _get(server, w, "project=demo&mine=False&agent=false")
+    assert "demo:THEIRS" in text

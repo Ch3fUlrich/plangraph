@@ -208,8 +208,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
 
         if name == "ready":
             n = None if self._one(query, "all") else int(self._one(query, "n", 10))
-            mine = self._one(query, "mine") in ("1", "true")
-            agent = self._one(query, "agent") in ("1", "true")
+            mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"
+            agent = str(self._one(query, "agent")).lower() in ("1", "true")
             owner = principal.name if mine else self._one(query, "owner")
             text = store.ready(principal, project=project, n=n, owner=owner, agent=agent)
             if as_text:
