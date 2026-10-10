@@ -356,3 +356,15 @@ that are decision-closable by their own definition.
 (`--owner NAME` for another principal), operator steps excluded (`operator` flag or kind question/decision/
 operator_task), ordered by (-priority, -unblocks, estimate, key). Then `pg claim KEY --lease 2h`. Offline (keeper
 unreachable) the CLI answers from the snapshot; `--mine` then cannot resolve the caller and lists all owners.
+
+## Change log (PG-CHANGELOG-GEN)
+
+`changelog(since)` (read verb, any authenticated principal; `GET /v1/changelog?since=...` text by default, `fmt=json` for
+`{since, head_seq, entries}`; `pg changelog --since DATE|SEQ`) folds the hash-chained events into one line per change:
+`created` (`item_created`), `closed` (`review_passed` = review, `closed_on_decision` = decision ids), `answered`
+(`answered` + decision id), `cancelled` (reason) and `restart` (`outage_recorded`: the keeper came back after a gap; a restart
+without a gap leaves no event). Decision ids carry the DECISION cell of their row in the configured decisions file (cut to
+100 chars; ids stay bare when the file is unreadable). `--since` is an event seq (entries with a greater seq) or a date /
+ISO datetime (entries at or after it, UTC). The text is a pure function of the events: header
+`changelog since X | head #N | M entries`, `## YYYY-MM-DD` groups, `HH:MMZ #seq type key | title | detail` lines, a
+`totals:` line (`no changes` when empty). Freezing the result into CHANGELOG.md is a manual step.
