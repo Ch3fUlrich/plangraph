@@ -2,7 +2,9 @@
 """One-way, idempotent import of the router's markdown into the keeper (SYNC-MD-IMPORT v1).
 
 QUESTIONS.md -> open question/operator lanes; ANSWERS.md -> closes them on the cited
-decisions; decisions-log.md is checked twice.  The plan pre-checks every cited
+decisions; decisions-log.md is checked twice.  PG-RF-ARCHIVE-ANSWERS: ``--archive-answers --questions-out PATH`` (default OFF) skips the import
+and writes QUESTIONS.md from the keeper's ``needs_you`` instead (``md_sync_archive``).
+The plan pre-checks every cited
 decision with the keeper's own parser (``DecisionsAdapter``): a ``Closes:`` list
 without the item's key would be refused, so the item gets no ops at all and is
 reported as ``close-skipped``.  What is left is one batch (BATCH.md format)
@@ -29,6 +31,7 @@ from datetime import datetime, timezone
 import yaml
 
 import apply_batch
+import md_sync_archive
 import md_sync_parse as mp
 import md_sync_plan as mplan
 
@@ -197,6 +200,8 @@ def report(plan, out, dry):
 def main(argv=None, out=None, err=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     out, err = out or sys.stdout, err or sys.stderr
+    if "--archive-answers" in argv:   # PG-RF-ARCHIVE-ANSWERS: default OFF; replaces the import
+        return md_sync_archive.archive_main(argv, out, err, write_status)
     parser = argparse.ArgumentParser(add_help=False)
     for name in ("questions", "answers", "decisions", "token-file"):
         parser.add_argument("--" + name, required=True)
