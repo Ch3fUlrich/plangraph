@@ -11,7 +11,7 @@ useDefault = true
 [[allowlists]]
 description = "synthetic demo credential in md_sync fixtures and tests (reviewed 2026-10-10)"
 condition = "AND"
-targetRules = ["generic-api-key"]  # required: without it only the paths are applied, not the values
+targetRules = ["generic-api-key"]  # required (observed with the pinned scanner 8.30.1): without it only the paths are applied, not the values
 paths = [
   '''^tests/fixtures/md_sync/sample_questions\.md$''',
   '''^tests/test_md_sync_parse\.py$''',

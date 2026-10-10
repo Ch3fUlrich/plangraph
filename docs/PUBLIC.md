@@ -125,7 +125,7 @@ that exact path in the private `rules.toml`.
 `make_public.py` runs gitleaks with `tools/split/gitleaks.toml` (`--leaks-config` overrides):
 the default rules plus a reviewed allowlist of synthetic, credential-shaped strings in test
 fixtures. Each entry needs the exact test path **and** the exact fake value (`condition = "AND"`,
-`targetRules = ["generic-api-key"]`; without `targetRules` gitleaks applies the paths alone), and
+`targetRules = ["generic-api-key"]`; without `targetRules` 8.30.1 was observed to apply the paths alone), and
 `tests/test_split_make_public.py` checks that only `tests/` paths appear in it. Never add a
 non-test path there.
 
