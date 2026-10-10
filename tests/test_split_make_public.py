@@ -70,8 +70,9 @@ def manifest(tmp_path):
 
 
 def run(src, out, manifest, *extra):
+    words = [] if "--words" in extra or "--no-words" in extra else ["--no-words"]
     return mp.main(["--source", str(src), "--out", str(out), "--manifest", str(manifest),
-                    "--no-gitleaks", *extra])
+                    "--no-gitleaks", *words, *extra])
 
 
 EXPECT = {"src/pkg/__init__.py", "src/pkg/core.py", "tests/test_core.py",
@@ -170,7 +171,7 @@ def test_gitleaks_wrapped_skipped_when_missing(tmp_path, src, manifest, capsys, 
     only_git.mkdir()
     (only_git / "git").symlink_to(shutil.which("git"))
     monkeypatch.setenv("PATH", str(only_git))
-    assert mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+    assert mp.main(["--no-words", "--source", str(src), "--out", str(tmp_path / "pub"),
                     "--manifest", str(manifest)]) == 0
     assert "gitleaks not installed" in capsys.readouterr().err
 
@@ -178,14 +179,14 @@ def test_gitleaks_wrapped_skipped_when_missing(tmp_path, src, manifest, capsys, 
 def test_gitleaks_findings_refuse_without_secret(tmp_path, src, manifest, capsys):
     fake = _fake_gitleaks(tmp_path, [{"File": "@SRC@/src/pkg/core.py", "StartLine": 1,
                                       "RuleID": "generic-api-key", "Secret": "TOPSECRETVALUE"}])
-    rc = mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+    rc = mp.main(["--no-words", "--source", str(src), "--out", str(tmp_path / "pub"),
                   "--manifest", str(manifest), "--gitleaks", str(fake)])
     out = capsys.readouterr()
     assert rc == 1 and "src/pkg/core.py:1: gitleaks:generic-api-key" in out.out
     assert "TOPSECRETVALUE" not in out.out + out.err
     assert not (tmp_path / "pub").exists()
     clean = _fake_gitleaks(tmp_path, [])
-    assert mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+    assert mp.main(["--no-words", "--source", str(src), "--out", str(tmp_path / "pub"),
                     "--manifest", str(manifest), "--gitleaks", str(clean)]) == 0
 
 
@@ -199,7 +200,7 @@ def test_glob_semantics():
 
 
 def test_shipped_manifest_passes_on_this_tree(capsys):
-    assert mp.main(["--source", str(ROOT), "--check", "--no-gitleaks"]) == 0
+    assert mp.main(["--no-words", "--source", str(ROOT), "--check", "--no-gitleaks"]) == 0
     assert "check ok" in capsys.readouterr().out
 
 
@@ -226,7 +227,7 @@ def test_deny_globs_case_insensitive_and_private_path_hashed(tmp_path, src, mani
 def test_gitleaks_outside_path_is_normalised(tmp_path, src, manifest, capsys):
     fake = _fake_gitleaks(tmp_path, [{"File": "/etc/ssh/host_key", "StartLine": 3,
                                       "RuleID": "private-key", "Secret": "S"}])
-    rc = mp.main(["--source", str(src), "--out", str(tmp_path / "pub"),
+    rc = mp.main(["--no-words", "--source", str(src), "--out", str(tmp_path / "pub"),
                   "--manifest", str(manifest), "--gitleaks", str(fake)])
     out = capsys.readouterr().out
     assert rc == 1 and "<outside>:3: gitleaks:private-key" in out
@@ -252,3 +253,127 @@ def test_tree_rel_posix_flavour_is_unchanged():
     assert mp._tree_rel(None, "/work/tree") == "<unknown>"
     assert mp._tree_rel("../x", "/work/tree") == "<outside>"
     assert mp._tree_rel("src" + os.sep + "a.py", "/work/tree") == "src" + os.sep + "a.py"
+
+
+# --- PG-RF-WORDS: the private names list is required for a real build ---------------
+
+WORD = "Project" + "Mordor"  # split so this file never trips the word list itself
+
+
+def _words(tmp_path, text=WORD + "\n"):
+    w = tmp_path / "w.txt"
+    w.write_text(text)
+    return str(w)
+
+
+def _main(src, out, manifest, *extra):
+    """Like run() but with NO implicit --no-words."""
+    return mp.main(["--source", str(src), "--out", str(out), "--manifest", str(manifest),
+                    "--no-gitleaks", *extra])
+
+
+@pytest.mark.parametrize("extra", [(), ("--check",)])
+def test_words_required_unless_no_words(tmp_path, src, manifest, capsys, extra):
+    out = tmp_path / "pub"
+    assert _main(src, out, manifest, *extra) == 2
+    err = capsys.readouterr().err
+    assert "--words" in err and "required" in err
+    assert not out.exists() and [p for p in tmp_path.iterdir() if p.name.startswith(".mp-")] == []
+
+
+def test_no_words_dev_flag_builds_with_warning(tmp_path, src, manifest, capsys):
+    assert _main(src, tmp_path / "pub", manifest, "--no-words") == 0
+    assert "--no-words" in capsys.readouterr().err
+
+
+def test_words_and_no_words_conflict(tmp_path, src, manifest):
+    assert _main(src, tmp_path / "pub", manifest, "--words", _words(tmp_path), "--no-words") == 2
+
+
+@pytest.mark.parametrize("text", ["", "# only a comment\n\n   \n"])
+def test_empty_words_file_is_refused(tmp_path, src, manifest, capsys, text):
+    assert _main(src, tmp_path / "pub", manifest, "--check", "--words", _words(tmp_path, text)) == 2
+    assert "no entries" in capsys.readouterr().err
+
+
+def test_missing_words_file_is_refused(tmp_path, src, manifest, capsys):
+    assert _main(src, tmp_path / "pub", manifest, "--check", "--words", str(tmp_path / "nope.txt")) == 2
+    assert "cannot read words file" in capsys.readouterr().err
+
+
+def test_bad_regex_in_words_names_line_not_entry(tmp_path, src, manifest, capsys):
+    bad = "re:" + "(unclosed-" + "Mordor"
+    assert _main(src, tmp_path / "pub", manifest, "--check",
+                 "--words", _words(tmp_path, f"# c\n{WORD}\n{bad}\n")) == 2
+    cap = capsys.readouterr()
+    assert "line 3" in cap.err
+    assert "unclosed" not in cap.out + cap.err and "Mordor" not in cap.out + cap.err
+
+
+def test_undecodable_words_file_is_refused(tmp_path, src, manifest, capsys):
+    w = tmp_path / "w.txt"
+    w.write_bytes(b"\xff\xfe\x00bad\n")
+    assert _main(src, tmp_path / "pub", manifest, "--check", "--words", str(w)) == 2
+    assert "UTF-8" in capsys.readouterr().err
+
+
+def test_words_matching_is_case_insensitive_and_whole_token(tmp_path, src, manifest, capsys):
+    w = _words(tmp_path, "# names\nZan" + "dor\n20" + "128\n/ho" + "me/s\n")
+    clean = tmp_path / "clean"
+    write(src, "src/pkg/ok.py", "x = 'Zan" + "dors' 'xZan" + "dor' 'Zan" + "dorx' 'p120" + "128' 'x_20" + "1289'\n")
+    assert _main(src, clean, manifest, "--words", w) == 0, capsys.readouterr().out
+    for i, line in enumerate(["# zan" + "DOR here", "port 20" + "128.", "x = 'ZANDOR'", "a_zan" + "dor_b"]):
+        write(src, "src/pkg/ok.py", line + "\n")
+        assert _main(src, tmp_path / f"pub{i}", manifest, "--words", w) == 1
+        out = capsys.readouterr().out
+        assert "src/pkg/ok.py:1: private-word" in out
+
+
+def test_words_content_never_in_output(tmp_path, src, manifest, capsys):
+    """Hit in content, in a file name, in a deny-listed path and in a gitleaks path."""
+    w = _words(tmp_path, "Zan" + "dor\nre:lab-" + r"\d+" + "\n")
+    write(src, "src/pkg/Zan" + "dor_notes.py", "# nothing\n")
+    write(src, "src/pkg/secrets/Zan" + "dor.txt", "\n")
+    write(src, "src/pkg/c.py", "# lab-" + "42 and Zan" + "dor\n")
+    assert _main(src, tmp_path / "pub", manifest, "--words", w) == 1
+    cap = capsys.readouterr()
+    text = cap.out + cap.err
+    assert "private-word" in text and "<path-hash:" in text
+    assert "zandor" not in text.lower() and "lab-42" not in text
+
+
+# --- PG-RF-WORDS: reviewed gitleaks allowlist for synthetic test fixtures --------------
+
+LEAKS_CFG = ROOT / "tools" / "split" / "gitleaks.toml"
+FAKE = "Zx81kQ92" + "LmPq77Vb"  # the reviewed synthetic demo value
+
+
+def test_leaks_allowlist_only_names_test_paths():
+    import tomllib
+    cfg = tomllib.loads(LEAKS_CFG.read_text())
+    assert cfg["extend"]["useDefault"] is True
+    lists = cfg["allowlists"]
+    assert lists
+    for al in lists:
+        assert al["condition"] == "AND" and al["targetRules"] == ["generic-api-key"]
+        assert al["regexes"] and al["paths"]
+        assert all(p.startswith("(?:^|/)tests/") and p.endswith("$") for p in al["paths"])
+        assert all(r.startswith("^") and r.endswith("$") for r in al["regexes"])
+
+
+@pytest.mark.skipif(shutil.which("gitleaks") is None
+                    and not (Path.home() / ".local/bin/gitleaks").exists(), reason="gitleaks not installed")
+def test_leaks_allowlist_exempts_exact_fixture_only(tmp_path):
+    exe = shutil.which("gitleaks") or str(Path.home() / ".local/bin/gitleaks")
+    line = f"Rotate the demo token: {FAKE} now\n"
+
+    def scan(rel, text, config=LEAKS_CFG):
+        tree = tmp_path / rel.replace("/", "_")
+        write(tree, rel, text)
+        return mp.run_gitleaks(tree, exe, config)[0]
+
+    assert scan("tests/test_md_sync_parse.py", line, None) != []          # rule fires without it
+    assert scan("tests/test_md_sync_parse.py", line) == []                # exact path + value
+    assert scan("src/pkg/real.py", line) != []                            # non-test path: never exempt
+    other = "Rotate the demo token: " + "Qw7" + "ErT" + "9yUi" + "Op2AsD" + "\n"
+    assert scan("tests/test_md_sync_parse.py", other) != []               # other value, same path

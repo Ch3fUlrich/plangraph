@@ -72,3 +72,7 @@ rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tools/split/manifest.toml"
 rules = ["credential-shape"]
+# The leak-scanner allowlist names the exact synthetic fixture values it exempts (reviewed).
+[[scrub.allow]]
+path = "tools/split/gitleaks.toml"
+rules = ["credential-shape"]

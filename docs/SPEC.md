@@ -11,7 +11,7 @@ Python 3.12, stdlib only (+ pytest for tests). Package `src/plangraph/`; each fi
 | `title` | str | ≤ 100 chars |
 | `kind` | `lane`\|`gate`\|`goal` | `gate` = a phase gate from README (no work, closes when its lanes are done); exactly one `goal` per project that has one (global goal `routing:GOAL`) |
 | `track` | str | `T0`…`T7` (plan v3 file) or a phase label; page groups by it |
-| `owner` | str | who works it, from the lane text (e.g. `AutoOS L1-main`, `OPERATOR`, `prox`) |
+| `owner` | str | who works it, from the lane text (e.g. `AutoOS L1-main`, `OPERATOR`, `ops-host`) |
 | `state` | `open`\|`claimed`\|`in_review`\|`done`\|`cancelled` | `ready`/`blocked` are NEVER stored, only computed |
 | `estimate_h` | number | hours; from the plan's estimates where given, else a stated default per lane complexity (flag with `estimate_src: default`) |
 | `depends_on` | list[key] | prerequisites; cross-project allowed |

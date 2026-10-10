@@ -11,7 +11,7 @@ mark keeps a later pull from accepting anything older.  Reader config (mode 600)
 
     {"snapshot": "~/.local/share/plangraph/plan.snapshot.json",
      "snapshot_pubkey": "~/.config/plangraph/snapshot-signing.pub",
-     "pull": {"host": "code.vm address", "user": "s",
+     "pull": {"host": "keeper host address", "user": "s",
               "identity": "~/.ssh/pg-snapshot-pull", "port": 22}}
 """
 from __future__ import annotations

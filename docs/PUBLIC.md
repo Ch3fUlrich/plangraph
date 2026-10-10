@@ -40,7 +40,7 @@ repo and point the keeper at it; every site-specific path is a field of that fil
 | `batch_roots` | directories `close_on_decision` may read batch files from |
 | `bind`, `default_lease` | listen address, claim lease seconds |
 
-Typical layout: clone the public repo as `plangraph/`, the private repo as `plangraph-data/`
+Typical layout: clone the public repo as `plangraph/`, the private repo as `<data-repo>/`
 (`keeper.json`, `keeper.db`, `plan.snapshot.json`, `batches/`, `DECISIONS.md`, `scrub/words.txt`,
 `scrub/rules.toml`), and start the keeper with the private config path. Batches are applied with
 `tools/apply_batch.py BATCH.yaml --url ... --token-file PATH` (the token file stays outside both
@@ -97,8 +97,37 @@ path = "tests/test_thing.py"
 rules = ["token-shape"]
 ```
 
-The word list is one word per line (`#` comments; `re:` prefix for a regex, case-insensitive,
-word-bounded). The list itself stays in the private repo.
+### The private names list (`--words`)
+
+`make_public.py` **requires** `--words PATH` (also with `--check`): without it the run exits 2 and
+writes nothing. A missing, unreadable, non-UTF-8 or empty list (no entry besides comments/blank
+lines) is refused the same way; a bad `re:` line is reported as `line N` only, never echoed.
+`--no-words` skips the check for local development; it prints a warning and must never be used
+for the real public build. `scrub_check.py` keeps `--words` optional (a warning says the
+`private-word` rule is then inactive).
+
+Format: one entry per line, `#` comments, blank lines ignored. A plain entry is matched
+case-insensitively as a whole token: it must not be glued to a letter or digit on either side
+(`_`, `-`, `.`, `/` count as boundaries), so `ab` hits `AB`, `x-ab_y`, not `abc` or `xab`. An entry
+starting with `re:` is a case-insensitive regex. The same list is matched against file names.
+What belongs in it (values only in the file, never in this repo): session/principal names, host
+names and domains, the GitHub owner, operator name/e-mail, claude.ai artifact ids (one `re:` for
+the URL shape), private repo names and paths, site ports, timezone. The file stays in the private
+repo (`scrub/words.txt`); its content never reaches output: hits are `path:line: private-word`,
+paths containing a word are shown as `<path-hash:...>`, counts only.
+
+A value that is functional in the public code (for example the keeper's default port) is not
+removed from the list: add a reviewed `[[scrub.allow]]` entry with `rules = ["private-word"]` for
+that exact path in the private `rules.toml`.
+
+### gitleaks and the fixture allowlist
+
+`make_public.py` runs gitleaks with `tools/split/gitleaks.toml` (`--leaks-config` overrides):
+the default rules plus a reviewed allowlist of synthetic, credential-shaped strings in test
+fixtures. Each entry needs the exact test path **and** the exact fake value (`condition = "AND"`,
+`targetRules = ["generic-api-key"]`; without `targetRules` gitleaks applies the paths alone), and
+`tests/test_split_make_public.py` checks that only `tests/` paths appear in it. Never add a
+non-test path there.
 
 ## Before publishing
 

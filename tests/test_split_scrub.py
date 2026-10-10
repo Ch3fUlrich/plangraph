@@ -191,3 +191,16 @@ def test_symlink_hit_cannot_be_allowed(tmp_path):
     (tree / "l").symlink_to("/etc/hostname")
     cfg = sc.build_config(allow=[{"path": "l", "rules": ["symlink"]}])
     assert [h.rule for h in sc.scan_tree(tree, cfg)] == ["symlink"]
+
+
+def test_word_list_case_insensitive_whole_token_and_bad_regex_line(tmp_path, capsys):
+    w = tmp_path / "w.txt"
+    w.write_text("Zan" + "dor\nre:lab-" + "(\n")
+    assert sc.main([str(tmp_path), "--words", str(w)]) == 2
+    err = capsys.readouterr().err
+    assert "line 2" in err and "lab-" not in err and "Zan" not in err
+    w.write_text("Zan" + "dor\n")
+    cfg = sc.build_config(words_file=w)
+    hit = lambda s: "private-word" in sc.scan_line(s, cfg, lambda t: [])  # noqa: E731
+    assert hit("a ZAN" + "DOR b") and hit("zan" + "dor_x") and hit("x-zan" + "dor") and hit("é zan" + "dor.")
+    assert not hit("xzan" + "dor") and not hit("zan" + "dorx") and not hit("zan" + "dor9") and not hit("éZan" + "dor")
