@@ -2,6 +2,18 @@
 
 Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest first.
 
+## 2026-10-10
+
+- **PG-AUDIT-META (D-1012/D-1013):** keeper read verb `audit_meta` — items in `open`/`claimed` missing `description`,
+  `estimate_h` (NULL **or** `estimate_src: default`), `done_criteria`, `owner`, with `gate` and the operator kinds exempt
+  from estimate and criteria; claims whose newest event is older than N days (default 3, injected clock) grouped by
+  claimant (owner fallback) with the action to take — `close-by-D-row` on verified commit evidence (the snapshot's
+  `merged` rule, no git call), `release` for an unreachable claimant or > 2N days quiet, else `renew`. Doors
+  `pg audit-meta [--project|--stale-days|--skeleton DIR]`, `GET /v1/audit-meta`, MCP `audit_meta` (32 tools); router and
+  L1 only, an L1 sees its own projects (another project via `--project` → 403). `--skeleton DIR` writes one
+  `P.BATCH.yaml` per project of empty `op: edit` stubs beside its sha-pinned note, which
+  `tools/apply_batch.py --dry-run` accepts (49e4e8d).
+
 ## 2026-10-09
 
 - **SYNC-MD-IMPORT + md-sync Kind column:** QUESTIONS rows become question/operator_task, answered rows in
