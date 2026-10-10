@@ -321,10 +321,10 @@ def test_undecodable_words_file_is_refused(tmp_path, src, manifest, capsys):
 
 def test_overflowing_regex_word_is_refused_with_line_only(tmp_path, src, manifest, capsys):
     w = tmp_path / "w.txt"
-    w.write_text("ok" + "name\nre:a{3000000000}\n")
+    w.write_text("ok" + "name\nre:a{99999999999999999999}\n")
     assert _main(src, tmp_path / "pub", manifest, "--check", "--words", str(w)) == 2
     out = capsys.readouterr()
-    assert "line 2" in out.err and "3000000000" not in out.err + out.out
+    assert "line 2" in out.err and "99999999999999999999" not in out.err + out.out
 
 
 def test_words_matching_is_case_insensitive_and_whole_token(tmp_path, src, manifest, capsys):
