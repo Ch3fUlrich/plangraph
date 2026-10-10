@@ -389,7 +389,7 @@ verb, refusal included.
 ### Missing metadata
 
 Only `open` and `claimed` items are audited: an `in_review` item is with its reviewer, and `done`/`cancelled` items are
-locked and cannot be edited. A field is missing when it is NULL or whitespace-only.
+locked and cannot be edited. A text field is missing when it is NULL or whitespace-only; `estimate_h` is numeric, so it is missing when NULL or when `estimate_src` is `default`.
 
 | field | kinds not audited | also missing when |
 |---|---|---|

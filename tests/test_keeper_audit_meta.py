@@ -256,6 +256,23 @@ def test_stale_days_moves_the_threshold(w):
             if i["key"] == "demo:S4"] == []
 
 
+def test_the_stale_and_release_boundaries_are_strict(w):
+    _create(w, [("S5", {})])
+    to_claimed(w, "demo:S5", who="l1main")
+
+    def action(**kw):
+        return {i["key"]: i["action"] for i in _stale(_data(w, **kw))}.get("demo:S5")
+
+    w.clock.advance(3 * DAY)                        # age == N: not yet stale
+    assert action(stale_days=3) is None
+    w.clock.advance(1)                              # age > N: stale, renew
+    assert action(stale_days=3) == "renew"
+    w.clock.advance(3 * DAY - 1)                    # age == 2N: still renew
+    assert action(stale_days=3) == "renew"
+    w.clock.advance(1)                              # age > 2N: release
+    assert action(stale_days=3) == "release"
+
+
 def test_an_item_with_no_events_is_never_stale(w):
     assert "demo:CLEAN" not in [i["key"] for i in _stale(_data(w))]
 
