@@ -55,7 +55,7 @@ def test_full_log_lists_every_kind_in_seq_order(w):
     assert types.count("created") == 4
     for kind in ("closed", "answered", "cancelled", "restart"):
         assert types.count(kind) == 1, kind
-    assert data["head_seq"] >= seqs[-1]
+    assert data["head_seq"] == seqs[-1]                  # the cancel is the last event
 
 
 def test_text_is_stable_and_has_the_expected_lines(w):
@@ -135,6 +135,15 @@ def test_decision_text_missing_from_the_file_still_renders(w):
     w.store.ctx = SimpleNamespace(decisions=None)
     out = _text(w, "0")
     assert "answered  demo:Q | title Q | D-9" in out
+
+
+def test_pipes_in_decision_text_cannot_fake_a_field():
+    ev = [{"seq": 1, "ts": "2026-10-10T08:00:00Z", "actor": "r", "key": "p:Q",
+           "type": "answered", "payload": {"text": "t", "decision_id": "D-1"}}]
+    line = [ln for ln in changelog.render(changelog.build(
+        ev, "0", {"p:Q": "T | x"}, {"D-1": "ok | injected: fake"}, 1)).splitlines()
+        if "answered" in ln][0]
+    assert line.count(" | ") == 2 and "T / x" in line and "ok / injected: fake" in line
 
 
 def test_titles_and_keys_cannot_inject_lines():

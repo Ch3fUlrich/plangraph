@@ -112,7 +112,7 @@ def build(events, since, titles, decision_texts, head_seq):
 
 
 def _one_line(text, cap=_TEXT_CAP):
-    text = " ".join(str(text).split())
+    text = " ".join(str(text).replace("|", "/").split())      # one line, no field separator
     return text if len(text) <= cap else text[:cap].rstrip() + "…"
 
 
