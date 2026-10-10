@@ -339,3 +339,12 @@ Text is raw data: the page must render it with `textContent`. Credential-shaped 
 `{enabled, generated, ok, kept_previous, errors:[{graph,error,missing}], graphs, nodes, unresolved_graphs, dangling:[{ref, items:[item keys]}]}`.
 `dangling` = the graph was read and holds no node for the ref (computed from the fresh read even when `kept_previous` is true, so it can name refs the kept export does not contain); refs into unreadable graphs are `unresolved_graphs`, not dangling.
 Go-live = a read-only Omnigraph token file from prox plus the two env vars on the render host (not part of this lane).
+
+## Router retier of an in-review item (D-950 rule)
+
+The router may `edit` `review_tier` / `evidence_kinds` of a `claimed` or `in_review` item (the keeper allows it; an L1
+edit of a non-open item is refused). Fleet rule (routing, 2026-10-10): use it ONLY for ops/config items that produced no
+code commit, and only with a D-row naming the key in `Closes:`; md-sync then closes the item on that decision. It is
+audited: the hash-chained `item_defined` event records `"while": "<state>"` and the new tier
+(the keeper `events` table; the activity page shows recent events), so a retier during review is visible. `withdraw_review` stays the path for items
+that are decision-closable by their own definition.
