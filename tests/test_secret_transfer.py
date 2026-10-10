@@ -15,13 +15,17 @@ REC2 = "age1" + "p" * 58
 SECRET = b"TOP-SECRET-CONTENT-xyzzy-12345"
 
 FAKE_AGE = """#!{py}
-import sys
+import sys, os
 a = sys.argv[1:]
-r = a[a.index("-r") + 1]
-o = a[a.index("-o") + 1]
-rest = [x for i, x in enumerate(a) if x not in ("-r", "-o") and a[i-1] not in ("-r", "-o")]
-data = open(rest[0], "rb").read() if rest else sys.stdin.buffer.read()
-open(o, "wb").write(b"FAKEAGE " + r.encode() + b"\\n" + data)
+open(os.path.join(os.path.dirname(__file__), "argv.log"), "a").write(repr(a) + "\\n")
+if a[:1] != ["-r"] or len(a) != 2:
+    sys.exit(9)
+sys.stdout.buffer.write(b"FAKEAGE " + a[1].encode() + b"\\n" + sys.stdin.buffer.read())
+"""
+
+FAKE_SHRED = """#!{py}
+import os
+open(os.path.join(os.path.dirname(__file__), "shred.called"), "w").write("x")
 """
 
 
@@ -34,7 +38,10 @@ def env(tmp_path):
     f.chmod(0o755)
     home = tmp_path / "home"
     home.mkdir()
-    e = {"PATH": "%s:/usr/bin:/bin" % bindir, "HOME": str(home)}
+    s2 = bindir / "shred"
+    s2.write_text(FAKE_SHRED.format(py=sys.executable))
+    s2.chmod(0o755)
+    e = {"PATH": "%s:%s" % (bindir, os.path.dirname(sys.executable)), "HOME": str(home)}
     return e, tmp_path
 
 
@@ -120,6 +127,7 @@ def test_send_allowed_after_match_and_no_leak(env):
     assert SECRET not in out
     assert hashlib.sha256(SECRET).hexdigest()[:8] in out.decode()
     assert SECRET in (tp / "o.age").read_bytes()  # fake age only
+    assert stat.S_IMODE((tp / "o.age").stat().st_mode) == 0o644
 
 
 def test_no_dummy_in_output(env):
@@ -177,3 +185,114 @@ def test_guard_hermetic(env):
     assert e["HOME"].startswith(str(tp))
     run(env, "recipient", "add", "bob", REC)
     assert not (Path(e["HOME"]) / ".config").exists()
+
+
+def argv_log(tp):
+    f = tp / "bin" / "argv.log"
+    return f.read_text() if f.exists() else ""
+
+
+def test_secret_path_never_in_argv_and_real_tools_not_used(env):
+    _, tp = env
+    confirmed(env)
+    s = secret_file(tp)
+    run(env, "send", "bob", "--in", str(s), "--out", str(tp / "o.age"))
+    log = argv_log(tp)
+    assert log and str(s) not in log and "secret" not in log
+    assert "'-o'" not in log
+    run(env, "shred", "bob", "--in", str(s))
+    assert not (tp / "bin" / "shred.called").exists()
+    assert env[0]["PATH"].split(":")[0] == str(tp / "bin") and len(env[0]["PATH"].split(":")) == 2
+
+
+def test_dash_leading_secret_name(env):
+    _, tp = env
+    confirmed(env)
+    s = tp / "-r"
+    s.write_bytes(SECRET)
+    s.chmod(0o600)
+    p = run(env, "send", "bob", "--in", str(s), "--out", str(tp / "o.age"))
+    assert p.returncode == 0 and "-r" not in argv_log(tp).replace("['-r', '", "")
+
+
+def set_passed_at(tp, iso):
+    f = tp / "st" / "s.json"
+    d = json.loads(f.read_text())
+    d["recipients"]["bob"]["test_passed_at"] = iso
+    f.write_text(json.dumps(d))
+
+
+def test_stale_test_refused(env):
+    _, tp = env
+    confirmed(env)
+    set_passed_at(tp, "2020-01-01T00:00:00Z")
+    s = secret_file(tp)
+    p = run(env, "send", "bob", "--in", str(s), "--out", str(tp / "o.age"))
+    assert p.returncode == 2 and not (tp / "o.age").exists()
+    p = run(env, "send", "bob", "--in", str(s), "--out", str(tp / "o.age"),
+            "--max-test-age", "100000")
+    assert p.returncode == 0
+
+
+def test_out_symlink_or_existing_refused(env):
+    _, tp = env
+    confirmed(env)
+    s = secret_file(tp)
+    victim = tp / "victim"
+    victim.write_text("keep")
+    (tp / "lo").symlink_to(victim)
+    assert run(env, "send", "bob", "--in", str(s), "--out", str(tp / "lo")).returncode == 2
+    assert victim.read_text() == "keep"
+    (tp / "ex").write_text("keep")
+    assert run(env, "send", "bob", "--in", str(s), "--out", str(tp / "ex")).returncode == 2
+    assert (tp / "ex").read_text() == "keep"
+    assert run(env, "test", "bob", "--out", str(tp / "ex")).returncode == 2
+    assert run(env, "test", "bob", "--out", str(tp / "lo")).returncode == 2
+    assert victim.read_text() == "keep"
+
+
+def test_state_symlink_refused(env):
+    e, tp = env
+    real = tp / "real.json"
+    real.write_text('{"recipients": {}}')
+    (tp / "st").mkdir()
+    (tp / "st" / "s.json").symlink_to(real)
+    assert run(env, "recipient", "add", "bob", REC).returncode == 2
+    assert real.read_text() == '{"recipients": {}}'
+
+
+def test_state_dir_symlink_refused(env):
+    _, tp = env
+    (tp / "realdir").mkdir()
+    (tp / "st").symlink_to(tp / "realdir")
+    assert run(env, "recipient", "add", "bob", REC).returncode == 2
+    assert not list((tp / "realdir").iterdir())
+
+
+def test_shred_requires_sent_file(env):
+    _, tp = env
+    confirmed(env)
+    s = secret_file(tp)
+    run(env, "send", "bob", "--in", str(s), "--out", str(tp / "o.age"))
+    other = tp / "other"
+    other.write_bytes(b"precious")
+    other.chmod(0o600)
+    assert run(env, "shred", "bob", "--in", str(other)).returncode == 2
+    assert other.exists()
+    # same inode, content changed after send
+    s.write_bytes(b"changed")
+    assert run(env, "shred", "bob", "--in", str(s)).returncode == 2 and s.exists()
+    s.write_bytes(SECRET)
+    # same content, different inode (replaced)
+    os.link(s, tp / "keep")
+    s.unlink()
+    s.write_bytes(SECRET)
+    s.chmod(0o600)
+    assert run(env, "shred", "bob", "--in", str(s)).returncode == 2 and s.exists()
+
+
+def test_help_per_subcommand(env):
+    e, tp = env
+    for sub in (["recipient", "add"], ["test"], ["confirm"], ["send"], ["shred"]):
+        p = subprocess.run([sys.executable, str(TOOL), *sub, "--help"], env=e, capture_output=True)
+        assert p.returncode == 0 and len(p.stdout) > 40

@@ -12,11 +12,9 @@ import json
 import os
 import re
 import secrets
-import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 
 RECIPIENT_RE = re.compile(r"^age1[0-9a-z]{58}$")
 PREFIX_RE = re.compile(r"^[0-9a-f]{8}$")
@@ -31,22 +29,39 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def load(path):
+def _check_dir(d):
     try:
-        with open(path) as f:
-            return json.load(f)
+        st = os.lstat(d)
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        raise Refuse("state dir is a symlink or not a directory")
+
+
+def load(path):
+    _check_dir(os.path.dirname(path) or ".")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
         return {"recipients": {}}
+    except OSError:
+        raise Refuse("cannot open state file (symlink?)")
+    with os.fdopen(fd) as f:
+        return json.load(f)
 
 
 def save(path, state):
     d = os.path.dirname(path) or "."
+    _check_dir(d)
     os.makedirs(d, mode=0o700, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".st-")
+    _check_dir(d)
+    tmp = os.path.join(d, ".st-%s.tmp" % secrets.token_hex(8))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
-        os.fchmod(fd, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(state, f, indent=2, sort_keys=True)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -63,37 +78,71 @@ def get_rec(state, name):
     return r
 
 
-def age_encrypt(recipient, out, infile=None, data=None):
-    cmd = ["age", "-r", recipient, "-o", out]
-    if infile is not None:
-        cmd.append(infile)
+def age_encrypt(recipient, data):
+    """Encrypt bytes: age -r R, plaintext on stdin, ciphertext on stdout."""
+    if not RECIPIENT_RE.match(recipient):
+        raise Refuse("invalid age recipient")
     try:
-        p = subprocess.run(cmd, input=data, capture_output=True, shell=False)
+        p = subprocess.run(["age", "-r", recipient], input=data,
+                           capture_output=True, shell=False)
     except FileNotFoundError:
         raise Refuse("age binary not found")
-    if p.returncode != 0:
+    if p.returncode != 0 or not p.stdout:
         raise Refuse("age failed (exit %d)" % p.returncode)
+    return p.stdout
 
 
-def check_secret_file(path):
+def check_out(out):
     try:
-        st = os.lstat(path)
+        os.lstat(out)
+    except FileNotFoundError:
+        return
+    raise Refuse("output path exists (or is a symlink)")
+
+
+def write_out(out, blob):
+    try:
+        fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     except OSError:
-        raise Refuse("secret file not found")
-    if stat.S_ISLNK(st.st_mode):
-        raise Refuse("secret file is a symlink")
-    if not stat.S_ISREG(st.st_mode):
-        raise Refuse("secret file is not a regular file")
-    if stat.S_IMODE(st.st_mode) != 0o600:
-        raise Refuse("secret file mode must be 0600, is %o" % stat.S_IMODE(st.st_mode))
+        raise Refuse("cannot create output file (exists or symlink)")
+    with os.fdopen(fd, "wb") as f:
+        f.write(blob)
+        f.flush()
+        os.fsync(f.fileno())
 
 
-def sha_prefix_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(65536), b""):
-            h.update(chunk)
-    return h.hexdigest()[:8]
+def open_secret(path, flags=os.O_RDONLY):
+    """Open O_NOFOLLOW, verify the descriptor (regular, 0600, owned by euid)."""
+    try:
+        fd = os.open(path, flags | os.O_NOFOLLOW)
+    except OSError:
+        raise Refuse("cannot open secret file (missing or symlink)")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refuse("secret file is not a regular file")
+        if stat.S_IMODE(st.st_mode) != 0o600:
+            raise Refuse("secret file mode must be 0600, is %o" % stat.S_IMODE(st.st_mode))
+        if st.st_uid != os.geteuid():
+            raise Refuse("secret file not owned by current user")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, st
+
+
+def read_fd(fd):
+    chunks = []
+    while True:
+        c = os.read(fd, 65536)
+        if not c:
+            return b"".join(chunks)
+        chunks.append(c)
+
+
+def parse_ts(ts):
+    return datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.timezone.utc)
 
 
 def cmd_add(a, st):
@@ -109,11 +158,13 @@ def cmd_add(a, st):
 
 def cmd_test(a, st):
     r = get_rec(st, a.name)
+    check_out(a.out)
     dummy = secrets.token_bytes(32)
-    age_encrypt(r["recipient"], a.out, data=dummy)
+    blob = age_encrypt(r["recipient"], dummy)
+    write_out(a.out, blob)
     r["pending_test"] = {"expected_prefix": hashlib.sha256(dummy).hexdigest()[:8], "at": now()}
     r.pop("test_passed_at", None)
-    print("%s %d" % (a.out, os.path.getsize(a.out)))
+    print("%s %d" % (a.out, len(blob)))
     return 1
 
 
@@ -132,31 +183,58 @@ def cmd_confirm(a, st):
 
 def cmd_send(a, st):
     r = get_rec(st, a.name)
-    if not r.get("test_passed_at"):
+    tp = r.get("test_passed_at")
+    if not tp:
         raise Refuse("recipient %s has no passed test; run test and confirm first" % a.name)
-    check_secret_file(a.infile)
-    age_encrypt(r["recipient"], a.out, infile=a.infile)
+    try:
+        age_s = (datetime.datetime.now(datetime.timezone.utc) - parse_ts(tp)).total_seconds()
+    except ValueError:
+        raise Refuse("bad test timestamp in state")
+    if age_s > a.max_test_age * 3600:
+        raise Refuse("passed test is older than %g h; re-run test and confirm" % a.max_test_age)
+    check_out(a.out)
+    fd, sst = open_secret(a.infile)
+    try:
+        data = read_fd(fd)
+    finally:
+        os.close(fd)
+    blob = age_encrypt(r["recipient"], data)
+    write_out(a.out, blob)
+    digest = hashlib.sha256(data).hexdigest()
     r["sent_at"] = now()
-    r["sent_sha256_prefix"] = sha_prefix_file(a.infile)
+    r["sent"] = {"sha256": digest, "dev": sst.st_dev, "ino": sst.st_ino}
     r.pop("sent_and_shredded_at", None)
-    print("%s %d %s" % (a.out, os.path.getsize(a.out), r["sent_sha256_prefix"]))
+    print("%s %d %s" % (a.out, len(blob), digest[:8]))
     return 1
 
 
 def cmd_shred(a, st):
     r = get_rec(st, a.name)
-    if not r.get("sent_at"):
+    sent = r.get("sent")
+    if not sent:
         raise Refuse("shred only after send")
-    check_secret_file(a.infile)
-    if shutil.which("shred"):
-        subprocess.run(["shred", "-u", a.infile], check=True, shell=False)
-    else:
-        size = os.path.getsize(a.infile)
-        with open(a.infile, "r+b") as f:
-            f.write(b"\0" * size)
-            f.flush()
-            os.fsync(f.fileno())
+    fd, fst = open_secret(a.infile, os.O_RDWR)
+    try:
+        if (fst.st_dev, fst.st_ino) != (sent["dev"], sent["ino"]):
+            raise Refuse("file is not the one that was sent (inode differs)")
+        data = read_fd(fd)
+        if hashlib.sha256(data).hexdigest() != sent["sha256"]:
+            raise Refuse("file content differs from what was sent")
+        # overwrite in place via the verified descriptor, then unlink
+        os.lseek(fd, 0, os.SEEK_SET)
+        for pattern in (b"\xff", b"\x00"):
+            os.lseek(fd, 0, os.SEEK_SET)
+            left = fst.st_size
+            while left > 0:
+                n = os.write(fd, pattern * min(left, 65536))
+                left -= n
+            os.fsync(fd)
+        cur = os.lstat(a.infile)
+        if (cur.st_dev, cur.st_ino) != (fst.st_dev, fst.st_ino):
+            raise Refuse("file replaced during shred; not unlinked")
         os.unlink(a.infile)
+    finally:
+        os.close(fd)
     r["sent_and_shredded_at"] = now()
     print("shredded")
     return 1
@@ -166,26 +244,28 @@ def parser():
     p = argparse.ArgumentParser(prog="secret_transfer")
     p.add_argument("--state", default=None)
     sub = p.add_subparsers(dest="cmd", required=True)
-    ra = sub.add_parser("recipient")
+    ra = sub.add_parser("recipient", help="manage recipients")
     rs = ra.add_subparsers(dest="rcmd", required=True)
-    x = rs.add_parser("add")
+    x = rs.add_parser("add", help="store a receiver age recipient", description="Store a receiver public age1... recipient (a different key resets its test).")
     x.add_argument("name")
     x.add_argument("recipient")
     x.set_defaults(fn=cmd_add)
-    x = sub.add_parser("test")
+    x = sub.add_parser("test", help="write a dummy encrypted test file", description="Encrypt 32 random bytes to the recipient; the receiver reports the sha256 8-hex prefix independently.")
     x.add_argument("name")
     x.add_argument("--out", required=True)
     x.set_defaults(fn=cmd_test)
-    x = sub.add_parser("confirm")
+    x = sub.add_parser("confirm", help="confirm the receiver reported prefix", description="Compare the receiver-reported 8-hex prefix with the pending test; mismatch exits 2.")
     x.add_argument("name")
     x.add_argument("prefix")
     x.set_defaults(fn=cmd_confirm)
-    x = sub.add_parser("send")
+    x = sub.add_parser("send", help="encrypt the secret (needs fresh passed test)", description="Encrypt a 0600 regular file to the confirmed recipient; prints out path, size, sha256 8-hex prefix.")
     x.add_argument("name")
     x.add_argument("--in", dest="infile", required=True)
     x.add_argument("--out", required=True)
+    x.add_argument("--max-test-age", type=float, default=24.0,
+                   help="max age in hours of the passed test (default 24)")
     x.set_defaults(fn=cmd_send)
-    x = sub.add_parser("shred")
+    x = sub.add_parser("shred", help="overwrite and unlink the sent plaintext", description="Only the exact file (inode and hash) recorded at send is overwritten and unlinked.")
     x.add_argument("name")
     x.add_argument("--in", dest="infile", required=True)
     x.set_defaults(fn=cmd_shred)
