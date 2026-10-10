@@ -204,11 +204,20 @@ def cmd_ready(args, session):
         session.json_mode = False
     n = None if args.all else args.n
 
+    owner = getattr(args, "owner", None)
+    mine = bool(getattr(args, "mine", False))
+    agent = bool(getattr(args, "agent", False))
+
     def local():
+        # Offline (snapshot) fallback: --mine needs the server's whoami, so it
+        # falls back to no owner filter there; --owner and --agent still apply.
         return _emit(session, session.local_items(),
-                     lambda items: fmt.ready_text(items, args.project, n))
+                     lambda items: fmt.ready_text(items, args.project, n,
+                                                  owner=owner, agent=agent))
     return read(session, "ready", {"project": args.project, "n": n,
-                                   "all": 1 if args.all else None},
+                                   "all": 1 if args.all else None,
+                                   "owner": owner, "mine": 1 if mine else None,
+                                   "agent": 1 if agent else None},
                 lambda r: fmt.ready_text(r["items"], args.project, n,
                                           r.get("unblocks")), local)
 

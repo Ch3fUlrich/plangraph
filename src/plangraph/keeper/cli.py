@@ -66,6 +66,10 @@ def _add_reads(sub):
     ready.add_argument("-n", type=int, default=10)
     ready.add_argument("--brief", action="store_true",
                        help="one compact line per item (the default; beats --json)")
+    ready.add_argument("--owner", help="only items owned by this principal")
+    ready.add_argument("--mine", action="store_true", help="only items owned by you (D-953)")
+    ready.add_argument("--agent", action="store_true",
+                       help="drop operator steps (operator flag or question/decision/operator_task)")
 
     show = _p(sub, "show", help="one item, compact")
     show.add_argument("key")

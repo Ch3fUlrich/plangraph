@@ -176,11 +176,13 @@ def warnings(items):
     return sorted(out, key=lambda p: (p["code"], p["key"]))
 
 
-def ready(items, project=None, ub=None):
+def ready(items, project=None, ub=None, owner=None, agent=False):
     """Open items whose every dependency is ``done``, best first.
 
     *ub* is a precomputed :func:`unblocks` map over the FULL graph, for a caller
-    that holds only a subset of the items.
+    that holds only a subset of the items.  *owner* keeps only items owned by
+    that principal; *agent* drops what waits on the operator (``operator`` flag
+    or an operator kind), so a heartbeat never picks a human step (D-953).
 
     Sorted by ``(-priority, -unblocks, estimate_h, key)``.  Gates and goals are
     included when open and unblocked: closing them is a valid action.
@@ -190,6 +192,8 @@ def ready(items, project=None, ub=None):
     out = [it for it in items
            if _state(it) == "open"
            and (project is None or it.get("project") == project)
+           and (owner is None or it.get("owner") == owner)
+           and not (agent and (it.get("operator") or it.get("kind") in OPERATOR_KINDS))
            and all(idx.get(d, {}).get("state") == "done" for d in _deps(it))]
     out.sort(key=lambda it: (-_prio(it), -ub.get(it["key"], 0), _est(it), it["key"]))
     return out
@@ -318,13 +322,13 @@ def unblocks(items):
     return dict(sorted(counts.items()))
 
 
-def brief(items, project=None, n=10, ub=None):
+def brief(items, project=None, n=10, ub=None, owner=None, agent=False):
     """Agent text: one line per ready item, capped at *n*.
 
     Format: ``key | title | est Nh | unblocks N | prio P``.
     """
     ub = unblocks(items) if ub is None else ub
-    rows = ready(items, project=project, ub=ub)
+    rows = ready(items, project=project, ub=ub, owner=owner, agent=agent)
     if n is not None:
         rows = rows[:max(0, int(n))]
     lines = [f"{it['key']} | {it.get('title', '')} | "

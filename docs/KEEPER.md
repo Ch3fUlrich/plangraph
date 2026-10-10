@@ -348,3 +348,11 @@ code commit, and only with a D-row naming the key in `Closes:`; md-sync then clo
 audited: the hash-chained `item_defined` event records `"while": "<state>"` and the new tier
 (the keeper `events` table; the activity page shows recent events), so a retier during review is visible. `withdraw_review` stays the path for items
 that are decision-closable by their own definition.
+
+## Next item for a heartbeat (PG-READY-OWNER, D-953)
+
+`pg ready --project P --mine --agent -n 1` (HTTP `GET /v1/ready?project=P&mine=1&agent=1&n=1`, MCP `ready` with
+`mine`/`agent`) returns the best item the caller can start now: state `open`, every dependency `done`, owned by the caller
+(`--owner NAME` for another principal), operator steps excluded (`operator` flag or kind question/decision/
+operator_task), ordered by (-priority, -unblocks, estimate, key). Then `pg claim KEY --lease 2h`. Offline (keeper
+unreachable) the CLI answers from the snapshot; `--mine` then cannot resolve the caller and lists all owners.
