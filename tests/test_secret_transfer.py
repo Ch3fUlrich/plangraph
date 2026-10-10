@@ -296,3 +296,16 @@ def test_help_per_subcommand(env):
     for sub in (["recipient", "add"], ["test"], ["confirm"], ["send"], ["shred"]):
         p = subprocess.run([sys.executable, str(TOOL), *sub, "--help"], env=e, capture_output=True)
         assert p.returncode == 0 and len(p.stdout) > 40
+
+
+@pytest.mark.parametrize("which,mode", [("dir", 0o777), ("dir", 0o750), ("file", 0o666), ("file", 0o640)])
+def test_loose_state_perms_refused(env, which, mode):
+    """A forged state (recipient + test_passed_at) in a group/world-accessible dir or file is never trusted."""
+    _, tp = env
+    confirmed(env)
+    secret = secret_file(tp)
+    target = (tp / "st") if which == "dir" else (tp / "st" / "s.json")
+    target.chmod(mode)
+    p = run(env, "send", "bob", "--in", str(secret), "--out", str(tp / "s.age"))
+    assert p.returncode == 2 and b"REFUSED" in p.stdout + p.stderr
+    assert not (tp / "s.age").exists()

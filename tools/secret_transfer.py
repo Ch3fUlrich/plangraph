@@ -36,6 +36,8 @@ def _check_dir(d):
         return
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
         raise Refuse("state dir is a symlink or not a directory")
+    if st.st_uid != os.geteuid() or st.st_mode & 0o077:
+        raise Refuse("state dir must be owned by you with mode 0700")
 
 
 def load(path):
@@ -47,6 +49,9 @@ def load(path):
     except OSError:
         raise Refuse("cannot open state file (symlink?)")
     with os.fdopen(fd) as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.geteuid() or st.st_mode & 0o077:
+            raise Refuse("state file must be a regular file owned by you with mode 0600")
         return json.load(f)
 
 
