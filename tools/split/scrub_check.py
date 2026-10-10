@@ -144,7 +144,7 @@ def _load_words(path):
             else:
                 pats.append(re.compile(rf"(?<!{_ALNUM})" + re.escape(w) + rf"(?!{_ALNUM})",
                                        re.IGNORECASE))
-        except re.error:
+        except (re.error, OverflowError, RecursionError, MemoryError):
             raise ValueError(f"bad regex in word list line {n}") from None
     return pats
 

@@ -312,9 +312,19 @@ def test_bad_regex_in_words_names_line_not_entry(tmp_path, src, manifest, capsys
 
 def test_undecodable_words_file_is_refused(tmp_path, src, manifest, capsys):
     w = tmp_path / "w.txt"
-    w.write_bytes(b"\xff\xfe\x00bad\n")
+    w.write_bytes(b"\xff\xfe\x00badword" + b"Qx" + b"7\n")
     assert _main(src, tmp_path / "pub", manifest, "--check", "--words", str(w)) == 2
-    assert "UTF-8" in capsys.readouterr().err
+    out = capsys.readouterr()
+    assert "UTF-8" in out.err
+    assert "badword" not in out.err + out.out and "\ufffd" not in out.err + out.out   # never echoed
+
+
+def test_overflowing_regex_word_is_refused_with_line_only(tmp_path, src, manifest, capsys):
+    w = tmp_path / "w.txt"
+    w.write_text("ok" + "name\nre:a{3000000000}\n")
+    assert _main(src, tmp_path / "pub", manifest, "--check", "--words", str(w)) == 2
+    out = capsys.readouterr()
+    assert "line 2" in out.err and "3000000000" not in out.err + out.out
 
 
 def test_words_matching_is_case_insensitive_and_whole_token(tmp_path, src, manifest, capsys):
@@ -357,6 +367,7 @@ def test_leaks_allowlist_only_names_test_paths():
     assert sorted(p for al in lists for p in al["paths"]) == sorted([
         r"^tests/fixtures/md_sync/sample_questions\.md$", r"^tests/test_md_sync_parse\.py$",
         r"^tests/test_md_sync_plan\.py$", r"^tests/test_keeper_cred" + r"ential_guard\.py$"])
+    assert all(len(al["regexes"]) == 1 for al in lists)   # no extra (broad) regex slips in
     assert sorted(al["regexes"][0] for al in lists) == sorted([
         "^(?:Zx81kQ92LmPq77Vb|AbCd1234Efgh)$", "^svcacct/" + "Zq9xk2LmPw$"])
     for al in lists:
