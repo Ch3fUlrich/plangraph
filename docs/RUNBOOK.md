@@ -137,6 +137,14 @@ batch would roll back), and the run says `close-skipped <ID>: <D-n> Closes does 
 plus `close-skipped <n>` at the end of the `md-sync:` summary.  Token-like
 strings are masked `[redacted]` before any text reaches the keeper (count in the report).
 
+**Archive switch (PG-RF-ARCHIVE-ANSWERS, default OFF).** Answers live in the keeper (Q9), so QUESTIONS.md can be
+generated instead of imported: `python3 tools/md_sync.py --archive-answers --questions-out PATH --url U --token-file F
+[--project routing] [--apply] [--status-file FILE]` skips the import (no QUESTIONS/ANSWERS/decisions inputs, no ops) and writes
+the project's open operator items (`views.needs_you`: question / decision / operator_task, in that order, `choices` as an
+`Options:` block) as the priority table above, atomically (tmp + rename). Without `--apply` it only reports (`dry run`). The file
+round-trips through the importer's parser; cells are single-line and credential-masked. Status file: `{ts, mode: "archive",
+archived, written, error}`. Turning the switch on in the timer unit is a later live step.
+
     python3 tools/md_sync.py --questions /home/s/code/routing/QUESTIONS.md \
         --answers /home/s/code/routing/ANSWERS.md \
         --decisions /home/s/code/routing/docs/decisions-log.md \
