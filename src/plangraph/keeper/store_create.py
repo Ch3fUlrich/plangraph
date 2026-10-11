@@ -220,33 +220,46 @@ class CreateMixin:
                          lambda now: self._edit(principal, key, fields, now))
 
     def _edit(self, principal, key, fields, now):
+        has_priority = isinstance(fields, dict) and "priority" in fields
+        prio = fields["priority"] if has_priority else None
+        rest = ({name: value for name, value in fields.items()
+                 if name != "priority"} if has_priority else fields)
+        if has_priority:
+            # Same order as ``_priority``: role, value, then the item lookup.
+            self._require_role(principal, "router")
+            self._checked_priority(prio)
+            if not rest:
+                with self._write():
+                    self._apply_priority(principal, key, prio, now)
+                return {"key": key, "priority": int(prio)}
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         self._may_manage(principal, item["project"])
         # D-434: the router's one narrow exception -- the two tier fields alone on
         # a claimed/in-review item; anyone else fails on authorisation, not state.
-        tier_edit = item["state"] in ("claimed", "in_review") and _tier_only(fields)
+        tier_edit = item["state"] in ("claimed", "in_review") and _tier_only(rest)
         if tier_edit and principal.role != "router":
             raise Refused("forbidden", "only the router may edit review_tier or "
                           "evidence_kinds while an item is claimed or in review")
         if item["state"] != "open" and not tier_edit:
             raise Refused("bad_state", f"{key} is {item['state']}, not open")
-        if not isinstance(fields, dict):
+        if not isinstance(rest, dict):
             raise Refused("validation", "edit body must be a mapping")
-        unknown = set(fields) - set(_EDITABLE)
+        unknown = set(rest) - set(_EDITABLE)
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
-        self._check_text(fields)
-        check_model_fields(fields, item["kind"], key)
-        if "review_tier" in fields:
-            validated_review_tier(fields["review_tier"])
+        edit_fields = dict(rest)
+        self._check_text(edit_fields)
+        check_model_fields(edit_fields, item["kind"], key)
+        if "review_tier" in edit_fields:
+            validated_review_tier(edit_fields["review_tier"])
             if (item["review_tier"] == "high"
-                    and fields["review_tier"] == "standard"
+                    and edit_fields["review_tier"] == "standard"
                     and principal.role != "router"):
                 raise Refused("forbidden", "only the router may lower review_tier")
         # X7b: the *resulting* (tier, evidence_kinds) pair must hold, so an edit
         # of either field alone cannot leave a `none` item with looser evidence.
-        resulting_tier = fields.get("review_tier", item["review_tier"])
+        resulting_tier = edit_fields.get("review_tier", item["review_tier"])
         if tier_needs_router(resulting_tier):
             if (resulting_tier != item["review_tier"]
                     and principal.role != "router"):
@@ -254,11 +267,11 @@ class CreateMixin:
                               "only the router may set review_tier='none'")
             validated_decision_tier(
                 resulting_tier,
-                fields.get("evidence_kinds", item["evidence_kinds"]))
+                edit_fields.get("evidence_kinds", item["evidence_kinds"]))
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
-        for field, value in fields.items():
+        for field, value in edit_fields.items():
             if field == "depends_on":
                 if not isinstance(value, (list, tuple)):
                     raise Refused("validation", "depends_on must be a list")
@@ -275,32 +288,32 @@ class CreateMixin:
                                   "cross-project dependency needs the router")
                 me["depends_on"] = deps
             elif field == "kg_refs":
-                value = fields["kg_refs"] = me["kg_refs"] = check_kg_refs(value, key)
+                value = edit_fields["kg_refs"] = me["kg_refs"] = check_kg_refs(value, key)
             elif field == "choices":
-                value = fields["choices"] = me["choices"] = check_choices(
+                value = edit_fields["choices"] = me["choices"] = check_choices(
                     value, item["kind"], key)
             elif field == "fixes" and value is not None:
                 if not isinstance(value, str) or not value:
                     raise Refused("validation", "fixes must be a key string or null")
-                value = fields["fixes"] = me["fixes"] = self._qualify(
+                value = edit_fields["fixes"] = me["fixes"] = self._qualify(
                     item["project"], value)
             else:
                 me[field] = value
-        if "review_tier" not in fields and me.get("review_tier") == "standard":
+        if "review_tier" not in edit_fields and me.get("review_tier") == "standard":
             # Renaming into risky territory raises standard->high
             # automatically.  Only an actual title/track rename triggers it;
             # an explicit tier in the same edit (or an already-high/none
             # item) is never touched, so this never lowers.  (``id`` is not
             # editable, so there is nothing to watch there.)
-            renamed = [fields[field] for field in ("title", "track")
-                       if field in fields]
+            renamed = [edit_fields[field] for field in ("title", "track")
+                       if field in edit_fields]
             if any(isinstance(value, str) and _REVIEW_KEYWORD.search(value)
                    for value in renamed):
-                fields["review_tier"] = "high"
+                edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
         check_fix_limit(candidate, {key})
         self._validate_change(candidate, before, affected={key})
-        assignments = [field for field in fields if field != "depends_on"]
+        assignments = [field for field in edit_fields if field != "depends_on"]
         with self._write():
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
@@ -316,14 +329,14 @@ class CreateMixin:
                 # Re-check the resulting (tier, kinds) pair under the lock:
                 # evidence_kinds may have been edited under us since the read.
                 validated_decision_tier(
-                    fields.get("review_tier", fresh["review_tier"]),
-                    fields.get("evidence_kinds", fresh["evidence_kinds"]))
+                    edit_fields.get("review_tier", fresh["review_tier"]),
+                    edit_fields.get("evidence_kinds", fresh["evidence_kinds"]))
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
                 round_no = int(fresh.get("round") or 0) + 1
             if assignments:
                 sets = ", ".join(f"{field}=?" for field in assignments)
-                values = [self._stored(field, fields[field]) for field in assignments]
+                values = [self._stored(field, edit_fields[field]) for field in assignments]
                 if tier_edit:
                     sets += ", round=?"
                     values.append(round_no)
@@ -336,18 +349,20 @@ class CreateMixin:
                 self._race_guard(cursor, key, guard, item["epoch"])
             else:
                 self._guarded_touch(key, ("open",), item["epoch"])
-            if "depends_on" in fields:
+            if "depends_on" in edit_fields:
                 self.conn.execute("DELETE FROM edges WHERE src=?", (key,))
                 for dep in me["depends_on"]:
                     self.conn.execute(
                         "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
                         (key, dep))
-            payload = _defined_payload(fields)
+            payload = _defined_payload(edit_fields)
             if tier_edit:
                 # D-434 marker: the state the router re-tiered through; the
                 # fold reads it to replay the round bump that voids verdicts.
                 payload["while"] = fresh["state"]
             self._append(principal, key, "item_defined", payload, now)
+            if has_priority:
+                self._apply_priority(principal, key, prio, now)
         return {"key": key}
 
     def set_priority(self, principal, key, n):
@@ -356,17 +371,27 @@ class CreateMixin:
 
     def _priority(self, principal, key, n, now):
         self._require_role(principal, "router")
+        self._checked_priority(n)
+        with self._write():
+            self._apply_priority(principal, key, n, now)
+        return {"key": key, "priority": int(n)}
+
+    @staticmethod
+    def _checked_priority(n):
+        if isinstance(n, bool) or not isinstance(n, int):
+            raise Refused("validation", "priority must be an integer")
+        return int(n)
+
+    def _apply_priority(self, principal, key, n, now):
         # Read and assert inside the transaction: the item may have been
         # cancelled or marked DONE before we take the write lock, and must then
         # get no priority change and no event.  The guarded UPDATE proves the
         # row we read is the one we changed.
-        with self._write():
-            item = self._get_or_refuse(key)
-            self._assert_unlocked(item)
-            cursor = self.conn.execute(
-                "UPDATE items SET priority=?, updated_at=?"
-                " WHERE key=? AND state=? AND epoch=?",
-                (int(n), self._iso(now), key, item["state"], item["epoch"]))
-            self._row_guard(cursor, key, item["state"], item["epoch"])
-            self._append(principal, key, "priority_set", {"priority": int(n)}, now)
-        return {"key": key, "priority": int(n)}
+        item = self._get_or_refuse(key)
+        self._assert_unlocked(item)
+        cursor = self.conn.execute(
+            "UPDATE items SET priority=?, updated_at=?"
+            " WHERE key=? AND state=? AND epoch=?",
+            (int(n), self._iso(now), key, item["state"], item["epoch"]))
+        self._row_guard(cursor, key, item["state"], item["epoch"])
+        self._append(principal, key, "priority_set", {"priority": int(n)}, now)
