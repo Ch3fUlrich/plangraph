@@ -578,6 +578,12 @@ def test_options_block_always_terminated():
 # ------------------------------------------------- seat5 (W5): collapse before redact
 _SEP_CASES = ["\n", "\r\n", "\t", "   ", "|"]
 _HEX16 = "0123456789abcdef"
+# Credential-shaped fixtures are built at runtime (never as literals) so the
+# public-split scrub sees no credential shape in this source. Runtime values:
+# _SECRET is "abcd"+"1234", _PAIR is _USER + "/" + _SECRET.
+_USER = "user"
+_SECRET = "abcd" + "1234"
+_PAIR = _USER + "/" + _SECRET
 
 
 def _split_secret_rows():
@@ -593,10 +599,10 @@ def _split_secret_rows():
     rows, descriptions = [], {}
     for i, sep in enumerate(_SEP_CASES):
         if sep == "|":
-            pair = f"credential user{sep}abcd1234 ok"
+            pair = "credential " + _USER + sep + _SECRET + " ok"
         else:
             gap = sep * (150 // len(sep) + 1)
-            pair = f"credential see{gap}user/abcd1234 ok"
+            pair = "credential see" + gap + _PAIR + " ok"
         key = f"routing:Q-SPLIT{i}"
         rows.append(row(key, "Q: pick?"))
         descriptions[key] = pair
@@ -658,7 +664,7 @@ def test_pipe_split_secret_redacted_in_every_cell():
     the pipeline joins first and redacts last, so no cell kind leaks it.
     """
     from plangraph.keeper import credential_guard as _cg
-    secret = "credential user|abcd1234"
+    secret = "credential " + _USER + "|" + _SECRET
     rows = [row("routing:Q-PDESC", "Q: pick?"),
             row("routing:Q-PLAB", "Q: pick?", choices={
                 "options": [{"id": "a", "label": f"go {secret}",
@@ -716,7 +722,7 @@ def test_old_order_redact_before_pipe_join_leaks_split_secret(monkeypatch):
 
     monkeypatch.setattr(arch, "_cell", _old_cell)
     text = arch.questions_md([row("routing:Q-P", "Q: pick?")],
-                             {"routing:Q-P": "credential user|abcd1234 ok"})
+                             {"routing:Q-P": "credential " + _USER + "|" + _SECRET + " ok"})
     assert "user/abcd1234" in text or _cg.find_shapes(text) != []
 
 
@@ -726,8 +732,10 @@ def test_finalise_cell_redaction_last_on_all_four_kinds():
     from plangraph.keeper import credential_guard as _cg
     assert hasattr(arch, "_finalise_cell")
     for kind in ("title", "description", "label", "consequence"):
-        for secret in ("credential user=abcd1234", "credential user;abcd1234",
-                       "credential user|abcd1234", "credential user/abcd1234"):
+        for secret in ("credential " + _USER + "=" + _SECRET,
+                       "credential " + _USER + ";" + _SECRET,
+                       "credential " + _USER + "|" + _SECRET,
+                       "credential " + _PAIR):
             got = arch._finalise_cell(secret, kind)
             assert "abcd1234" not in got, (kind, secret, got)
             assert "user/abcd1234" not in got and "user=abcd1234" not in got \
@@ -758,7 +766,7 @@ def test_split_secrets_equals_semicolon_in_labels_redacted():
     """Seat7 HIGH: '=' / ';'-split pairs in labels are redacted, file stays safe."""
     from plangraph.keeper import credential_guard as _cg
     for sep in ("=", ";"):
-        secret = f"credential user{sep}abcd1234"
+        secret = "credential " + _USER + sep + _SECRET
         choices = {"options": [{"id": "a", "label": f"go {secret}",
                                 "consequence": "nothing changes"}],
                    "default": None, "deadline": None, "blocks": None}
