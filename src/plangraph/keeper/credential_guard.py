@@ -34,7 +34,7 @@ _EXT_KEYWORDS = re.compile(
     re.IGNORECASE)
 _CRED_PAIR = re.compile(
     r"(?<![A-Za-z0-9_])(?:credential|password|passwd|pwd|login|token|secret|api[_-]?key)"
-    r"\s*[=:]\s*([A-Za-z0-9._~+/=-]{8,})(?![A-Za-z0-9_])",
+    r"[\"']?\s*[=:]\s*[\"']?([A-Za-z0-9._~+/=-]{8,})(?![A-Za-z0-9_])",
     re.IGNORECASE)
 _HEX = re.compile(r"[0-9a-fA-F]{32,}")
 _B64 = re.compile(r"[A-Za-z0-9+/=]{32,}={0,2}")

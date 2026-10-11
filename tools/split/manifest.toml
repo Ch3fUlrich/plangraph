@@ -69,13 +69,13 @@ path = "tests/test_md_sync_plan.py"
 rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tests/test_apply_batch.py"
-rules = ["token-shape"]
+rules = ["token-shape", "credential-shape"]
 [[scrub.allow]]
 path = "tests/test_mcp.py"
-rules = ["token-shape"]
+rules = ["token-shape", "credential-shape"]
 [[scrub.allow]]
 path = "tests/test_keeper_final_a.py"
-rules = ["token-shape", "high-entropy"]
+rules = ["token-shape", "high-entropy", "credential-shape"]
 # These two name the rule/guard in prose and file paths next to the word "credential".
 [[scrub.allow]]
 path = "docs/PUBLIC.md"

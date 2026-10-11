@@ -423,3 +423,29 @@ def test_guard_mask_agree_and_no_trigram_leak():
         if refused and val is not None:
             _no3(msg, val)
             _no3(t, val)
+
+
+def _quoted_value():
+    return "q7Zx" + "9mK2" + "pLw"
+
+
+@pytest.mark.parametrize("template", [
+    'password: "{v}"', "password = '{v}'", '{{"token": "{v}"}}',
+    "secret: '{v}' (rotate)", 'api_key="{v}"'])
+def test_quoted_pair_values_are_refused_and_masked(template):
+    val = _quoted_value()
+    text = template.format(v=val)
+    with pytest.raises(Refused) as exc:
+        guard("note", text)
+    _no3(exc.value.msg, val)
+    masked, count = mask(text)
+    assert count >= 1
+    _no3(masked, val)
+
+
+@pytest.mark.parametrize("text", [
+    'password: "rotate-soon"', "token: 'Configured'",
+    'tokens["w"] = 1'])
+def test_quoted_prose_is_not_refused(text):
+    guard("note", text)
+    assert mask(text) == (text, 0)
