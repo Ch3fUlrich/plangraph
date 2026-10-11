@@ -220,19 +220,20 @@ class CreateMixin:
                          lambda now: self._edit(principal, key, fields, now))
 
     def _edit(self, principal, key, fields, now):
-        item = self._get_or_refuse(key)
-        self._assert_unlocked(item)
         has_priority = isinstance(fields, dict) and "priority" in fields
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
                  if name != "priority"} if has_priority else fields)
         if has_priority:
+            # Same order as ``_priority``: role, value, then the item lookup.
             self._require_role(principal, "router")
             self._checked_priority(prio)
             if not rest:
                 with self._write():
                     self._apply_priority(principal, key, prio, now)
                 return {"key": key, "priority": int(prio)}
+        item = self._get_or_refuse(key)
+        self._assert_unlocked(item)
         self._may_manage(principal, item["project"])
         # D-434: the router's one narrow exception -- the two tier fields alone on
         # a claimed/in-review item; anyone else fails on authorisation, not state.

@@ -160,7 +160,7 @@ def test_mutation_guard_no_priority_in_defined_payload(w):
     assert [t for t, _ in tail] == ["item_defined", "priority_set"]
     assert "priority" not in tail[0][1]
     assert tail[0][1]["fields"] == ["title"]
-    assert set(json.dumps(p, sort_keys=True) for _, p in tail) is not None
+    assert tail[1][1] == {"priority": 3}
 
 
 def test_apply_batch_client_accepts_priority_in_edit_fields():
@@ -171,3 +171,29 @@ def test_apply_batch_client_accepts_priority_in_edit_fields():
                                            "src", "digest")
     assert verb == "edit_definition"
     assert body == {"key": "demo:A", "fields": {"priority": 3}}
+
+
+def test_non_router_priority_edit_on_missing_key_refuses_like_set_priority(w):
+    with pytest.raises(Refused) as via_verb:
+        w.store.set_priority(w.p("l1main"), "demo:NOPE", 3)
+    with pytest.raises(Refused) as via_edit:
+        w.store.edit_definition(w.p("l1main"), "demo:NOPE", {"priority": 3})
+    assert (via_edit.value.code, via_edit.value.msg) == \
+        (via_verb.value.code, via_verb.value.msg)
+    assert via_edit.value.code == "forbidden"
+
+
+def test_router_priority_edit_on_missing_key_matches_set_priority(w):
+    with pytest.raises(Refused) as via_verb:
+        w.store.set_priority(w.p("router"), "demo:NOPE", 3)
+    with pytest.raises(Refused) as via_edit:
+        w.store.edit_definition(w.p("router"), "demo:NOPE", {"priority": 3})
+    assert (via_edit.value.code, via_edit.value.msg) == \
+        (via_verb.value.code, via_verb.value.msg)
+
+
+def test_set_priority_verb_rejects_bool(w):
+    with pytest.raises(Refused) as exc:
+        w.store.set_priority(w.p("router"), "demo:A", True)
+    assert exc.value.code == "validation"
+    assert w.store._item("demo:A")["priority"] == 0
