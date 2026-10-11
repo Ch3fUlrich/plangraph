@@ -67,8 +67,11 @@ def _label(text):
 
 
 def _options(choices):
-    """``Options: a = c; *b {custom-id} = c. Deadline: D`` (the block ``parse_options`` reads back), or ``""``.
+    """``Options: a = c; *b {custom-id} = c. Deadline: D.`` (the block ``parse_options`` reads back), or ``""``.
 
+    The block always ends with its own ``.`` (and ``Deadline: D.`` ends with one
+    too), so the parser's optional trailing ``.`` eats the generator's period,
+    never the keeper text's: a consequence or label ending in ``.`` round-trips.
     An option whose id is not the slug of its label is written ``label {id}`` so the
     id survives a round trip; ``parse_options`` reads the explicit id back, slugging
     only labels without one.  The Kind column carries ``DECISION`` for decisions, so a
@@ -87,9 +90,9 @@ def _options(choices):
         if option.get("consequence"):
             text += " = " + _cell(option["consequence"]).replace(";", ",")
         parts.append(text)
-    block = "Options: " + "; ".join(parts)
+    block = "Options: " + "; ".join(parts) + "."
     if _DATE.fullmatch(str(choices.get("deadline") or "")):
-        block += f". Deadline: {choices['deadline']}"
+        block += f" Deadline: {choices['deadline']}."
     return block
 
 

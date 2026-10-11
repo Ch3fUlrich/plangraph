@@ -340,7 +340,8 @@ def _prop_pool(rng, keywords):
 
 
 def _prop_string(rng, pool, lo=1, hi=3):
-    return (" ".join(rng.choice(pool) for _ in range(rng.randint(lo, hi))) + " ok").strip()
+    text = " ".join(rng.choice(pool) for _ in range(rng.randint(lo, hi)))
+    return text + " ok" + rng.choice(["", ".", "..", "!", ":", " "])
 
 
 def _assert_property_roundtrip(n=_PROP_N, seed=_PROP_SEED, keywords=None):
@@ -400,7 +401,10 @@ def _assert_property_roundtrip(n=_PROP_N, seed=_PROP_SEED, keywords=None):
             arch._cell(rc).replace(";", ",") for _, _, rc in opts], f"{qid} consequences"
         exp_title = "Q: " + mp._title_and_rest(arch._cell(title[3:]).strip())[0]
         assert got.title == exp_title, f"{qid} title {got.title!r} != {exp_title!r}"
-        exp_desc = f"{arch._cell(raw_desc)} — {arch._cell(key)}"
+        # the parser strips " .;:" between the description and the Options block,
+        # so a description trailing in those chars round-trips stripped.
+        exp_step = arch._cell(raw_desc).rstrip(" .;:")
+        exp_desc = f"{exp_step} — {arch._cell(key)}" if exp_step else arch._cell(key)
         assert got.description == exp_desc, f"{qid} description"
 
 
@@ -473,3 +477,66 @@ def test_neutralisation_mutations_are_killed():
     block = arch._options({"options": [{"id": "pick-x", "label": "Pick {x}"}],
                            "default": None, "deadline": None, "blocks": None})
     assert "Pick (x) {pick-x}" in block, block  # id == slug(parens) yet still explicit
+
+
+# ------------------------------------------------- seat4 (W4): trailing period
+def test_trailing_period_consequence_round_trips():
+    """Seat4: a consequence ending in '.' keeps it, with and without a deadline."""
+    for deadline in (None, "2026-10-12"):
+        choices = {"options": [{"id": "a", "label": "enable",
+                                "consequence": "mail goes out."}],
+                   "default": "a", "deadline": deadline, "blocks": None}
+        text = arch.questions_md([row("routing:Q-D", choices=choices)], {})
+        (entry,) = mp.parse_questions(text)
+        assert entry.choices is not None, text
+        assert entry.choices["options"][0].get("consequence") == "mail goes out.", text
+        assert entry.choices.get("deadline") == deadline, text
+        assert entry.choices.get("default") == "a", text
+        line = next(ln for ln in text.splitlines() if "Options:" in ln)
+        if deadline is None:
+            assert line.rstrip().endswith(".. |") or ".. |" in line, line  # text '.' + generator '.'
+        else:
+            assert f"Deadline: {deadline}." in line, line
+
+
+def test_trailing_period_last_label_round_trips():
+    """Seat4: a last label ending in '.' with id == slug keeps it, +/- deadline."""
+    for deadline in (None, "2026-10-12"):
+        choices = {"options": [{"id": "a", "label": "first", "consequence": "x"},
+                               {"id": "done", "label": "Done."}],
+                   "default": None, "deadline": deadline, "blocks": None}
+        text = arch.questions_md([row("routing:Q-L", choices=choices)], {})
+        (entry,) = mp.parse_questions(text)
+        assert entry.choices is not None, text
+        assert [(o["id"], o["label"]) for o in entry.choices["options"]] == [
+            ("a", "first"), ("done", "Done.")], text
+        assert entry.choices.get("deadline") == deadline, text
+        # single-option shape too (the label is still last)
+        solo = {"options": [{"id": "done", "label": "Done."}],
+                "default": None, "deadline": deadline, "blocks": None}
+        solo_text = arch.questions_md([row("routing:Q-L", choices=solo)], {})
+        (solo_entry,) = mp.parse_questions(solo_text)
+        assert solo_entry.choices["options"] == [{"id": "done", "label": "Done."}], solo_text
+
+
+def test_options_block_always_terminated():
+    """Seat4: the generator's own '.' terminates the block, never the keeper text."""
+    bare = arch._options({"options": [{"id": "a", "label": "enable",
+                                        "consequence": "mail goes out."}],
+                          "default": "a", "deadline": None, "blocks": None})
+    assert bare.endswith("."), bare
+    assert bare.endswith("mail goes out.."), bare
+    dated = arch._options({"options": [{"id": "a", "label": "enable",
+                                         "consequence": "mail goes out."}],
+                           "default": "a", "deadline": "2026-10-12", "blocks": None})
+    assert dated.endswith("Deadline: 2026-10-12."), dated
+    assert "mail goes out.. Deadline:" in dated, dated
+    plain = arch._options({"options": [{"id": "a", "label": "enable",
+                                         "consequence": "mail goes out"}],
+                           "default": "a", "deadline": None, "blocks": None})
+    assert plain.endswith("mail goes out."), plain
+    plain_dated = arch._options({"options": [{"id": "a", "label": "enable",
+                                              "consequence": "mail goes out"}],
+                                "default": "a", "deadline": "2026-10-12", "blocks": None})
+    assert plain_dated.endswith("Deadline: 2026-10-12."), plain_dated
+    assert "mail goes out. Deadline:" in plain_dated, plain_dated
