@@ -25,7 +25,6 @@ _OPTIONS_START = re.compile(r"(?:^|\s)Options:", re.IGNORECASE)
 _PARENT_TOKEN = re.compile(
     r"(?:^|\s)Parent:\s*(?P<key>[A-Za-z0-9_-]+(?::[A-Za-z0-9_-]+)?)\s*\.?\s*$",
     re.IGNORECASE)
-_PH = re.compile(r"PH-[A-Z0-9-]+")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # The generic consequence names the router (built without the literal so the
 # committed source carries no fleet-principal string; the runtime output keeps it).
@@ -496,9 +495,6 @@ def main(argv=None):
             parent = parent_cell.strip()
         elif token_parent:
             parent = token_parent
-        else:
-            found = _PH.search(f"{why or ''}\n{step_raw or ''}")
-            parent = found.group(0) if found else None
         deadline = find_deadline(why, step_raw)
         if malformed:
             salv = _salvage_options(step_raw)
@@ -612,10 +608,11 @@ def main(argv=None):
     lines = [header_line, sep]
     for row in proposed:
         cells = [row["prio"], row["id"]]
-        if has_kind:
-            cells.append(row["kind"] if row["kind"] in ("TASK", "ANSWER") else "")
-        if has_parent:
-            cells.append(clean_cell(row["parent"]) if row["parent"] else "")
+        for name in opt_order:
+            if name == "kind":
+                cells.append(row["kind"] if row["kind"] in ("TASK", "ANSWER") else "")
+            elif name == "parent":
+                cells.append(clean_cell(row["parent"]) if row["parent"] else "")
         cells += [row["why"], row["step"], row["where"]]
         lines.append("| " + " | ".join(cells) + " |")
     prop_text = "\n".join(lines) + "\n"

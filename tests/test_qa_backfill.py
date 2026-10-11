@@ -368,6 +368,57 @@ def _balanced(s):
     return not stack
 
 
+def _n_cells(line):
+    parts = line.strip().split("|")[1:]
+    if parts and parts[-1].strip() == "":
+        parts = parts[:-1]
+    return len([p.strip() for p in parts])
+
+
+def test_opt_order_columns_follow_header(tmp_path):
+    cases = [
+        ("| Prio | ID | Parent | Kind | why | step | where |",
+         "| 1 | Q-O1 | routing:G1 | TASK | why here | pick a) x; b) y | host |"),
+        ("| Prio | ID | Kind | Parent | why | step | where |",
+         "| 1 | Q-O2 | TASK | routing:G1 | why here | pick a) x; b) y | host |"),
+        ("| Prio | ID | Kind | why | step | where |",
+         "| 1 | Q-O3 | TASK | why here | pick a) x; b) y | host |"),
+        ("| Prio | ID | Parent | why | step | where |",
+         "| 1 | Q-O4 | routing:G1 | why here | pick a) x; b) y | host |"),
+        ("| Prio | ID | why | step | where |",
+         "| 1 | Q-O5 | why here | pick a) x; b) y | host |"),
+    ]
+    for i, (header, row) in enumerate(cases):
+        n = _n_cells(header)
+        sep = "|" + "|".join(["---"] * n) + "|"
+        body = header + "\n" + sep + "\n" + row + "\n"
+        want = mp.parse_questions(body)
+        assert len(want) == 1
+        q = write_q(tmp_path, body, name=f"QO{i}.md")
+        out = tmp_path / f"out{i}"
+        assert run(q, out).returncode == 0
+        prop, _ = read_out(out)
+        lines = [l for l in prop.splitlines() if l.strip().startswith("|")]
+        assert len(lines) >= 2
+        assert _n_cells(lines[0]) == n
+        assert _n_cells(lines[2]) == n
+        (got,) = mp.parse_questions(prop)
+        assert got.wait == want[0].wait, (header, got.wait, want[0].wait)
+        assert got.parent == want[0].parent, (header, got.parent, want[0].parent)
+
+
+def test_incidental_ph_token_not_parent(tmp_path):
+    q = write_q(tmp_path, table(["| 1 | Q-PH | reuse the PH-AUDIT conventions | just do the thing | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "parent: none" in rev
+    assert "Parent:" not in prop
+    assert "PH-AUDIT" in prop
+    (e,) = mp.parse_questions(prop)
+    assert e.parent is None
+
+
 def test_properties_over_10_rows(tmp_path):
     rows = [
         "| 1 | Q-P01 | why | pick a) enable mail; b) keep disabled | host |",
