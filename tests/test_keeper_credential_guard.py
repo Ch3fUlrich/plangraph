@@ -28,15 +28,16 @@ BAD = [f"login with {SECRET} on the box", f"password: {SECRET}",
        f"x{' ' * 100}{SECRET} login"]
 OK = ["plain text a/b login", "no keyword svc/Zq9xk2LmPw",
       "login " + "x" * 200 + " svcacct/Zq9xk2LmPw",
-      "svcacct/Zq9xk2LmPw " + "x" * 200 + " login"]
-# D-388: NO exemptions. URLs, paths, extensions and brackets do not hide a pair;
-# the accepted false positive is that authors rephrase paths/URLs near credential words.
+      "svcacct/Zq9xk2LmPw " + "x" * 200 + " login",
+      "password docs/setup_guide.md"]
+# D-1090 (supersedes D-388): repo-path-like tokens are exempt. URLs, brackets
+# and secret-looking segments do NOT hide a pair, so those stay BAD.
 BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "read svc/Zq9xk2LmPw.md for the password",
         "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw",
         "login ./svcacct/Secret123", "login /svcacct/Secret123",
         "login {src/secret1234}", "login <data/secret1234>",
-        "password docs/setup_guide.md", "login docs/Zq9xk2LmPw",
+        "login docs/Zq9xk2LmPw",
         "login src/plangraph/Zq9xk2LmPw", "login tools/Zq9xk2LmPw",
         "login ../svcacct/Secret123", "login `docs/Zq9xk2LmPw`",
         "login (src/Zq9xk2LmPw)",
@@ -83,20 +84,20 @@ def test_import_path_refuses_too(w):
                                              defn("G2", ["X"], kind="goal")])
 
 
-@pytest.mark.parametrize("text", ["login ./svcacct/Secret123",
-                                  "password docs/setup_guide.md"])
+@pytest.mark.parametrize("text", ["login ./svcacct/Secret123"])
 def test_path_shaped_text_is_refused_without_echo(w, text):
     with pytest.raises(Refused) as exc:
         w.store.create_items(w.p("router"), [defn("X", note=text),
                                              defn("G2", ["X"], kind="goal")])
     assert exc.value.code == "validation" and "note" in exc.value.msg
-    assert "Secret123" not in str(exc.value) and "setup_guide" not in str(exc.value)
+    assert "Secret123" not in str(exc.value) and "svcacct" not in str(exc.value)
 
 
 def test_five_char_segment_is_not_a_shape():
-    # the shape needs 6+ word chars after the slash: docs/setup.md is not one
+    # the shape needs 6+ word chars after the slash: docs/setup.md is not one;
+    # D-1090: docs/setup_guide.md is an exempt repo path near a keyword.
     assert not find_shapes("password docs/setup.md")
-    assert find_shapes("password docs/setup_guide.md")
+    assert not find_shapes("password docs/setup_guide.md")
 
 
 def test_ordinary_text_still_creates(w):

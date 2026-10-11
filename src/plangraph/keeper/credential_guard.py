@@ -2,10 +2,15 @@ r"""D-374: keep credential-shaped text out of item definitions and rendered page
 
 A ``word/secretish`` token (``\w+/\w{6,}``) within 120 characters of
 ``credential|password|passwd|pwd|login`` is how a pasted ``user/password`` pair
-looks.  ``create``/``edit``/``import`` refuse it (naming the field, never
-echoing the value) and ``pg render`` masks any that got in as ``[redacted]``.
-There are NO exemptions (D-388): a URL, a path or a ``.ext`` does not hide a
-pair, so authors rephrase paths and URLs that sit near a credential word.
+looks.  ``create``/``edit``/``import`` refuse it (naming the item key, the
+field and the character span, never echoing the value) and ``pg render`` masks
+any that got in as ``[redacted]``.
+
+D-1090 (supersedes the D-388 "no path exemptions" rule): repo-path-like
+strings are NOT credentials.  A match whose whole whitespace-delimited token
+is path-like (known file extension with clean segments, or a multi-slash
+lowercase path) with no ``=``/``:`` pair and no secret-looking segment is
+exempt from both ``guard()`` and ``mask()``.
 """
 from __future__ import annotations
 
@@ -19,31 +24,230 @@ _NEAR = 120
 #: the text fields a create/edit/import carries (``description`` is its own column).
 GUARDED_FIELDS = ("title", "note", "done_criteria", "description")
 
+_EXT_KEYWORDS = re.compile(
+    r"credential|password|passwd|pwd|login|token|secret|api[_-]?key",
+    re.IGNORECASE)
+_CRED_PAIR = re.compile(
+    r"(?<![A-Za-z0-9_])(?:credential|password|passwd|pwd|login|token|secret|api[_-]?key)"
+    r"\s*[=:]\s*([A-Za-z0-9._~+/=-]{8,})(?![A-Za-z0-9_])",
+    re.IGNORECASE)
+_HEX = re.compile(r"[0-9a-fA-F]{32,}")
+_B64 = re.compile(r"[A-Za-z0-9+/=]{32,}={0,2}")
+_PEM = re.compile(r"-----BEGIN [^-]*PRIVATE KEY-----")
+
+_EXTENSIONS = frozenset([
+    "md", "yml", "yaml", "py", "json", "toml", "txt", "sh", "cfg", "ini",
+    "conf", "service", "timer", "js", "ts", "html", "css", "sql", "log",
+    "csv", "lock", "rst"])
+_SEG1 = re.compile(r"[A-Za-z0-9._-]+")
+_SEG2 = re.compile(r"[a-z0-9._-]+")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+class _Hit:
+    """A minimal ``re.Match``-like span (``start()``/``end()``/``span()``)."""
+
+    __slots__ = ("_s", "_e")
+
+    def __init__(self, s, e):
+        self._s = int(s)
+        self._e = int(e)
+
+    def start(self, group=None):
+        return self._s
+
+    def end(self, group=None):
+        return self._e
+
+    def span(self, group=None):
+        return (self._s, self._e)
+
+    def __repr__(self):
+        return f"_Hit({self._s}, {self._e})"
+
+
+def _strip_token(token):
+    return token.lstrip("./([<{`'\"").rstrip(".,;)]}>`'\"")
+
+
+def _has_upper(s):
+    return any(c.isupper() for c in s)
+
+
+def _has_lower(s):
+    return any(c.islower() for c in s)
+
+
+def _has_digit(s):
+    return any(c.isdigit() for c in s)
+
+
+def _secret_segment(seg):
+    stem = seg.rsplit(".", 1)[0] if "." in seg else seg
+    for cand in (seg, stem):
+        if len(cand) >= 8 and _has_upper(cand) and _has_lower(cand) \
+                and _has_digit(cand):
+            return True
+    if "-" in stem or "_" in stem:
+        return False
+    if len(stem) >= 12 and re.fullmatch(r"[A-Za-z0-9+/=]+", stem):
+        letters = any(c.isalpha() for c in stem)
+        digits = any(c.isdigit() for c in stem)
+        upper = _has_upper(stem)
+        lower = _has_lower(stem)
+        if (letters and digits) or (upper and lower):
+            return True
+    return False
+
+
+def _is_exempt_token(raw):
+    token = _strip_token(raw)
+    if not token or "/" not in token:
+        return False
+    if "=" in token:
+        return False
+    if "://" in token:
+        return False
+    if ":" in token:
+        return False
+    segments = token.split("/")
+    if any(not s for s in segments):
+        return False
+    # Branch 1: known file extension, clean segments, no secret segment.
+    if "." in segments[-1]:
+        ext = segments[-1].rsplit(".", 1)[-1].lower()
+        if ext in _EXTENSIONS and all(_SEG1.fullmatch(s) for s in segments):
+            if not any(_secret_segment(s) for s in segments):
+                return True
+    # Branch 2: >= 2 slashes, all lowercase, no letter+digit segment.
+    if token.count("/") >= 2 and all(_SEG2.fullmatch(s) for s in segments):
+        for s in segments:
+            if _DATE.fullmatch(s):
+                continue
+            if len(s) >= 8 and any(c.isalpha() and c.islower() for c in s) \
+                    and _has_digit(s):
+                return False
+        return True
+    return False
+
+
+def _token_of(text, pos):
+    start = pos
+    while start > 0 and text[start - 1] not in " \t\n\r\f\v":
+        start -= 1
+    end = pos
+    while end < len(text) and text[end] not in " \t\n\r\f\v":
+        end += 1
+    return text[start:end]
+
+
+def _shape_spans(text):
+    words = [m.span() for m in _WORD.finditer(text)]
+    out = []
+    for m in _SHAPE.finditer(text):
+        if not any(a <= m.end() + _NEAR and b >= m.start() - _NEAR
+                   for a, b in words):
+            continue
+        if _is_exempt_token(_token_of(text, m.start())):
+            continue
+        out.append((m.start(), m.end()))
+    return out
+
+
+def _pair_spans(text):
+    out = []
+    for m in _CRED_PAIR.finditer(text):
+        start, end = m.start(1), m.end(1)
+        val = text[start:end]
+        if "[" in val or "]" in val:
+            continue
+        rest = text[end:].lstrip()[:1]
+        if rest in ("+", "-", "*", "/", "(", "["):
+            continue
+        if _is_exempt_token(val):
+            continue
+        out.append((start, end))
+    return out
+
+
+def _run_spans(text):
+    out = []
+    keys = [m.start() for m in _EXT_KEYWORDS.finditer(text)]
+    if not keys:
+        return out
+    for m in _HEX.finditer(text):
+        if any(k <= m.start() <= k + 60 for k in keys):
+            if _is_exempt_token(_token_of(text, m.start())):
+                continue
+            out.append((m.start(), m.end()))
+    for m in _B64.finditer(text):
+        raw = m.group(0)
+        if len(raw) < 32:
+            continue
+        core = raw.strip("=")
+        if len(set(core)) < 4:
+            continue
+        if not ((_has_digit(core) and any(c.isalpha() for c in core))
+                or (_has_upper(core) and _has_lower(core))):
+            continue
+        if any(k <= m.start() <= k + 60 for k in keys):
+            if _is_exempt_token(_token_of(text, m.start())):
+                continue
+            out.append((m.start(), m.end()))
+    return out
+
+
+def _pem_spans(text):
+    return [(m.start(), m.end()) for m in _PEM.finditer(text)]
+
+
+def _all_spans(text):
+    if not isinstance(text, str) or not text:
+        return []
+    spans = _shape_spans(text) + _pair_spans(text) + _run_spans(text) \
+        + _pem_spans(text)
+    spans.sort()
+    merged = []
+    for s, e in spans:
+        if e <= s:
+            continue
+        if merged and s <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], e)
+        else:
+            merged.append([s, e])
+    return [(s, e) for s, e in merged]
+
 
 def find_shapes(text):
     """The credential-shaped matches in *text* (empty when there are none)."""
-    if not isinstance(text, str):
-        return []
-    words = [m.span() for m in _WORD.finditer(text)]
-    return [m for m in _SHAPE.finditer(text)
-            if any(a <= m.end() + _NEAR and b >= m.start() - _NEAR
-                   for a, b in words)]
+    return [_Hit(s, e) for s, e in _all_spans(text)]
 
 
-def guard(field, text):
+def guard(field, text, key=None):
     """Refuse credential-shaped *text* of *field*; the value is never echoed."""
-    if find_shapes(text):
+    hits = _all_spans(text) if isinstance(text, str) else []
+    if hits:
+        s, e = hits[0]
+        n = e - s
+        masked = "*" * min(n, 8)
+        if key:
+            raise Refused("validation",
+                          f"item {key}: {field} looks like it contains a "
+                          f"credential at chars {s}-{e} ({n} chars, masked "
+                          f"{masked}); remove or reword it")
         raise Refused("validation",
-                      f"{field} looks like it contains a credential "
-                      "(a word/secret pair next to a credential keyword); "
-                      "remove it")
+                      f"{field} looks like it contains a credential at chars "
+                      f"{s}-{e} ({n} chars, masked {masked}); remove or "
+                      "reword it")
 
 
 def mask(text):
     """``(text with each credential-shaped match as [redacted], count)``."""
-    hits = find_shapes(text)
-    for match in reversed(hits):
-        text = text[:match.start()] + "[redacted]" + text[match.end():]
+    hits = _all_spans(text) if isinstance(text, str) else []
+    if not isinstance(text, str):
+        return text, 0
+    for s, e in reversed(hits):
+        text = text[:s] + "[redacted]" + text[e:]
     return text, len(hits)
 
 

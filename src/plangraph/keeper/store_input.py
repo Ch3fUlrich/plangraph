@@ -24,10 +24,10 @@ class InputMixin:
     """``_check_text``, ``_normalise`` and ``_qualify`` for :class:`Store`."""
 
     @staticmethod
-    def _check_text(fields):
+    def _check_text(fields, key=None):
         """Refuse oversize, non-string or credential-shaped text, naming the field."""
         for field in GUARDED_FIELDS:
-            guard(field, fields.get(field))
+            guard(field, fields.get(field), key)
         for field, cap in _TEXT_CAPS.items():
             value = fields.get(field)
             if value is None:
@@ -42,9 +42,10 @@ class InputMixin:
             check_wait(fields["wait"])
 
     def _normalise(self, raw):
-        self._check_text(raw)
         project = raw.get("project")
         identifier = raw.get("id")
+        pre_key = f"{project}:{identifier}" if project and identifier else None
+        self._check_text(raw, pre_key)
         if not project or not identifier:
             raise Refused("validation", "each item needs project and id")
         key = f"{project}:{identifier}"

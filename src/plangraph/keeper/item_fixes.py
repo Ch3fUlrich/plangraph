@@ -44,7 +44,7 @@ def check_fix_limit(items, affected):
                           f" (max {FIXES_MAX}); escalate instead")
 
 
-def check_error_ref(ref):
+def check_error_ref(ref, key=None):
     """Return the normalised error record or refuse ``validation`` naming the field."""
     if not isinstance(ref, dict):
         raise Refused("validation", "error evidence ref must be a mapping")
@@ -62,7 +62,7 @@ def check_error_ref(ref):
             raise Refused("validation", f"error evidence {name} must be a string")
         if len(value) > cap:
             raise Refused("validation", f"error evidence {name} exceeds {cap} characters")
-        guard(f"error evidence {name}", value)
+        guard(f"error evidence {name}", value, key)
         out[name] = value
     return out
 

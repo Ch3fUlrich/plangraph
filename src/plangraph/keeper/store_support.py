@@ -159,7 +159,7 @@ class SupportMixin:
             if done is not None:
                 return done
         if kind == "error":  # always unverified, no I/O: never injected
-            ref = check_error_ref(ref)
+            ref = check_error_ref(ref, item["key"])
             return ErrorRecordVerifier().verify(item, ref, None)
         verifier = self.verifiers.get(kind)
         if verifier is None:
