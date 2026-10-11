@@ -56,6 +56,17 @@ rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tests/test_evidence_*.py"
 rules = ["credential-shape"]
+# PG-LE-GUARD-KEY: the `token: <value>` pair is now a detected shape; these hold the one reviewed
+# synthetic demo value (the same one tools/split/gitleaks.toml names).
+[[scrub.allow]]
+path = "tests/fixtures/md_sync/sample_questions.md"
+rules = ["credential-shape"]
+[[scrub.allow]]
+path = "tests/test_md_sync_parse.py"
+rules = ["credential-shape"]
+[[scrub.allow]]
+path = "tests/test_md_sync_plan.py"
+rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tests/test_apply_batch.py"
 rules = ["token-shape"]
