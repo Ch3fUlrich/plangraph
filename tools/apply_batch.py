@@ -39,6 +39,7 @@ OP_ALLOWED = {
     "set_kind": {"op", "key", "kind"},
 }
 TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops"}
+PIN_MISMATCH_MARK = "sha256 mismatch"
 LEGACY_STATES = ("claimed", "in_review")
 # \Z ensures end of string; [^:@/\s] excludes whitespace (including newline)
 KEY_RE = re.compile(r"^[^:@/\s]+:[^:@/\s]+\Z")
@@ -303,7 +304,7 @@ def main(argv=None, out=None, err=None):
         except OSError as exc:
             raise BatchError(f"cannot read source file: {exc}") from None
         if digest != data["source_sha256"]:
-            line(f"source {source}: sha256 mismatch "
+            line(f"source {source}: {PIN_MISMATCH_MARK} "
                  f"(refusing before any call)")
             return 1
         # Read and validate token early so token errors exit 2
