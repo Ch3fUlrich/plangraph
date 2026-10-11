@@ -280,3 +280,146 @@ def test_guard_key_none_names_field():
     assert "note" in exc.value.msg
     a, b, n, stars = _parse(exc.value.msg)
     assert stars == "*" * min(n, 8)
+
+
+# -- PG-LE-GUARD-KEY fix: F1/F2/F3 regression cases (fragments only) --
+def _pair_path_tok():
+    return "to" + "ken" + "=" + "/".join(["docs", "setup_guide.md"])
+
+
+def _pair_path_pwd():
+    return "pass" + "word" + ": " + _docker()
+
+
+def _pair_path_sec():
+    return "sec" + "ret" + ": " + "/".join(["docs", "a", "b.md"])
+
+
+def _pair_lookahead():
+    return "sec" + "ret" + ": " + "Ab" + "Cde" + "fghij12" + " (rotate)"
+
+
+def _prose_texts():
+    return [
+        "To" + "ken" + ": " + "refresh" + "-after-expiry",
+        "sec" + "ret" + ": " + "rotate" + "-quarterly",
+        "To" + "ken" + ": " + "Con" + "figured",
+        "pass" + "word" + ": " + "Con" + "figuration",
+    ]
+
+
+def _pair_secret_texts():
+    return [
+        "to" + "ken" + "=" + "Ab" + "Cd" + "1234" + "Efgh",
+        "sec" + "ret" + ": " + "kJ" + "8sd" + "9Qw" + "2xLm",
+        "ap" + "i_" + "ke" + "y" + "=" + "Qx" + "7Zp" + "Lm2" + "vB9r",
+        "to" + "ken" + "=" + "Ab" + "Cd" + "EfGh" + "IjKl",
+    ]
+
+
+def _pair_secret_vals():
+    return [
+        "Ab" + "Cd" + "1234" + "Efgh",
+        "kJ" + "8sd" + "9Qw" + "2xLm",
+        "Qx" + "7Zp" + "Lm2" + "vB9r",
+        "Ab" + "Cd" + "EfGh" + "IjKl",
+    ]
+
+
+def _chunk_bad_texts():
+    h2 = "hunt" + "er2"
+    s1234 = "secr" + "et1234"
+    return [
+        _kw_login() + " " + "/".join(["a", "b", h2]),
+        _kw_login() + " " + "/".join(["a", "b", h2 + ".m" + "d"]),
+        _kw_login() + " " + "/".join(["a", "b", s1234 + ".m" + "d"]),
+    ]
+
+
+def _chunk_bad_vals():
+    h2 = "hunt" + "er2"
+    s1234 = "secr" + "et1234"
+    return [h2, h2, s1234]
+
+
+def _chunk_pass_text():
+    return _kw_password() + " " + "/".join(
+        ["Server", "Media", "Downloader" + "_v2", "docker-compose.yml"])
+
+
+def test_pair_path_values_still_refused():
+    for text in (_pair_path_tok(), _pair_path_pwd(), _pair_path_sec(),
+                 _pair_lookahead()):
+        assert find_shapes(text), text
+        with pytest.raises(Refused):
+            guard("note", text)
+        t, c = mask(text)
+        assert c == 1 and "[redacted]" in t
+
+
+def test_pair_prose_values_pass():
+    for text in _prose_texts():
+        assert not find_shapes(text), text
+        guard("note", text)
+        t, c = mask(text)
+        assert c == 0 and t == text
+
+
+def test_pair_digit_or_interior_upper_refused():
+    for text in _pair_secret_texts():
+        assert find_shapes(text), text
+        with pytest.raises(Refused):
+            guard("note", text)
+        t, c = mask(text)
+        assert c >= 1 and "[redacted]" in t
+
+
+def test_chunk_secret_refused_and_paths_pass():
+    for text in _chunk_bad_texts():
+        assert find_shapes(text), text
+        with pytest.raises(Refused):
+            guard("note", text)
+    assert not find_shapes(_chunk_pass_text())
+    guard("note", _chunk_pass_text())
+    t, c = mask(_chunk_pass_text())
+    assert c == 0
+    assert not find_shapes(_kw_login() + " " + _docker())
+    assert not find_shapes(_kw_login() + " " + _op1())
+
+
+def test_guard_mask_agree_and_no_trigram_leak():
+    cases = [
+        (_pair_path_tok(), True, None),
+        (_pair_path_pwd(), True, None),
+        (_pair_path_sec(), True, None),
+        (_pair_lookahead(), True, "Ab" + "Cde" + "fghij12"),
+    ]
+    for text, val in zip(_pair_secret_texts(), _pair_secret_vals()):
+        cases.append((text, True, val))
+    chunk_texts = _chunk_bad_texts()
+    chunk_vals = _chunk_bad_vals()
+    for i, text in enumerate(chunk_texts):
+        # "secr"+"et1234" shares trigrams (e.g. "cre") with the refusal
+        # boilerplate ("credential"), so the no-trigram leak check applies
+        # to the hunter2 pair and the pair secrets, not to it; agreement
+        # is still checked for every case.
+        val = chunk_vals[i] if i < 2 else None
+        cases.append((text, True, val))
+    for text in _prose_texts():
+        cases.append((text, False, None))
+    cases.append((_chunk_pass_text(), False, None))
+    for text, refused, val in cases:
+        try:
+            guard("note", text)
+            was_refused = False
+            msg = ""
+        except Refused as exc:
+            was_refused = True
+            msg = str(exc) + exc.msg
+        assert was_refused == refused, text
+        t, c = mask(text)
+        assert (c >= 1) == refused, text
+        assert ("[redacted]" in t) == refused, text
+        if refused and val is not None:
+            _no3(msg, val)
+            _no3(t, val)

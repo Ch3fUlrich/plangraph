@@ -11,6 +11,11 @@ strings are NOT credentials.  A match whose whole whitespace-delimited token
 is path-like (known file extension with clean segments, or a multi-slash
 lowercase path) with no ``=``/``:`` pair and no secret-looking segment is
 exempt from both ``guard()`` and ``mask()``.
+
+Accepted limits: lowercase letters-only passphrase paths with >=2 slashes,
+CamelCase alphabetic file names, and single-slash lowercase pairs without
+a known extension are judged as before / not detectable as credentials;
+``src/my_module`` stays refused as a single-slash lowercase pair.
 """
 from __future__ import annotations
 
@@ -82,21 +87,39 @@ def _has_digit(s):
     return any(c.isdigit() for c in s)
 
 
+def _has_interior_upper(s):
+    for i in range(1, len(s)):
+        if s[i].isupper() and (s[i - 1].islower() or s[i - 1].isdigit()):
+            return True
+    return False
+
+
 def _secret_segment(seg):
     stem = seg.rsplit(".", 1)[0] if "." in seg else seg
-    for cand in (seg, stem):
-        if len(cand) >= 8 and _has_upper(cand) and _has_lower(cand) \
-                and _has_digit(cand):
+    chunks = re.split(r"[-_.]", stem)
+    date_prefix = (
+        len(chunks) >= 3 and re.fullmatch(r"[0-9]{4}", chunks[0])
+        and re.fullmatch(r"[0-9]{2}", chunks[1])
+        and re.fullmatch(r"[0-9]{2}", chunks[2]))
+    for idx, chunk in enumerate(chunks):
+        if not chunk:
+            continue
+        if date_prefix and idx < 3:
+            continue
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", chunk):
+            continue
+        letters = any(c.isalpha() for c in chunk)
+        digits = any(c.isdigit() for c in chunk)
+        if len(chunk) >= 6 and letters and digits:
             return True
-    if "-" in stem or "_" in stem:
-        return False
-    if len(stem) >= 12 and re.fullmatch(r"[A-Za-z0-9+/=]+", stem):
-        letters = any(c.isalpha() for c in stem)
-        digits = any(c.isdigit() for c in stem)
-        upper = _has_upper(stem)
-        lower = _has_lower(stem)
-        if (letters and digits) or (upper and lower):
+        if len(chunk) >= 8 and _has_upper(chunk) and _has_lower(chunk) \
+                and _has_digit(chunk):
             return True
+        if len(chunk) >= 12 and re.fullmatch(r"[A-Za-z0-9+/=]+", chunk):
+            upper = _has_upper(chunk)
+            lower = _has_lower(chunk)
+            if (letters and digits) or (upper and lower):
+                return True
     return False
 
 
@@ -119,13 +142,12 @@ def _is_exempt_token(raw):
         if ext in _EXTENSIONS and all(_SEG1.fullmatch(s) for s in segments):
             if not any(_secret_segment(s) for s in segments):
                 return True
-    # Branch 2: >= 2 slashes, all lowercase, no letter+digit segment.
+    # Branch 2: >= 2 slashes, all lowercase, no secret-looking chunk.
     if token.count("/") >= 2 and all(_SEG2.fullmatch(s) for s in segments):
         for s in segments:
             if _DATE.fullmatch(s):
                 continue
-            if len(s) >= 8 and any(c.isalpha() and c.islower() for c in s) \
-                    and _has_digit(s):
+            if _secret_segment(s):
                 return False
         return True
     return False
@@ -161,11 +183,19 @@ def _pair_spans(text):
         val = text[start:end]
         if "[" in val or "]" in val:
             continue
+        # Operator rule: a key=value/credential pair is never path-exempt,
+        # so there is no _is_exempt_token skip here.  A trailing "[" still
+        # exempts index access such as a tokens dict subscript; every other
+        # post-value lookahead skip is gone, so a trailing "(rotate)"
+        # no longer exempts the pair.  A slash-bearing pair
+        # value is always refused; any other pair value must be secret-like
+        # (a digit or an interior uppercase letter) to count.
         rest = text[end:].lstrip()[:1]
-        if rest in ("+", "-", "*", "/", "(", "["):
+        if rest == "[":
             continue
-        if _is_exempt_token(val):
-            continue
+        if "/" not in val:
+            if not (_has_digit(val) or _has_interior_upper(val)):
+                continue
         out.append((start, end))
     return out
 
