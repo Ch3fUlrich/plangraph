@@ -880,3 +880,40 @@ def test_malformed_snapshot_data_returns_2_with_status(tmp_path, monkeypatch):
     assert target.read_text(encoding="utf-8") == "keep me"
     doc = json.loads(status.read_text(encoding="utf-8"))
     assert doc["error"] is not None and doc["written"] is False
+
+
+def test_write_atomic_chmod_failure_keeps_old_file(tmp_path, monkeypatch):
+    """W9 (judge HOLD): chmod happens on the temp BEFORE the atomic replace.
+
+    If the mode set fails, the tmp is removed, the old file (content + mode)
+    stays untouched, and the error surfaces.
+    """
+    import os as _os
+
+    target = tmp_path / "QUESTIONS.md"
+    target.write_text("keep me", encoding="utf-8")
+    _os.chmod(target, 0o644)
+    before_mode = stat.S_IMODE(_os.stat(target).st_mode)
+
+    def boom_chmod(*_a, **_k):
+        raise PermissionError("chmod gone")
+
+    monkeypatch.setattr(_os, "chmod", boom_chmod)
+    if hasattr(_os, "fchmod"):
+        monkeypatch.setattr(_os, "fchmod", boom_chmod)
+    with pytest.raises(PermissionError):
+        arch._write_atomic(str(target), "new content")
+    assert target.read_text(encoding="utf-8") == "keep me"
+    assert stat.S_IMODE(_os.stat(target).st_mode) == before_mode == 0o644
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".questions.")] == []
+
+
+def test_write_atomic_success_keeps_existing_0644_mode(tmp_path):
+    """W9: a successful write keeps an existing 0644 mode, no temp left."""
+    target = tmp_path / "QUESTIONS.md"
+    target.write_text("old", encoding="utf-8")
+    os.chmod(target, 0o644)
+    arch._write_atomic(str(target), "new content")
+    assert target.read_text(encoding="utf-8") == "new content"
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o644
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".questions.")] == []

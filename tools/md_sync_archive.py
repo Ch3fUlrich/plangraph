@@ -209,9 +209,9 @@ def _write_atomic(path, text):
     try:
         with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as handle:
             handle.write(text)
-        os.replace(tmp, path)
         if old_mode is not None:
-            os.chmod(path, old_mode)
+            os.chmod(tmp, old_mode)
+        os.replace(tmp, path)
     except Exception:
         try:
             os.unlink(tmp)
