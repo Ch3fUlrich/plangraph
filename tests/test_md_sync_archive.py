@@ -540,3 +540,73 @@ def test_options_block_always_terminated():
                                 "default": "a", "deadline": "2026-10-12", "blocks": None})
     assert plain_dated.endswith("Deadline: 2026-10-12."), plain_dated
     assert "mail goes out. Deadline:" in plain_dated, plain_dated
+
+
+# ------------------------------------------------- seat5 (W5): collapse before redact
+_SEP_CASES = ["\n", "\r\n", "\t", "   "]
+_HEX16 = "0123456789abcdef"
+
+
+def _split_secret_rows():
+    """One row per separator x field: a whitespace-gapped secret in each cell kind.
+
+    Each separator gets a >120-char run between the guard keyword and the pair
+    (``credential_guard`` only links a pair within 120 chars, so redacting the
+    raw text misses it) plus the reported shape (a 48-hex secret straddling one
+    separator) in the description.
+    """
+    rows, descriptions = [], {}
+    for i, sep in enumerate(_SEP_CASES):
+        gap = sep * (150 // len(sep) + 1)
+        pair = f"credential see{gap}user/abcd1234 ok"
+        key = f"routing:Q-SPLIT{i}"
+        rows.append(row(key, "Q: pick?"))
+        descriptions[key] = pair
+        lab_key = f"routing:Q-SLAB{i}"
+        rows.append(row(lab_key, "Q: pick?", choices={
+            "options": [{"id": "a", "label": f"go {pair}",
+                         "consequence": "nothing changes"}],
+            "default": None, "deadline": None, "blocks": None}))
+        descriptions[lab_key] = "plain"
+        con_key = f"routing:Q-SCON{i}"
+        rows.append(row(con_key, "Q: pick?", choices={
+            "options": [{"id": "a", "label": "go",
+                         "consequence": f"{pair} done"}],
+            "default": None, "deadline": None, "blocks": None}))
+        descriptions[con_key] = "plain"
+        hex_key = f"routing:Q-SHEX{i}"
+        rows.append(row(hex_key, "Q: pick?"))
+        descriptions[hex_key] = f"token {_HEX16 * 2}{sep}{_HEX16} end"
+    return rows, descriptions
+
+
+def _assert_split_secrets_redacted():
+    import re as _re3
+
+    from plangraph.keeper import credential_guard as _cg
+    rows, descriptions = _split_secret_rows()
+    text = arch.questions_md(rows, descriptions)
+    assert "[redacted]" in text
+    assert "user/abcd1234" not in text
+    assert _cg.find_shapes(text) == []
+    assert _re3.search(r"[0-9a-fA-F]{32,}", text) is None
+
+
+def test_split_secrets_redacted_after_collapse():
+    """Seat5: a secret gapped by newline/CRLF/tab/spaces is redacted in the file."""
+    _assert_split_secrets_redacted()
+
+
+def test_old_order_redact_before_collapse_misses_gapped_secrets(monkeypatch):
+    """Seat5 mutation: redacting before the whitespace collapse leaks the gapped pair."""
+    import md_sync_parse as _mp
+
+    from plangraph.keeper import credential_guard as _cg
+
+    def _old_cell(text):
+        redacted = _cg.mask(_mp.redact(str(text or ""))[0])[0]
+        return arch._neutralise_keywords(" ".join(redacted.replace("|", "/").split()))
+
+    monkeypatch.setattr(arch, "_cell", _old_cell)
+    with pytest.raises(AssertionError):
+        _assert_split_secrets_redacted()

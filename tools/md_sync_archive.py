@@ -55,9 +55,10 @@ def _neutralise_keywords(text):
 
 
 def _cell(text):
-    """One table-safe line: credentials masked, whitespace collapsed, no ``|``."""
-    text = credential_guard.mask(mp.redact(str(text or ""))[0])[0]
-    return _neutralise_keywords(" ".join(text.replace("|", "/").split()))
+    """One table-safe line: whitespace collapsed, then credentials masked, no ``|``."""
+    collapsed = " ".join(str(text or "").split())
+    redacted = credential_guard.mask(mp.redact(collapsed)[0])[0]
+    return _neutralise_keywords(redacted.replace("|", "/"))
 
 
 def _label(text):
