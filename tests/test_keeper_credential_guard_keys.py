@@ -456,6 +456,31 @@ def test_split_short_mixed_chunks_are_one_secret(text):
     assert mask(text)[1] >= 1
 
 
+_NUMRUN = [_W + "docs/incidents/" + "AbCdEf" + "-123456.md",
+           _W + "docs/incidents/" + "abc" + "-123456.md"]
+
+
+@pytest.mark.parametrize("text", _NUMRUN)
+def test_bare_number_run_chunk_is_secret_like(text):
+    with pytest.raises(Refused):
+        guard("note", text)
+    assert mask(text)[1] >= 1
+
+
+def test_find_shapes_hit_exposes_group_text():
+    text = "pass" + "word user/" + "Zq9xk2" + "LmPw"
+    hits = find_shapes(text)
+    assert hits and hits[0].group() == text[hits[0].start():hits[0].end()]
+    assert hits[0].group(0) == hits[0].group()
+
+
+@pytest.mark.parametrize("pair", ["tok" + "en=hunt" + "er2xyz", "sec" + "ret: abc" + "12345"])
+def test_pair_value_with_digit_but_no_capital_is_refused(pair):
+    with pytest.raises(Refused):
+        guard("note", pair)
+    assert mask(pair)[1] >= 1
+
+
 @pytest.mark.parametrize("text", [
     "login docs/runbook/docker-compose-v2.yml",
     "password server/media/k3s-v1/notes.md",

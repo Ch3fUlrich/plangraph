@@ -54,11 +54,15 @@ _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 class _Hit:
     """A minimal ``re.Match``-like span (``start()``/``end()``/``span()``)."""
 
-    __slots__ = ("_s", "_e")
+    __slots__ = ("_s", "_e", "_text")
 
-    def __init__(self, s, e):
+    def __init__(self, s, e, text=""):
         self._s = int(s)
         self._e = int(e)
+        self._text = text
+
+    def group(self, group=0):
+        return self._text[self._s:self._e]
 
     def start(self, group=None):
         return self._s
@@ -113,6 +117,8 @@ def _secret_segment(seg):
             continue
         letters = any(c.isalpha() for c in chunk)
         digits = any(c.isdigit() for c in chunk)
+        if len(chunk) >= 5 and digits and not letters:
+            return True   # a bare number run (``AbCdEf-123456``), dates aside
         if len(chunk) >= 6 and letters and digits:
             return True
         if len(chunk) >= 8 and _has_upper(chunk) and _has_lower(chunk) \
@@ -257,7 +263,7 @@ def _all_spans(text):
 
 def find_shapes(text):
     """The credential-shaped matches in *text* (empty when there are none)."""
-    return [_Hit(s, e) for s, e in _all_spans(text)]
+    return [_Hit(s, e, text) for s, e in _all_spans(text)]
 
 
 def guard(field, text, key=None):
