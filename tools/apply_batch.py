@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply an ordered ops YAML batch through the keeper HTTP API (X7d)."""
+"""Apply an ordered ops YAML batch through the keeper HTTP API (X7d). With --queue-line/--queue-file the tool appends the QUEUE line only after an applied N of N batch."""
 import argparse
 import hashlib
 import json
@@ -254,7 +254,8 @@ def read_token(path):
     return token
 def print_help(out):
     out.write("usage: apply_batch.py BATCH.yaml --url URL --token-file PATH "
-              "[--dry-run] [--from N] [--per-op] [--allow-no-whoami]\n")
+              "[--dry-run] [--from N] [--per-op] [--allow-no-whoami] "
+              "[--queue-line TEXT --queue-file PATH]\n")
 def main(argv=None, out=None, err=None):
     args_in = list(sys.argv[1:] if argv is None else argv)
     out = out or sys.stdout
@@ -267,14 +268,55 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--from", dest="from_n", default=None)
     parser.add_argument("--allow-no-whoami", action="store_true")
     parser.add_argument("--per-op", action="store_true")
+    parser.add_argument("--queue-line", default=None)
+    parser.add_argument("--queue-file", default=None)
     try:
         opts = parser.parse_args(args_in)
     except SystemExit:
         print_help(err)
+        if any(a.split("=", 1)[0] in ("--queue-line", "--queue-file")
+               for a in args_in):
+            out.write("error: bad arguments (see usage)\n")
         return 2
+    queue_attempt = opts.queue_line is not None or opts.queue_file is not None
+    queue_mode = opts.queue_line is not None and opts.queue_file is not None
+    _buf = []
+    def line(text, refusal=False):
+        if queue_mode:
+            _buf.append((text, refusal))
+        else:
+            out.write(text + "\n")
+            out.flush()
+    def _done(rc):
+        if not queue_mode:
+            return rc
+        seq = list(_buf)
+        _buf.clear()
+        if rc != 0:
+            for i, (_, marked) in enumerate(seq):
+                if marked:
+                    if i:
+                        seq.insert(0, seq.pop(i))
+                    break
+        for text, _ in seq:
+            out.write(text + "\n")
+        out.flush()
+        return rc
+    if (opts.queue_line is None) != (opts.queue_file is None):
+        err.write("error: --queue-line and --queue-file must be given together\n")
+        line("error: --queue-line and --queue-file must be given together",
+             refusal=True)
+        print_help(err)
+        return _done(2)
+    if queue_mode and ("\n" in opts.queue_line or "\r" in opts.queue_line):
+        err.write("error: --queue-line must be a single line\n")
+        line("error: --queue-line must be a single line", refusal=True)
+        return _done(2)
     if not opts.batch_file:
         print_help(err)
-        return 2
+        if queue_mode:
+            line("error: missing BATCH.yaml argument", refusal=True)
+        return _done(2)
     start = 1
     if opts.from_n is not None:
         try:
@@ -282,14 +324,14 @@ def main(argv=None, out=None, err=None):
         except (ValueError, TypeError):
             err.write(f"error: --from must be an integer, "
                       f"got {opts.from_n!r}\n")
-            return 2
-    def line(text):
-        out.write(text + "\n")
-        out.flush()
+            if queue_attempt:
+                line(f"error: --from must be an integer, "
+                     f"got {opts.from_n!r}", refusal=True)
+            return _done(2)
     def fail(n, name, key, code, message):
-        line(f"op {n} {name} {key}: {code} {message}")
+        line(f"op {n} {name} {key}: {code} {message}", refusal=True)
         line(f"resume with --from {n}")
-        return 1
+        return _done(1)
     try:
         data = load_batch(opts.batch_file)
         ops = data["ops"]
@@ -297,7 +339,10 @@ def main(argv=None, out=None, err=None):
         if start < 1 or start > total:
             err.write(f"error: --from must be between 1 and {total}, "
                       f"got {opts.from_n!r}\n")
-            return 2
+            if queue_attempt:
+                line(f"error: --from must be between 1 and {total}, "
+                     f"got {opts.from_n!r}", refusal=True)
+            return _done(2)
         source = resolve_source(opts.batch_file, data["source"])
         try:
             digest = sha256_of(source)
@@ -305,14 +350,16 @@ def main(argv=None, out=None, err=None):
             raise BatchError(f"cannot read source file: {exc}") from None
         if digest != data["source_sha256"]:
             line(f"source {source}: {PIN_MISMATCH_MARK} "
-                 f"(refusing before any call)")
-            return 1
+                 f"(refusing before any call)", refusal=True)
+            return _done(1)
         # Read and validate token early so token errors exit 2
         try:
             token = read_token(opts.token_file)
         except BatchError as exc:
             err.write(f"error: {exc}\n")
-            return 2
+            if queue_attempt:
+                line(f"error: {exc}", refusal=True)
+            return _done(2)
         # Pre-validate all ops before any execution (dry-run or live)
         for n, op in enumerate(ops, 1):
             if n < start:
@@ -342,11 +389,13 @@ def main(argv=None, out=None, err=None):
             line("dry run: " + (", ".join(f"{name} {counts[name]}"
                                           for name in sorted(counts))
                                  or "no ops") + " (no calls made)")
-            return 0
+            return _done(0)
         session = Session(opts.url, token)
     except (BatchError, OSError) as exc:
         err.write(f"error: {exc}\n")
-        return 1
+        if queue_mode:
+            line(f"error: {exc}", refusal=True)
+        return _done(1)
     try:
         who = session.get("whoami")
         who_name, who_role = who.get("name"), who.get("role")
@@ -354,8 +403,9 @@ def main(argv=None, out=None, err=None):
         if who_name != data["principal"] or who_role != "router":
             line(f"error: principal mismatch: batch wants "
                  f"{data['principal']!r} (router), token acts as "
-                 f"{who_name!r} ({who_role}) (refusing before any call)")
-            return 1
+                 f"{who_name!r} ({who_role}) (refusing before any call)",
+                 refusal=True)
+            return _done(1)
     except ApiError as exc:
         if opts.allow_no_whoami:
             msg = f" ({exc.msg})" if exc.msg else ""
@@ -363,16 +413,26 @@ def main(argv=None, out=None, err=None):
         else:
             msg = f" ({exc.msg})" if exc.msg else ""
             err.write(f"error: whoami failed: {exc.code}{msg}\n")
-            return 2
+            if queue_attempt:
+                line(f"error: whoami failed: {exc.code}{msg}", refusal=True)
+            return _done(2)
     applied = Counter()
     done = 0
     if not opts.per_op:
-        code, report = atomic.send(session, ops, start, source, digest,
-                                   (ApiError, BatchError), op_key)
-        for text in report:
-            line(text)
+        try:
+            code, report = atomic.send(session, ops, start, source, digest,
+                                       (ApiError, BatchError), op_key)
+        except Exception as exc:
+            if not queue_mode:
+                raise
+            line(f"error: unexpected {exc.__class__.__name__} during apply "
+                 f"(batch state unknown)", refusal=True)
+            return _done(1)
+        # refusal_lines()/send() put the error first, so index 0 is the refusal.
+        for i, text in enumerate(report):
+            line(text, refusal=bool(code and i == 0))
         if code:
-            return code
+            return _done(code)
     for n, op in enumerate(ops, 1):
         if n < start:
             continue
@@ -390,6 +450,11 @@ def main(argv=None, out=None, err=None):
             return fail(n, name, key, "error", str(exc))
         except ApiError as exc:
             return fail(n, name, key, exc.code, exc.msg)
+        except Exception as exc:
+            if not queue_mode:
+                raise
+            return fail(n, name, key, "error",
+                        f"unexpected {exc.__class__.__name__} (op state unknown)")
         line(f"ok {n} {name} {key}")
         applied[name] += 1
         done += 1
@@ -400,6 +465,38 @@ def main(argv=None, out=None, err=None):
     if skipped:
         summary += f", skipped {skipped} (before --from)"
     line(summary + ")")
+    if queue_mode:
+        if skipped or done != total:
+            return _done(0)
+        try:
+            payload = (opts.queue_line + "\n").encode("utf-8")
+        except (OSError, UnicodeError) as exc:
+            detail = getattr(exc, "strerror", None) or str(exc) \
+                or exc.__class__.__name__
+            line(f"error: batch applied but queue line not written: {detail}",
+                 refusal=True)
+            return _done(3)
+        try:
+            fd = os.open(opts.queue_file,
+                         os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                         | os.O_NOFOLLOW, 0o600)
+            try:
+                offset = 0
+                while offset < len(payload):
+                    n = os.write(fd, payload[offset:])
+                    if not n:
+                        raise OSError("short write returned 0")
+                    offset += n
+            finally:
+                os.close(fd)
+        except (OSError, UnicodeError) as exc:
+            detail = getattr(exc, "strerror", None) or str(exc) \
+                or exc.__class__.__name__
+            line(f"error: batch applied but queue line not written: {detail}",
+                 refusal=True)
+            return _done(3)
+        line(f"queue: appended to {opts.queue_file}")
+        return _done(0)
     return 0
 if __name__ == "__main__":
     sys.exit(main())
