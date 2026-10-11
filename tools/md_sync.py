@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 
 import yaml
@@ -43,6 +44,19 @@ USAGE = ("usage: md_sync.py --questions P --answers P --decisions P "
          "[--dry-run | --apply] --url U --token-file F [--principal NAME] "
          "[--batch-out FILE] [--status-file FILE] [--keeper-config PATH] "
          "[--decisions-since N]\n")
+
+SLEEP = time.sleep
+
+
+def _is_pin_mismatch(log):
+    """True only for apply_batch's pre-call source-pin refusal line."""
+    mark = getattr(apply_batch, "PIN_MISMATCH_MARK", "sha256 mismatch")
+    for text in log.splitlines():
+        line = text.strip()
+        if (line.startswith("source ") and
+                line.endswith("(refusing before any call)") and mark in line):
+            return True
+    return False
 
 
 def write_batch(path, principal, answers_path, digest, ops):
@@ -229,64 +243,71 @@ def main(argv=None, out=None, err=None):
         write_status(opts.status_file, status, error, err)
         return rc
 
-    try:
-        texts = {}
-        for name in ("questions", "answers", "decisions"):
-            with open(getattr(opts, name), "rb") as handle:
-                texts[name] = handle.read()
-        token = apply_batch.read_token(opts.token_file)
-    except (OSError, apply_batch.BatchError) as exc:
-        err.write(f"error: {exc}\n")
-        return stop(2, f"error: {exc}")
-    # D-505: the merge gate reads the keeper config's ``repos`` only (a
-    # missing/unreadable config means no registered repo: fail closed there).
-    repos = {}
-    cfg_path = opts.keeper_config or os.environ.get("PG_CONFIG")
-    if cfg_path:
+    for attempt in (0, 1):
         try:
-            repos = keeper_config.load_config(cfg_path).repos
-        except keeper_config.ConfigError as exc:
+            texts = {}
+            for name in ("questions", "answers", "decisions"):
+                with open(getattr(opts, name), "rb") as handle:
+                    texts[name] = handle.read()
+            token = apply_batch.read_token(opts.token_file)
+        except (OSError, apply_batch.BatchError) as exc:
             err.write(f"error: {exc}\n")
             return stop(2, f"error: {exc}")
-    digest = hashlib.sha256(texts["answers"]).hexdigest()
-    questions = mp.parse_questions(texts["questions"].decode("utf-8", "replace"))
-    # QA-IMPORT: rows whose ID cell is not one id never become items: name them (redacted).
-    status["unmatched"] = [mplan.credential_guard.mask(mp.redact(cell)[0])[0][:80] for cell in
-                           mp.unmatched_rows(texts["questions"].decode("utf-8", "replace"))]
-    answers, skipped = mp.parse_answers(texts["answers"].decode("utf-8", "replace"))
-    decisions_text = texts["decisions"].decode("utf-8", "replace")
-    decisions = mp.parse_decisions(decisions_text)
-    session = apply_batch.Session(opts.url, token)
-    try:
-        items = session.get("snapshot").get("items") or []
-    except apply_batch.ApiError as exc:
-        err.write(f"error: cannot read the live graph: {exc.code} {exc.msg}\n")
-        return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
-    try:
-        plan = mplan.build_plan(questions, answers, skipped, decisions, items,
-                                decisions_view=DecisionsAdapter(opts.decisions),
-                                decisions_text=decisions_text, repos=repos,
-                                since=opts.decisions_since)
-    except mplan.PlanError as exc:
-        out.write(f"error: {exc}\n")
-        return stop(1, f"error: {exc}")
-    fill_status(status, plan)
-    report(plan, out, not opts.apply)
-    rc = 1 if plan.refused else 0
-    if not opts.apply or not plan.ops:
-        return stop(rc, None)
-    answers_path = os.path.realpath(opts.answers)
-    record = []
-    if opts.batch_out:
-        path = write_batch(opts.batch_out, opts.principal, answers_path, digest, plan.ops)
-        code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
-    else:
-        with tempfile.TemporaryDirectory() as tmp:
-            path = write_batch(os.path.join(tmp, "md-sync.yaml"), opts.principal,
-                               answers_path, digest, plan.ops)
+        # D-505: the merge gate reads the keeper config's ``repos`` only (a
+        # missing/unreadable config means no registered repo: fail closed there).
+        repos = {}
+        cfg_path = opts.keeper_config or os.environ.get("PG_CONFIG")
+        if cfg_path:
+            try:
+                repos = keeper_config.load_config(cfg_path).repos
+            except keeper_config.ConfigError as exc:
+                err.write(f"error: {exc}\n")
+                return stop(2, f"error: {exc}")
+        digest = hashlib.sha256(texts["answers"]).hexdigest()
+        questions = mp.parse_questions(texts["questions"].decode("utf-8", "replace"))
+        # QA-IMPORT: rows whose ID cell is not one id never become items: name them (redacted).
+        status["unmatched"] = [mplan.credential_guard.mask(mp.redact(cell)[0])[0][:80] for cell in
+                               mp.unmatched_rows(texts["questions"].decode("utf-8", "replace"))]
+        answers, skipped = mp.parse_answers(texts["answers"].decode("utf-8", "replace"))
+        decisions_text = texts["decisions"].decode("utf-8", "replace")
+        decisions = mp.parse_decisions(decisions_text)
+        session = apply_batch.Session(opts.url, token)
+        try:
+            items = session.get("snapshot").get("items") or []
+        except apply_batch.ApiError as exc:
+            err.write(f"error: cannot read the live graph: {exc.code} {exc.msg}\n")
+            return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
+        try:
+            plan = mplan.build_plan(questions, answers, skipped, decisions, items,
+                                    decisions_view=DecisionsAdapter(opts.decisions),
+                                    decisions_text=decisions_text, repos=repos,
+                                    since=opts.decisions_since)
+        except mplan.PlanError as exc:
+            out.write(f"error: {exc}\n")
+            return stop(1, f"error: {exc}")
+        fill_status(status, plan)
+        report(plan, out, not opts.apply)
+        rc = 1 if plan.refused else 0
+        if not opts.apply or not plan.ops:
+            return stop(rc, None)
+        answers_path = os.path.realpath(opts.answers)
+        record = []
+        if opts.batch_out:
+            path = write_batch(opts.batch_out, opts.principal, answers_path, digest, plan.ops)
             code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
-    status["applied"] = code == 0
-    return stop(code or rc, None if code == 0 else _apply_error("".join(record)))
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = write_batch(os.path.join(tmp, "md-sync.yaml"), opts.principal,
+                                   answers_path, digest, plan.ops)
+                code = _apply(path, opts, _Tee(out, record), _Tee(err, record))
+        log = "".join(record)
+        if code != 0 and attempt == 0 and _is_pin_mismatch(log):
+            out.write("pin mismatch: source changed between read and apply; "
+                      "retrying once after 5s\n")
+            SLEEP(5)
+            continue
+        status["applied"] = code == 0
+        return stop(code or rc, None if code == 0 else _apply_error(log))
 
 
 def _apply(path, opts, out, err):
