@@ -301,6 +301,125 @@ def test_views_needs_you_is_the_source_of_truth(world):
     assert keys and "routing:Q-DONE" not in keys
 
 
+# ------------------------------------------------- seat3 (W3): one keyword table
+import random as _random
+import re as _re2
+
+_PROP_SEED = 20261011
+_PROP_N = 500
+
+
+def _prop_mixed(word, rng):
+    return "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in word)
+
+
+def _prop_pool(rng, keywords):
+    """Fragments covering every keyword, case variants, braces, pipes, ';', '=', '*' and newlines."""
+    pool = []
+    for kw in keywords:
+        if kw.endswith(":"):
+            pool += [kw, kw.lower(), kw.upper(), _prop_mixed(kw, rng)]
+            low = kw.lower()
+            if low.startswith("deadline"):
+                pool += [f"{kw} 2026-10-12", f"{_prop_mixed(kw, rng)} 2026-10-12"]
+            elif low.startswith("parent"):
+                pool += [f"{kw} PH-OPERATOR", f"{kw} routing:G1",
+                         f"[{kw} foo]", f"{_prop_mixed(kw, rng)} routing:G1"]
+            elif low.startswith("options"):
+                pool += [f"{kw} a = b", f"{_prop_mixed(kw, rng)} x"]
+        elif "{" in kw or "}" in kw:
+            pool += ["{id}", "{x}", "{custom-id}", "{Keep}", "{a} {b}", "{", "}",
+                     "label {id}", "Pick {x}", " {trail}", "[bracket]"]
+        elif kw == "*":
+            pool += ["*", "**", "*lead", "a*b", "* urgent", " *"]
+        else:  # a future keyword: poison it literally so the test stays sensitive
+            pool += [kw, kw.lower(), kw.upper()]
+    pool += ["|", ";", "=", "\n", "alpha", "beta", "pick", "go", "fast",
+             "win", "soon", "ok", "123"]
+    return pool
+
+
+def _prop_string(rng, pool, lo=1, hi=3):
+    return (" ".join(rng.choice(pool) for _ in range(rng.randint(lo, hi))) + " ok").strip()
+
+
+def _assert_property_roundtrip(n=_PROP_N, seed=_PROP_SEED, keywords=None):
+    """Seeded questions_md -> parse_questions round trip over poisoned keeper rows.
+
+    Every title/description/label/consequence is built from the structural
+    keywords (any case), braces, pipes, ';', '=', '*' and newlines.  After the
+    documented neutralisation (``arch._cell``/``arch._label``) the title, labels,
+    consequences, option ids, default, deadline and kind round-trip exactly, no
+    row yields a parent or a malformed (``None``) choices, and the file holds
+    exactly one ``Options:`` block per row, one ``Deadline:`` per dated row and
+    no ``Parent:`` token.
+    """
+    keywords = tuple(keywords) if keywords is not None else tuple(mp.STRUCTURAL_KEYWORDS)
+    rng = _random.Random(seed)
+    pool = _prop_pool(rng, keywords)
+    rows, descriptions, meta = [], {}, []
+    for idx in range(n):
+        raw_title = _prop_string(rng, pool, 1, 3)
+        raw_desc = _prop_string(rng, pool, 1, 4)
+        opts = []
+        for j in range(2):
+            opts.append((f"opt-{idx}-{j}",
+                         _prop_string(rng, pool, 1, 2),
+                         _prop_string(rng, pool, 1, 3)))
+        default = rng.choice([opts[0][0], opts[1][0], None])
+        deadline = rng.choice(["2026-10-12", None])
+        kind = rng.choice(["question", "decision"])
+        key = f"routing:Q-PROP{idx:04d}"
+        title = f"Q: {raw_title}"
+        choices = {"options": [{"id": oid, "label": rl, "consequence": rc}
+                               for oid, rl, rc in opts],
+                   "default": default, "deadline": deadline, "blocks": None}
+        rows.append(row(key, title, kind=kind, choices=choices))
+        descriptions[key] = raw_desc
+        meta.append((key, title, kind, raw_desc, opts, default, deadline))
+    text = arch.questions_md(rows, descriptions)
+    parsed = {q.id: q for q in mp.parse_questions(text)}
+    assert len(parsed) == n
+    assert mp.unmatched_rows(text) == []
+    assert len(_re2.findall(r"(?i)(?:^|\s)Options:", text)) == n
+    n_dated = sum(1 for m in meta if m[6] is not None)
+    assert len(_re2.findall(r"(?i)deadline\s*:", text)) == n_dated
+    assert _re2.search(r"(?i)(?:^|\s)Parent\s*:", text) is None
+    for key, title, kind, raw_desc, opts, default, deadline in meta:
+        qid = key.split(":", 1)[-1]
+        got = parsed[qid]
+        assert got.parent is None, f"{qid} extra parent {got.parent!r}"
+        assert got.kind == kind, f"{qid} kind {got.kind!r} != {kind!r}"
+        assert got.choices is not None, f"{qid} choices lost (extra structure?)"
+        assert [o["id"] for o in got.choices["options"]] == [o[0] for o in opts]
+        assert got.choices.get("default") == default, f"{qid} default"
+        assert got.choices.get("deadline") == deadline, f"{qid} deadline"
+        assert [o["label"] for o in got.choices["options"]] == [
+            arch._label(rl) for _, rl, _ in opts], f"{qid} labels"
+        assert [o.get("consequence", "") for o in got.choices["options"]] == [
+            arch._cell(rc).replace(";", ",") for _, _, rc in opts], f"{qid} consequences"
+        exp_title = "Q: " + mp._title_and_rest(arch._cell(title[3:]).strip())[0]
+        assert got.title == exp_title, f"{qid} title {got.title!r} != {exp_title!r}"
+        exp_desc = f"{arch._cell(raw_desc)} — {arch._cell(key)}"
+        assert got.description == exp_desc, f"{qid} description"
+
+
+def test_property_all_keywords_round_trip():
+    """W3: 500 seeded poisoned rows survive questions_md -> parse_questions."""
+    _assert_property_roundtrip()
+
+
+def test_tuple_mutation_each_keyword_is_required(monkeypatch):
+    """W3: dropping any one keyword from the tuple breaks the round trip."""
+    original = tuple(mp.STRUCTURAL_KEYWORDS)
+    assert len(original) >= 5  # Options:, Deadline:, Parent:, {id}, *
+    for drop in original:
+        monkeypatch.setattr(mp, "STRUCTURAL_KEYWORDS",
+                            tuple(k for k in original if k != drop))
+        with pytest.raises(AssertionError):
+            _assert_property_roundtrip(keywords=original)
+
+
 # ------------------------------------------------- seat2 (W2): cells
 def test_literal_braces_in_keeper_label_round_trip():
     """V3: a keeper label ending in a literal ``{x}`` keeps its text (as parens) and its id."""

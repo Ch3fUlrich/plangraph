@@ -187,6 +187,16 @@ _EXPLICIT_ID_RE = re.compile(r"^(?P<label>.*?)\s+\{(?P<oid>[^{}]*)\}\s*$")
 _OPTION_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 
 
+#: Single source of truth for every structural keyword the parser reacts to
+#: inside a table cell. The generator (md_sync_archive) neutralises each of
+#: these so keeper text never parses as structure. If you add a new keyword
+#: to the parser, add it here too:
+#: "Options:" (options block), "Deadline:" (deadline suffix), "Parent:"
+#: (parent token), "{id}" (trailing " {id}" explicit option id: any "{" / "}"
+#: in a label), "*" (leading default marker on an option).
+STRUCTURAL_KEYWORDS = ("Options:", "Deadline:", "Parent:", "{id}", "*")
+
+
 def _slug(label):
     return _SLUG_RE.sub("-", label.lower()).strip("-")[:40] or "option"
 

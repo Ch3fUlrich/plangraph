@@ -34,24 +34,36 @@ HEADER = ("# QUESTIONS\n\n"
 TABLE_HEAD = "| Prio | ID | Kind | Why | Exact step | Where |\n|---|---|---|---|---|---|\n"
 _PREFIX = re.compile(r"^(?:Q|OP):\s*")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-_OPTIONS_LABEL_RE = re.compile(r"Options:", re.IGNORECASE)
 
 
-def _neutralise_options(text):
-    """Neutralise any-case ``options:`` so ``parse_options`` never sees a second block."""
-    return _OPTIONS_LABEL_RE.sub("Options -", text)
+def _neutralise_keywords(text):
+    """Neutralise every keyword in ``mp.STRUCTURAL_KEYWORDS`` (case-insensitive).
+
+    ``Options:``/``Deadline:``/``Parent:`` lose their colon (``Deadline:`` ->
+    ``Deadline -``) so the parser never sees a block/token/deadline; ``{id}``
+    means any brace (``{``/``}`` -> parens) so no `` {id}`` suffix parses;
+    ``*`` strips the leading default marker. Reads the tuple live so dropping
+    an entry disables that neutralisation."""
+    for kw in mp.STRUCTURAL_KEYWORDS:
+        if kw.endswith(":"):
+            text = re.compile(re.escape(kw), re.IGNORECASE).sub(kw[:-1] + " -", text)
+        elif "{" in kw or "}" in kw:
+            text = text.replace("{", "(").replace("}", ")")
+        elif kw == "*":
+            text = text.lstrip("* ")
+    return text
 
 
 def _cell(text):
     """One table-safe line: credentials masked, whitespace collapsed, no ``|``."""
     text = credential_guard.mask(mp.redact(str(text or ""))[0])[0]
-    return _neutralise_options(" ".join(text.replace("|", "/").split()))
+    return _neutralise_keywords(" ".join(text.replace("|", "/").split()))
 
 
 def _label(text):
-    # Only the generator's own " {id}" suffix may carry braces: literal braces in
-    # keeper labels become parens so parse_options never reads them as an explicit id.
-    return _cell(text).replace(";", ",").replace("=", "-").replace("{", "(").replace("}", ")").lstrip("* ")
+    # Only the generator's own " {id}" suffix may carry braces (handled in
+    # _cell via the "{id}" keyword); ";" and "=" are option separators.
+    return _cell(text).replace(";", ",").replace("=", "-")
 
 
 def _options(choices):
