@@ -15,7 +15,9 @@ exempt from both ``guard()`` and ``mask()``.
 Accepted limits: lowercase letters-only passphrase paths with >=2 slashes,
 CamelCase alphabetic file names, and single-slash lowercase pairs without
 a known extension are judged as before / not detectable as credentials;
-``src/my_module`` stays refused as a single-slash lowercase pair.
+``src/my_module`` stays refused as a single-slash lowercase pair.  A
+``key: value`` pair value of lowercase letters only (no digit, no interior
+capital) is read as prose (``token: refresh-after-expiry``) and not refused.
 """
 from __future__ import annotations
 
@@ -101,6 +103,7 @@ def _secret_segment(seg):
         len(chunks) >= 3 and re.fullmatch(r"[0-9]{4}", chunks[0])
         and re.fullmatch(r"[0-9]{2}", chunks[1])
         and re.fullmatch(r"[0-9]{2}", chunks[2]))
+    mixed = 0
     for idx, chunk in enumerate(chunks):
         if not chunk:
             continue
@@ -120,7 +123,11 @@ def _secret_segment(seg):
             lower = _has_lower(chunk)
             if (letters and digits) or (upper and lower):
                 return True
-    return False
+        # Several short letter+digit chunks (``abc1_def2``) are one secret
+        # split by separators; a bare version token (``v2``) does not count.
+        if letters and digits and not re.fullmatch(r"v?[0-9]{1,3}", chunk):
+            mixed += 1
+    return mixed >= 2
 
 
 def _is_exempt_token(raw):

@@ -443,6 +443,28 @@ def test_quoted_pair_values_are_refused_and_masked(template):
     _no3(masked, val)
 
 
+_W = "log" + "in "
+_SPLIT = [_W + "a/b/" + "abc1" + "_def2", _W + "a/b/" + "abc1" + "_def2.txt",
+          _W + "a/b/" + "aB1c" + "_dE2f.txt",
+          "pass" + "word x/y/" + "ab1_" + "cd2_" + "ef3.md"]
+
+
+@pytest.mark.parametrize("text", _SPLIT)
+def test_split_short_mixed_chunks_are_one_secret(text):
+    with pytest.raises(Refused):
+        guard("note", text)
+    assert mask(text)[1] >= 1
+
+
+@pytest.mark.parametrize("text", [
+    "login docs/runbook/docker-compose-v2.yml",
+    "password server/media/k3s-v1/notes.md",
+    "login docs/2026-08-30-ups-notes/readme.md"])
+def test_version_and_single_mixed_chunks_stay_paths(text):
+    guard("note", text)
+    assert mask(text) == (text, 0)
+
+
 @pytest.mark.parametrize("text", [
     'password: "rotate-soon"', "token: 'Configured'",
     'tokens["w"] = 1'])
