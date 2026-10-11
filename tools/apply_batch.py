@@ -310,7 +310,9 @@ def main(argv=None, out=None, err=None):
         return _done(2)
     if not opts.batch_file:
         print_help(err)
-        return 2
+        if queue_mode:
+            line("error: missing BATCH.yaml argument", refusal=True)
+        return _done(2)
     start = 1
     if opts.from_n is not None:
         try:
@@ -387,6 +389,8 @@ def main(argv=None, out=None, err=None):
         session = Session(opts.url, token)
     except (BatchError, OSError) as exc:
         err.write(f"error: {exc}\n")
+        if queue_mode:
+            line(f"error: {exc}", refusal=True)
         return _done(1)
     try:
         who = session.get("whoami")

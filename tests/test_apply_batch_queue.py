@@ -352,3 +352,48 @@ def test_heuristic_spoof_not_promoted(world, srv, token_file, tmp_path,
     assert "not_found" in out.splitlines()[0]
     assert "fake" not in out.splitlines()[0]
     assert not qp.exists()
+
+
+def test_malformed_batch_queue_first_line_rc1(world, srv, token_file, tmp_path):
+    bad = tmp_path / "bad-batch.yaml"
+    bad.write_text("- not a mapping\n", encoding="utf-8")
+    qp = tmp_path / "qbad.txt"
+    rc, out, err = qrun(bad, srv.base_url, token_file, qp, "LIVE x")
+    assert rc == 1
+    assert out.splitlines()[0].startswith("error:")
+    assert "error:" in err
+    assert not qp.exists()
+
+
+def test_missing_batch_file_queue_first_line_rc1(world, srv, token_file,
+                                                 tmp_path):
+    qp = tmp_path / "qmiss.txt"
+    rc, out, err = qrun(tmp_path / "absent.yaml", srv.base_url, token_file,
+                        qp, "LIVE x")
+    assert rc == 1
+    assert out.splitlines()[0].startswith("error:")
+    assert not qp.exists()
+
+
+def test_no_batch_argument_queue_first_line_rc2(world, srv, token_file,
+                                                tmp_path):
+    qp = tmp_path / "qnone.txt"
+    out, err = io.StringIO(), io.StringIO()
+    rc = apply_batch.main(
+        ["--url", srv.base_url, "--token-file", token_file,
+         "--queue-line", "LIVE x", "--queue-file", str(qp)], out=out, err=err)
+    assert rc == 2
+    assert out.getvalue().splitlines()[0].startswith("error:")
+    assert not qp.exists()
+
+
+def test_malformed_batch_without_queue_flags_keeps_stdout_empty(
+        world, srv, token_file, tmp_path):
+    bad = tmp_path / "bad2-batch.yaml"
+    bad.write_text("- not a mapping\n", encoding="utf-8")
+    out, err = io.StringIO(), io.StringIO()
+    rc = apply_batch.main([str(bad), "--url", srv.base_url,
+                           "--token-file", token_file], out=out, err=err)
+    assert rc == 1
+    assert out.getvalue() == ""
+    assert "error:" in err.getvalue()
