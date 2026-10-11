@@ -27,7 +27,6 @@ _PARENT_TOKEN = re.compile(
     re.IGNORECASE)
 _PH = re.compile(r"PH-[A-Z0-9-]+")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-_TRIG = re.compile(r"(?i)(deadline|sp.+test|by|until)")
 # The generic consequence names the router (built without the literal so the
 # committed source carries no fleet-principal string; the runtime output keeps it).
 _ROUTER_TELL = "tell " + "routing-" + "00"
@@ -59,12 +58,7 @@ def remove_options_block(step):
     match = _OPTIONS_START.search(step or "")
     if not match:
         return (step or "").strip()
-    start = match.start()
-    if step[start:start + 1].isspace():
-        cut = start
-    else:
-        cut = start
-    return step[:cut].rstrip(" .;:")
+    return step[:match.start()].rstrip(" .;:")
 
 
 def find_deadline(why, step):
@@ -81,6 +75,34 @@ def find_deadline(why, step):
     return match.group(2)
 
 
+_DANGLING = frozenset({
+    "and", "or", "the", "to", "in", "of", "an", "for", "with", "on",
+    "at", "by", "from", "as", "but", "if", "then", "than", "so", "yet",
+    "nor", "also", "because", "while", "when", "where", "which", "who",
+    "whom", "whose", "what", "how", "why", "is", "are", "was", "were",
+    "be", "been", "being", "have", "has", "had", "do", "does", "did",
+    "will", "would", "should", "could", "may", "might", "must", "can",
+    "shall", "it", "its", "this", "that", "these", "those", "they",
+    "them", "their", "he", "she", "we", "you", "my", "our", "your",
+    "his", "her", "not", "no", "per", "via", "vs", "plus", "without",
+    "within", "about", "into", "over", "after", "before", "between",
+    "under", "above", "out", "up", "down",
+})
+
+_SALV_ENUM = re.compile(r"^\s*(?:\([a-dA-D0-9]+\)|[a-dA-D0-9]+[).:])\s*")
+_GENERIC_LABELS = ("do it as written", "skip or defer")
+
+
+def _strip_dangling(text):
+    prev = None
+    while prev != text:
+        prev = text
+        words = text.strip(" .;:-,!?\"'").split()
+        if words and words[-1].lower().strip("()[]\"'") in _DANGLING:
+            text = " ".join(words[:-1]).strip(" .;:-,!?\"'")
+    return text.strip(" .;:-")
+
+
 def _short(text, cap):
     text = re.sub(r"\s+", " ", (text or "").strip())
     text = text.replace("|", "/").replace(";", ",")
@@ -91,7 +113,147 @@ def _short(text, cap):
         cut = text[:cap].rsplit(" ", 1)
         text = cut[0] if len(cut) == 2 and len(cut[0]) >= cap * 0.5 else text[:cap]
         text = text.rstrip(" .;:-")
+    text = _strip_dangling(text)
     return text.strip()
+
+
+def _is_balanced(text):
+    stack = []
+    pairs = {")": "(", "]": "["}
+    for c in text or "":
+        if c in "([":
+            stack.append(c)
+        elif c in ")]":
+            if not stack or stack.pop() != pairs[c]:
+                return False
+    return not stack
+
+
+def _is_clean_label(label):
+    if not label or not re.search(r"[A-Za-z0-9]", label):
+        return False
+    if len(label) > 60:
+        return False
+    if "`" in label or "*" in label or ";" in label or "|" in label:
+        return False
+    if label.lstrip().startswith("*"):
+        return False
+    if not _is_balanced(label):
+        return False
+    words = label.strip(" .;:-,!?\"'").split()
+    if not words:
+        return False
+    if words[-1].lower().strip("()[]\"'") in _DANGLING:
+        return False
+    return True
+
+
+def _clean_consequence(text):
+    text = (text or "").replace("`", "").replace("*", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not _is_balanced(text):
+        return ""
+    return text
+
+
+def _generic_options():
+    return ([{"id": "do-it-as-written", "label": "do it as written",
+              "consequence": _ROUTER_TELL},
+             {"id": "skip-or-defer", "label": "skip or defer",
+              "consequence": _ROUTER_TELL}],
+            "do-it-as-written", {"generic"})
+
+
+def _salvage_options(step_raw):
+    """Salvage a malformed Options: block. Returns (pairs, default_idx|None) or None."""
+    start_m = _OPTIONS_START.search(step_raw or "")
+    if not start_m:
+        return None
+    om = mp._OPTIONS_RE.search(step_raw or "")
+    if om:
+        opts_str = om.group("opts")
+    else:
+        m2 = re.search(r"(?i)Options:\s*(.*)$", step_raw or "", re.DOTALL)
+        if not m2:
+            return None
+        opts_str = m2.group(1)
+        opts_str = re.sub(r"(?i)\.?\s*Deadline:\s*.*?\s*$", "", opts_str).strip()
+    pairs = []
+    default_idx = None
+    for frag in opts_str.split(";"):
+        frag = (frag or "").strip()
+        if not frag:
+            continue
+        marked = frag.startswith("*")
+        if marked:
+            frag = frag[1:].strip()
+        frag = _SALV_ENUM.sub("", frag).strip()
+        if "=" in frag:
+            label_raw, _, conseq_raw = frag.partition("=")
+            label_raw, conseq_raw = label_raw.strip(), conseq_raw.strip()
+        else:
+            label_raw, conseq_raw = frag.strip(), ""
+        if not label_raw or not re.search(r"[A-Za-z0-9]", label_raw):
+            continue
+        if len(label_raw) > 60 and not conseq_raw:
+            label = _short(label_raw, 60)
+            conseq = _clean_consequence(_short(label_raw, 160))
+        else:
+            label = _short(label_raw, 60)
+            conseq = _clean_consequence(_short(conseq_raw, 160))
+        if not _is_clean_label(label):
+            continue
+        if marked:
+            if default_idx is not None:
+                return None
+            default_idx = len(pairs)
+        pairs.append((label, conseq))
+        if len(pairs) > 8:
+            pairs = pairs[:8]
+            if default_idx is not None and default_idx >= 8:
+                default_idx = None
+            break
+    if len(pairs) < 2:
+        return None
+    pairs = pairs[:8]
+    if default_idx is not None and default_idx >= len(pairs):
+        default_idx = None
+    return pairs, default_idx
+
+
+def _finish_salvaged(pairs, default_idx, step, why):
+    options = []
+    seen = set()
+    for label, conseq in pairs[:8]:
+        if not _is_clean_label(label):
+            continue
+        conseq = _clean_consequence(conseq)
+        oid = mp._slug(label)
+        if not oid or oid in seen:
+            continue
+        seen.add(oid)
+        entry = {"id": oid, "label": label}
+        if conseq:
+            entry["consequence"] = conseq
+        options.append(entry)
+    if len(options) < 2:
+        return None, None, set()
+    flags = set()
+    default = None
+    if default_idx is not None:
+        try:
+            want = pairs[default_idx][0]
+        except IndexError:
+            want = None
+        if want is not None:
+            for opt in options:
+                if opt["label"] == want:
+                    default = opt["id"]
+                    break
+    if default is None:
+        default = options[0]["id"]
+        flags.add("default guessed: first")
+    return options, default, flags
 
 
 def _split_label_conseq(fragment):
@@ -155,24 +317,20 @@ def derive(step, why):
         pairs = [(first, ""), (single, "")]
         return _finish(pairs, step, why,
                        explicit_default=single if default_m else None)
-    # 3. or-split of two commands/actions
+    # 3. or-split of two commands/actions: both sides must be clean as they stand
     if re.search(r"(?i)\s+or\s+", text):
         sides = re.split(r"(?i)\s+or\s+", text, maxsplit=1)
         if len(sides) == 2:
-            left = _short(sides[0].strip(" .;:`'\""), 60)
-            right = _short(sides[1].strip(" .;:`'\""), 60)
-            # keep both sides as-is; no echo is dropped
-            if left and right and len(left) >= 3 and len(right) >= 3:
-                # trim to verb phrase: last clause after ',' or '.'?
-                return _finish([(left, ""), (right, "")], step, why, explicit_default=None)
+            left_cand = re.sub(r"\s+", " ", sides[0].strip()).strip(" .;:")
+            right_cand = re.sub(r"\s+", " ", sides[1].strip()).strip(" .;:")
+            if (left_cand and right_cand and len(left_cand) >= 3 and len(right_cand) >= 3
+                    and len(left_cand) <= 60 and len(right_cand) <= 60
+                    and _is_clean_label(left_cand) and _is_clean_label(right_cand)):
+                return _finish([(left_cand, ""), (right_cand, "")], step, why, explicit_default=None)
     # 4. a "tell the router ok or what is wrong" sentence falls through to
     # or-split above;
     # generic fallback:
-    opts = [{"id": "a-do-it-as-written", "label": "a) do it as written",
-             "consequence": _ROUTER_TELL},
-            {"id": "b-skip-or-defer", "label": "b) skip or defer",
-             "consequence": _ROUTER_TELL}]
-    return opts, "a-do-it-as-written", {"generic"}
+    return _generic_options()
 
 
 def _finish(pairs, step, why, explicit_default):
@@ -181,8 +339,8 @@ def _finish(pairs, step, why, explicit_default):
     seen = set()
     for label_raw, conseq_raw in pairs[:4]:
         label = _short(label_raw, 60)
-        conseq = _short(conseq_raw, 160)
-        if not label or not re.search(r"[A-Za-z0-9]", label):
+        conseq = _clean_consequence(_short(conseq_raw, 160))
+        if not _is_clean_label(label):
             continue
         oid = mp._slug(label)
         if not oid or oid in seen:
@@ -192,6 +350,8 @@ def _finish(pairs, step, why, explicit_default):
                 suffix += 1
             oid = f"{base_oid}-{suffix}"
             label = _short(f"{label} {suffix}", 60)
+            if not _is_clean_label(label):
+                continue
             oid = mp._slug(label)
             if oid in seen or not oid:
                 continue
@@ -201,11 +361,7 @@ def _finish(pairs, step, why, explicit_default):
             entry["consequence"] = conseq
         options.append(entry)
     if len(options) < 2:
-        opts = [{"id": "a-do-it-as-written", "label": "a) do it as written",
-                 "consequence": _ROUTER_TELL},
-                {"id": "b-skip-or-defer", "label": "b) skip or defer",
-                 "consequence": _ROUTER_TELL}]
-        return opts, "a-do-it-as-written", {"generic"}
+        return _generic_options()
     flags = set()
     default = None
     if explicit_default:
@@ -216,12 +372,26 @@ def _finish(pairs, step, why, explicit_default):
                 break
         if default is None:
             default = options[0]["id"]
-    elif _DEF.search(blob) or re.search(r"(?i)\bStandard\s*:", blob) or _WHEN_CONV.search(blob):
-        # named default but derivation did not isolate it: keep first as the named one
-        default = options[0]["id"]
+            flags.add("default guessed: first")
     else:
-        default = options[0]["id"]
-        flags.add("default guessed: first")
+        named = None
+        dm = _DEF.search(blob)
+        if dm:
+            named = dm.group(2)
+        elif _WHEN_CONV.search(blob):
+            named = "when convenient"
+        if named is not None:
+            norm = _short(named, 60).lower()
+            for opt in options:
+                if opt["label"].lower() == norm or norm in opt["label"].lower():
+                    default = opt["id"]
+                    break
+            if default is None:
+                default = options[0]["id"]
+                flags.add("default guessed: first")
+        else:
+            default = options[0]["id"]
+            flags.add("default guessed: first")
     return options, default, flags
 
 
@@ -249,12 +419,10 @@ def _header_info(text):
 
 def _prio_map(text):
     mapping, seen = {}, set()
-    opt_order = []
     for raw in text.splitlines():
         line = raw.rstrip()
         stripped = line.strip()
         if not stripped.startswith("|"):
-            opt_order = []
             continue
         if line.startswith("    ") or line.startswith("\t"):
             continue
@@ -265,9 +433,6 @@ def _prio_map(text):
         if len(cells) < 5:
             continue
         if cells[1].strip().lower() == "id":
-            lowers = [c.strip().lower() for c in cells]
-            opt_order = [n for n in lowers[2:len(cells) - 3] if n in ("kind", "parent")] \
-                if len(cells) > 5 else []
             continue
         if all(set(c) <= set("-: ") for c in cells if c):
             continue
@@ -305,7 +470,7 @@ def main(argv=None):
         return 2
     header_line, opt_order, _ = _header_info(text)
     if header_line is None:
-        header_line = HDR_DEFAULT = "| Prio | ID | why | step | where |"
+        header_line = "| Prio | ID | why | step | where |"
         opt_order = []
     prios = _prio_map(text)
     rows = mp._table_rows(text)
@@ -313,7 +478,7 @@ def main(argv=None):
     has_parent = "parent" in opt_order
 
     proposed, already, could_not = [], [], []
-    details = []  # (ident, kind-ваluе) review records in input order
+    details = []  # (ident, kind-value) review records in input order
     for _heading, ident, why, step_raw, where, kind, parent_cell in rows:
         step_no_opts, choices = mp.parse_options(step_raw, why)
         if choices is not None:
@@ -335,9 +500,27 @@ def main(argv=None):
             found = _PH.search(f"{why or ''}\n{step_raw or ''}")
             parent = found.group(0) if found else None
         deadline = find_deadline(why, step_raw)
-        options, default, flags = derive(base_no_parent, why)
         if malformed:
-            flags = set(flags) | {"malformed block replaced"}
+            salv = _salvage_options(step_raw)
+            if salv is None:
+                could_not.append(ident)
+                details.append({"id": ident, "status": "could-not-derive",
+                                "why": why, "step": step_raw, "where": where,
+                                "kind": kind, "parent": parent,
+                                "malformed": malformed, "flags": set()})
+                continue
+            pairs, s_idx = salv
+            options, default, flags = _finish_salvaged(pairs, s_idx, base_no_parent, why)
+            if options is None:
+                could_not.append(ident)
+                details.append({"id": ident, "status": "could-not-derive",
+                                "why": why, "step": step_raw, "where": where,
+                                "kind": kind, "parent": parent,
+                                "malformed": malformed, "flags": set()})
+                continue
+            flags = set(flags) | {"salvaged malformed block"}
+        else:
+            options, default, flags = derive(base_no_parent, why)
         # mask labels/consequences, recompute ids
         masked_opts = []
         seen_ids = set()
@@ -345,8 +528,8 @@ def main(argv=None):
             label = clean_cell(opt["label"])
             conseq = clean_cell(opt.get("consequence", ""))
             label = _short(label, 60)
-            conseq = _short(conseq, 160)
-            if not label or not re.search(r"[A-Za-z0-9]", label):
+            conseq = _clean_consequence(_short(conseq, 160))
+            if not _is_clean_label(label):
                 masked_opts = []
                 break
             oid = mp._slug(label)
@@ -366,7 +549,6 @@ def main(argv=None):
                             "malformed": malformed, "flags": flags})
             continue
         # remap default through masked labels
-        orig_ids = [o["id"] for o in options]
         try:
             default_label = next(o["label"] for o in options if o["id"] == default)
         except StopIteration:
@@ -393,7 +575,7 @@ def main(argv=None):
             else f"Options: {opts_str}"
         if deadline:
             new_step += f" Deadline: {deadline}"
-        check, back = mp.parse_options(new_step, clean_cell(why))
+        _, back = mp.parse_options(new_step, clean_cell(why))
         ok = (back is not None and [o["id"] for o in back["options"]]
               == [o["id"] for o in masked_opts]
               and back.get("default") == new_default

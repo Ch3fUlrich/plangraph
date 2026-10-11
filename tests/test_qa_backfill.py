@@ -108,7 +108,7 @@ def test_malformed_flagged_and_replaced(tmp_path):
     out = tmp_path / "out"
     assert run(q, out).returncode == 0
     prop, rev = read_out(out)
-    assert "malformed block replaced" in rev
+    assert "salvaged malformed block" in rev
     (e,) = mp.parse_questions(prop)
     assert e.choices is not None
     assert " ; ; " not in e.description
@@ -219,3 +219,186 @@ def test_header_counts_line(tmp_path):
     _, rev = read_out(out)
     assert "rows 2, proposed 1, already-has-options 1, could-not-derive 0" in rev
     assert "accept: replace the row with the proposed one" in rev
+
+
+# --- W3: salvage, clean labels, generic wording, default mapping, properties ---
+
+def test_salvage_long_label_and_enumerator(tmp_path):
+    long_label = "enable the mail handling for the whole team today please add extra words to be long"
+    assert len(long_label) > 60
+    step = f"do it Options: a) {long_label}; *b) keep disabled = tell owner"
+    q = write_q(tmp_path, table([f"| 1 | Q-S1 | why | {step} | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "salvaged malformed block" in rev
+    (e,) = mp.parse_questions(prop)
+    assert e.choices is not None and len(e.choices["options"]) == 2
+    labels = [o["label"] for o in e.choices["options"]]
+    assert all(len(l) <= 60 for l in labels)
+    assert all("a)" not in l for l in labels)
+    # long original moved into a consequence, default stays on starred option
+    assert any("consequence" in o for o in e.choices["options"])
+    default_label = next(o["label"] for o in e.choices["options"] if o["id"] == e.choices["default"])
+    assert default_label == "keep disabled"
+
+
+def test_salvage_paren_enumerator_and_deadline(tmp_path):
+    long_label = "first choice here with many extra words added to push it past sixty characters total"
+    assert len(long_label) > 60
+    step = f"do it Options: (a) {long_label}; (b) second choice there Deadline: 2026-12-01"
+    q = write_q(tmp_path, table([f"| 1 | Q-S2 | why here | {step} | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "salvaged malformed block" in rev
+    (e,) = mp.parse_questions(prop)
+    assert e.choices is not None
+    assert e.choices["deadline"] == "2026-12-01"
+    labels = [o["label"] for o in e.choices["options"]]
+    assert "second choice there" in labels
+
+
+def test_salvage_keeps_up_to_8(tmp_path):
+    long_label = "first choice with plenty of extra words to make the label exceed sixty characters"
+    assert len(long_label) > 60
+    parts = [f"a) {long_label}"] + [f"choice number {i}" for i in range(2, 7)]
+    step = "do it Options: " + "; ".join(parts)
+    q = write_q(tmp_path, table([f"| 1 | Q-S3 | why | {step} | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "salvaged malformed block" in rev
+    (e,) = mp.parse_questions(prop)
+    assert e.choices is not None and len(e.choices["options"]) == 6
+
+
+def test_salvage_failure_is_could_not_derive_not_generic(tmp_path):
+    # empty labels cannot be salvaged: must NOT fall back to generic pair
+    step = "do it Options: = ; = "
+    q = write_q(tmp_path, table([f"| 1 | Q-SF | why | {step} | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "could not derive" in rev and "Q-SF" in rev
+    assert "do it as written" not in prop
+    assert "rows 1, proposed 0, already-has-options 0, could-not-derive 1" in rev
+
+
+def test_garbled_or_split_uses_generic(tmp_path):
+    step = "In the session add the allow rule `Bash(cd or say hello"
+    q = write_q(tmp_path, table([f"| 1 | Q-G2 | why | {step} | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "generic" in rev
+    (e,) = mp.parse_questions(prop)
+    labels = [o["label"] for o in e.choices["options"]]
+    assert labels == ["do it as written", "skip or defer"]
+    assert all("`" not in l for l in labels)
+
+
+def test_garbled_enumeration_falls_back_to_generic(tmp_path):
+    step = "Pick one a) `run this; b) **bold thing"
+    q = write_q(tmp_path, table([f"| 1 | Q-G3 | why | {step} | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    assert "generic" in rev
+    (e,) = mp.parse_questions(prop)
+    for o in e.choices["options"]:
+        assert "`" not in o["label"] and "*" not in o["label"]
+
+
+def test_generic_pair_wording(tmp_path):
+    q = write_q(tmp_path, table(["| 1 | Q-GW | why | just do the thing | host |"]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, _ = read_out(out)
+    (e,) = mp.parse_questions(prop)
+    labels = [o["label"] for o in e.choices["options"]]
+    assert labels == ["do it as written", "skip or defer"]
+    for o in e.choices["options"]:
+        assert o.get("consequence") == "tell " + "routing-" + "00"
+    assert e.choices["default"] == e.choices["options"][0]["id"]
+
+
+def test_default_named_maps_and_unmatched_flags_guessed(tmp_path):
+    q = write_q(tmp_path, table([
+        "| 1 | Q-M1 | Default: keep disabled | pick a) enable mail; b) keep disabled | host |",
+        "| 1 | Q-M2 | Default: unknown thing here | pick a) enable mail; b) keep disabled | host |",
+    ]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, rev = read_out(out)
+    by = {e.id: e for e in mp.parse_questions(prop)}
+    lab1 = next(o["label"] for o in by["Q-M1"].choices["options"] if o["id"] == by["Q-M1"].choices["default"])
+    assert lab1 == "keep disabled"
+    assert rev.count("default guessed: first") == 1
+
+
+def test_when_convenient_maps_or_flags(tmp_path):
+    q = write_q(tmp_path, table([
+        "| 1 | Q-WC | why here | pick a) do it when convenient; b) skip for now | host |",
+    ]))
+    out = tmp_path / "out"
+    assert run(q, out).returncode == 0
+    prop, _ = read_out(out)
+    (e,) = mp.parse_questions(prop)
+    lab = next(o["label"] for o in e.choices["options"] if o["id"] == e.choices["default"])
+    assert "when convenient" in lab.lower()
+
+
+def test_source_has_no_cyrillic_or_dead_code(tmp_path):
+    src = (ROOT / "tools" / "qa_backfill.py").read_text(encoding="utf-8")
+    assert all(ord(c) < 128 for c in src)
+    assert "_TRIG =" not in src and "_TRIG=" not in src and "HDR_DEFAULT" not in src
+    assert "orig_ids" not in src and "kind-ва" not in src
+
+
+def _balanced(s):
+    stack = []
+    pairs = {")": "(", "]": "["}
+    for c in s:
+        if c in "([":
+            stack.append(c)
+        elif c in ") ]".replace(" ", ""):
+            if not stack or stack.pop() != pairs[c]:
+                return False
+    return not stack
+
+
+def test_properties_over_10_rows(tmp_path):
+    rows = [
+        "| 1 | Q-P01 | why | pick a) enable mail; b) keep disabled | host |",
+        "| 1 | Q-P02 | why | do it Options: a) a very long label that surely exceeds sixty characters total here yes; *b) short = fine | host |",
+        "| 1 | Q-P03 | why | do it Options: (a) first choice here; (b) second choice there | host |",
+        "| 1 | Q-P04 | why | just do the thing | host |",
+        "| 1 | Q-P05 | why | type approve in the box or apply the patch manually | host |",
+        "| 1 | Q-P06 | why | In the session add the allow rule `Bash(cd or say hello | host |",
+        "| 1 | Q-P07 | why | Do the thing. Default: keep disabled. Alternative: enable mail now | host |",
+        "| 1 | Q-P08 | need by 2026-11-02 | do it | host |",
+        "| 1 | Q-P09 | why | do it Parent: PH-OPERATOR | host |",
+        "| 1 | Q-P10 | why | pick a) one; b) two; c) three; d) four; e) five | host |",
+        "| 1 | Q-P11 | why | pick a) enable mail; b) keep disabled when convenient | host |",
+    ]
+    q = write_q(tmp_path, table(rows))
+    o1, o2 = tmp_path / "o1", tmp_path / "o2"
+    assert run(q, o1).returncode == 0
+    assert run(q, o2).returncode == 0
+    assert (o1 / "proposed-rows.md").read_bytes() == (o2 / "proposed-rows.md").read_bytes()
+    prop = (o1 / "proposed-rows.md").read_text(encoding="utf-8")
+    dangling = {"and", "or", "the", "to", "in", "of"}
+    for e in mp.parse_questions(prop):
+        assert e.choices is not None and len(e.choices["options"]) >= 2
+        for o in e.choices["options"]:
+            for key in ("label", "consequence"):
+                if key not in o:
+                    continue
+                v = o[key]
+                assert "`" not in v and ";" not in v and "|" not in v
+                assert not v.lstrip().startswith("*")
+                assert _balanced(v)
+            last = o["label"].strip(" .;:-,!?\"'").split()[-1].lower()
+            assert last not in dangling
+            assert len(o["label"]) <= 60
