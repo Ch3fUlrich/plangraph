@@ -299,3 +299,58 @@ def test_views_needs_you_is_the_source_of_truth(world):
     items = world.store.snapshot(world.p("router"))["items"]
     keys = [r["key"] for r in views.needs_you(items, project="routing")]
     assert keys and "routing:Q-DONE" not in keys
+
+
+# ------------------------------------------------- seat2 (W2): cells
+def test_literal_braces_in_keeper_label_round_trip():
+    """V3: a keeper label ending in a literal ``{x}`` keeps its text (as parens) and its id."""
+    choices = {"options": [
+        {"id": "pick-x", "label": "Pick {x}", "consequence": "kept"},
+        {"id": "other", "label": "Other {word} choice", "consequence": "gone"}],
+        "default": "pick-x", "deadline": None, "blocks": None}
+    text = arch.questions_md([row("routing:Q-B", choices=choices)], {})
+    assert "Pick (x) {pick-x}" in text            # ALWAYS writes {id} when braces were present
+    assert "Other (word) choice {other}" in text
+    got = {q.id: q for q in mp.parse_questions(text)}["Q-B"].choices
+    assert got is not None
+    assert [(o["id"], o["label"], o.get("consequence")) for o in got["options"]] == [
+        ("pick-x", "Pick (x)", "kept"), ("other", "Other (word) choice", "gone")]
+    assert got["default"] == "pick-x"
+
+
+def test_any_case_options_neutralised_in_every_cell():
+    """V2: ``options:``/``OPTIONS:`` in title, description, label, consequence: one block only."""
+    import re as _re
+    for poison in ("options:", "OPTIONS:"):
+        poisoned = {"options": [
+            {"id": "a", "label": f"go {poison} fast", "consequence": f"win {poison} soon"}],
+            "default": "a", "deadline": None, "blocks": None}
+        text = arch.questions_md(
+            [row("routing:Q-P", f"Q: decide {poison} now?", choices=poisoned)],
+            {"routing:Q-P": f"pick it {poison} soon"})
+        assert _re.findall(r"(?i)(?:^|\s)Options:", text) == [" Options:"], text  # only the real block
+        assert "Options -" in text
+        got = {q.id: q for q in mp.parse_questions(text)}["Q-P"]
+        assert got.choices is not None and len(got.choices["options"]) == 1
+        opt = got.choices["options"][0]
+        assert opt["id"] == "a" and "Options -" in opt["label"] and "Options -" in opt["consequence"]
+        assert "Options -" in got.title and "Options -" in got.description
+
+
+def test_neutralisation_mutations_are_killed():
+    """V5c: reverting either neutralisation (exact-case Options, or braces) fails."""
+    import re as _re
+    # V2 mutation: an exact-case-only ``.replace("Options:", ...)`` would leave these behind.
+    for bad in ("a options: b", "a OPTIONS: b", "a oPtIoNs: b"):
+        cell = arch._cell(bad)
+        assert "Options -" in cell, cell
+        assert _re.search(r"(?i)options:", cell) is None, cell
+    old_exact_case = "a OPTIONS: b".replace("Options:", "Options -")
+    assert "OPTIONS:" in old_exact_case  # the old code left upper-case behind: the new test kills it
+    assert "OPTIONS:" not in arch._cell("a OPTIONS: b")
+    # V3 mutation: dropping the brace escape (or the ALWAYS-id) breaks the round trip.
+    assert arch._label("Pick {x}") == "Pick (x)"
+    assert "{" not in arch._label("Other {word} choice") and "}" not in arch._label("Other {word} choice")
+    block = arch._options({"options": [{"id": "pick-x", "label": "Pick {x}"}],
+                           "default": None, "deadline": None, "blocks": None})
+    assert "Pick (x) {pick-x}" in block, block  # id == slug(parens) yet still explicit

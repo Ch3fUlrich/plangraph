@@ -34,16 +34,24 @@ HEADER = ("# QUESTIONS\n\n"
 TABLE_HEAD = "| Prio | ID | Kind | Why | Exact step | Where |\n|---|---|---|---|---|---|\n"
 _PREFIX = re.compile(r"^(?:Q|OP):\s*")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_OPTIONS_LABEL_RE = re.compile(r"Options:", re.IGNORECASE)
+
+
+def _neutralise_options(text):
+    """Neutralise any-case ``options:`` so ``parse_options`` never sees a second block."""
+    return _OPTIONS_LABEL_RE.sub("Options -", text)
 
 
 def _cell(text):
     """One table-safe line: credentials masked, whitespace collapsed, no ``|``."""
     text = credential_guard.mask(mp.redact(str(text or ""))[0])[0]
-    return " ".join(text.replace("|", "/").split())
+    return _neutralise_options(" ".join(text.replace("|", "/").split()))
 
 
 def _label(text):
-    return _cell(text).replace(";", ",").replace("=", "-").lstrip("* ")
+    # Only the generator's own " {id}" suffix may carry braces: literal braces in
+    # keeper labels become parens so parse_options never reads them as an explicit id.
+    return _cell(text).replace(";", ",").replace("=", "-").replace("{", "(").replace("}", ")").lstrip("* ")
 
 
 def _options(choices):
@@ -57,10 +65,12 @@ def _options(choices):
         return ""
     parts = []
     for option in choices["options"]:
+        raw_label = str(option.get("label") or "")
         label = _label(option.get("label"))
         oid = option.get("id")
         text = ("*" if oid == choices.get("default") else "") + label
-        if isinstance(oid, str) and oid != mp._slug(label):
+        if isinstance(oid, str) and (("{" in raw_label or "}" in raw_label)
+                                    or oid != mp._slug(label)):
             text += " {" + oid + "}"
         if option.get("consequence"):
             text += " = " + _cell(option["consequence"]).replace(";", ",")
@@ -89,7 +99,7 @@ def questions_md(rows, descriptions):
     out.append(TABLE_HEAD)
     for rank, row in enumerate(rows, 1):
         key = row["key"]
-        step = _cell(descriptions.get(key)).replace("Options:", "Options -")
+        step = _cell(descriptions.get(key))
         block = _options(row.get("choices"))
         step = f"{step} {block}".strip()
         why = _cell(_PREFIX.sub("", row.get("title") or ""))
