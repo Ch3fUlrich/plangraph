@@ -33,6 +33,9 @@ MAX_LISTED = 1500          # per graph, listed (non-referenced) nodes
 MAX_ROWS = 5000
 MAX_GRAPHS = 12
 DEADLINE_S = 60.0
+# Omnigraph 0.13 contract: every API request must carry exactly one
+# `omnigraph-http-api: 0.13` header, else the server answers 400 api_contract_mismatch.
+OMNIGRAPH_HTTP_API = "0.13"
 LISTED_TYPES = ("Decision", "Rule", "Component")
 _REF = re.compile(r"([a-z0-9][a-z0-9-]{0,62}):(Decision|Rule|Convention|Component|Preference|Project):"
                   r"([a-z0-9][a-z0-9._-]{0,127})")
@@ -101,7 +104,8 @@ class OmnigraphClient:
         body = json.dumps({"query": text, "name": name, "params": params or {}, "branch": "main"}).encode()
         req = urllib.request.Request(url, data=body, method="POST", headers={
             "Content-Type": "application/json", "Accept": "application/json",
-            "Authorization": f"Bearer {self._token}"})
+            "Authorization": f"Bearer {self._token}",
+            "omnigraph-http-api": OMNIGRAPH_HTTP_API})
         try:
             with _OPENER.open(req, timeout=self.timeout) as resp:  # scheme checked; redirects refused
                 raw, t_end = b"", time.monotonic() + 3 * self.timeout   # total budget: a slow drip cannot hold the render

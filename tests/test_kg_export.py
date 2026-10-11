@@ -630,3 +630,37 @@ def test_mode_is_set_on_the_descriptor_not_the_path(tmp_path, monkeypatch):
     kg.run([], tmp_path, env=env, transport=Fake({}))
     assert called == []
     assert ((tmp_path / "kg-export.json").stat().st_mode & 0o777) == 0o644
+
+
+def test_client_sends_omnigraph_http_api_header_once(monkeypatch):
+    """Omnigraph 0.13 contract: exactly one `omnigraph-http-api: 0.13` header (hermetic, no network)."""
+    captured = {}
+
+    class _Resp:
+        def __init__(self):
+            self._calls = 0
+
+        def read(self, n=-1):
+            self._calls += 1
+            return b'{"rows":[]}' if self._calls == 1 else b""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_open(req, timeout=None):
+        captured["req"] = req
+        return _Resp()
+
+    monkeypatch.setattr(kg._OPENER, "open", fake_open)
+    assert kg.OMNIGRAPH_HTTP_API == "0.13"
+    rows = kg.OmnigraphClient("http://kg.example", TOKEN, timeout=3)("g", "kg_x", "q")
+    assert rows == []
+    req = captured["req"]
+    items = list(req.header_items()) + list(req.unredirected_hdrs.items())
+    api = [(k, v) for k, v in items if k.lower() == "omnigraph-http-api"]
+    assert len(api) == 1 and api[0][1] == "0.13"
+    auth = [(k, v) for k, v in items if k.lower() == "authorization"]
+    assert len(auth) == 1 and auth[0][1] == f"Bearer {TOKEN}"
