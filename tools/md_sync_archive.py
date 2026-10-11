@@ -14,6 +14,7 @@ writing the file from the live graph instead.
 import argparse
 import os
 import re
+import stat
 import sys
 import tempfile
 
@@ -64,25 +65,68 @@ def _neutralise_keywords(text):
     return text
 
 
-def _cell(text, *, label=False, consequence=False):
+def _redact_all(text):
+    """``mp.redact`` + ``credential_guard.mask`` together; ``(text, count)``."""
+    redacted, count = mp.redact(text)
+    masked, extra = credential_guard.mask(redacted)
+    return masked, count + extra
+
+
+def _finalise_cell(text, kind):
+    """Separator-safe redaction; redaction is always the LAST transform.
+
+    *kind*: ``"title"`` / ``"description"`` / ``"label"`` / ``"consequence"``.
+    ``=``/``;``-split credential pairs (``"credential user=abcd1234"``,
+    ``"credential user;abcd1234"``) match no shape until the separator
+    becomes ``/``, so the label ``=`` -> ``-`` / ``;`` -> ``,`` swaps would
+    hide them when they run before redaction.  Expose them on a probe
+    (``=``/``;`` -> ``/``) for detection, redact, make the redacted output
+    separator-safe per *kind*, then redact AGAIN so the returned text ends
+    with redaction.  Non-secret text keeps the historical safe chars
+    (``,``/``-`` for labels); split-secret text returns the redacted probe
+    (``/`` + ``[redacted]``, separator-free).
+    """
+    s = str(text or "")
+    probe = s.replace("|", "/").replace("=", "/").replace(";", "/")
+    red_probe, n_probe = _redact_all(probe)
+    if kind == "label":
+        safe = s.replace("|", "/").replace(";", ",").replace("=", "-")
+    elif kind == "consequence":
+        safe = s.replace("|", "/").replace(";", ",")
+    else:  # title / description / keys: '|' joined, '=' / ';' kept
+        safe = s.replace("|", "/")
+    red_safe, n_safe = _redact_all(safe)
+    base = red_probe if n_probe > n_safe else red_safe
+    if kind == "label":
+        base = base.replace(";", ",").replace("=", "-")
+    elif kind == "consequence":
+        base = base.replace(";", ",")
+    return _redact_all(base)[0]
+
+
+def _cell(text, *, label=False, consequence=False, kind=None):
     """One table-safe line through the single ordered cell pipeline.
 
     Order (all text transforms first, redaction last): (a) whitespace/newline
-    collapse, (b) ``|`` -> ``/`` (plus the ``;``/``,`` and ``=``/``-`` option-separator
-    swaps for labels, ``;``/``,`` for consequences), (c) brace handling for labels,
-    (d) keyword neutralisation, and LAST (e) ``mp.redact`` + ``credential_guard.mask``.
-    Redaction runs last so it sees the final text exactly as it is written to the
-    file: a credential split by a table pipe is joined by ``/`` before redaction
-    and masked, never joined after redaction and leaked.
+    collapse, (b) ``|`` -> ``/``, (c) keyword neutralisation, and LAST (d)
+    ``_finalise_cell`` (separator-safe swaps per kind + ``mp.redact`` +
+    ``credential_guard.mask``, re-checked so redaction ends the pipeline).
+    Redaction runs last so it sees the final text exactly as it is written
+    to the file: a credential split by a table pipe -- or by ``=`` / ``;``
+    in a label -- is exposed as ``/`` on the probe before redaction and
+    masked, never joined after redaction and leaked.
     """
     collapsed = " ".join(str(text or "").split())  # (a)
-    shaped = collapsed.replace("|", "/")  # (b)
-    if label:
-        shaped = shaped.replace(";", ",").replace("=", "-")
-    elif consequence:
-        shaped = shaped.replace(";", ",")
-    neutral = _neutralise_keywords(shaped)  # (c) braces + (d) keywords
-    return credential_guard.mask(mp.redact(neutral)[0])[0]  # (e) LAST, on the final text
+    shaped = collapsed.replace("|", "/")  # (b) pipe join before anything else
+    neutral = _neutralise_keywords(shaped)  # (c) braces + keywords
+    if kind is None:
+        if label:
+            kind = "label"
+        elif consequence:
+            kind = "consequence"
+        else:
+            kind = "description"
+    return _finalise_cell(neutral, kind)  # (d) LAST, on the final text
 
 
 def _label(text):
@@ -107,9 +151,14 @@ def _options(choices):
         return ""
     parts = []
     for option in choices["options"]:
+        if not isinstance(option, dict):
+            raise ValueError(f"malformed option: {option!r}")
         raw_label = str(option.get("label") or "")
         label = _label(option.get("label"))
         oid = option.get("id")
+        if not label.strip():
+            label = oid if isinstance(oid, str) and oid else "option"
+            label = _cell(label, kind="label")
         text = ("*" if oid == choices.get("default") else "") + label
         if isinstance(oid, str) and (("{" in raw_label or "}" in raw_label)
                                     or oid != mp._slug(label)):
@@ -141,23 +190,29 @@ def questions_md(rows, descriptions):
     out.append(TABLE_HEAD)
     for rank, row in enumerate(rows, 1):
         key = row["key"]
-        step = _cell(descriptions.get(key))
+        step = _cell(descriptions.get(key), kind="description")
         block = _options(row.get("choices"))
         step = f"{step} {block}".strip()
-        why = _cell(_PREFIX.sub("", row.get("title") or ""))
-        out.append(f"| {rank} | {_cell(key.split(':', 1)[-1])} | {_kind_cell(row)} | {why} | {step} "
-                   f"| {_cell(key)} |\n")
+        why = _cell(_PREFIX.sub("", row.get("title") or ""), kind="title")
+        out.append(f"| {rank} | {_cell(key.split(':', 1)[-1], kind='title')} | {_kind_cell(row)} | {why} | {step} "
+                   f"| {_cell(key, kind='description')} |\n")
     return "".join(out)
 
 
 def _write_atomic(path, text):
     folder = os.path.dirname(os.path.abspath(path)) or "."
+    try:
+        old_mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        old_mode = None
     fd, tmp = tempfile.mkstemp(prefix=".questions.", dir=folder)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="replace") as handle:
             handle.write(text)
         os.replace(tmp, path)
-    except OSError:
+        if old_mode is not None:
+            os.chmod(path, old_mode)
+    except Exception:
         try:
             os.unlink(tmp)
         except OSError:
@@ -199,15 +254,19 @@ def archive_main(argv, out, err, write_status):
     except apply_batch.ApiError as exc:
         err.write(f"error: cannot read the live graph: {exc.code} {exc.msg}\n")
         return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
-    rows = views.needs_you(items, project=opts.project)
-    text = questions_md(rows, {i["key"]: i.get("description") for i in items})
+    try:
+        rows = views.needs_you(items, project=opts.project)
+        text = questions_md(rows, {i["key"]: i.get("description") for i in items})
+    except Exception as exc:
+        err.write(f"error: malformed snapshot data: {exc.__class__.__name__}\n")
+        return stop(2, f"error: malformed snapshot data: {exc.__class__.__name__}")
     status["archived"] = len(rows)
     if not opts.apply:
         out.write(f"dry run: would write {len(rows)} open items to {opts.questions_out} (no file written)\n")
         return stop(0, None)
     try:
         _write_atomic(opts.questions_out, text)
-    except OSError as exc:
+    except Exception as exc:
         err.write(f"error: cannot write {opts.questions_out}: {exc.__class__.__name__}\n")
         return stop(2, f"error: cannot write {opts.questions_out}: {exc.__class__.__name__}")
     status["written"] = True

@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import stat
 import sys
 import threading
 from pathlib import Path
@@ -717,3 +718,157 @@ def test_old_order_redact_before_pipe_join_leaks_split_secret(monkeypatch):
     text = arch.questions_md([row("routing:Q-P", "Q: pick?")],
                              {"routing:Q-P": "credential user|abcd1234 ok"})
     assert "user/abcd1234" in text or _cg.find_shapes(text) != []
+
+
+# ------------------------------------------------- seat7 (W7): redaction last, robust write
+def test_finalise_cell_redaction_last_on_all_four_kinds():
+    """Seat7 HIGH: redaction ends every branch; '=' / ';' splits never leak."""
+    from plangraph.keeper import credential_guard as _cg
+    assert hasattr(arch, "_finalise_cell")
+    for kind in ("title", "description", "label", "consequence"):
+        for secret in ("credential user=abcd1234", "credential user;abcd1234",
+                       "credential user|abcd1234", "credential user/abcd1234"):
+            got = arch._finalise_cell(secret, kind)
+            assert "abcd1234" not in got, (kind, secret, got)
+            assert "user/abcd1234" not in got and "user=abcd1234" not in got \
+                and "user;abcd1234" not in got, (kind, secret, got)
+            assert _cg.find_shapes(got) == [], (kind, secret, got)
+        # separator-safe per kind: labels carry no ';' / '=' after finalise
+        assert ";" not in arch._finalise_cell("x; y = z", "label")
+        assert "=" not in arch._finalise_cell("x; y = z", "label")
+        assert ";" not in arch._finalise_cell("x; y", "consequence")
+    # all four cell kinds flow through the helper (title, description, label, consequence)
+    seen = []
+    real = arch._finalise_cell
+
+    def spy(text, kind):
+        seen.append(kind)
+        return real(text, kind)
+
+    import unittest.mock as _mock
+    with _mock.patch.object(arch, "_finalise_cell", spy):
+        arch._cell("t", kind="title")
+        arch._cell("d", kind="description")
+        arch._cell("l", label=True)
+        arch._cell("c", consequence=True)
+    assert seen == ["title", "description", "label", "consequence"]
+
+
+def test_split_secrets_equals_semicolon_in_labels_redacted():
+    """Seat7 HIGH: '=' / ';'-split pairs in labels are redacted, file stays safe."""
+    from plangraph.keeper import credential_guard as _cg
+    for sep in ("=", ";"):
+        secret = f"credential user{sep}abcd1234"
+        choices = {"options": [{"id": "a", "label": f"go {secret}",
+                                "consequence": "nothing changes"}],
+                   "default": None, "deadline": None, "blocks": None}
+        text = arch.questions_md([row("routing:Q-SEP", choices=choices)], {})
+        assert "abcd1234" not in text, (sep, text)
+        assert _cg.find_shapes(text) == [], (sep, text)
+        assert ("user=abcd1234" not in text and "user;abcd1234" not in text
+                and "user/abcd1234" not in text), (sep, text)
+        assert "[redacted]" in text
+    # title / description / consequence with '=' also redacted (redaction last everywhere)
+    text = arch.questions_md(
+        [row("routing:Q-T", "Q: credential user=abcd1234?"),
+         row("routing:Q-C", choices={"options": [
+             {"id": "a", "label": "go", "consequence": "credential user;abcd1234 done"}],
+             "default": None, "deadline": None, "blocks": None})],
+        {"routing:Q-T": "see credential user;abcd1234 ok",
+         "routing:Q-C": "plain"})
+    assert "abcd1234" not in text and _cg.find_shapes(text) == []
+
+
+def test_write_atomic_surrogate_replaced_keeps_mode_and_no_temp(tmp_path):
+    """Seat7 MEDIUM: lone surrogate never crashes; old mode (0644) is kept."""
+    target = tmp_path / "QUESTIONS.md"
+    target.write_text("old", encoding="utf-8")
+    os.chmod(target, 0o644)
+    arch._write_atomic(str(target), "new \ud800 text")
+    assert "old" not in target.read_text(encoding="utf-8")
+    assert "\ud800" not in target.read_text(encoding="utf-8")
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o644
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".questions.")] == []
+
+
+def test_write_atomic_forced_failures_keep_old_file(tmp_path, monkeypatch):
+    """Seat7 MEDIUM: ANY write failure keeps the old file, no temp left behind."""
+    import os as _os
+    # (a) os.replace raises
+    target = tmp_path / "A.md"
+    target.write_text("keep-a", encoding="utf-8")
+    def boom_replace(*_a, **_k):
+        raise RuntimeError("disk gone")
+    monkeypatch.setattr(_os, "replace", boom_replace)
+    with pytest.raises(RuntimeError):
+        arch._write_atomic(str(target), "new")
+    assert target.read_text(encoding="utf-8") == "keep-a"
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".questions.")] == []
+    monkeypatch.undo()
+    # (b) handle.write raises (mock the file object os.fdopen returns)
+    target2 = tmp_path / "B.md"
+    target2.write_text("keep-b", encoding="utf-8")
+    real_fdopen = _os.fdopen
+
+    class _BadHandle:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_a):
+            return False
+        def write(self, _text):
+            raise RuntimeError("write gone")
+
+    def bad_fdopen(*_a, **_k):
+        _fd = _a[0]
+        try:
+            _os.close(_fd)
+        except OSError:
+            pass
+        return _BadHandle()
+
+    monkeypatch.setattr(_os, "fdopen", bad_fdopen)
+    try:
+        with pytest.raises(RuntimeError):
+            arch._write_atomic(str(target2), "new")
+    finally:
+        monkeypatch.setattr(_os, "fdopen", real_fdopen)
+    assert target2.read_text(encoding="utf-8") == "keep-b"
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".questions.")] == []
+
+
+def test_empty_label_after_neutralisation_falls_back_to_id():
+    """Seat7 MEDIUM: '*' / '* ' labels are written as the option id."""
+    for raw in ("*", "* "):
+        block = arch._options({"options": [{"id": "a", "label": raw}],
+                               "default": None, "deadline": None, "blocks": None})
+        assert block == "Options: a.", block
+        got = mp.parse_options(block + " ")
+        # parses to a real option whose label is the id (never empty)
+        assert got[1] is not None and got[1]["options"][0]["label"] == "a", block
+
+
+def test_malformed_snapshot_data_returns_2_with_status(tmp_path, monkeypatch):
+    """Seat7 MEDIUM: choices={'options':['a']} writes the status file, returns 2."""
+    target = tmp_path / "QUESTIONS.md"
+    target.write_text("keep me", encoding="utf-8")
+    tok = tmp_path / "t"
+    tok.write_text("x" * 20, encoding="utf-8")
+    os.chmod(tok, 0o600)
+    status = tmp_path / "status.json"
+    bad = {"key": "routing:Q-BAD", "project": "routing", "title": "Q: bad?",
+           "kind": "question", "state": "open", "wait": "answer",
+           "operator": True, "priority": 0, "depends_on": [],
+           "description": "d", "choices": {"options": ["a"]}}
+
+    def fake_get(self, _verb):
+        return {"items": [bad]}
+
+    monkeypatch.setattr(md_sync.apply_batch.Session, "get", fake_get)
+    out, err = io.StringIO(), io.StringIO()
+    rc = md_sync.main(["--archive-answers", "--questions-out", str(target),
+                       "--url", "http://keeper.invalid", "--token-file", str(tok),
+                       "--apply", "--status-file", str(status)], out=out, err=err)
+    assert rc == 2
+    assert target.read_text(encoding="utf-8") == "keep me"
+    doc = json.loads(status.read_text(encoding="utf-8"))
+    assert doc["error"] is not None and doc["written"] is False
