@@ -344,6 +344,25 @@ def _prop_string(rng, pool, lo=1, hi=3):
     return text + " ok" + rng.choice(["", ".", "..", "!", ":", " "])
 
 
+def _prop_pad(text, want):
+    """Pad *text* with plain spaced words to exactly *want* chars (never truncates).
+
+    Chunks keep a space every third char, so no 40+-char alnum run forms and
+    ``mp.redact`` leaves the padded length alone; the pad holds no keywords or
+    separators, so it only exercises the length limits (60 for labels, 160 for
+    consequences).
+    """
+    while len(text) < want:
+        room = want - len(text)
+        if room == 1:
+            text += "q"
+        elif room == 2:
+            text += " w"
+        else:
+            text += " wq"
+    return text
+
+
 def _assert_property_roundtrip(n=_PROP_N, seed=_PROP_SEED, keywords=None):
     """Seeded questions_md -> parse_questions round trip over poisoned keeper rows.
 
@@ -367,6 +386,16 @@ def _assert_property_roundtrip(n=_PROP_N, seed=_PROP_SEED, keywords=None):
             opts.append((f"opt-{idx}-{j}",
                          _prop_string(rng, pool, 1, 2),
                          _prop_string(rng, pool, 1, 3)))
+        # Seat6 (d): also cover the parser's length limits. Every 4th row pads its
+        # first label to 55-60 chars, every 5th row its second consequence to
+        # 155-160. The transforms never lengthen (neutralisation is 1-for-1, the
+        # pad forms no redactable runs), so the block must still parse.
+        if idx % 4 == 0:
+            oid, rl, rc = opts[0]
+            opts[0] = (oid, _prop_pad(rl, 55 + (idx % 6)), rc)
+        if idx % 5 == 0:
+            oid, rl, rc = opts[1]
+            opts[1] = (oid, rl, _prop_pad(rc, 155 + (idx % 6)))
         default = rng.choice([opts[0][0], opts[1][0], None])
         deadline = rng.choice(["2026-10-12", None])
         kind = rng.choice(["question", "decision"])
@@ -398,7 +427,7 @@ def _assert_property_roundtrip(n=_PROP_N, seed=_PROP_SEED, keywords=None):
         assert [o["label"] for o in got.choices["options"]] == [
             arch._label(rl) for _, rl, _ in opts], f"{qid} labels"
         assert [o.get("consequence", "") for o in got.choices["options"]] == [
-            arch._cell(rc).replace(";", ",") for _, _, rc in opts], f"{qid} consequences"
+            arch._cell(rc, consequence=True) for _, _, rc in opts], f"{qid} consequences"
         exp_title = "Q: " + mp._title_and_rest(arch._cell(title[3:]).strip())[0]
         assert got.title == exp_title, f"{qid} title {got.title!r} != {exp_title!r}"
         # the parser strips " .;:" between the description and the Options block,
@@ -452,12 +481,14 @@ def test_any_case_options_neutralised_in_every_cell():
             [row("routing:Q-P", f"Q: decide {poison} now?", choices=poisoned)],
             {"routing:Q-P": f"pick it {poison} soon"})
         assert _re.findall(r"(?i)(?:^|\s)Options:", text) == [" Options:"], text  # only the real block
-        assert "Options -" in text
+        assert arch._NEUTRAL_COLON in text  # keeper keywords neutralised length-preservingly
         got = {q.id: q for q in mp.parse_questions(text)}["Q-P"]
         assert got.choices is not None and len(got.choices["options"]) == 1
         opt = got.choices["options"][0]
-        assert opt["id"] == "a" and "Options -" in opt["label"] and "Options -" in opt["consequence"]
-        assert "Options -" in got.title and "Options -" in got.description
+        assert opt["id"] == "a" and arch._NEUTRAL_COLON in opt["label"] \
+            and arch._NEUTRAL_COLON in opt["consequence"]
+        assert arch._NEUTRAL_COLON in got.title and arch._NEUTRAL_COLON in got.description
+        assert _re.search(r"(?i)options:", got.description) is None
 
 
 def test_neutralisation_mutations_are_killed():
@@ -466,11 +497,12 @@ def test_neutralisation_mutations_are_killed():
     # V2 mutation: an exact-case-only ``.replace("Options:", ...)`` would leave these behind.
     for bad in ("a options: b", "a OPTIONS: b", "a oPtIoNs: b"):
         cell = arch._cell(bad)
-        assert "Options -" in cell, cell
+        assert arch._NEUTRAL_COLON in cell, cell
         assert _re.search(r"(?i)options:", cell) is None, cell
     old_exact_case = "a OPTIONS: b".replace("Options:", "Options -")
     assert "OPTIONS:" in old_exact_case  # the old code left upper-case behind: the new test kills it
     assert "OPTIONS:" not in arch._cell("a OPTIONS: b")
+    assert "OPTIONS" + arch._NEUTRAL_COLON in arch._cell("a OPTIONS: b")  # case kept, colon swapped 1-for-1
     # V3 mutation: dropping the brace escape (or the ALWAYS-id) breaks the round trip.
     assert arch._label("Pick {x}") == "Pick (x)"
     assert "{" not in arch._label("Other {word} choice") and "}" not in arch._label("Other {word} choice")
@@ -543,22 +575,27 @@ def test_options_block_always_terminated():
 
 
 # ------------------------------------------------- seat5 (W5): collapse before redact
-_SEP_CASES = ["\n", "\r\n", "\t", "   "]
+_SEP_CASES = ["\n", "\r\n", "\t", "   ", "|"]
 _HEX16 = "0123456789abcdef"
 
 
 def _split_secret_rows():
     """One row per separator x field: a whitespace-gapped secret in each cell kind.
 
-    Each separator gets a >120-char run between the guard keyword and the pair
+    Each whitespace separator gets a >120-char run between the guard keyword and the pair
     (``credential_guard`` only links a pair within 120 chars, so redacting the
     raw text misses it) plus the reported shape (a 48-hex secret straddling one
-    separator) in the description.
+    separator) in the description. ``|`` is a table pipe, not whitespace: its case is
+    the seat6 V2 shape, a credential pair split by the pipe (``user|abcd1234``), which
+    the pipeline's ``|`` -> ``/`` join must bring together *before* redaction.
     """
     rows, descriptions = [], {}
     for i, sep in enumerate(_SEP_CASES):
-        gap = sep * (150 // len(sep) + 1)
-        pair = f"credential see{gap}user/abcd1234 ok"
+        if sep == "|":
+            pair = f"credential user{sep}abcd1234 ok"
+        else:
+            gap = sep * (150 // len(sep) + 1)
+            pair = f"credential see{gap}user/abcd1234 ok"
         key = f"routing:Q-SPLIT{i}"
         rows.append(row(key, "Q: pick?"))
         descriptions[key] = pair
@@ -603,10 +640,80 @@ def test_old_order_redact_before_collapse_misses_gapped_secrets(monkeypatch):
 
     from plangraph.keeper import credential_guard as _cg
 
-    def _old_cell(text):
+    def _old_cell(text, **_kw):
         redacted = _cg.mask(_mp.redact(str(text or ""))[0])[0]
         return arch._neutralise_keywords(" ".join(redacted.replace("|", "/").split()))
 
     monkeypatch.setattr(arch, "_cell", _old_cell)
     with pytest.raises(AssertionError):
         _assert_split_secrets_redacted()
+
+
+# ------------------------------------------------- seat6 (W6): one pipeline, redaction last
+def test_pipe_split_secret_redacted_in_every_cell():
+    """Seat6 V2 (a): a credential split by '|' is joined by '/' before redaction.
+
+    ``user|abcd1234`` matches no credential shape until the pipe becomes ``/``;
+    the pipeline joins first and redacts last, so no cell kind leaks it.
+    """
+    from plangraph.keeper import credential_guard as _cg
+    secret = "credential user|abcd1234"
+    rows = [row("routing:Q-PDESC", "Q: pick?"),
+            row("routing:Q-PLAB", "Q: pick?", choices={
+                "options": [{"id": "a", "label": f"go {secret}",
+                             "consequence": "nothing changes"}],
+                "default": None, "deadline": None, "blocks": None}),
+            row("routing:Q-PCON", "Q: pick?", choices={
+                "options": [{"id": "a", "label": "go",
+                             "consequence": f"{secret} done"}],
+                "default": None, "deadline": None, "blocks": None})]
+    text = arch.questions_md(rows, {"routing:Q-PDESC": f"see {secret} ok"})
+    assert "user|abcd1234" not in text and "user/abcd1234" not in text
+    assert "[redacted]" in text
+    assert _cg.find_shapes(text) == []
+
+
+def test_sixty_char_label_with_keyword_round_trips():
+    """Seat6 V3 (b): keyword neutralisation is length-preserving.
+
+    A valid 60-char label containing a keyword round-trips: the block is accepted
+    (not dropped as malformed) and the label keeps its length; same for a
+    160-char consequence.
+    """
+    import re as _re4
+    raw_label = "Options: " + "ab " * 16 + "ab!"
+    assert len(raw_label) == 60
+    neutral_label = arch._label(raw_label)
+    assert len(neutral_label) == len(raw_label)
+    assert _re4.search(r"(?i)options:", neutral_label) is None
+    raw_consequence = "Deadline: " + "cd " * 49 + "cd?"
+    assert len(raw_consequence) == 160
+    neutral_consequence = arch._cell(raw_consequence, consequence=True)
+    assert len(neutral_consequence) == len(raw_consequence)
+    assert _re4.search(r"(?i)deadline:", neutral_consequence) is None
+    choices = {"options": [{"id": "a", "label": raw_label,
+                            "consequence": raw_consequence}],
+               "default": None, "deadline": None, "blocks": None}
+    text = arch.questions_md([row("routing:Q-LEN", choices=choices)], {})
+    (entry,) = mp.parse_questions(text)
+    assert entry.choices is not None  # block accepted, not malformed
+    (opt,) = entry.choices["options"]
+    assert opt["label"] == neutral_label and len(opt["label"]) == 60
+    assert opt["consequence"] == neutral_consequence and len(opt["consequence"]) == 160
+
+
+def test_old_order_redact_before_pipe_join_leaks_split_secret(monkeypatch):
+    """Seat6 V2 mutation (e): redacting before the '|' -> '/' join leaks the split pair."""
+    import md_sync_parse as _mp
+
+    from plangraph.keeper import credential_guard as _cg
+
+    def _old_cell(text, **_kw):
+        collapsed = " ".join(str(text or "").split())
+        redacted = _cg.mask(_mp.redact(collapsed)[0])[0]
+        return arch._neutralise_keywords(redacted.replace("|", "/"))
+
+    monkeypatch.setattr(arch, "_cell", _old_cell)
+    text = arch.questions_md([row("routing:Q-P", "Q: pick?")],
+                             {"routing:Q-P": "credential user|abcd1234 ok"})
+    assert "user/abcd1234" in text or _cg.find_shapes(text) != []

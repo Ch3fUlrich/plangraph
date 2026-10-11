@@ -194,6 +194,8 @@ _OPTION_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 #: "Options:" (options block), "Deadline:" (deadline suffix), "Parent:"
 #: (parent token), "{id}" (trailing " {id}" explicit option id: any "{" / "}"
 #: in a label), "*" (leading default marker on an option).
+#: (The archive generator neutralises the ':' of the colon keywords length-preservingly
+#: as U+A789 MODIFIER LETTER COLON, which these literal-':' patterns never match.)
 STRUCTURAL_KEYWORDS = ("Options:", "Deadline:", "Parent:", "{id}", "*")
 
 

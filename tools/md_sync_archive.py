@@ -35,18 +35,28 @@ TABLE_HEAD = "| Prio | ID | Kind | Why | Exact step | Where |\n|---|---|---|---|
 _PREFIX = re.compile(r"^(?:Q|OP):\s*")
 _DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
+#: Length-preserving neutralisation for the ':' of ``Options:``/``Deadline:``/``Parent:``:
+#: U+A789 MODIFIER LETTER COLON. The parser only reacts to a literal ':' (``_OPTIONS_RE``,
+#: ``_PARENT_RE``, ``deadline\s*:``), so the lookalike neutralises without ever parsing as
+#: structure. ';' cannot serve: it separates options in ``parse_options``. U+A789 is a
+#: modifier letter (Lm, not a control per ``is_control``), never a table or option
+#: separator, and swaps 1-for-1, so a valid 60-char label or 160-char consequence keeps
+#: its length instead of growing by one and being rejected on read-back.
+_NEUTRAL_COLON = "\uA789"
+
 
 def _neutralise_keywords(text):
     """Neutralise every keyword in ``mp.STRUCTURAL_KEYWORDS`` (case-insensitive).
 
-    ``Options:``/``Deadline:``/``Parent:`` lose their colon (``Deadline:`` ->
-    ``Deadline -``) so the parser never sees a block/token/deadline; ``{id}``
-    means any brace (``{``/``}`` -> parens) so no `` {id}`` suffix parses;
-    ``*`` strips the leading default marker. Reads the tuple live so dropping
-    an entry disables that neutralisation."""
+    Length-preserving: the ':' of ``Options:``/``Deadline:``/``Parent:`` becomes
+    U+A789 (one char for one char, matched case kept); ``{``/``}`` become parens
+    (``{id}`` means any brace, so no `` {id}`` suffix parses); ``*`` strips the
+    leading default marker (shortens only, never grows). Reads the tuple live so
+    dropping an entry disables that neutralisation."""
     for kw in mp.STRUCTURAL_KEYWORDS:
         if kw.endswith(":"):
-            text = re.compile(re.escape(kw), re.IGNORECASE).sub(kw[:-1] + " -", text)
+            text = re.compile(re.escape(kw), re.IGNORECASE).sub(
+                lambda match: match.group(0)[:-1] + _NEUTRAL_COLON, text)
         elif "{" in kw or "}" in kw:
             text = text.replace("{", "(").replace("}", ")")
         elif kw == "*":
@@ -54,17 +64,33 @@ def _neutralise_keywords(text):
     return text
 
 
-def _cell(text):
-    """One table-safe line: whitespace collapsed, then credentials masked, no ``|``."""
-    collapsed = " ".join(str(text or "").split())
-    redacted = credential_guard.mask(mp.redact(collapsed)[0])[0]
-    return _neutralise_keywords(redacted.replace("|", "/"))
+def _cell(text, *, label=False, consequence=False):
+    """One table-safe line through the single ordered cell pipeline.
+
+    Order (all text transforms first, redaction last): (a) whitespace/newline
+    collapse, (b) ``|`` -> ``/`` (plus the ``;``/``,`` and ``=``/``-`` option-separator
+    swaps for labels, ``;``/``,`` for consequences), (c) brace handling for labels,
+    (d) keyword neutralisation, and LAST (e) ``mp.redact`` + ``credential_guard.mask``.
+    Redaction runs last so it sees the final text exactly as it is written to the
+    file: a credential split by a table pipe is joined by ``/`` before redaction
+    and masked, never joined after redaction and leaked.
+    """
+    collapsed = " ".join(str(text or "").split())  # (a)
+    shaped = collapsed.replace("|", "/")  # (b)
+    if label:
+        shaped = shaped.replace(";", ",").replace("=", "-")
+    elif consequence:
+        shaped = shaped.replace(";", ",")
+    neutral = _neutralise_keywords(shaped)  # (c) braces + (d) keywords
+    return credential_guard.mask(mp.redact(neutral)[0])[0]  # (e) LAST, on the final text
 
 
 def _label(text):
     # Only the generator's own " {id}" suffix may carry braces (handled in
-    # _cell via the "{id}" keyword); ";" and "=" are option separators.
-    return _cell(text).replace(";", ",").replace("=", "-")
+    # _cell via the "{id}" keyword); ";" and "=" are option separators, so label
+    # cells take the pipeline's label branch (swaps run before redaction inside
+    # _cell: all text transforms first, redaction last).
+    return _cell(text, label=True)
 
 
 def _options(choices):
@@ -89,7 +115,7 @@ def _options(choices):
                                     or oid != mp._slug(label)):
             text += " {" + oid + "}"
         if option.get("consequence"):
-            text += " = " + _cell(option["consequence"]).replace(";", ",")
+            text += " = " + _cell(option["consequence"], consequence=True)
         parts.append(text)
     block = "Options: " + "; ".join(parts) + "."
     if _DATE.fullmatch(str(choices.get("deadline") or "")):
