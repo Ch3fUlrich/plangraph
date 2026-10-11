@@ -142,7 +142,9 @@ generated instead of imported: `python3 tools/md_sync.py --archive-answers --que
 [--project routing] [--apply] [--status-file FILE]` skips the import (no QUESTIONS/ANSWERS/decisions inputs, no ops) and writes
 the project's open operator items (`views.needs_you`: question / decision / operator_task, in that order, `choices` as an
 `Options:` block) as the priority table above, atomically (tmp + rename). Without `--apply` it only reports (`dry run`). The file
-round-trips through the importer's parser; cells are single-line and credential-masked. Status file: `{ts, mode: "archive",
+round-trips through the importer's parser losslessly: Kind `DECISION` parses back to kind `decision` (wait `answer`),
+and an option whose id differs from its label slug is written `label {id}` and parses back to that id, so reading
+a generated file back plans no choices edits on unchanged items. Cells are single-line and credential-masked. Status file: `{ts, mode: "archive",
 archived, written, error}`. Turning the switch on in the timer unit is a later live step.
 
     python3 tools/md_sync.py --questions /home/s/code/routing/QUESTIONS.md \

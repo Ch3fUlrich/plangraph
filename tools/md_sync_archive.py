@@ -2,8 +2,11 @@
 
 ``questions_md`` renders the keeper's open operator items (``views.needs_you``: question /
 decision / operator_task, ``choices`` included) as the priority table ``md_sync_parse`` reads
-back, so the file round-trips.  ``archive_main`` is the ``md_sync.py --archive-answers`` switch
-(default OFF): it replaces the markdown import, writing the file from the live graph instead.
+back, so the file round-trips losslessly: a decision row is written with Kind ``DECISION``
+(which parses back to kind ``decision``, wait ``answer``) and an option whose id differs
+from its label slug is written ``label {id}`` (which parses back to that id).  ``archive_main``
+is the ``md_sync.py --archive-answers`` switch (default OFF): it replaces the markdown import,
+writing the file from the live graph instead.
 
     md_sync.py --archive-answers --questions-out PATH --url U --token-file F
                [--project routing] [--dry-run | --apply] [--status-file FILE]
@@ -44,16 +47,21 @@ def _label(text):
 
 
 def _options(choices):
-    """``Options: a = c; *b = c. Deadline: D`` (the block ``parse_options`` reads back), or ``""``.
+    """``Options: a = c; *b {custom-id} = c. Deadline: D`` (the block ``parse_options`` reads back), or ``""``.
 
-    The Kind column only says ANSWER / TASK and option ids are re-derived from the labels
-    (``parse_options`` slugs them), so a decision's kind and a custom option id do not survive
-    a round trip; the keeper stays the source of truth."""
+    An option whose id is not the slug of its label is written ``label {id}`` so the
+    id survives a round trip; ``parse_options`` reads the explicit id back, slugging
+    only labels without one.  The Kind column carries ``DECISION`` for decisions, so a
+    decision's kind survives too; the keeper stays the source of truth."""
     if not isinstance(choices, dict) or not choices.get("options"):
         return ""
     parts = []
     for option in choices["options"]:
-        text = ("*" if option.get("id") == choices.get("default") else "") + _label(option.get("label"))
+        label = _label(option.get("label"))
+        oid = option.get("id")
+        text = ("*" if oid == choices.get("default") else "") + label
+        if isinstance(oid, str) and oid != mp._slug(label):
+            text += " {" + oid + "}"
         if option.get("consequence"):
             text += " = " + _cell(option["consequence"]).replace(";", ",")
         parts.append(text)
@@ -64,6 +72,8 @@ def _options(choices):
 
 
 def _kind_cell(row):
+    if row.get("kind") == "decision":
+        return "DECISION"
     wait = row.get("wait")
     if wait in ("answer", "task"):
         return "ANSWER" if wait == "answer" else "TASK"

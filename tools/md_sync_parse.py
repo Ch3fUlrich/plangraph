@@ -95,7 +95,8 @@ def _classify_wait(ident, kind, title, raw):
 
 
 #: the explicit Kind cell of a priority-table row -> wait
-_KIND_CELLS = {"TASK": "task", "ANSWER": "answer"}
+#: DECISION waits on an answer, like ANSWER; the entry kind keeps "decision".
+_KIND_CELLS = {"TASK": "task", "ANSWER": "answer", "DECISION": "answer"}
 
 _TABLE_ID_RE = re.compile(r"(?i)(OS-[0-9]+[A-Za-z]?|Q-[A-Z0-9][A-Z0-9-]*)")
 
@@ -181,6 +182,9 @@ def _table_rows(text):
 _OPTIONS_RE = re.compile(r"(?:^|\s)Options:\s*(?P<opts>.+?)"
                          r"(?:\.?\s*Deadline:\s*(?P<deadline>[0-9]{4}-[0-9]{2}-[0-9]{2}))?\.?\s*$", re.IGNORECASE)
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+#: explicit option id: a single trailing `` {id}`` on the label.
+_EXPLICIT_ID_RE = re.compile(r"^(?P<label>.*?)\s+\{(?P<oid>[^{}]*)\}\s*$")
+_OPTION_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 
 
 def _slug(label):
@@ -190,7 +194,11 @@ def _slug(label):
 def parse_options(step, why=""):
     """``(step without the Options block, choices dict or None)``.
 
-    A malformed block (empty labels, duplicate ids, > 8 options) is left in the
+    An entry is ``label = consequence`` (``*`` prefix = default, ``;``
+    separates).  A label may carry an explicit id as ``label {id}`` with
+    ``id = [a-z0-9][a-z0-9-]{0,39}``; without it the id is the label slug.
+    A malformed block (empty labels, duplicate ids, > 8 options, a ``{...}``
+    that is not a single trailing `` {id}`` with a legal id) is left in the
     step text and yields no choices, so a typo never drops the operator's words.
     """
     if len(re.findall(r"(?i)(?:^|\s)Options:", step or "")) > 1:
@@ -217,7 +225,17 @@ def parse_options(step, why=""):
         if any(is_control(c) for c in label + consequence):
             return step, None                 # checked before trimming: a tab is a control too
         label, consequence = label.strip(), consequence.strip()
-        oid = _slug(label)
+        oid = None
+        if "{" in label or "}" in label:
+            explicit = _EXPLICIT_ID_RE.match(label)
+            if not explicit or not _OPTION_ID_RE.fullmatch(explicit.group("oid")):
+                return step, None             # a malformed {...} keeps the text, like any malformed block
+            if "{" in explicit.group("label") or "}" in explicit.group("label"):
+                return step, None
+            label = explicit.group("label").strip()
+            oid = explicit.group("oid")
+        if oid is None:
+            oid = _slug(label)
         if not re.search(r"[A-Za-z0-9]", label) or oid in seen or len(label) > 60 or len(consequence) > 160:
             return step, None
         seen.add(oid)
@@ -310,8 +328,12 @@ def parse_questions(text):
             continue
         seen_table.add(ident)
         title, _ = _title_and_rest(why.strip())
-        kind = "op" if ident.startswith("OS-") else "question"
-        prefix = "OP: " if kind == "op" else "Q: "
+        is_op = ident.startswith("OS-")
+        if kind_cell == "DECISION":
+            kind = "decision"
+        else:
+            kind = "op" if is_op else "question"
+        prefix = "OP: " if is_op else "Q: "
         full_title = (prefix + title)[:TITLE_CAP]
         step, where = step.strip(), where.strip()
         raw_step = step

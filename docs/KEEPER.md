@@ -300,10 +300,13 @@ deadline, blocks}` (<= 8 options, ids `[a-z0-9-]`, label <= 60, consequence <= 1
 credential-guarded, no control characters); create/edit set it, `show`, the snapshot and `needs_you` return it.
 md-sync reads it from the end of a QUESTIONS.md "Exact step" cell:
 `Options: enable = mail goes out as your Gmail; own sender = needs a new mailbox; *stay disabled = nothing changes. Deadline: 2026-10-12`
-(`*` = default, `;` separates; a malformed block stays plain text). Rows whose ID cell is not exactly one id are
+(`*` = default, `;` separates; an option whose id is not the slug of its label is written `label {id}`
+with `id = [a-z0-9][a-z0-9-]{0,39}`, e.g. `Keep the Shelfmark lane {keep} = stays`; a malformed block,
+including a malformed `{...}`, stays plain text). Rows whose ID cell is not exactly one id are
 listed in the md-sync status file under `unmatched`.
 QUESTIONS.md row format `| Prio | ID | Kind | Parent | why | step | where |` (Kind/Parent header-declared, either
-order, either absent); the step cell may end `[Parent: <key>] Options: a = consequence; *b; c. Deadline: YYYY-MM-DD`
+order, either absent; Kind is `TASK` / `ANSWER` / `DECISION`, where `DECISION` parses to kind `decision`,
+wait `answer`); the step cell may end `[Parent: <key>] Options: a = consequence; *b {custom}; c. Deadline: YYYY-MM-DD`
 (Parent token before Options; a Parent column wins over the token; `<key>` = `project:ID` or a bare id of an OPEN gate;
 unknown/non-gate/closed parent -> md-sync warning, no op; one `depends_on` edit per parent gate, merged with the
 gate link, idempotent). md-sync edits choices of an existing OPEN routing item (any source) when a VALID block differs;

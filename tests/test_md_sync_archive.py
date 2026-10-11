@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 import md_sync  # noqa: E402
 import md_sync_archive as arch  # noqa: E402
 import md_sync_parse as mp  # noqa: E402
+import md_sync_plan as mplan  # noqa: E402
 
 from keeper_util import World, defn  # noqa: E402
 from plangraph import views  # noqa: E402
@@ -106,21 +107,63 @@ def test_choice_text_is_sanitised_deadline_and_star_labels():
     text = arch.questions_md(rows, {})
     assert hexrun not in text and "leak" not in text and text.count("\n") == len(text.splitlines())
     got = {q.id: q for q in mp.parse_questions(text)}["Q-Z"].choices
-    assert got["default"] == "later" and got["deadline"] is None
-    assert [o["label"] for o in got["options"]] == ["urgent", "later"]
+    assert got["default"] == "b" and got["deadline"] is None
+    assert [(o["id"], o["label"]) for o in got["options"]] == [("a", "urgent"), ("b", "later")]
     ok = arch.questions_md([row("routing:Q-Z", choices={**CHOICES, "deadline": "2026-02-03"})], {})
     assert "Deadline: 2026-02-03" in ok
 
 
-def test_documented_lossy_round_trip_decision_kind_and_custom_option_ids():
-    """The file format has only ANSWER/TASK and slug ids: pinned so a change is deliberate."""
+def test_decision_kind_and_custom_option_ids_round_trip_losslessly():
+    """W1: DECISION kind + explicit ``{id}`` survive questions_md -> parse_questions."""
+    choices = {"options": [{"id": "keep", "label": "Keep the Shelfmark lane",
+                             "consequence": "the lane stays"},
+                            {"id": "drop-shelf", "label": "Drop shelf",
+                             "consequence": "gone"}],
+               "default": "keep", "deadline": "2026-10-12", "blocks": None}
     rows = [row("routing:Q-D", "Q: pick", kind="decision", wait="answer",
-                choices={"options": [{"id": "keep", "label": "Stay Disabled", "consequence": "x"}],
-                         "default": "keep", "deadline": None, "blocks": None})]
+                choices=choices),
+            row("routing:Q-MAIL", "Q: Send mail?", choices=CHOICES)]
     text = arch.questions_md(rows, {})
-    assert "| ANSWER |" in text and "*Stay Disabled" in text
-    got = {q.id: q for q in mp.parse_questions(text)}["Q-D"]
-    assert got.wait == "answer" and got.choices["default"] == "stay-disabled"
+    assert "| DECISION |" in text and "| ANSWER |" in text
+    assert "Keep the Shelfmark lane {keep}" in text
+    assert "{drop-shelf}" not in text          # a slug id needs no braces
+    got = {q.id: q for q in mp.parse_questions(text)}
+    assert got["Q-D"].kind == "decision" and got["Q-D"].wait == "answer"
+    assert got["Q-MAIL"].kind == "question" and got["Q-MAIL"].wait == "answer"
+    dec = got["Q-D"].choices
+    assert [(o["id"], o["label"], o.get("consequence")) for o in dec["options"]] == [
+        ("keep", "Keep the Shelfmark lane", "the lane stays"),
+        ("drop-shelf", "Drop shelf", "gone")]
+    assert dec["default"] == "keep" and dec["deadline"] == "2026-10-12"
+    mail = got["Q-MAIL"].choices
+    assert [(o["id"], o["label"]) for o in mail["options"]] == [
+        ("enable", "enable"), ("stay-disabled", "stay disabled")]
+    assert mail["default"] == "stay-disabled" and mail["deadline"] == "2026-10-12"
+
+
+def test_generated_file_read_back_plans_no_choices_edits():
+    """W1: a generated file read back plans no choices edits on unchanged items."""
+    choices = {"options": [{"id": "keep", "label": "Keep the Shelfmark lane",
+                             "consequence": "the lane stays"}],
+               "default": "keep", "deadline": None, "blocks": "pick"}
+    rows = [row("routing:Q-D", "Q: pick", kind="decision", wait="answer",
+                choices=choices)]
+    text = arch.questions_md(rows, {})
+    (entry,) = mp.parse_questions(text)
+    assert entry.choices["options"][0]["id"] == "keep"  # was slugged to keep-the-shelfmark-lane
+    probe = mplan.Plan()
+    live = {"project": "routing", "id": "Q-D", "key": "routing:Q-D", "state": "open",
+            "kind": "decision", "title": entry.title, "description": entry.description,
+            "wait": entry.wait, "source": "md-sync", "depends_on": [], "evidence": [],
+            "choices": mplan._masked_choices(dict(choices), probe)}
+    goal = {"project": "routing", "id": "GOAL", "key": "routing:GOAL", "state": "open",
+            "kind": "goal", "depends_on": ["routing:PH-OPERATOR"], "evidence": []}
+    gate = {"project": "routing", "id": "PH-OPERATOR", "key": "routing:PH-OPERATOR",
+            "state": "open", "kind": "gate", "depends_on": ["routing:Q-D"],
+            "evidence": []}
+    planned = mplan.build_plan([entry], [], [], set(), [goal, gate, live])
+    assert [o for o in planned.ops if o.get("op") == "edit"
+            and "choices" in o.get("fields", {})] == []
 
 
 def test_non_matching_ids_are_listed_but_flagged():

@@ -235,3 +235,41 @@ def test_kind_only_table_unchanged():
     (e,) = mp.parse_questions(text)
     assert (e.wait, e.title, e.description) == ("task", "Q: Restart the box", "do it — host")
     assert e.parent is None
+
+
+# ---- explicit option ids (archive W1: ``label {id}``) ----
+def test_explicit_id_used_and_slug_otherwise():
+    (e,) = qtable("| 1 | Q-ID | ANSWER | why | do it Options: Keep the Shelfmark lane {keep} = stays; Drop shelf = goes | where |")
+    assert [(o["id"], o["label"], o.get("consequence")) for o in e.choices["options"]] == [
+        ("keep", "Keep the Shelfmark lane", "stays"),
+        ("drop-shelf", "Drop shelf", "goes")]
+    assert e.choices["default"] is None
+
+
+def test_explicit_id_default_tracks_the_custom_id():
+    (e,) = qtable("| 1 | Q-ID2 | ANSWER | why | do it Options: Keep the Shelfmark lane {keep} = stays; *Drop shelf {drop} = goes | where |")
+    assert [o["id"] for o in e.choices["options"]] == ["keep", "drop"]
+    assert e.choices["default"] == "drop"
+
+
+def test_malformed_braces_keep_the_text_and_warn():
+    (e,) = qtable("| 1 | Q-BID | ANSWER | why | do it Options: Keep it {Keep} = stays | where |")
+    assert e.choices is None and e.options_malformed
+    keep = {"options": [{"id": "k", "label": "K"}], "default": None,
+            "deadline": None, "blocks": None}
+    item = live("routing", "Q-BID", title=e.title, description=e.description,
+                wait=e.wait, choices=dict(keep))
+    p = build([e], [item])
+    assert p.ops == []
+    assert any("malformed Options block ignored" in w["text"] for w in p.warnings)
+    assert "Options:" in e.description
+
+
+def test_duplicate_explicit_id_is_malformed():
+    (e,) = qtable("| 1 | Q-DUP | ANSWER | why | do it Options: Alpha {same} = x; Beta {same} = y | where |")
+    assert e.choices is None and e.options_malformed
+
+
+def test_braces_mid_label_are_malformed():
+    (e,) = qtable("| 1 | Q-MID | ANSWER | why | do it Options: Alpha {a} Beta = x; Gamma = y | where |")
+    assert e.choices is None and e.options_malformed
