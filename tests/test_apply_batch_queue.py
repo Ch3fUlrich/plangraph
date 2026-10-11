@@ -397,3 +397,75 @@ def test_malformed_batch_without_queue_flags_keeps_stdout_empty(
     assert rc == 1
     assert out.getvalue() == ""
     assert "error:" in err.getvalue()
+
+
+def test_one_flag_first_stdout_line_is_the_error(world, srv, token_file,
+                                                 tmp_path):
+    batch = write_batch(tmp_path, name="qone2")
+    out, err = io.StringIO(), io.StringIO()
+    rc = apply_batch.main([str(batch), "--url", srv.base_url,
+                           "--token-file", token_file,
+                           "--queue-line", "LIVE x"], out=out, err=err)
+    assert rc == 2
+    assert out.getvalue().splitlines()[0].startswith("error: --queue-line")
+
+
+def test_argparse_failure_with_queue_flags_first_line(tmp_path):
+    out, err = io.StringIO(), io.StringIO()
+    rc = apply_batch.main(["b.yaml", "--bogus", "--queue-line", "x",
+                           "--queue-file", str(tmp_path / "q.txt")],
+                          out=out, err=err)
+    assert rc == 2
+    assert out.getvalue().splitlines()[0].startswith("error:")
+    assert not (tmp_path / "q.txt").exists()
+
+
+def test_argparse_failure_without_queue_flags_stdout_empty():
+    out, err = io.StringIO(), io.StringIO()
+    rc = apply_batch.main(["b.yaml", "--bogus"], out=out, err=err)
+    assert rc == 2
+    assert out.getvalue() == ""
+
+
+def test_unexpected_exception_in_apply_queue_mode_first_line(
+        world, srv, token_file, tmp_path, monkeypatch):
+    def boom(self, verb, body):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(apply_batch.Session, "post", boom)
+    batch = write_batch(tmp_path, name="qboom")
+    qp = tmp_path / "qboom.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE x")
+    assert rc == 1
+    assert out.splitlines()[0].startswith("error: unexpected RuntimeError")
+    assert not qp.exists()
+
+
+def test_unexpected_exception_without_queue_flags_still_propagates(
+        world, srv, token_file, tmp_path, monkeypatch):
+    import pytest
+    def boom(self, verb, body):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(apply_batch.Session, "post", boom)
+    batch = write_batch(tmp_path, name="qboom2")
+    with pytest.raises(RuntimeError):
+        apply_batch.main([str(batch), "--url", srv.base_url,
+                          "--token-file", token_file],
+                         out=io.StringIO(), err=io.StringIO())
+
+
+def test_per_op_unexpected_exception_queue_mode_first_line(
+        world, srv, token_file, tmp_path, monkeypatch):
+    real = apply_batch.Session.post
+
+    def boom(self, verb, body):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(apply_batch.Session, "post", boom)
+    batch = write_batch(tmp_path, name="qboom3")
+    qp = tmp_path / "qboom3.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE x",
+                        extra=["--per-op"])
+    assert real is not None
+    assert rc == 1
+    assert out.splitlines()[0].startswith("op 1 ")
+    assert "unexpected RuntimeError" in out.splitlines()[0]
+    assert not qp.exists()

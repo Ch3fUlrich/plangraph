@@ -273,6 +273,9 @@ def main(argv=None, out=None, err=None):
         opts = parser.parse_args(args_in)
     except SystemExit:
         print_help(err)
+        if any(a.split("=", 1)[0] in ("--queue-line", "--queue-file")
+               for a in args_in):
+            out.write("error: bad arguments (see usage)\n")
         return 2
     queue_attempt = opts.queue_line is not None or opts.queue_file is not None
     queue_mode = opts.queue_line is not None and opts.queue_file is not None
@@ -415,8 +418,16 @@ def main(argv=None, out=None, err=None):
     applied = Counter()
     done = 0
     if not opts.per_op:
-        code, report = atomic.send(session, ops, start, source, digest,
-                                   (ApiError, BatchError), op_key)
+        try:
+            code, report = atomic.send(session, ops, start, source, digest,
+                                       (ApiError, BatchError), op_key)
+        except Exception as exc:
+            if not queue_mode:
+                raise
+            line(f"error: unexpected {exc.__class__.__name__} during apply "
+                 f"(batch state unknown)", refusal=True)
+            return _done(1)
+        # refusal_lines()/send() put the error first, so index 0 is the refusal.
         for i, text in enumerate(report):
             line(text, refusal=bool(code and i == 0))
         if code:
@@ -438,6 +449,11 @@ def main(argv=None, out=None, err=None):
             return fail(n, name, key, "error", str(exc))
         except ApiError as exc:
             return fail(n, name, key, exc.code, exc.msg)
+        except Exception as exc:
+            if not queue_mode:
+                raise
+            return fail(n, name, key, "error",
+                        f"unexpected {exc.__class__.__name__} (op state unknown)")
         line(f"ok {n} {name} {key}")
         applied[name] += 1
         done += 1
