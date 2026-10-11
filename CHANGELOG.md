@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest first.
 
+## 2026-10-11
+
+- **QA-BACKFILL:** `tools/qa_backfill.py --questions F --out DIR` proposes choices for QUESTIONS rows without a valid Options block (`DIR/proposed-rows.md` + `DIR/review.md`, deterministic, writes nothing else).
+
 ## 2026-10-10
 
 - **PG-AUDIT-META (D-1012/D-1013):** keeper read verb `audit_meta` — items in `open`/`claimed` missing `description`,

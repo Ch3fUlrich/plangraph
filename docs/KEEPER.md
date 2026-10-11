@@ -302,6 +302,15 @@ md-sync reads it from the end of a QUESTIONS.md "Exact step" cell:
 `Options: enable = mail goes out as your Gmail; own sender = needs a new mailbox; *stay disabled = nothing changes. Deadline: 2026-10-12`
 (`*` = default, `;` separates; a malformed block stays plain text). Rows whose ID cell is not exactly one id are
 listed in the md-sync status file under `unmatched`.
+QUESTIONS.md row format `| Prio | ID | Kind | Parent | why | step | where |` (Kind/Parent header-declared, either
+order, either absent); the step cell may end `[Parent: <key>] Options: a = consequence; *b; c. Deadline: YYYY-MM-DD`
+(Parent token before Options; a Parent column wins over the token; `<key>` = `project:ID` or a bare id of an OPEN gate;
+unknown/non-gate/closed parent -> md-sync warning, no op; one `depends_on` edit per parent gate, merged with the
+gate link, idempotent). md-sync edits choices of an existing OPEN routing item (any source) when a VALID block differs;
+absent or malformed block -> live choices untouched (malformed also warns); claimed/in_review items untouched and
+reported (`choices-skipped <key>: <state>` line, status file `choices_skipped`).
+`tools/qa_backfill.py --questions F --out DIR` proposes choices for rows without a valid block
+(`DIR/proposed-rows.md` + `DIR/review.md`, writes nothing else, routing applies what it accepts).
 
 ## Knowledge refs (PG-KG-REFS, D-879)
 
