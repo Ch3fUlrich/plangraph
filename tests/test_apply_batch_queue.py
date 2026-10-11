@@ -143,6 +143,7 @@ def test_unreadable_reply_writes_nothing(world, srv, token_file, tmp_path,
     qp = tmp_path / "qbad.txt"
     rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE x")
     assert rc == 1
+    assert out.splitlines()[0].startswith("error: unreadable")
     assert not qp.exists()
 
 
@@ -190,6 +191,9 @@ def test_append_failure_exits_3(world, srv, token_file, tmp_path):
         os.chmod(d, 0o700)
     assert rc == 3
     assert "batch applied but queue line not written" in (out.getvalue() + err.getvalue())
+    assert out.getvalue().splitlines()[0].startswith("error: batch applied")
+    assert "applied 6 of 6" in out.getvalue()
+    assert world.conn.execute("SELECT COUNT(*) c FROM items").fetchone()["c"] == 2
 
 
 def test_mutation_guard_append_after_apply(world, srv, token_file, tmp_path,
@@ -219,3 +223,132 @@ def test_mutation_guard_append_after_apply(world, srv, token_file, tmp_path,
     rc2, out2, err2 = qrun(batch2, srv.base_url, token_file, qp2, "LIVE g2")
     assert rc2 == 1
     assert not qp2.exists()
+
+
+def test_per_op_refusal_first_line_no_append(world, srv, token_file, tmp_path):
+    ops = ops_for()
+    ops[1] = {"op": "edit", "key": "demo:MISSING",
+              "fields": {"title": "no such item"}}
+    batch = write_batch(tmp_path, ops=ops, name="qperref")
+    qp = tmp_path / "qperref.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE per",
+                        extra=["--per-op"])
+    assert rc == 1
+    assert out.splitlines()[0].startswith("op 2 ") and "not_found" in out.splitlines()[0]
+    assert not qp.exists()
+
+
+def test_per_op_success_appends_once(world, srv, token_file, tmp_path):
+    batch = write_batch(tmp_path, name="qperok")
+    qp = tmp_path / "qperok.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE perok",
+                        extra=["--per-op"])
+    assert rc == 0, out + err
+    assert "applied 6 of 6" in out
+    assert qp.read_text(encoding="utf-8").splitlines() == ["LIVE perok"]
+
+
+def test_whoami_failure_queue_first_line(world, srv, tmp_path):
+    batch = write_batch(tmp_path, name="qwho")
+    bad = tmp_path / "bad.token"
+    bad.write_text("SECRETTOKEN0123456789abcdef", encoding="utf-8")
+    qp = tmp_path / "qwho.txt"
+    rc, out, err = qrun(batch, srv.base_url, str(bad), qp, "LIVE x")
+    assert rc == 2
+    assert out.splitlines()[0].startswith("error: whoami failed")
+    assert "whoami failed" in err
+    assert not qp.exists()
+
+
+def test_from_out_of_range_queue_first_line(world, srv, token_file, tmp_path):
+    batch = write_batch(tmp_path, name="qrange")
+    qp = tmp_path / "qrange.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE x",
+                        extra=["--from", "7"])
+    assert rc == 2
+    assert out.splitlines()[0].startswith("error: --from")
+    assert "--from" in err
+    assert not qp.exists()
+
+
+def test_token_error_queue_first_line(world, srv, tmp_path):
+    batch = write_batch(tmp_path, name="qtok")
+    bad = tmp_path / "empty.token"
+    bad.write_text("   ", encoding="utf-8")
+    qp = tmp_path / "qtok.txt"
+    rc, out, err = qrun(batch, srv.base_url, str(bad), qp, "LIVE x")
+    assert rc == 2
+    assert out.splitlines()[0].startswith("error:")
+    assert not qp.exists()
+
+
+def test_newline_queue_first_line(world, srv, token_file, tmp_path):
+    batch = write_batch(tmp_path, name="qnl2")
+    qp = tmp_path / "qnl2.txt"
+    out, err = io.StringIO(), io.StringIO()
+    rc = apply_batch.main(
+        [str(batch), "--url", srv.base_url, "--token-file", token_file,
+         "--queue-line", "a\nb", "--queue-file", str(qp)], out=out, err=err)
+    assert rc == 2
+    assert out.getvalue().splitlines()[0].startswith("error: --queue-line")
+    assert not qp.exists()
+
+
+def test_lone_surrogate_queue_rc3_no_file(world, srv, token_file, tmp_path):
+    batch = write_batch(tmp_path, name="qsur")
+    qp = tmp_path / "qsur.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp,
+                        "x" + chr(0xDC80))
+    assert rc == 3, out + err
+    assert out.splitlines()[0].startswith(
+        "error: batch applied but queue line not written")
+    assert "applied 6 of 6" in out
+    assert not qp.exists()
+
+
+def test_symlink_queue_refused_target_unchanged(world, srv, token_file,
+                                                tmp_path):
+    batch = write_batch(tmp_path, name="qsym")
+    target = tmp_path / "target.txt"
+    target.write_text("ORIG\n", encoding="utf-8")
+    qp = tmp_path / "qlink.txt"
+    qp.symlink_to(target)
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE sym")
+    assert rc == 3, out + err
+    assert out.splitlines()[0].startswith(
+        "error: batch applied but queue line not written")
+    assert target.read_text(encoding="utf-8") == "ORIG\n"
+
+
+def test_short_write_full_line_lands(world, srv, token_file, tmp_path,
+                                     monkeypatch):
+    real_write = os.write
+
+    def one_byte(fd, data):
+        return real_write(fd, bytes(data[:1]))
+
+    monkeypatch.setattr(os, "write", one_byte)
+    batch = write_batch(tmp_path, name="qshort2")
+    qp = tmp_path / "qshort2.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE short")
+    assert rc == 0, out + err
+    assert qp.read_text(encoding="utf-8").splitlines() == ["LIVE short"]
+
+
+def test_heuristic_spoof_not_promoted(world, srv, token_file, tmp_path,
+                                      monkeypatch):
+    import apply_batch_atomic as atomic
+    real_warn = atomic.warnings
+    monkeypatch.setattr(atomic, "warnings",
+                        lambda reply: ["op 999 fake: should not win"])
+    ops = ops_for()
+    ops[1] = {"op": "edit", "key": "demo:MISSING",
+              "fields": {"title": "no such item"}}
+    batch = write_batch(tmp_path, ops=ops, name="qspoof")
+    qp = tmp_path / "qspoof.txt"
+    rc, out, err = qrun(batch, srv.base_url, token_file, qp, "LIVE spoof",
+                        extra=["--per-op"])
+    assert rc == 1
+    assert "not_found" in out.splitlines()[0]
+    assert "fake" not in out.splitlines()[0]
+    assert not qp.exists()
