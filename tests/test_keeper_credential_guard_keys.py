@@ -496,3 +496,76 @@ def test_version_and_single_mixed_chunks_stay_paths(text):
 def test_quoted_prose_is_not_refused(text):
     guard("note", text)
     assert mask(text) == (text, 0)
+
+
+# -- PG-LE-GUARD-KEY round 2: every slash-bearing token is a candidate ------
+_R2_KW = "pass" + "word"
+_R2_BLOB = "aBcDe" + "FgH" + "-123"
+
+
+def _r2_path(*segments):
+    return "/".join(segments)
+
+
+def _r2_refuse(text, val=None):
+    assert find_shapes(text), text
+    with pytest.raises(Refused):
+        guard("note", text)
+    masked, count = mask(text)
+    assert count >= 1 and "[redacted]" in masked, text
+    if val is not None:
+        _no3(masked, val)
+        assert val not in masked, text
+
+
+def _r2_allow(text):
+    assert not find_shapes(text), text
+    guard("note", text)
+    assert mask(text) == (text, 0), text
+
+
+# T1: a blob that has no 6+ word-char segment after a slash used to be invisible
+def test_r2_blob_with_a_short_tail_after_the_slash_is_refused():
+    _r2_refuse(_R2_KW + " " + _r2_path(_R2_BLOB, "a", "b.md"), val=_R2_BLOB)
+
+
+# T2: an index-looking tail no longer exempts a secret-like pair value
+@pytest.mark.parametrize("tail", ["[0]", " [0]"])
+def test_r2_pair_value_before_a_subscript_is_refused(tail):
+    val = "abcd" + "1234"
+    _r2_refuse("tok" + "en=" + val + tail, val=val)
+
+
+# T3: a letters-only pair value is not secret-like, subscript or not
+def test_r2_letters_only_pair_value_with_a_subscript_passes():
+    _r2_allow("tok" + "en=" + "tokens" + "[0]")
+
+
+# T4: the legit repo paths stay exempt under the widened net
+@pytest.mark.parametrize("text", [
+    _R2_KW + " " + _OP_HEAD + _OP_MID + "notes" + ".md",
+    _kw_login() + " " + _docker(),
+    _R2_KW + " " + _r2_path("docs", "runbook", "docker-compose-v2.yml")])
+def test_r2_repo_paths_stay_exempt(text):
+    _r2_allow(text)
+
+
+# T5: mutation set of short-tail slash tokens
+_R2_MUTANTS = [
+    _r2_path("x7" + "Kq9Lm2", "a"),
+    _r2_path("a", "b", "Zq9xk2" + "LmPw1", "c.md"),
+    _r2_path(_R2_BLOB, "a"),
+    _r2_path("1a2b" + "3c4d", "x"),
+]
+
+
+@pytest.mark.parametrize("tail", _R2_MUTANTS)
+def test_r2_short_tail_slash_tokens_are_refused(tail):
+    _r2_refuse(_R2_KW + " " + tail)
+
+
+# T6: the keyword condition is not widened
+def test_r2_without_a_keyword_or_far_from_one_the_token_passes():
+    token = _r2_path(_R2_BLOB, "a", "b.md")
+    _r2_allow(token)
+    _r2_allow(_R2_KW + " " + "x" * 200 + " " + token)

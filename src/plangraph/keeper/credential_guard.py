@@ -1,16 +1,18 @@
 r"""D-374: keep credential-shaped text out of item definitions and rendered pages.
 
-A ``word/secretish`` token (``\w+/\w{6,}``) within 120 characters of
-``credential|password|passwd|pwd|login`` is how a pasted ``user/password`` pair
-looks.  ``create``/``edit``/``import`` refuse it (naming the item key, the
-field and the character span, never echoing the value) and ``pg render`` masks
-any that got in as ``[redacted]``.
+A path candidate - every whitespace-delimited token that carries a ``/`` -
+within 120 characters of ``credential|password|passwd|pwd|login`` is how a
+pasted ``user/password`` pair looks.  ``create``/``edit``/``import`` refuse a
+candidate that is not an exempt repo path (naming the item key, the field and
+the character span, never echoing the value) and ``pg render`` masks any that
+got in as ``[redacted]``.
 
 D-1090 (supersedes the D-388 "no path exemptions" rule): repo-path-like
 strings are NOT credentials.  A match whose whole whitespace-delimited token
 is path-like (known file extension with clean segments, or a multi-slash
 lowercase path) with no ``=``/``:`` pair and no secret-looking segment is
-exempt from both ``guard()`` and ``mask()``.
+exempt from both ``guard()`` and ``mask()``.  The refused span is the stripped
+token itself, so masking removes the whole path-shaped candidate.
 
 Accepted limits: inside an exempt path ANY chunk that holds a digit is
 secret-like except a year (``1999``/``2026``), a 1-2 digit number (the MM or
@@ -18,11 +20,13 @@ DD of a ``YYYY-MM-DD`` date, which splits into separate chunks) and a version
 token (``v2``/``v10``) - so ``k3s`` is refused as an accepted false positive.
 A letters-only chunk is never secret-like (apart from a 12+ letter mixed-case
 CamelCase blob), so a lowercase letters-only passphrase path such as
-``a/b/correcthorsebattery`` is not detectable.  Single-slash lowercase pairs
-without a known extension are judged as before: ``src/my_module`` stays
-refused.  A ``key: value`` pair value of lowercase letters only (no digit, no
-interior capital) is read as prose (``token: refresh-after-expiry``) and not
-refused.
+``a/b/correcthorsebattery`` is not detectable.  Because a candidate is any
+slash-bearing token, a plain short pair such as ``and/or`` next to a keyword
+is refused too - an accepted false positive of the widened net.  A ``key:
+value`` pair value of lowercase letters only (no digit, no interior capital)
+is read as prose (``token: refresh-after-expiry``) and not refused; a
+secret-like pair value is refused whatever follows it, a subscript
+``token=abcd1234[0]`` included.
 """
 from __future__ import annotations
 
@@ -30,7 +34,6 @@ import re
 
 from .errors import Refused
 
-_SHAPE = re.compile(r"\w+/\w{6,}")
 _WORD = re.compile(r"credential|password|passwd|pwd|login", re.IGNORECASE)
 _NEAR = 120
 #: the text fields a create/edit/import carries (``description`` is its own column).
@@ -56,6 +59,9 @@ _SEG2 = re.compile(r"[a-z0-9._-]+")
 #: the only digit-bearing chunks a repo path is allowed to carry
 _CLEAN_CHUNKS = (re.compile(r"(?:19|20)[0-9]{2}"), re.compile(r"[0-9]{1,2}"),
                 re.compile(r"v[0-9]{1,3}"))
+_WS = " \t\n\r\f\v"
+_STRIP_LEAD = "./([<{`'\""
+_STRIP_TRAIL = ".,;)]}>`'\""
 
 
 class _Hit:
@@ -85,7 +91,29 @@ class _Hit:
 
 
 def _strip_token(token):
-    return token.lstrip("./([<{`'\"").rstrip(".,;)]}>`'\"")
+    return token.lstrip(_STRIP_LEAD).rstrip(_STRIP_TRAIL)
+
+
+def _path_candidates(text):
+    """``(start, end, stripped)`` per whitespace token carrying a ``/``."""
+    out = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] in _WS:
+            i += 1
+            continue
+        j = i
+        while j < n and text[j] not in _WS:
+            j += 1
+        raw = text[i:j]
+        if "/" in raw:
+            head = raw.lstrip(_STRIP_LEAD)
+            start = i + (len(raw) - len(head))
+            body = head.rstrip(_STRIP_TRAIL)
+            if body:
+                out.append((start, start + len(body), body))
+        i = j
+    return out
 
 
 def _has_upper(s):
@@ -164,13 +192,13 @@ def _token_of(text, pos):
 def _shape_spans(text):
     words = [m.span() for m in _WORD.finditer(text)]
     out = []
-    for m in _SHAPE.finditer(text):
-        if not any(a <= m.end() + _NEAR and b >= m.start() - _NEAR
+    for start, end, token in _path_candidates(text):
+        if not any(a <= end + _NEAR and b >= start - _NEAR
                    for a, b in words):
             continue
-        if _is_exempt_token(_token_of(text, m.start())):
+        if _is_exempt_token(token):
             continue
-        out.append((m.start(), m.end()))
+        out.append((start, end))
     return out
 
 
@@ -182,15 +210,13 @@ def _pair_spans(text):
         if "[" in val or "]" in val:
             continue
         # Operator rule: a key=value/credential pair is never path-exempt,
-        # so there is no _is_exempt_token skip here.  A trailing "[" still
-        # exempts index access such as a tokens dict subscript; every other
-        # post-value lookahead skip is gone, so a trailing "(rotate)"
-        # no longer exempts the pair.  A slash-bearing pair
-        # value is always refused; any other pair value must be secret-like
-        # (a digit or an interior uppercase letter) to count.
-        rest = text[end:].lstrip()[:1]
-        if rest == "[":
-            continue
+        # so there is no _is_exempt_token skip here, and no lookahead skip
+        # either: a secret-like value is refused whatever follows it, a
+        # ``[0]`` subscript or a trailing "(rotate)" included.  A
+        # slash-bearing pair value is always refused; any other pair value
+        # must be secret-like (a digit or an interior uppercase letter) to
+        # count, so a letters-only value such as ``token=tokens[0]`` is
+        # prose.
         if "/" not in val:
             if not (_has_digit(val) or _has_interior_upper(val)):
                 continue
