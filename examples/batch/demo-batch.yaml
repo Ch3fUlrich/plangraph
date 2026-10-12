@@ -1,0 +1,21 @@
+# Fictional example batch (apply with tools/apply_batch.py; see docs/BATCH.md).
+batch: example-demo
+principal: router
+source: demo-source.md
+source_sha256: 11deac57c8e4d02890bc36310edee385f1e9e52e6f11217d1380d2a0f1243f0c
+ops:
+  - op: create
+    item:
+      project: orchard
+      id: O-5
+      title: Package the seed trays
+      kind: lane
+      track: T2
+      owner: Ada (fictional)
+      estimate_h: 2
+      depends_on: [orchard:O-3]
+      done_criteria: Trays are labelled.
+      evidence_kinds: [decision]
+      operator: false
+  - {op: priority, key: "orchard:O-3", priority: 2}
+  - {op: cancel, key: "orchard:O-1", reason: Superseded by the example catalogue.}

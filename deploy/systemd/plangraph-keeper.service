@@ -1,0 +1,14 @@
+[Unit]
+Description=plangraph keeper (persistent; replaces the transient systemd-run unit, 2026-10-09)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/proposal/src
+ExecStart=/usr/bin/python3 -m plangraph.keeper.daemon --config %h/.local/share/plangraph/keeper.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

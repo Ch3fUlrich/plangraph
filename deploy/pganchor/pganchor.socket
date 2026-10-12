@@ -1,0 +1,17 @@
+# M2B-ANCHOR (D-789 D1): the keeper appends anchor records through this socket.
+# Operator-installed as root: /etc/systemd/system/pganchor.socket
+[Unit]
+Description=plangraph anchor log socket (append-only records for the keeper)
+
+[Socket]
+ListenStream=/run/pganchor/anchor.sock
+Accept=yes
+SocketUser=pganchor
+# Only the keeper's group may connect (the keeper runs as user s, group s).
+SocketGroup=s
+SocketMode=0660
+DirectoryMode=0755
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target
