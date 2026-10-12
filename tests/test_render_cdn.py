@@ -182,6 +182,7 @@ def test_js_and_css_are_data_driven():
         "page_table_model.js",
         "page_table_url.js",
         "page_table_view.js",
+        "page_qa_write.js",
         "page_qa.js",
         "page_kg.js",
         "page_kg_tab.js",

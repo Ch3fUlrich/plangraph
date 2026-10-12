@@ -1,9 +1,12 @@
 /* PlanUI.QAPage — the Decisions & Q&A page: two dense tables with their
  * connections to task, phase and project, hover previews, and in-page answering.
  *
- * The page is a static snapshot, so an answer typed here is a LOCAL answer: it is
- * kept in localStorage, shown as answered, and can be exported as JSON for the
- * keeper to apply. Nothing is sent anywhere. DOM via createElement/textContent.
+ * The page is a static snapshot. With no keeper base URL configured (see
+ * PlanUI.QAWrite) an answer typed here is a LOCAL answer: it is kept in
+ * localStorage, shown as answered, and can be exported as JSON for the keeper to
+ * apply — nothing is sent anywhere. With write mode on, an open question on an
+ * operator-owned item can also be sent to the keeper. DOM via
+ * createElement/textContent.
  */
 (function (global) {
   "use strict";
@@ -40,13 +43,24 @@
     saveAnswers(a);
     refresh();
   }
+  /* What the tables and the counts answer to: the stored local answers plus the
+   * keeper answers made on this page (in memory only — never localStorage). */
+  function effectiveAnswers() {
+    var a = answers(), w = PlanUI.QAWrite, m = {}, k;
+    for (k in a) if (Object.prototype.hasOwnProperty.call(a, k)) m[k] = a[k];
+    if (w && w.answeredMap) {
+      var u = w.answeredMap();
+      for (k in u) if (Object.prototype.hasOwnProperty.call(u, k)) m[k] = u[k];
+    }
+    return m;
+  }
 
   /* Recompute the question-derived VM slices, then run the existing render /
    * count paths so the Q&A table badges, the Needs You list/count and the
    * phone #inbox-badge follow without a page reload. */
   function refresh() {
     var vm = PlanUI.app && PlanUI.app.vm;
-    if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());
+    if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, effectiveAnswers());
     if (vm && PlanUI.Sidebar && PlanUI.Sidebar.render) PlanUI.Sidebar.render();
     render(vm);
   }
@@ -130,18 +144,28 @@
   }
 
   /* ---- questions -------------------------------------------------------------------- */
-  /* One decision point for the row badge: the EFFECTIVE status (a local
-   * answer overrides the snapshot status to "answered"; removing it restores
-   * the snapshot status — PlanUI.qaEffectiveStatus decides). */
+  /* One decision point for the row badge: the EFFECTIVE status — a local answer
+   * or a keeper answer made on this page (PlanUI.QAWrite) overrides the snapshot
+   * status to "answered"; removing the local answer restores it. */
   function effective(q) {
-    var all = answers(), a = all[q.id];
+    var w = PlanUI.QAWrite, all = effectiveAnswers(), a = all[q.id];
+    if (w && w.isAnswered && w.isAnswered(q.id)) return { status: "answered", answer: a ? a.text : "", ui: true, at: a && a.at };
     if (a) return { status: "answered", answer: a.text, local: true, at: a.at };
     var st = PlanUI.qaEffectiveStatus ? PlanUI.qaEffectiveStatus(q, all) : q.status;
     return { status: st, answer: q.answer, local: false };
   }
   function effectiveStatus(q) { return effective(q).status; }
 
-  function editor(q, rerender) {
+  function editor(q, vm, rerender) {
+    var w = PlanUI.QAWrite;
+    if (w && w.editor) {                                    // write mode: keeper option buttons + text
+      var node = w.editor(vm, q, {
+        answered: function () { delete open[q.id]; rerender(); },
+        local: function (text) { setAnswer(q.id, text); delete open[q.id]; rerender(); },
+        cancel: function () { delete open[q.id]; rerender(); }
+      });
+      if (node) return node;
+    }
     var box = el("div", "qa-edit");
     var ta = el("textarea", "qa-ta"); ta.rows = 3; ta.placeholder = "Your answer…"; ta.setAttribute("aria-label", "Answer to " + q.id);
     var cur = answers()[q.id]; ta.value = cur ? cur.text : (q.answer || "");
@@ -173,9 +197,10 @@
       idc.appendChild(idb); tr.appendChild(idc);
       var tx = el("td", "qa-text"); tx.appendChild(el("div", null, q.text));
       if (ef.answer) tx.appendChild(el("div", "qa-ans", (ef.local ? "Local answer: " : "Answer: ") + ef.answer));
-      if (open[q.id]) tx.appendChild(editor(q, rerender));
+      if (ef.ui && PlanUI.QAWrite.NOTE) tx.appendChild(el("div", "qa-ans-ui", PlanUI.QAWrite.NOTE));
+      if (open[q.id]) tx.appendChild(editor(q, vm, rerender));
       tr.appendChild(tx);
-      var ts = el("td"); ts.appendChild(el("span", "tc-badge b-" + (ef.status === "answered" ? "done" : ef.status === "cancelled" ? "cancelled" : "open"), ef.status + (ef.local ? " (local)" : "")));
+      var ts = el("td"); ts.appendChild(el("span", "tc-badge b-" + (ef.status === "answered" ? "done" : ef.status === "cancelled" ? "cancelled" : "open"), ef.status + (ef.ui ? " (UI)" : ef.local ? " (local)" : "")));
       tr.appendChild(ts);
       var tp = el("td"); tp.appendChild(projDot(vm, q.project || c.project)); tr.appendChild(tp);
       tr.appendChild(el("td", "tc-phase", c.phase || "—"));
@@ -191,7 +216,11 @@
 
   function exportBar(vm) {
     var a = answers(), ids = Object.keys(a), bar = el("div", "tt-bar qa-export");
-    bar.appendChild(el("span", "tt-count", ids.length + " local answer" + (ids.length === 1 ? "" : "s") + " — this page is read-only; export them for the keeper"));
+    var count = ids.length + " local answer" + (ids.length === 1 ? "" : "s");
+    var sent = PlanUI.QAWrite && PlanUI.QAWrite.enabled && PlanUI.QAWrite.enabled();
+    bar.appendChild(el("span", "tt-count", sent
+      ? count + " kept on this page; write mode is on — a keeper answer is sent when you click it"
+      : count + " — this page is read-only; export them for the keeper"));
     function payload() {
       return JSON.stringify(ids.map(function (id) { return { question: id, answer: a[id].text, answered_at: a[id].at }; }), null, 2);
     }
@@ -211,7 +240,7 @@
 
   function render(vm) {
     vm = vm || (global.PlanUI.app && global.PlanUI.app.vm);
-    if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, answers());  // stored answers apply on first paint too
+    if (vm && PlanUI.refreshQA) PlanUI.refreshQA(vm, effectiveAnswers());  // stored + keeper answers apply on first paint
     var box = document.getElementById("sb-panel-qa");
     if (!box || !vm) return;
     clear(box);

@@ -64,6 +64,7 @@ JS_FILES = (
     "page_table_model.js",
     "page_table_url.js",
     "page_table_view.js",
+    "page_qa_write.js",
     "page_qa.js",
     "page_kg.js",
     "page_kg_tab.js",
