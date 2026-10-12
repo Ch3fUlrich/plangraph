@@ -16,7 +16,8 @@ __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
 
 SCHEMA_VERSION = 9
 
-ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
+ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner",
+         "operator")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",

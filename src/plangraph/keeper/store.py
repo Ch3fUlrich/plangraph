@@ -22,6 +22,7 @@ from .. import views
 from . import auth, evidence
 from .errors import Refused
 from .store_answer import AnswerMixin
+from .store_operator_answer import OperatorAnswerMixin
 from .store_audit_meta import AuditMetaMixin
 from .store_close import CloseMixin
 from .store_create import CreateMixin
@@ -64,8 +65,8 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
-            NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
-            TokensMixin, OutboxMixin, WithdrawMixin, KindMixin,
+            NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, OperatorAnswerMixin,
+            NeedsMixin, TokensMixin, OutboxMixin, WithdrawMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin):
     """State machine, locking and audit over one keeper connection."""
 
