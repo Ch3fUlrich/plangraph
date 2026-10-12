@@ -20,12 +20,15 @@ class NeedsMixin:
                                                    project=project))
 
     def answer_map(self):
-        """``key -> {"text", "decision_id", "ts"}`` for every answered item.
+        """``key -> {"text", "decision_id", "source", "user", "choice_id", "ts"}``.
 
-        An ``answered`` event (MK-ANSWER) wins.  SYNC-MD-IMPORT: a done QUESTIONS
-        row that md-sync closed by decision has no answer text in the keeper, so
-        it gets "answered by D-x, D-y" from its decision evidence (``ts`` None:
-        ``done_at`` stays the close time).
+        An ``answered`` event (MK-ANSWER) wins.  ``source``/``user``/``choice_id``
+        come from the event payload (PG-ANSWER-UI: ``source="ui"`` for a UI
+        answer) and are None for a router answer, which names no user and needs
+        no choice.  SYNC-MD-IMPORT: a done QUESTIONS row that md-sync closed by
+        decision has no answer text in the keeper, so it gets "answered by D-x,
+        D-y" from its decision evidence (``ts`` None: ``done_at`` stays the close
+        time).
         """
         out = {}
         decisions = {}
@@ -44,7 +47,8 @@ class NeedsMixin:
             ids = decisions.get(row["key"])
             if ids:
                 out[row["key"]] = {"text": "answered by " + ", ".join(ids),
-                                   "decision_id": ids[0], "ts": None}
+                                   "decision_id": ids[0], "ts": None,
+                                   "source": None, "user": None, "choice_id": None}
         for row in self.conn.execute(
                 "SELECT key,ts,payload FROM events WHERE type='answered'"
                 " ORDER BY seq"):
@@ -53,7 +57,10 @@ class NeedsMixin:
             except ValueError:
                 payload = {}
             out[row["key"]] = {"ts": row["ts"], "text": payload.get("text"),
-                               "decision_id": payload.get("decision_id")}
+                               "decision_id": payload.get("decision_id"),
+                               "source": payload.get("source"),
+                               "user": payload.get("user"),
+                               "choice_id": payload.get("choice_id")}
         return out
 
     def _with_answers(self):
@@ -66,6 +73,8 @@ class NeedsMixin:
             hit = latest.get(item["key"])
             if hit is not None:
                 item["answer"] = {"text": hit["text"],
-                                  "decision_id": hit["decision_id"]}
+                                  "decision_id": hit["decision_id"],
+                                  "source": hit["source"], "user": hit["user"],
+                                  "choice_id": hit["choice_id"]}
                 item["done_at"] = hit["ts"] or done_at.get(item["key"])
         return items

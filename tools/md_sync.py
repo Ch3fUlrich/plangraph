@@ -4,6 +4,8 @@
 QUESTIONS.md -> open question/operator lanes; ANSWERS.md -> closes them on the cited
 decisions; decisions-log.md is checked twice.  PG-RF-ARCHIVE-ANSWERS: ``--archive-answers --questions-out PATH`` (default OFF) skips the import
 and writes QUESTIONS.md from the keeper's ``needs_you`` instead (``md_sync_archive``).
+PG-ANSWER-UI (d): ``--ui-answers --answers-out PATH`` (default OFF) writes the
+generated UI-answer mirror for the router instead (``md_sync_ui_answers``).
 The plan pre-checks every cited
 decision with the keeper's own parser (``DecisionsAdapter``): a ``Closes:`` list
 without the item's key would be refused, so the item gets no ops at all and is
@@ -35,6 +37,7 @@ import apply_batch
 import md_sync_archive
 import md_sync_parse as mp
 import md_sync_plan as mplan
+import md_sync_ui_answers
 
 # md_sync_plan puts src/ on sys.path, which is where the keeper lives.
 from plangraph.keeper import config as keeper_config  # noqa: E402
@@ -216,6 +219,8 @@ def main(argv=None, out=None, err=None):
     out, err = out or sys.stdout, err or sys.stderr
     if "--archive-answers" in argv:   # PG-RF-ARCHIVE-ANSWERS: default OFF; replaces the import
         return md_sync_archive.archive_main(argv, out, err, write_status)
+    if "--ui-answers" in argv:        # PG-ANSWER-UI (d): default OFF; the UI-answer mirror
+        return md_sync_ui_answers.ui_answers_main(argv, out, err, write_status)
     parser = argparse.ArgumentParser(add_help=False)
     for name in ("questions", "answers", "decisions", "token-file"):
         parser.add_argument("--" + name, required=True)

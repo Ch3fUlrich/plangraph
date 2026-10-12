@@ -378,9 +378,10 @@ def answers(items, project=None):
 
     An item is answered when it is a question/decision (or a QUESTIONS row that
     is not an operator task, SYNC-MD-IMPORT), ``done`` and carries ``answer`` (``{"text",
-    "decision_id"}``) and ``done_at`` (the store joins them from the ``answered``
-    event).  A row whose item is named by another live item's ``corrects`` gets
-    ``superseded_by`` (sorted keys of those items).
+    "decision_id"}``, plus ``source``/``user``/``choice_id`` for a UI answer) and
+    ``done_at`` (the store joins them from the ``answered`` event).  A row whose
+    item is named by another live item's ``corrects`` gets ``superseded_by``
+    (sorted keys of those items).
     """
     corrected_by = {}
     for it in items:
@@ -401,6 +402,11 @@ def answers(items, project=None):
                "answer": answer.get("text"),
                "decision_id": answer.get("decision_id"),
                "done_at": it.get("done_at")}
+        # PG-ANSWER-UI: a UI answer names its source, user and chosen option; a
+        # router answer carries none of them, so the keys stay absent.
+        for name in ("source", "user", "choice_id"):
+            if answer.get(name) is not None:
+                row["answer_" + name] = answer[name]
         if corrected_by.get(it["key"]):
             row["superseded_by"] = sorted(corrected_by[it["key"]])
         rows.append(row)
