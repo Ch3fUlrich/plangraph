@@ -11,6 +11,8 @@ Routes (contract):
 * ``GET  /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,
   snapshot,whoami,health}`` and ``/v1/audit-meta`` (router/L1)
 * ``GET /v1/health`` is open; everything else needs ``Authorization: Bearer``.
+* The operator doors (``operator_csrf``, ``operator_answer``) need the operator
+  bearer *and* the hop header/Origin/CSRF checks of :mod:`api_operator`.
 * ``?fmt=text`` gives the compact form (the default for ``ready``, ``show``,
   ``alerts`` and ``blocked``); otherwise JSON.
 * Refusals are 4xx ``{"error": code, "msg": …}``; unexpected failures are a 500
@@ -34,7 +36,7 @@ from pathlib import Path
 from .. import views
 from . import outage
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
-from . import api_routes, audit_meta, auth, brief, changelog, fmt
+from . import api_operator, api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
 from .errors import Refused
 
@@ -114,10 +116,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 return
             try:
                 api_routes.run_gate(principal, name)
+                hop_user = api_operator.gate(principal, name, method,
+                                             self.headers, server.config,
+                                             server.store.now())
                 if method == "GET":
-                    payload, as_text = self._read(name, extra, query, principal)
+                    payload, as_text = self._read(name, extra, query, principal,
+                                                  hop_user)
                 else:
-                    payload = self._write(name, body or {}, principal)
+                    payload = self._write(name, body or {}, principal, hop_user)
                     as_text = query.get("fmt", ["json"])[0] == "text"
                     self._snapshot(principal)
                 if as_text:
@@ -126,6 +132,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 else:
                     self._json(200, payload)
             except Refused as exc:
+                if isinstance(exc, api_operator.HopRefused):
+                    with suppress(Exception):  # the hop is audited, then a 403
+                        server.store.audit_auth_failure(exc.msg or exc.code)
                 self._json(_STATUS.get(exc.code, 400),
                            {"error": exc.code, "msg": exc.msg})
             except Exception:  # noqa: BLE001 - never leak internals
@@ -199,8 +208,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
         values = query.get(name)
         return values[0] if values else default
 
-    def _read(self, name, extra, query, principal):
+    def _read(self, name, extra, query, principal, hop_user=None):
         store = self.server.store
+        if name == "operator_csrf":
+            return (api_operator.csrf_payload(
+                self.server.config, hop_user, store.now()), False)
         fmt_name = self._one(query, "fmt")
         as_text = fmt_name == "text" or (
             fmt_name is None and name in _TEXT_DEFAULT)
@@ -258,7 +270,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return (text(data), True) if as_text else (data, False)
         raise Refused("not_found", f"no read verb {name!r}")
     # --------------------------------------------------------------- writes
-    def _write(self, name, body, principal):
+    def _write(self, name, body, principal, hop_user=None):
         store = self.server.store
         if not isinstance(body, dict):
             if name in ("create_items", "import_items") and isinstance(body, list):
@@ -267,6 +279,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 raise Refused("validation", "body must be a JSON object")
         if isinstance(body.get("key"), str):  # old (rehomed) keys resolve
             body["key"] = store.resolve_key(body["key"])
+        if name == "operator_answer":
+            return api_operator.answer(store, principal, body, hop_user)
         if name in ("create_items", "import_items"):
             items = body.get("items")
             if not isinstance(items, list):

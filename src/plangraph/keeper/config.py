@@ -9,6 +9,9 @@ The config maps the store and its verifiers onto real paths:
 * ``decisions_file``— the DECISIONS.md the ``decision`` verifier reads
 * ``ci``            — ``{project: "owner/repo" | "none"}``
 * ``batch_roots``   — directories ``close_on_decision`` may read batch files from
+* ``operator_users``— the Authelia names the operator hop accepts (default none)
+* ``operator_origin`` — the exact ``Origin`` an operator write must present
+* ``operator_csrf_key_file`` — HMAC key for the ``X-PG-CSRF`` token
 * ``bind``          — ``"host:port"`` (or ``host``/``port`` keys)
 * ``default_lease`` — seconds a claim is held without a heartbeat
 
@@ -20,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -31,6 +35,9 @@ __all__ = ["Config", "ConfigError", "load_config", "verifier_context",
 REQUIRED_MODE = 0o600
 _DEFAULT_SNAPSHOT = "plan.snapshot.json"
 _DEFAULT_DB = "keeper.db"
+#: An ``Origin`` is exactly a scheme and a host with a port: a path, a user or
+#: any other scheme can never match the header the browser sends.
+_ORIGIN = re.compile(r"https?://[A-Za-z0-9._-]+(?::\d{1,5})?")
 
 
 class ConfigError(Exception):
@@ -84,6 +91,26 @@ class Config:
         # A blank entry would ``_resolve`` to the config dir and silently
         # authorise it; drop blanks before resolving.
         self.batch_roots = [str(self._resolve(p)) for p in roots if p.strip()]
+        # PG-ANSWER-UI: the operator hop.  The allow-list is the only thing
+        # naming an Authelia user, so a blank or absent entry must close every
+        # door rather than match one.
+        users = data.get("operator_users") or []
+        if not isinstance(users, (list, tuple)):
+            raise ConfigError("operator_users must be a list of names")
+        for user in users:
+            if not isinstance(user, str):
+                raise ConfigError("operator_users entries must be strings")
+            if not user.strip():
+                raise ConfigError("operator_users entries must not be blank")
+        self.operator_users = list(users)
+        origin = data.get("operator_origin")
+        if origin is not None and not _ORIGIN.fullmatch(str(origin)):
+            raise ConfigError(f"operator_origin {origin!r} must be "
+                              "scheme://host[:port] with no path")
+        self.operator_origin = str(origin) if origin else None
+        self.operator_csrf_key_file = (
+            str(self._resolve(data["operator_csrf_key_file"]))
+            if data.get("operator_csrf_key_file") else None)
         host, port = self._bind(data)
         self.host = host
         self.port = port
