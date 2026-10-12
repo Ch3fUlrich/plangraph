@@ -483,7 +483,7 @@ def test_pair_value_with_digit_but_no_capital_is_refused(pair):
 
 @pytest.mark.parametrize("text", [
     "login docs/runbook/docker-compose-v2.yml",
-    "password server/media/k3s-v1/notes.md",
+    "password server/media/downloader-v1/notes.md",
     "login docs/2026-08-30-ups-notes/readme.md"])
 def test_version_and_single_mixed_chunks_stay_paths(text):
     guard("note", text)

@@ -12,12 +12,17 @@ is path-like (known file extension with clean segments, or a multi-slash
 lowercase path) with no ``=``/``:`` pair and no secret-looking segment is
 exempt from both ``guard()`` and ``mask()``.
 
-Accepted limits: lowercase letters-only passphrase paths with >=2 slashes,
-CamelCase alphabetic file names, and single-slash lowercase pairs without
-a known extension are judged as before / not detectable as credentials;
-``src/my_module`` stays refused as a single-slash lowercase pair.  A
-``key: value`` pair value of lowercase letters only (no digit, no interior
-capital) is read as prose (``token: refresh-after-expiry``) and not refused.
+Accepted limits: inside an exempt path ANY chunk that holds a digit is
+secret-like except a year (``1999``/``2026``), a 1-2 digit number (the MM or
+DD of a ``YYYY-MM-DD`` date, which splits into separate chunks) and a version
+token (``v2``/``v10``) - so ``k3s`` is refused as an accepted false positive.
+A letters-only chunk is never secret-like (apart from a 12+ letter mixed-case
+CamelCase blob), so a lowercase letters-only passphrase path such as
+``a/b/correcthorsebattery`` is not detectable.  Single-slash lowercase pairs
+without a known extension are judged as before: ``src/my_module`` stays
+refused.  A ``key: value`` pair value of lowercase letters only (no digit, no
+interior capital) is read as prose (``token: refresh-after-expiry``) and not
+refused.
 """
 from __future__ import annotations
 
@@ -48,7 +53,9 @@ _EXTENSIONS = frozenset([
     "csv", "lock", "rst"])
 _SEG1 = re.compile(r"[A-Za-z0-9._-]+")
 _SEG2 = re.compile(r"[a-z0-9._-]+")
-_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+#: the only digit-bearing chunks a repo path is allowed to carry
+_CLEAN_CHUNKS = (re.compile(r"(?:19|20)[0-9]{2}"), re.compile(r"[0-9]{1,2}"),
+                re.compile(r"v[0-9]{1,3}"))
 
 
 class _Hit:
@@ -101,39 +108,22 @@ def _has_interior_upper(s):
 
 
 def _secret_segment(seg):
+    """ONE rule: a digit-bearing chunk is secret-like, except year/MM/DD/vN.
+
+    Letters-only chunks are clean apart from a 12+ letter mixed-case
+    CamelCase blob.
+    """
     stem = seg.rsplit(".", 1)[0] if "." in seg else seg
-    chunks = re.split(r"[-_.]", stem)
-    date_prefix = (
-        len(chunks) >= 3 and re.fullmatch(r"[0-9]{4}", chunks[0])
-        and re.fullmatch(r"[0-9]{2}", chunks[1])
-        and re.fullmatch(r"[0-9]{2}", chunks[2]))
-    mixed = 0
-    for idx, chunk in enumerate(chunks):
+    for chunk in re.split(r"[-_.]", stem):
         if not chunk:
             continue
-        if date_prefix and idx < 3:
-            continue
-        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", chunk):
-            continue
-        letters = any(c.isalpha() for c in chunk)
-        digits = any(c.isdigit() for c in chunk)
-        if len(chunk) >= 5 and digits and not letters:
-            return True   # a bare number run (``AbCdEf-123456``), dates aside
-        if len(chunk) >= 6 and letters and digits:
-            return True
-        if len(chunk) >= 8 and _has_upper(chunk) and _has_lower(chunk) \
-                and _has_digit(chunk):
-            return True
-        if len(chunk) >= 12 and re.fullmatch(r"[A-Za-z0-9+/=]+", chunk):
-            upper = _has_upper(chunk)
-            lower = _has_lower(chunk)
-            if (letters and digits) or (upper and lower):
+        if _has_digit(chunk):
+            if not any(p.fullmatch(chunk) for p in _CLEAN_CHUNKS):
                 return True
-        # Several short letter+digit chunks (``abc1_def2``) are one secret
-        # split by separators; a bare version token (``v2``) does not count.
-        if letters and digits and not re.fullmatch(r"v?[0-9]{1,3}", chunk):
-            mixed += 1
-    return mixed >= 2
+        elif len(chunk) >= 12 and chunk.isalpha() and _has_upper(chunk) \
+                and _has_lower(chunk):
+            return True
+    return False
 
 
 def _is_exempt_token(raw):
@@ -157,12 +147,7 @@ def _is_exempt_token(raw):
                 return True
     # Branch 2: >= 2 slashes, all lowercase, no secret-looking chunk.
     if token.count("/") >= 2 and all(_SEG2.fullmatch(s) for s in segments):
-        for s in segments:
-            if _DATE.fullmatch(s):
-                continue
-            if _secret_segment(s):
-                return False
-        return True
+        return not any(_secret_segment(s) for s in segments)
     return False
 
 
