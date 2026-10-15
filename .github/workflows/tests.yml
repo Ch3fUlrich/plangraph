@@ -75,4 +75,4 @@ jobs:
           # keeper modules that never open the SQLite file directly
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
-          python -m pytest -q -n auto --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py $FILES
+          python -m pytest -q -n auto --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py $FILES

@@ -126,6 +126,12 @@ def _cmd_verify(args, cfg) -> int:
     return 0
 
 
+def _cmd_copy_to_pg(args, cfg) -> int:
+    """W3: SQLite snapshot -> empty Postgres keeper (``--dry-run`` reads the source only)."""
+    from . import copy_to_pg
+    return copy_to_pg.run(cfg, src=args.src, apply=args.apply)
+
+
 def _cmd_import(args, cfg) -> int:
     items = _importer().load_dir(args.dir)
     conn = _open(cfg)
@@ -220,6 +226,7 @@ _COMMANDS = {
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,
     "verify": _cmd_verify,
+    "copy-to-pg": _cmd_copy_to_pg,
     "import": _cmd_import,
     "export": _cmd_export,
 }
