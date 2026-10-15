@@ -126,16 +126,18 @@ class TokensMixin:
             token = TOKEN_PREFIX + secrets.token_urlsafe(32)
             family = self._run_family(job) if role == "reviewer" else None
             token_hash = auth.hash_token(token)
-            cursor = self.conn.execute(
-                "INSERT INTO run_tokens(token_sha256,key,project,epoch,role,"
+            # The id is assigned here (single-writer transaction), like events.seq.
+            token_id = self.conn.execute(
+                "INSERT INTO run_tokens(id,token_sha256,key,project,epoch,role,"
                 "run_id,family,minted_by,created_at,expires_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM run_tokens),"
+                "?,?,?,?,?,?,?,?,?,?) RETURNING id",
                 (token_hash, key, fresh["project"], epoch, role,
                  run_id, family, principal.name, self._iso(now),
-                 self._iso(expires)))
+                 self._iso(expires))).fetchone()[0]
             # The sha256 (never the token) is chained, so a raw hash swap is detected (M2B-TOKEN-INTEGRITY).
             self._append(principal, key, "token_minted",
-                         {"token_id": cursor.lastrowid, "token_sha256": token_hash, "role": role,
+                         {"token_id": token_id, "token_sha256": token_hash, "role": role,
                           "run_id": run_id, "epoch": epoch,
                           "expires_at": self._iso(expires)}, now)
         return {"key": key, "role": role, "run_id": run_id, "epoch": epoch,

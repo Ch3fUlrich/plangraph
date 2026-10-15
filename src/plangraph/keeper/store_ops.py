@@ -26,10 +26,10 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 
 from .. import views
 from . import events
+from . import db_errors
 from .errors import Refused
 
 MAX_OPS = 500
@@ -45,7 +45,7 @@ _OPS = {
     "set_kind": {"op", "key", "kind"},
 }
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
-              sqlite3.ProgrammingError)
+              *db_errors.PROGRAMMING)
 #: ops that change a key's state or epoch (evidence after them is verified in-lock).
 _MOVES = ("create", "legacy_state", "cancel", "close_on_decision", "rehome")
 
@@ -243,7 +243,7 @@ class OpsMixin:
             return self._run_op(principal, op, batch_ref, now)
         except Refused as exc:
             raise _fail(index, op, exc) from None
-        except sqlite3.IntegrityError as exc:
+        except db_errors.INTEGRITY as exc:
             raise _fail(index, op, Refused(
                 "conflict", "keeper data conflicts with this request")) from exc
         except _MALFORMED as exc:

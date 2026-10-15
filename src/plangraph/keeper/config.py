@@ -3,6 +3,9 @@
 The config maps the store and its verifiers onto real paths:
 
 * ``db``            — the SQLite file (relative paths resolve next to the config)
+* ``backend``       — ``"sqlite"`` (default) or ``"postgres"``; with Postgres ``dsn``
+                      (or env ``PG_DSN``) names the server and ``pg_schema`` the
+                      namespace (``db`` then only anchors the derived schema name)
 * ``snapshot``      — where ``plan.snapshot.json`` is rewritten after every write
 * ``repos``         — ``{project: working tree path}`` for the git verifier
 * ``runs_dir``      — where ``run-record`` jobs live
@@ -64,6 +67,7 @@ class Config:
                 self.repos[proj] = {"path": path, "ref": ref}
             else:
                 raise ConfigError(f"repo {proj!r} entry must be a path string or dict")
+        self.db_options = self._db_options(data)
         self.runs_dir = data.get("runs_dir")
         self.decisions_file = data.get("decisions_file")
         # M2B-SIGNED-SNAPSHOT: the keeper signs with signing_key; readers verify with snapshot_pubkey.
@@ -94,6 +98,20 @@ class Config:
         self.backup_prune = self._backup_prune(data.get("backup_prune"))
 
     # ------------------------------------------------------------- helpers
+    @staticmethod
+    def _db_options(data) -> dict:
+        """Backend options for ``db.open_db``/``lock_keeper`` (only what the file sets)."""
+        out = {}
+        for name, key in (("backend", "backend"), ("dsn", "dsn"), ("schema", "pg_schema")):
+            if data.get(key) is None:
+                continue
+            if not isinstance(data[key], str) or not data[key]:
+                raise ConfigError(f"{key} must be a non-empty string")
+            out[name] = data[key]
+        if out.get("backend") not in (None, "sqlite", "postgres"):
+            raise ConfigError("backend must be 'sqlite' or 'postgres'")
+        return out
+
     def _resolve(self, value) -> Path:
         path = Path(value).expanduser()   # "~/..." in keeper.json / reader.json (D-818 steps)
         return path if path.is_absolute() else (self._base / path)

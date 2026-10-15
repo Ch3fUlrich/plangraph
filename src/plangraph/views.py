@@ -28,7 +28,8 @@ __all__ = [
     "STATES",
 ]
 
-STATES = ("open", "claimed", "in_review", "done", "cancelled")
+STATES = ("open", "ready", "claimed", "in_review", "done", "cancelled", "running",
+          "needs_input", "waiting", "failed", "parked")
 TERMINAL = frozenset(("done", "cancelled"))
 _ACTIVE = ("open", "claimed")
 

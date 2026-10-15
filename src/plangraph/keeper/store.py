@@ -14,15 +14,16 @@ from __future__ import annotations
 import json
 import logging
 import math
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .. import views
 from . import auth, evidence
+from . import db_errors
 from .errors import Refused
 from .store_answer import AnswerMixin
 from .store_audit_meta import AuditMetaMixin
+from .store_cards import CardsMixin
 from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
@@ -55,7 +56,7 @@ _LEASE_MIN, _LEASE_MAX = 60, 86400
 # Exceptions raised by a verb that mean the request was malformed, not that the
 # server crashed.  ``_run`` turns them into an audited ``Refused``.
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
-              sqlite3.ProgrammingError)
+              *db_errors.PROGRAMMING)
 
 #: X7b: evidence kinds a claimant may never attach for itself.  Only the router
 #: puts legacy proof on an item, and only via ``add_evidence_router``.
@@ -66,7 +67,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, KindMixin,
-            ChangelogMixin, AuditMetaMixin):
+            ChangelogMixin, AuditMetaMixin, CardsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -184,7 +185,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         except Refused as exc:
             self._audit(principal, action, key, False, exc.code, exc.msg, now)
             raise
-        except sqlite3.IntegrityError as exc:
+        except db_errors.INTEGRITY as exc:
             # A uniqueness/foreign-key violation is a lost race or duplicate.
             self._audit(principal, action, key, False, "conflict", str(exc), now)
             raise Refused("conflict",
@@ -201,7 +202,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             self._audit(principal, action, key, False, "validation",
                         "malformed input", now)
             raise Refused("validation", "malformed input")
-        except sqlite3.OperationalError as exc:
+        except db_errors.OPERATIONAL as exc:
             # A concurrent writer holding the write lock is a lost race, not an
             # unhandled crash: report it as a conflict and audit the refusal.
             if "lock" not in str(exc).lower() and "busy" not in str(exc).lower():

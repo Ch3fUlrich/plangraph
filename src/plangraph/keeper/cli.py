@@ -192,6 +192,8 @@ def _add_admin(sub):
     init = commands.add_parser("init", help="create the DB schema")
     init.add_argument("--router", help="also create a router principal")
 
+    commands.add_parser("migrate", help="apply pending schema migrations (Postgres) / upgrade (SQLite)")
+
     add = commands.add_parser("add-principal")
     add.add_argument("name")
     add.add_argument("--role", required=True)
