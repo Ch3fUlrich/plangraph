@@ -10,7 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import seat_verdict as sv  # noqa: E402
 
-TOKEN = "tok-not-a-real-secret-123"
+TOKEN = "dummy"
 
 
 @pytest.mark.parametrize("text,want", [
