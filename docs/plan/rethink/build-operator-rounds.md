@@ -32,3 +32,4 @@
 ## 2026-10-15 ~20:2x-20:3xZ operator verbatim
 - "Lensure that there will be no confusion anymore when agents try to spawn a mimo leg. Another agent reported "leg 1 failed with a 402 (OpenRouter credits, not the mimo route). Falling back to leg 2, --free.". There should be no confusion"
 - AskUserQuestion (mimo fix waits for router GO, router paused): answer "GO both now (Recommended)" = fixes-L1 merges maingreen -> ordrift (opencode.jsonc modelID mimo/mimo-v2.6-flash), ff /home/s/code/AutoOS, live-apply only the mimo-v2.6-flash/pro combos in OmniRoute.
+- ~20:4xZ: "Continue orchestration and ensure that you will not be blocked by asking interactive questions. I will ask for them when I will be back in 8 hours" -> no AskUserQuestion until ~04:4xZ; reversible questions decided with the default (D-935) and logged in the card; operator questions queued under "FOR OPERATOR".

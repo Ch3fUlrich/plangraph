@@ -31,3 +31,6 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 - 20:17 beat: 7 leases hb ok. #12 98d6f8e CI ✓✓ (verdict-parity fix pending). #11 e91a415 (rebase pending keeper-pg). AutoOS main b33e0fb39, priv-writers not merged -> deepinfra L2 waits. All 6 L2s alive. MemAvail 4.7 GB. mimo 402-via-OpenRouter trace running (Sonnet subagent).
 - 20:2x mimo 402 root cause: opencode.jsonc:746 bare modelID "mimo-v2.6-flash"; live OmniRoute lacks repo combo (combos.json:300-305) -> auto-resolve -> openrouter/xiaomi/mimo-v2.6-flash 402. Fix asked of fixes-L1 (modelID mimo/mimo-v2.6-flash + apply combos). L2s: skip mimo leg until MIMO-FIXED.
 - FOR ROUTER: if fixes-L1 lacks an OmniRoute GO: live apply of mimo-v2.6-flash/pro combos (configuration/omniroute/apply.sh).
+
+## FOR OPERATOR (operator away until ~04:4xZ; no interactive questions; defaults taken are logged here)
+- (none yet)
