@@ -72,7 +72,7 @@ def pytest_collection_modifyitems(config, items):
         return
     kept, dropped = [], []
     for item in items:
-        (dropped if item.nodeid in _READS_SQLITE_FILE else kept).append(item)
+        (dropped if item.nodeid.split("@", 1)[0] in _READS_SQLITE_FILE else kept).append(item)
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
