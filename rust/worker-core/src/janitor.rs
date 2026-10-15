@@ -2,7 +2,7 @@
 //!
 //! Only branches that parse as `attempt/<card>/<n>` are ever touched.
 
-use crate::git::{git, GitError};
+use crate::git::{check_rev, git, GitError};
 use crate::probe::{probe, ProbeOutcome};
 use crate::worktree::{list, remove, AttemptId};
 use std::collections::HashSet;
@@ -102,6 +102,7 @@ pub fn sweep(repo: &Path, live: &HashSet<AttemptId>, spec: &ProbeSpec) -> Result
 }
 
 fn commits_beyond_branch(repo: &Path, base: &str, branch: &str) -> Result<ProbeOutcome, GitError> {
+    check_rev(base)?;
     let n = git(repo, &["rev-list", "--count", &format!("{base}..{branch}")])?;
     Ok(if n.parse::<u32>().unwrap_or(0) == 0 {
         ProbeOutcome::Nothing
@@ -114,7 +115,7 @@ fn commits_beyond_branch(repo: &Path, base: &str, branch: &str) -> Result<ProbeO
 mod tests {
     use super::*;
     use crate::testutil::{commit_all, repo, write};
-    use crate::worktree::create;
+    use crate::worktree::{create, remove};
 
     fn branches(repo: &Path) -> Vec<String> {
         let s = git(repo, &["branch", "--format=%(refname:short)"]).unwrap();
@@ -235,5 +236,27 @@ mod tests {
         assert!(rep.removed.is_empty());
         assert_eq!(rep.failed.len(), 1);
         assert!(w.path.exists());
+    }
+
+    #[test]
+    fn option_like_base_keeps_attempt_with_and_without_worktree() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let (with_wt, bare) = (AttemptId::new("c", 1), AttemptId::new("c", 2));
+        let w = create(r.path(), &base, &root.path().join("w"), &with_wt).unwrap();
+        let w2 = create(r.path(), &base, &root.path().join("w2"), &bare).unwrap();
+        remove(r.path(), &w2.path).unwrap(); // branch only
+        let bad = |_: &AttemptId| "--all".to_string();
+        let spec = ProbeSpec {
+            check_cmd: "true",
+            timeout: Duration::from_secs(5),
+            tail_lines: 5,
+            base_for: &bad,
+        };
+        let rep = sweep(r.path(), &HashSet::new(), &spec).unwrap();
+        assert!(rep.removed.is_empty() && rep.done.is_empty());
+        assert_eq!(rep.failed.len(), 2);
+        assert!(w.path.exists());
+        assert_eq!(branches(r.path()).len(), 3, "main + both attempt branches");
     }
 }

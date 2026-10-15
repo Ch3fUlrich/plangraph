@@ -174,6 +174,29 @@ mod tests {
     }
 
     #[test]
+    fn trailing_newline_and_mixed_patterns_still_classify() {
+        let crash = |err: &str| {
+            with(|s| {
+                s.exit_code = Some(1);
+                s.stderr = err.into();
+            })
+        };
+        let p = Patterns::default();
+        assert_eq!(
+            p.classify(&crash("error: 429\n")).class,
+            ExitClass::UsageLimit
+        );
+        assert_eq!(p.classify(&crash("429")).class, ExitClass::UsageLimit);
+        // usage_limit and outage are handled identically by the budget
+        // (re-route, then wait), so their relative precedence is not observable.
+        assert_eq!(
+            p.classify(&crash("503 service unavailable, then 429\n"))
+                .class,
+            ExitClass::UsageLimit
+        );
+    }
+
+    #[test]
     fn classification_table() {
         use ExitClass::*;
         let crash = |err: &str| {
