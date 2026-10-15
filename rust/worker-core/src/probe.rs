@@ -1,7 +1,7 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
 use crate::check::run_check;
-use crate::git::{git, GitError};
+use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::Duration;
@@ -27,6 +27,7 @@ pub enum ProbeError {
 
 /// Number of commits on HEAD of `dir` beyond `base`.
 pub fn commits_beyond(dir: &Path, base: &str) -> Result<u32, GitError> {
+    check_rev(base)?;
     let n = git(dir, &["rev-list", "--count", &format!("{base}..HEAD")])?;
     Ok(n.parse().unwrap_or(0))
 }

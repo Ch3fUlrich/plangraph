@@ -13,6 +13,22 @@ pub enum GitError {
         code: Option<i32>,
         stderr: String,
     },
+    #[error(
+        "refusing revision {0:?}: empty, option-like or containing whitespace/control characters"
+    )]
+    BadRev(String),
+}
+
+/// Reject a caller-supplied revision that git could parse as an option
+/// (leading `-`) or that is not a single token, before it reaches an argv.
+pub fn check_rev(rev: &str) -> Result<(), GitError> {
+    if rev.is_empty()
+        || rev.starts_with('-')
+        || rev.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(GitError::BadRev(rev.to_string()));
+    }
+    Ok(())
 }
 
 /// Run `git <args>` in `dir` and return raw stdout bytes.

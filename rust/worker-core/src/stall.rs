@@ -215,6 +215,23 @@ mod tests {
     }
 
     #[test]
+    fn tail_keeps_exactly_the_last_max_bytes() {
+        for max in [0usize, 1, 7] {
+            let o = Opts {
+                max_output: max,
+                ..quick()
+            };
+            let r = supervise(
+                sh("printf 0123456789abcdefghij; sleep 0.1; printf KLMNOPQRST"),
+                &o,
+            )
+            .unwrap();
+            let all = b"0123456789abcdefghijKLMNOPQRST";
+            assert_eq!(r.output, all[all.len() - max..], "max={max}");
+        }
+    }
+
+    #[test]
     fn output_is_truncated_to_tail() {
         let o = Opts {
             max_output: 100,

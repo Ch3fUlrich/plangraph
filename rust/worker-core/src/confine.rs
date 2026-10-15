@@ -1,6 +1,6 @@
 //! Write-set confinement: what an attempt changed versus what the card allows.
 
-use crate::git::{git_bytes, GitError};
+use crate::git::{check_rev, git_bytes, GitError};
 use crate::hash::Fnv;
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,7 @@ fn names(dir: &Path, args: &[&str]) -> Result<Vec<String>, GitError> {
 /// Files changed in `dir` relative to `base`: committed (base..HEAD),
 /// uncommitted, and untracked (honouring .gitignore). Renames count as both paths.
 pub fn changed_files(dir: &Path, base: &str) -> Result<BTreeSet<String>, GitError> {
+    check_rev(base)?;
     let range = format!("{base}..HEAD");
     let mut set = BTreeSet::new();
     for args in [
@@ -102,6 +103,7 @@ pub fn check_confinement(
 
 /// Hash of the attempt's total change versus `base` (tracked diff + untracked files).
 pub fn diff_hash(dir: &Path, base: &str) -> Result<String, ConfineError> {
+    check_rev(base)?;
     let mut h = Fnv::default();
     h.update(&git_bytes(
         dir,
@@ -117,6 +119,7 @@ pub fn diff_hash(dir: &Path, base: &str) -> Result<String, ConfineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::git;
     use crate::testutil::{commit_all, repo, write};
 
     fn s(v: &[&str]) -> Vec<String> {
@@ -189,6 +192,70 @@ mod tests {
     }
 
     #[test]
+    fn rename_reports_both_paths() {
+        let (dir, base) = repo();
+        let p = dir.path();
+        git(p, &["mv", "README.md", "src_moved.md"]).unwrap();
+        let got: Vec<String> = changed_files(p, &base).unwrap().into_iter().collect();
+        assert_eq!(got, ["README.md", "src_moved.md"]);
+        commit_all(p, "mv");
+        let got: Vec<String> = changed_files(p, &base).unwrap().into_iter().collect();
+        assert_eq!(got, ["README.md", "src_moved.md"]);
+        // renaming a protected file into the write set is still a violation
+        let v = check_confinement(p, &base, &s(&["src_moved.md"]), &[]).unwrap();
+        assert_eq!(
+            v,
+            vec![Violation::OutsideWriteSet {
+                path: "README.md".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn dotfiles_match_globs() {
+        let ws = s(&["src/**", "**", "docs/"]);
+        for p in ["src/.env", ".env", "docs/.hidden/x", "a/.b/.c"] {
+            assert!(evaluate([p], &ws, &[]).unwrap().is_empty(), "{p}");
+        }
+        let only_src = s(&["src/**"]);
+        assert_eq!(evaluate([".env"], &only_src, &[]).unwrap().len(), 1);
+        assert!(evaluate(["src/.env"], &only_src, &[]).unwrap().is_empty());
+        let fb = s(&["**/.env"]);
+        assert_eq!(evaluate(["src/.env"], &ws, &fb).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn dirty_submodule_is_reported() {
+        let (sub, _) = repo();
+        let (dir, base) = repo();
+        let p = dir.path();
+        git(
+            p,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &sub.path().to_string_lossy(),
+                "vendor/sub",
+            ],
+        )
+        .unwrap();
+        commit_all(p, "add sub");
+        let base2 = git(p, &["rev-parse", "HEAD"]).unwrap();
+        assert!(base != base2);
+        assert!(changed_files(p, &base2).unwrap().is_empty());
+        write(p, "vendor/sub/README.md", "dirty\n"); // tracked file inside the submodule
+        let got = changed_files(p, &base2).unwrap();
+        assert!(got.contains("vendor/sub"), "{got:?}");
+        write(p, "vendor/sub/new.txt", "u"); // untracked inside the submodule
+        commit_all(&p.join("vendor/sub"), "in sub");
+        let got = changed_files(p, &base2).unwrap();
+        assert!(got.contains("vendor/sub"), "{got:?}");
+    }
+
+    #[test]
     fn check_confinement_end_to_end() {
         let (dir, base) = repo();
         let p = dir.path();
@@ -208,6 +275,34 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn option_like_base_is_refused_not_passed_to_git() {
+        let (dir, _) = repo();
+        let p = dir.path();
+        let out = tempfile::tempdir().unwrap().keep().join("leak.diff");
+        // `git diff --output=<file>` would write a file at an attacker-chosen path
+        let evil = format!("--output={}", out.display());
+        assert!(diff_hash(p, &evil).is_err());
+        assert!(!out.exists());
+        assert!(changed_files(p, &evil).is_err());
+        assert!(changed_files(p, "--all").is_err());
+        std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn ignored_files_are_not_changes_but_force_added_ones_are() {
+        let (dir, base) = repo();
+        let p = dir.path();
+        write(p, ".gitignore", "build/\n");
+        commit_all(p, "ignore");
+        write(p, "build/out.bin", "x"); // ignored: can never enter a commit
+        let got = changed_files(p, &base).unwrap();
+        assert!(!got.contains("build/out.bin"));
+        git(p, &["add", "-f", "build/out.bin"]).unwrap();
+        let got = changed_files(p, &base).unwrap();
+        assert!(got.contains("build/out.bin"), "{got:?}");
     }
 
     #[test]
