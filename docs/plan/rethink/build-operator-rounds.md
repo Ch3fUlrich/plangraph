@@ -24,3 +24,6 @@
 ## 2026-10-15 ~19:45-19:55Z (build-L1 gen-4), operator verbatim
 - "I noticed that mimo/mimo-v2.6-flash should have up to 1M token. Maybe the omniroute settings are off. Check it"
 - After finding (no OmniRoute cap; client review-call.py 300 s timeout + reasoning eats max_tokens; fix = client option, route to AutoOS owner): "Go"
+
+## 2026-10-15 ~20:3xZ operator verbatim
+- "Mimo works only via the mimo provider route. Deepinfra models should be removed fully and disabled from omniroute."
