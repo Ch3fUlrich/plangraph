@@ -6,11 +6,13 @@ on:
     paths:
       - "rust/**"
       - "!rust/spikes/**"
+      - "!rust/worker/**"
       - ".github/workflows/rust.yml"
   pull_request:
     paths:
       - "rust/**"
       - "!rust/spikes/**"
+      - "!rust/worker/**"
       - ".github/workflows/rust.yml"
 
 # D-1338: lane branches run CI via their PR only; a newer push cancels the older run.
