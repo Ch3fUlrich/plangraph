@@ -112,3 +112,5 @@ temporal worker deployment set-current-version --deployment-name d --build-id v1
 SPIKE_ADDR=http://127.0.0.1:17233 cargo run --bin driver -- all tests/fixtures
 cargo test --test replay      # offline, no server
 ```
+
+Outcome: recorded as decision D-1321 (adopt with workarounds, pending the live Temporal check).
