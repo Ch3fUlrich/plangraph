@@ -31,9 +31,24 @@ pub fn check_rev(rev: &str) -> Result<(), GitError> {
     Ok(())
 }
 
+/// Test builds only: no system or global config, and a fixed identity, so tests
+/// behave the same on a machine (or CI runner) without a git identity.
+fn hermetic(cmd: &mut Command) {
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "tester")
+        .env("GIT_AUTHOR_EMAIL", "t@example.com")
+        .env("GIT_COMMITTER_NAME", "tester")
+        .env("GIT_COMMITTER_EMAIL", "t@example.com");
+}
+
 /// Run `git <args>` in `dir` and return raw stdout bytes.
 pub fn git_bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
-    let out = Command::new("git")
+    let mut cmd = Command::new("git");
+    if cfg!(test) {
+        hermetic(&mut cmd);
+    }
+    let out = cmd
         .args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
