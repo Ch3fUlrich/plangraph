@@ -7,6 +7,7 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+from ..inbox import routes as _inbox
 from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
@@ -22,6 +23,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "set_kind"}
+READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
+WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
 

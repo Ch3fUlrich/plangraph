@@ -31,7 +31,7 @@ from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .. import views
+from .. import inbox, views
 from . import outage
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
@@ -66,6 +66,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
 
     def _handle(self, method):
         parsed = urllib.parse.urlsplit(self.path)
+        if method == "GET" and parsed.path == "/inbox":
+            return self._inbox()
         if not parsed.path.startswith("/v1/"):
             self._json(404, {"error": "not_found", "msg": "unknown path"})
             return
@@ -178,11 +180,18 @@ class KeeperHandler(BaseHTTPRequestHandler):
             text = json.dumps(text)
         self._send(status, text.encode("utf-8"), "text/plain; charset=utf-8")
 
-    def _send(self, status, body, ctype):
+    def _inbox(self):
+        """GET /inbox: the static, unauthenticated question form."""
+        self._send(200, inbox.routes.page(), "text/html; charset=utf-8",
+                   inbox.routes.PAGE_HEADERS)
+
+    def _send(self, status, body, ctype, headers=()):
         if status == 413:
             self.close_connection = True
         self.send_response(status)
         self.send_header("Content-Type", ctype)
+        for name, value in headers:
+            self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         try:
@@ -202,6 +211,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
             fmt_name is None and name in _TEXT_DEFAULT)
         project = self._one(query, "project")
 
+        if name in inbox.routes.READ_VERBS:
+            return inbox.routes.read(store, principal, name, query), False
         if name == "ready":
             n = None if self._one(query, "all") else self._int(self._one(query, "n", 10), "n")
             mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"
@@ -263,6 +274,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 raise Refused("validation", "body must be a JSON object")
         if isinstance(body.get("key"), str):  # old (rehomed) keys resolve
             body["key"] = store.resolve_key(body["key"])
+        if name in inbox.routes.WRITE_VERBS:
+            return inbox.routes.write(store, principal, name, body)
         if name in ("create_items", "import_items"):
             items = body.get("items")
             if not isinstance(items, list):
