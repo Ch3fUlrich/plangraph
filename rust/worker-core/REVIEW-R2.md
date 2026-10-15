@@ -33,3 +33,15 @@ Counts: 2 confirmed (1 behaviour fix, 1 test gap), 19 false, 1 deferred (symlink
 
 Not in the review, for the glue: design 4.5 says the wait is "capped at 24 h, then park + alarm"; `budget::next_action` caps
 each delay but never parks after repeated waits, and `probe_fail` backoff has no attempt limit. The glue should bound both.
+
+## Round-2 seat and carry-over (RT-P1-WORKER)
+
+Round-2 seat (gpt-oss-120b, openai) on head 291617ff: pass, no test-gaming; it agreed with the three false HIGH verdicts above.
+Carry into RT-P1-WORKER, which owns them:
+
+| Item | Source | Where it lands |
+|---|---|---|
+| Fresh worktree on leg-tier promotion | design 4.5 | glue: promotion starts a new attempt worktree from the base sha |
+| Symlink escape out of the write set | R2 deferred | harness sandbox (confinement here checks paths, not link targets) |
+| 24 h wait cap, then park + alarm | design 4.5 | glue: count waits per card, park when the cap is reached |
+| `probe_fail` attempt cap | R2 note | glue: bound backoff attempts, then classify as failed |
