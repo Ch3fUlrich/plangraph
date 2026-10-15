@@ -39,6 +39,27 @@ Payloads are `{"metadata": {"encoding": b64 "json/plain"}, "data": b64}`; decode
 
 The projector never sets `done` or `cancelled` (not in `SETTABLE_STATES`).
 
+Refinements: a StateRec is emitted only when its state differs from the previously emitted state of the same run (no
+`waiting, waiting`). A TimerStarted never overrides `needs_input` (the answer wait carries a timer). StateRec event ids: the
+ActivityTaskScheduled id for `running`; the attempt's closing event id for `needs_input`/`waiting`; the TimerStarted id; the
+workflow-end event id. Attempt fields not in the result fall back to the event times of ActivityTaskStarted (started_at) and
+the closing event (ended_at); `attempt` defaults to 1 when no Started event exists (e.g. terminated while scheduled -> no
+AttemptRec is emitted for an activity that never closed). `RunProjection.status` in `running | completed | failed | canceled |
+terminated | timed_out | continued_as_new`; it also carries `outcome` (workflow result `outcome`, else None) and `next_run_id`
+(ContinuedAsNew). A run with no plan key yields plan_key None and no records (status still filled).
+
+Module contracts (so writers can work in parallel):
+* `source.py`: `WorkflowRef(workflow_id, run_id, start_time, status)` frozen dataclass (status = Temporal status name upper-case,
+  e.g. `RUNNING`, `COMPLETED`); `class HistorySource(Protocol)`: `list_workflows(self, *, open_only: bool = False) -> list[WorkflowRef]`
+  (one ref per run, sorted by (start_time, workflow_id, run_id)), `fetch_history(self, workflow_id, run_id) -> dict`;
+  `FileSource(dir)` over `tests/projector_record.py` output files. `temporal_source.py`: `TemporalSource` (lazy temporalio).
+* `apply.py`: `class Projector(store, principal, *, now=time.time)`; `apply_run(proj, *, run_ord) -> ApplyResult` (counters
+  attempts_written, attempts_existing, states_written, states_skipped_state, states_existing, states_stale); module function
+  `project_source(source, projector, *, open_only=False) -> dict` (counters + processed/unmapped); `rebuild` is the same call
+  (idempotent). Global watermark updated at the end of `project_source`.
+* `reconcile.py`: `reconcile(store_or_conn, source, projector_or_none, *, now=time.time) -> ReconcileReport`.
+* `run_ord` = index of the run in the workflow's runs sorted by (start_time, run_id).
+
 `project_history(history, *, workflow_id, run_id) -> RunProjection` with frozen dataclasses `AttemptRec(workflow_id, run_id,
 activity_id, attempt, scheduled_event_id, closed_event_id, plan_key, exit_class, harness, model, combo, class_, started_at,
 ended_at, tokens_in, tokens_out, cost)`, `StateRec(workflow_id, run_id, event_id, plan_key, state, reason)`,
