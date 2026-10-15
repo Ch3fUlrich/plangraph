@@ -33,6 +33,7 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 - FOR ROUTER: if fixes-L1 lacks an OmniRoute GO: live apply of mimo-v2.6-flash/pro combos (configuration/omniroute/apply.sh).
 
 ## FOR OPERATOR (operator away until ~04:4xZ; no interactive questions; defaults taken are logged here)
+- INCIDENT ~21:2xZ: GitHub Actions refuses all jobs on plangraph ("recent account payments have failed or your spending limit needs to be increased", Billing & plans). Every PR CI is blocked until billing is fixed or the workstation runner (CI-RUNS-ON-WORKST, after autoos:CI-WORKST-RUNNER) exists. Default taken: no merges without CI; PR #13 fix 22922ec waits (local WSL gate green, qwen delta seat running).
 - D-935 default 21:0xZ: keeper-pg L2 hit cap (232k); router paused so no recycle -> build-L1 runs its 2 leftover closed tasks (#11 conftest fix, final HIGH seats) as in-session Sonnet subagents (spawner admission 4354<4608 MB refuses L3). Reversible; recorded as Sonnet fallback.
 - 20:5x MIMO-FIXED: live combos mimo-v2.6-flash/pro -> mimo provider (fixes-L1, evidence /home/s/seat-evidence/mimo-combos-d1375/, smoke ids uuid_hex = mimo, before gen-* = OpenRouter). L2s told. opencode.jsonc mimo/ prefix lands with ordrift merge.
 - 21:0x PR #14 (W3 copy-to-pg) merged main 3495f09 (CI 38801537015 both ✓). keeper-pg L2 stopped at cap; handoff SUPERSEDED. Subagents: #11 fix (contract @loadgroup nodeid), final HIGH seats gpt-oss+qwen -> keeper-pg-seats/final-221e9b2/.
@@ -44,3 +45,4 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 - 21:4x PR #13 openai seat: 3/3 pass (1 HIGH refuted), judge-confirmed V11 defect: cancel not reaching harness child (attempt.rs:87/123) + LOW janitor skip on native cancel (workflow.rs:113-116,151-152). Sent fix to build-L2-worker-code; expect MERGE-READY new sha + qwen delta seat; successor spot-checks fix then merges. Seat dir worker-code-seats/openai-37d4a2b/.
 - 21:5x PR #15 PLANNER-KIT-CODE merged main 27f5604 (d01c678 CI ✓✓; qwen r3 pass A+B, seat copied durable /home/s/code/plangraph-worktrees/planner-kit-seats/qwen-d01c678; writers Sonnet: spawner floor refused). Successor: evidence/submit/verdict; L2-DONE build-L2-planner-kit.
 - 21:17 beat: 7 leases hb. gen-4 over cap, awaiting recycle (FOR ROUTER).
+- 21:2x PR #13 fix 22922ec pushed (cancel via supervise_with_cancel, janitor on native cancel, 600 s cancel e2e); GitHub Actions billing refusal blocks CI -> waits. FOR ROUTER: incident GH Actions billing (all repos?) + CI-RUNS-ON-WORKST priority.
