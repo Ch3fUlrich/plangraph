@@ -1,0 +1,101 @@
+**V1 – Bug‑fix completeness**  
+
+*`src/plangraph/keeper/api.py:KeeperHandler._write` (lines 250‑266) – verdict handling now checks `isinstance(ok, bool)` and raises a Refused (validation) if not, fixing the ““false” string passes” bug.  
+*`src/plangraph/keeper/api.py:KeeperHandler._write` (lines 210‑214) – `set_priority` now calls the new helper `_int` instead of `int()`.  
+*`src/plangraph/keeper/api.py:KeeperHandler._write` (lines 190‑194) – `claim` parses `lease` via `_int`.  
+*`src/plangraph/keeper/api.py:KeeperHandler._read` (lines 177‑180) – `ready` parses `n` via `_int`.  
+*`src/plangraph/keeper/api.py:KeeperHandler._int` (new static method, lines 271‑279) – centralises integer validation and maps malformed numbers to Refused (validation) → 400.  
+
+**Finding:** All places where request data or query parameters are coerced to `int` or `bool` have been replaced with explicit validation. No other `int()` or `bool()` calls appear in `api.py`. The fixes are therefore **correct and complete** with respect to the contract.  
+
+---
+
+**V2 – Black‑box discipline**  
+
+| Test file | Import that reaches keeper internals |
+|-----------|--------------------------------------|
+| `tests/contract/test_events.py` | `import sqlite3` – reads the SQLite `keeper.db` file directly (allowed only for local SQLite keeper; the test skips when not in local mode). |
+| `tests/contract/test_snapshot_file.py` | `import cryptography` – used only for signature verification of the on‑disk snapshot, not for keeper internals. |
+| `tests/contract/contract_harness.py` | imports `contract_harness` modules but never imports `plangraph.keeper.store` or similar; only uses HTTP/CLI. |
+| All other test modules | import only the public `Keeper` wrapper, `contract_world`, `contract_schema`, etc.; no direct access to `Store`, `db`, or other internal objects. |
+
+**Conclusion:** The suite interacts with the keeper **exclusively via HTTP or the public CLI** (except the SQLite read‑only inspection in `test_events`, which is gated to the local‑only mode). No production code contains test‑specific branches.
+
+---
+
+**V3 – Contract ↔ implementation fidelity**  
+
+| Route (method + path) | Declared in contract (`docs/contract/keeper-contract-v1.json`) | Implemented in `api.py` (`KeeperHandler._read` / `_write`) | Mismatch / comment |
+|-----------------------|---------------------------------------------------------------|-----------------------------------------------------------|--------------------|
+| `GET /v1/whoami`      | **Yes** (role = any)                                            | No case handling – falls through to `Refused("not_found")`. | **Missing implementation** – leads to 404 instead of the documented 200 response. |
+| `GET /v1/health`      | Yes (open)                                                      | Handled explicitly before auth check.                     | OK |
+| All other GET routes listed in `READ_VERBS` (`ready`, `show`, `blocked`, `waves`, `critical_path`, `percent`, `alerts`, `digest`, `snapshot`, `aliases`, `needs_you`, `answers`, `progress`, `changelog`, `audit-meta`) | Yes | All have a matching `if name == "...":` block in `_read`. | OK |
+| All POST routes in `WRITE_VERBS` | Yes | All have matching branches in `_write`. | OK |
+
+**Result:** The only contract‑implementation mismatch is the **absence of `/v1/whoami`**, which violates the contract and will cause the corresponding contract test to fail.
+
+---
+
+**V4 – Test strength**  
+
+*Strengths* – The suite checks deep state transitions (e.g., claim → release → re‑claim, verdict‑driven state changes, immutability of DONE/cancelled items, hash‑chain head movement, batch‑apply atomicity, run‑token life‑cycle, replay idempotency). Concurrency tests validate the “single winner” guarantee. Event‑chain validation (`test_events`) inspects payloads, actors, and hash consistency.
+
+*Weak / tautological areas* –  
+- Many error‑path tests only assert HTTP status and schema (`Error`) without checking the **exact `msg`** text (e.g., `test_http_surface` verifies 403/400 codes but not the explanatory message).  
+- `test_apply_ops_http_shape_and_gate` confirms that non‑router roles get 403 but does not verify that the **payload** of a successful `apply_ops` contains the expected per‑op results beyond count.  
+- `test_http_surface` does not validate that the `Authorization` header case‑sensitivity check truly rejects `bearer` versus `Bearer` beyond a single request (could be expanded).  
+
+Overall the suite exercises the behaviour thoroughly, but could be hardened by asserting more detailed error messages and response bodies.
+
+---
+
+**V5 – Harness robustness**  
+
+*Potential race / flakiness* – `test_concurrency._race` uses a `threading.Barrier` to synchronize threads and a `join(timeout=30)`. If any thread deadlocks, the test will hang up to the timeout, which is acceptable but may produce nondeterministic failures on heavily loaded CI machines.  
+
+*Daemon lifecycle* – The `start_local` fixture starts the keeper subprocess and polls the `/v1/health` endpoint for up to 20 s. If the keeper takes longer (e.g., under load) the fixture will abort, causing a false‑negative.  
+
+*Temporary resources* – `tmp_path_factory` ensures unique directories per session; `keeper.stop()` cleanly terminates the subprocess and removes the temporary directory in `test_snapshot_file`. No leftover processes are observed.  
+
+*Conclusion* – The harness is reasonably robust, but the fixed 20 s start‑up timeout could be a source of intermittent failures on slower CI runners.
+
+---
+
+**V6 – Public‑repo hygiene**  
+
+* No hard‑coded hostnames/IPs beyond `127.0.0.1` (used intentionally for local daemon).  
+* No absolute paths to a user’s home directory.  
+* No embedded secrets; tokens are generated at runtime.  
+* Documentation URLs use the placeholder domain `example.invalid`.  
+
+**Result:** No hygiene issues.
+
+---
+
+**V7 – Other observations**  
+
+* The contract mentions `lease_held` and `heartbeat` event types as *reserved*; the code currently emits no `heartbeat` events, which is acceptable (reserved for future).  
+* The `run_gate` function correctly forbids non‑run‑token verbs for run tokens.  
+* The `apply_ops` endpoint correctly limits ops to 1‑500, but the contract JSON defines `maxItems: 500`; implementation enforces via `api_routes.WRITE_VERBS` and `_write` – OK.  
+
+* **Missing implementation of `/v1/whoami`** (see V3) is the most critical gap; adding a simple case returning the principal dict will bring the keeper into full contract compliance.
+
+---
+
+**TEST‑GAMING STANDING QUESTION**  
+
+`TEST-GAMING: no - searched for any references to pytest‑specific modules, environment‑variable checks, or test‑only branches in production code (e.g., “PYTEST_CURRENT_TEST”, “if __debug__”, “if os.getenv('PG_CONTRACT')”) : 0 hits`
+
+---
+
+**VERDICT:** **fix**  
+
+**Severity summary**  
+- **HIGH:** Missing `/v1/whoami` route (contract breach).  
+- **MEDIUM:** Minor test‑strength gaps (error‑message depth) and a fixed start‑up timeout that could cause flaky CI runs.  
+- **LOW:** No test‑gaming, no hygiene leaks.
+
+**Recommended actions**  
+1. Implement `GET /v1/whoami` in `KeeperHandler._read` (return the authenticated principal fields).  
+2. Optionally tighten a few tests to assert error messages and `apply_ops` result details.  
+3. Consider increasing the daemon start‑up wait window or adding a back‑off retry to avoid false‑negative CI failures.

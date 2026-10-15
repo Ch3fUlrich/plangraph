@@ -1,0 +1,48 @@
+**V1 – Confinement bypass**  
+- `src/confine.rs:build` – adds “**” for patterns ending with ‘/’, so directories are recursed (lines 9‑14).  
+- `src/confine.rs:changed_files` – uses `git diff --name-only -z --no-renames` plus `git ls-files --others --exclude-standard -z`, so renamed files appear as both delete + add (lines 23‑31).  
+- `src/confine.rs:evaluate` – matches each path against forbid‑set first, then allow‑set, no special handling for symlinks, “..”, spaces, or newlines (lines 36‑45).  
+**Finding:** No obvious bypass for renames, deletions, spaces, newlines, symlinks, “../”, or ignored‑dir untracked files; submodule contents are not listed but are outside the intended scope.
+
+**V2 – Budget policy vs spec**  
+- `src/budget/mod.rs:Attempt::consumes_attempt` – correctly excludes `UsageLimit` and `Outage` (lines 28‑31).  
+- `src/budget/mod.rs:next_action` – implements the decision tree: terminal classes, reroute/wait for limits, context overflow upgrade, quarantine on identical failures, retry count limit (`used < cfg.retries_per_tier`), promotion count (`promoted < cfg.promotions`) (lines 71‑114).  
+- `src/budget/mod.rs:reroute_or_wait` – selects next unlimited leg of same tier, counts the failing leg as limited even if not flagged (lines 124‑146).  
+- `src/budget/mod.rs:exp_delay` – exponential back‑off with jitter and 24 h cap (lines 52‑58).  
+**Finding:** All policy rules are faithfully represented; no off‑by‑one in attempt counting, no multiple promotions, upgrades only on overflow, and only non‑limit classes consume attempts.
+
+**V3 – Process control**  
+- `src/stall.rs:supervise` – creates a process group (`process_group(0)`) and reads output in a separate thread (`read_tail`) that updates `last` on any data (lines 20‑38).  
+- Stall vs timeout precedence: `if opts.timeout… { timed_out = true; } else if opts.stall… { stalled = true; }` (lines 68‑73).  
+- After detecting either condition it sends `SIGTERM` to the whole group, then after `opts.grace` sends `SIGKILL` (lines 61‑65, 78‑81).  
+- Whole‑group kill after loop guarantees no orphaned grandchildren (`killpg(pgid, libc::SIGKILL)` at end, line 84).  
+**Finding:** Process‑group handling, stall timeout reset, and precedence match the specification; no zombie‑reaping gaps.
+
+**V4 – Git safety**  
+- `src/git.rs:git_bytes` – builds the argument vector directly (`args: &[&str]`) and passes it to `Command::new("git")` without invoking a shell, preventing injection (lines 10‑19).  
+- `src/janitor.rs:attempt_branches` – restricts to refs under `refs/heads/attempt/`, parsing only branches that match the `attempt/<card>/<n>` pattern, so non‑attempt branches are never removed (lines 23‑35).  
+- `src/janitor.rs:sweep` – removes worktrees only after a successful probe; failures are recorded but not deleted (lines 43‑71).  
+**Finding:** No command‑injection paths; janitor safely targets only attempt branches and worktrees.
+
+**V5 – Exit classifier**  
+- `src/exit_class.rs:Patterns::default` – defines usage‑limit, outage, and context‑overflow regexes that operate on `stderr` only (lines 68‑84).  
+- `src/exit_class.rs:Patterns::classify` – precedence order: cancelled → lease‑lost → contract defect → needs input → rebase conflict → merge refused → probe fail → timeout → stall → usage‑limit → outage → worker crash → check outcome (lines 91‑114).  
+**Finding:** Correct precedence; false positives limited to `stderr` containing matching substrings (e.g., “429” in a non‑error line) but this follows spec.
+
+**V6 – Tests**  
+- `src/budget/tests.rs` exercises all budget actions, including retry limits, promotion ladder, limit handling, reroute, exponential wait, probe backoff, context upgrades, quarantine detection, and packet serialization (lines 1‑348).  
+- `src/check/tests.rs`, `src/confine/tests.rs`, `src/exit_class/tests.rs`, `src/stall/tests.rs`, `src/probe/tests.rs`, `src/worktree/tests.rs` each cover core functionality and edge cases.  
+**Finding:** Tests are substantive, not mere tautologies; they assert correct behaviour for a wide range of scenarios.
+
+**V7 – Miscellaneous correctness**  
+- No `unwrap()` on untrusted input in production code; all fallible calls use `?` and propagate `GitError` or `io::Result`.  
+- All public APIs are `pub` with proper error types; serialization (`serde`) is used safely.  
+- `src/config.rs` default values match the specification (checked in its unit test).  
+**Finding:** No panics, no platform‑specific assumptions beyond Unix (process groups, signals) which is acceptable for Linux/WSL2 only.
+
+**VERDICT:** pass  
+
+---  
+
+**STANDING QUESTION**  
+TEST-GAMING: no - searched the Rust source for any `cfg(test)`, `#[test]`‑only branches that inspect environment variables or alter behaviour for tests; also grepped for strings like `PYTEST_CURRENT_TEST`, `unittest`, `sys.modules`; 0 hits.
