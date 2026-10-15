@@ -4,6 +4,7 @@ name: rust-spike
 
 on:
   push:
+    branches: [main]
     paths:
       - "rust/spikes/**"
       - ".github/workflows/rust-spike.yml"
@@ -11,6 +12,11 @@ on:
     paths:
       - "rust/spikes/**"
       - ".github/workflows/rust-spike.yml"
+
+# D-1338: lane branches run CI via their PR only; a newer push cancels the older run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
