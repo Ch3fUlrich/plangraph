@@ -50,7 +50,9 @@ def test_findings_after_else_before():
     ("deepseek-r1", "deepseek"), ("qwen3-max", "alibaba"),
     ("gemini-3-pro", "google"), ("claude-sonnet-5", "anthropic"),
     ("opus", "anthropic"), ("haiku-4", "anthropic"),
-    ("mystery-1", None), (None, None)])
+    ("mystery-1", None), (None, None),
+    ("gpt-claude-3", None), ("claude-via-gpt-router", None),
+    ("deepseek-llama-distill", None), ("deepseek-r1-distill-llama", None)])
 def test_family(model, fam):
     assert sv.model_family(model) == fam
 
@@ -88,6 +90,13 @@ def test_refusals(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
+def test_multi_family_refused_before_send(tmp_path, capsys):
+    for i, m in enumerate(("gpt-claude-3", "deepseek-llama-distill")):
+        assert run(tmp_path, f"m{i}", "VERDICT: PASS", served_model=m) == 2
+        assert run(tmp_path, f"f{i}", "VERDICT: FIX\nx", served_model=m) == 2
+    assert capsys.readouterr().out == ""
+
+
 def test_served_model_falls_back_to_requested(tmp_path):
     assert run(tmp_path, "a", "VERDICT: PASS", extra=["--dry-run"], served_model=None) == 0
     assert run(tmp_path, "b", "VERDICT: PASS", writer="openai", served_model=None) == 2
@@ -100,6 +109,34 @@ def test_no_verdict_and_pass_gates(tmp_path):
     assert run(tmp_path, "c", "VERDICT: PASS", extra=dry, test_gaming="yes") == 4
     # a fix verdict is still recorded when the call was truncated
     assert run(tmp_path, "d", "VERDICT: FIX\nbad", extra=dry, finish_reason="length") == 0
+
+
+@pytest.mark.parametrize("gaming", [None, "missing", "unsure", "yes", "", 0, False])
+def test_pass_needs_test_gaming_no(tmp_path, gaming):
+    dry = ["--dry-run"]
+    assert run(tmp_path, "p", "VERDICT: PASS", extra=dry, test_gaming=gaming) == 4
+    assert run(tmp_path, "f", "VERDICT: FIX\nbad", extra=dry, test_gaming=gaming) == 0
+
+
+def test_pass_test_gaming_no_normalised(tmp_path):
+    assert run(tmp_path, "a", "VERDICT: PASS", extra=["--dry-run"], test_gaming=" No ") == 0
+
+
+def test_fix_sent_with_test_gaming_missing(tmp_path, monkeypatch):
+    Stub.seen.clear()
+    srv = HTTPServer(("127.0.0.1", 0), Stub)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.delenv("PG_URL", raising=False)
+        sub = tmp_path / "x"
+        sub.mkdir()
+        argv = seat(sub, "VERDICT: FIX\nbad", test_gaming=None)
+        assert sv.main(argv + ["--url", f"http://127.0.0.1:{srv.server_port}"]) == 0
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    (_, _, raw), = Stub.seen
+    assert json.loads(raw)["ok"] is False
 
 
 def test_payload_is_bool():
