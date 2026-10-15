@@ -100,16 +100,24 @@ pub fn check_sandbox(workdir: &Path) -> Result<(), SandboxError> {
 pub fn find_escaping_symlinks(workdir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let base = lexical(&std::path::absolute(workdir)?);
     let mut out = Vec::new();
-    walk(workdir, workdir, &base, &mut out)?;
+    walk(workdir, workdir, &base, true, &mut out)?;
     out.sort();
     Ok(out)
 }
 
-fn walk(root: &Path, dir: &Path, base: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn walk(
+    root: &Path,
+    dir: &Path,
+    base: &Path,
+    top: bool,
+    out: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        // `.git` is the repo's own metadata, never part of the write set.
-        if entry.file_name().to_str() == Some(".git") {
+        // Only the worktree's own top-level `.git` is repo metadata, never part
+        // of the write set. A `.git` deeper down may be a symlink an agent could
+        // use to escape, so it must still be checked.
+        if top && entry.file_name().to_str() == Some(".git") {
             continue;
         }
         let path = entry.path();
@@ -131,7 +139,7 @@ fn walk(root: &Path, dir: &Path, base: &Path, out: &mut Vec<PathBuf>) -> std::io
                 out.push(rel);
             }
         } else if ft.is_dir() {
-            walk(root, &path, base, out)?;
+            walk(root, &path, base, false, out)?;
         }
     }
     Ok(())
@@ -280,5 +288,20 @@ mod tests {
         link(w, ".git/evil", "/etc/passwd");
         assert!(find_escaping_symlinks(w).unwrap().is_empty());
         assert!(check_sandbox(w).is_ok());
+    }
+
+    #[test]
+    fn nested_git_symlink_escapes_but_top_level_git_is_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        // Top-level `.git` is the repo's own metadata and stays exempt...
+        link(w, ".git/evil", "/etc/passwd");
+        // ...but a `.git` nested below it must not borrow that exemption.
+        link(w, "sub/.git", "/etc");
+        assert_eq!(
+            find_escaping_symlinks(w).unwrap(),
+            vec![PathBuf::from("sub/.git")]
+        );
+        assert!(matches!(check_sandbox(w), Err(SandboxError::Escape(_))));
     }
 }

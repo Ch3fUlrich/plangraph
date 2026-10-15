@@ -35,13 +35,22 @@ pub fn validate(id: &str) -> bool {
 
 /// The `(deployment, build_id)` pair to advertise, or `None` to run without
 /// versioning. `PG_VERSIONING=off` disables it outright; the deployment comes
-/// from `PG_DEPLOYMENT` (falling back to [`DEPLOYMENT`]). An id that fails
-/// [`validate`] disables versioning rather than failing startup.
+/// from `PG_DEPLOYMENT` (falling back to [`DEPLOYMENT`] when unset or empty).
+/// A deployment or id that fails [`validate`] disables versioning rather than
+/// failing startup.
 pub fn from_env() -> Option<(String, String)> {
     if std::env::var("PG_VERSIONING").as_deref() == Ok("off") {
         return None;
     }
-    let deployment = std::env::var("PG_DEPLOYMENT").unwrap_or_else(|_| DEPLOYMENT.to_string());
+    // An empty override is treated as unset so a stray empty var still gets the
+    // default; a non-empty but malformed name must not reach the server.
+    let deployment = match std::env::var("PG_DEPLOYMENT") {
+        Ok(v) if !v.is_empty() => v,
+        _ => DEPLOYMENT.to_string(),
+    };
+    if !validate(&deployment) {
+        return None;
+    }
     let id = build_id();
     validate(&id).then_some((deployment, id))
 }
@@ -172,5 +181,31 @@ mod tests {
             from_env,
         );
         assert_eq!(invalid, None);
+    }
+
+    #[test]
+    fn from_env_empty_deployment_falls_back_to_default() {
+        let out = with_env(
+            &[
+                ("PG_VERSIONING", None),
+                ("PG_DEPLOYMENT", Some("")),
+                ("PG_BUILD_ID", Some("id-1")),
+            ],
+            from_env,
+        );
+        assert_eq!(out, Some((DEPLOYMENT.to_string(), "id-1".to_string())));
+    }
+
+    #[test]
+    fn from_env_invalid_deployment_disables_versioning() {
+        let out = with_env(
+            &[
+                ("PG_VERSIONING", None),
+                ("PG_DEPLOYMENT", Some("bad deployment")),
+                ("PG_BUILD_ID", Some("id-1")),
+            ],
+            from_env,
+        );
+        assert_eq!(out, None);
     }
 }

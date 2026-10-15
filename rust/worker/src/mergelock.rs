@@ -92,6 +92,23 @@ pub enum MergeOutcome {
     Conflict,
 }
 
+/// Removes a scratch worktree directory when it goes out of scope.
+///
+/// Armed before `git worktree add` runs, so the scratch directory is removed on
+/// every exit path: an early `?` when the add fails partway (directory created,
+/// checkout not finished), a panic while merging, or the normal return. `Drop`
+/// goes through `remove_worktree`, which ignores its own failures.
+struct ScratchWorktree<'a> {
+    repo: &'a Path,
+    path: PathBuf,
+}
+
+impl Drop for ScratchWorktree<'_> {
+    fn drop(&mut self) {
+        remove_worktree(self.repo, &self.path);
+    }
+}
+
 /// Merge `attempt_branch` into `main_branch`, but only if main is still at
 /// `base_sha`. The lock serialises competing workers; the recheck makes a stale
 /// base a no-op instead of a lost update.
@@ -117,6 +134,12 @@ pub fn merge_attempt(
     // Merge in a throwaway detached worktree so the caller's checkout and index
     // are never disturbed; the branch ref moves only after the merge succeeds.
     let wt = unique_worktree_path();
+    // Armed before `worktree add` so a partial add, an early `?` or a panic all
+    // still remove the scratch directory; `Drop` runs it in every case.
+    let _scratch = ScratchWorktree {
+        repo,
+        path: wt.clone(),
+    };
     let wt_s = wt.to_string_lossy().into_owned();
     git(
         repo,
@@ -142,7 +165,6 @@ pub fn merge_attempt(
         Ok(MergeOutcome::Merged { sha: new })
     })();
 
-    remove_worktree(repo, &wt);
     result
 }
 
@@ -347,5 +369,40 @@ mod tests {
             .count();
         assert_eq!((merged, moved), (1, 1), "{outs:?}");
         assert_ne!(git(r.path(), &["rev-parse", "refs/heads/main"]), base);
+    }
+
+    /// A `post-checkout` hook that fails makes `git worktree add` exit non-zero
+    /// only *after* it has created and registered the scratch worktree, so the
+    /// directory survives inside git; only the guard removes it.
+    #[test]
+    fn failed_worktree_add_removes_scratch_dir() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (r, base) = repo();
+        let p = r.path();
+        attempt_branch(p, "attempt/x/1", "x.txt", "x", &base);
+
+        let hook = p.join(".git/hooks/post-checkout");
+        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The add fails partway through, after the working tree exists.
+        let err =
+            merge_attempt(p, "main", "attempt/x/1", &base, Duration::from_secs(5)).unwrap_err();
+        assert!(matches!(err, MergeError::Git(_)), "{err:?}");
+
+        // Only the main worktree may be registered; a leaked scratch worktree
+        // would show up here.
+        let listing = git(p, &["worktree", "list", "--porcelain"]);
+        let registered = listing
+            .lines()
+            .filter(|l| l.starts_with("worktree "))
+            .count();
+        assert_eq!(
+            registered, 1,
+            "scratch worktree was not cleaned up:\n{listing}"
+        );
+        assert_eq!(git(p, &["rev-parse", "refs/heads/main"]), base);
     }
 }

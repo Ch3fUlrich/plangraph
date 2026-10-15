@@ -268,7 +268,11 @@ impl CardActivities {
             tokio::select! {
                 res = &mut handle => break res,
                 _ = tokio::time::sleep(heartbeat) => {
-                    ctx.record_heartbeat(beats).await?;
+                    // A heartbeat error means the activity is cancelled/gone; keep looping so the blocking task is still joined and reaped.
+                    if ctx.record_heartbeat(beats).await.is_err() {
+                        cancelled = true;
+                        cancel_flag.store(true, Ordering::SeqCst);
+                    }
                     beats = beats.wrapping_add(1);
                     if ctx.is_cancelled() {
                         cancelled = true;

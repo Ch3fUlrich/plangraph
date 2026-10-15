@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{
-    ActivityOptions, SyncWorkflowContext, WorkflowCancellationToken, WorkflowContext,
+    ActivityOptions, SyncWorkflowContext, TimeoutType, WorkflowCancellationToken, WorkflowContext,
     WorkflowResult, WorkflowTermination,
 };
 
@@ -119,12 +119,18 @@ impl Card {
                     return Ok(cancelled(n));
                 }
                 Err(e) => {
-                    // The worker never returned a result: a heartbeat timeout is a
-                    // stall, anything else a crash. What follows is the budget's call.
-                    let exit_class = if e.as_timeout().is_some() {
-                        ExitClass::Stall
-                    } else {
-                        ExitClass::WorkerCrash
+                    // The worker never returned a result. A heartbeat timeout means
+                    // it is hung (a stall); a start-to-close or schedule-to-close
+                    // timeout means it ran past its budget (a timeout); any other
+                    // timeout kind stays a stall; a non-timeout is a crash. What
+                    // follows is the budget's call.
+                    let exit_class = match e.as_timeout().map(|t| t.timeout_type()) {
+                        Some(TimeoutType::Heartbeat) => ExitClass::Stall,
+                        Some(TimeoutType::StartToClose) | Some(TimeoutType::ScheduleToClose) => {
+                            ExitClass::Timeout
+                        }
+                        Some(_) => ExitClass::Stall,
+                        None => ExitClass::WorkerCrash,
                     };
                     AttemptResult {
                         exit_class,
@@ -426,10 +432,29 @@ fn cancelled(attempts: u32) -> CardOutput {
     }
 }
 
-/// The options every auxiliary activity gets: one bounded attempt, no Temporal
-/// retries (a failure is a workflow signal, not something to replay blindly).
+/// The options every auxiliary activity gets: bounded retries for idempotent
+/// auxiliary activities (a failure is a workflow signal, not something to
+/// replay forever).
 fn activity_options(cfg: &Config) -> ActivityOptions {
-    ActivityOptions::start_to_close_timeout(cfg.start_to_close)
+    let retry = RetryPolicy::builder()
+        .initial_interval(Duration::from_secs(2))
+        .maximum_attempts(5)
+        .build();
+    ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+        .retry_policy(retry)
+        .build()
+}
+
+/// The options the `merge` activity gets: a single attempt, because a retried
+/// merge after a successful ref update would falsely report `base_moved`.
+fn once_options(cfg: &Config) -> ActivityOptions {
+    let retry = RetryPolicy::builder()
+        .initial_interval(Duration::from_secs(2))
+        .maximum_attempts(1)
+        .build();
+    ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+        .retry_policy(retry)
+        .build()
 }
 
 /// Wait `d` durably, unless the `cancel` signal wins first (`true`).
@@ -461,7 +486,7 @@ async fn merge_step(
                 branch: branch.to_string(),
                 base_sha: base_sha.to_string(),
             },
-            activity_options(cfg),
+            once_options(cfg),
         )
         .await?;
     Ok(if r.outcome == "merged" {
@@ -674,5 +699,24 @@ mod tests {
             Duration::ZERO
         );
         assert_eq!(wait_duration(now, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn auxiliary_activities_get_bounded_retries() {
+        let cfg = Config::default();
+        let retry = activity_options(&cfg)
+            .retry_policy
+            .expect("auxiliary options carry a retry policy");
+        assert_eq!(retry.maximum_attempts(), 5);
+        assert_eq!(retry.initial_interval(), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn merge_activity_is_single_attempt() {
+        let cfg = Config::default();
+        let retry = once_options(&cfg)
+            .retry_policy
+            .expect("merge options carry a retry policy");
+        assert_eq!(retry.maximum_attempts(), 1);
     }
 }
