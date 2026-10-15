@@ -171,7 +171,7 @@ def open_db(path, *, create: bool = False,
     conn.execute("PRAGMA trusted_schema=OFF")
     conn.execute("PRAGMA journal_mode=WAL")
     if create:
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA + PROJECTOR_SQLITE)
     else:
         present = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'"

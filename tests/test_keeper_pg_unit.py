@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from plangraph.keeper import config as config_mod, db as kdb, db_pg, schema, schema_pg
+from plangraph.projector import ddl as projector_ddl
 
 
 # ----------------------------------------------------------------- translation
@@ -142,7 +143,7 @@ def test_config_rejects_a_non_string_dsn(tmp_path):
 # ------------------------------------------------------ schema parity (no server)
 def _sqlite_tables():
     conn = sqlite3.connect(":memory:")
-    conn.executescript(schema.SCHEMA)
+    conn.executescript(schema.SCHEMA + projector_ddl.SQLITE)
     out = {}
     for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"
                                 " AND name NOT LIKE 'sqlite_%'"):
