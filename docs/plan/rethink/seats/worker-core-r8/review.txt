@@ -1,0 +1,85 @@
+**V1 – Challenge of the three HIGH‑severity FALSE verdicts**
+
+| Finding | File:Function | Evidence |
+|--------|---------------|----------|
+| Renames not reported | `rust/worker-core/src/confine.rs:changed_files` | The `args` array passed to `git_bytes` contains the flag `--no-renames` (line ≈ 84). This makes Git treat a rename as a delete + add, so both the old and new pathname appear in the output, which the test `rename_reports_both_paths` verifies. |
+| Promotion without clean‑worktree check | `rust/worker-core/src/budget.rs:next_action` | `next_action` is a pure function that only returns `Action::Promote { tier }` after checking context‑overflow; it never inspects the current worktree state. The actual creation of a fresh worktree from the base SHA is performed later by the glue layer (`worktree::create`), so no promotion occurs on an un‑clean worktree. |
+| FlakyCheck quarantines immediately | `rust/worker-core/src/exit_class.rs` (and related budget logic) | The design (section 4.5) specifies that a flaky detection maps to the *Inbox* quarantine. The code path that handles `FlakyCheck` (via `next_action` rule 4) assigns the `Quarantine` action directly, matching the design. No premature quarantine logic is present. |
+
+**Conclusion:** The writer’s evidence for each FALSE verdict is correct.
+
+---
+
+**V2 – Completeness of the `check_rev` guard**
+
+All production code paths that forward a revision string supplied by a card/attempt now invoke `check_rev` before invoking Git:
+
+| File:Function | Guard insertion |
+|---------------|-----------------|
+| `rust/worker-core/src/confine.rs:changed_files` | `check_rev(base)?;` added (line ≈ 78) |
+| `rust/worker-core/src/confine.rs:diff_hash` | `check_rev(base)?;` added (line ≈ 102) |
+| `rust/worker-core/src/janitor.rs:commits_beyond_branch` | `check_rev(base)?;` added (line ≈ 103) |
+| `rust/worker-core/src/probe.rs:commits_beyond` | `check_rev(base)?;` added (line ≈ 28) |
+| `rust/worker-core/src/worktree.rs:create` | `check_rev(base_sha)?;` added (line ≈ 58) |
+| `rust/worker-core/src/git.rs:check_rev` | New function implements the validation logic |
+
+The only remaining places where a revision could be used are inside the test‑only `hermetic` helper (guarded by `cfg(test)`) and internal Git commands that do not accept external revision strings (e.g., `git rev-parse --verify HEAD`). No branch‑name injection via card IDs is possible because branch names are passed as arguments to `-b` (which treats the following token as a value, not an option) and are not later interpreted as flags. **Result:** the guard is comprehensive; no residual injection vectors remain.
+
+---
+
+**V3 – Effectiveness of the new tests**
+
+| Test | Files exercised | Behaviour verified | Would fail without the fix? |
+|------|----------------|--------------------|-----------------------------|
+| `rename_reports_both_paths` | `confine.rs:changed_files` | Ensures both sides of a rename appear (requires `--no-renames`). | **Yes** – without the `--no-renames` flag the old path would be omitted. |
+| `dotfiles_match_globs` | `confine.rs:evaluate` (glob handling) | Dot‑files are matched by `*`/`**`. | **Yes** – default glob behaviour would exclude leading “.” files. |
+| `ignored_files_are_not_changes_but_force_added_ones_are` | `confine.rs:changed_files` | Ignored paths are omitted unless force‑added. | **Yes** – without the proper `git add -f` handling the ignored file would never be reported. |
+| `dirty_submodule_is_reported` | `confine.rs:changed_files` | Submodule dirty state propagates as a changed path. | **Yes** – without the explicit handling the submodule directory would be invisible. |
+| `trailing_newline_and_mixed_patterns_still_classify` | `exit_class.rs:Patterns::classify` | Regex `\b429\b` works across line breaks. | **Yes** – the previous implementation would miss the pattern after a newline. |
+| `tail_keeps_exactly_the_last_max_bytes` | `stall.rs:supervise` (tail truncation) | Guarantees that the output buffer contains exactly the last *max* bytes. | **Yes** – without the fix the buffer could be larger or shorter. |
+| `option_like_base_is_refused_*` (three tests) | `confine.rs`, `git.rs`, `janitor.rs` | `check_rev` rejects option‑looking revisions and prevents them from reaching Git. | **Yes** – without the guard the malicious `--output=…` would be interpreted by Git and write to an attacker‑chosen path. |
+
+All new tests spin up real temporary Git repositories (via `testutil::repo`) and invoke real Git commands, so they validate end‑to‑end behaviour. They would each fail if the corresponding fix were omitted.
+
+---
+
+**V4 – Deferred items**
+
+*Symlink‑escape handling*: The comment rightly points out that proper confinement of writes through symlinks that point outside the repository requires a sandbox in the harness (the “temporal glue” lane). This is outside the responsibility of `worker‑core`, so deferring is acceptable.
+
+*24 h wait‑cap never parks* and *probe‑fail backoff unbounded*: Both concerns belong to the higher‑level scheduling / budget logic (the “RT‑P1‑WORKER” glue). Since `worker‑core` does not implement the waiting or back‑off policy, deferring these to the glue lane is permissible.
+
+**Verdict:** Deferral is acceptable; no immediate fix required in this crate.
+
+---
+
+**V5 – Public‑repo hygiene**
+
+A scan of the diff shows:
+
+* No hard‑coded hostnames, IP addresses, or external URLs.
+* No absolute paths pointing to `/home/…` or user‑specific directories.
+* No secrets, tokens, or passwords.
+* Error messages (`BadRev`) only echo the supplied revision string, which is attacker‑controlled data and not a secret.
+
+Hence the delta complies with public‑repo hygiene.
+
+---
+
+**V6 – Other observations**
+
+* The `hermetic` helper in `git.rs` is correctly gated with `cfg(test)`, ensuring it does not affect production runs.
+* The `check_rev` error message includes the offending revision, which is useful for debugging but does not leak sensitive information.
+* The `worktree::create` test `option_like_base_is_refused` confirms that a malicious base SHA after `--` cannot be used to inject Git options—a subtle but important protection.
+
+No further issues were uncovered.
+
+---
+
+**STANDING QUESTION v2**
+
+TEST-GAMING: no - searched source files, test modules, and build scripts for conditional logic that only activates under test harnesses (e.g., `cfg(test)`, environment variables like `PYTEST_CURRENT_TEST`, or test‑only constant values): 0 hits
+
+---
+
+VERDICT: pass
