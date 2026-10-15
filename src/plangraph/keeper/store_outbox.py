@@ -81,7 +81,9 @@ class OutboxMixin:
         if verb == "submit":
             return self.submit(principal, key, body.get("epoch"))
         if verb == "verdict":
-            return self.verdict(principal, key, bool(body.get("ok")), body.get("reason") or "")
+            if not isinstance(body.get("ok"), bool):
+                raise Refused("validation", "ok must be a boolean")
+            return self.verdict(principal, key, body["ok"], body.get("reason") or "")
         raise Refused("forbidden", f"{verb!r} cannot be replayed")
 
     # Note: the HTTP server serialises every request under one lock, so two replays of the

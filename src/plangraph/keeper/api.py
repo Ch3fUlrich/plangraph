@@ -48,10 +48,6 @@ from .api_routes import WRITE_VERBS as _WRITE_VERBS
 
 
 # --------------------------------------------------------------------------- #
-# snapshot rewriting
-# --------------------------------------------------------------------------- #
-
-# --------------------------------------------------------------------------- #
 # request handler
 # --------------------------------------------------------------------------- #
 
@@ -207,7 +203,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         project = self._one(query, "project")
 
         if name == "ready":
-            n = None if self._one(query, "all") else int(self._one(query, "n", 10))
+            n = None if self._one(query, "all") else self._int(self._one(query, "n", 10), "n")
             mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"
             agent = str(self._one(query, "agent")).lower() in ("1", "true")
             owner = principal.name if mine else self._one(query, "owner")
@@ -277,11 +273,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
                                          self._need(body, "fields"))
         if name == "set_priority":
             return store.set_priority(principal, self._need(body, "key"),
-                                      int(body.get("n", body.get("priority"))))
+                                      self._int(body.get("n", body.get("priority")), "n"))
         if name == "claim":
             lease = body.get("lease_s", body.get("lease"))
             return store.claim(principal, self._need(body, "key"),
-                               lease_s=None if lease is None else int(lease))
+                               lease_s=None if lease is None else self._int(lease, "lease_s"))
         if name == "delegate":
             return store.delegate(principal, self._need(body, "key"),
                                   self._need(body, "worker", "worker_principal"))
@@ -299,9 +295,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
                                              body.get("ref") or {})
         if name == "verdict":
             ok = body.get("ok")
-            if ok is None:
-                raise Refused("validation", "ok is required")
-            return store.verdict(principal, self._need(body, "key"), bool(ok),
+            if not isinstance(ok, bool):   # "false" must never pass a review
+                raise Refused("validation", "ok is required and must be a boolean")
+            return store.verdict(principal, self._need(body, "key"), ok,
                                  body.get("reason") or "")
         if name == "cancel":
             return store.cancel(principal, self._need(body, "key"),
@@ -314,6 +310,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "reap":
             return store.reap(principal)
         raise Refused("not_found", f"no write verb {name!r}")
+
+    @staticmethod
+    def _int(value, name):  # a malformed number is a 400, never a 500
+        try:
+            return int(value)
+        except (TypeError, ValueError, OverflowError):
+            raise Refused("validation", f"{name} must be an integer") from None
 
     @staticmethod
     def _need(body, *names):
