@@ -28,6 +28,9 @@ pub struct Removed {
 #[derive(Debug, Default)]
 pub struct Report {
     pub removed: Vec<Removed>,
+    /// Dead attempts with a worktree whose check passes (`AlreadyDone`): kept,
+    /// worktree and branch, for the worker glue to merge. Holds (id, branch head).
+    pub done: Vec<(AttemptId, String)>,
     /// Dead attempts left in place because probing or removal failed.
     pub failed: Vec<(AttemptId, String)>,
 }
@@ -80,6 +83,10 @@ pub fn sweep(repo: &Path, live: &HashSet<AttemptId>, spec: &ProbeSpec) -> Result
                 continue;
             }
         };
+        if wt.is_some() && outcome == ProbeOutcome::AlreadyDone {
+            report.done.push((id, head));
+            continue;
+        }
         let res = match wt {
             Some(w) => remove(repo, &w.path),
             None => Ok(()),
@@ -143,7 +150,7 @@ mod tests {
         let b = base.clone();
         let base_for = move |_: &AttemptId| b.clone();
         let spec = ProbeSpec {
-            check_cmd: "test -f f.txt",
+            check_cmd: "test -f nothere.txt",
             timeout: Duration::from_secs(20),
             tail_lines: 10,
             base_for: &base_for,
@@ -159,7 +166,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                ("c#2".to_string(), ProbeOutcome::AlreadyDone),
+                ("c#2".to_string(), ProbeOutcome::Partial),
                 ("d#1".to_string(), ProbeOutcome::Nothing),
                 ("orphan#3".to_string(), ProbeOutcome::Nothing),
             ]
@@ -180,6 +187,35 @@ mod tests {
         );
         // idempotent
         assert!(sweep(p, &live_set, &spec).unwrap().removed.is_empty());
+    }
+
+    #[test]
+    fn dead_attempt_with_passing_check_is_kept_and_listed_done() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let p = r.path();
+        let id = AttemptId::new("c", 1);
+        let w = create(p, &base, &root.path().join("w"), &id).unwrap();
+        write(&w.path, "f.txt", "x");
+        let head = commit_all(&w.path, "work");
+        // branch-only attempt with commits: classified Partial, removed as before
+        git(p, &["branch", "attempt/orphan/2", &head]).unwrap();
+        let b = base.clone();
+        let base_for = move |_: &AttemptId| b.clone();
+        let spec = ProbeSpec {
+            check_cmd: "test -f f.txt",
+            timeout: Duration::from_secs(20),
+            tail_lines: 10,
+            base_for: &base_for,
+        };
+        let rep = sweep(p, &HashSet::new(), &spec).unwrap();
+        assert_eq!(rep.done, vec![(id.clone(), head.clone())]);
+        assert_eq!(rep.removed.len(), 1);
+        assert_eq!(rep.removed[0].id, AttemptId::new("orphan", 2));
+        assert!(w.path.exists());
+        assert_eq!(branches(p), ["attempt/c/1", "main"]);
+        // stays listed on every sweep
+        assert_eq!(sweep(p, &HashSet::new(), &spec).unwrap().done.len(), 1);
     }
 
     #[test]
