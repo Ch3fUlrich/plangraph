@@ -34,14 +34,18 @@ def ok(resp, schema=None, status=200):
     return body
 
 
-def err(resp, status, code=None):
-    """Assert an error response of the contract shape and return its body."""
+def err(resp, status, code):
+    """Assert a refusal: HTTP *status*, contract error *code*, non-empty ``msg``.
+
+    The ``error`` code is normative; ``msg`` is free text and only checked to
+    be a non-empty string (implementations word it differently).
+    """
     assert resp.status == status, f"{resp.status}: {resp.raw[:300]!r}"
     assert "application/json" in resp.ctype
     body = resp.json
     assert_valid(body, "Error")
-    if code is not None:
-        assert body["error"] == code, body
+    assert body["error"] == code, body
+    assert isinstance(body["msg"], str) and body["msg"].strip(), body
     return body
 
 

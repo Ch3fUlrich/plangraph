@@ -104,9 +104,10 @@ def test_close_on_decision_refusals(kp):
         400, "evidence_missing")
     evidence(kp, none_tier, 1, did="D-1")
     for bad in ("not-a-ref", "/x@abc"):
-        err(kp.post("close_on_decision", "router", {"key": none_tier, "batch_ref": bad}), 400)
-    resp = err(kp.post("close_on_decision", "router", {"key": none_tier, "batch_ref": ref}), 403, "forbidden")
-    assert "batch" in resp["msg"]                              # outside every batch root
+        err(kp.post("close_on_decision", "router", {"key": none_tier, "batch_ref": bad}),
+            400, "validation")
+    err(kp.post("close_on_decision", "router", {"key": none_tier, "batch_ref": ref}),
+        403, "forbidden")                                      # outside every batch root
 
 
 def test_tier_none_items_take_no_verdicts(kp):

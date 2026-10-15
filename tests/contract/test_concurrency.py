@@ -2,7 +2,7 @@
 import threading
 from collections import Counter
 
-from contract_world import head, make_plan, need, show, to_in_review, uid, verdict
+from contract_world import err, head, make_plan, need, show, to_in_review, uid, verdict
 
 
 def _race(jobs):
@@ -28,7 +28,9 @@ def test_concurrent_claim_has_one_winner(kp):
     results = _race([lambda w=w: kp.post("claim", w, {"key": plan.key}) for w in who])
     statuses = Counter(r.status for r in results)
     assert statuses == {200: 1, 409: len(who) - 1}, statuses
-    assert all(r.json["error"] == "conflict" for r in results if r.status == 409)
+    for r in results:
+        if r.status == 409:
+            err(r, 409, "conflict")
     winner = who[[r.status for r in results].index(200)]
     shown = show(kp, plan.key)
     assert shown["claimed_by"] == winner and shown["epoch"] == 1
@@ -39,6 +41,9 @@ def test_concurrent_create_of_one_key_has_one_winner(kp):
     body = {"items": [{"project": "demo", "id": "R-" + tag, "kind": "goal", "title": "race " + tag}]}
     results = _race([lambda: kp.post("create_items", "router", body) for _ in range(6)])
     assert Counter(r.status for r in results) == {200: 1, 409: 5}
+    for r in results:
+        if r.status == 409:
+            err(r, 409, "conflict")
 
 
 def test_concurrent_verdicts_make_one_done_transition(kp):
@@ -49,6 +54,7 @@ def test_concurrent_verdicts_make_one_done_transition(kp):
     results = _race([lambda w=w: verdict(kp, plan.key, w) for w in ("reviewer1", "reviewer2")])
     statuses = sorted(r.status for r in results)
     assert statuses == [200, 409], [r.raw for r in results]
+    err(next(r for r in results if r.status == 409), 409, "locked")
     assert show(kp, plan.key)["state"] == "done"
     assert len(show(kp, plan.key)["reviews"]) == 1
     assert head(kp)[0] == before + 2           # review_verdict + review_passed, once

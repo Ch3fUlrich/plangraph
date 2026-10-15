@@ -69,7 +69,7 @@ def test_head_moves_only_on_successful_writes(kp):
     kp.get("/v1/ready", "reader")
     kp.get("/v1/snapshot", "reader")
     assert head(kp) == base                                   # reads
-    err(kp.post("claim", "reader", {"key": plan.key}), 403)
+    err(kp.post("claim", "reader", {"key": plan.key}), 403, "forbidden")
     assert head(kp) == base                                   # refusals
     epoch = claim(kp, plan.key)
     seq, digest = head(kp)

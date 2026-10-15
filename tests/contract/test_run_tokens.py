@@ -79,7 +79,7 @@ def test_writer_run_token_lifecycle(kp):
     assert got["verified"] is True
     ok(kp.post("submit", None, {"key": key, "epoch": epoch}, token=token), "Submit")
     # submit revokes the writer token
-    assert kp.post("heartbeat", None, {"key": key, "epoch": epoch}, token=token).status in (401, 403)
+    err(kp.post("heartbeat", None, {"key": key, "epoch": epoch}, token=token), 401, "forbidden")
 
 
 def test_reviewer_run_token_carries_the_run_family(kp):
@@ -134,9 +134,9 @@ def test_run_token_is_dead_after_the_item_moves_on(kp):
     epoch = claim(kp, key)
     token = ok(_mint(kp, key, "writer", _run_dir(kp, key)), "MintToken")["token"]
     ok(kp.post("release", "worker1", {"key": key, "epoch": epoch}), "KeyOnly")
-    assert kp.post("heartbeat", None, {"key": key, "epoch": epoch}, token=token).status in (401, 403)
+    err(kp.post("heartbeat", None, {"key": key, "epoch": epoch}, token=token), 401, "forbidden")
     claim(kp, key, "worker2")                                          # new epoch: old token stays dead
-    assert kp.post("heartbeat", None, {"key": key, "epoch": epoch + 1}, token=token).status in (401, 403)
+    err(kp.post("heartbeat", None, {"key": key, "epoch": epoch + 1}, token=token), 401, "forbidden")
 
 
 def test_reap_is_system_only(kp):
