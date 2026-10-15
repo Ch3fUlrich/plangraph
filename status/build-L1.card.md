@@ -18,3 +18,4 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 - Build rule (D-1319 disk): one CARGO_TARGET_DIR, cargo clean after; Temporal SDK builds (5 GB target) on the workstation via workst-L1-autoos. D-1317: tool-less seats on coding.vm ok (max 4 fleet).
 - WORKER-CORE: seat ovh/gpt-oss-120b PASS, janitor fix ea684b9b, PR #1. SPIKE: all demos pass (SDK 1.1.0), adopt-with-workarounds; FINDINGS pending.
 - 2026-10-15 16:05 gen-2 (8f5ea8): CONTRACT done (main 7e5a61e3, live via GO D-1331, keeper ci block on). seat_verdict merged (PR #4, e56d2d9a). WORKER-CORE commit+ci✓; ovh r5 = fix (3 HIGH) -> writer lane/rt-p1-worker-core-r2 triaging. xiaomi seats time out; 2nd family = ovh qwen3.8-27b (D-1329) but no reviewer-alibaba token yet.
+- 16:15 gen-2 recycle: handoff #2. CI triggers fixed (D-1338, main ab3d0817). KEEPER-PG-CODE claimed, W1 writer running. WORKER-CORE r2 PR #6 green, awaiting 1 recordable seat (qwen).

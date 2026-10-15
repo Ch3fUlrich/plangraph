@@ -1,37 +1,43 @@
-# build-L1 handoff #1 — 2026-10-15 ~15:45Z (context cap)
+# build-L1 handoff #2 — 2026-10-15 ~16:15Z (gen-2 8f5ea8, context cap)
 
 Read first: brief `/home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md`, design (binding, 14a)
 `.../docs/reports/2026-10-15-rethink-setup-design.md`, card `status/build-L1.card.md` (this branch), then this file.
-Control branch = `build-L1` (this worktree); never merged to main. Code lanes = Agent subagents (sonnet, isolation worktree,
-they land under /home/s/code/plangraph/.claude/worktrees/agent-*), push lane/* branches; I PR + merge to main after CI + seats.
+Control branch = `build-L1` (this worktree); never merged to main. Code lanes = Sonnet subagents in worktrees under
+/home/s/code/plangraph-worktrees/ (from origin/main); push lane/*, PR, I merge after CI + seat.
 
-## Tools (this branch, ops/)
-- `ops/pg.sh` keeper CLI wrapper; token PGTOK (default build-L1 = ~/.config/plangraph/build-L1.token). Copy to job tmp and fix PYTHONPATH if the worktree moves.
-- `ops/seat.sh MODEL PROMPT OUTDIR TITLE` tool-less gateway seat (review-call.py, 300 s hard timeout -> split big prompts). `ops/assemble.py OUT part|label=path...` builds prompts.
-- Working seat models: `ovh/gpt-oss-120b` (openai), `xiaomi-mimo/mimo-v2.6-flash` (xiaomi; timed out on a 55k prompt).
-  NOT usable: `opencode/*-free` (403 "free tier only within OpenCode"), `meta_api/*` (401 no credentials).
-- Reviewer tokens (D-1321/D-1327 GO): ~/.config/plangraph/reviewer-{openai,meta,xiaomi,deepseek}.token, by REVIEWING model family.
-  D-1324 rule until contract fix is live: ok must be a JSON bool from the VERDICT line -> use tools/seat_verdict.py (lane below).
-- Worktree isolation: compound shell commands with $VARS + git/python get refused; use plain commands or write a script file.
+## Tools (this branch, ops/) — copy to your job tmp and fix paths
+- `ops/pg.sh` keeper CLI (token build-L1). `ops/probe.sh LABEL` live-keeper probes (health, verdict bool on a NONEXISTENT key, router whoami).
+- `ops/seat.sh MODEL PROMPT OUTDIR TITLE` = review-call (300 s hard cap, default max_tokens 16000; call review-call directly for --max-tokens).
+- `ops/assemble.py OUT part|label=path...`; ALWAYS append `ops/tail.md` (answer-shape reminder) as the last part, else gpt-oss
+  answers only the standing question, bolds the VERDICT, or ends TEST-GAMING without ": 0 hits" (-> test_gaming=missing).
+- Record verdicts with `tools/seat_verdict.py` (on main since PR #4): `--key K --seat-dir DIR --writer-family anthropic
+  --token-dir ~/.config/plangraph [--dry-run]`. PASS needs finish_reason=stop AND test_gaming=no. Reviewer tokens: openai, meta,
+  xiaomi, deepseek, alibaba (issued 16:10 by fixes-L1).
+- Seat models now: `ovh/gpt-oss-120b` works (flaky format, sometimes hallucinates evidence -> adjudicate against code).
+  xiaomi-mimo flash+pro: every call timed out since ~15:40. `ovh/Qwen3.8-27B` (exact case! alibaba, D-1329 2nd family):
+  timed out at 16000 max tokens; retry running with --max-tokens 5000.
+- Batch replay: ops/mkreplay.py (edit T path), daemon from a lane worktree's src on :18787, apply_batch.py with router token, kill + rm.
 
-## Keeper rules learned
-- commit+ci evidence needs: Plan-Item trailer `Plan-Item: <project:KEY>` on the commit, commit ancestor of origin/main, CI on that exact sha.
-  Merge commits lack it -> put the trailer on a lane commit whose own push CI is green. Every writer brief must demand the trailer.
-- Keeper config has NO "ci" block -> commit+ci never verifies. Approved in principle (D-1327c): add `"ci": {"plangraph": "Ch3fUlrich/plangraph"}`
-  to ~/.local/share/plangraph/keeper.json, bundled into the contract-fix "GO <sha> ff+restart" request (exact diff + rollback).
-- kind `commit` is router-only (POST /v1/add_evidence_router). tier none items close by router (`close` on a decision batch).
-- Batch replay before sending: ops/mkreplay.py (sqlite .backup of the live DB copy + daemon on :18787, chmod 600 config), apply_batch.py with router token, delete copy after.
+## Lessons (new)
+- Plan-Item trailer must be in the LAST paragraph together with Co-Authored-By (no blank line), else git ignores it and
+  commit+ci evidence fails ("does not carry trailer"). Check `git log -1 --format='%(trailers:key=Plan-Item,valueonly)'`.
+- D-1338 (operator): every red CI run emails the operator. Local suite green before every push. CI now runs on push only for
+  main; lanes need a (draft) PR for CI; concurrency cancels superseded lane runs (PR #7, main ab3d0817).
+- Public scrub test (tests/test_split_make_public.py) rejects token-shaped test constants.
 
 ## Items (owner build-L1)
 | Key | State | Next |
 |---|---|---|
-| plangraph:RT-P1-WORKER-CORE | claimed (lease ~17:14Z, heartbeat!) | merged main 2cd2c382 (PR#1); trailer commit fad33f3c on main via 575efd7a (PR#3), CI run 38759410266 green; evidence pending keeper ci config; then submit + record ovh PASS (docs/plan/rethink/seats/worker-core-ovh) via seat_verdict.py with reviewer-openai |
-| plangraph:RT-P1-TEMPORAL-SPIKE | in_review (decision D-1321 + commit 3b4c51c3 verified) | tier none -> ask routing to close |
-| plangraph:RT-P1-CONTRACT | claimed | lane/rt-p1-contract 0a3d6008 (154 black-box tests, 43/43 routes; fixes verdict bool bug + int 500->400). Seat ovh = fix, its HIGH is FALSE (/v1/whoami served via api_routes.py:32 READ_CALLS); MED: assert error msgs, keeper start timeout 20 s -> raise. Seat mimo split A/B running (bg; outputs /home/s/.claude/jobs/ee78d094/tmp/seat-ct/mimoA, mimoB). Then: small fix pass via the lane's writer, PR, merge, evidence, then "GO <sha> ff+restart" to routing with before/after (health + POST verdict "ok":"false" -> 400), keeper ci config diff, rollback sha d1b0b333 (current live) |
-| seat_verdict tool | writer running (lane/rt-p1-seat-verdict, trailer RT-P1-REVIEW) | review + PR; send sha to fixes-L1 (they asked) |
+| plangraph:RT-P1-CONTRACT | DONE (main 7e5a61e3, live via GO D-1331, keeper "ci" block live) | — |
+| plangraph:RT-P1-TEMPORAL-SPIKE | in_review, tier none | routing closes |
+| plangraph:RT-P1-WORKER-CORE | claimed, lease 18:13Z (heartbeat!) | commit+ci✓ (fad33f3c). r2 lane lane/rt-p1-worker-core-r2 291617ff, PR #6, CI green. Seats: r5 fix -> triaged (2 confirmed fixed, 19 false), r6 PASS (test_gaming missing), r7 fix = hallucinated (adjudication docs/plan/rethink/seats/worker-core-r2-adjudication.md). Need 1 recordable seat: qwen running (out /home/s/.claude/jobs/abc4dacf/tmp/wc/qwen, prompt wc/r6.md) else rerun ovh with tail. Then merge PR #6, commit+ci on 291617ff (trailer ok), submit, seat_verdict. |
+| plangraph:RT-P1-KEEPER-PG-CODE | claimed (b02 applied, D-1334), lease 18:13Z | W1 writer (Sonnet subagent of gen-2) running: brief docs/plan/rethink/briefs/keeper-pg-code-w1.md, worktree /home/s/code/plangraph-worktrees/keeper-pg, branch lane/rt-p1-keeper-pg-code. If the subagent died with gen-2: inspect the worktree, relaunch with the same brief + D-1338 rules (PG job continue-on-error until parity, draft PR for CI). Then W2 (design-3 tables/states), W3 (copy tool). HIGH: 2 families (openai + alibaba). |
+| plangraph:RT-P1-REVIEW | open (dep WORKER) | seat_verdict tool already on main (trailer commit a28d0119) |
+
+## Carry into RT-P1-WORKER (from worker-core reviews)
+fresh worktree on promotion (design 4.5 l.126); symlink escape needs harness sandbox; 24 h wait cap -> park; probe_fail attempt cap.
 
 ## Other state
-- server:RT-P1-PG-DEPLOY: server-L1-main planning (D-1305). Everything else in P1 waits on it (+ RT-P0-OR-DRIFT for CLASS-COMBOS, RT-P0-BASELINE for GOVERNOR).
-- Disk (D-1319): Temporal SDK builds -> workstation (workst-L1-autoos); one CARGO_TARGET_DIR + cargo clean. D-1317: tool-less seats ok on coding.vm, max 4 fleet.
-- Janitor change done (keeps check-passing dead attempts). WORKER lane must add: merge lock + fencing, Temporal glue (SDK 1.1.0, protoc, cancel-aware activities), keeper calls.
-- Lane worktree /home/s/code/plangraph-worktrees/rt-evidence-1 (branch merged) can be removed.
+- All other P1 items gate on server:RT-P1-PG-DEPLOY (server-L1-main / server-L2-rtp1-pg-code).
+- Backups from D-1331: ~/.local/share/plangraph/keeper.{json,db}.bak-20261015-contract (keep until KEEPER-PG cutover).
+- Removable worktrees: /home/s/code/plangraph-worktrees/{rt-evidence-1,ci-triggers}, .claude/worktrees/agent-{a3aff9b8a3414d80b,aef4af91b3ec7281e,aaf50bb78352c3468,af32cede7c100d08a} (lanes merged).
