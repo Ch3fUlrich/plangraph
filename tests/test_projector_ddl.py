@@ -119,7 +119,8 @@ def test_model_field_order_follows_the_spec():
         "started_at", "ended_at", "tokens_in", "tokens_out", "cost"]
     assert names(StateRec) == ["workflow_id", "run_id", "event_id", "plan_key", "state", "reason"]
     assert names(RunProjection) == ["workflow_id", "run_id", "plan_key", "status", "start_time",
-                                    "last_event_id", "attempts", "states"]
+                                    "last_event_id", "attempts", "states", "outcome",
+                                    "next_run_id"]
 
 
 def test_constants_come_from_the_keeper():

@@ -65,6 +65,10 @@ rules = ["token-shape"]
 [[scrub.allow]]
 path = "tests/test_keeper_final_a.py"
 rules = ["token-shape", "high-entropy"]
+# Recorded Temporal histories carry base64 payloads and a build id (high-entropy by shape only).
+[[scrub.allow]]
+path = "tests/fixtures/temporal/*.json"
+rules = ["high-entropy"]
 # These two name the rule/guard in prose and file paths next to the word "credential".
 [[scrub.allow]]
 path = "docs/PUBLIC.md"
