@@ -2,7 +2,7 @@
 
 Scope of W1: a Postgres storage backend next to SQLite, behind one seam, proven by the frozen black-box contract suite
 (`tests/contract`) and the storage-facing keeper tests running against a Postgres service container in GitHub Actions.
-SQLite stays the default. Not in W1: the design-3 tables/states (done in W2, below) and the SQLite -> Postgres copy tool (W3).
+SQLite stays the default. Not in W1: the design-3 tables/states (done in W2, below) and the SQLite -> Postgres copy tool (W3, below).
 
 ## Selecting the backend
 
@@ -114,3 +114,26 @@ the item's project; decisions and answers by router only; budget by router or sy
 l1/worker/spawner of the item's project. Questions follow design 4.8: a question with a default needs a deadline;
 `source='question_timeout'` (router or system) applies the stored default once the deadline has passed; a question tagged
 auth, secrets, money, live-step or public-release cannot carry a default and never times out.
+
+## Copy tool (W3)
+
+`pg --config keeper.json admin copy-to-pg (--dry-run | --apply) [--src <sqlite file>]` copies a SQLite keeper into an
+empty Postgres keeper (`src/plangraph/keeper/copy_to_pg.py`). Exactly one of `--dry-run` / `--apply` is required; `--src`
+defaults to the configured `db`. The target is always Postgres: DSN and schema come from `keeper.json` (`dsn`, `pg_schema`)
+or env `PG_DSN` / `PG_SCHEMA`; the DSN is never printed or put in an error message.
+
+* `--dry-run` reads the source only (opened `mode=ro`): per-table row counts, the events chain head, and a full chain
+  check. A broken source chain exits 2. The target is not contacted.
+* `--apply` creates or migrates the target schema (`open_db(create=True)`), then in ONE transaction copies every table
+  verbatim in primary-key order (events, items, evidence, edges, principals, aliases, run_tokens, outbox_seen, audit_log,
+  audit_findings, then cards, attempts, decisions, questions, answers, budget) with parameterised inserts, ids and `seq`
+  preserved, values unchanged, so event hashes stay byte-identical. Before commit it checks per-table row counts, that the
+  target chain head equals the source head and that the copied chain verifies; any mismatch rolls everything back and exits 2.
+  The key-lock triggers are disabled for the copy only (events are loaded before the items and evidence they lock), inside
+  the same transaction, and re-enabled and checked before the commit; this needs the table owner (the role that migrates).
+  Identity sequences are advanced past the copied maximum so the first keeper write after the copy does not collide.
+* Emptiness rule: the target must hold no rows in any keeper table (the append-only triggers make a merge impossible); a
+  second `--apply` is refused with `target is not empty`.
+* Copy a snapshot, never a live database: stop the keeper (or copy the file with the SQLite backup API) first. Writes made
+  to the source after the copy are not carried over.
+* The report is plain text (table, source rows, target rows, head); it holds no paths, hosts or secrets.
