@@ -1,0 +1,36 @@
+# build-L1 2026-10-15 b02: split the Postgres port CODE out of RT-P1-KEEPER-PG so it starts before server:RT-P1-PG-DEPLOY.
+# KEEPER-PG-CODE: Python keeper storage on Postgres (psycopg, same HTTP contract) + design-3 tables/states; proven by the
+#   frozen black-box contract suite (RT-P1-CONTRACT) + existing tests against a throwaway Postgres SERVICE CONTAINER in GitHub
+#   Actions only (no coding.vm infra, no live DB). SQLite stays the default backend until cutover.
+# KEEPER-PG keeps the live part: blue-green migration onto the PG-DEPLOY instance, old keeper read-only 48 h, row counts +
+#   hash chain compared, cutover under a GO. HIGH seats (2 families incl. non-Claude) stay on both.
+batch: 2026-10-15-build-l1-b02
+principal: routing-00
+source: /home/s/code/routing-worktrees/rethink-setup/docs/reports/2026-10-15-rethink-setup-design.md
+source_sha256: 1958911c9a9c4b3a301096e0e296a887c75e0bcaeaa5d94cee27a6d550a2309e
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: RT-P1-KEEPER-PG-CODE
+    kind: lane
+    owner: build-L1
+    review_tier: high
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 12
+    estimate_src: plan
+    priority: 1
+    track: RETHINK
+    depends_on:
+    - plangraph:RT-P1-CONTRACT
+    title: 'Keeper Postgres backend (code): storage port + cards/attempts/decisions/questions/budget tables + new states'
+    done_criteria: keeper storage backend selectable (sqlite default, postgres via config/DSN); contract suite (tests/contract) + existing suite green against Postgres in CI (GitHub Actions postgres service) and still green on SQLite; design-3 tables (cards with check/read-write sets/class/risk tags, attempts, decisions, questions/answers, budget) and states needs_input/waiting/failed/parked with migrations; hash chain identical across backends; SQLite->Postgres copy tool with row-count + hash-chain verify (dry-run tested in CI); 2 seats incl. non-Claude
+    description: 'Split from plangraph:RT-P1-KEEPER-PG so the port starts before server:RT-P1-PG-DEPLOY. No live infra: Postgres only as a CI service container. Source: D-1285 design 3, 12 (migration risk), 14a.'
+- op: edit
+  key: plangraph:RT-P1-KEEPER-PG
+  fields:
+    depends_on:
+    - server:RT-P1-PG-DEPLOY
+    - plangraph:RT-P1-CONTRACT
+    - plangraph:RT-P1-KEEPER-PG-CODE
