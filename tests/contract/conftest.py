@@ -4,6 +4,14 @@ import pytest
 import contract_harness as harness
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        fspath = str(getattr(item, "fspath", "") or getattr(item, "path", ""))
+        if "tests/contract" in fspath.replace("\\", "/"):
+            item.add_marker(pytest.mark.xdist_group("contract"))
+
+
 @pytest.fixture(scope="session")
 def kp(tmp_path_factory):
     """The keeper under test: ``PG_CONTRACT_URL`` if set, else a local daemon."""

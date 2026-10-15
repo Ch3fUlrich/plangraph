@@ -8,13 +8,40 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 ``admin verify``, and ``tests/test_keeper_pg_parity.py`` compares every (seq, hash) pair and the
 head against SQLite through the adapter.
 """
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+
+def _use_tmpfs_tempdir() -> None:
+    # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
+    shm = "/dev/shm"
+    if not sys.platform.startswith("linux"):
+        return
+    if os.environ.get("TMPDIR") or os.environ.get("PG_TEST_DISK_TMP"):
+        return
+    try:
+        if not os.access(shm, os.W_OK | os.X_OK):
+            return
+        st = os.statvfs(shm)
+        if st.f_bavail * st.f_frsize < 256 * 1024 * 1024:
+            return
+        path = tempfile.mkdtemp(prefix="pgtest-", dir=shm)
+    except OSError:
+        return
+    atexit.register(shutil.rmtree, path, ignore_errors=True)
+    os.environ["TMPDIR"] = path
+    tempfile.tempdir = path
+
+
+_use_tmpfs_tempdir()
 
 _PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 
@@ -45,7 +72,7 @@ def pytest_collection_modifyitems(config, items):
         return
     kept, dropped = [], []
     for item in items:
-        (dropped if item.nodeid in _READS_SQLITE_FILE else kept).append(item)
+        (dropped if item.nodeid.split("@", 1)[0] in _READS_SQLITE_FILE else kept).append(item)
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
