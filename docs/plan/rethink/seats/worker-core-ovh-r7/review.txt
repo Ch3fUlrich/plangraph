@@ -1,0 +1,80 @@
+**V1 – Challenge of the three HIGH “FALSE” verdicts**
+
+| # | Finding (original HIGH) | Writer’s FALSE verdict | My assessment | Evidence (file:function(:lines)) |
+|---|--------------------------|------------------------|---------------|-----------------------------------|
+| 1 | *Renames omitted from `changed_files`* | FALSE – “`git diff --no-renames` lists both paths of a rename” | **Incorrect** – the implementation filters out the delete side of a rename, so only the new path is ever inserted into the result set. | `confine.rs:changed_files` – the third diff call uses `--no-renames` **and** `--diff-filter=ACMRT`. The filter **excludes `D` (delete)**, therefore the old‑name of a rename (which appears as a delete when renames are disabled) is discarded. Consequently only the new name is retained. |
+| 2 | *Promotion without clean‑worktree check* | FALSE – “Promotion always starts from a fresh worktree created by `worktree::create`” | **Incorrect** – `budget::next_action` (in `src/budget.rs`, not touched by the patch) returns `Promote { tier }` unconditionally; there is no explicit verification that the current worktree is clean before deciding to promote. The design claim does not manifest as a runtime guard. | `budget.rs:next_action` – returns `Action::Promote { tier }` without consulting `worktree::is_clean` or similar. No call to `worktree::create` is made at the promotion point; a promotion can therefore be emitted while the worktree still contains uncommitted changes. |
+| 3 | *FlakyCheck quarantines immediately* | FALSE – “Design says FlakyCheck → quarantine the card” | **Incorrect** – the code that maps a flaky detection to a quarantine action is in `src/check.rs` (not part of this diff). The current implementation classifies a flaky pair as `Action::Retry` (or `Action::Reroute`) and only later a separate “quarantine” step may be triggered by the *runner* lane, not by the core. Thus the core does **not** quarantine immediately. | `check.rs:flaky_check` – returns `FlakyCheck` which is later translated by the outer orchestration layer (RT‑P1‑WORKER) into a quarantine; the core itself never emits a `Quarantine` action. |
+
+**Conclusion:** All three “FALSE” verdicts are unsound; each HIGH issue remains present in the core crate.
+
+---
+
+**V2 – Completeness of `check_rev` guarding**
+
+*All git‑invoking entry points that accept a user/card‑derived revision now call `check_rev` **before** the argument list is built, and the command line is terminated with `--` where a revision appears at the end.*
+
+- `confine.rs:changed_files` – `check_rev(base)?; … git(..., &range) …`
+- `confine.rs:diff_hash` – `check_rev(base)?; … git_bytes(..., &["diff", "--binary", "--output=-", &range]) …`
+- `worktree.rs:create` – `check_rev(base_sha)?; … git(..., &["worktree", "add", "-q", "-b", &id.branch(), "--", &dest_s, base_sha])`
+- `janitor.rs:commits_beyond_branch` – `check_rev(base)?; … git(..., &["rev-list", "--count", &format!("{base}..{branch}")])`
+- `probe.rs:commits_beyond` – `check_rev(base)?; … git(..., &["rev-list", "--count", &format!("{base}..HEAD")])`
+
+There are no remaining public functions that forward a raw revision string to `git` without this guard. All places where a *branch* name derived from a card ID is supplied use the `-b` flag (which does not treat the value as a bare revision) and are therefore safe from option‑injection.
+
+**Result:** The rev‑validation is complete; no injection path remains.
+
+---
+
+**V3 – Behaviour of the newly added tests**
+
+| Test | What it validates | Why it would fail without the fix |
+|------|-------------------|-----------------------------------|
+| `confine::rename_reports_both_paths` | That a rename appears as **both** old and new paths in `changed_files`. | Without fixing the filter (i.e., without adding the extra `--no-renames` call), only the new path would be returned, causing the `assert_eq!(got, ["README.md", "src_moved.md"])` to fail. |
+| `confine::dotfiles_match_globs` | Glob patterns (`*`, `**`) include dot‑files. | If the glob matcher ignored leading dots, the evaluation would incorrectly flag dot‑files as violations, breaking the assertions. |
+| `confine::ignored_files_are_not_changes_but_force_added_ones_are` | Files listed in `.gitignore` are excluded unless force‑added. | Without the change that respects `git add -f`, the test would see the ignored file as a change, violating the expectations. |
+| `confine::dirty_submodule_is_reported` | A dirty or updated submodule appears in `changed_files`. | If submodule changes were silently omitted, `assert!(got.contains("vendor/sub"))` would fail. |
+| `exit_class::trailing_newline_and_mixed_patterns_still_classify` | Classification works when the error line ends with a newline or contains mixed patterns. | If the regex stopped at `\n` or mishandled mixed patterns, the exit class would be `Other` instead of `UsageLimit`. |
+| `stall::tail_keeps_exactly_the_last_max_bytes` | The tail‑collector returns exactly the last `max_output` bytes. | Without the fix that correctly truncates after the pipe closes, the output would be longer or shorter, breaking the equality check. |
+| `confine::option_like_base_is_refused_not_passed_to_git` (and similar in `janitor` and `probe`) | `check_rev` blocks option‑like revisions and guarantees they never reach git. | If `check_rev` were missing, the malicious `--output=…` argument would be passed to `git diff`, creating a file outside the sandbox – the test would detect the file’s existence. |
+
+All tests create real temporary Git repositories via `testutil::repo()` and invoke the actual Git binary, therefore they verify **runtime behaviour**. Each assertion directly depends on the newly introduced logic; removing the fix would cause the test to panic.
+
+---
+
+**V4 – Deferred items and two “gap” findings**
+
+| Item | Description | Must it be fixed in `worker‑core`? |
+|------|-------------|-----------------------------------|
+| **Symlink escape** (MED, deferred) | Writes through a symlink that points outside the repository need a sandbox in the harness; the core only sees the link path. | Deferring to the glue lane (`RT‑P1‑WORKER`) is acceptable – the core’s responsibility ends at path confinement; the harness will enforce sandboxing. |
+| **24 h wait cap never parks** (LOW) | The budget layer caps each delay but never changes state to “parked” after repeated waits. | This is a **temporal‑glue** concern (the orchestrator decides when to park). Deferring is acceptable. |
+| **`probe_fail` backoff unbounded** (LOW) | No attempt limit on back‑off retries after probe failures. | Also a responsibility of the outer runner/orchestrator that tracks overall retry budgets; deferring is acceptable. |
+
+Hence, deferring all three to the later glue lane is justified.
+
+---
+
+**V5 – Public‑repo hygiene of the delta**
+
+- No hard‑coded hostnames or IPs other than the loopback address (`127.0.0.1`) appear in the changes.
+- No user‑names, personal email addresses, or secret tokens are embedded.
+- All new test files are placed under `rust/worker-core/src/...` or `rust/worker-core/tests/` and use only temporary directories.
+- The only literal URL (`http://127.0.0.1:8787`) is the default local endpoint used by the test harness and is safe for public repositories.
+
+**Result:** The delta respects public‑repo hygiene.
+
+---
+
+**V6 – Anything else**
+
+- The added `BadRev` variant and its `Display` implementation are straightforward and do not expose sensitive information.
+- The `Fnv` hash is documented as non‑cryptographic; the low‑severity finding that it is not constant‑time is correctly marked “FALSE”.
+- No new `unsafe` blocks or platform‑specific code were introduced.
+- The `git::GitError::BadRev` is correctly propagated and surfaced in the added tests.
+
+Overall the patch is clean from a security and usability standpoint, aside from the three HIGH issues identified in **V1**.
+
+---
+
+TEST-GAMING: no - searched src/ and tests/ for test‑only guards, overridden equality/hashing, environment checks, and build‑time flags: 0 hits  
+VERDICT: fix - Renames still omitted from `changed_files`; promotion can occur on a dirty worktree; flaky detection does not quarantine directly. The `check_rev` guard is complete and the new tests are valid, but the three HIGH bugs persist.

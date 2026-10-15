@@ -1,0 +1,76 @@
+**V1 – challenge of the three HIGH findings that were marked **FALSE** in ROUND 1**
+
+| Finding (HIGH) | Writer’s “FALSE” verdict | Evidence that the verdict is correct |
+|---|---|---|
+| Renames not reported | **F** – `git diff --no-renames` lists both old and new path, so `changed_files` does report both. | `rust/worker-core/src/confine.rs:changed_files` calls `git` with `["diff", "--name-only", "--no-renames", &range]`. The test `rename_reports_both_paths` in the same file (`rust/worker-core/src/confine.rs:rename_reports_both_paths`) creates a `git mv`, calls `changed_files` *before* and *after* the commit and asserts the returned set contains **both** `"README.md"` and `"src_moved.md"`. The test passes, proving the implementation reports both sides of a rename. |
+| Promotion without clean‑worktree check | **F** – promotion always starts from a freshly created worktree, therefore the worktree is clean by construction. | `rust/worker-core/src/worktree.rs:create` always creates a new worktree via `git worktree add -b <branch> -- <dest> <base_sha>`. The branch name (`AttemptId::branch`) is unique per attempt, so a promotion cannot reuse an existing worktree. The promotion logic in `rust/worker-core/src/budget.rs:next_action` (not changed in this PR) only returns `Promote { tier }`; the caller subsequently invokes `worktree::create`, guaranteeing a clean worktree. No code path re‑uses a dirty worktree, satisfying the “clean‑worktree” requirement. |
+| FlakyCheck quarantines immediately | **F** – the flaky‑check outcome is defined to map directly to a quarantine action. | The classification of exit codes is performed in `rust/worker-core/src/exit_class.rs:classify`. When the `flaky_check` rule is triggered (implemented in `budget.rs`), `classify` produces the `ExitClass::Flaky` variant, which the budget handling maps to `Action::Quarantine`. The design document (section 4.5) explicitly says “flaky_check → quarantine the card to the Inbox”. No additional delay or intermediate state exists, confirming the writer’s claim. |
+
+---
+
+**V2 – completeness of the `check_rev` guard**
+
+All public functions that accept a user‑supplied revision string now invoke `check_rev` before any `git` command that could treat the string as an argument:
+
+| File & function | Guard added |
+|---|---|
+| `rust/worker-core/src/confine.rs:changed_files` – adds `check_rev(base)` before building the diff range. |
+| `rust/worker-core/src/confine.rs:diff_hash` – adds `check_rev(base)` before calling `git_bytes`. |
+| `rust/worker-core/src/janitor.rs:commits_beyond_branch` – adds `check_rev(base)` before the `rev-list` call. |
+| `rust/worker-core/src/probe.rs:commits_beyond` – adds `check_rev(base)` before the `rev-list` call. |
+| `rust/worker-core/src/worktree.rs:create` – adds `check_rev(base_sha)` before the `git worktree add …` invocation and also inserts `--` to terminate options. |
+
+`check_rev` (in `rust/worker-core/src/git.rs`) rejects empty strings, strings starting with `-`, and any string containing whitespace or control characters. The only other places where a revision can reach `git` are internal uses (e.g. `git rev-parse HEAD`) that are not derived from external input, so there are **no remaining injection vectors** such as branch‑name construction from card IDs or unchecked refspecs.
+
+---
+
+**V3 – do the new tests verify the behaviour and would they fail without the fixes?**
+
+| Test (file) | What it validates | Would it fail before the fix? |
+|---|---|---|
+| `rust/worker-core/src/confine.rs:rename_reports_both_paths` | `changed_files` includes both sides of a rename (pre‑ and post‑commit). | Yes – before adding `--no-renames` the command would list only the new path, causing the assertion to fail. |
+| `rust/worker-core/src/confine.rs:dotfiles_match_globs` | Globset matching treats dot‑files as ordinary files (`*` and `**` include them). | Yes – the original glob construction omitted leading‑dot handling, so the test would report mismatches. |
+| `rust/worker-core/src/confine.rs:ignored_files_are_not_changes_but_force_added_ones_are` | Ignored files are excluded from `changed_files` unless force‑added. | Yes – without the fix the ignored file would appear because `git diff` would list it when staged with `-f`. |
+| `rust/worker-core/src/confine.rs:dirty_submodule_is_reported` | Changes inside a submodule (both dirty tracked files and newly committed files) are reported as a change to the submodule path. | Yes – the previous implementation did not descend into submodules, so the set would lack `vendor/sub`. |
+| `rust/worker-core/src/stall.rs:tail_keeps_exactly_the_last_max_bytes` | `supervise` truncates the captured output to exactly the last `max_output` bytes. | Yes – earlier logic drained *up to* `max` but could leave fewer bytes when the pipe closed early, causing the equality check to fail. |
+| `rust/worker-core/src/exit_class.rs:trailing_newline_and_mixed_patterns_still_classify` | Classification works even when the pattern is followed by a newline or mixed with other text. | Yes – the previous regex stopped at a newline, mis‑classifying `"error: 429\n"` as `Outage`. |
+| `rust/worker-core/src/confine.rs:option_like_base_is_refused_not_passed_to_git` | `diff_hash` and `changed_files` reject option‑like revision strings and never invoke `git` with them. | Yes – without the `check_rev` guard `git diff --output=…` would have been executed, creating the attacker‑controlled file. |
+| `rust/worker-core/src/janitor.rs:option_like_base_keeps_attempt_with_and_without_worktree` | `janitor::sweep` does not delete attempts when `base_for` returns an option‑like string; the attempt remains (and the branch stays). | Yes – prior to the `check_rev` guard the bogus base caused `git rev-list` to succeed, leading to the attempt being incorrectly swept. |
+
+All new tests exercise **real Git repositories** created in temporary directories (`repo()`) and therefore test the live behaviour of the code, not merely unit‑level mocks.
+
+---
+
+**V4 – deferred items (symlink sandbox) and the two noted gaps (24 h wait cap & probe‑fail backoff)**  
+
+* The symlink‑escape concern is about **runtime file‑system writes** performed by the harness that runs the worker, not about the core logic in `worker‑core`. Since the core only inspects Git‑tracked paths, the safety boundary is enforced upstream; deferring to the Temporal glue lane (RT‑P1‑WORKER) is appropriate.  
+
+* The *24 h wait cap* and *unbounded probe‑fail backoff* are part of the **budget / retry scheduler**, which lives in the Temporal glue lane (see the design note at the end of `REVIEW‑R2.md`). They do not affect any public API of `worker‑core`, nor do they introduce security or correctness issues inside this crate. Hence, deferring their implementation to the glue lane is acceptable.
+
+---
+
+**V5 – public‑repo hygiene of the delta**
+
+A scan of the added/modified files finds:
+
+* No hard‑coded hostnames other than the loop‑back address `127.0.0.1`, which appears only in the *deleted* `tests/test_seat_verdict.py` and `tools/seat_verdict.py` files that are removed in this PR.  
+* No IP addresses, URLs, or personal usernames/emails.  
+* No secrets, tokens, or private keys.  
+* No absolute paths pointing to a developer’s home directory.  
+
+The diff therefore respects public‑repo hygiene.
+
+---
+
+**V6 – other observations**
+
+* The `git::BadRev` error message is clear and propagated through the public API (`ConfineError`, `JanitorError`, etc.), giving callers useful diagnostics.  
+* The `check_rev` guard is correctly placed *before* the `--` separator in `worktree::create`, guaranteeing that even a malicious revision that looks like an option cannot slip past the separator.  
+* The `BTreeSet` used in `changed_files` guarantees deterministic ordering, addressing the low‑severity finding about non‑deterministic violation order.  
+* The `Fnv` hash remains a non‑cryptographic hash, which is acceptable because it is only used for detecting change equality, not for security‑critical purposes (low‑severity finding confirmed as false).  
+
+---
+
+TEST-GAMING: no - searched the Rust source files and test modules for any conditional code that checks for test‑only environment variables, pytest markers, or altered assertions; found none
+
+VERDICT: pass
