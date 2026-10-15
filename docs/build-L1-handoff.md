@@ -41,3 +41,11 @@ fresh worktree on promotion (design 4.5 l.126); symlink escape needs harness san
 - All other P1 items gate on server:RT-P1-PG-DEPLOY (server-L1-main / server-L2-rtp1-pg-code).
 - Backups from D-1331: ~/.local/share/plangraph/keeper.{json,db}.bak-20261015-contract (keep until KEEPER-PG cutover).
 - Removable worktrees: /home/s/code/plangraph-worktrees/{rt-evidence-1,ci-triggers}, .claude/worktrees/agent-{a3aff9b8a3414d80b,aef4af91b3ec7281e,aaf50bb78352c3468,af32cede7c100d08a} (lanes merged).
+
+## Update 16:55Z — KEEPER-PG-CODE W1 finished
+Head 41bb2307 on lane/rt-p1-keeper-pg-code, draft PR #8; CI green both jobs incl. pytest-postgres (runs 38770815285 push, 38770823100 PR; no continue-on-error).
+Backend chosen only by keeper.json `backend: postgres` / PG_KEEPER_BACKEND; advisory write lock; schema_pg.py migrations + `pg admin migrate`;
+parity test tests/test_keeper_pg_parity.py (event rows, chain head, item state). Plan + open questions: docs/keeper-postgres.md.
+Open: 5 SQLite-file tests deselected on PG (3 frozen contract tests in test_events.py — needs a judge note or an HTTP-level replacement);
+lane branch predates PR #7 (merge origin/main to pick up trigger change). Next: merge origin/main, W1 HIGH seats (gpt-oss + qwen/alibaba,
+split by module, tail.md), then W2 (design-3 tables/states) + W3 (SQLite->PG copy tool). Commit+ci evidence needs a lane commit with trailer.
