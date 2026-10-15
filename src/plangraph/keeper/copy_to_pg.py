@@ -18,10 +18,12 @@ from . import db as kdb, db_errors, events
 
 __all__ = ["run", "TABLES", "CopyError"]
 
-#: dependency-safe copy order: the chain first, then the cache and its satellites, then design 3.
+#: dependency-safe copy order: the chain first, then the cache and its satellites, then design 3,
+#: then the projector tables (migration 3; no foreign keys into the tables above).
 TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
           "outbox_seen", "audit_log", "audit_findings",
-          "cards", "attempts", "decisions", "questions", "answers", "budget")
+          "cards", "attempts", "decisions", "questions", "answers", "budget",
+          "projector_applied", "projector_watermark", "projector_alarms")
 _BATCH = 500
 
 
