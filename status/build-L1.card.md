@@ -27,3 +27,4 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 
 ## FOR ROUTER
 - L2-LAUNCH build-L2-deepinfra /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-deepinfra-remove.md /home/s/code/AutoOS-worktrees/deepinfra-remove (worktree to create from AutoOS origin/main AFTER priv-writers merges; build-L1 creates it). Sonnet, coding.vm (check MemAvailable >= 1 GB + headroom).
+- EDIT server:RT-P1-PG-DEPLOY done_criteria (D-1375, B2 off-host backup optional): replace "nightly off-host backup + restore drill" with "nightly backup (VM/NFS backup covers off-host; B2/OS-191b optional, non-gating) + restore drill". It gates plangraph:RT-P1-KEEPER-PG, server:RT-P1-TEMPORAL-CHECK, routing:RT-P1. Checked all plangraph/RT items: no other B2 dep (M2B-OFFHOST = keeper hosting, not backup).
