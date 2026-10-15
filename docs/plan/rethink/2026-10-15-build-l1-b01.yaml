@@ -1,0 +1,66 @@
+# build-L1 2026-10-15: P1 dep reorder so three tracks start before server:RT-P1-PG-DEPLOY lands.
+# 1) CONTRACT freezes the CURRENT (SQLite) keeper API first -> it becomes the acceptance suite of the Postgres port.
+# 2) TEMPORAL-SPIKE: Rust SDK workflow+activity+signal+timer against a local throwaway dev server (no live infra);
+#    TEMPORAL-CHECK keeps the live parts (RAM on coding.vm, WSL2 reach, UI deep link).
+# 3) WORKER-CORE: engine-free Rust modules of the worker (unit-tested); WORKER keeps Temporal+keeper glue and HIGH seats.
+batch: 2026-10-15-build-l1-b01
+principal: routing-00
+source: /home/s/code/routing-worktrees/rethink-setup/docs/reports/2026-10-15-rethink-setup-design.md
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: RT-P1-TEMPORAL-SPIKE
+    kind: lane
+    owner: build-L1
+    review_tier: none
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 3
+    estimate_src: plan
+    priority: 1
+    track: RETHINK
+    depends_on: []
+    title: 'Temporal Rust SDK spike on a local dev server: workflow, activity, signal, durable timer'
+    done_criteria: spike crate in plangraph (branch) runs workflow+activity+signal+durable timer against a local throwaway Temporal dev server; replay test green; SDK gaps listed; feeds the TEMPORAL-CHECK decision row
+    description: 'Split from server:RT-P1-TEMPORAL-CHECK (engine-side part, no live infra). Source: D-1285 design 11 (P1.1), 12 (Rust SDK risk), 14a (fallback = own runner on Postgres SKIP LOCKED).'
+- op: create
+  item:
+  - project: plangraph
+    id: RT-P1-WORKER-CORE
+    kind: lane
+    owner: build-L1
+    review_tier: standard
+    evidence_kinds:
+    - commit+ci
+    estimate_h: 10
+    estimate_src: plan
+    priority: 1
+    track: RETHINK
+    depends_on: []
+    title: 'Rust worker core (engine-free): worktree, checks, confinement, exit classes, budgets, probe, janitor'
+    done_criteria: rust crate with unit tests for worktree-per-attempt from base sha, check runner with tail capture, positive write-set confinement + forbid paths, exit-class classifier, retry budget + flaky detector + leg-tier promotion as pure functions, stall detector + process-group kill, outcome probe, janitor; CI green
+    description: 'Split from plangraph:RT-P1-WORKER so it can start before the keeper port and Temporal check. Numbers per design 4.5/4.6. HIGH seats stay on RT-P1-WORKER and cover this code. Source: D-1285 design.'
+- op: edit
+  key: plangraph:RT-P1-CONTRACT
+  fields:
+    depends_on: []
+- op: edit
+  key: plangraph:RT-P1-KEEPER-PG
+  fields:
+    depends_on:
+    - server:RT-P1-PG-DEPLOY
+    - plangraph:RT-P1-CONTRACT
+- op: edit
+  key: server:RT-P1-TEMPORAL-CHECK
+  fields:
+    depends_on:
+    - server:RT-P1-PG-DEPLOY
+    - plangraph:RT-P1-TEMPORAL-SPIKE
+- op: edit
+  key: plangraph:RT-P1-WORKER
+  fields:
+    depends_on:
+    - server:RT-P1-TEMPORAL-CHECK
+    - plangraph:RT-P1-KEEPER-PG
+    - plangraph:RT-P1-WORKER-CORE
