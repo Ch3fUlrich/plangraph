@@ -46,3 +46,4 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 - 21:5x PR #15 PLANNER-KIT-CODE merged main 27f5604 (d01c678 CI ✓✓; qwen r3 pass A+B, seat copied durable /home/s/code/plangraph-worktrees/planner-kit-seats/qwen-d01c678; writers Sonnet: spawner floor refused). Successor: evidence/submit/verdict; L2-DONE build-L2-planner-kit.
 - 21:17 beat: 7 leases hb. gen-4 over cap, awaiting recycle (FOR ROUTER).
 - 21:2x PR #13 fix 22922ec pushed (cancel via supervise_with_cancel, janitor on native cancel, 600 s cancel e2e); GitHub Actions billing refusal blocks CI -> waits. FOR ROUTER: incident GH Actions billing (all repos?) + CI-RUNS-ON-WORKST priority.
+- 21:47 beat: leases hb; waiting (GH billing, projector, inbox, #13 delta seat); gen-4 over cap awaiting recycle.
