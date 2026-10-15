@@ -20,3 +20,7 @@
 - "Mimo seats from opencode may be down but not from mimo/mimo-v2.6-flash check It"
 - "Communicate with "workst-L1-autoos" and o get access to the workstation agent"
 - AskUserQuestion (spawner refuses mimo/free legs on private repos, "not private-safe (trains on prompts)"): answer "Allow for all private repos" (option text: "Drop the private-safe guard fleet-wide for writers.")
+
+## 2026-10-15 ~19:45-19:55Z (build-L1 gen-4), operator verbatim
+- "I noticed that mimo/mimo-v2.6-flash should have up to 1M token. Maybe the omniroute settings are off. Check it"
+- After finding (no OmniRoute cap; client review-call.py 300 s timeout + reasoning eats max_tokens; fix = client option, route to AutoOS owner): "Go"
