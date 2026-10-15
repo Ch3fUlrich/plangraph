@@ -1,6 +1,6 @@
 //! One git worktree per attempt, on branch `attempt/<card>/<n>`.
 
-use crate::git::{git, GitError};
+use crate::git::{check_rev, git, GitError};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -56,7 +56,9 @@ pub fn create(
     dest: &Path,
     id: &AttemptId,
 ) -> Result<AttemptWorktree, GitError> {
+    check_rev(base_sha)?;
     let dest_s = dest.to_string_lossy();
+    // `--`: nothing after it can be taken for an option.
     git(
         repo,
         &[
@@ -65,6 +67,7 @@ pub fn create(
             "-q",
             "-b",
             &id.branch(),
+            "--",
             &dest_s,
             base_sha,
         ],
@@ -169,5 +172,20 @@ mod tests {
         let id = AttemptId::new("c", 1);
         create(repo_dir.path(), &base, &root.path().join("a"), &id).unwrap();
         assert!(create(repo_dir.path(), &base, &root.path().join("b"), &id).is_err());
+    }
+
+    #[test]
+    fn option_like_base_is_refused() {
+        let (repo_dir, _) = repo();
+        let root = tempfile::tempdir().unwrap();
+        // `-f` would otherwise be parsed as `git worktree add --force` and the
+        // worktree silently start from the main checkout's HEAD instead of the base.
+        let dest = root.path().join("w");
+        let id = AttemptId::new("c", 1);
+        assert!(create(repo_dir.path(), "-f", &dest, &id).is_err());
+        assert!(!dest.exists());
+        assert!(git(repo_dir.path(), &["branch", "--list", "attempt/c/1"])
+            .unwrap()
+            .is_empty());
     }
 }
