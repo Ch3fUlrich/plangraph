@@ -22,3 +22,8 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 - 20:0x gen-4 (5fadc0): beat 17,47 (fleet rule). PR #8 seat gpt-oss 5/5 pass (keeper-pg-seats/w12-ffc1bba), await ffc1bba push+CI -> merge. CI-PARALLEL PR #11 e91a415 CI ✓ (run 38796191893, 2557 passed 113 s), seat pass; L2 backup stopped at cap. #11 conflicts #8 (tests.yml, conftest.py) -> merge #8 first, then rebase #11 (add xdist to pytest-postgres). mimo: no OmniRoute cap; review-call.py fix routed (operator GO).
 - D-1364: messages only BLOCKED/DONE+sha/GO/incident/launch; L2s no beat; my beat 17,47 only while polling CI/lease.
 - 20:2x: PR #8 merged main 1779d2d. W3 go (keeper-pg). REBASE-11 go (backup). Claimed PROJECTOR/PLANNER-KIT/INBOX-CODE (lease 21:50Z), briefs e33eb87, worktrees from 1779d2d, L2-LAUNCH x3 asked of routing. Watch: migration-number collisions across lanes at merge.
+- 20:5x D-1374 router paused until ~04:10Z: no messages to routing; decisions D-935 default + log here.
+- AO-DEEPINFRA-REMOVE: fixes-L1 OFFLOAD to build-L1 L2 (fixes-L1 merges; order maingreen -> ordrift -> priv-writers -> reviewcall-mimo -> deepinfra). Brief 87720f8. Writer leg 1 = omniroute/mimo-v2.6-flash (all L2s told).
+
+## FOR ROUTER
+- L2-LAUNCH build-L2-deepinfra /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-deepinfra-remove.md /home/s/code/AutoOS-worktrees/deepinfra-remove (worktree to create from AutoOS origin/main AFTER priv-writers merges; build-L1 creates it). Sonnet, coding.vm (check MemAvailable >= 1 GB + headroom).
