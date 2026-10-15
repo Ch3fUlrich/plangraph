@@ -3,6 +3,10 @@
 ``open_db`` owns the pragmas, the schema install (only with ``create=True``) and
 the sqlite3 authorizer that denies DDL afterwards.  ``lock_keeper`` is the
 singleton flock helper the API/server uses to keep one writer per host.
+
+Two backends sit behind it: SQLite (default) and Postgres (``db_pg``).  The
+backend is chosen explicitly (``backend=`` / ``PG_KEEPER_BACKEND``), never by the
+mere presence of a DSN.  See docs/keeper-postgres.md.
 """
 from __future__ import annotations
 
@@ -15,9 +19,27 @@ from pathlib import Path
 from .errors import KeeperLocked
 from .schema import ALIASES_DDL, OUTBOX_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS
 
-__all__ = ["open_db", "lock_keeper", "KeeperLock"]
+__all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
 
 _DEFAULT_BUSY_MS = 5000
+_BACKENDS = ("sqlite", "postgres")
+
+
+def select_backend(explicit=None) -> str:
+    """``explicit`` if given, else env ``PG_KEEPER_BACKEND``, else ``sqlite``."""
+    choice = explicit if explicit is not None else (
+        os.environ.get("PG_KEEPER_BACKEND") or "sqlite")
+    if choice not in _BACKENDS:
+        raise ValueError(f"unknown keeper backend {choice!r} (sqlite or postgres)")
+    return choice
+
+
+def _pg_dsn(dsn):
+    return dsn or os.environ.get("PG_DSN")
+
+
+def _pg_schema(schema):
+    return schema or os.environ.get("PG_SCHEMA") or None
 
 
 def _denied_actions() -> set:
@@ -118,13 +140,20 @@ def _upgrade(conn):
 
 
 def open_db(path, *, create: bool = False,
-            busy_timeout: int = _DEFAULT_BUSY_MS) -> sqlite3.Connection:
+            busy_timeout: int = _DEFAULT_BUSY_MS, backend=None, dsn=None, schema=None):
     """Open the keeper DB and lock it down.
 
     ``create=True`` installs the schema first, then applies the authorizer (the
     schema's own CREATE statements must not be denied).  ``create=False``
     verifies the schema exists and applies the authorizer immediately.
+
+    With the Postgres backend *path* only names the keeper (it derives the schema
+    name unless *schema* is given); the connection is a ``db_pg.PgConnection``.
     """
+    if select_backend(backend) == "postgres":
+        from . import db_pg
+        return db_pg.open_pg(path, create=create, busy_timeout=busy_timeout,
+                             dsn=_pg_dsn(dsn), schema=_pg_schema(schema))
     path = Path(path)
     if create:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,11 +209,16 @@ class KeeperLock:
         return False
 
 
-def lock_keeper(path, *, blocking: bool = False) -> KeeperLock:
+def lock_keeper(path, *, blocking: bool = False, backend=None, dsn=None, schema=None):
     """Take the exclusive keeper lock for ``path`` or raise ``KeeperLocked``.
 
     The lock lives on ``<path>.lock`` so it survives checkpointing of the DB.
+    On Postgres it is a session advisory lock on a dedicated connection.
     """
+    if select_backend(backend) == "postgres":
+        from . import db_pg
+        return db_pg.lock_pg(path, blocking=blocking, dsn=_pg_dsn(dsn),
+                             schema=_pg_schema(schema))
     lock_path = str(path) + ".lock"
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
     fileobj = os.fdopen(fd, "w")

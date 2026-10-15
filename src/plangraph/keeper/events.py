@@ -41,17 +41,21 @@ def append_event(conn, ts, actor, role, model, key, type, payload=None):
     Must run inside the caller's transaction so the event and its cache write
     commit together.
     """
-    row = conn.execute("SELECT hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
-    prev_hash = row[0] if row is not None else ""
+    row = conn.execute("SELECT seq, hash FROM events ORDER BY seq DESC LIMIT 1").fetchone()
+    # The seq is assigned here (not by AUTOINCREMENT / a sequence) so both backends number
+    # events identically and a rolled-back write never leaves a gap.  Appends run inside
+    # the single-writer transaction.
+    seq = (row[0] + 1) if row is not None else 1
+    prev_hash = row[1] if row is not None else ""
     payload = payload or {}
     event = {"ts": ts, "actor": actor, "role": role, "model": model, "key": key,
              "type": type, "payload": payload}
     digest = event_hash(prev_hash, event)
-    cursor = conn.execute(
-        "INSERT INTO events(ts,actor,role,model,key,type,payload,prev_hash,hash)"
-        " VALUES(?,?,?,?,?,?,?,?,?)",
-        (ts, actor, role, model, key, type, canonical(payload), prev_hash, digest))
-    return cursor.lastrowid, digest
+    conn.execute(
+        "INSERT INTO events(seq,ts,actor,role,model,key,type,payload,prev_hash,hash)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (seq, ts, actor, role, model, key, type, canonical(payload), prev_hash, digest))
+    return seq, digest
 
 
 def read_events(conn):

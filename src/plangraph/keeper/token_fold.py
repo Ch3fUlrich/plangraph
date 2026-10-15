@@ -11,7 +11,7 @@ never renew and must keep their minted expiry exactly.
 """
 from __future__ import annotations
 
-import sqlite3
+from . import db_errors
 from datetime import datetime, timezone
 
 __all__ = ["fold_tokens", "verify_tokens"]
@@ -84,8 +84,8 @@ def verify_tokens(conn, events):
         rows = {r["id"]: r for r in conn.execute(
             "SELECT id,key,role,run_id,epoch,created_at,expires_at,revoked_at,token_sha256"
             " FROM run_tokens")}
-    except sqlite3.OperationalError as exc:
-        if "no such table" not in str(exc):
+    except db_errors.NO_TABLE as exc:
+        if "no such table" not in str(exc) and "does not exist" not in str(exc):
             raise                     # anything else must surface, never a silent clean
         rows = {}                     # a DB from before M2B-RUN-TOKENS (minted tokens still checked)
     folded = fold_tokens(events)

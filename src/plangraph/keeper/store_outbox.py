@@ -91,8 +91,8 @@ class OutboxMixin:
     def _seen(self, principal, eid, verb, key, result):
         with self._write():
             self.conn.execute(
-                "INSERT OR IGNORE INTO outbox_seen(entry_id,token_id,verb,key,result,seen_at)"
-                " VALUES(?,?,?,?,?,?)",
+                "INSERT INTO outbox_seen(entry_id,token_id,verb,key,result,seen_at)"
+                " VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING",
                 (eid, principal.token_id, str(verb)[:32], key, result, self._iso(self.now())))
         return {"id": eid, "result": result}
 

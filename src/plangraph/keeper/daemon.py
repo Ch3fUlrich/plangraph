@@ -31,8 +31,8 @@ def _install_signals(stop: threading.Event) -> None:
 
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
-    lock = kdb.lock_keeper(cfg.db)
-    conn = kdb.open_db(cfg.db)
+    lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
+    conn = kdb.open_db(cfg.db, **cfg.db_options)
     try:
         store = Store(conn, ctx=config_mod.verifier_context(cfg),
                       batch_roots=cfg.batch_roots)

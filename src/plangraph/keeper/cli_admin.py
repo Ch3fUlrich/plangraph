@@ -35,7 +35,7 @@ def _config(args):
 
 
 def _open(cfg, *, create=False):
-    return kdb.open_db(cfg.db, create=create)
+    return kdb.open_db(cfg.db, create=create, **cfg.db_options)
 
 
 def dispatch(args) -> int:
@@ -63,6 +63,14 @@ def _cmd_init(args, cfg) -> int:
         finally:
             conn.close()
         print(f"router {args.router} token (shown once): {token}")
+    return 0
+
+
+def _cmd_migrate(args, cfg) -> int:
+    """Bring the schema to the current version (Postgres runs the pending migrations)."""
+    postgres = kdb.select_backend(cfg.db_options.get("backend")) == "postgres"
+    _open(cfg, create=postgres).close()      # SQLite upgrades on every open; Postgres migrates here
+    print("schema up to date")
     return 0
 
 
@@ -194,6 +202,7 @@ _COMMANDS = {
     "verify-snapshot": _cmd_verify_snapshot,
     "verify-anchor": _cmd_verify_anchor,
     "init": _cmd_init,
+    "migrate": _cmd_migrate,
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,
     "verify": _cmd_verify,
