@@ -19,12 +19,12 @@ Config diff (~/.local/share/plangraph/keeper.json, mode 600 kept):
 (D-1327c. Enables commit+ci evidence for project plangraph via `gh api .../check-runs`; gh at /usr/bin/gh, logged in.)
 
 Steps (never chained with `;`):
-1. before: `curl -s 127.0.0.1:8787/v1/health` ; POST /v1/verdict {"key":"<any>","ok":"false",...} with a reviewer token -> today not 400 (record status)
+1. before: `curl -s 127.0.0.1:8787/v1/health` ; POST /v1/verdict {"key":"plangraph:NO-SUCH-GO-CHECK","ok":"false","reason":"go check"} with a reviewer token (NONEXISTENT key, so the old code cannot record a pass) -> today 404 not_found
 2. backup: `cp -p keeper.json keeper.json.bak-20261015-contract` ; sqlite `.backup` of the keeper DB
 3. `git -C .../proposal merge --ff-only 7e5a61e3`
 4. write keeper.json with the ci block (python json load/dump, chmod 600)
 5. `systemctl --user restart plangraph-keeper` && health poll 30 s
-6. after: health ok; POST verdict ok:"false" -> 400 validation; `pg show plangraph:RT-P1-WORKER-CORE` then add commit+ci evidence fad33f3c -> verified true
+6. after: health ok; same POST -> 400 validation (bool check precedes lookup); `pg show plangraph:RT-P1-WORKER-CORE` then add commit+ci evidence fad33f3c -> verified true
 
 Rollback: `git -C .../proposal reset --hard d1b0b333` ; `cp -p keeper.json.bak-20261015-contract keeper.json` ; restart ; health.
 If the unit is gone: recreate per live-tree-merge-safety (no reset-failed).
