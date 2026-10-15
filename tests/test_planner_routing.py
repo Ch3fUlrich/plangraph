@@ -14,7 +14,7 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
 D25_IDS = [
     "qodercli-qwen3.8-flash", "opencode-zen-free", "or-north-mini-code-free",
     "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
-    "deepinfra-mimo-v2.6-flash", "agy-gemini-3.8-flash", "agy-sonnet-5.5", "deepseek",
+    "mimo-v2.6-flash", "agy-gemini-3.8-flash", "agy-sonnet-5.5", "deepseek",
 ]
 
 
@@ -45,7 +45,7 @@ def test_default_legs_exact_d25_order():
     tiers = [TIERS.index(leg.tier) for leg in DEFAULT_LEGS]
     assert tiers == sorted(tiers)
     ids_ = [leg.id for leg in DEFAULT_LEGS]
-    assert ids_.index("deepinfra-mimo-v2.6-flash") < ids_.index("agy-gemini-3.8-flash")
+    assert ids_.index("mimo-v2.6-flash") < ids_.index("agy-gemini-3.8-flash")
     assert ids_[-1] == "deepseek"
 
 
@@ -138,7 +138,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "or-nemotron-3-super-free",
-                      "deepinfra-mimo-v2.6-flash", "agy-gemini-3.8-flash",
+                      "mimo-v2.6-flash", "agy-gemini-3.8-flash",
                       "agy-sonnet-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
@@ -261,10 +261,10 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
         a, leg = next_after_failure(route, [q], ec, 2)
         assert (a, leg.id) == ("retry", q)
     a, leg = next_after_failure(route, [q], "check_fail", 3)
-    assert (a, leg.id) == ("promote", "deepinfra-mimo-v2.6-flash")
+    assert (a, leg.id) == ("promote", "mimo-v2.6-flash")
     a, leg = next_after_failure(route, [q, leg.id], "check_fail", 3)
     assert (a, leg.id) == ("promote", "deepseek")
-    assert next_after_failure(route, [q, "deepinfra-mimo-v2.6-flash", "deepseek"],
+    assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"],
                               "stall", 3) == ("park", None)
     assert next_after_failure(route, [q], "check_fail", 0)[0] == "retry"
 
