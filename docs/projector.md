@@ -106,3 +106,12 @@ Hermetic: recorded history fixtures under `tests/fixtures/temporal/` (recorded o
 `tests/projector_record.py`), parser tests, apply/idempotency/forward-only/rebuild/reconciler tests on SQLite and, when
 `PG_KEEPER_BACKEND=postgres`, on Postgres. Live: a test that starts `temporal server start-dev` (binary from env `TEMPORAL_CLI`
 or PATH; skipped when missing) and runs real workflows. Migration test: upgrade a v2 Postgres schema to v3.
+
+## Operations
+
+* Exactly one projector process per keeper (`run` or a scheduled `run-once`). The ledger primary key makes a second process lose
+  loudly (an integrity error or a `conflict` refusal) rather than corrupt rows; it is not a supported mode.
+* Nightly reconcile: schedule `python -m plangraph.projector reconcile` (cron on the keeper host or a Temporal schedule); the
+  Inbox reads open rows of `projector_alarms`. The projector never sets `done`/`cancelled`: closing a card stays a keeper verb.
+* Attempts have no dedicated keeper event type; `state_set` events (written by `Store.set_state`) are the keeper events the
+  projector produces, the attempt rows themselves are the append-only record of each attempt.
