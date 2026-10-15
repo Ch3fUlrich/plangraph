@@ -13,6 +13,9 @@ Two modes, chosen by the environment:
 * otherwise: start the Python keeper daemon as a subprocess on a temp dir and
   a free localhost port, seeded through the public ``pg admin`` CLI.
 
+``PG_CONTRACT_START_TIMEOUT`` (seconds, default 60) bounds the wait for a
+locally started keeper to become healthy.
+
 Nothing here imports keeper internals; every assertion goes over HTTP or a
 CLI subprocess.
 """
@@ -31,6 +34,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
+
+#: Per-request socket timeout (seconds) for every HTTP call to the keeper.
+REQUEST_TIMEOUT = 20
+
+
+def _start_timeout() -> float:
+    """Seconds to wait for a started keeper to answer ``/v1/health``.
+
+    ``PG_CONTRACT_START_TIMEOUT`` overrides the default of 60 (a Postgres or
+    Rust keeper may need longer to migrate or compile on first start).
+    """
+    return float(os.environ.get("PG_CONTRACT_START_TIMEOUT", "60"))
 
 #: name -> (role, projects, family).  A remote keeper must provide the same.
 PRINCIPALS = {
@@ -106,7 +121,7 @@ class Keeper:
         for name, value in (headers or {}).items():
             req.add_header(name, value)
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 out = Resp(resp.status, dict(resp.headers), resp.read())
         except urllib.error.HTTPError as exc:
             out = Resp(exc.code, dict(exc.headers), exc.read())
@@ -228,7 +243,7 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
     keeper = Keeper(f"http://127.0.0.1:{port}", tokens,
                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
                     batch_dir, runs_dir, proc)
-    deadline = time.time() + 20
+    deadline = time.time() + _start_timeout()
     while time.time() < deadline:
         if proc.poll() is not None:
             raise RuntimeError("keeper exited: " + proc.stderr.read().decode()[:500])
@@ -238,4 +253,5 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
         except OSError:
             time.sleep(0.05)
     keeper.stop()
-    raise RuntimeError("keeper did not come up")
+    raise RuntimeError(f"keeper did not come up within {_start_timeout():g}s "
+                       "(PG_CONTRACT_START_TIMEOUT)")
