@@ -69,7 +69,8 @@ runs `tests/contract` plus the keeper modules that exercise storage. The existin
 (Answered conservatively; revisit in W2.)
 
 * Three contract tests read the SQLite file directly (`test_events.py` chain export and tamper check). They cannot run on
-  Postgres without editing the frozen suite; the PG job deselects them and `test_keeper_pg_parity.py` covers the same
-  chain check through the adapter.
+  Postgres without editing the frozen suite; the PG job deselects them (`tests/conftest.py`) and `test_keeper_pg_parity.py` covers the same
+  chain check through the adapter. Two storage tests that inspect the SQLite file (`brief_stats` read-only open, `admin init`
+  file check) and every test module importing `sqlite3` are likewise left out of the PG job.
 * The runtime role must lack DDL rights; creating that role is deployment (RT-P1-PG-DEPLOY), not W1.
 * Connection pooling: one connection behind the existing API lock, as with SQLite.

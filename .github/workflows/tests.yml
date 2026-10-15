@@ -30,8 +30,6 @@ jobs:
         run: python -m pytest -q tests
 
   pytest-postgres:
-    # until parity, RT-P1-KEEPER-PG-CODE
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 40
     services:
