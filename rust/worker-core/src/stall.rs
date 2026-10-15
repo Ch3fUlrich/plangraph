@@ -40,6 +40,8 @@ pub struct Supervised {
     pub signal: Option<i32>,
     pub stalled: bool,
     pub timed_out: bool,
+    /// The caller's cancel closure fired, so we terminated the group early.
+    pub cancelled: bool,
     /// Trailing combined stdout+stderr.
     pub output: Vec<u8>,
 }
@@ -71,7 +73,22 @@ fn read_tail(mut r: impl Read, start: Instant, last: &AtomicU64, max: usize) -> 
 }
 
 /// Run `cmd` to completion under the watchdog described in the module docs.
-pub fn supervise(mut cmd: Command, opts: &Opts) -> io::Result<Supervised> {
+///
+/// Thin wrapper for callers with no cancellation source.
+pub fn supervise(cmd: Command, opts: &Opts) -> io::Result<Supervised> {
+    supervise_with_cancel(cmd, opts, &|| false)
+}
+
+/// Like [`supervise`], but also stops the child when `cancelled` reports true.
+///
+/// The cancel check is polled alongside stall/timeout and reuses the same
+/// SIGTERM-then-SIGKILL-after-grace path, so a cancelling caller never leaves a
+/// supervised child running.
+pub fn supervise_with_cancel(
+    mut cmd: Command,
+    opts: &Opts,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<Supervised> {
     let (reader, writer) = io::pipe()?;
     cmd.stdin(Stdio::null())
         .stdout(writer.try_clone()?)
@@ -85,7 +102,7 @@ pub fn supervise(mut cmd: Command, opts: &Opts) -> io::Result<Supervised> {
     let (last2, max) = (last.clone(), opts.max_output);
     let reader = thread::spawn(move || read_tail(reader, start, &last2, max));
 
-    let (mut stalled, mut timed_out) = (false, false);
+    let (mut stalled, mut timed_out, mut cancelled_flag) = (false, false, false);
     let mut term_at: Option<Instant> = None;
     let mut killed = false;
     let status = loop {
@@ -102,8 +119,10 @@ pub fn supervise(mut cmd: Command, opts: &Opts) -> io::Result<Supervised> {
                     timed_out = true;
                 } else if opts.stall.is_some_and(|s| quiet >= s) {
                     stalled = true;
+                } else if cancelled() {
+                    cancelled_flag = true;
                 }
-                if timed_out || stalled {
+                if timed_out || stalled || cancelled_flag {
                     killpg(pgid, libc::SIGTERM);
                     term_at = Some(now);
                 }
@@ -124,6 +143,7 @@ pub fn supervise(mut cmd: Command, opts: &Opts) -> io::Result<Supervised> {
         signal: status.signal(),
         stalled,
         timed_out,
+        cancelled: cancelled_flag,
         output,
     })
 }
@@ -131,6 +151,7 @@ pub fn supervise(mut cmd: Command, opts: &Opts) -> io::Result<Supervised> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
 
     fn sh(script: &str) -> Command {
         let mut c = Command::new("sh");
@@ -242,5 +263,46 @@ mod tests {
         assert!(String::from_utf8_lossy(&r.output)
             .trim_end()
             .ends_with("5000"));
+    }
+
+    #[test]
+    fn cancel_terms_a_running_child() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let f = flag.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            f.store(true, Ordering::Relaxed);
+        });
+        let t = Instant::now();
+        let r = supervise_with_cancel(sh("sleep 600"), &quick(), &|| flag.load(Ordering::Relaxed))
+            .unwrap();
+        assert!(t.elapsed() < Duration::from_secs(5));
+        assert!(r.cancelled && !r.stalled && !r.timed_out);
+        assert_eq!(r.signal, Some(libc::SIGTERM));
+    }
+
+    #[test]
+    fn cancel_sigkills_a_sigterm_ignorer_after_grace() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let f = flag.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(300));
+            f.store(true, Ordering::Relaxed);
+        });
+        let t = Instant::now();
+        let r = supervise_with_cancel(sh("trap '' TERM; echo up; sleep 600"), &quick(), &|| {
+            flag.load(Ordering::Relaxed)
+        })
+        .unwrap();
+        assert!(r.cancelled && !r.stalled && !r.timed_out);
+        assert_eq!(r.signal, Some(libc::SIGKILL));
+        assert!(t.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn normal_exit_is_not_cancelled() {
+        let r = supervise_with_cancel(sh("exit 0"), &quick(), &|| false).unwrap();
+        assert!(!r.cancelled && !r.stalled && !r.timed_out);
+        assert_eq!(r.code, Some(0));
     }
 }

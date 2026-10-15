@@ -2,16 +2,16 @@
 //! sandbox pre-check that must hold before it runs.
 //!
 //! A harness only *builds* a command; `run_harness` hands that command to
-//! `stall::supervise`, which owns the process group, output capture and the
-//! stall/timeout kills. Keeping the two apart lets tests inspect argv and cwd
-//! without spawning anything.
+//! `stall::supervise_with_cancel`, which owns the process group, output capture
+//! and the stall/timeout/cancel kills. Keeping the two apart lets tests inspect
+//! argv and cwd without spawning anything.
 //!
 //! The sandbox check exists because a symlink *inside* the worktree can point
 //! outside it: a write through the link lands beyond the write set even though
 //! the path it was written to looks confined. Such links are resolved purely
 //! lexically, so a broken link is judged the same as a working one.
 
-use pg_worker_core::stall::{Opts, Supervised, supervise};
+use pg_worker_core::stall::{Opts, Supervised, supervise_with_cancel};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -22,7 +22,7 @@ pub struct HarnessRun<'a> {
     pub prompt: &'a str,
 }
 
-/// Builds the agent's command. The caller supervises it with `stall::supervise`.
+/// Builds the agent's command. The caller runs it with `stall::supervise_with_cancel`.
 pub trait Harness: Send + Sync {
     fn name(&self) -> &str;
     fn command(&self, run: &HarnessRun) -> Command;
@@ -69,8 +69,16 @@ impl Harness for Opencode {
 }
 
 /// Build the command for `h` and run it under the stall/timeout watchdog.
-pub fn run_harness(h: &dyn Harness, run: &HarnessRun, opts: &Opts) -> std::io::Result<Supervised> {
-    supervise(h.command(run), opts)
+///
+/// `cancelled` is polled while the child runs so a cancel kills the process
+/// group promptly instead of waiting for stall, timeout or natural exit.
+pub fn run_harness(
+    h: &dyn Harness,
+    run: &HarnessRun,
+    opts: &Opts,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<Supervised> {
+    supervise_with_cancel(h.command(run), opts, cancelled)
 }
 
 /// Errors from the symlink sandbox check.
@@ -226,7 +234,10 @@ mod tests {
             model: "m",
             prompt: "p",
         };
-        let r = run_harness(&Fake { script: "echo hi" }, &run, &Opts::default()).unwrap();
+        let r = run_harness(&Fake { script: "echo hi" }, &run, &Opts::default(), &|| {
+            false
+        })
+        .unwrap();
         assert_eq!(r.code, Some(0));
         assert!(String::from_utf8_lossy(&r.output).contains("hi"));
     }

@@ -418,7 +418,10 @@ async fn a_check_that_never_passes_stops_the_card() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancel_signal_stops_a_running_attempt() {
     in_local(async {
-        let Some(env) = env_or_skip("cancel", "sleep 30").await else {
+        // The attempt sleeps for ten minutes, far past the deadline below, so a
+        // pass can only mean the cancel signal killed it rather than the script
+        // ending on its own.
+        let Some(env) = env_or_skip("cancel", "sleep 600").await else {
             println!("skipped: PG_TEMPORAL_ADDR unset");
             return;
         };
@@ -426,6 +429,9 @@ async fn cancel_signal_stops_a_running_attempt() {
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
         let handle = env.start(&format!("e2e-cancel-{}", unique()), claim).await;
 
+        // Time the whole cancellation from just before the signal. The 25s
+        // budget covers the 2s settle plus the time to reap the sleeping attempt.
+        let started = std::time::Instant::now();
         tokio::time::sleep(Duration::from_secs(2)).await;
         handle
             .signal(
@@ -437,14 +443,19 @@ async fn cancel_signal_stops_a_running_attempt() {
             .expect("send cancel signal");
 
         let out = tokio::time::timeout(
-            Duration::from_secs(30),
+            Duration::from_secs(25),
             handle.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("cancel takes effect within 30s")
+        .expect("cancel takes effect within 25s")
         .expect("cancelled card returns a result");
+        let elapsed = started.elapsed();
         record("cancel", &handle).await;
         assert_eq!(out.outcome, "cancelled", "{out:?}");
+        assert!(
+            elapsed < Duration::from_secs(25),
+            "cancel took {elapsed:?}, expected under 25s"
+        );
         env.stop();
     })
     .await;

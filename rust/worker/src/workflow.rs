@@ -113,6 +113,9 @@ impl Card {
                 Err(e) if e.as_cancelled().is_some() => {
                     // A driven cancellation ends the run; a signal ends the card.
                     if ctx.cancellation_token().is_cancelled() {
+                        // Reclaim the attempt's worktree before the run ends; the
+                        // janitor is scheduled detached so it survives this cancel.
+                        run_janitor(ctx, &cfg, &input, &base_sha).await?;
                         return Err(WorkflowTermination::cancelled());
                     }
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
@@ -148,6 +151,9 @@ impl Card {
             // `run_attempt` reports a cancelled run as an `ok` result, so the signal
             // is re-checked here; native cancellation is honoured first.
             if ctx.cancellation_token().is_cancelled() {
+                // Reclaim the attempt's worktree before the run ends; the janitor
+                // is scheduled detached so it survives this cancel.
+                run_janitor(ctx, &cfg, &input, &base_sha).await?;
                 return Err(WorkflowTermination::cancelled());
             }
             if ctx.state(|s| s.cancel_requested) {
@@ -512,10 +518,24 @@ async fn run_janitor(
                 check_cmd: input.claim.check_cmd.clone(),
                 base_sha: base_sha.to_string(),
             },
-            activity_options(cfg),
+            janitor_options(cfg),
         )
         .await?;
     Ok(())
+}
+
+/// The options the `janitor` activity gets: the auxiliary options plus a
+/// *detached* cancellation token.
+///
+/// `None` would inherit workflow cancellation, so a native cancel would abort
+/// the sweep and leak the attempt's worktree. A detached token
+/// (`WorkflowCancellationToken::new`) is not a child of the workflow token, so
+/// workflow cancellation never reaches the janitor and the cleanup is not
+/// skipped.
+fn janitor_options(cfg: &Config) -> ActivityOptions {
+    let mut opts = activity_options(cfg);
+    opts.cancellation_token = Some(WorkflowCancellationToken::new());
+    opts
 }
 
 /// Record a park packet and raise the alarm that goes with it.
@@ -718,5 +738,16 @@ mod tests {
             .retry_policy
             .expect("merge options carry a retry policy");
         assert_eq!(retry.maximum_attempts(), 1);
+    }
+
+    #[test]
+    fn janitor_is_detached_from_workflow_cancellation() {
+        let cfg = Config::default();
+        let token = janitor_options(&cfg)
+            .cancellation_token
+            .expect("the janitor names its own cancellation token");
+        // A detached token never observes the workflow's cancellation, so the
+        // sweep still runs to completion after a native cancel.
+        assert!(!token.is_cancelled());
     }
 }

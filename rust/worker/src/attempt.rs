@@ -64,8 +64,10 @@ pub enum AttemptError {
 
 /// Run one attempt end to end and report how it ended.
 ///
-/// `cancelled` is polled once, before any harness work: a cancelled attempt
-/// still gets its fresh worktree so the caller's bookkeeping matches reality.
+/// `cancelled` is polled before any harness work (a cancelled attempt still
+/// gets its fresh worktree so the caller's bookkeeping matches reality) and
+/// again while the harness runs, so a cancel tears the agent down instead of
+/// waiting for a stall or the 90-minute timeout.
 pub fn run_attempt(
     h: &dyn Harness,
     cfg: &Config,
@@ -85,16 +87,7 @@ pub fn run_attempt(
     let wt = worktree::create(repo, &claim.base_sha, &dest, &id)?;
 
     if cancelled() {
-        return Ok(AttemptResult {
-            exit_class: ExitClass::Cancelled,
-            diff_hash: String::new(),
-            check_hash: String::new(),
-            check_tail: String::new(),
-            context_overflow: false,
-            branch,
-            head: wt.head.clone(),
-            output_tail: String::new(),
-        });
+        return Ok(cancelled_result(&branch, &wt.head, String::new()));
     }
 
     // A link planted by the base that escapes the worktree is a contract
@@ -120,9 +113,17 @@ pub fn run_attempt(
         grace: cfg.kill_grace,
         max_output: 1 << 20,
     };
-    let sup = run_harness(h, &run, &opts)?;
+    let sup = run_harness(h, &run, &opts, cancelled)?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
+
+    // A cancel that arrived while the harness ran kills the agent, so nothing
+    // it wrote is committed and the commit/confinement/check stages are
+    // skipped: the caller only needs to know the attempt was cancelled.
+    if sup.cancelled {
+        return Ok(cancelled_result(&branch, &wt.head, output_tail));
+    }
+
     let clean = sup.code == Some(0) && !sup.stalled && !sup.timed_out;
 
     // The harness itself must not have left an escaping link behind.
@@ -183,6 +184,7 @@ pub fn run_attempt(
         stalled: sup.stalled,
         contract_defect: contract,
         stderr: output,
+        cancelled: sup.cancelled,
         ..Signals::default()
     });
 
@@ -235,6 +237,22 @@ fn violations_tail(violations: &[Violation]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A cancelled attempt: keep the branch and head the caller already knows and
+/// skip the commit, confinement and check stages. `output_tail` carries what
+/// the harness printed before it was killed.
+fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptResult {
+    AttemptResult {
+        exit_class: ExitClass::Cancelled,
+        diff_hash: String::new(),
+        check_hash: String::new(),
+        check_tail: String::new(),
+        context_overflow: false,
+        branch: branch.to_string(),
+        head: head.to_string(),
+        output_tail,
+    }
 }
 
 /// A contract-defect result, keeping the diff so the planner can still tell
@@ -299,7 +317,8 @@ fn clear_dest(repo: &Path, dest: &Path) -> Result<(), AttemptError> {
 mod tests {
     use super::*;
     use std::process::{Command, Stdio};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -522,6 +541,37 @@ mod tests {
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| true).unwrap();
         assert_eq!(res.exit_class, ExitClass::Cancelled);
         assert_eq!(h.runs(), 0, "harness must not run when cancelled");
+    }
+
+    #[test]
+    fn cancel_while_the_harness_runs_stops_it_without_committing() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        // A long silent harness: without a cancel poll it would stall out.
+        let h = Fake::new("sleep 600");
+        // The closure itself never blocks; a separate thread flips the flag.
+        let flag = Arc::new(AtomicBool::new(false));
+        let setter = Arc::clone(&flag);
+        let ticker = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            setter.store(true, Ordering::SeqCst);
+        });
+        let cancelled = || flag.load(Ordering::SeqCst);
+        let start = std::time::Instant::now();
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &cancelled).unwrap();
+        ticker.join().unwrap();
+        assert_eq!(res.exit_class, ExitClass::Cancelled);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "cancel must not wait for the harness to exit"
+        );
+        assert_eq!(res.head, base, "a cancelled attempt must not commit");
     }
 
     #[test]
