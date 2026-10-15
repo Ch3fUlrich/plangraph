@@ -1,6 +1,7 @@
 """Run one review seat per leg and prompt part (stdlib only)."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,13 +57,11 @@ def _write_minimal(out: Path, leg: family.Leg, part: int,
     """Empty review.txt plus a minimal evidence.json for a raised leg."""
     out.mkdir(parents=True, exist_ok=True)
     (out / "review.txt").write_text("", encoding="utf-8", newline="\n")
-    import json as _json
-
     doc = {"verdict": None, "test_gaming": "missing",
            "test_gaming_quote": None, "finish_reason": finish or "error",
            "leg": leg.name, "family": leg.family, "part": part,
            "error": error}
-    (out / "evidence.json").write_text(_json.dumps(doc, indent=2) + "\n",
+    (out / "evidence.json").write_text(json.dumps(doc, indent=2) + "\n",
                                        encoding="utf-8", newline="\n")
 
 

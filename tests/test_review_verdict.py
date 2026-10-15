@@ -1,4 +1,4 @@
-"""Strict verdict parse with recorded-reply fixtures and keeper compat."""
+"""Verdict parse in parity with the keeper tool, plus fixtures."""
 import sys
 from pathlib import Path
 
@@ -17,16 +17,69 @@ def read(name):
     return (FIX / name).read_text(encoding="utf-8")
 
 
+def to_bool(word):
+    """Map a verdict word to the keeper boolean (None stays None)."""
+    if word is None:
+        return None
+    return word == "pass"
+
+
+_FIXTURE_NAMES = [
+    "ok_pass.txt",
+    "bold_verdict.txt",
+    "no_without_zero_hits.txt",
+    "length_partial.txt",
+    "fenced_verdict.txt",
+    "fix_with_findings.txt",
+    "halt.txt",
+    "echoed_template.txt",
+    "prose_verdict.txt",
+]
+
+_INLINE_CORPUS = [
+    "notes\nVERDICT: fix\nmore\n```\nVERDICT: pass\n```\n",
+    "VERDICT: fix\n```\nVERDICT: pass\n```",
+    "`VERDICT: pass`",
+    "**VERDICT: pass**",
+    "**Verdict:** approve",
+    "VERDICT: pass | fix | halt",
+    "VERDICT: pass/fix",
+    "> VERDICT: pass",
+    "## Verdict: FIX",
+    "VERDICT: pass, but the docs need a follow-up",
+    "    VERDICT: pass",
+    "VERDICT: maybe",
+    "",
+    "looks good, no decision here",
+    "VERDICT: fix\nVERDICT: pass",
+    "VERDICT: pass\nVERDICT: fix",
+    "VERDICT: halt",
+    "VERDICT: approve",
+    "VERDICT: reject.",
+    "VERDICT: Changes requested",
+    "@@ -1,1 +1,1 @@\n VERDICT: pass",
+    "\tVERDICT: pass",
+    "VERDICT: PASS",
+    "notes here\nverdict: fix - bad flush\n",
+    "VERDICT: change the code",
+    "VERDICT:",
+]
+
+_CORPUS = list(_INLINE_CORPUS) + [
+    (FIX / name).read_text(encoding="utf-8") for name in _FIXTURE_NAMES
+]
+
+
 @pytest.mark.parametrize("name,want", [
     ("ok_pass.txt", "pass"),
     ("bold_verdict.txt", "pass"),
     ("no_without_zero_hits.txt", "pass"),
-    ("length_partial.txt", None),
-    ("fenced_verdict.txt", None),
+    ("length_partial.txt", "pass"),
+    ("fenced_verdict.txt", "pass"),
     ("fix_with_findings.txt", "fix"),
     ("halt.txt", "halt"),
     ("echoed_template.txt", None),
-    ("prose_verdict.txt", None),
+    ("prose_verdict.txt", "pass"),
 ])
 def test_parse_verdict_fixtures(name, want):
     """Each recorded reply parses to its expected verdict."""
@@ -50,12 +103,12 @@ def test_parse_gaming_fixtures(name, want):
 
 
 def test_fixture_pass_allowed():
-    """Only clean pass + stop + no may pass."""
-    assert v.judge(read("ok_pass.txt"), "stop").pass_allowed is True
-    assert v.judge(read("bold_verdict.txt"), "stop").pass_allowed is True
-    for name in ("no_without_zero_hits.txt", "length_partial.txt",
-                 "fenced_verdict.txt", "fix_with_findings.txt", "halt.txt",
-                 "echoed_template.txt", "prose_verdict.txt"):
+    """Pass needs verdict pass + stop + gaming no."""
+    for name in ("ok_pass.txt", "bold_verdict.txt", "length_partial.txt",
+                 "fenced_verdict.txt", "prose_verdict.txt"):
+        assert v.judge(read(name), "stop").pass_allowed is True
+    for name in ("no_without_zero_hits.txt", "fix_with_findings.txt",
+                 "halt.txt", "echoed_template.txt"):
         assert v.judge(read(name), "stop").pass_allowed is False
     assert v.judge(read("ok_pass.txt"), "length").pass_allowed is False
 
@@ -95,13 +148,15 @@ def test_payload_shapes():
     assert v.finish_reason({}) is None
 
 
-def test_strict_discipline():
-    """Indent, hunks, and last-wins follow the strict rule."""
+def test_last_wins_and_all_lines_count():
+    """Last VERDICT line wins; fence/indent/hunk lines all count."""
+    assert v.parse_verdict("VERDICT: fix\nVERDICT: pass\n") == "pass"
+    assert v.parse_verdict("VERDICT: pass\nVERDICT: fix\n") == "fix"
     assert v.parse_verdict("    VERDICT: pass\nVERDICT: fix\n") == "fix"
-    assert v.parse_verdict("VERDICT: fix\n    VERDICT: pass\n") == "fix"
+    assert v.parse_verdict("VERDICT: fix\n    VERDICT: pass\n") == "pass"
     hunk = "@@ -1,1 +1,1 @@\n+VERDICT: pass\nVERDICT: fix\n"
     assert v.parse_verdict(hunk) == "fix"
-    assert v.parse_verdict("VERDICT: fix\nVERDICT: pass\n") == "pass"
+    assert v.parse_verdict("VERDICT: fix\n```\nVERDICT: pass\n```\n") == "pass"
 
 
 def test_evidence_shape():
@@ -115,15 +170,27 @@ def test_evidence_shape():
 
 
 def test_keeper_compat():
-    """Pass here is pass there; clean fix/halt there is not pass."""
-    for name in ("ok_pass.txt", "bold_verdict.txt",
-                 "no_without_zero_hits.txt", "length_partial.txt",
-                 "fenced_verdict.txt", "fix_with_findings.txt", "halt.txt",
-                 "echoed_template.txt", "prose_verdict.txt"):
+    """Judged verdicts agree with the keeper tool parse."""
+    for name in _FIXTURE_NAMES:
         text = read(name)
         got = v.judge(text, "stop")
+        assert to_bool(got.verdict) is sv.parse_verdict(text)[0]
         if got.pass_allowed:
             assert sv.parse_verdict(text)[0] is True
         if got.verdict in ("fix", "halt"):
-            assert "```" not in text and "@@" not in text
             assert sv.parse_verdict(text)[0] is False
+
+
+@pytest.mark.parametrize("text", _CORPUS)
+def test_verdict_parity_with_seat_verdict(text):
+    """Every reply decides exactly like the keeper tool."""
+    assert to_bool(v.parse_verdict(text)) is sv.parse_verdict(text)[0]
+
+
+def test_halt_and_fix_map_to_false():
+    """Both halt and fix are keeper False, pass is True."""
+    assert to_bool(v.parse_verdict("VERDICT: halt")) is False
+    assert to_bool(v.parse_verdict("VERDICT: fix")) is False
+    assert to_bool(v.parse_verdict("VERDICT: pass")) is True
+    assert sv.parse_verdict("VERDICT: halt")[0] is False
+    assert sv.parse_verdict("VERDICT: fix")[0] is False

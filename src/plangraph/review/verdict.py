@@ -1,14 +1,9 @@
-"""Strict review-reply parsing: verdict, test-gaming, payload helpers.
+"""Review-reply parsing: verdict, test-gaming, payload helpers.
 
-Port of the verdict/test-gaming parse used by the one-shot review call,
-without any caller, transport, or key handling.
-
-This parse is STRICTER than ``tools/seat_verdict.py``: a verdict line inside
-a fenced block, a diff hunk body, or an indented code block is ignored, and
-an unclosed fence fails closed (only lines before the first fence marker
-count). The keeper re-parses ``review.txt`` with its own looser rule, so a
-``pass`` here always parses as pass there, while prose or template echoes
-stay missing here.
+The verdict parse is identical to ``tools/seat_verdict.py``: the last
+``VERDICT:`` line decides and fenced, quoted, indented, and hunk lines
+all count. Only the test-gaming check and the finish-reason gating
+here are stricter.
 """
 
 from __future__ import annotations
@@ -29,9 +24,10 @@ __all__ = [
 
 VERDICTS = ("pass", "fix", "halt")
 
-_VERDICT_LINE_RE = re.compile(
-    r"(?i)^\s*(?:#{1,6}\s*|[-*+]\s+)*(?P<dec>[*_]{1,2})?VERDICT"
-    r"(?:\s*(?P<dec2>[*_]{1,2})\s*:|\s*:)\s*(?P<value>\S.*)$")
+PASS_WORDS = frozenset({"pass", "approve"})
+FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+_VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
+_FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I)
 
 _STANDING_ANSWER_RE = re.compile(
     r"^TEST-GAMING: (?:"
@@ -42,7 +38,6 @@ _STANDING_ANSWER_RE = re.compile(
 
 _FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _FENCE_CLOSE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
-_HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -59,92 +54,27 @@ def _indent_columns(line: str) -> int:
     return col
 
 
-def _verdict_value(stripped: str) -> str | None:
-    """Map one stripped line to pass/fix/halt, or None.
-
-    Quoted (``>``), template (``<`` or ``|``), and prose values
-    (``pass, but ...``) are not verdicts; emphasis must balance.
-    """
-    if stripped.startswith(">") or "<" in stripped or "|" in stripped:
-        return None
-    m = _VERDICT_LINE_RE.match(stripped)
-    if not m:
-        return None
-    dec, dec2, value = m.group("dec"), m.group("dec2"), m.group("value")
-    if dec != dec2 and not (dec and dec2 is None and value.startswith(dec)):
-        return None
-    for _ in range(2):
-        value = value.strip().strip("*_` ").strip()
-        if value[-1:] in (".", "!", "?"):
-            value = value[:-1]
-    value = value.strip().lower()
-    if value in ("pass", "approve"):
-        return "pass"
-    if value in ("fix", "fail", "fail-with-findings",
-                 "change", "changes", "reject"):
-        return "fix"
-    if value == "halt":
-        return "halt"
-    return None
-
-
 def parse_verdict(text: str) -> str | None:
-    """Last qualifying ``VERDICT:`` line mapped to pass/fix/halt, or None."""
-    raws = [_ANSI_RE.sub("", line) for line in (text or "").splitlines()]
-    found = None
-    found_before_fence = None
-    fence = None
-    first_marker = None
-    hunk = None
-    for i, raw in enumerate(raws):
-        if hunk is not None:
-            old, new = hunk
-            if old <= 0 and new <= 0:
-                hunk = None
-            elif raw.startswith(" "):
-                hunk = (old - 1, new - 1)
-                continue
-            elif raw.startswith("-"):
-                hunk = (old - 1, new)
-                continue
-            elif raw.startswith("+"):
-                hunk = (old, new - 1)
-                continue
-            elif raw.startswith("\\"):
-                continue
-            elif raw == "":
-                hunk = (old - 1, new - 1)
-                continue
-            else:
-                hunk = None
-        if fence is not None:
-            m = _FENCE_CLOSE_RE.match(raw)
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1]:
-                fence = None
+    """Last ``VERDICT:`` line mapped to pass/fix/halt, or None.
+
+    Identical to ``tools/seat_verdict.py``: scan from the end, the
+    first matching line decides; the first word maps to the verdict.
+    """
+    lines = (text or "").splitlines()
+    for idx in range(len(lines) - 1, -1, -1):
+        match = _VERDICT_LINE.match(lines[idx])
+        if not match:
             continue
-        if raw.startswith(("diff --git", "index ", "---", "+++")):
-            continue
-        m = _HUNK_RE.match(raw)
-        if m:
-            hunk = (int(m.group(1) or 1), int(m.group(2) or 1))
-            continue
-        m = _FENCE_OPEN_RE.match(raw)
-        if m:
-            fence = (m.group(1)[0], len(m.group(1)))
-            if first_marker is None:
-                first_marker = i
-            continue
-        if _indent_columns(raw) >= 4:
-            continue
-        stripped = raw.strip()
-        if not stripped:
-            continue
-        value = _verdict_value(stripped)
-        if value:
-            found = value
-            if first_marker is None:
-                found_before_fence = value
-    return found_before_fence if fence is not None else found
+        word = _FIRST_WORD.match(match.group(1).strip())
+        word = word.group(1).lower() if word else ""
+        if word in PASS_WORDS:
+            return "pass"
+        if word == "halt":
+            return "halt"
+        if word in FIX_WORDS:
+            return "fix"
+        return None
+    return None
 
 
 def _standing_outcome(match: re.Match, material: str) -> tuple[str, str | None]:
