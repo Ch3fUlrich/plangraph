@@ -10,8 +10,8 @@
 use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
 use pg_worker_core::check::{self, CheckResult};
-use pg_worker_core::confine::{self, ConfineError, Violation};
 use pg_worker_core::config::{Config, Tier};
+use pg_worker_core::confine::{self, ConfineError, Violation};
 use pg_worker_core::exit_class::{CheckOutcome, ExitClass, Patterns, Signals};
 use pg_worker_core::git::{GitError, git};
 use pg_worker_core::stall::Opts;
@@ -100,7 +100,13 @@ pub fn run_attempt(
     // A link planted by the base that escapes the worktree is a contract
     // defect: a write through it lands beyond the write set.
     if let Some(paths) = sandbox_escape(&dest)? {
-        return defect_result(&dest, &claim.base_sha, &branch, &wt.head, escape_tail(&paths));
+        return defect_result(
+            &dest,
+            &claim.base_sha,
+            &branch,
+            &wt.head,
+            escape_tail(&paths),
+        );
     }
 
     let run = HarnessRun {
@@ -121,7 +127,13 @@ pub fn run_attempt(
 
     // The harness itself must not have left an escaping link behind.
     if let Some(paths) = sandbox_escape(&dest)? {
-        return defect_result(&dest, &claim.base_sha, &branch, &wt.head, escape_tail(&paths));
+        return defect_result(
+            &dest,
+            &claim.base_sha,
+            &branch,
+            &wt.head,
+            escape_tail(&paths),
+        );
     }
 
     if clean {
@@ -466,7 +478,11 @@ mod tests {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let repo_s = r.path().to_string_lossy().into_owned();
-        let inp = input(claim(&repo_s, &base, &["out.txt"], "exit 1"), 1, root.path());
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "exit 1"),
+            1,
+            root.path(),
+        );
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::CheckFail);
@@ -478,7 +494,12 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let repo_s = r.path().to_string_lossy().into_owned();
         let inp = input(
-            claim(&repo_s, &base, &["out.txt"], "test -f m || { touch m; exit 1; }"),
+            claim(
+                &repo_s,
+                &base,
+                &["out.txt"],
+                "test -f m || { touch m; exit 1; }",
+            ),
             1,
             root.path(),
         );

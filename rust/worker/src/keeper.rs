@@ -319,7 +319,9 @@ mod tests {
             }
             response.push_str("Content-Type: application/json\r\nConnection: close\r\n\r\n");
             response.push_str(&body);
-            stream.write_all(response.as_bytes()).expect("write response");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
             stream.flush().expect("flush response");
             captured
         });

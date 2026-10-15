@@ -7,7 +7,7 @@
 //! operation runs under a file lock shared through `<git-common-dir>/pg-merge.lock`.
 
 use pg_worker_core::exit_class::ExitClass;
-use pg_worker_core::git::{check_rev, git, GitError};
+use pg_worker_core::git::{GitError, check_rev, git};
 use std::fs::{File, OpenOptions};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -248,7 +248,19 @@ mod tests {
         let scratch = tempfile::tempdir().unwrap();
         let wt = scratch.path().join("wt");
         let wt_s = wt.to_string_lossy().into_owned();
-        git(p, &["worktree", "add", "-q", "-b", name, "--", wt_s.as_str(), base]);
+        git(
+            p,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                name,
+                "--",
+                wt_s.as_str(),
+                base,
+            ],
+        );
         write(&wt, file, body);
         let head = commit_all(&wt, name);
         git(p, &["worktree", "remove", "--force", wt_s.as_str()]);

@@ -69,11 +69,7 @@ impl Harness for Opencode {
 }
 
 /// Build the command for `h` and run it under the stall/timeout watchdog.
-pub fn run_harness(
-    h: &dyn Harness,
-    run: &HarnessRun,
-    opts: &Opts,
-) -> std::io::Result<Supervised> {
+pub fn run_harness(h: &dyn Harness, run: &HarnessRun, opts: &Opts) -> std::io::Result<Supervised> {
     supervise(h.command(run), opts)
 }
 
@@ -254,7 +250,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let w = dir.path();
         link(w, "up", "../../x");
-        assert_eq!(find_escaping_symlinks(w).unwrap(), vec![PathBuf::from("up")]);
+        assert_eq!(
+            find_escaping_symlinks(w).unwrap(),
+            vec![PathBuf::from("up")]
+        );
     }
 
     #[test]
