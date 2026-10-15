@@ -24,3 +24,6 @@
 - NEVER touch /home/s/code/plangraph/.claude/worktrees/proposal or write to 127.0.0.1:8787. No docker/systemd on coding.vm.
 - Denials verbatim + stop that step. Blocked: one line `BLOCKED <item> | <what> | options, *default` to build-L1, keep working.
   Decide best-practice questions yourself (D-935). Output D-658 caveman.
+- Messaging + beats (D-1364, binding): message build-L1 only for BLOCKED/decision needed, DONE/MERGE-READY with sha, GO requests,
+  incidents, launch/recycle requests. No acks, "noted", ALIVE, status relays or progress chatter; at most one batched message per beat.
+  L2s run NO beat cron; wait on messages and your own tool results.

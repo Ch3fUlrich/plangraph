@@ -3,7 +3,7 @@
 Read first: brief `/home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md`, design (binding, 14a)
 `/home/s/code/routing-worktrees/rethink-setup/docs/reports/2026-10-15-rethink-setup-design.md`, card `status/build-L1.card.md`, this file,
 operator answers `docs/plan/rethink/build-operator-rounds.md` (all of today's are binding). Control branch = `build-L1` (never merged).
-Startup: skill unattended-orchestration + main-orchestrator.md, SKILL-READ reply, CronCreate beat (17,47 — fleet rule, routing-00 2026-10-15), build-L1-ALIVE to routing.
+Startup: skill unattended-orchestration + main-orchestrator.md, SKILL-READ reply. Beat (D-1364): CronCreate 17,47 ONLY while polling something no message reports (CI run, spawner run, keeper lease), else none. No ALIVE/acks/status chatter; messages only BLOCKED, DONE/MERGE-READY+sha, GO, incident, launch/recycle; max one batched message per beat. L2s get no beat cron.
 
 ## Tools (ops/ on this branch)
 - `ops/pg.sh` keeper CLI (token build-L1). Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D
