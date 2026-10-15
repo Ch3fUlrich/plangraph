@@ -184,14 +184,24 @@ def test_close_on_decision_outside_batch_roots_is_refused(kp, tmp_path):
 # --------------------------------------------------------------- apply_ops over HTTP
 def test_apply_ops_http_shape_and_gate(kp):
     tag = uid()
+    lane_key, goal_key = f"demo:H1-{tag}", f"demo:HG-{tag}"
     body = {"ops": [{"op": "create", "item": lane("demo", f"H1-{tag}")},
                     {"op": "create", "item": goal("demo", f"HG-{tag}", [f"H1-{tag}"])},
-                    {"op": "priority", "key": f"demo:H1-{tag}", "priority": 3}]}
+                    {"op": "priority", "key": lane_key, "priority": 3},
+                    {"op": "edit", "key": lane_key, "fields": {"title": f"edited {tag}"}}]}
     for who in ("lead", "worker1", "reader", "reviewer1"):
         err(kp.post("apply_ops", who, body), 403, "forbidden")
+    assert not _exists(kp, lane_key)                          # a refusal applies nothing
     res = ok(kp.post("apply_ops", "router", body), "ApplyOps")
-    assert res["applied"] == 3 and len(res["results"]) == 3
-    assert show(kp, f"demo:H1-{tag}")["priority"] == 3
+    assert res["applied"] == 4 and len(res["results"]) == 4
+    first, second, third, fourth = res["results"]             # one result per op, in op order
+    assert first["created"] == [lane_key] and second["created"] == [goal_key]
+    assert third["key"] == lane_key and fourth["key"] == lane_key
+    shown = show(kp, lane_key)                                # visible through a read route
+    assert shown["priority"] == 3 and shown["title"] == f"edited {tag}"
+    assert shown["state"] == "open" and shown["kind"] == "lane"
+    assert [d["key"] for d in show(kp, goal_key)["depends_on"]] == [lane_key]
+    assert goal_key in shown["unblocks"]
 
 
 @pytest.mark.parametrize("ops,code", [
@@ -203,8 +213,7 @@ def test_apply_ops_http_shape_and_gate(kp):
     ([{"op": "close_on_decision", "key": "demo:X"}], "validation"),    # no batch_ref
 ])
 def test_apply_ops_http_shape_refusals(kp, ops, code):
-    body = err(kp.post("apply_ops", "router", {"ops": ops}), 400, code)
-    assert "msg" in body
+    err(kp.post("apply_ops", "router", {"ops": ops}), 400, code)
 
 
 def test_apply_ops_names_the_failing_op_and_rolls_back(kp):

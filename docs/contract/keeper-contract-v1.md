@@ -39,7 +39,10 @@ must not rely on it and a new implementation need not copy it.
 ### Error body and status mapping
 
 Every refusal is `{"error": "<code>", "msg": "<text>"}` (exactly those two
-keys). A `msg` never contains a token or a stack trace.
+keys). The `error` code is normative; `msg` is non-empty free text whose wording
+is not part of the contract (clients and tests must not match on it, except
+where a section below quotes a stable fragment such as `op <n> <op> <key>`). A
+`msg` never contains a token or a stack trace.
 
 | code | HTTP | meaning |
 | --- | --- | --- |
@@ -297,7 +300,9 @@ ops:                          # applied in order
   --from)])`. Exit `0` success, `1` refusal, `2` bad arguments or token file.
   The pin mismatch line contains `sha256 mismatch`; a principal or role
   mismatch prints `principal mismatch` and calls nothing else.
-* `apply_ops` over HTTP: `{"applied": N, "results": [...]}`; a bad op list is
+* `apply_ops` over HTTP: `{"applied": N, "results": [...]}`; `results` holds
+  one object per op in op order: `{"created": [keys]}` for `create`, and an
+  object with the affected `key` for every other op; a bad op list is
   `400 validation`; the failing op's code and status are returned with the
   `op <n> ...` message; a non-router is `403`.
 
