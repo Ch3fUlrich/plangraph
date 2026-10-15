@@ -1,0 +1,40 @@
+**V1 parse_verdict (tools/seat_verdict.py:parse_verdict)**
+- Returns the *last* VERDICT line only; earlier lines are ignored as required.
+- Uses `_FIRST_WORD` with a negative look‑ahead to reject template echoes like “pass | fix | halt”.
+- Returns `None` for unknown first words, causing an EXIT_NO_VERDICT (tests cover this).
+- No path where a PASS could be mistakenly accepted when the reviewer intended FIX/HALT, and a valid PASS cannot be missed because any non‑acceptable word yields `None`.
+
+**V2 model_family (tools/seat_verdict.py:model_family)**
+- Strips vendor prefix, lower‑cases name, then applies regex list.
+- Ambiguous matches (e.g. “gpt‑claude‑3”, “deepseek‑llama‑distill”) produce a set of >1 families → returns `None`, correctly refused before any send (tests verify).
+- No false‑positive mapping to Anthropics or writer’s family; those are explicitly refused after the lookup.
+
+**V3 token safety (tools/seat_verdict.py:main & send)**
+- Token is read only at send time from `reviewer‑<family>.token`.
+- Never logged, printed, or placed in `argv`.
+- In dry‑run mode the token field is replaced with `"<redacted>"`.
+- No accidental exposure in error messages.
+
+**V4 PASS gates (tools/seat_verdict.py:main)**
+- Pass is allowed only when `finish_reason == "stop"` **and** `test_gaming` exists as a string equal to “no” after stripping/lowering.
+- Any missing, non‑string, “yes”, “unsure”, empty, or other value triggers EXIT_PASS_REFUSED.
+- FIX/HALT are sent regardless of those fields.
+- Proper handling of absent evidence dict (type check) and JSON decoding errors.
+
+**V5 tests (tests/test_seat_verdict.py)**
+- Fully hermetic: an in‑process HTTPServer on 127.0.0.1 captures POSTs; no external keeper is contacted.
+- Tests cover parsing, family mapping, refusal before send, dry‑run redaction, boolean payload type, reason formatting, and PASS gate logic including varied `test_gaming` values.
+- No missing edge cases observable.
+
+**V6 public‑repo hygiene**
+- All hostnames are `127.0.0.1` (loopback) in tests; no external IPs or domain names.
+- No absolute home paths, user names, or secrets are committed. Token value is a dummy string in tests.
+
+**V7 additional observations**
+- `build_reason` concatenates a short header; for PASS it omits findings (as intended).
+- `verdict_payload` asserts `type(ok) is bool`, guaranteeing a real JSON boolean.
+- Error messages avoid leaking the token.
+- Exit‑code mapping follows the spec.
+
+TEST-GAMING: no - searched tools/seat_verdict.py and tests/ for any conditional checks against pytest or environment that would only be true during testing: 0 hits
+VERDICT: pass

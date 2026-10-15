@@ -1,0 +1,120 @@
+**V1 Confinement bypass**  
+- **confine.rs:changed_files** – uses `git diff --name-only -z --no-renames` which *excludes renames* entirely, so a rename is not reported as a change (thus bypasses the write‑set check).  
+  ```rust
+  for args in [
+      vec!["diff", "--name-only", "-z", "--no-renames", &range],
+      vec!["diff", "--name-only", "-z", "--no-renames", "HEAD"],
+      vec!["ls-files", "--others", "--exclude-standard", "-z"],
+  ] {
+      set.extend(names(dir, &args)?);
+  }
+  ```
+- **confine.rs:evaluate** – glob building treats trailing “/” as “/**” but does **not** enable matching of dot‑files; paths beginning with “.” (e.g. `.env`) are not matched by a pattern like `src/**` and therefore slip past the write‑set.  
+  ```rust
+  let g: Glob = GlobBuilder::new(&pat)
+      .literal_separator(true)
+      .build()
+  ```
+- **confine.rs:changed_files** – the `ls-files --others --exclude-standard` command respects `.gitignore`, so *untracked files in ignored directories are omitted* from the change set, contrary to the spec that they must be considered.  
+- **confine.rs:evaluate** – symlinks are treated just like regular paths; a symlink pointing outside the repository is not detected, allowing writes outside the confined tree.  
+- **confine.rs:changed_files** – paths are taken from Git output and stored as UTF‑8 strings; Git will *normalize “../” components*, so a malicious path containing `../` cannot be detected and may escape the repository tree.  
+- **confine.rs:evaluate** – submodule directories are not inspected; changes inside a submodule are invisible to the diff, letting a submodule be modified without triggering a violation.  
+
+**V2 Budget policy vs spec**  
+- **budget/mod.rs:next_action** – promotion is allowed *even when the worktree is dirty*. The spec requires promotion only from a *clean* worktree, but the code does not check `last.context_overflow` or any diff hash before promoting.  
+  ```rust
+  if used < cfg.retries_per_tier {
+      return Action::Retry;
+  }
+  let promoted = inp.history.windows(2)
+      .filter(|w| w[1].tier > w[0].tier)
+      .count() as u32;
+  match last.tier.next() {
+      Some(tier) if promoted < cfg.promotions => Action::Promote { tier },
+      _ => park(),
+  }
+  ```
+- **budget/mod.rs:next_action** – `ExitClass::FlakyCheck` is mapped directly to `Action::Quarantine`. The specification defines *quarantine* only for “two identical failures with unchanged diff”; treating the classifier’s `FlakyCheck` as immediate quarantine deviates from the intended policy.  
+  ```rust
+  ExitClass::FlakyCheck => return Action::Quarantine,
+  ```
+- **budget/mod.rs:next_action** – the exponential back‑off for `ProbeFail` uses `n-1` where `n` is the length of the trailing `ProbeFail` streak. For a *single* `ProbeFail` this yields a delay of `base` (correct), but the spec describes “backoff retry” without the “‑1” offset; the implementation is a subtle off‑by‑one that makes the first retry *too* short when jitter is 0.  
+  ```rust
+  let delay = exp_delay(cfg.backoff_base, n - 1, cfg.wait_cap, inp.jitter);
+  ```
+- **budget/mod.rs:reroute_or_wait** – when all legs of the tier are limited, the code *always* adds a `Wait` even if the failing leg is the *only* leg and is already marked limited; the spec says “wait only when every leg of the tier is limited”, which is satisfied, but the implementation does not preserve the original `last.limited()` flag, potentially causing *double‑counting* of a leg that was already limited by the provider.  
+
+**V3 Process control**  
+- **stall.rs:read_tail** – the “last activity” timestamp is stored *after* each successful read (`last.store(start.elapsed().as_millis() ...)`). If the child writes a large chunk that fills the pipe buffer *before* the reader gets scheduled, the stall detector may fire erroneously because the write succeeded but no read occurred yet. This race can cause a false stall termination.  
+- **stall.rs:supervise** – after sending `SIGTERM` to the process group, the code *immediately* calls `killpg(SIGKILL)` once the grace period expires, without first checking whether the group has already exited; this can send an unnecessary `SIGKILL` to a process that terminated cleanly after the `SIGTERM`.  
+- **stall.rs:supervise** – zombie processes are reaped only for the *direct* child (`child.try_wait`). Grand‑children that survive the `SIGTERM` and exit after the `SIGKILL` are not explicitly waited on; they become *orphaned* and may linger until the parent exits.  
+
+**V4 Git safety**  
+- **worktree.rs:create** – the branch name is built from the raw card identifier (`id.branch()`). If a card contains a string like `--orphan`, Git will interpret it as an option to `git worktree add`, potentially causing unexpected behaviour or command injection.  
+  ```rust
+  git(
+      repo,
+      &["worktree", "add", "-q", "-b", &id.branch(), &dest_s, base_sha],
+  )?;
+  ```
+- **janitor.rs:sweep** – the `base_for` closure is supplied by the caller and can return an *arbitrary* SHA string. If it returns a malformed or malicious string, the subsequent `probe` or `commits_beyond_branch` call will embed it directly into a Git revision argument (`"{base}..{branch}"`), which may trigger Git to interpret it as a *refspec* injection. The code does not validate the SHA format.  
+- **janitor.rs:sweep** – after a failed `probe`, the attempt worktree is *kept* but the branch is **not** protected against accidental deletion later in the same sweep; a later iteration could delete the branch if the earlier failure was transient, leading to data loss.  
+
+**V5 Exit classifier**  
+- **exit_class.rs:classify** – the ordering places `failed_process && usage_limit` before `failed_process && outage`; if the stderr contains both a usage‑limit pattern *and* an outage pattern, the classifier will emit `UsageLimit` even though the outage might be more severe, potentially mis‑routing retries.  
+  ```rust
+  } else if failed_process && self.usage_limit.is_match(&s.stderr) {
+      ExitClass::UsageLimit
+  } else if failed_process && self.outage.is_match(&s.stderr) {
+      ExitClass::Outage
+  }
+  ```
+- **exit_class.rs:classify** – the classifier does **not** trim trailing newlines from `stderr` before regex matching; a pattern like `\b429\b` will fail to match `"429\n"` and could misclassify a genuine usage‑limit error.  
+
+**V6 Tests**  
+- The test suite in `budget/tests.rs` covers most retry‑count and promotion logic, but **does not** test:  
+  * rename handling (V1),  
+  * dot‑file matching (V1),  
+  * untracked files in ignored directories (V1),  
+  * submodule changes (V1),  
+  * promotion from a *clean* worktree (V2),  
+  * the special‑case handling of `FlakyCheck` (V2),  
+  * the race condition in stall detection (V3),  
+  * the possible “SIGKILL after graceful termination” double‑kill (V3).  
+  Consequently, several security‑relevant behaviours remain unexercised.  
+
+**V7 Other correctness / safety concerns**  
+- **hash.rs:Fnv** – uses `wrapping_mul` which is correct, but the implementation is *not* constant‑time; it may leak timing information about the length/content of diff hashes when used in side‑channel‑sensitive contexts (unlikely here, but worth noting).  
+- **confine.rs:evaluate** – returns a `Vec<Violation>` that preserves the order of `changed` iteration; this order is **non‑deterministic** because `changed_files` returns a `BTreeSet`, but `evaluate` iterates over the supplied iterator without sorting, possibly leading to flaky test results when comparing violation vectors.  
+- **stall.rs:supervise** – the `max_output` truncation logic drains *twice* (`if buf.len() > max.saturating_mul(2) { … }` then a final trim). This may discard more data than intended, especially when `max_output` is small, causing the tail to be shorter than advertised.  
+
+---  
+
+**STANDING QUESTION v2**  
+TEST‑GAMING: no - searched src/ for any conditional that inspects testing frameworks, environment variables like `PYTEST_CURRENT_TEST`, or test‑only constants: 0 hits  
+
+---  
+
+**VERDICT:** fix (findings by severity HIGH/MED/LOW)  
+
+**HIGH**  
+- Rename omission in `changed_files` (V1).  
+- Promotion without clean‑worktree check (V2).  
+- Immediate quarantine on `FlakyCheck` class (V2).  
+
+**MED**  
+- Dot‑file, ignored‑dir, submodule, and symlink bypasses (V1).  
+- Potential false stall due to pipe‑buffer race (V3).  
+- Process‑group double‑kill and possible orphaned grandchildren (V3).  
+- Branch‑name injection via malformed card identifiers (V4).  
+- Unvalidated `base_for` SHA leading to refspec injection (V4).  
+
+**LOW**  
+- Regex precedence causing mis‑classification when both usage‑limit and outage patterns appear (V5).  
+- Trailing‑newline issue in `stderr` matching (V5).  
+- Test coverage gaps (V6).  
+- Non‑constant‑time hash (V7).  
+- Non‑deterministic violation ordering (V7).  
+- Over‑aggressive output truncation (V7).  
+
+All identified issues should be addressed before the crate is considered production‑ready.
