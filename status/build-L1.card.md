@@ -13,3 +13,5 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 
 ## State
 - 2026-10-15 start. Ready for build-L1 in keeper: none (all gate on PG-DEPLOY). Need: build-L1 token, batch b01 applied, PG-DEPLOY GO.
+- 2026-10-15 D-1305: b01 accepted (fixes-L1 applies), token via fixes-L1, PG-DEPLOY asked of server-L1-main (plan first). SPIKE on coding.vm ok (-j4, stop dev server idle).
+- Writers running (Sonnet, isolated worktrees): lane/rt-p1-contract, lane/rt-p1-temporal-spike, lane/rt-p1-worker-core. Claim on token arrival.
