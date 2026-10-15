@@ -2,7 +2,7 @@
 - Load skill `unattended-orchestration` first. L2 = Sonnet orchestrator: split, brief, spawn, review; never write code itself, never merge
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
 - L3 writers (operator 2026-10-15 ~19:10Z: cut Claude usage): autoos-agent `spawn` with opencode, leg order
-  (1) `omniroute/deepinfra-mimo-v2.6-flash`, (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
+  (1) `omniroute/deepinfra-mimo-v2.6-flash` (2026-10-15 19:2xZ: opencode "No active credentials for provider: deepinfra" -> skip until fixed), (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
   (3) OpenRouter free (`omniroute/or-north-mini-code-free`, `or-laguna-s-2.1-free`, `or-nemotron-3-super-free`), (4) qodercli
   Qwen3.8-Flash. Sonnet (in-session Agent tool) ONLY if all of these fail or spawner admission refuses; record why in the lane
   record. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:
