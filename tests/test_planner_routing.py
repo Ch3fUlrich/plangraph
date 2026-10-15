@@ -255,6 +255,22 @@ def test_usage_limit_rotates_in_tier_then_waits(route):
     assert next_after_failure(route, free + sub, "outage", 1) == ("wait", None)
 
 
+def test_usage_limit_empty_tried_excludes_implicit_first_leg(route):
+    free = [leg.id for leg in route.legs if leg.tier == "free"]
+    assert route.first_leg.id == free[0]
+    for ec in ("usage_limit", "outage"):
+        action, leg = next_after_failure(route, [], ec, 1)
+        assert (action, leg.id) == ("rotate", free[1])
+
+
+def test_usage_limit_empty_tried_single_leg_tier_waits():
+    free = [leg for leg in DEFAULT_LEGS if leg.tier == "free"]
+    legs = tuple(free[:1]) + tuple(leg for leg in DEFAULT_LEGS if leg.tier != "free")
+    r = route_card(card(), legs=legs)
+    assert r.first_leg.id == free[0].id
+    assert next_after_failure(r, [], "usage_limit", 1) == ("wait", None)
+
+
 def test_retry_until_budget_then_promote_free_sub_paid_park(route):
     q = "qodercli-qwen3.8-flash"
     for ec in ("check_fail", "stall", "timeout", "rebase_conflict", "worker_crash"):

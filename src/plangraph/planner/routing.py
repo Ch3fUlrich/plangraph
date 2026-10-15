@@ -182,8 +182,9 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
         raise ValueError(f"tried legs not in the plan: {unknown}")
     last = by_id[tried[-1]] if tried else route.first_leg
     if exit_class in _PROVIDER_EXITS:
+        spent = {*tried, last.id}  # tried=[] => the failed leg is route.first_leg
         for leg in route.legs:
-            if leg.tier == last.tier and leg.id not in tried:
+            if leg.tier == last.tier and leg.id not in spent:
                 return ("rotate", leg)
         return ("wait", None)
     if tier_attempts < route.attempt_budget:

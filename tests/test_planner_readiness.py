@@ -61,6 +61,13 @@ OVERLAP = [
     ("src/**/x.py", "src/x.py", True),
     ("src/a/*.py", "src/a/**", True),
     ("src/a/*.py", "tests/**", False),
+    ("src/*.py", "src/sub", True),
+    ("*.py", "src", True),
+    ("src/*.py", "src/a.txt", False),
+    ("*.py", "a.txt", False),
+    ("src/*.py", "src/sub/", True),
+    ("src/*.py", "src/sub/deep", True),
+    ("src/pkg.d/**", "src/pkg.d", True),
 ]
 
 
@@ -68,6 +75,13 @@ OVERLAP = [
 def test_paths_overlap_table(a, b, want):
     assert paths_overlap(a, b) is want
     assert paths_overlap(b, a) is want
+
+
+def test_write_sets_disjoint_glob_vs_dir_literal():
+    assert write_sets_disjoint(["src"], {"B": ["*.py"]}) == [("src", "B", "*.py")]
+    assert write_sets_disjoint(["src/*.py"], {"B": ["src/sub"]}) == [
+        ("src/*.py", "B", "src/sub")]
+    assert write_sets_disjoint(["src/*.py"], {"B": ["src/a.txt"]}) == []
 
 
 def test_write_sets_disjoint_reports_pairs():

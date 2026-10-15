@@ -143,8 +143,14 @@ def _glob_re(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out) + r"\Z", re.DOTALL)
 
 
+def _looks_like_file(raw: str) -> bool:
+    """Heuristic: a last component with a ``.`` (and no trailing ``/``) names a file."""
+    return not raw.endswith("/") and "." in raw.rsplit("/", 1)[-1].lstrip(".")
+
+
 def paths_overlap(a: str, b: str) -> bool:
     """Conservative, symmetric check whether two paths/globs may name a common file."""
+    raw = {_norm(a): a, _norm(b): b}
     a, b = _norm(a), _norm(b)
     if a == b:
         return True
@@ -156,7 +162,11 @@ def paths_overlap(a: str, b: str) -> bool:
         if _glob_re(glob).match(lit):
             return True
         lp, gp = _parts(lit), _literal_prefix(glob)
-        return len(lp) <= len(gp) and gp[:len(lp)] == lp
+        if len(lp) <= len(gp) and gp[:len(lp)] == lp:
+            return True  # literal is an ancestor dir of the glob's directory
+        if _looks_like_file(raw[lit]):
+            return False  # file the glob does not match
+        return gp == lp[:len(gp)]  # dir under (or equal to) the glob's directory
     if _glob_re(a).match(b) or _glob_re(b).match(a):
         return True
     return _prefix_related(_literal_prefix(a), _literal_prefix(b))
