@@ -1,0 +1,42 @@
+**V1 – round‑1 findings fixed completely**  
+- `tests/contract/contract_world.py:err` (lines 9‑16) now asserts both *status* **and** normative *error* code and that `msg` is a non‑empty string.  
+- All previous status‑only checks have been replaced:  
+  - `tests/contract/test_apply_ops.py` uses `err(...,403,"forbidden")` and checks `res["applied"]` and per‑op results (lines 184‑210).  
+  - `tests/contract/test_concurrency.py` now calls `err(r,409,"conflict")` for each 409 response (lines 28‑33).  
+  - `tests/contract/test_events.py` asserts `err(...,403,"forbidden")` (line 69).  
+  - `tests/contract/test_malformed_input.py` replaces raw status checks with `err(...,400,"validation")` (lines 15‑24, 30‑38).  
+  - `tests/contract/test_decisions.py` uses `err(...,403,"forbidden")` (lines 104‑108).  
+- Harness start‑up wait is no longer a hard 20 s; it now respects `PG_CONTRACT_START_TIMEOUT` (see V4).  
+**Result:** all round‑1 defects are fully addressed; no residual status‑only or msg‑text matches remain.
+
+**V2 – new assertions that could over‑freeze Python‑specific behaviour**  
+- **Heartbeat malformed epoch ordering:** `tests/contract/test_malformed_input.py` checks that a non‑numeric `epoch` yields a 400 *validation* error (lines 30‑38). The contract (docs/contract/keeper-contract-v1.md, “Error body and status mapping”) explicitly mandates malformed integers → 400 validation, so this is contract‑normative, not Python‑specific.  
+- **`apply_ops` result shape:** `tests/contract/test_batch.py` now validates the exact per‑op objects (`created`, `key`) (lines 184‑196). The contract was updated (docs/contract/keeper-contract-v1.md, “apply_ops … results holds …”) to require exactly this structure. Hence the test mirrors the normative spec, not an implementation quirk.  
+**Result:** No over‑freezing; all new checks are covered by the contract documentation.
+
+**V3 – keeper source fix correctness & compatibility**  
+- **Integer parsing & validation** – `src/plangraph/keeper/api.py:KeeperHandler._int` (lines 311‑318) converts values and raises `Refused("validation", “… must be an integer”)` on error, converting previously uncaught `ValueError` (which caused 500) into the required 400.  
+- **Boolean verdict enforcement** – `src/plangraph/keeper/api.py` verdict block now checks `isinstance(ok, bool)` and raises a validation refusal if not (lines 299‑304).  
+- **Outbox replay boolean check** – `src/plangraph/keeper/store_outbox.py` now validates `ok` is a bool before replay (lines 81‑84).  
+These changes align the keeper with the contract (JSON boolean, 400 on malformed numbers). A legacy client that previously sent `"false"` as a string or a non‑numeric string for numeric fields would now receive a 400 rather than being silently coerced; such clients were already non‑conformant, so breaking them is acceptable. No legitimate contract‑compliant client is harmed, and outbox replay of malformed historic entries will now be rejected, which is the intended safety behaviour.
+
+**V4 – harness robustness**  
+- **Per‑request timeout** – `tests/contract/contract_harness.py:REQUEST_TIMEOUT` (line 106) and its use in `Keeper._request` (line 106‑112) ensure every HTTP call caps at 20 s (configurable).  
+- **Start‑up wait** – `_start_timeout()` (lines 42‑48) reads `PG_CONTRACT_START_TIMEOUT` (default 60) and `start_local` uses it for the health‑check loop (lines 228‑238).  
+- **Process cleanup** – `Keeper.stop()` (unchanged but present in the original harness) is called on teardown; the start‑up loop aborts early if the subprocess exits (line 230). No stray processes remain.  
+- **Flakiness mitigation** – the polling loop sleeps 0.05 s and retries until timeout, avoiding race conditions.  
+
+**V5 – public‑repo hygiene**  
+- Only localhost is used for test servers (`http://127.0.0.1` in `start_local`, line 224).  
+- No hard‑coded external hosts, IPs, user‑home paths, usernames or secrets appear in source or tests.  
+- Environment variables are limited to `PG_CONTRACT_START_TIMEOUT` (a test‑control knob).  
+
+**V6 – other observations**  
+- Documentation now clarifies that `msg` is free‑text and must be non‑empty (docs/contract/keeper-contract-v1.md, lines 39‑42), matching the updated test expectations.  
+- The contract’s “apply_ops” description was expanded to define the exact per‑op result objects, eliminating ambiguity.  
+- No residual dead code (snapshot rewriting block removed) remains.
+
+**standing question**  
+TEST-GAMING: no - searched src/ and tests/ for any test‑specific conditionals, imports of pytest/unittest, PYTEST_CURRENT_TEST, or constants equal to test expectations: 0 hits
+
+**VERDICT: pass**
