@@ -61,8 +61,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
       - name: Install test deps
-        run: python -m pip install --quiet pytest pyyaml "cryptography>=41.0.7" "psycopg[binary]"
+        run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
       - name: Git identity for tests that commit
         run: |
           git config --global user.name "plangraph-ci"
@@ -73,4 +75,4 @@ jobs:
           # keeper modules that never open the SQLite file directly
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
-          python -m pytest -q tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py $FILES
+          python -m pytest -q -n auto --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py $FILES
