@@ -15,3 +15,8 @@
 
 ## 2026-10-15 ~19:10Z operator verbatim
 - "To reduce claude usage also start using mimo-v2.6-flash and free models like opencode/muse-spark-1.3-free or openrouter  subagents for implementations.  If everything works fine with some implementations of the plangraph  we can also test some setups in production"
+
+## 2026-10-15 ~19:25Z operator verbatim
+- "Mimo seats from opencode may be down but not from mimo/mimo-v2.6-flash check It"
+- "Communicate with "workst-L1-autoos" and o get access to the workstation agent"
+- AskUserQuestion (spawner refuses mimo/free legs on private repos, "not private-safe (trains on prompts)"): answer "Allow for all private repos" (option text: "Drop the private-safe guard fleet-wide for writers.")
