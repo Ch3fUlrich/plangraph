@@ -27,3 +27,4 @@
 
 ## 2026-10-15 ~20:3xZ operator verbatim
 - "Mimo works only via the mimo provider route. Deepinfra models should be removed fully and disabled from omniroute."
+- ~20:4xZ: "Since you are working on the plangraph and mcp, update the agent spawner mcp server correctly" -> routed to fixes-L1 (owner of 3 in-flight AutoOS spawner lanes) as AO-DEEPINFRA-REMOVE + mimo leg 1 + MCP ff/restart/probe; offload to a build-L1 L2 if fixes-L1 declines.
