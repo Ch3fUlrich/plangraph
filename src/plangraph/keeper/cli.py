@@ -218,6 +218,15 @@ def _add_admin(sub):
     vsnap.add_argument("--pubkey")
     commands.add_parser("verify-anchor", help="M2B: check the anchor log against the chain")
 
+    prune = commands.add_parser(
+        "prune-backups", help="retention for ad-hoc backup files in a data dir (dry run by default)")
+    prune.add_argument("--dir", required=True, help="the keeper data dir (no default)")
+    prune.add_argument("--keep", type=int, default=10, help="newest files to keep (default 10)")
+    prune.add_argument("--daily-days", dest="daily_days", type=int, default=7,
+                       help="also keep the newest file of each of the last N UTC days (default 7)")
+    prune.add_argument("--apply", action="store_true",
+                       help="actually delete (absent = dry run)")
+
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="pg", description="Keeper client.")
