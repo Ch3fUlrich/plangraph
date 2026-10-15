@@ -28,3 +28,7 @@
 ## 2026-10-15 ~20:3xZ operator verbatim
 - "Mimo works only via the mimo provider route. Deepinfra models should be removed fully and disabled from omniroute."
 - ~20:4xZ: "Since you are working on the plangraph and mcp, update the agent spawner mcp server correctly" -> routed to fixes-L1 (owner of 3 in-flight AutoOS spawner lanes) as AO-DEEPINFRA-REMOVE + mimo leg 1 + MCP ff/restart/probe; offload to a build-L1 L2 if fixes-L1 declines.
+
+## 2026-10-15 ~20:2x-20:3xZ operator verbatim
+- "Lensure that there will be no confusion anymore when agents try to spawn a mimo leg. Another agent reported "leg 1 failed with a 402 (OpenRouter credits, not the mimo route). Falling back to leg 2, --free.". There should be no confusion"
+- AskUserQuestion (mimo fix waits for router GO, router paused): answer "GO both now (Recommended)" = fixes-L1 merges maingreen -> ordrift (opencode.jsonc modelID mimo/mimo-v2.6-flash), ff /home/s/code/AutoOS, live-apply only the mimo-v2.6-flash/pro combos in OmniRoute.
