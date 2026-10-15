@@ -6,6 +6,7 @@
 batch: 2026-10-15-build-l1-b01
 principal: routing-00
 source: /home/s/code/routing-worktrees/rethink-setup/docs/reports/2026-10-15-rethink-setup-design.md
+source_sha256: 1958911c9a9c4b3a301096e0e296a887c75e0bcaeaa5d94cee27a6d550a2309e
 ops:
 - op: create
   item:
@@ -15,7 +16,8 @@ ops:
     owner: build-L1
     review_tier: none
     evidence_kinds:
-    - commit+ci
+    - decision
+    - commit
     estimate_h: 3
     estimate_src: plan
     priority: 1
