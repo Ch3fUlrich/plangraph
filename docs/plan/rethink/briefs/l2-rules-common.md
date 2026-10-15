@@ -2,7 +2,7 @@
 - Load skill `unattended-orchestration` first. L2 = Sonnet orchestrator: split, brief, spawn, review; never write code itself, never merge
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
 - L3 writers (operator 2026-10-15 ~19:10Z: cut Claude usage): autoos-agent `spawn` with opencode, leg order
-  (1) `omniroute/mimo-v2.6-flash` ONLY after build-L1 says MIMO-FIXED (2026-10-15 20:2xZ: it sent a bare model id that the gateway sometimes routed to OpenRouter -> 402; fix at fixes-L1); until then SKIP leg 1; never any openrouter/xiaomi or deepinfra mimo id, (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
+  (1) `omniroute/mimo-v2.6-flash` (MIMO-FIXED 2026-10-15 ~20:5xZ: live OmniRoute combo pins it to mimo/mimo-v2.6-flash, smoke 200 from the mimo provider; a 402 or any OpenRouter id on this leg = incident, report to build-L1, never use openrouter/xiaomi or deepinfra mimo ids), (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
   (3) OpenRouter free (`omniroute/or-north-mini-code-free`, `or-laguna-s-2.1-free`, `or-nemotron-3-super-free`), (4) qodercli
   Qwen3.8-Flash. Sonnet (in-session Agent tool) ONLY if all of these fail or spawner admission refuses; record why in the lane
   record. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:

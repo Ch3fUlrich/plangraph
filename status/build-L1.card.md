@@ -34,3 +34,4 @@ Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending rout
 
 ## FOR OPERATOR (operator away until ~04:4xZ; no interactive questions; defaults taken are logged here)
 - (none yet)
+- 20:5x MIMO-FIXED: live combos mimo-v2.6-flash/pro -> mimo provider (fixes-L1, evidence /home/s/seat-evidence/mimo-combos-d1375/, smoke ids uuid_hex = mimo, before gen-* = OpenRouter). L2s told. opencode.jsonc mimo/ prefix lands with ordrift merge.
