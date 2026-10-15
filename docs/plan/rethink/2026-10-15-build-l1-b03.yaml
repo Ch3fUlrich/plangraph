@@ -1,0 +1,52 @@
+# build-L1 2026-10-15 b03: CI speed + workstation runner (operator answers 18:55Z, verbatim in build-operator-rounds.md).
+# Measured: plangraph main CI 3m43s on GitHub-hosted (pytest 2488 tests serial 213 s); local pre-push suite on coding.vm
+#   960 s at 6% CPU (44 s user) = tests wait, not compute. Workstation (workst-L1-autoos 20:48Z): 32 threads, 59 GB free WSL2,
+#   891 GB disk, Docker Desktop 29.7.2 (no docker inside the WSL distro).
+# Operator: runner on Docker Desktop, no CPU cap, 32 GB RAM cap; stop using GitHub-hosted runners for now; workstation for
+#   speed until repos go public / faster CI exists. Note: AutoOS, Tools, chaptarr, OmniRoute, great-wiki are PUBLIC -> fork-PR guard.
+batch: 2026-10-15-build-l1-b03
+principal: routing-00
+source: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/build-operator-rounds.md
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: CI-PARALLEL
+    kind: lane
+    owner: build-L1
+    review_tier: standard
+    evidence_kinds: [commit+ci]
+    estimate_h: 2
+    estimate_src: plan
+    priority: 2
+    track: RETHINK
+    title: 'plangraph CI speed: pytest-xdist, pip cache, find the waiting tests'
+    done_criteria: tests.yml runs pytest with -n auto (xdist) and cached deps; tests that share state made xdist-safe; top-20 --durations wait sources fixed or bounded (local suite on coding.vm well under 960 s); CI green on SQLite + Postgres jobs; 1 seat
+    description: 'Operator 2026-10-15 ("Yes, now"). Local suite 960 s wall at 6% CPU = waits (sleeps/timeouts/subprocess). Independent of the runner move.'
+  - project: autoos
+    id: CI-WORKST-RUNNER
+    kind: lane
+    owner: workst-L1-autoos
+    review_tier: high
+    evidence_kinds: [commit+ci]
+    estimate_h: 4
+    estimate_src: plan
+    priority: 2
+    track: OPS
+    title: 'Workstation GitHub Actions runners on Docker Desktop (ephemeral, no CPU cap, 32 GB RAM cap)'
+    done_criteria: ephemeral self-hosted runner containers on workstation Docker Desktop (no reboot, no WSL feature change), label workstation, mem limit 32 GB, no CPU limit, restart policy; registered per repo (user account has no org runner pool) for plangraph first, then the other active repos; service containers (postgres) work for jobs; registration secret (PAT or registration token) operator-owned per D-944, never in a repo; public repos run workstation jobs only for push/same-repo PRs (fork PRs never reach the host); compose/config in AutoOS; a plangraph run green on it
+    description: 'Operator 2026-10-15 18:55Z. Live step on the workstation under a GO. Docker socket inside a runner = host-level control: private repos fine; public repos need the fork guard.'
+  - project: plangraph
+    id: CI-RUNS-ON-WORKST
+    kind: lane
+    owner: build-L1
+    review_tier: standard
+    evidence_kinds: [commit+ci]
+    estimate_h: 1
+    estimate_src: plan
+    priority: 2
+    track: RETHINK
+    depends_on: [autoos:CI-WORKST-RUNNER]
+    title: 'plangraph workflows run on the workstation runner (no GitHub-hosted fallback for now)'
+    done_criteria: all plangraph workflow jobs runs-on [self-hosted, workstation]; CI green there incl. pytest-postgres; duration before/after recorded
+    description: 'Operator: "do not use github runner anymore for now". Other repos switch under their owning L1 (routing assigns).'
