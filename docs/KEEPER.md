@@ -453,3 +453,15 @@ placeholder (an applier needs a router token of that name; an l1 has no batch do
 and an item listed as `state claimed` cannot be edited until it is released, because `edit_definition` only accepts
 `open` items.
 
+
+## Backup retention (PG-BACKUP-RETENTION)
+
+The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-*.db`, `keeper.db.pre-*`, `keeper.db.bak-*`, `pre-*.db`, `keeper-pre-*.db`) in the keeper data dir, and they pile up. `pg admin prune-backups` trims them. It needs no keeper config and has no default directory.
+
+    pg admin prune-backups --dir DIR [--keep 10] [--daily-days 7] [--apply]
+
+- Policy: keep the newest `--keep` files by mtime, plus the newest file of each of the last `--daily-days` UTC calendar days; delete the rest. Files with a future mtime are kept.
+- **Dry run is the default**: it lists what would go, bytes freed and `du before` / `du after (projected)`, and deletes nothing. Only `--apply` unlinks. Exit 0 ok, 2 bad arguments or directory (`/`, empty, missing), 1 if any delete failed.
+- Never touched, whatever the name: `keeper.db`, `keeper.json` (and `keeper.json.*`), `*.token`, `*-wal`, `*-shm`, `*.lock`, `*.pid`, `*.alive`, `*.log`, `plan.snapshot*`, `md-sync*`, symlinks, sub-directories (not entered; no recursion) and any name outside the explicit allow-list in `backup_retention.py`.
+- Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error.
+- Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.

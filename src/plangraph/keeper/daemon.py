@@ -29,6 +29,29 @@ def _install_signals(stop: threading.Event) -> None:
             signal.signal(sig, handler)
 
 
+def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
+    """PG-BACKUP-RETENTION hook body: prune once now, then every ``interval_s``.
+
+    Exits promptly when *stop* is set; any exception is logged and never
+    propagates (a retention problem must not take the keeper down).
+    """
+    from . import backup_retention
+    if log is None:
+        def log(msg):
+            print(msg, file=sys.stderr)
+    while not stop.is_set():
+        try:
+            res = backup_retention.prune(
+                settings["dir"], settings["keep"], settings["daily_days"],
+                apply=True, out=lambda _line: None)
+            log(f"backup_prune: deleted {len(res.deleted)}, "
+                f"failed {len(res.failed)}, kept {len(res.plan.keep)}")
+        except Exception as exc:  # noqa: BLE001 - never crash the keeper
+            log(f"backup_prune: error: {exc}")
+        if stop.wait(settings["interval_s"]):
+            break
+
+
 def run(cfg, *, host=None, port=None, ready=None):
     """Start the server and block until a signal; returns 0 on clean shutdown."""
     lock = kdb.lock_keeper(cfg.db)
@@ -48,11 +71,21 @@ def run(cfg, *, host=None, port=None, ready=None):
         thread = threading.Thread(target=server.serve_forever, daemon=True,
                                   name="keeper-http")
         thread.start()
+        prune_thread = None
+        bp = getattr(cfg, "backup_prune", None) or {}
+        if bp.get("enabled"):   # opt-in; default off
+            prune_thread = threading.Thread(
+                target=_backup_prune_loop, args=(bp, stop),
+                daemon=True, name="keeper-backup-prune")
+            prune_thread.start()
         if ready is not None:
             ready(server)
         try:
             stop.wait()
         finally:
+            stop.set()
+            if prune_thread is not None:
+                prune_thread.join(timeout=5)
             server.shutdown()
             server.stop_reaper()
             server.server_close()

@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-15
 
+- **PG-BACKUP-RETENTION:** `pg admin prune-backups --dir D [--keep N] [--daily-days N] [--apply]` trims ad-hoc backup files in a data dir (dry run by default, explicit allow-list, keeper files never touched); opt-in keeper `backup_prune` config hook, default off.
 - **RT-P1-CONTRACT:** keeper contract 1.0 frozen in `docs/contract/` (prose, route reference, JSON schemas) with a storage-agnostic black-box suite in `tests/contract/` (subprocess keeper, or `PG_CONTRACT_URL` plus tokens). Keeper fixes: malformed `n`/`lease_s`/priority are 400 not 500; `verdict` `ok` must be a JSON boolean.
 
 ## 2026-10-11

@@ -91,11 +91,38 @@ class Config:
         self.review_overdue_s = int(data.get("review_overdue_s", 4 * 3600))
         self.lease_warn_s = int(data.get("lease_warn_s", 15 * 60))
         self.reap_interval = float(data.get("reap_interval", 60))
+        self.backup_prune = self._backup_prune(data.get("backup_prune"))
 
     # ------------------------------------------------------------- helpers
     def _resolve(self, value) -> Path:
         path = Path(value).expanduser()   # "~/..." in keeper.json / reader.json (D-818 steps)
         return path if path.is_absolute() else (self._base / path)
+
+    def _backup_prune(self, raw) -> dict:
+        """PG-BACKUP-RETENTION: opt-in hook settings; disabled unless ``enabled`` is true."""
+        out = {"enabled": False, "dir": None, "keep": 10, "daily_days": 7,
+               "interval_s": 21600}
+        if raw is None:
+            return out
+        if not isinstance(raw, dict):
+            raise ConfigError("backup_prune must be a dictionary")
+        enabled = raw.get("enabled", False)
+        if not isinstance(enabled, bool):
+            raise ConfigError("backup_prune.enabled must be true or false")
+        out["enabled"] = enabled
+        for key, floor in (("keep", 0), ("daily_days", 0), ("interval_s", 1)):
+            value = raw.get(key, out[key])
+            if isinstance(value, bool) or not isinstance(value, int) or value < floor:
+                raise ConfigError(f"backup_prune.{key} must be an integer >= {floor}")
+            out[key] = value
+        directory = raw.get("dir")
+        if directory is not None and (not isinstance(directory, str) or not directory.strip()):
+            raise ConfigError("backup_prune.dir must be a non-empty path string")
+        if directory:
+            out["dir"] = str(self._resolve(directory))
+        if enabled and not out["dir"]:
+            raise ConfigError("backup_prune enabled but backup_prune.dir is not set")
+        return out
 
     @staticmethod
     def _bind(data) -> tuple[str, int]:

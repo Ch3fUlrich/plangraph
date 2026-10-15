@@ -38,8 +38,22 @@ def _open(cfg, *, create=False):
     return kdb.open_db(cfg.db, create=create)
 
 
+def _cmd_prune_backups(args) -> int:
+    """PG-BACKUP-RETENTION: needs no config; --dir is explicit; dry-run unless --apply."""
+    from . import backup_retention
+    try:
+        res = backup_retention.prune(args.dir, args.keep, args.daily_days,
+                                     apply=bool(args.apply))
+    except (OSError, ValueError) as exc:
+        print(f"prune-backups: {exc}", file=sys.stderr)
+        return 2
+    return 0 if res.ok else 1
+
+
 def dispatch(args) -> int:
     command = args.admin_command
+    if command == "prune-backups":     # before _config(): no keeper config needed
+        return _cmd_prune_backups(args)
     cfg = _config(args)
     if cfg is None:
         return 2
