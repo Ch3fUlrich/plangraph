@@ -49,3 +49,18 @@ parity test tests/test_keeper_pg_parity.py (event rows, chain head, item state).
 Open: 5 SQLite-file tests deselected on PG (3 frozen contract tests in test_events.py — needs a judge note or an HTTP-level replacement);
 lane branch predates PR #7 (merge origin/main to pick up trigger change). Next: merge origin/main, W1 HIGH seats (gpt-oss + qwen/alibaba,
 split by module, tail.md), then W2 (design-3 tables/states) + W3 (SQLite->PG copy tool). Commit+ci evidence needs a lane commit with trailer.
+
+## Gen-3 (e37141) state 19:10Z
+- DONE: RT-P1-WORKER-CORE (main dd6300cf; commit+ci 53e7f78e; verdict openai), PG-BACKUP-RETENTION (PR #10 6f644e71; live prune GO D-1349:
+  du 1644093178 -> 976613114, log docs/plan/rethink/go/prune-d1349.log), TEMPORAL-SPIKE closed by routing (D-1350).
+- Claimed (lease ~01:07Z / KEEPER-PG-CODE 22:25Z): RT-P1-KEEPER-PG-CODE, CI-PARALLEL, RT-P1-WORKER-CODE, RT-P1-REVIEW-CODE.
+- L2s: build-L2-keeper-pg (787f3984; W2 early PR, W3, seats), build-L2-backup (4c1ebfe8; now CI-PARALLEL, brief briefs/l2-ci-parallel.md),
+  requested: build-L2-worker-code (workstation), build-L2-review-code. Common rules: briefs/l2-rules-common.md.
+- Batches live: b03r2 (CI-PARALLEL, autoos:CI-WORKST-RUNNER owner workst-L1-autoos, CI-RUNS-ON-WORKST), b04 (WORKER/REVIEW/PROJECTOR/
+  PLANNER-KIT/INBOX -CODE). PROJECTOR/PLANNER-KIT/INBOX CODE start after KEEPER-PG-CODE W2 is on main (claim then, L2 each).
+- Operator today (verbatim in docs/plan/rethink/build-operator-rounds.md): qwen seats via qodercli, never ovh Qwen; workstation =
+  default CI runner (Docker Desktop, no CPU cap, 32 GB), no GitHub-hosted runners once it exists; L2 cap lifted, floors coding.vm 1 GB /
+  workstation 12 GB; writers free first (mimo-v2.6-flash -> muse-spark free -> OpenRouter free -> qodercli; Sonnet last).
+- Seat recipe qodercli: empty dir, prompt prefixed "You have NO tools ...", `qodercli -p --model Qwen3.8-Flash --tools "" -o json`.
+- Open: free-CI research subagent -> docs/plan/rethink/research/free-ci-runners.md (routing asked for it, D-1349 (3)).
+- Local suite on coding.vm 960 s at 6% CPU (tests wait) vs CI 213 s.
