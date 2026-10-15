@@ -55,3 +55,5 @@ class RunProjection:
     last_event_id: int
     attempts: tuple[AttemptRec, ...]
     states: tuple[StateRec, ...]
+    outcome: Optional[str] = None
+    next_run_id: Optional[str] = None
