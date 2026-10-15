@@ -1,9 +1,13 @@
 # Common rules for build-L1 L2s (bind the L2 and every L3; copy into each L3 brief)
 - Load skill `unattended-orchestration` first. L2 = Sonnet orchestrator: split, brief, spawn, review; never write code itself, never merge
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
-- L3 writers: autoos-agent `route` then `spawn`, free non-Claude first (D-1061). If spawner admission refuses or no free leg serves:
-  in-session Sonnet subagent (Agent tool, model sonnet) in your worktree; note the reason in the lane record. Run finished = exit.json /
-  `status`; never poll job.json. Several writers in parallel are fine when write sets are disjoint.
+- L3 writers (operator 2026-10-15 ~19:10Z: cut Claude usage): autoos-agent `spawn` with opencode, leg order
+  (1) `omniroute/deepinfra-mimo-v2.6-flash`, (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
+  (3) OpenRouter free (`omniroute/or-north-mini-code-free`, `or-laguna-s-2.1-free`, `or-nemotron-3-super-free`), (4) qodercli
+  Qwen3.8-Flash. Sonnet (in-session Agent tool) ONLY if all of these fail or spawner admission refuses; record why in the lane
+  record. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:
+  diff stat, tests, files-read; relaunch, never resume, a no-change run. Run finished = exit.json / `status`; never poll job.json.
+  Several writers in parallel are fine when write sets are disjoint.
 - RAM floors (operator 2026-10-15): coding.vm MemAvailable >= 1 GB, workstation >= 12 GB free. Heavy Rust/Temporal builds on the
   workstation, one CARGO_TARGET_DIR, `cargo clean` after (D-1319).
 - Seats (tool-less, max 4 fleet-wide): openai = ovh/gpt-oss-120b via /home/s/code/plangraph-worktrees/build-L1/ops/seat.sh; qwen =

@@ -12,3 +12,6 @@
 ## 2026-10-15 ~19:02Z AskUserQuestion (L2 cap), operator verbatim
 - "What do you more an with "no free L2 slots". There should be plenty available"
 - Answer: "Rais cap on both machines. Coding vm limited by 1gb free ram and workstation by 12gb free ram"
+
+## 2026-10-15 ~19:10Z operator verbatim
+- "To reduce claude usage also start using mimo-v2.6-flash and free models like opencode/muse-spark-1.3-free or openrouter  subagents for implementations.  If everything works fine with some implementations of the plangraph  we can also test some setups in production"
