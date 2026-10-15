@@ -15,7 +15,7 @@ Control branch = `build-L1` (this worktree); never merged to main. Code lanes = 
   xiaomi, deepseek, alibaba (issued 16:10 by fixes-L1).
 - Seat models now: `ovh/gpt-oss-120b` works (flaky format, sometimes hallucinates evidence -> adjudicate against code).
   xiaomi-mimo flash+pro: every call timed out since ~15:40. `ovh/Qwen3.8-27B` (exact case! alibaba, D-1329 2nd family):
-  timed out at 16000 max tokens; retry running with --max-tokens 5000.
+  timed out at 16000 max tokens; at --max-tokens 5000 finish_reason=length with EMPTY answer (reasoning eats budget) -> try ~10000 or a smaller prompt.
 - Batch replay: ops/mkreplay.py (edit T path), daemon from a lane worktree's src on :18787, apply_batch.py with router token, kill + rm.
 
 ## Lessons (new)
@@ -30,7 +30,7 @@ Control branch = `build-L1` (this worktree); never merged to main. Code lanes = 
 |---|---|---|
 | plangraph:RT-P1-CONTRACT | DONE (main 7e5a61e3, live via GO D-1331, keeper "ci" block live) | — |
 | plangraph:RT-P1-TEMPORAL-SPIKE | in_review, tier none | routing closes |
-| plangraph:RT-P1-WORKER-CORE | claimed, lease 18:13Z (heartbeat!) | commit+ci✓ (fad33f3c). r2 lane lane/rt-p1-worker-core-r2 291617ff, PR #6, CI green. Seats: r5 fix -> triaged (2 confirmed fixed, 19 false), r6 PASS (test_gaming missing), r7 fix = hallucinated (adjudication docs/plan/rethink/seats/worker-core-r2-adjudication.md). Need 1 recordable seat: qwen running (out /home/s/.claude/jobs/abc4dacf/tmp/wc/qwen, prompt wc/r6.md) else rerun ovh with tail. Then merge PR #6, commit+ci on 291617ff (trailer ok), submit, seat_verdict. |
+| plangraph:RT-P1-WORKER-CORE | claimed, lease 18:13Z (heartbeat!) | commit+ci✓ (fad33f3c). r2 lane lane/rt-p1-worker-core-r2 291617ff, PR #6, CI green. Seats: r5 fix -> triaged (2 confirmed fixed, 19 false), r6 PASS (test_gaming missing), r7 fix = hallucinated (adjudication docs/plan/rethink/seats/worker-core-r2-adjudication.md). Need 1 recordable seat: qwen 5000-token try failed (length, empty); next: ovh/gpt-oss-120b on prompt wc/r6.md (copy from /home/s/.claude/jobs/abc4dacf/tmp/wc/) or qwen ~10000. Then merge PR #6, commit+ci on 291617ff (trailer ok), submit, seat_verdict. |
 | plangraph:RT-P1-KEEPER-PG-CODE | claimed (b02 applied, D-1334), lease 18:13Z | W1 writer (Sonnet subagent of gen-2) running: brief docs/plan/rethink/briefs/keeper-pg-code-w1.md, worktree /home/s/code/plangraph-worktrees/keeper-pg, branch lane/rt-p1-keeper-pg-code. If the subagent died with gen-2: inspect the worktree, relaunch with the same brief + D-1338 rules (PG job continue-on-error until parity, draft PR for CI). Then W2 (design-3 tables/states), W3 (copy tool). HIGH: 2 families (openai + alibaba). |
 | plangraph:RT-P1-REVIEW | open (dep WORKER) | seat_verdict tool already on main (trailer commit a28d0119) |
 
