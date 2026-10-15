@@ -218,7 +218,9 @@ def default_dry_run(cmd: str, repo_root: Path) -> tuple[bool, str]:
         return False, f"cannot parse command: {exc}"
     if not segments:
         return False, "empty command"
-    for seg in segments[:_SEGMENT_CAP]:
+    if len(segments) > _SEGMENT_CAP:
+        return False, f"too many chained commands (max {_SEGMENT_CAP})"
+    for seg in segments:
         words = list(seg)
         while words and _ASSIGN_RE.match(words[0]):
             words.pop(0)

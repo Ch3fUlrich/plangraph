@@ -229,3 +229,35 @@ def test_pack_budget_numbers():
         pack_budget("2m")
     with pytest.raises(ValueError):
         pack_budget("128k", fraction=0)
+
+
+# ------------------------------------------------------- F5 too-large write file
+def test_too_large_write_file_raises_pack_too_big(tmp_path, monkeypatch):
+    from plangraph.planner import context_pack as cp
+    monkeypatch.setattr(cp, "_MAX_READ_BYTES", 100)
+    put(tmp_path, "big.py", "x" * 400)
+    with pytest.raises(PackTooBig) as info:
+        build(tmp_path, card(write_set=["big.py"]), budget_tokens=1234)
+    assert info.value.needed == 400 // cp.CHARS_PER_TOKEN
+    assert info.value.budget == 1234 and info.value.path == "big.py"
+    p = build(tmp_path, card(read_set=["big.py"]))  # read-set file stays skipped
+    assert p.skipped == (("big.py", "too_large"),)
+
+
+def test_binary_write_file_still_skipped(tmp_path):
+    (tmp_path / "blob.bin").write_bytes(b"\0\1\2")
+    p = build(tmp_path, card(write_set=["blob.bin"]))
+    assert p.skipped == (("blob.bin", "binary"),)
+
+
+# ------------------------------------------------------- F6 entry cap visible
+def test_entry_cap_omissions_recorded(tmp_path):
+    for i in range(60):
+        put(tmp_path, f"many/f{i:02d}.py", "x\n")
+        put(tmp_path, f"wr/g{i:02d}.py", "x\n")
+    p = build(tmp_path, card(read_set=["many/*.py"], write_set=["wr"]))
+    omitted = sorted(s for s in p.skipped if s[1] == "entry_cap")
+    want = sorted([(f"many/f{i:02d}.py", "entry_cap") for i in range(50, 60)]
+                  + [(f"wr/g{i:02d}.py", "entry_cap") for i in range(50, 60)])
+    assert omitted == want
+    assert len(p.files) == 100

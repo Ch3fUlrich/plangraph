@@ -120,9 +120,9 @@ def test_dry_run_segments_and_parse_errors(tmp_path):
         False, "executable not found: no-such-binary-xyz")
     assert default_dry_run("true; true | true", tmp_path) == (True, "ok")
     assert default_dry_run("echo $(no-such-binary-xyz)", tmp_path)[0] is False
-    # only the first five segments are inspected
+    # more than five segments fail closed (see F1 test below)
     assert default_dry_run("true;true;true;true;true;no-such-binary-xyz", tmp_path) == (
-        True, "ok")
+        False, "too many chained commands (max 5)")
     ok, reason = default_dry_run("echo 'unterminated", tmp_path)
     assert ok is False and reason
     assert default_dry_run("   ", tmp_path)[0] is False
@@ -269,3 +269,15 @@ def test_check_cards_sorted_and_peers_not_running(tmp_path):
                            running_write_sets={"r": ["src/a.py"]})
     assert [k for k, v in with_run.items() if not v.ready] == ["a", "b"]
     assert os.path.isdir(tmp_path)
+
+
+# ------------------------------------------------------- F1 segment cap fails closed
+
+def test_dry_run_too_many_segments_fails_closed(tmp_path):
+    five = " && ".join(["true"] * 5)
+    assert default_dry_run(five, tmp_path) == (True, "ok")
+    six_missing = " && ".join(["true"] * 5 + ["pytest tests/missing_x.py"])
+    assert default_dry_run(six_missing, tmp_path) == (
+        False, "too many chained commands (max 5)")
+    assert default_dry_run(" && ".join(["true"] * 6), tmp_path) == (
+        False, "too many chained commands (max 5)")

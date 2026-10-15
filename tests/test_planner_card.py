@@ -288,3 +288,49 @@ def test_apply_cards_real_store_roundtrip(tmp_path):
         assert {k: got[k] for k in want} == want
     finally:
         world.close()
+
+
+# ------------------------------------------------------- F2 explicit key qualification
+def test_explicit_bare_key_qualified_with_project():
+    doc = {"project": "alpha", "items": [{"key": "42", "card": raw()}]}
+    assert set(cards_from_batch(doc)) == {"alpha:42"}
+    doc = {"project": "alpha", "items": [{"key": "42", "project": "beta", "card": raw()}]}
+    assert set(cards_from_batch(doc)) == {"beta:42"}
+    doc = {"items": [{"key": "42", "card": raw()}]}
+    assert set(cards_from_batch(doc, default_project="gamma")) == {"gamma:42"}
+    assert set(cards_from_batch({"items": [{"key": "p:42", "card": raw()}]})) == {"p:42"}
+
+
+def test_explicit_bare_key_without_project_rejected():
+    with pytest.raises(CardError):
+        cards_from_batch({"items": [{"key": "42", "card": raw()}]})
+
+
+# ------------------------------------------------------- F3 credential guard in parse_card
+def _secret():
+    return "/".join(["svcacct", "Zq9xk2" + "LmPw"])
+
+
+def test_credential_shapes_collected_as_problems():
+    bad = f"login with {_secret()} on the box"
+    ps = problems_of(raw(outcome=bad, check_cmd=bad, heldout_check=bad,
+                         read_set=["ok.py", bad], smoke_checks=[bad], exports=[bad]))
+    joined = " ".join(ps)
+    for name in ("outcome", "check_cmd", "heldout_check", "read_set", "smoke_checks",
+                 "exports"):
+        assert any(p.startswith(name) and "credential" in p for p in ps), (name, ps)
+    assert _secret() not in joined
+    assert len(ps) >= 6
+
+
+def test_plain_text_passes_credential_guard():
+    assert parse_card(raw(outcome="login page svc/x")).outcome == "login page svc/x"
+
+
+# ------------------------------------------------------- F4 path spellings
+def test_path_spellings_collapse():
+    for spelling in ("src//", "src/", "src", "./src/.", "src/./", "src//./", "./src"):
+        assert parse_card(raw(write_set=[spelling])).write_set == ("src",), spelling
+    assert parse_card(raw(write_set=["a//b/./c.py"])).write_set == ("a/b/c.py",)
+    assert parse_card(raw(write_set=["src//", "src/", "src"])).write_set == ("src",)
+    assert problems_of(raw(write_set=["./."]))

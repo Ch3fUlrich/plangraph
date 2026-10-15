@@ -139,19 +139,21 @@ def _forbidden(rel: str, patterns: list[str]) -> bool:
     return False
 
 
-def _expand(entry: str, root: Path) -> list[Path]:
-    """Files an entry stands for (sorted, capped); a literal path may not exist."""
+def _expand(entry: str, root: Path) -> tuple[list[Path], list[Path]]:
+    """``(kept, omitted)`` files an entry stands for (sorted; ``kept`` capped at
+    ``ENTRY_CAP``); a literal path may not exist."""
     if _GLOB_CHARS & set(entry):
         try:
             found = [p for p in root.glob(entry) if p.is_file()]
         except (NotImplementedError, ValueError, OSError):
-            return []
-        return sorted(found, key=lambda p: p.as_posix())[:ENTRY_CAP]
-    path = root / entry
-    if path.is_dir():
+            return [], []
+    else:
+        path = root / entry
+        if not path.is_dir():
+            return [path], []
         found = [p for p in list(path.glob("*")) + list(path.glob("*/*")) if p.is_file()]
-        return sorted(set(found), key=lambda p: p.as_posix())[:ENTRY_CAP]
-    return [path]
+    ordered = sorted(set(found), key=lambda p: p.as_posix())
+    return ordered[:ENTRY_CAP], ordered[ENTRY_CAP:]
 
 
 def _collect(entries: list[str], root: Path, forbid: list[str],
@@ -163,7 +165,10 @@ def _collect(entries: list[str], root: Path, forbid: list[str],
         if os.path.isabs(entry) or entry.startswith(("/", "\\")):
             skipped.append((entry, "outside_root"))
             continue
-        for path in _expand(entry, root):
+        kept, omitted = _expand(entry, root)
+        skipped += [(Path(os.path.relpath(p, root)).as_posix(), "entry_cap")
+                    for p in omitted]
+        for path in kept:
             rel = Path(os.path.relpath(path, root)).as_posix()
             try:
                 real = path.resolve()
@@ -261,6 +266,9 @@ def build_pack(card: Mapping[str, Any], *, repo_root: Path, key: str | None = No
             block, truncated = f"# FILE {rel} (write, new)\n", False
         else:
             loaded = _load((writes if role == "write" else reads)[rel], max_file_tokens)
+            if loaded == "too_large" and role == "write":
+                size = (writes[rel]).stat().st_size
+                raise PackTooBig(size // CHARS_PER_TOKEN, budget_tokens, rel)
             if isinstance(loaded, str):
                 skipped.append((rel, loaded))
                 continue

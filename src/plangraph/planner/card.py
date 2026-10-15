@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
+from plangraph.keeper.credential_guard import guard
+from plangraph.keeper.errors import Refused
 from plangraph.keeper.schema import RISK_TAGS, WINDOW_CLASSES
 
 __all__ = ["Card", "CardError", "parse_card", "cards_from_batch", "strip_cards",
@@ -86,11 +88,11 @@ class Card:
 
 
 def _normalise_path(value: str) -> str | None:
-    """Strip, use forward slashes, drop leading ``./``; ``None`` if nothing is left."""
+    """Strip, use forward slashes, collapse ``//``, drop ``.`` components and a trailing
+    ``/`` (so ``src//``, ``src/`` and ``./src`` all become ``src``); ``None`` if empty."""
     path = value.strip().replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
-    return path or None
+    parts = [p for p in path.split("/") if p not in ("", ".")]
+    return ("/" if path.startswith("/") else "") + "/".join(parts) or None
 
 
 def _path_problem(name: str, original: str, path: str | None) -> str | None:
@@ -101,6 +103,16 @@ def _path_problem(name: str, original: str, path: str | None) -> str | None:
     if ".." in path.split("/"):
         return f"{name} entry {original!r} must not contain '..'"
     return None
+
+
+def _guard_problem(name: str, value: str, problems: list[str]) -> bool:
+    """Run the keeper's credential guard; record a problem and return True if refused."""
+    try:
+        guard(name, value)
+    except Refused as exc:
+        problems.append(exc.msg or str(exc))
+        return True
+    return False
 
 
 def _check_list(name: str, value: Any, problems: list[str], paths: bool = False,
@@ -118,6 +130,8 @@ def _check_list(name: str, value: Any, problems: list[str], paths: bool = False,
             continue
         if allowed is not None and entry not in allowed:
             problems.append(f"{name} entry {entry!r} is not one of {list(allowed)}")
+            continue
+        if _guard_problem(name, entry, problems):
             continue
         if paths:
             normal = _normalise_path(entry)
@@ -143,6 +157,8 @@ def _check_text(name: str, value: Any, problems: list[str],
         return None
     if len(value) > _TEXT_CAP:
         problems.append(f"{name} exceeds {_TEXT_CAP} characters")
+        return None
+    if _guard_problem(name, value, problems):
         return None
     return value
 
@@ -251,11 +267,15 @@ def cards_from_batch(doc: Any, default_project: str | None = None) -> dict[str, 
         if "card" not in item:
             continue
         key = item.get("key")
-        if not isinstance(key, str) or not key:
-            ident, proj = item.get("id"), item.get("project", project)
+        proj = item.get("project")
+        proj = proj if isinstance(proj, str) and proj else project
+        if isinstance(key, str) and key:
+            key = _qualify(key, proj, "item")
+        else:
+            ident = item.get("id")
             if not isinstance(ident, str) or not ident:
                 raise CardError(["item with an inline card needs a key or an id"])
-            key = _qualify(ident, proj if isinstance(proj, str) else None, "item")
+            key = _qualify(ident, proj, "item")
         add(key, item["card"])
     return cards
 

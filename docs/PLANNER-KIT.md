@@ -96,7 +96,9 @@ Plain text, deterministic: `# CARD <key>` header (outcome, check_cmd, window_cla
 exports, forbid, smoke; never `heldout_check`), optional `# CHECK OUTPUT` tail (last 40-60 lines),
 then `# FILE <path> (write)` blocks, then `(read)` blocks, each in a fenced block. Budget =
 0.55 x window - 8000 tokens; tokens = ceil(chars / 4). A write file that does not fit raises
-`PackTooBig` (route to a bigger class); read files over budget are skipped.
+`PackTooBig` (route to a bigger class), as does a write file over the read-size limit;
+read files over budget or size are skipped. Entries beyond the 50-file expansion cap are
+listed in `skipped` as `(path, "entry_cap")`. Binary write files are skipped.
 
 ## Tests
 
