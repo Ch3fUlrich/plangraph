@@ -89,4 +89,4 @@ jobs:
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
           python -m pytest -q tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py \
-            tests/test_projector_ddl.py $FILES
+            tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES
