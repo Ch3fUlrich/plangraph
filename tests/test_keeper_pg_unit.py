@@ -209,7 +209,7 @@ def _store_sources():
     root = Path(config_mod.__file__).parent
     names = [p for p in root.glob("*.py")
              if p.name not in ("db.py", "db_pg.py", "db_errors.py", "schema.py", "schema_pg.py",
-                               "importer.py")]
+                               "importer.py", "copy_to_pg.py")]   # copy_to_pg reads a SQLite file
     return {p.name: p.read_text() for p in names}
 
 
