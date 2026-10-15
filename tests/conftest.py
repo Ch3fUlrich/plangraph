@@ -3,8 +3,10 @@
 With ``PG_KEEPER_BACKEND=postgres`` (the CI ``pytest-postgres`` job) the keeper runs on
 Postgres, so tests that open the keeper's SQLite file directly cannot run and are
 left out; the contract tests that read the SQLite file are deselected by name (the
-frozen suite stays untouched; ``tests/test_keeper_pg_parity.py`` checks the same
-chain through the adapter).
+frozen suite stays untouched).  Their coverage on Postgres: ``tests/test_keeper_http_events.py``
+re-checks the chain over HTTP (head after each write == sha256(previous head + event)) plus
+``admin verify``, and ``tests/test_keeper_pg_parity.py`` compares every (seq, hash) pair and the
+head against SQLite through the adapter.
 """
 import os
 import sys
