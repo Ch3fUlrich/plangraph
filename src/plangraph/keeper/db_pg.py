@@ -221,8 +221,16 @@ class PgConnection:
 
     @property
     def in_transaction(self) -> bool:
-        from psycopg import pq
-        return self._raw.info.transaction_status != pq.TransactionStatus.IDLE
+        return int(self._raw.info.transaction_status) != 0     # pq.TransactionStatus.IDLE
+
+    def commit(self):
+        """``sqlite3.Connection.commit``: end an open transaction, else nothing."""
+        if self.in_transaction:
+            self._raw.execute("COMMIT")
+
+    def rollback(self):
+        if self.in_transaction:
+            self._raw.execute("ROLLBACK")
 
     def close(self):
         if self._open:

@@ -16,8 +16,10 @@ if str(_SRC) not in sys.path:
 
 _PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 
-#: contract tests that dump/copy ``keeper.db`` through the stdlib sqlite3 module.
+#: tests that read the SQLite file itself (contract: dump/copy ``keeper.db`` via stdlib sqlite3).
 _READS_SQLITE_FILE = {
+    "tests/test_keeper_brief.py::test_brief_stats_reports_median_and_p90",   # opens the file mode=ro
+    "tests/test_keeper_cli.py::test_cli_admin_init_add_principal_verify",    # inspects the db file
     "tests/contract/test_events.py::test_chain_verifies_from_outside",
     "tests/contract/test_events.py::test_event_payload_and_actor_attribution",
     "tests/contract/test_events.py::test_admin_verify_passes_and_flags_tampering",

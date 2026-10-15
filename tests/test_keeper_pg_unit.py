@@ -208,3 +208,25 @@ def test_admin_migrate_on_sqlite(tmp_path, monkeypatch, capsys):
     assert cli.main(["--config", str(cfg), "admin", "init"]) == 0
     assert cli.main(["--config", str(cfg), "admin", "migrate"]) == 0
     assert "schema up to date" in capsys.readouterr().out
+
+
+class _FakeRaw:
+    """Just enough of a psycopg connection to drive PgConnection's transaction control."""
+
+    def __init__(self, status):
+        self.sent = []
+        self.info = type("Info", (), {"transaction_status": status})()
+
+    def execute(self, sql, params=None):
+        self.sent.append(sql)
+
+
+def test_commit_and_rollback_only_when_a_transaction_is_open():
+    idle = db_pg.PgConnection(_FakeRaw(0), "k_x")
+    idle.commit()
+    idle.rollback()
+    assert idle._raw.sent == []
+    busy = db_pg.PgConnection(_FakeRaw(2), "k_x")
+    busy.commit()
+    busy.rollback()
+    assert busy._raw.sent == ["COMMIT", "ROLLBACK"]
