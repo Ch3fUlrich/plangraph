@@ -244,6 +244,8 @@ def fold(events):
             item["kind"] = payload.get("kind", item["kind"])
             item["wait"] = payload.get("wait", item["wait"])
             item["operator"] = payload.get("operator", item["operator"])
+        elif kind == "state_set":   # W2 set_state: design-3 states, no claim fields touched
+            item["state"] = payload.get("state", item["state"])
         elif kind == "run_recorded":
             _fold_run(item, payload)
         elif kind == "evidence_added":

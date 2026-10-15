@@ -13,6 +13,10 @@ from __future__ import annotations
 
 from . import auth, events
 from .errors import Refused
+from .schema import STATES
+
+#: every live state (the design-3 ones included); done/cancelled are final.
+_CANCELLABLE = tuple(s for s in STATES if s not in ("done", "cancelled"))
 
 
 class VerbsMixin:
@@ -256,7 +260,7 @@ class VerbsMixin:
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         self._may_manage(principal, item["project"])
-        if item["state"] not in ("open", "claimed", "in_review"):
+        if item["state"] not in _CANCELLABLE:
             raise Refused("bad_state", f"{key} is {item['state']}")
         before = self._all_items()
         # Cancelling deliberately dangles dependents; that is the one new code

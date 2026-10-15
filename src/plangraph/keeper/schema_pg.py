@@ -10,6 +10,9 @@ Dialect choices: every TEXT column is ``COLLATE "C"`` (SQLite BINARY ordering, s
 in Python over canonical JSON); ``events.seq`` and ``run_tokens.id`` carry no
 sequence (the store assigns them, so a rolled-back write never leaves a gap).
 
+Migration 2 adds the design-3 tables (cards, attempts, decisions, questions, answers,
+budget) and the append-only triggers on attempts, decisions and answers.
+
 A later change appends a new ``Migration`` to ``MIGRATIONS``; never edit one that
 shipped.  ``db_pg.migrate`` applies the pending ones under an advisory lock.
 """
@@ -17,6 +20,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from .schema import EXIT_CLASSES, WINDOW_CLASSES
 
 __all__ = ["Migration", "MIGRATIONS", "LATEST", "parse_tables", "table_bodies",
            "BOOTSTRAP"]
@@ -283,7 +288,114 @@ CREATE TRIGGER trg_outbox_seen_append_only_delete BEFORE DELETE ON outbox_seen
     FOR EACH ROW EXECUTE FUNCTION pgk_reject('outbox_seen is append-only');
 """
 
-MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),)
+def _in(values):
+    return ",".join(f"'{v}'" for v in values)
+
+
+# Design-3 tables (SQLite schema v10, ``schema.DESIGN3_DDL``).  Same columns in the
+# same order; INTEGER -> BIGINT, REAL -> DOUBLE PRECISION; ids are assigned by the
+# store (MAX(id)+1 inside the write lock), like ``run_tokens``.
+_V2 = f"""
+CREATE TABLE cards (
+    key             TEXT COLLATE "C" PRIMARY KEY REFERENCES items(key),
+    outcome         TEXT COLLATE "C" NOT NULL,
+    read_set        TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    write_set       TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    exports         TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    forbid_paths    TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    check_cmd       TEXT COLLATE "C",
+    smoke_checks    TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    heldout_check   TEXT COLLATE "C",
+    window_class    TEXT COLLATE "C" CHECK (window_class IN ({_in(WINDOW_CLASSES)})),
+    risk_tags       TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    estimate_tokens BIGINT,
+    updated_at      TEXT COLLATE "C"
+);
+
+CREATE TABLE attempts (
+    id           BIGINT PRIMARY KEY,
+    key          TEXT COLLATE "C" NOT NULL REFERENCES items(key),
+    n            BIGINT NOT NULL,
+    harness      TEXT COLLATE "C",
+    model        TEXT COLLATE "C",
+    combo        TEXT COLLATE "C",
+    class        TEXT COLLATE "C",
+    started_at   TEXT COLLATE "C",
+    ended_at     TEXT COLLATE "C",
+    exit_class   TEXT COLLATE "C" NOT NULL CHECK (exit_class IN ({_in(EXIT_CLASSES)})),
+    tokens_in    BIGINT,
+    tokens_out   BIGINT,
+    cost         DOUBLE PRECISION,
+    run_id       TEXT COLLATE "C",
+    workflow_id  TEXT COLLATE "C",
+    log_ref      TEXT COLLATE "C",
+    UNIQUE (key, n)
+);
+CREATE INDEX idx_attempts_key ON attempts(key);
+
+CREATE TABLE decisions (
+    id      TEXT COLLATE "C" PRIMARY KEY,
+    ts      TEXT COLLATE "C" NOT NULL,
+    actor   TEXT COLLATE "C",
+    kind    TEXT COLLATE "C" NOT NULL CHECK (kind IN ('operator','judge')),
+    text    TEXT COLLATE "C" NOT NULL,
+    closes  TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    waives  TEXT COLLATE "C" NOT NULL DEFAULT '[]'
+);
+
+CREATE TABLE questions (
+    id             BIGINT PRIMARY KEY,
+    key            TEXT COLLATE "C" NOT NULL REFERENCES items(key),
+    text           TEXT COLLATE "C" NOT NULL,
+    default_answer TEXT COLLATE "C",
+    deadline       TEXT COLLATE "C",
+    risk_tags      TEXT COLLATE "C" NOT NULL DEFAULT '[]',
+    state          TEXT COLLATE "C" NOT NULL DEFAULT 'open'
+                   CHECK (state IN ('open','answered','timeout')),
+    created_at     TEXT COLLATE "C" NOT NULL
+);
+CREATE INDEX idx_questions_key ON questions(key);
+
+CREATE TABLE answers (
+    question_id BIGINT PRIMARY KEY REFERENCES questions(id),
+    ts          TEXT COLLATE "C" NOT NULL,
+    actor       TEXT COLLATE "C",
+    text        TEXT COLLATE "C" NOT NULL,
+    source      TEXT COLLATE "C" NOT NULL CHECK (source IN ('answer','question_timeout'))
+);
+
+CREATE TABLE budget (
+    provider TEXT COLLATE "C" NOT NULL,
+    day      TEXT COLLATE "C" NOT NULL,
+    tokens   BIGINT NOT NULL DEFAULT 0,
+    cost     DOUBLE PRECISION NOT NULL DEFAULT 0,
+    meter    DOUBLE PRECISION,
+    PRIMARY KEY (provider, day)
+);
+
+-- attempts, decisions and answers are append-only.
+CREATE TRIGGER trg_attempts_append_only_update BEFORE UPDATE ON attempts
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('attempts are append-only');
+CREATE TRIGGER trg_attempts_append_only_delete BEFORE DELETE ON attempts
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('attempts are append-only');
+CREATE TRIGGER trg_attempts_append_only_truncate BEFORE TRUNCATE ON attempts
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('attempts are append-only');
+CREATE TRIGGER trg_decisions_append_only_update BEFORE UPDATE ON decisions
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('decisions are append-only');
+CREATE TRIGGER trg_decisions_append_only_delete BEFORE DELETE ON decisions
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('decisions are append-only');
+CREATE TRIGGER trg_decisions_append_only_truncate BEFORE TRUNCATE ON decisions
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('decisions are append-only');
+CREATE TRIGGER trg_answers_append_only_update BEFORE UPDATE ON answers
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('answers are append-only');
+CREATE TRIGGER trg_answers_append_only_delete BEFORE DELETE ON answers
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('answers are append-only');
+CREATE TRIGGER trg_answers_append_only_truncate BEFORE TRUNCATE ON answers
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('answers are append-only');
+"""
+
+MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
+              Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

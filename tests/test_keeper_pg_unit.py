@@ -153,9 +153,13 @@ def _sqlite_tables():
     return out, idx, trg
 
 
+def _all_pg_ddl():
+    return "\n".join(m.sql for m in schema_pg.MIGRATIONS)
+
+
 def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
     tables, indexes, triggers = _sqlite_tables()
-    ddl = schema_pg.MIGRATIONS[0].sql
+    ddl = _all_pg_ddl()
     pg_tables = schema_pg.parse_tables(ddl)
     for name, cols in tables.items():
         assert name in pg_tables, name
@@ -174,8 +178,25 @@ def test_migrations_are_versioned_contiguously():
     assert schema_pg.LATEST == versions[-1]
 
 
+def test_design3_tables_are_in_both_schemas():
+    tables, _, triggers = _sqlite_tables()
+    new = {"cards", "attempts", "decisions", "questions", "answers", "budget"}
+    assert new <= set(tables)
+    assert new <= set(schema_pg.parse_tables(schema_pg.MIGRATIONS[1].sql))
+    assert not new & set(schema_pg.parse_tables(schema_pg.MIGRATIONS[0].sql))
+    for table in ("attempts", "decisions", "answers"):
+        for verb in ("update", "delete"):
+            assert f"trg_{table}_append_only_{verb}" in triggers
+
+
+def test_pg_exit_and_window_checks_match_sqlite():
+    sql = schema_pg.MIGRATIONS[1].sql
+    for value in schema.EXIT_CLASSES + schema.WINDOW_CLASSES:
+        assert f"'{value}'" in sql and f"'{value}'" in schema.DESIGN3_DDL
+
+
 def test_pg_text_columns_use_binary_collation():
-    ddl = schema_pg.MIGRATIONS[0].sql
+    ddl = _all_pg_ddl()
     for name, body in schema_pg.table_bodies(ddl).items():
         for line in body.splitlines():
             if re.match(r"\s+\w+\s+TEXT\b", line):
