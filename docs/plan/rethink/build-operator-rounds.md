@@ -8,3 +8,7 @@
 - Runner host: "Docker desktop but no cpu  cap an 32 gb RAM cap. Additionally do not use github runner anymore for now. Also are there other ci runners freely available? Those can be uses in the future for public repositories like the plangraph"
 - Repos: "Use workstation because of speed for now until assumed the repos public and no faster ci is available"
 - Parallel CI (xdist + pip cache): "Yes, now (Recommended)"
+
+## 2026-10-15 ~19:02Z AskUserQuestion (L2 cap), operator verbatim
+- "What do you more an with "no free L2 slots". There should be plenty available"
+- Answer: "Rais cap on both machines. Coding vm limited by 1gb free ram and workstation by 12gb free ram"
