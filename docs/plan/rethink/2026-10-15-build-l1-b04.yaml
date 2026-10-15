@@ -6,6 +6,7 @@
 batch: 2026-10-15-build-l1-b04
 principal: routing-00
 source: /home/s/code/routing-worktrees/rethink-setup/docs/reports/2026-10-15-rethink-setup-design.md
+source_sha256: 1958911c9a9c4b3a301096e0e296a887c75e0bcaeaa5d94cee27a6d550a2309e
 ops:
 - op: create
   item:
@@ -20,7 +21,7 @@ ops:
     priority: 1
     track: RETHINK
     depends_on: [plangraph:RT-P1-WORKER-CORE, plangraph:RT-P1-TEMPORAL-SPIKE]
-    title: 'Rust worker on Temporal (code): workflow + activities over worker-core, opencode adapter, advisory-lock merge with recheck, build ids'
+    title: 'Rust worker on Temporal (code): workflow, opencode adapter, lock merge, build ids'
     done_criteria: Temporal workflow per card attempt using worker-core (worktree, checks, confinement, probe, exit classes, budgets, janitor); opencode harness adapter; advisory-lock merge with base recheck; worker build ids; carry-over from worker-core R2 (fresh worktree on promotion, 24 h wait cap -> park, probe_fail attempt cap, symlink escape via sandbox); keeper glue behind a trait with an HTTP-contract stub; workflow replay tests + an end-to-end test against a local Temporal dev server in CI; 2 seats incl. non-Claude
     description: 'Split from plangraph:RT-P1-WORKER (design 4.5/4.6, 14a). Live part (WSL2 worker against the deployed frontend, real keeper) stays on RT-P1-WORKER. Source: D-1285.'
   - project: plangraph
@@ -34,7 +35,7 @@ ops:
     priority: 1
     track: RETHINK
     depends_on: [plangraph:RT-P1-WORKER-CORE]
-    title: 'Phase-review harness (code): cross-family reviewer activity, JSON verdict pass/fix/halt'
+    title: 'Phase-review harness (code): cross-family reviewer, JSON verdict pass/fix/halt'
     done_criteria: reviewer activity (tool-less gateway call + qodercli leg) with family pick != writer family; prompt assembly with vector block + answer-shape tail; JSON verdict pass/fix/halt parser (finish_reason, test_gaming) compatible with tools/seat_verdict.py; unit tests with recorded replies; 1 seat
     description: 'Split from plangraph:RT-P1-REVIEW so the harness exists when RT-P1-WORKER lands. Source: D-1285 design 4, 14a.'
   - project: plangraph
@@ -48,7 +49,7 @@ ops:
     priority: 1
     track: RETHINK
     depends_on: [plangraph:RT-P1-TEMPORAL-SPIKE]
-    title: 'Projector (code): Temporal history -> keeper attempts/events, watermark, rebuild, nightly reconciler'
+    title: 'Projector (code): Temporal history -> keeper attempts/events, rebuild, reconciler'
     done_criteria: projector reads workflow history and writes attempts + keeper events idempotently with a watermark; full rebuild from history gives identical rows; reconciler flags drift; tests against a local Temporal dev server + Postgres CI service; starts after KEEPER-PG-CODE W2 tables are on main; 2 seats incl. non-Claude
     description: 'Split from plangraph:RT-P1-PROJECTOR (design 3, 4). Live part stays on the parent. Source: D-1285.'
   - project: plangraph
@@ -62,7 +63,7 @@ ops:
     priority: 2
     track: RETHINK
     depends_on: []
-    title: 'Planner kit (code): card schema + import, readiness gate, keeper-side routing (leg order D25), context packs'
+    title: 'Planner kit (code): card schema, readiness gate, keeper routing (D25), context packs'
     done_criteria: card schema (design 3 cards fields) + import from batch YAML; readiness gate (check present, write sets disjoint in a running phase, risk tags); keeper-side routing picks harness/leg by class and D25 leg order (qwen-3.8-flash via qodercli first); context pack builder; tests on SQLite and Postgres CI; starts after KEEPER-PG-CODE W2 tables are on main; 1 seat
     description: 'Split from plangraph:RT-P1-PLANNER-KIT (design 4, 5, 11 P1.6). Jev shadow hook + planning skill rewrite stay on the parent. Source: D-1285.'
   - project: plangraph

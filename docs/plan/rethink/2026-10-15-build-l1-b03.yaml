@@ -4,9 +4,11 @@
 #   891 GB disk, Docker Desktop 29.7.2 (no docker inside the WSL distro).
 # Operator: runner on Docker Desktop, no CPU cap, 32 GB RAM cap; stop using GitHub-hosted runners for now; workstation for
 #   speed until repos go public / faster CI exists. Note: AutoOS, Tools, chaptarr, OmniRoute, great-wiki are PUBLIC -> fork-PR guard.
-batch: 2026-10-15-build-l1-b03
+# fixes-L1 (acting plangraph owner): source_sha256 added + 2 titles length-fixed for keeper cap 80 (format-only).
+batch: 2026-10-15-build-l1-b03r2
 principal: routing-00
 source: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/build-operator-rounds.md
+source_sha256: e0720679ee0b98e1c7500349d7263fdabb9b429672529d4e82e4b61ec606c273
 ops:
 - op: create
   item:
@@ -33,7 +35,7 @@ ops:
     estimate_src: plan
     priority: 2
     track: OPS
-    title: 'Workstation GitHub Actions runners on Docker Desktop (ephemeral, no CPU cap, 32 GB RAM cap)'
+    title: 'Workstation Actions runners on Docker Desktop (ephemeral, no CPU cap, 32 GB RAM)'
     done_criteria: ephemeral self-hosted runner containers on workstation Docker Desktop (no reboot, no WSL feature change), label workstation, mem limit 32 GB, no CPU limit, restart policy; registered per repo (user account has no org runner pool) for plangraph first, then the other active repos; service containers (postgres) work for jobs; registration secret (PAT or registration token) operator-owned per D-944, never in a repo; public repos run workstation jobs only for push/same-repo PRs (fork PRs never reach the host); compose/config in AutoOS; a plangraph run green on it
     description: 'Operator 2026-10-15 18:55Z. Live step on the workstation under a GO. Docker socket inside a runner = host-level control: private repos fine; public repos need the fork guard.'
   - project: plangraph
@@ -47,6 +49,26 @@ ops:
     priority: 2
     track: RETHINK
     depends_on: [autoos:CI-WORKST-RUNNER]
-    title: 'plangraph workflows run on the workstation runner (no GitHub-hosted fallback for now)'
+    title: 'plangraph workflows run on the workstation runner (no GitHub-hosted fallback)'
     done_criteria: all plangraph workflow jobs runs-on [self-hosted, workstation]; CI green there incl. pytest-postgres; duration before/after recorded
     description: 'Operator: "do not use github runner anymore for now". Other repos switch under their owning L1 (routing assigns).'
+- op: edit
+  key: routing:RT-P1
+  fields:
+    depends_on:
+    - autoos:RT-P1-CLASS-COMBOS
+    - plangraph:RT-P1-CONTRACT
+    - plangraph:RT-P1-E2E
+    - plangraph:RT-P1-GOVERNOR
+    - plangraph:RT-P1-INBOX
+    - plangraph:RT-P1-KEEPER-PG
+    - plangraph:RT-P1-PLANNER-KIT
+    - plangraph:RT-P1-PROJECTOR
+    - plangraph:RT-P1-REVIEW
+    - plangraph:RT-P1-WORKER
+    - routing:RT-P0
+    - server:RT-P1-PG-DEPLOY
+    - server:RT-P1-TEMPORAL-CHECK
+    - plangraph:CI-PARALLEL
+    - plangraph:CI-RUNS-ON-WORKST
+    - autoos:CI-WORKST-RUNNER
