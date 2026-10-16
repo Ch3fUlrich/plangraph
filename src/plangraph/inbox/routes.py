@@ -7,8 +7,10 @@ Temporal signal for an already answered (or timed-out) question.  An answer send
 its signal only after the store commit, and a signal failure never fails or rolls
 back the answer.  The keeper runs no deadline timer: that lives in Temporal.
 
-``GET /v1/alarms`` lists the open (uncleared, unacknowledged) projector alarms and
-``POST /v1/ack_alarm`` acknowledges one for good (router or system only).  The
+``GET /v1/alarms`` lists the open (uncleared, unacknowledged) projector alarms the
+caller may see — the same project scoping as ``GET /v1/questions`` (keyless alarms
+are router/system/reader only) — and ``POST /v1/ack_alarm`` acknowledges one for
+good (router or system only).  The
 acknowledgement *is* the audit row: the successful ``ack_alarm`` ``audit_log`` entry
 keyed ``alarm:<id>`` that ``Store._run`` writes on success, so there is no separate
 acks table and no schema change; a refusal is audited ``ok=0`` and hides nothing.
@@ -29,7 +31,7 @@ READ_VERBS = {"questions", "alarms"}
 WRITE_VERBS = {"ask_question", "answer_question", "resignal_question", "ack_alarm"}
 
 _STATES = ("open", "answered", "timeout", "all")
-#: Roles that see every project's questions; all others see their own projects.
+#: Roles that see every project's questions and alarms; all others see their own.
 _SEES_ALL = ("router", "system", "reader")
 _SELECT = ("SELECT q.id, q.key, q.text, q.default_answer, q.deadline, q.risk_tags,"
            " q.state, q.created_at, a.ts AS a_ts, a.actor AS a_actor,"
@@ -132,18 +134,20 @@ def _age_s(store, stamp, moment) -> int | None:
 
 
 def _alarms(store, principal) -> dict:
-    """Every open, unacknowledged projector alarm, oldest first."""
+    """The open, unacknowledged projector alarms *principal* may see, oldest first."""
     def fn(now):
         try:
             rows = store.conn.execute(_ALARMS).fetchall()
         except _UNREADABLE as exc:      # table missing or unreadable: named, never silent
             return {"alarms": [], "error": f"alarms unreadable: {type(exc).__name__}"}
         moment = store.now()
+        allowed = None if principal.role in _SEES_ALL else set(principal.projects or [])
         return {"alarms": [{"id": r["id"], "key": r["key"], "kind": r["kind"],
                             "workflow_id": r["workflow_id"], "detail": r["detail"],
                             "raised_at": r["raised_at"],
                             "age_s": _age_s(store, r["raised_at"], moment)}
-                           for r in rows]}
+                           for r in rows
+                           if allowed is None or _project(r["key"]) in allowed]}
 
     return store._run(principal, "alarms", None, fn)
 

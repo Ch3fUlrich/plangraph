@@ -46,8 +46,12 @@ stored answer and returns `{"question_id", "signal": {...}}`. Audited as
 
 ## `GET /v1/alarms`
 
-Any authenticated principal, audited as `alarms` like the other reads. Lists the
-projector alarms that are still open: `projector_alarms` rows with
+Any authenticated principal, audited as `alarms` like the other reads, with the
+same visibility rule as `GET /v1/questions`: `router`, `system` and `reader` see
+every project's alarms, other roles only the alarms whose `key` project (the part
+before the first `:`) is in their principal's projects — so a keyless alarm (an
+empty `key`, which has no project) is visible to `router`, `system` and `reader`
+only. Lists the projector alarms that are still open: `projector_alarms` rows with
 `cleared_at IS NULL` that have no successful `ack_alarm` audit row
 (`audit_log.action = 'ack_alarm'`, `ok = 1`, `key = 'alarm:<id>'`), ordered by `id`.
 

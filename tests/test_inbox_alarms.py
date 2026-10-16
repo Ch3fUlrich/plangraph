@@ -68,10 +68,22 @@ def test_lists_open_alarms_with_key_kind_and_age(doors, w):
     assert row["detail"] == "drifted" and row["age_s"] == 45
 
 
-def test_every_authenticated_principal_may_read_the_alarms(doors, w):
-    raise_alarm(w)
-    for who in ("router", "system", "reader", "workerA", "l1main"):
-        assert [row["id"] for row in listed(doors, who)["alarms"]] == [1], who
+def test_any_principal_may_read_alarms_but_only_in_its_own_projects(doors, w):
+    raise_alarm(w, alarm_id=1, key="demo:A1")
+    raise_alarm(w, alarm_id=2, key="other:B1")
+    raise_alarm(w, alarm_id=3, key="")                            # keyless alarm
+    for who in ("router", "system", "reader"):                    # _SEES_ALL: all three
+        assert [r["key"] for r in listed(doors, who)["alarms"]] == ["demo:A1", "other:B1", ""], who
+    assert [row["key"] for row in listed(doors, "l1main")["alarms"]] == ["demo:A1"]
+    assert [row["key"] for row in listed(doors, "l1other")["alarms"]] == ["other:B1"]
+    assert [row["key"] for row in listed(doors, "reviewer")["alarms"]] == ["demo:A1"]
+    assert [row["key"] for row in listed(doors, "workerA")["alarms"]] == ["demo:A1"]
+
+
+def test_a_principal_without_the_alarm_project_sees_none(doors, w):
+    raise_alarm(w, alarm_id=1, key="demo:A1")                     # a demo-only alarm
+    assert listed(doors, "l1other")["alarms"] == []               # projects ['other']: none match
+    assert [row["id"] for row in listed(doors, "l1main")["alarms"]] == [1]
 
 
 # ------------------------------------------------------------------- write
@@ -90,6 +102,7 @@ def test_ack_is_router_or_system_only(doors, w):
         status, body = ack(doors, 1, who)
         assert (status, body["error"]) == (403, "forbidden"), who
     assert [row["id"] for row in listed(doors)["alarms"]] == [1]    # the refusal stored nothing
+    assert ack(doors, 1, "router") == (200, {"alarm_id": 1, "acked": True})
     assert ack(doors, 1, "system") == (200, {"alarm_id": 1, "acked": True})
 
 
