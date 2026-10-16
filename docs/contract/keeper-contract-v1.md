@@ -89,13 +89,8 @@ Malformed client input must never produce `500`.
 
 | verb | who may call it |
 | --- | --- |
-<<<<<<< HEAD
-| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default) |
-| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
-=======
 | `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default, no cross-project `under`) |
-| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review` | router |
->>>>>>> 9e3ed036 (WIP(autoos-agent): uncommitted at exit rc=1)
+| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
 | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
 | `claim` | l1 or worker scoped to the item's project |
 | `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only) |
