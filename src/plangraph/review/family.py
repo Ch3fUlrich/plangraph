@@ -1,4 +1,8 @@
-"""Cross-family review leg selection (stdlib only)."""
+"""Cross-family review leg selection (stdlib only).
+
+The only family ban is reviewer family == writer family (D-1533): any
+model family may review, and Claude is one leg among several.
+"""
 from __future__ import annotations
 
 import re
@@ -6,15 +10,16 @@ from dataclasses import dataclass
 
 __all__ = [
     "FAMILIES",
+    "HIGH_RISK",
     "Leg",
     "LEGS",
-    "NEVER",
     "FamilyError",
     "NoEligibleLeg",
     "FleetFull",
     "model_family",
     "leg_for",
     "pick_legs",
+    "families_for_risk",
     "check_cross_family",
 ]
 
@@ -24,9 +29,12 @@ FAMILIES = (
     (r"claude|sonnet|opus|haiku", "anthropic"),
 )
 
+# Risk tags that need two reviewer families at phase end.
+HIGH_RISK = frozenset({"auth", "secrets", "live-step", "public-release", "high"})
+
 
 class FamilyError(ValueError):
-    """Reviewer family unusable (unknown, ambiguous, barred, or writer's)."""
+    """Reviewer family unusable (unknown, ambiguous, or writer's)."""
 
 
 class NoEligibleLeg(ValueError):
@@ -47,12 +55,14 @@ class Leg:
     family: str
 
 
+# Order is preference order. No leg is required: pick_legs skips the
+# writer's family and any leg marked down.
 LEGS = (
     Leg("openai", "gateway", "ovh/gpt-oss-120b", "openai"),
     Leg("qwen", "qoder", "Qwen3.8-Flash", "alibaba"),
+    Leg("anthropic", "gateway", "claude-sonnet-4-5", "anthropic"),
+    Leg("opencode", "opencode", "opencode/deepseek-v3", "deepseek"),
 )
-
-NEVER = ("anthropic",)
 
 
 def model_family(model: str | None) -> str | None:
@@ -90,19 +100,19 @@ def _norm(value: object) -> str:
 
 def pick_legs(writer_family: str, *, need: int = 1,
               down: frozenset[str] = frozenset(), fleet_busy: int = 0,
-              fleet_cap: int = 4) -> list[Leg]:
+              fleet_cap: int = 4, legs: tuple[Leg, ...] | None = None,
+              ) -> list[Leg]:
     """Pick up to `need` legs of distinct families unlike the writer's."""
     if fleet_busy + need > fleet_cap:
         raise FleetFull(
             f"fleet full: busy={fleet_busy} need={need} cap={fleet_cap}")
     writer = _norm(writer_family)
-    barred = {_norm(item) for item in NEVER}
     offline = {_norm(item) for item in (down or frozenset())}
     seen: set[str] = set()
     eligible: list[Leg] = []
-    for leg in LEGS:
+    for leg in (LEGS if legs is None else legs):
         fam = _norm(leg.family)
-        if fam == writer or fam in barred or _norm(leg.name) in offline:
+        if fam == writer or _norm(leg.name) in offline:
             continue
         if fam in seen:
             continue
@@ -115,8 +125,36 @@ def pick_legs(writer_family: str, *, need: int = 1,
     return eligible[:need]
 
 
+def families_for_risk(risk: str | list | tuple | set | frozenset | None,
+                      writer_family: str,
+                      legs: tuple[Leg, ...] | None = None) -> list[str]:
+    """Reviewer families for a risk: 1 (standard) or 2 (high-risk).
+
+    `risk` is one tag or several; any tag in HIGH_RISK needs two distinct
+    families, both unlike the writer's. Raises NoEligibleLeg when the legs
+    cannot supply that many.
+    """
+    if risk is None or isinstance(risk, str):
+        tags = {_norm(risk)}
+    else:
+        tags = {_norm(item) for item in risk}
+    need = 2 if tags & HIGH_RISK else 1
+    writer = _norm(writer_family)
+    found: list[str] = []
+    for leg in (LEGS if legs is None else legs):
+        fam = _norm(leg.family)
+        if fam != writer and fam not in found:
+            found.append(fam)
+    if len(found) < need:
+        raise NoEligibleLeg(
+            f"risk {sorted(tags)} needs {need} reviewer famil"
+            f"{'y' if need == 1 else 'ies'} unlike writer {writer_family!r}; "
+            f"only {len(found)} available")
+    return found[:need]
+
+
 def check_cross_family(writer_family: str, reviewer_model: str) -> str:
-    """Reviewer family for a model id, refusing same/barred/unknown."""
+    """Reviewer family for a model id, refusing same/unknown."""
     if isinstance(reviewer_model, str) and _is_gateway_qwen(reviewer_model):
         raise FamilyError(
             f"model {reviewer_model!r} is not eligible (qwen is qoder-only)")
@@ -124,8 +162,6 @@ def check_cross_family(writer_family: str, reviewer_model: str) -> str:
     if family is None:
         raise FamilyError(
             f"unknown or ambiguous family for model {reviewer_model!r}")
-    if _norm(family) in {_norm(item) for item in NEVER}:
-        raise FamilyError(f"family {family!r} never reviews")
     if _norm(family) == _norm(writer_family):
         raise FamilyError(
             f"family {family!r} is the writer family {writer_family!r}")

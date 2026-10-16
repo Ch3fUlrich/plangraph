@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -27,12 +28,19 @@ __all__ = [
     "argv",
     "parse_output",
     "classify",
+    "is_rate_limited",
     "run",
     "write_seat_dir",
 ]
 
 DEFAULT_MODEL = "Qwen3.8-Flash"
 DEFAULT_TIMEOUT = 900
+_RATE_LIMIT = re.compile(r"rate[ _-]?limit|\b429\b", re.I)
+
+
+def is_rate_limited(text: str | None) -> bool:
+    """True when stderr text mentions a rate limit or HTTP 429."""
+    return bool(_RATE_LIMIT.search(text or ""))
 
 
 def _utc_now() -> str:
@@ -134,6 +142,7 @@ class QoderResult:
     finished: str
     error: str | None
     usage: dict | None = field(default=None)
+    rate_limited: bool = False
 
     def to_evidence(self) -> dict:
         """Evidence fields for this leg (tokens only when usage present)."""
@@ -182,16 +191,24 @@ def run(prompt: str, *, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEO
     if isinstance(stdout, bytes):
         stdout = stdout.decode("utf-8", "replace")
     parsed = parse_output(stdout)
+    stderr = getattr(completed, "stderr", "") or ""
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", "replace")
+    finish = classify(parsed)
+    limited = is_rate_limited(stderr) and (
+        finish != "stop" or getattr(completed, "returncode", 0) not in (0, None))
     usage = parsed.get("usage") or None
     if isinstance(usage, dict) and not usage:
         usage = None
     return QoderResult(rc=getattr(completed, "returncode", None),
                        text=parsed["text"],
-                       finish_reason=classify(parsed),
+                       finish_reason=finish,
                        num_turns=parsed["num_turns"],
                        is_error=parsed["is_error"], model=model,
                        prompt_sha256=sha, started=started,
-                       finished=_utc_now(), error=None, usage=usage)
+                       finished=_utc_now(),
+                       error="rate limit" if limited else None,
+                       usage=usage, rate_limited=limited)
 
 
 def write_seat_dir(out_dir: Path, result: QoderResult,
