@@ -4,6 +4,7 @@
 
 pub mod activities;
 pub mod card;
+pub mod tls;
 
 use serde::{Deserialize, Serialize};
 

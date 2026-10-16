@@ -55,7 +55,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let runtime = Runtime::from_current_tokio(Default::default())?;
-    let conn = Connection::connect(ConnectionOptions::new(Url::from_str(&addr)?).build()).await?;
+    let tls = pg_worker::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?;
+    let conn = Connection::connect(
+        ConnectionOptions::new(Url::from_str(&addr)?)
+            .maybe_tls_options(tls)
+            .build(),
+    )
+    .await?;
     let client = Client::new(conn, ClientOptions::new(namespace).build())?;
 
     let builder = WorkerOptions::new(TASK_QUEUE)
