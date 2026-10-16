@@ -1,0 +1,62 @@
+**V1 data loss / ordering in copy**  
+*File:* src/plangraph/keeper/copy_to_pg.py *Function:* `_copy_table` / `_apply`  
+- `_copy_table` selects rows `ORDER BY` the primary‑key columns (or `rowid`), copies in batches preserving order.  
+- No rows are dropped; `_count` checks per‑table counts after the transaction; any mismatch aborts with rollback.  
+- Triggers are disabled before copy and re‑enabled after; `_triggers_all_on` validates they are on.  
+- The runbook’s sections 4‑5 invoke the tool in “dry‑run” (counts only) and “apply” (full copy) and then re‑check counts, covering all safety checks.  
+**Finding:** No defect.
+
+---
+
+**V2 hash‑chain continuity across backends**  
+*File:* src/plangraph/keeper/copy_to_pg.py *Function:* `run` (calls `events.verify_chain` on source and on target)  
+*File:* keeper-pg-cutover.md *Section:* 5.2 “Chain” and the copy‑to‑pg output (head seq/hash)  
+- The tool verifies the full events chain on the source before copying and again on the target after copy; any broken chain aborts.  
+- The runbook also runs `admin verify` on the PG keeper, which performs the same verification, and compares the head hash printed by the tool.  
+**Finding:** No defect; chain continuity is fully validated.
+
+---
+
+**V3 freeze completeness**  
+*File:* keeper-pg-cutover.md *Section:* 2 “Freeze (T0; writers pause, order matters)”  
+- All systemd units that write (`plangraph-md-sync.timer`, `.path`, `.service`, `plangraph-render.timer`, `plangraph-keeper.service`) are stopped.  
+- The daemon’s internal threads (CI‑evidence/reaper) run inside `plangraph-keeper.service`; stopping the service halts them.  
+- The lock‑file check (`fuser`) guards any stray SQLite holder.  
+- Clients are expected to queue writes in their outbox; no additional writer processes are documented.  
+**Finding:** No defect; the freeze stops every known writer.
+
+---
+
+**V4 rollback validity**  
+*File:* keeper-pg-cutover.md *Section:* 7 “48 h window and rollback”  
+- **Before any PG write:** stops the PG‑backed keeper, removes the drop‑in, restores file permissions, deletes `*.wal`/`*.shm`, reloads systemd and restarts the original SQLite keeper – exactly the pre‑freeze state.  
+- **After PG writes:** acknowledges that the SQLite snapshot lacks those rows, gives explicit loss‑window policy and manual re‑import instructions.  
+- No leftover files (WAL, SHM) remain; no DDL changes are left behind.  
+**Finding:** No defect; rollback steps are correct for both scenarios.
+
+---
+
+**V5 secrets hygiene**  
+*File:* keeper-pg-cutover.md *Sections:* 0 (log note), 4 (export PG_DSN), 9 (hygiene)  
+- DSNs are stored only in secret files (`<PG_MIGRATOR_DSN_FILE>`, `<PG_RUNTIME_DSN_FILE>`) and exported via `EnvironmentFile=`; the runbook explicitly says “never echo, never in argv”.  
+- The rehearsal log shows the literal `$PG_DSN` placeholder, not the actual value.  
+- The optional row‑hash script receives the DSN via command‑line argument but the value is never printed.  
+**Finding:** No secret leakage.
+
+---
+
+**V6 correctness of commands**  
+*File:* keeper-pg-cutover.md *Relevant commands*  
+- `mkdir -p -m 700 … && python3 -c "import sqlite3; … s.backup(d)"` – valid SQLite backup usage.  
+- `pg --config $LIVE/keeper-pg.json admin copy-to-pg …` – matches `copy_to_pg.run` signature; `--apply` will error correctly if target not empty (demonstrated in rehearsal log).  
+- Per‑table count check via `psql "$PG_DSN" -Atc "select count(*) …"` – correct psql syntax.  
+- Optional row‑digest script: the runbook notes to edit the `search_path` line; the script itself works with `psycopg.connect`.  
+- The glob in `admin verify-snapshot --snapshot $LIVE/backups/pg-cutover-*/plan.snapshot.json` could expand to multiple files if several cutovers exist; however the runbook expects a single latest directory, so in normal use it resolves to one file.  
+**Finding:** No command error that would abort the cutover under the documented usage.
+
+---
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched all provided source files and documentation for test‑only conditionals, mocks, or test‑only guards; none were found: 0 hits
+
+VERDICT: pass

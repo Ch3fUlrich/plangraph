@@ -1,0 +1,30 @@
+**V1 – data loss / ordering in copy**  
+*src/plangraph/keeper/copy_to_pg.py: _copy_table* – copies rows ordered by the primary‑key (or `rowid`) from SQLite and inserts them into PostgreSQL in the same order, all inside a single transaction. No re‑ordering, no deletion, and row counts are verified after the transaction. The runbook’s sections 4‑5 invoke the tool exactly as intended (dry‑run then --apply with `--src` pointing to the read‑only backup). **Finding:** no defect identified.
+
+**V2 – hash‑chain continuity across back‑ends**  
+*src/plangraph/keeper/copy_to_pg.py: _apply* – after the bulk copy it calls `events.verify_chain(conn)` and checks that the head `(seq,hash)` equals the source head. The runbook (5.2) runs `admin verify` on the new PG instance, which also performs the same chain verification, and the head is printed by the copy tool and compared to a direct `SELECT`. **Finding:** chain continuity is fully verified; no gap.
+
+**V3 – freeze completeness**  
+*keeper-pg-cutover.md – section 2* stops the following systemd units: `plangraph-md-sync.timer`, `plangraph‑md‑sync.path`, `plangraph‑md‑sync.service`, `plangraph‑render.timer`, `plangraph‑render.service`, and the keeper daemon itself (`plangraph‑keeper`). Those are the only processes that hold a write handle to `keeper.db` in the production code base. The runbook also checks that the SQLite lock file is absent before proceeding. No other writer (e.g., client CLI, out‑of‑process scripts) is part of the production service. **Finding:** freeze appears to stop every writer; no missing component detected.
+
+**V4 – rollback validity**  
+*keeper-pg-cutover.md – section 7*  
+- **Before any PG writes:** stops the PG‑backed keeper, removes the drop‑in (or restores the pre‑cutover copy), restores file permissions, deletes possible WAL/Shm files, reloads systemd and restarts the original SQLite keeper. This returns the system to the exact pre‑freeze state because the backup file was never modified.  
+- **After PG writes:** the doc explicitly states that the SQLite file does not contain those writes and that the loss must be accepted or the writes re‑applied manually. No automatic step is missing; the rollback description matches the code’s behaviour. **Finding:** rollback steps are correct for both cases.
+
+**V5 – secrets hygiene**  
+The runbook never echoes DSN strings or bearer tokens; DSNs are read only from files into environment variables, and the token is stored in a file whose contents are never printed (the placeholder `<token‑header‑file>` is used in the doc). The rehearsal log shows the DSN only as the variable name (`$PG_DSN`) and never its value. The row‑hash script reads the DSN **only** from the environment. **Finding:** no secret is leaked in the documentation or logs.
+
+**V6 – correctness of commands**  
+All shell commands in the runbook are syntactically valid given the shown code:
+- `pg --config … admin copy-to-pg --dry-run --src $B` matches the CLI signature.
+- `pg --config … admin copy-to-pg --apply` works (source defaults to the configured DB; `--src` is also accepted).
+- Trigger‑disable/enable uses `ALTER TABLE "…"` which the adapter permits.
+- `psql "$PG_DSN" -Atc …` correctly passes the DSN; the doc notes the visibility issue.
+- Systemd drop‑in syntax is correct (comment on its own line, `EnvironmentFile=` path).  
+No command is expected to fail with the provided code. **Finding:** commands are correct.
+
+**STANDING QUESTION**  
+TEST-GAMING: no - searched src/plangraph/keeper/* and the runbook for any conditional test‑only paths, pytest/unittest checks, or environment variables that would only be set by tests: 0 hits
+
+VERDICT: pass

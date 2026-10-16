@@ -1,9 +1,0 @@
-{
-  "generated": "2026-10-01T00:00:00Z",
-  "head": null,
-  "items": [
-    {"project": "demo", "id": "A", "key": "demo:A", "title": "Finished prerequisite", "kind": "lane", "track": "T0", "owner": "demo L1", "state": "done", "estimate_h": 2, "depends_on": [], "corrects": null, "priority": 0},
-    {"project": "demo", "id": "B", "key": "demo:B", "title": "Ready via done dep", "kind": "lane", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 3, "depends_on": ["demo:A"], "corrects": null, "priority": 0},
-    {"project": "demo", "id": "GOAL", "key": "demo:GOAL", "title": "Demo goal", "kind": "goal", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 0, "depends_on": ["demo:B"], "corrects": null, "priority": 0}
-  ]
-}

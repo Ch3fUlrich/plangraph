@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/code/plangraph-worktrees/.sessions/pg-prep/qwen6.json",
+      "sha256": "e687ec6d47e58a79a0a2693ec7a3f98abe2af237868b407592ba2fc0a7c37aa9",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "ffd70ee2-20dd-45d5-8141-14cc87cb2768",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "5c11fa9c87494b2788cc1251ec7540705ba359e494f354cc6228ef8b98e5312b"
+}

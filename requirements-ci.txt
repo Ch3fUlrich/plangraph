@@ -1,5 +1,0 @@
-pytest
-pytest-xdist
-pyyaml
-cryptography>=41.0.7
-temporalio

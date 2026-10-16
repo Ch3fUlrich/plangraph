@@ -1,0 +1,75 @@
+=== part /home/s/code/plangraph-worktrees/.sessions/pg-prep/qwen6.json
+Looking at this review carefully across all six vectors, examining copy_to_pg.py against the runbook and rehearsal log.
+
+## V1 Data loss / ordering in copy
+
+**copy_to_pg.run / _apply / _copy_table / _triggers / _advance_identities**
+
+The tool copies 19 tables in dependency order (events first), uses PK-ordered SELECT for source reads, inserts row-by-row in a single transaction with trigger DISABLE/ENABLE around the copy, verifies per-table counts + chain head + full chain, advances identity sequences, then COMMITs. Mismatches trigger rollback via `except BaseException: conn.rollback()`.
+
+For rowid tables (no explicit PK): `_columns` falls back to `["rowid"]` for source ordering. The target INSERT specifies all source columns explicitly; PG stores by its own PK. No row loss — completeness is guaranteed by count check.
+
+Emptiness check (`_apply`): only tests `tables` (those present in source). A fresh `admin migrate` schema has all 19 tables; source backup also has all 19 (sqlite `backup()` API copies schema). Rehearsal confirms 19 tables checked. No defect.
+
+Trigger toggling uses `conn._raw.execute` (bypasses the adapter that blocks DDL). Runs inside the PG transaction; rollback re-enables. The `_triggers_all_on` guard validates post-copy state. Correct.
+
+Batch boundaries (`_BATCH = 500`, `fetchmany`): if remaining rows < 500, `fetchmany` returns them all; next call returns empty list, loop exits. No loss.
+
+Runbook sections 4–5 correctly invoke the tool and its gates match the internal checks. No gap.
+
+## V2 Hash-chain continuity across backends
+
+**copy_to_pg.run: `events.verify_chain(source)`** verifies the source chain before copying. **copy_to_pg._apply**: compares target head via `_head(conn)` to `source_head`, then runs full `events.verify_chain(conn)` on the target, all pre-COMMIT.
+
+**Runbook section 5.2**: `admin verify` on PG (rc=0 confirms full chain integrity), plus an independent PG query for the head matching the printed value.
+
+**Runbook section 5.1b** (optional): rowhash.py covers in-row byte-level differences that counts + head cannot.
+
+Chain head from the source backup IS the live head at freeze time (backup taken post-stop, section 2). No gap.
+
+## V3 Freeze completeness
+
+**Runbook section 2** addresses all identified writers:
+- md-sync: timer, path, and service stopped.
+- render: timer and service stopped.
+- Keeper daemon (hosts CI-evidence + reaper threads): stopped; `is-active` confirms inactive; lock file fuser check adds defense.
+- L1/L2 clients: cannot write when daemon is down; `PG_OUTBOX` queue is replayed post-switch.
+- `plangraph-md-sync-halt.service`: described as a stopper-only unit, correctly left untouched.
+
+`systemctl stop` is synchronous (waits for inactive). The backup's `mode=ro` sqlite connect cannot cause writes or modify WAL/shm on the source. No writer is left.
+
+## V4 Rollback validity
+
+**Before PG writes (section 7):** Stop keeper → remove drop-in (or restore `.pre-pg` backup dir) → `chmod 0600` the sqlite file → `rm -f` wal/shm (defensive; clean stop already checkpointed) → `daemon-reload` + `start` → verify with `unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA` in a clean shell → restart timers. This returns to exact pre-freeze state (sqlite file was never written during freeze). Correct.
+
+**After PG writes:** Explicitly acknowledges loss window, lists the query to identify divergent events, and offers two recovery options. The boundary seq is recorded at switch time (section 6.5). Correct.
+
+**Abort during steps 4–5 (section 7 last bullet):** Drops the populated schema (PG owner action) and restarts the keeper on unchanged sqlite config. WAL/shm: the backup API with `mode=ro` on the source doesn't create wal/shm beside `$LIVE/keeper.db`; the original clean stop checkpointed them. No issue.
+
+No residual artifacts: the drop-in is removed or the directory is restored; timers restart; the config (`$KJ`) was never modified.
+
+## V5 Secrets hygiene
+
+Header explicitly states "DSNs and secret files are named, never printed." Sections reference `<PG_MIGRATOR_DSN_FILE>`, `<PG_RUNTIME_DSN_FILE>` by angle-bracket names only. Section 4 instructs "never echo, never in argv." Section 7 provides the `psql "$PG_DSN"` process-table warning with libpq env alternative.
+
+Rehearsal log: `$PG_DSN` appears as a shell variable name (not value), with trust-auth note for the throwaway container. The old argv form at line 29 is annotated as historical and superseded. The chain hash `0d6f6305...5eb9` is public integrity data, not a secret. No leaks.
+
+## V6 Correctness of commands
+
+- Section 2 backup one-liner: `sqlite3.connect('file:...?mode=ro', uri=True)` + `s.backup(d)` is valid Python/SQLite backup API. Path under backup dir created by preceding `mkdir -p -m 700`. Correct.
+- Section 4: config `keeper-pg.json` with `"backend":"postgres","pg_schema":"keeper"` matches code expectations. `opts["backend"] = "postgres"` in `run()` ensures PG target regardless of config value; `pg_schema` needed for schema resolution. DSN from `PG_DSN` env (no dsn key in config) matches `if apply and not (opts.get("dsn") or os.environ.get("PG_DSN"))`. Correct.
+- Section 6 drop-in: `EnvironmentFile=<PG_RUNTIME_DSN_FILE>` exports the runtime DSN; `Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper` are systemd `KEY=VALUE` pairs on one line (systemd syntax allows space-separated assignments in a single `Environment=` line). Comment on its own line. Correct.
+- Section 5.1b rowhash: `PG_DSN` from env, `sys.argv[1]` = sqlite file, `sys.argv[2]` = source dir for `sys.path`. Runbook command matches: `rowhash.py $B <src dir>`. The `search_path=rehearsal` hardcode is explicitly flagged for operator edit. Correct.
+- Section 5.4 `curl -H @<token-header-file>`: valid curl syntax (header from file). Token file path, not content, shown. Correct.
+- Section 7 `pg --config $KJ admin verify` in a shell with `unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA`: forces sqlite backend via original config. Correct.
+
+**One observation (minor, not a runbook defect):** Section 5.4 suggests using "a reader token already in the copied principals" if not using a throwaway schema. Section 0 shows `run_tokens = 0`. Whether authentication tokens live in `principals` or `run_tokens` is a code question I cannot verify from the materials shown. The rehearsal used the explicit throwaway-schema path. Not a defect in the runbook text itself (both alternatives are offered), but an operator on live (where run_tokens=0) would need the throwaway schema path.
+
+No command in the runbook would fail or misbehave given the code shown and the stated preconditions.
+
+---
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass
