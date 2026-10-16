@@ -1,4 +1,4 @@
-# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-9 (relaunch routing-00, 2026-10-16 12:5xZ, effort medium; beat cron eab5bcdf 17,47 (D-1436)) · 16:43Z KEEPER ON PG
+# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-9 (relaunch routing-00, 2026-10-16 12:5xZ, effort medium; beat cron eab5bcdf 17,47 (D-1436)) · 16:43Z KEEPER ON PG · HANDOFF #9 17:3xZ (ctx cap)
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md · design (binding, 14a): .../docs/reports/2026-10-15-rethink-setup-design.md
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md`. Handoff: docs/build-L1-handoff.md (#8 e28ba63d).
 Rules: D-1504 model = its path only (qwen3.8-flash qodercli; gemini-3.8-flash agy/AI Studio; muse-spark-1.3 opencode; mimo-v2.6 mimo), path in every brief/seat request. D-1442 judge only HIGH (keeper engine/live, schema, auth) -> LOCAL server-L1-routing; standard = self-approve on seats. D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch. D-1390 medium. D-825 live steps need GO. No GitHub billing.

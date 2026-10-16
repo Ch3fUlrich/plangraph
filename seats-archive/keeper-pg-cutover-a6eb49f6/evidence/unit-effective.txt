@@ -1,0 +1,60 @@
+# /home/s/.config/systemd/user/plangraph-keeper.service
+[Unit]
+Description=plangraph keeper (persistent; replaces the transient systemd-run unit, 2026-10-09)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/proposal/src
+ExecStart=/usr/bin/python3 -m plangraph.keeper.daemon --config %h/.local/share/plangraph/keeper.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-1b923e5.conf
+# KEEPER-LIVE-SYNC GO D-1437 (2026-10-16): live tree -> 1b923e5 worktree; worktree-proposal stays at f3bac63 (rollback, 24 h).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-1b923e5-20261016T064214Z, start.
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-1b923e5
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-1b923e5/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-8165c22.conf
+# LIVE-SYNC-2 GO D-1463 (2026-10-16): live tree -> 8165c22 worktree (overrides live-sync-1b923e5.conf, sorts after it).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-8165c22-20261016T082054Z, start (= 1b923e5).
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-8165c22
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-8165c22/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-cd85d13.conf
+# LIVE-SYNC-3 GO D-1482 (2026-10-16): live tree -> cd85d13 worktree (KEEPER-SNAPSHOT-PG; overrides live-sync-8165c22.conf, sorts after it).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-cd85d13-20261016T105157Z, start (= 8165c22).
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-cd85d13
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-cd85d13/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-z4-b3d71096.conf
+# LIVE-SYNC-4 GO D-1490 (2026-10-16): live tree -> b3d71096 worktree (27c95c3 followups + newest-wins verifier; no schema change; overrides live-sync-cd85d13.conf; z4 prefix so it sorts after it).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-b3d71096-20261016T125712Z, start (= cd85d13).
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-b3d71096
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-b3d71096/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/semaphore.conf
+# PG-SEMAPHORE-LIVE (D-906/D-917): read-only Semaphore access for semaphore-task evidence.
+# Rollback: remove this file, systemctl --user daemon-reload, restart; shred the token; prox deletes the user.
+[Service]
+Environment=PG_SEMAPHORE_URL=https://semaphore.ohje.ooguy.com
+Environment=PG_SEMAPHORE_TOKEN_FILE=%h/.config/plangraph/semaphore.token
+Environment=PG_SEMAPHORE_PROJECTS=1
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/zz-pg-backend.conf
+# KEEPER-PG step 3 switch (runbook 7f5a35a section 6). Rollback: rm this file, daemon-reload, runbook section 7.
+# zz prefix: must sort after live-sync-z4-b3d71096.conf
+[Service]
+EnvironmentFile=%h/.config/plangraph/pg-keeper.dsn
+Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
+ExecStart=
+ExecStart=%h/.local/share/plangraph/venv-pg/bin/python -m plangraph.keeper.daemon --config %h/.local/share/plangraph/keeper.json

@@ -1,0 +1,17 @@
+current_user, session_user: [('keeper_rt', 'keeper_rt')]
+client addr / ssl: [('192.168.178.73/32', False)]
+pg_roles keeper_rt (super,createrole,createdb,inherit,bypassrls): [(False, False, False, False, False)]
+member of: []
+has_database_privilege keeper CONNECT/CREATE/TEMP: [(True, False, False)]
+has_schema_privilege keeper USAGE/CREATE: [(True, False)]
+has_schema_privilege public CREATE: [(False,)]
+tables in keeper with S/I/U/D for keeper_rt (count of 19+): [(20, 20, 0)]
+table owners in keeper: [('keeper',)]
+DDL refused as expected: create table keeper.ddl_probe(x int) -> InsufficientPrivilege permission denied for schema keeper
+DDL refused as expected: alter table keeper.events add column ddl_probe int -> InsufficientPrivilege must be owner of table events
+DDL refused as expected: drop table keeper.events -> InsufficientPrivilege must be owner of table events
+DDL refused as expected: create schema ddl_probe -> InsufficientPrivilege permission denied for database keeper
+PG events max seq now: [(6339,)]
+events with seq<=6329 count: [(6329,)]
+first events after boundary (seq,ts,type,key): [(6330, '2026-10-16T16:43:40Z', 'evidence_added', 'plangraph:RT-P1-KEEPER-PG'), (6331, '2026-10-16T16:43:50Z', 'claimed', 'autoos:CI-SMART-SELECT'), (6332, '2026-10-16T16:43:51Z', 'claimed', 'autoos:FLEET-STATUS-HOOK'), (6333, '2026-10-16T16:44:01Z', 'evidence_added', 'plangraph:RT-P1-KEEPER-PG'), (6334, '2026-10-16T16:48:03Z', 'item_created', 'routing:OS-207')]
+boundary row: [(6329, 'ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0')]

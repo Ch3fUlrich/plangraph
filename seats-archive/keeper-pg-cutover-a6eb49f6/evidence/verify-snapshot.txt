@@ -1,0 +1,3 @@
+$ pg admin verify-snapshot --snapshot <backup>/plan.snapshot.json
+snapshot signature ok
+rc=0

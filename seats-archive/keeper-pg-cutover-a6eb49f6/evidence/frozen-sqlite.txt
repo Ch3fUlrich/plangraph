@@ -1,0 +1,35 @@
+$ ls -la <backup dir>
+total 11752
+drwx------ 2 s s    4096 Oct 16 16:43 .
+drwxrwxr-x 7 s s    4096 Oct 16 16:42 ..
+-rw------- 1 s s      76 Oct 16 16:42 SHA256SUMS
+-rw-rw-r-- 1 s s      88 Oct 16 16:42 boundary.txt
+-rw-rw-r-- 1 s s     867 Oct 16 16:42 copy-apply.txt
+-rw-rw-r-- 1 s s     684 Oct 16 16:42 copy-dryrun.txt
+-rw------- 1 s s     334 Oct 16 16:42 counts.json
+-rw------- 1 s s 8663040 Oct 16 16:42 keeper.db
+-rw------- 1 s s   32768 Oct 16 16:49 keeper.db-shm
+-rw------- 1 s s       0 Oct 16 16:42 keeper.db-wal
+-rw-rw-r-- 1 s s     107 Oct 16 16:42 keeper.db.frozen.sha256
+-rw------- 1 s s    1579 Oct 16 16:42 keeper.json
+-rw-rw-r-- 1 s s      93 Oct 16 16:43 loss-boundary.txt
+-rw-rw-r-- 1 s s      87 Oct 16 16:42 pg-head.txt
+-rw------- 1 s s 3267868 Oct 16 16:42 plan.snapshot.json
+-rw------- 1 s s      88 Oct 16 16:42 plan.snapshot.json.sig
+-rw-rw-r-- 1 s s    1300 Oct 16 16:42 rowhash.txt
+-rw-rw-r-- 1 s s      29 Oct 16 16:42 verify-pg.txt
+-rw-rw-r-- 1 s s      29 Oct 16 16:43 verify-switch.txt
+
+$ ls -l / stat keeper.db (live dir)
+-r-------- 1 s s 8663040 Oct 16 16:42 /home/s/.local/share/plangraph/keeper.db
+mode=400 size=8663040 mtime=2026-10-16 16:42:30.512085418 +0000
+
+$ sha256sum -c keeper.db.frozen.sha256
+/home/s/.local/share/plangraph/keeper.db: OK
+$ (cd backup && sha256sum -c SHA256SUMS)
+keeper.db: OK
+$ ls -l keeper.db-wal keeper.db-shm (live dir)
+ls: cannot access '/home/s/.local/share/plangraph/keeper.db-wal': No such file or directory
+ls: cannot access '/home/s/.local/share/plangraph/keeper.db-shm': No such file or directory
+$ restore dry check: sqlite integrity of backup copy (ro)
+ok max seq 6329

@@ -1,24 +1,26 @@
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
-# build-L1 handoff #8 (gen-8 -> gen-9, 2026-10-16 12:5xZ, ctx cap 230k)
-Read first: brief /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md, card above.
-Startup: skill unattended-orchestration (+ references/main-orchestrator.md). Beat: CronCreate 30 min `17,47 * * * *` (D-1436, build-L1 only; my 9375f049 dies with this session).
-Rules: D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch. D-1390 effort medium. D-1442 HIGH -> judge server-L1-routing (send to the LOCAL one: `server-L1-routing [ref]` from ListAgents, a stale Remote Control twin exists).
-Live steps need router GO (D-825). No GitHub billing. Card <= 40 lines.
+# build-L1 handoff #9 (gen-9 -> gen-10, 2026-10-16 ~17:3xZ, ctx cap 230k)
+Startup: skill unattended-orchestration (+ references/main-orchestrator.md). Beat: CronCreate 30 min `17,47 * * * *` (D-1436; gen-9 cron eab5bcdf dies with this session).
+Rules: D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch. D-1390 medium. D-1442 HIGH -> LOCAL judge `server-L1-routing [890344]`. D-1504 model = its path only. Live steps need router GO (D-825).
 
-## Gen-8 landed (all keeper state done, evidence + verdicts)
-CI-PYTEST-SPEED #30 e790e34 · RT-P1-KEEPER-PG-PREP #29 7f5a35a (judge ACCEPT; cutover = separate GOs) · CI-PG-CONTRACT-TIMEOUT #31 de11496 + 10/10 runs ·
-KEEPER-SNAPSHOT-PG #32 cd85d13 (seats/snapshot-pg-c12e5b1 0b02679) · KEEPER-SNAPSHOT-FOLLOWUPS #33 27c95c3 · KEEPER-CI-NEWEST-WINS #34 b3d71096 (D-1479/D-1489).
-Live keeper = cd85d13 (GO D-1482 10:52Z, drop-in live-sync-cd85d13.conf, backup backups/live-sync-cd85d13-20261016T105157Z).
+## Gen-9 landed
+- Live keeper cd85d13 -> b3d71096 (D-1490, 12:57Z; drop-in live-sync-z4-b3d71096.conf).
+- KEEPER-PG CUTOVER LIVE: keeper on Postgres since 16:43:16Z (GO D-1506 step1+2, D-1506b step3). Boundary seq 6329 hash ac87778f. Drop-in zz-pg-backend.conf (EnvironmentFile ~/.config/plangraph/pg-keeper.dsn = keeper_rt; venv ~/.local/share/plangraph/venv-pg). Admin/migrate: pg-keeper-migrate.dsn (role keeper).
+  Frozen sqlite 0400 sha256 6e6e9609; backup ~/.local/share/plangraph/backups/pg-cutover-b3d71096-20261016T164230Z. Step 4 (delete-or-archive) needs router GO >= 2026-10-18 16:43Z.
+- Record PR #35 merged main a6eb49f6 (head e5898f70 Plan-Item trailer, tests dispatch 38934446074 green). RT-P1-KEEPER-PG = in_review (evidence decision D-1506 ok + commit+ci ok; a stray D-1506b decision row shows ✗, harmless).
+- ci-newest-wins worktree removed. Worktree .claude/worktrees/keeper-pg-record (branch merged) can be removed: `git -C /home/s/code/plangraph worktree remove .claude/worktrees/keeper-pg-record`.
 
-## Next
-- WAITING router GO: live cd85d13 -> b3d71096 (batches 27c95c3 per D-1484). Recipe below; report drop-in, backup, counts, verify, snapshot GET ms.
-- L2-DONE sent for build-L2-ci-newest-wins 29c2f028: archive its card (worktree plangraph-worktrees/keeper-ci-newest-wins/.sessions) to l2-cards/, then `git -C /home/s/code/plangraph worktree remove` it.
-- ROLLBACK-HOLD: after 2026-10-17 06:42Z ask routing to retire old drop-ins (1b923e5/8165c22) + worktree-proposal f3bac63.
-- Open gated items (card): CI-RUNS-ON-WORKST, AO-DEEPINFRA-REMOVE (workst-L1-autoos), server:RT-P1-PG-DEPLOY -> PG cutover GOs.
-## Live-sync recipe (worked 3x)
-detached worktree .claude/worktrees/live-<sha> -> stop md-sync.path/.timer + render.timer -> stop keeper -> require no -wal -> sqlite backup API copy + keeper.json + snapshot(+sig) + SHA256SUMS
-+ counts (ops: copy /home/s/.claude/jobs/2714142d/tmp/counts.py) -> drop-in live-sync-<sha>.conf (sorts after) -> daemon-reload -> start -> check MainPID env -> counts equal (+1 system snapshot audit row expected)
--> `PYTHONPATH=<wt>/src PG_CONFIG=~/.local/share/plangraph/keeper.json python3 -m plangraph.keeper.cli admin verify` + `verify-snapshot` -> /inbox, /v1/show, heartbeat smoke -> timers back.
+## NEXT (in order)
+1. JUDGE wants FRESH seats on the cutover (server-L1-routing msg ~17:2xZ): qwen3.8-flash via qodercli (alibaba) + mimo-v2.6-flash via mimo provider (xiaomi). Prompt must carry RAW outputs.
+   Evidence bundle DONE: seats-archive/keeper-pg-cutover-a6eb49f6/evidence/ (execution.md, boundary/copy-dryrun/copy-apply/rowhash/verify-pg/verify-switch/verify-snapshot/pg-head/loss-boundary, frozen-sqlite.txt, keeper-rt-privileges.txt (all DDL refused, DML on 20 tables, first post-boundary write 6330 at 16:43:40Z), go-texts-and-hba.txt, unit-effective.txt; secret scan none). Gather script: /home/s/.claude/jobs/68428f2c/tmp/gather.sh.
+   TODO: redact the PG_SEMAPHORE_URL line in unit-effective.txt; build prompt.txt = all evidence files raw + questions: (a) every gate has evidence after the boundary? (b) rollback (sqlite 0400 + backup) restorable? (c) any write between freeze and switch? (d) step 4 held? End with `VERDICT: pass|fix` and `TEST-GAMING: yes|no` lines.
+   Qwen: `cd <empty dir>; timeout 900 qodercli -p --model Qwen3.8-Flash --tools "" --no-session-persistence -o json "$(cat prompt.txt)" > out.json`, then `python3 ops/qseat.py <seatdir>/verdict-alibaba out.json`.
+   Mimo: `ops/seat.sh mimo/mimo-v2.6-flash prompt.txt <seatdir>/verdict-xiaomi keeper-pg-cutover` (gateway review-call writes review.txt + evidence.json).
+   Send judge the seat dirs + record sha a6eb49f6 (e5898f70); on ACCEPT: `python3 <(git show origin/main:tools/seat_verdict.py) --key plangraph:RT-P1-KEEPER-PG --seat-dir D --writer-family anthropic --token-dir ~/.config/plangraph` per seat.
+   Open judge question for server-L1-main/prox: which pg_hba rule admits keeper_rt live (D-1500 2c8f3d063 ACCEPT vs deployed b0f127b8; hand rule?). build-L1 cannot read pg_hba_file_rules.
+2. After KEEPER-PG done: PLANNER-KIT (deps done) -> L2 via routing "L2-LAUNCH <name> <brief> <cwd>" sonnet medium, --parent build-L1. Then WORKER/PROJECTOR after server:RT-P1-TEMPORAL-CHECK; GOVERNOR waits routing:RT-P0-BASELINE.
+3. server-L1-main [1c13b7]: PG-DRILL-POSTCUT (rows>0) told it may run. orch-setup: told lanes F/A may start (rebased >= b3d71096).
+4. ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 + worktree-proposal f3bac63 (z4 + zz-pg-backend stay).
+5. CI-RUNS-ON-WORKST: HOLD (router re-scope to private repos, S18).
 ## Traps
-commit+ci verifier: before b3d71096 is LIVE, every dispatch suite counts (never cancel a dispatch on a head sha). Item closes at tier's review count (2nd verdict 409 locked).
-zsh: `git push origin $T:refs/...` breaks (:r modifier) -> quote/brace. Seat dirs need review.txt + evidence.json (ops/qseat.py for qodercli out.json).
+Drop-ins lexical order (name overrides to sort last; check /proc/<MainPID>/environ). Worktree-isolated sessions refuse complex git/gh shell lines: use plain commands or exit the worktree. Docs-only PRs trigger no CI: dispatch tests.yml on the branch. Keeper.db is frozen pre-cutover sqlite, NOT live.

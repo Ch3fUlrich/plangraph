@@ -1,0 +1,24 @@
+copy-to-pg dry-run (target untouched)
+source events head: seq=6329 hash=ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0
+table            source
+events              6329
+items               1743
+evidence            1079
+edges               2569
+principals            24
+aliases               12
+run_tokens             0
+outbox_seen            0
+audit_log          52688
+audit_findings        36
+cards                  0
+attempts               0
+decisions              0
+questions              0
+answers                0
+budget                 0
+projector_applied        0
+projector_watermark        0
+projector_alarms        0
+total              64480
+source chain ok
