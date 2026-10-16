@@ -3,7 +3,7 @@ Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-b
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
-## Main = 1b923e5 · keeper live f3bac63 (worktree-proposal = 7e5a61e + PR #24 diff only; main drift = routing's call) (CI on workst runner since #17 5188310)
+## Main = 1b923e5 · keeper live 1b923e5 (live-1b923e5 worktree via drop-in; worktree-proposal f3bac63 = 24 h rollback) (CI on workst runner)
 DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
 RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ),
 RT-P1-INBOX-CODE (PR #18 b5f45c9; router evidence commit 68a9180, kinds->[commit]; openai seat inbox-seats/r2-1cb7acc),
@@ -15,7 +15,7 @@ KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restar
 | Item | State | Next |
 |---|---|---|
 | PROJECTOR-LIVE-NAMESPACE-FLAKE (D-1433 p2) | claimed; L2 forwarded D-1434 (workst) | brief briefs/l2-live-namespace-flake.md |
-| KEEPER-LIVE-SYNC (p2 HIGH) | SYNC-READY doc 83b283a (7 seat rounds); r7 fix/fix judge-REFUTED live-sync-seats/adjudication.md, dry-run rc0 both; L2 told stop | GO 1b923e5 asked 06:4xZ -> run doc §4 runbook myself; abort = wal/shm delete + backup + f3bac63; then verdicts+evidence |
+| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | keep worktree-proposal f3bac63 until 2026-10-17 06:42Z; seat verdicts/evidence on item; L2 stop |
 | PROJECTOR-ALARMS-READER (p3) | open | after LIVE-SYNC |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
