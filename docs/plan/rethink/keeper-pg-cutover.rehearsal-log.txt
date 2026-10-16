@@ -58,7 +58,7 @@ $ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json
 copy-to-pg: target is not empty (events, items, evidence, edges, principals, aliases, audit_log, audit_findings): copy-to-pg only fills an empty keeper
 rc=2
 
-$ $SCRATCH/venv/bin/python $SCRATCH/rowhash.py $SCRATCH/keeper-copy.db postgresql://postgres@127.0.0.1:38505/keeper /home/s/code/plangraph-worktrees/pg-prep/src
+$ $SCRATCH/venv/bin/python $SCRATCH/rowhash.py $SCRATCH/keeper-copy.db "$PG_DSN" $SRC
 events               sqlite=6edec9fb5944d79e pg=6edec9fb5944d79e ok
 items                sqlite=9edf30b7c795dd64 pg=9edf30b7c795dd64 ok
 evidence             sqlite=2024581a098cc4ed pg=2024581a098cc4ed ok

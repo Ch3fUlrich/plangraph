@@ -33,10 +33,10 @@ systemctl --user stop plangraph-md-sync.service plangraph-render.service
 systemctl --user is-active plangraph-md-sync.service plangraph-md-sync.timer plangraph-md-sync.path   # all inactive
 systemctl --user stop plangraph-keeper            # explicit stop: Restart=on-failure does not undo it
 systemctl --user is-active plangraph-keeper       # inactive
-fuser $LIVE/keeper.db.lock                        # empty = no holder
+[ ! -e $LIVE/keeper.db.lock ] || fuser $LIVE/keeper.db.lock   # missing file or empty output = no holder
 ```
 Clients that write while it is down queue in their own outbox (`PG_OUTBOX`) and replay AFTER the switch with `pg replay`; announce the window to L1s first (router message) so they do not claim mid-freeze. `plangraph-md-sync-halt.service` is a stopper only; leave it.
-Backup of the stopped db (folds WAL): `python3 -c "import sqlite3;s=sqlite3.connect('file:$LIVE/keeper.db?mode=ro',uri=True);d=sqlite3.connect('$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db');s.backup(d)"`, then `sha256sum` it, copy `$KJ`, `plan.snapshot.json(.sig)` beside it, `chmod 0600`. All following steps read ONLY this backup (`--src`); the live file stays untouched.
+Backup of the stopped db (folds WAL): `mkdir -p -m 700 $LIVE/backups/pg-cutover-<sha>-<UTC> && python3 -c "import sqlite3;s=sqlite3.connect('file:$LIVE/keeper.db?mode=ro',uri=True);d=sqlite3.connect('$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db');s.backup(d)"`, then `sha256sum` it, record `select count(*)` of all 19 tables from it into `counts.json` (as `counts-before.json` in earlier backups), copy `$KJ`, `plan.snapshot.json(.sig)` beside it, `chmod 0600`. All following steps read ONLY this backup (`--src`); the live file stays untouched.
 
 ## 3. Old keeper "read-only 48 h" (router decision R1 before GO)
 The keeper has **no read-only flag** (grep of `src/plangraph/keeper`: none; adding one is a separate HIGH code change). Options:
@@ -55,6 +55,7 @@ pg --config $LIVE/keeper-pg.json admin copy-to-pg --apply   --src $B     # rc0, 
 
 ## 5. Verify gates (all must pass; any failure = abort to section 7, still no live impact)
 1. Per-table counts: dry-run source column == `--apply` target column for all 19 tables (the tool compares and rolls back on diff); re-check independently: `psql "$PG_DSN" -Atc "select count(*) from keeper.events"` etc. vs `$LIVE/backups/pg-cutover-*/counts` (sqlite `select count(*)`).
+1b. Optional row-level digest (rehearsal tool, no writes): `python3 -I docs/plan/rethink/keeper-pg-cutover.rowhash.py $B "$PG_DSN" <src dir> ` -> 19 lines `ok`, `DIFFS 0` (edit the `search_path` line to the real schema name first; the rehearsal used `rehearsal`). Catches in-row differences that counts and head cannot.
 2. Chain: `PG_KEEPER_BACKEND=postgres pg --config $LIVE/keeper-pg.json admin verify` -> `chain and cache integrity ok`; head seq/hash printed by copy-to-pg equals `select seq,hash from keeper.events order by seq desc limit 1`.
 3. `pg --config $LIVE/keeper-pg.json admin verify-snapshot --snapshot $LIVE/backups/pg-cutover-*/plan.snapshot.json --pubkey ~/.config/plangraph/snapshot-signing.pub` -> `snapshot signature ok`.
 4. Smoke on a scratch keeper on PG (runtime DSN, own port e.g. 18787, scratch token minted with `admin add-principal` **only if** it is done on a throwaway schema copy; otherwise use a reader token already in the copied principals): `pg whoami`, `ready`, `show plangraph:RT-P1-KEEPER-PG`, `percent` rc0; `curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(cat <token file>)" http://127.0.0.1:18787/v1/alarms` = 200; `/inbox` = 200. Stop the scratch keeper.
@@ -87,4 +88,4 @@ Separate explicit GO per step, each naming sha and scope; ACCEPT of the PR is no
 `GO ... step 4 retire sqlite after 48 h` (after a green second verify). Router decisions needed first: R1 (read-only option, section 3), loss-window policy (section 7), which timeslot (all writers paused ~15 min estimated: copy of 62.9k rows took seconds in rehearsal).
 
 ## 9. Hygiene
-Hermetic tests (D-852) for any wrapper script that automates sections 2-6: stub `systemctl`/`psql` on PATH plus a guard test that fails when the real ones are reachable. This PR adds no executable tooling, only this doc and the log.
+Hermetic tests (D-852) for any wrapper script that automates sections 2-6: stub `systemctl`/`psql` on PATH plus a guard test that fails when the real ones are reachable. This PR adds no apply/deploy tooling: only this doc, the log and the read-only digest script `keeper-pg-cutover.rowhash.py` (opens sqlite `mode=ro`, PG select only).
