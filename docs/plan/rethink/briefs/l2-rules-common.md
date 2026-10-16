@@ -22,7 +22,7 @@
   Check `git log -1 --format='%(trailers:key=Plan-Item,valueonly)'`.
 - Public-repo hygiene: no hosts, IPs other than 127.0.0.1, home paths, user names, token-shaped strings;
   `python3 -m pytest -q tests/test_split_make_public.py` green.
-- NEVER touch /home/s/code/plangraph/.claude/worktrees/proposal or write to 127.0.0.1:8787. No docker/systemd on coding.vm.
+- NEVER touch /home/s/code/plangraph/.claude/worktrees/proposal or write to 127.0.0.1:8787. No systemd changes on coding.vm; docker only for a throwaway test DB container (--memory 1g, removed at end; D-1569), never for agent runs (D-437).
 - Denials verbatim + stop that step. Blocked: one line `BLOCKED <item> | <what> | options, *default` to build-L1, keep working.
   Decide best-practice questions yourself (D-935). Output D-658 caveman.
 - Messaging + beats (D-1364, binding): message build-L1 only for BLOCKED/decision needed, DONE/MERGE-READY with sha, GO requests,
