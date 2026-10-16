@@ -3,7 +3,7 @@ CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current
 Startup: skill unattended-orchestration (+ references/main-orchestrator.md). NO crons (D-1377, launch order); wait via ONE background
 command that exits. Effort medium. Msgs only BLOCKED/DONE/GO-request/incident/launch. Card <= 40 lines; CARD-READY before 230k.
 Rules: D-1504 model = its path only (qwen3.8-flash ONLY qodercli; mimo-v2.6-flash ONLY mimo provider; muse opencode; gemini agy).
-D-1442 judge (server-L1-routing [890344]) only HIGH; standard lanes self-approve on 1 non-Claude seat. D-825 live steps need router GO.
+D-1442 judge (server-L1-routing [d18ee6]) only HIGH; standard lanes self-approve on 1 non-Claude seat. D-825 live steps need router GO.
 FREEZE ON (D-1398 L7): no Omnigraph writes until routing FREEZE OFF (keeper unaffected).
 Operator wants: report DONE for plangraph:RT-P1-E2E to routing at once when it lands.
 
@@ -35,4 +35,4 @@ ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-
 ## Tools
 pg CLI: `ops/pg.sh <verb>` (ready/show/claim/heartbeat/evidence --kind commit+ci --commit SHA/submit). Verdict: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
 Seat dirs: qwen via ops/qseat.py; mimo via ops/seat.sh (review-call: don't add a bare TEST-GAMING line to prompts, the standing question handles it).
-Peers: routing [5a7958], server-L1-routing [890344], prox-L1-main [8fa900] (Remote Control), server-L1-main.
+Peers: routing [5a7958], server-L1-routing [d18ee6], prox-L1-main [8fa900] (Remote Control), server-L1-main.
