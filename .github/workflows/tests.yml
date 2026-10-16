@@ -55,7 +55,6 @@ jobs:
           --health-retries 10
     env:
       PG_KEEPER_BACKEND: postgres
-      PG_PORT: ${{ job.services.postgres.ports['5432'] }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -64,6 +63,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-ci.txt
       - name: Resolve Postgres service host
+        env:
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
         # Self-hosted runner: the job runs in a container and the service is a sibling
         # container on the host Docker, published on a random host port; 127.0.0.1 is the
         # runner container itself, so probe the host aliases instead.
