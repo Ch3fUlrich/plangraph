@@ -101,7 +101,7 @@ Tables (migration 3, `ddl.py`, PG and SQLite variants, created only through the 
 * `projector_applied(workflow_id, run_id, activity_id, attempt, kind, key, n, applied_at, PRIMARY KEY (workflow_id, run_id,
   activity_id, attempt, kind))`, `kind` in `attempt | state`.
 * `projector_watermark(workflow_id PRIMARY KEY, run_id, run_ord, event_id, status, plan_key, updated_at)`; the row with
-  workflow_id `*` is the global watermark (`event_id` unused, `updated_at` = completion of the last full scan). The UI shows it.
+  workflow_id `*` is the global watermark (`event_id` unused, `updated_at` = completion of the last full scan). The UI shows it: `GET /v1/projector_watermark` (read-only, same auth gate as `GET /v1/questions`) returns `{global, workflows, open_alarms}` and the inbox page prints one line from it.
 * `projector_alarms(id, kind, workflow_id, key, detail, raised_at, cleared_at)`; open = `cleared_at IS NULL`.
 
 Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `system` principal, never raw SQL on keeper tables.
@@ -124,7 +124,14 @@ Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `sys
 * `reconcile.py`: open workflows (visibility `ExecutionStatus="Running"`) vs keeper states. Alarm kinds: `unmapped_workflow`,
   `missing_item`, `state_drift` (projected expected state != items.state), `orphan_running` (item running/waiting/needs_input,
   no open workflow, grace 15 min), `watermark_stale` (global watermark older than 30 min while workflows are open). Alarms
-  dedupe on (kind, workflow_id, key) while open and clear themselves when the condition is gone. Runs nightly; the Inbox reads
+  dedupe on (kind, workflow_id, key) while open and clear themselves when the condition is gone.
+  A sixth kind, `unknown_shape`, is raised by `apply` (not by the reconcile pass, which never clears it): an activity type
+  outside `KNOWN_ACTIVITY_TYPES` (`attempt` and `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor`), an
+  attempt result payload that is not a JSON object, or a completed attempt with a void result (no `exit_class`). One open row
+  per (workflow_id, run_id, activity_id): `key = <run_id>:<activity_id>`, so repeated applies are no-ops. Kind is free text, no
+  migration. A completed result that is a JSON object without `exit_class` keeps the documented default `ok` and raises
+  nothing (fixture `13_second_attempt_started`). Every recorded fixture raises none (`tests/test_projector_unknown_shape.py`).
+  Reconcile runs nightly; the Inbox reads
   `projector_alarms`.
 
 ## Tests

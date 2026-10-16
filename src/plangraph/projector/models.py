@@ -7,11 +7,26 @@ from typing import Optional
 from plangraph.keeper.schema import EXIT_CLASSES
 from plangraph.keeper.store_cards import SETTABLE_STATES
 
-__all__ = ["AttemptRec", "StateRec", "RunProjection", "ATTEMPT_ACTIVITY_TYPES",
+__all__ = ["AttemptRec", "StateRec", "ShapeIssue", "RunProjection", "ATTEMPT_ACTIVITY_TYPES",
+           "KNOWN_ACTIVITY_TYPES",
            "EXIT_CLASSES", "SETTABLE_STATES"]
 
 #: Activity type names that count as one workflow-level attempt.
 ATTEMPT_ACTIVITY_TYPES = frozenset({"attempt"})
+
+#: Every activity type the Card workflow may schedule; anything else is an ``unknown_shape``.
+KNOWN_ACTIVITY_TYPES = ATTEMPT_ACTIVITY_TYPES | frozenset(
+    f"CardActivities::{n}" for n in
+    ("tick", "probe", "merge", "report", "park", "complete", "alarm", "janitor"))
+
+
+@dataclass(frozen=True)
+class ShapeIssue:
+    """One history shape the contract does not cover; apply raises an ``unknown_shape`` alarm."""
+    workflow_id: str
+    run_id: str
+    activity_id: str
+    detail: str
 
 
 @dataclass(frozen=True)
@@ -57,3 +72,4 @@ class RunProjection:
     states: tuple[StateRec, ...]
     outcome: Optional[str] = None
     next_run_id: Optional[str] = None
+    shape_issues: tuple[ShapeIssue, ...] = ()
