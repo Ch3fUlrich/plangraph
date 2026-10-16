@@ -3,20 +3,20 @@ name: rust-spike
 # Offline tests of the Temporal SDK spike (history replay; no server needed).
 
 on:
-  push:
+  pull_request:
     branches: [main]
     paths:
       - "rust/spikes/**"
       - ".github/workflows/rust-spike.yml"
-  pull_request:
-    paths:
-      - "rust/spikes/**"
-      - ".github/workflows/rust-spike.yml"
+      - "!**/*.md"
+      - "!docs/**"
+      - "!CHANGELOG*"
+  workflow_dispatch:
 
-# D-1338: lane branches run CI via their PR only; a newer push cancels the older run.
+# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
