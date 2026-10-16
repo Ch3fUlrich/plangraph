@@ -111,3 +111,15 @@ def test_alarm_is_per_run_and_activity_and_survives_reconcile(world, projector, 
     (tmp_path / "empty").mkdir()
     reconcile(world.store, FileSource(tmp_path / "empty"), projector)
     assert len(alarms(world)) == 2                             # a reconcile pass never clears them
+
+
+def test_rebuild_from_history_yields_identical_alarm_rows_twice(world, projector):
+    h = attempt_history()
+    events(h, "ACTIVITY_TASK_SCHEDULED")[0]["activityTaskScheduledEventAttributes"][
+        "activityType"]["name"] = "mystery"
+    projector.apply_run(project_history(copy.deepcopy(h), workflow_id="card:demo:A", run_id="r1"),
+                        run_ord=0)
+    first = alarms(world)
+    projector.apply_run(project_history(copy.deepcopy(h), workflow_id="card:demo:A", run_id="r1"),
+                        run_ord=0)
+    assert len(first) == 1 and alarms(world) == first

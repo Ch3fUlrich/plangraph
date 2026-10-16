@@ -92,3 +92,26 @@ def test_post_is_not_a_door_for_the_read_verb(doors):
 
 def test_page_shows_one_watermark_line():
     assert 'id="wm"' in PAGE and "/v1/projector_watermark" in PAGE
+
+
+def test_open_alarm_count_is_withheld_from_project_restricted_callers(doors, w):
+    stamp = w.store._iso(w.clock())
+    w.conn.execute("INSERT INTO projector_alarms(id, kind, workflow_id, key, detail, raised_at)"
+                   " VALUES(1, ?, ?, ?, ?, ?)", ("state_drift", "wf", "other:B", "d", stamp))
+    assert get(doors, "router")[1]["open_alarms"] == 1
+    assert get(doors, "l1main")[1]["open_alarms"] is None       # unscoped count would leak other:B
+
+
+def test_unreadable_watermark_table_is_a_named_error():
+    import sqlite3
+    from types import SimpleNamespace
+    from plangraph.inbox import routes
+
+    class Conn:
+        def execute(self, *a):
+            raise sqlite3.OperationalError("no such table: projector_watermark")
+
+    store = SimpleNamespace(conn=Conn(), now=lambda: 0.0,
+                            _run=lambda principal, action, key, fn: fn(0.0))
+    body = routes._projector_watermark(store, SimpleNamespace(role="router", projects=None))
+    assert body == {"error": "watermark unreadable: OperationalError"}

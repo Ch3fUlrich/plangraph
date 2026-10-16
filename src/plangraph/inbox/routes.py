@@ -153,7 +153,10 @@ def _alarms(store, principal) -> dict:
 
 
 def _projector_watermark(store, principal) -> dict:
-    """Read-only projection progress: per-workflow rows, the global scan stamp, open alarms."""
+    """Read-only projection progress: per-workflow rows, the global scan stamp, open alarms.
+
+    open_alarms counts every project, so a project-restricted caller gets None.
+    """
     def fn(now):
         try:
             rows = store.conn.execute(
@@ -163,7 +166,7 @@ def _projector_watermark(store, principal) -> dict:
                 "SELECT COUNT(*) FROM projector_alarms WHERE cleared_at IS NULL").fetchone()[0]
         except _UNREADABLE as exc:      # table missing or unreadable: named, never silent
             return {"error": f"watermark unreadable: {type(exc).__name__}"}
-        moment = store.now()
+        moment = now
         allowed = None if principal.role in _SEES_ALL else set(principal.projects or [])
         glob, workflows = None, []
         for r in rows:
@@ -175,7 +178,7 @@ def _projector_watermark(store, principal) -> dict:
                                   "run_ord": r["run_ord"], "event_id": r["event_id"],
                                   "status": r["status"], "plan_key": r["plan_key"],
                                   "updated_at": r["updated_at"]})
-        return {"global": glob, "workflows": workflows, "open_alarms": int(open_n)}
+        return {"global": glob, "workflows": workflows, "open_alarms": None if allowed is not None else int(open_n)}
 
     return store._run(principal, "projector_watermark", None, fn)
 
