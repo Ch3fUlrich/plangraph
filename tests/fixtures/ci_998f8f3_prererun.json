@@ -15,7 +15,7 @@
    "check_suite": {
     "id": 105351488221
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38875149323/job/116916026956",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "workflow_dispatch",
     "workflow_id": 379033856,
@@ -36,7 +36,7 @@
    "check_suite": {
     "id": 105351488221
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38875149323/job/116916025339",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "workflow_dispatch",
     "workflow_id": 379033856,
@@ -57,7 +57,7 @@
    "check_suite": {
     "id": 105355583034
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38876665137/job/116919131161",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "pull_request",
     "workflow_id": 379033856,
@@ -78,7 +78,7 @@
    "check_suite": {
     "id": 105355583034
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38876665137/job/116919130781",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "pull_request",
     "workflow_id": 379033856,
@@ -99,7 +99,7 @@
    "check_suite": {
     "id": 105362026458
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38879016538/job/116923418150",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "workflow_dispatch",
     "workflow_id": 379033856,
@@ -120,7 +120,7 @@
    "check_suite": {
     "id": 105362026458
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38879016538/job/116923416880",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "workflow_dispatch",
     "workflow_id": 379033856,
@@ -141,7 +141,7 @@
    "check_suite": {
     "id": 105370467644
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38882090233/job/116910998247",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "workflow_dispatch",
     "workflow_id": 379033856,
@@ -162,7 +162,7 @@
    "check_suite": {
     "id": 105370467644
    },
-   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38882090233/job/116910998687",
+   "details_url": "https://example.invalid/actions",
    "workflow": {
     "event": "workflow_dispatch",
     "workflow_id": 379033856,
