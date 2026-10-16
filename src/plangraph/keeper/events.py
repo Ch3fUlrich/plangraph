@@ -204,6 +204,19 @@ def fold(events):
             item["state"] = "claimed"
             item["reviewer"] = None
             item["lease_until"] = payload.get("lease_until")
+        elif kind == "item_reopened":   # PG-REOPEN: back to the claimant, fresh epoch
+            # The store opens a new work epoch (+1, round 0, reviewer and
+            # waiver cleared, fresh lease) and keeps the holder; replay exactly
+            # the columns it wrote so ``verify_integrity`` agrees.  The
+            # delegate of the claim is intentionally left alone: the reopen
+            # changes who holds the work only as far as the epoch.
+            item["state"] = "claimed"
+            item["epoch"] = payload["epoch"]
+            item["claimed_by"] = payload["claimed_by"]
+            item["reviewer"] = None
+            item["round"] = 0
+            item["review_waiver"] = None
+            item["lease_until"] = payload["lease_until"]
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")
