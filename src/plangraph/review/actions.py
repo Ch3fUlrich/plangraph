@@ -43,7 +43,7 @@ def plan_actions(verdict: Any, phase: str, key: str | None = None) -> dict:
     """Plan {fix_cards, inbox, pass} for a verdict at a phase.
 
     fix: one fix card per finding (one generic card when none are listed);
-    halt: one inbox question for plan *key* (the caller's card key), no default;
+    halt: one inbox question for plan *key* (required: ValueError when missing), no default;
     pass: nothing to do. A verdict
     with no usable word plans nothing and does not pass.
     """
@@ -65,6 +65,8 @@ def plan_actions(verdict: Any, phase: str, key: str | None = None) -> dict:
                 card["files"] = list(files)
             plan["fix_cards"].append(card)
     elif word == "halt":
+        if not key:
+            raise ValueError("a halt verdict needs the card key (key=...) for the inbox question")
         tags = [str(t) for t in (_get(verdict, "risk_tags") or ["review-halt"])]
         plan["inbox"].append({
             "key": key,

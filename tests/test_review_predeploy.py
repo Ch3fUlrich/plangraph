@@ -145,7 +145,7 @@ def test_plan_fix_without_findings_uses_reason():
 
 def test_plan_halt_one_inbox_no_default():
     got = actions.plan_actions({"verdict": "halt", "reason": "scope",
-                                "risk_tags": ["auth"]}, "P3")
+                                "risk_tags": ["auth"]}, "P3", key="demo:A")
     assert got["fix_cards"] == [] and got["pass"] is False
     assert len(got["inbox"]) == 1
     item = got["inbox"][0]

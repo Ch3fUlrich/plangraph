@@ -82,7 +82,9 @@ def _retriable(result, leg: family.Leg) -> bool:
     if leg.kind == "gateway":
         status = getattr(result, "status", None)
         if status != 200:
-            return status in (0, None) or status == 429 or status >= 500
+            if not isinstance(status, int) or isinstance(status, bool):
+                return True          # unknown/garbled status: retriable-unknown, never a TypeError
+            return status in (0, 429) or status >= 500
     if finish in _INCOMPLETE:
         return True
     return not (getattr(result, "text", "") or "").strip()
