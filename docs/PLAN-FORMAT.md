@@ -56,7 +56,7 @@ ops:
   # - {op: cancel, key: server:BK-DRILL, reason: "replaced by server:BK-DRILL2"}   # corrections = new item + cancel/link, never edit DONE
 ```
 Order: `create` an item before any op that references it. Other ops (router only): `edit`, `cancel`, `legacy_state`,
-`add_evidence`, `close_on_decision` (see docs/BATCH.md).
+`add_evidence`, `close_on_decision`, `priority`, `rehome`, `set_kind`, `add_dep`, `remove_dep` (see docs/BATCH.md).
 
 ## Rules the validator enforces (the file is refused otherwise)
 No cycles · every non-terminal item reaches a goal · no dependency on a cancelled item · DONE items are locked (edit/cancel refused) ·

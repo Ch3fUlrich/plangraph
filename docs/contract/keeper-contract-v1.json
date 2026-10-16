@@ -116,7 +116,7 @@
     "WaiveBody": {"type": "object", "properties": {"key": {"type": "string"}, "decision_id": {"type": "string"}}, "required": ["key", "decision_id"]},
     "CloseBody": {"type": "object", "properties": {"key": {"type": "string"}, "batch_ref": {"type": "string"}}, "required": ["key", "batch_ref"]},
     "LegacyBody": {"type": "object", "properties": {"key": {"type": "string"}, "state": {"enum": ["claimed", "in_review"]}, "note": {"type": "string"}}, "required": ["key", "state"]},
-    "Op": {"type": "object", "properties": {"op": {"enum": ["create", "edit", "legacy_state", "add_evidence", "close_on_decision", "cancel", "priority", "rehome", "set_kind"]}}, "required": ["op"]},
+    "Op": {"type": "object", "properties": {"op": {"enum": ["create", "edit", "legacy_state", "add_evidence", "close_on_decision", "cancel", "priority", "rehome", "set_kind", "add_dep", "remove_dep"]}}, "required": ["op"]},
     "ApplyOpsBody": {"type": "object", "properties": {"ops": {"type": "array", "minItems": 1, "maxItems": 500, "items": {"$ref": "#/$defs/Op"}}, "batch_ref": {"type": "string"}}, "required": ["ops"]},
     "RehomeBody": {"type": "object", "properties": {"key": {"type": "string"}, "new_project": {"type": "string"}, "host": {"type": ["string", "null"]}}, "required": ["key", "new_project"]},
     "RecordRunBody": {"type": "object", "properties": {"key": {"type": "string"}, "run": {"type": "object", "properties": {"run_id": {"type": "string"}, "phase": {"enum": ["started", "finished"]}, "rc": {"type": ["integer", "null"]}, "writer": {"type": "object"}, "seats": {"type": "array", "items": {"type": "object"}}}, "required": ["run_id", "phase"]}}, "required": ["key", "run"]},

@@ -2,7 +2,7 @@
 
 ``apply_ops(principal, ops, batch_ref=None)`` applies a list of BATCH.md ops
 (create, edit, legacy_state, add_evidence, close_on_decision, cancel,
-priority) in ONE
+priority, rehome, set_kind, add_dep, remove_dep) in ONE
 ``BEGIN IMMEDIATE`` transaction, all or nothing.  Every op runs the very same
 inner function as its single verb (so the same auth/state checks), except that
 the whole-graph validation is deferred: the single verbs' ``_validate_change``
@@ -43,6 +43,8 @@ _OPS = {
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
     "set_kind": {"op", "key", "kind"},
+    "add_dep": {"op", "key", "dep"},
+    "remove_dep": {"op", "key", "dep"},
 }
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               *db_errors.PROGRAMMING)
@@ -144,6 +146,9 @@ class OpsMixin:
                 raise Refused("validation", "priority must be an integer")
         if name == "set_kind" and not isinstance(op.get("kind"), str):
             raise Refused("validation", "set_kind needs a kind")
+        if name in ("add_dep", "remove_dep") \
+                and not isinstance(op.get("dep"), str):
+            raise Refused("validation", f"{name} needs a dep")
         if name == "close_on_decision" and not isinstance(batch_ref, str):
             raise Refused("validation", "close_on_decision needs a batch_ref")
 
@@ -209,7 +214,48 @@ class OpsMixin:
         if name == "rehome":
             return self._rehome(principal, key, op.get("new_project"),
                                 op.get("host"), now)
+        if name in ("add_dep", "remove_dep"):
+            return self._dep_op(principal, name, key, op["dep"], now)
         return self._cancel(principal, key, op.get("reason", ""), now)
+
+    def _dep_op(self, principal, name, key, dep, now):
+        """``add_dep``/``remove_dep``: the item's CURRENT ``depends_on``, edited
+        by delegating to ``_edit`` so authorisation, state, the graph
+        validation and the ``item_defined`` event are exactly the edit's.
+
+        A dep that is already there (``add_dep``) or not there (``remove_dep``)
+        changes nothing: no write and no event, only a warning.  A dep naming a
+        cancelled item is dropped by ``_edit`` (with its own warning), never
+        refused; an unknown dep key still fails the graph validation.
+        """
+        item = self._get_or_refuse(key)
+        current = list(item.get("depends_on") or [])
+        target = self._qualify(item["project"], dep)
+        if name == "remove_dep":
+            if target not in current:
+                return self._dep_noop(principal, item,
+                                      [f"dependency {target} not present"])
+            deps = [d for d in current if d != target]
+        else:
+            if target in current:
+                return self._dep_noop(principal, item,
+                                      [f"dependency {target} already present"])
+            deps = current + [target]
+        return self._edit(principal, key, {"depends_on": deps}, now)
+
+    def _dep_noop(self, principal, item, warnings):
+        """The answer for a dep op that would not change the graph.
+
+        The item still must exist, be unlocked and be editable -- the checks
+        ``_edit`` runs before it writes -- but nothing is written and no event
+        is appended.
+        """
+        self._assert_unlocked(item)
+        self._may_manage(principal, item["project"])
+        if item["state"] != "open":
+            raise Refused("bad_state",
+                          f"{item['key']} is {item['state']}, not open")
+        return {"key": item["key"], "warnings": warnings}
 
     def _apply_ops(self, principal, ops, batch_ref, now):
         self._require_role(principal, "router")

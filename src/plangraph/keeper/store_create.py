@@ -373,6 +373,8 @@ class CreateMixin:
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
+        by_key = {it["key"]: it for it in candidate}
+        dropped = []
         for field, value in edit_fields.items():
             if field == "depends_on":
                 if not isinstance(value, (list, tuple)):
@@ -384,11 +386,23 @@ class CreateMixin:
                     raise Refused("validation",
                                   "depends_on entries must be strings")
                 deps = [self._qualify(item["project"], d) for d in value]
-                if any(not d.startswith(item["project"] + ":") for d in deps) \
+                # A dependency on an item that is cancelled is dropped from the
+                # resulting list instead of refusing the edit: the rest of the
+                # list stands, the caller is told what went away, and the graph
+                # validates (views.validate would report depends_on_cancelled).
+                # An unknown key is kept here and refused by _validate_change.
+                kept = []
+                for dep in deps:
+                    target = by_key.get(dep)
+                    if target is not None and target["state"] == "cancelled":
+                        dropped.append(f"dropped cancelled dependency {dep}")
+                        continue
+                    kept.append(dep)
+                if any(not d.startswith(item["project"] + ":") for d in kept) \
                         and principal.role != "router":
                     raise Refused("forbidden",
                                   "cross-project dependency needs the router")
-                me["depends_on"] = deps
+                me["depends_on"] = kept
             elif field == "kg_refs":
                 value = edit_fields["kg_refs"] = me["kg_refs"] = check_kg_refs(value, key)
             elif field == "choices":
@@ -469,7 +483,12 @@ class CreateMixin:
             self._append(principal, key, "item_defined", payload, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
-        return {"key": key}
+        result = {"key": key}
+        if dropped:
+            # Only when something was actually dropped: every caller (the HTTP
+            # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
+            result["warnings"] = dropped
+        return result
 
     def set_priority(self, principal, key, n):
         return self._run(principal, "set_priority", key,
