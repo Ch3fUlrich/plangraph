@@ -1,26 +1,38 @@
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
-# build-L1 handoff #9 (gen-9 -> gen-10, 2026-10-16 ~17:3xZ, ctx cap 230k)
-Startup: skill unattended-orchestration (+ references/main-orchestrator.md). Beat: CronCreate 30 min `17,47 * * * *` (D-1436; gen-9 cron eab5bcdf dies with this session).
-Rules: D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch. D-1390 medium. D-1442 HIGH -> LOCAL judge `server-L1-routing [890344]`. D-1504 model = its path only. Live steps need router GO (D-825).
+# build-L1 handoff #10 (gen-10 -> after /clear, 2026-10-16 ~19:1xZ)
+Startup: skill unattended-orchestration (+ references/main-orchestrator.md). NO crons (D-1377, launch order); wait via ONE background
+command that exits. Effort medium. Msgs only BLOCKED/DONE/GO-request/incident/launch. Card <= 40 lines; CARD-READY before 230k.
+Rules: D-1504 model = its path only (qwen3.8-flash ONLY qodercli; mimo-v2.6-flash ONLY mimo provider; muse opencode; gemini agy).
+D-1442 judge (server-L1-routing [890344]) only HIGH; standard lanes self-approve on 1 non-Claude seat. D-825 live steps need router GO.
+FREEZE ON (D-1398 L7): no Omnigraph writes until routing FREEZE OFF (keeper unaffected).
+Operator wants: report DONE for plangraph:RT-P1-E2E to routing at once when it lands.
 
-## Gen-9 landed
-- Live keeper cd85d13 -> b3d71096 (D-1490, 12:57Z; drop-in live-sync-z4-b3d71096.conf).
-- KEEPER-PG CUTOVER LIVE: keeper on Postgres since 16:43:16Z (GO D-1506 step1+2, D-1506b step3). Boundary seq 6329 hash ac87778f. Drop-in zz-pg-backend.conf (EnvironmentFile ~/.config/plangraph/pg-keeper.dsn = keeper_rt; venv ~/.local/share/plangraph/venv-pg). Admin/migrate: pg-keeper-migrate.dsn (role keeper).
-  Frozen sqlite 0400 sha256 6e6e9609; backup ~/.local/share/plangraph/backups/pg-cutover-b3d71096-20261016T164230Z. Step 4 (delete-or-archive) needs router GO >= 2026-10-18 16:43Z.
-- Record PR #35 merged main a6eb49f6 (head e5898f70 Plan-Item trailer, tests dispatch 38934446074 green). RT-P1-KEEPER-PG = in_review (evidence decision D-1506 ok + commit+ci ok; a stray D-1506b decision row shows ✗, harmless).
-- ci-newest-wins worktree removed. Worktree .claude/worktrees/keeper-pg-record (branch merged) can be removed: `git -C /home/s/code/plangraph worktree remove .claude/worktrees/keeper-pg-record`.
+## Gen-10 landed
+- RT-P1-KEEPER-PG DONE (judge ACCEPT; verdicts alibaba qwen/qodercli + xiaomi mimo judged TG n/a; note seats-archive/keeper-pg-cutover-a6eb49f6/DONE-NOTE.md). Routing D-1512.
+  Step 4 (delete-or-archive frozen sqlite + backup pg-cutover-b3d71096-20261016T164230Z) HELD: send GO-request to routing >= 2026-10-18 16:43Z.
+- RT-P1-PLANNER-KIT DONE: PR #36 merged main e70eb566 (head 9bf0a319, CI 38938032186), seat seats-archive/planner-kit-9bf0a319. L2 21fa0888 stopped, worktree removed.
 
-## NEXT (in order)
-1. JUDGE wants FRESH seats on the cutover (server-L1-routing msg ~17:2xZ): qwen3.8-flash via qodercli (alibaba) + mimo-v2.6-flash via mimo provider (xiaomi). Prompt must carry RAW outputs.
-   Evidence bundle DONE: seats-archive/keeper-pg-cutover-a6eb49f6/evidence/ (execution.md, boundary/copy-dryrun/copy-apply/rowhash/verify-pg/verify-switch/verify-snapshot/pg-head/loss-boundary, frozen-sqlite.txt, keeper-rt-privileges.txt (all DDL refused, DML on 20 tables, first post-boundary write 6330 at 16:43:40Z), go-texts-and-hba.txt, unit-effective.txt; secret scan none). Gather script: /home/s/.claude/jobs/68428f2c/tmp/gather.sh.
-   TODO: redact the PG_SEMAPHORE_URL line in unit-effective.txt; build prompt.txt = all evidence files raw + questions: (a) every gate has evidence after the boundary? (b) rollback (sqlite 0400 + backup) restorable? (c) any write between freeze and switch? (d) step 4 held? End with `VERDICT: pass|fix` and `TEST-GAMING: yes|no` lines.
-   Qwen: `cd <empty dir>; timeout 900 qodercli -p --model Qwen3.8-Flash --tools "" --no-session-persistence -o json "$(cat prompt.txt)" > out.json`, then `python3 ops/qseat.py <seatdir>/verdict-alibaba out.json`.
-   Mimo: `ops/seat.sh mimo/mimo-v2.6-flash prompt.txt <seatdir>/verdict-xiaomi keeper-pg-cutover` (gateway review-call writes review.txt + evidence.json).
-   Send judge the seat dirs + record sha a6eb49f6 (e5898f70); on ACCEPT: `python3 <(git show origin/main:tools/seat_verdict.py) --key plangraph:RT-P1-KEEPER-PG --seat-dir D --writer-family anthropic --token-dir ~/.config/plangraph` per seat.
-   Open judge question for server-L1-main/prox: which pg_hba rule admits keeper_rt live (D-1500 2c8f3d063 ACCEPT vs deployed b0f127b8; hand rule?). build-L1 cannot read pg_hba_file_rules.
-2. After KEEPER-PG done: PLANNER-KIT (deps done) -> L2 via routing "L2-LAUNCH <name> <brief> <cwd>" sonnet medium, --parent build-L1. Then WORKER/PROJECTOR after server:RT-P1-TEMPORAL-CHECK; GOVERNOR waits routing:RT-P0-BASELINE.
-3. server-L1-main [1c13b7]: PG-DRILL-POSTCUT (rows>0) told it may run. orch-setup: told lanes F/A may start (rebased >= b3d71096).
-4. ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 + worktree-proposal f3bac63 (z4 + zz-pg-backend stay).
-5. CI-RUNS-ON-WORKST: HOLD (router re-scope to private repos, S18).
-## Traps
-Drop-ins lexical order (name overrides to sort last; check /proc/<MainPID>/environ). Worktree-isolated sessions refuse complex git/gh shell lines: use plain commands or exit the worktree. Docs-only PRs trigger no CI: dispatch tests.yml on the branch. Keeper.db is frozen pre-cutover sqlite, NOT live.
+## In flight: server:RT-P1-TEMPORAL-CHECK (owner build-L1, claimed epoch 1)
+- Lease: background heartbeat loop task b0cndr9ag DIES with /clear -> after clear run `ops/pg.sh heartbeat server:RT-P1-TEMPORAL-CHECK` at once
+  (lease 40 min), then restart one background loop: `for i in 1..8; sleep 2400; ops/pg.sh heartbeat server:RT-P1-TEMPORAL-CHECK`.
+- Plan: Server docs/operations/temporal-check-live-plan.md + temporal-validation-runbook.md @ improve 314c06d42.
+- GO D-1513 (routing): T1-T6 + T9; executor prox-L1-main -> its L2 prox-L2-temporal-check (1149b99b, on home). Conditions: T0 certs = operator
+  (OS-208, being minted now); T1 floors home free mem + cloud >= 3 GB; T2 exactly 5 containers; AFTER T3: build-L1 runs keeper admin verify +
+  snapshot 200 within 5 min, red -> prox rolls back T3 (--action down). T7/T8/T10 need separate GO.
+- Done: T1 PASS (BASE_MEMAVAIL_MB 19073, swap 52 MB free/2 GB note), T2 PASS (dryrun task 164707). T3 BLOCKED on certs; prox relaunches its L2 when certs exist.
+  Log: seats-archive/temporal-check/live-log.md (append each step).
+- Keeper check after T3: `ops/pg.sh admin verify` (or `ops/pg.sh snapshot`; check `ops/pg.sh --help`) + `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/v1/snapshot` -> 200.
+- Then: T5 idle samples (+10m/+1h/+6h/+24h, prox); T9/C probes = L2 via routing `L2-LAUNCH build-L2-temporal-probes
+  /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-temporal-check-probes.md <cwd>` (needs client certs, workstation build).
+  T11 decision row (adopt / adopt-with-workarounds / fallback) with +24h sample -> send to routing, then evidence decision + done.
+- PG headroom: Temporal pools 20 conns; PG 11/60 before deploy.
+
+## Next RT-P1 by plan order
+WORKER + PROJECTOR <- TEMPORAL-CHECK; INBOX <- PROJECTOR; REVIEW <- WORKER; GOVERNOR <- routing:RT-P0-BASELINE; CLASS-COMBOS <- autoos:RT-P0-OR-DRIFT
+(router assigns RT-P0 owners next gen); E2E <- all. Briefs exist: briefs/l2-worker-code.md, l2-projector-code.md (code parts done; write live-lane briefs).
+Other: Q-API-PUSH (ex RT-P3-ASK-PUSH, HIGH, owner build-L1; orch-setup-plan @6087fe20 awaits routing). CI-RUNS-ON-WORKST re-scoped (private repos only).
+ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 + worktree-proposal f3bac63.
+## Tools
+pg CLI: `ops/pg.sh <verb>` (ready/show/claim/heartbeat/evidence --kind commit+ci --commit SHA/submit). Verdict: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
+Seat dirs: qwen via ops/qseat.py; mimo via ops/seat.sh (review-call: don't add a bare TEST-GAMING line to prompts, the standing question handles it).
+Peers: routing [5a7958], server-L1-routing [890344], prox-L1-main [8fa900] (Remote Control), server-L1-main.
