@@ -10,6 +10,7 @@ PAGE = """<!doctype html>
 *{box-sizing:border-box}
 body{margin:0 auto;max-width:42rem;padding:1rem;background:var(--bg);color:var(--fg);font:16px/1.45 system-ui,sans-serif}
 h1{font-size:1.3rem;margin:0 0 .75rem}
+h2{font-size:1.05rem;margin:1rem 0 .5rem}
 .row{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem}
 input,textarea,button{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--bd);border-radius:6px;padding:.5rem}
 input{flex:1;min-width:10rem}
@@ -31,6 +32,8 @@ textarea{width:100%;min-height:5rem;margin:.5rem 0}
 </div>
 <div id="msg" class="mut"></div>
 <div id="list"></div>
+<h2>Alarms</h2>
+<div id="alarms"></div>
 <script>
 (function(){
 var token="";
@@ -69,6 +72,32 @@ function card(q){
   c.appendChild(ta);c.appendChild(btn);c.appendChild(st);
   return c;
 }
+function alarmCard(a){
+  var c=el("div","card"),btn=el("button",null,"Acknowledge"),st=el("div","mut");
+  c.appendChild(el("div","key",a.key));
+  c.appendChild(el("div","mut",a.kind+" / "+a.workflow_id+" - age "+(a.age_s==null?"?":a.age_s)+"s"));
+  btn.addEventListener("click",function(){
+    btn.disabled=true;st.className="mut";st.textContent="acknowledging...";
+    fetch("/v1/ack_alarm",{method:"POST",headers:hdr(true),body:JSON.stringify({alarm_id:a.id})})
+    .then(function(r){return r.json().catch(function(){return {}}).then(function(b){
+      if(r.ok&&b.acked){c.remove();msg("acknowledged "+a.key,"ok")}
+      else{var t="error: "+((b&&(b.msg||b.error))||("HTTP "+r.status));
+        st.className="err";st.textContent=t;msg(t,"err");btn.disabled=false}
+    })})
+    .catch(function(e){st.className="err";st.textContent="error: "+e.message;btn.disabled=false});
+  });
+  c.appendChild(btn);c.appendChild(st);
+  return c;
+}
+function loadAlarms(){
+  fetch("/v1/alarms",{headers:hdr(false)})
+  .then(function(r){return r.json().catch(function(){return {}}).then(function(b){
+    var box=$("alarms");box.textContent="";
+    if(!r.ok||b.error){msg("error: "+((b&&(b.msg||b.error))||("HTTP "+r.status)),"err");return}
+    (Array.isArray(b.alarms)?b.alarms:[]).forEach(function(a){box.appendChild(alarmCard(a))});
+  })})
+  .catch(function(e){msg("error: "+e.message,"err")});
+}
 function load(){
   token=$("tok").value;
   if(!token){msg("enter a token first","err");return}
@@ -80,6 +109,7 @@ function load(){
     l.textContent="";
     qs.forEach(function(q){l.appendChild(card(q))});
     msg(qs.length+" open question(s)");
+    loadAlarms();
   })})
   .catch(function(e){msg("error: "+e.message,"err")});
 }
