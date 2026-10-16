@@ -32,9 +32,14 @@ export TEMPORAL_TLS_CERT=<client.pem>  TEMPORAL_TLS_KEY=<client.key>  TEMPORAL_T
 export TEMPORAL_TLS_SERVER_NAME=<name on the server cert>
 export PLANGRAPH_TEMPORAL_HTTP=https://<cluster-http-api>   # keeper side: answer signals
 export PLANGRAPH_TEMPORAL_NAMESPACE=<namespace>
-export PG_KEEPER_URL=https://<keeper-host>             # worker -> keeper (behind TLS)
-export PG_KEEPER_TOKEN=<worker-role token>             # never log it; router/system tokens stay on the keeper side
+export PG_KEEPER_URL=https://<keeper-host>             # required: the worker refuses to start without it
+export PG_KEEPER_TOKEN=<worker-role token>             # required with a URL; set-but-empty is a startup error
+# PG_KEEPER_STUB=1 would allow an in-memory keeper, but only with PG_KEEPER_URL unset: never for a live run.
+export PG_HARNESS_VERSIONS=opencode=<version>,claude=<version>  # pin; a drifted binary stops the worker
+export PG_OPENCODE_SERVER_URL=<opencode server url>    # worker leg `opencode-server` (fallback family)
+export PLANGRAPH_OPENCODE_SERVER_URL=<same url>        # review seat opencode leg adds --attach
 export PG_CONFIG=<keeper.json>                         # projector opens the keeper db from this
+# Never log tokens; router/system tokens stay on the keeper side.
 export PG_BUILD_ID=<build id>  PG_DEPLOYMENT=pg-worker # versioning; set the current version first:
 temporal worker deployment set-current-version --address "$TEMPORAL_ADDRESS" \
   --deployment-name pg-worker --build-id "$PG_BUILD_ID" --yes
