@@ -1,0 +1,51 @@
+**V1 ΓÇô Probe covers historyΓÇ»+ΓÇ»matching**
+
+*Evidence*  
+- `await client.start_workflow(... )`ΓÇ»ΓÇôΓÇ»lineΓÇ»50 invokes the **matching** service.  
+- `await handle.terminate("readiness probe")`ΓÇ»ΓÇôΓÇ»lineΓÇ»54 (and the finally blockΓÇ»57ΓÇæ59) forces the **history** service to record a termination event.  
+- `await client.get_workflow_handle(wid).describe()`ΓÇ»ΓÇôΓÇ»lineΓÇ»55 reads the workflow **history**.
+
+If the ``default`` namespace is not yet registered in the history or matching services, the first call (`start_workflow`) raises `temporalio.service.RPCError` (e.g. *NamespaceNotFound*). The probe therefore fails **exactly** while those services still lack the namespace, which is the situation observed on CI when only the gRPC frontend is ready.
+
+*Concrete failing scenario*  
+On a slow CI runner the dev server process starts, `source.connect_check()` succeeds and `source.list_workflows()` (frontend) returns, but the history/matching backΓÇæends have not yet loaded the ``default`` namespace. The probeΓÇÖs `client.start_workflow` raises `RPCError: Namespace default is not found`; `_namespace_ready` returns `False`; `DevServer.start()` loops until the namespace appears. This reproduces the CI failure.
+
+---
+
+**V2 ΓÇô Potential leaks / leftover probe workflow**
+
+*Evidence*  
+- The probe creates a **new client** each poll (linesΓÇ»46ΓÇæ48) and never calls a `close()` method (the comment on lineΓÇ»47 notes the lack of `Client.close()`). Dropping the client object releases the underlying gRPC channel when garbageΓÇæcollected.  
+- The `try ΓÇª finally` block (linesΓÇ»53ΓÇæ60) guarantees a second `terminate` attempt, swallowing only `RPCError`.  
+
+*Analysis*  
+If `handle.terminate` raises a nonΓÇæ`RPCError` (e.g., a cancellation or programming error) the exception propagates out of `_namespace_ready`. That exception is **not** caught by the `except RPCError` clause, so it bubbles up to `DevServer.start`. The outer `except BaseException` (linesΓÇ»25ΓÇæ27) treats this as a bug, stops the server, and reΓÇæraises the original exception. No probe workflow is left running in the normal success path; only in an unexpected error path would a workflow possibly remain alive, but the test would fail loudly rather than silently leaking resources.
+
+Thus, under expected conditions there is no persistent probe workflow, and any abnormal exception aborts the startΓÇæup, surfacing the problem.
+
+---
+
+**V3 ΓÇô Bounded retry and no hiddenΓÇæfailure swallowing**
+
+*Evidence*  
+- Bounded loop: `deadline = time.monotonic() + timeout` and `while time.monotonic() < deadline:` (linesΓÇ»18ΓÇæ24). The loop sleeps 0.3ΓÇ»s each iteration, guaranteeing a maximum wait of the supplied timeout (defaultΓÇ»60ΓÇ»s).  
+- Error handling: `_namespace_ready` catches **only** `RPCError` (lineΓÇ»66) and returns `False` to trigger a retry. All other exceptions propagate out of `_namespace_ready`, causing the outer `except BaseException` to stop the server and reΓÇæraise (linesΓÇ»25ΓÇæ27).  
+
+*Result*  
+Only the expected ΓÇ£namespace not readyΓÇ¥ condition (`RPCError`) triggers retries; any genuine configuration, TLS, or programming error aborts immediately. The retry logic is therefore bounded and does not hide real failures.
+
+---
+
+**V4 ΓÇô ImportError fallback for `_run`**
+
+*Evidence*  
+- The previous fallback (now removed) attempted to import `_run`; on `ImportError` it defined `_run` as `asyncio.run(factory())`. In the current version the import is unconditional (lineΓÇ»23) and the fallback code has been deleted.  
+- The comment in the diff (linesΓÇ»23ΓÇæ24) indicates that `_run` ΓÇ£runs the coroutine on a fresh loop (or on a helper thread when one is already running)ΓÇ¥. The implementation lives in `plangraph.projector.temporal_source` and is expected to handle the case of an alreadyΓÇærunning event loop.
+
+*Analysis*  
+The `ImportError` fallback was only relevant for very old versions of `plangraph.projector.temporal_source` that lacked `_run`. Modern code always provides it, so the removal does not affect behaviour. Moreover, `_run` itself is responsible for dealing with an existing asyncio loop; the test suite does not rely on the fallback. Therefore the change does **not** mask importΓÇærelated bugs nor introduce silent failures.
+
+---
+
+TEST-GAMING: yes - searched the diff for RPCError, start_workflow, terminate, describe, except, BaseException, _run, list_workflows in tests/projector_live_util.py: 9 hits  
+VERDICT: pass

@@ -1,0 +1,17 @@
+{
+  "requested_model": "ovhcloud/gpt-oss-120b",
+  "served_model": "gpt-oss-120b",
+  "served_eq_pinned": true,
+  "provider": "ovhcloud",
+  "finish_reason": "stop",
+  "verdict_line": "**VERDICT:** pass",
+  "test_gaming": "no",
+  "test_gaming_line": "TEST-GAMING: no \u0393\u00c7\u00f4 searched the repository for `skip`, `xfail`, `retry`, `sleep(`, broad `except` in test files; 0 hits",
+  "correlation_id": "a5130c2d-53fe-4aba-8437-f5d6142c9a41",
+  "call_log_id": null,
+  "session_tag": "nsflakebfa0fd9t-a1-gptoss/gpt-oss-120b/ca8fa969863a45acbd30dba760790a2b",
+  "tokens": "in 2833, out 1839",
+  "prompt_sha256": "4ad5492fda6fcdbc64c701a321c635d9a62f5c3fd6bbabb0885684a7997e80e2",
+  "review_sha256": "cbdeb6c6a6a8beee47d8c4b1f709cb351b1d9389ee138ba7c4ffae5c8f741383",
+  "gateway": "local OmniRoute, pinned model, no combo, no fallthrough, no tools"
+}

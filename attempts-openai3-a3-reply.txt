@@ -1,0 +1,24 @@
+**V1 ΓÇô Probe covers historyΓÇ»+ΓÇ»matching**  
+*File:ΓÇ»tests/projector_live_util.py, functionΓÇ»`_namespace_ready`*  
+Evidence: linesΓÇ»45ΓÇæ61 create a workflow with `client.start_workflow` (matching service), then `handle.terminate` (matching) and finally `client.get_workflow_handle(...).describe()` (history service).  
+Concrete failing scenario (if it were not covering both): a dev server where the frontend is up but the matching service still lacks the ``default`` namespace would let `list_workflows` succeed, yet `start_workflow` would raise ``RPCError: Namespace default is not found``. The current probe would catch that and return *not ready* ΓÇô showing the probe indeed exercises the needed services.
+
+**V2 ΓÇô Potential leak of probe workflow**  
+*File:ΓÇ»tests/projector_live_util.py, functionΓÇ»`_namespace_ready`*  
+Evidence: the `try ΓÇª finally` block (linesΓÇ»53ΓÇæ60) attempts a second `handle.terminate`; it only swallows `RPCError`. If termination fails with any other exception (e.g., a transient networking error that raises `grpc.RpcError` not subclassed from `temporalio.service.RPCError`) the exception propagates out of `_namespace_ready`, causing the outer `except RPCError` to miss it. The workflow then remains running.  
+Concrete failing scenario: on a very slow CI host the namespace becomes ready only afterΓÇ»30ΓÇ»seconds. During those 30ΓÇ»seconds the readiness loop fires everyΓÇ»0.3ΓÇ»s, creating a throwΓÇæaway workflow each poll. If `handle.terminate` raises a nonΓÇæ`RPCError` (e.g., `grpc.RpcError` with status `UNAVAILABLE`) the workflow is left alive. After a few dozen polls the server accumulates dozens of stray workflows, eventually hitting resource limits (open file descriptors or max workflow count) and causing subsequent `start_workflow` calls to fail with `ResourceExhausted`, breaking the test suite.
+
+**V3 ΓÇô Broad suppression of real failures**  
+*File:ΓÇ»tests/projector_live_util.py, functionΓÇ»`_namespace_ready`*  
+Evidence: the outer `except RPCError` (linesΓÇ»66ΓÇæ67) treats **any** `temporalio.service.RPCError` as ΓÇ£namespace not readyΓÇ¥. `RPCError` covers many gRPC statuses (e.g., `INTERNAL`, `UNAVAILABLE`, `PERMISSION_DENIED`).  
+Concrete failing scenario: the dev server is misΓÇæconfigured and returns `INTERNAL` errors on workflow creation. The readiness loop will keep retrying for the full 60ΓÇ»s, eventually raising a generic ΓÇ£dev server did not become readyΓÇ¥ error and obscuring the underlying `INTERNAL` cause. This hides a real failure behind the retry logic.
+
+**V4 ΓÇô ImportError fallback for `_run`**  
+*File:ΓÇ»tests/projector_live_util.py, topΓÇælevel imports*  
+Evidence: the previous fallback (`try: ΓÇª except ImportError: ΓÇª`) has been removed; now the code directly imports `_run` from `plangraph.projector.temporal_source` (linesΓÇ»24ΓÇæ31).  
+Concrete failing scenario: an environment where `plangraph.projector.temporal_source` exists but does not export `_run` (e.g., a refactor that renamed the helper). The import would raise `ImportError` and the test suite would fail immediately, rather than gracefully falling back to `asyncio.run`. However, when `_run` is present (as in the current repository) the helper runs the probe on a fresh event loop, which is appropriate for the synchronous test harness. No masking of bugs occurs.
+
+---  
+**TEST-GAMING:** no ΓÇô searched the diff for `skip`, `xfail`, `retry`, `sleep`ΓÇætoΓÇæpass and broad `except` in the test utilities: 0 hits  
+
+**VERDICT:** pass

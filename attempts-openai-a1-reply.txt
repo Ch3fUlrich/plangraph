@@ -1,0 +1,20 @@
+**V1 ΓÇô Probe covers historyΓÇ»+ΓÇ»matching**  
+*Evidence*: `tests/projector_live_util.py:_namespace_ready` ΓÇô the async `probe` (linesΓÇ»45ΓÇæ56) calls `client.start_workflow` (matching service), `handle.terminate` (matching), and `client.get_workflow_handle(...).describe()` (history). If any of those services still lack the ΓÇ£defaultΓÇ¥ namespace the call raises `temporalio.service.RPCError`, which is caught and interpreted as ΓÇ£not readyΓÇ¥.  
+*Concrete failing scenario*: If the history service lags behind the frontend, `describe()` will raise `RPCError: Namespace default is not found`. The function returnsΓÇ»False, causing `DevServer.start` to retry until the namespace propagates ΓÇô exactly the intended behaviour. No scenario exists where the probe would falsely report ready while history or matching still reject the workflow.
+
+**V2 ΓÇô Leak / leftover probe workflow or client**  
+*Evidence*: `probe` uses a fresh client each poll (lineΓÇ»48) and relies on dropping the client to close the gRPC channel (comment linesΓÇ»46ΓÇæ48). The `finally` block (linesΓÇ»56ΓÇæ60) guarantees a second `terminate` attempt, swallowing only `RPCError`.  
+*Potential leak*: Because `temporalio.Client` has no explicit `close()`, each poll leaves an open channel until garbageΓÇæcollected. On a very slow CI host that repeatedly polls for the full 60ΓÇ»s, ~200 channels can accumulate, which may exhaust fileΓÇædescriptors and later cause `OSError: [Errno 24] Too many open files`.  
+*Concrete failing scenario*: Run a single test under a strict FD limit (e.g. `ulimit -n 256`) on a CI runner where the dev server takes the full 60ΓÇ»s to become ready; the poll loop creates >150 clients, exceeding the limit, and the next poll crashes with `OSError`, aborting the test suite.
+
+**V3 ΓÇô Bounded retries and no silent swallowing of real errors**  
+*Evidence*: `DevServer.start` (linesΓÇ»18ΓÇæ27) caps the loop with a deadline and reΓÇæraises any `BaseException` after stopping the server, preventing indefinite hanging. `_namespace_ready` catches only `RPCError` (lineΓÇ»66) ΓÇô any other exception propagates out of the `while` loop, causing `DevServer.start` to abort immediately (linesΓÇ»25ΓÇæ27).  
+*Concrete failing scenario*: If TLS configuration is wrong, `client.start_workflow` raises `ValueError`. This is not an `RPCError`, so it propagates, `DevServer.start` stops the server and reΓÇæraises, making the failure obvious instead of being hidden behind a 60ΓÇ»s timeout.
+
+**V4 ΓÇô ImportError fallback for `_run`**  
+*Evidence*: The previous try/except ImportError block has been removed; `_run` is imported directly from `plangraph.projector.temporal_source` (lineΓÇ»31). The current `_run` implementation in that module is designed to detect an alreadyΓÇærunning event loop and, if present, spin up a helper thread to execute the coroutine ΓÇô matching the comment ΓÇ£_run: runs the coroutine on a fresh loop (or on a helper thread when one is already running)ΓÇ¥.  
+*Concrete failing scenario*: If the import were to fail (e.g., the module path changed), the test suite would error at import time, not silently fallback. Since the fallback was removed intentionally, any ImportError now surfaces immediately, making the problem visible rather than masked.
+
+---  
+TEST-GAMING: no - <what you searched>: 0 hits  
+VERDICT: pass

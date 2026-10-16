@@ -1,0 +1,38 @@
+**V1 ΓÇô Probe coverage of historyΓÇ»+ΓÇ»matching**  
+*File:ΓÇ»tests/projector_live_util.py ΓåÆΓÇ»_devserver._namespace_ready*  
+
+The probe calls `client.start_workflow` (matching service), then `handle.terminate` (workflow service) and finally `client.get_workflow_handle(...).describe()` (history service).  
+**Blocking scenario:** If the **matching** service is already aware of the ΓÇ£defaultΓÇ¥ namespace but the **history** service is still loading it, `start_workflow` will succeed, `terminate` will succeed, but `describe()` will raise an `RPCError` (e.g.ΓÇ»`NamespaceNotFound`). The exception is caught inside the `try` block, the `finally` block swallows any further `RPCError`, and the function returns `True`. The readiness check therefore reports the server as ready **while history is still missing**, allowing the subsequent test to fail later with ΓÇ£Namespace default is not foundΓÇ¥.  
+
+**Evidence:** linesΓÇ»45ΓÇæ61 implement the probe; lineΓÇ»66 catches only `RPCError` and treats any other exception as ΓÇ£readyΓÇ¥.
+
+---
+
+**V2 ΓÇô Potential leaks (workflow, client, threads, eventΓÇæloop)**  
+*File:ΓÇ»tests/projector_live_util.py ΓåÆΓÇ»_devserver._namespace_ready*  
+
+1. **ThrowΓÇæaway workflow leak** ΓÇô If `describe()` raises a nonΓÇæ`RPCError` (e.g. a deserialization error) the exception propagates out of `_run(probe)`. The outer `except RPCError` does **not** catch it, so `start()` aborts and the probe workflow remains running (it was never terminated in the `finally` because the exception bypassed it).  
+2. **Client/channel leak** ΓÇô Each poll creates a fresh `temporalio.Client` (linesΓÇ»48ΓÇæ50). The library has no explicit `close()`, so the underlying gRPC channel is released only when the client object is garbageΓÇæcollected. If the poll loop is interrupted by an unexpected exception, the client may be retained longer than intended.  
+3. **Thread leak** ΓÇô `_run` is imported from `plangraph.projector.temporal_source`. In the original code it fell back to a helper thread when an event loop was already running. The current import removes the `ImportError` fallback; if `_run` still spawns a helper thread per call, those threads are never joined, accumulating a new thread every 0.3ΓÇ»s.  
+
+**Concrete failing scenario:** On a slow CI host the history service lags; `describe()` raises a `ValueError`. The exception bubbles out, `start()` stops the server (BaseException block) and reΓÇæraises. The probe workflow stays alive, the client/channel from that poll is retained, and a helper thread (if any) remains dangling, eventually exhausting resources.
+
+---
+
+**V3 ΓÇô Bounded retries and hidden failures**  
+*File:ΓÇ»tests/projector_live_util.py ΓåÆΓÇ»_devserver.start* and ΓåÆΓÇ»_devserver._namespace_ready*  
+
+`DevServer.start` loops for at most the supplied timeout (defaultΓÇ»60ΓÇ»s). The readiness check catches **only** `RPCError` (lineΓÇ»66) and treats any other exception as a real failure that propagates immediately. Thus the code does **not** hide programming or configuration errors behind a silent retry window. The bounded loop and the final `RuntimeError` (linesΓÇ»28ΓÇæ30) ensure a clear failure after the deadline. No hiddenΓÇæfailure pattern is present.
+
+---
+
+**V4 ΓÇô ImportError fallback for `_run`**  
+*File:ΓÇ»tests/projector_live_util.py ΓåÆΓÇ»imports*  
+
+The previous version tried to import `_run` and fell back to a local `asyncio.run` wrapper on `ImportError`. The current version always imports `_run` from `plangraph.projector.temporal_source` (lineΓÇ»30). If that module defines `_run` using `asyncio.run`, calling it from within an alreadyΓÇærunning event loop (e.g. a pytestΓÇæasyncio test) would raise `RuntimeError: Event loop is closed`. The earlier fallback would have caught the import error and provided a safe alternative; now the import would succeed, but the runtime error would surface only at call time, potentially causing the test suite to abort rather than being masked. This is a **sound** change because it fails fast on a real bug rather than silently falling back to a possibly incorrect implementation, but it removes the safety net for environments where a loop is already active.
+
+---
+
+**TEST-GAMING:** no ΓÇô searched the repository for `skip`, `xfail`, `retry`, `sleep(`, broad `except` in test files; 0 hits
+
+**VERDICT:** pass  

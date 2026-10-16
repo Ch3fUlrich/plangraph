@@ -1,0 +1,55 @@
+**V1 ΓÇô Probe covers historyΓÇ»+ΓÇ»matching**
+
+*File / Function*: `tests/projector_live_util.py::_namespace_ready`
+
+*Evidence*:
+- LinesΓÇ»50ΓÇæ55 start a workflow (`client.start_workflow`) ΓÇô this exercises the **matching** service.
+- LinesΓÇ»54ΓÇæ55 (and the `finally` blockΓÇ»57ΓÇæ60) terminate the workflow and then call `describe()` on its handle ΓÇô `describe()` reads from the **history** service (lineΓÇ»55).
+- The `except RPCError` clause (lineΓÇ»66) treats any RPC error (including ΓÇ£Namespace default is not foundΓÇ¥) as ΓÇ£not readyΓÇ¥.
+
+*Concrete failing scenario*:  
+On a very slow CI machine the frontend is up, but the history service has not yet registered the default namespace. `client.start_workflow` succeeds (matching is ready) but `describe()` fails with an `RPCError` (namespace missing in history). The exception is caught, `_namespace_ready` returns `False`, and the start loop retries until the namespace becomes available. Thus the probe does detect the missing namespace in either service.
+
+---
+
+**V2 ΓÇô Potential leaks / stray probe workflow**
+
+*File / Function*: `tests/projector_live_util.py::_namespace_ready`
+
+*Evidence*:
+- A brandΓÇænew `temporalio.Client` is created on every poll (lineΓÇ»48). The client holds a gRPC channel that is never explicitly closed; dropping the reference relies on GC to free the channel.
+- The probe workflow is terminated twice (linesΓÇ»54,ΓÇ»58) but only `RPCError` is suppressed in the inner `except`. If `handle.terminate` raised a **different** exception (e.g., network error, `CancelledError`), that exception would escape the coroutine, cause `_run(probe)` to raise, and propagate out of `_namespace_ready`. The outer `try/except` only catches `RPCError`, so the exception would abort the server startup instead of being interpreted as ΓÇ£not readyΓÇ¥.
+
+*Concrete failing scenario*:  
+Imagine a transient network glitch while terminating the probe workflow, raising `aiohttp.ClientConnectionError` (a subclass of `Exception` but **not** `RPCError`). The coroutine propagates this exception, `_run` raises it, and `_namespace_ready` does **not** catch it. The `DevServer.start` loopΓÇÖs `try/except BaseException` (linesΓÇ»25ΓÇæ27) interprets this as a bug, stops the server, and reΓÇæraises, causing the whole test suite to fail prematurely. In addition, the unΓÇæclosed gRPC channels accumulate (Γëê200 pollsΓÇ»├ùΓÇ»1ΓÇ»channel per poll = 200 open sockets), which on a heavily parallel CI could exhaust the fileΓÇædescriptor limit and yield unrelated `RPCError`s that are mistakenly treated as ΓÇ£namespace not readyΓÇ¥.
+
+---
+
+**V3 ΓÇô Bounded retry and no silent hideΓÇæaway of real failures**
+
+*File / Function*: `tests/projector_live_util.py::DevServer.start` and `::_namespace_ready`
+
+*Evidence*:
+- The retry loop is bounded by a deadline (`deadline = time.monotonic() + timeout`) and sleeps 0.3ΓÇ»s each iteration (linesΓÇ»19ΓÇæ24). After the deadline a `RuntimeError` is raised (lineΓÇ»30) ΓÇô the logic is **bounded**.
+- `_namespace_ready` returns `False` only on `RPCError` (lineΓÇ»66). Any other exception (TLS misΓÇæconfiguration, programming bugs, unexpected gRPC codes) bubbles up to `DevServer.start`, where the generic `except BaseException` (linesΓÇ»25ΓÇæ27) stops the server and reΓÇæraises the original exception. Thus no real failure is silently swallowed or retried for the full 60ΓÇ»s.
+
+*Concrete failing scenario*:  
+If the Temporal server were started with an invalid TLS certificate, the client connection would raise a `grpc.RpcError` that is **not** a `temporalio.service.RPCError`. This exception would escape `_namespace_ready`, be caught by the outer `BaseException` handler, stop the dev server, and cause the test to fail immediately ΓÇô the failure is not hidden.
+
+---
+
+**V4 ΓÇô ImportError fallback for `_run`**
+
+*File / Function*: `tests/projector_live_util.py` (linesΓÇ»24ΓÇæ28 vs. current import)
+
+*Evidence*:
+- The previous version wrapped the import of `_run` in a `try/except ImportError` and defined a fallback that used `asyncio.run` (now removed). The fallback could silently mask importΓÇætime problems (e.g., a typo in `temporal_source` or a missing symbol) by silently falling back to a different implementation.
+- The current code imports `_run` directly (lineΓÇ»24). If `_run` is missing or broken, the import raises immediately, causing test collection to fail rather than hiding the problem behind a fallback.
+
+*Concrete failing scenario*:  
+Suppose a developer mistakenly removes the `_run` symbol from `plangraph.projector.temporal_source`. With the old fallback, the import would fail, the fallback would be used, and the tests might still pass because the fallback still runs the coroutine (albeit in a new thread). The real bug (missing `_run`) would stay unnoticed. The current direct import surfaces the problem immediately, which is the desired, safer behaviour.
+
+---
+
+**TEST-GAMING: no - searched the diff for `skip`, `xfail`, `retry`, `sleep`, broad `except` in `tests/projector_live_util.py`: 0 hits**  
+**VERDICT: pass**
