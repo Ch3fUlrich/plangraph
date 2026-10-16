@@ -2,7 +2,8 @@
 
 STANDING RULES: `docs/plans/orch-setup/briefs/COMMON.md` (binding, read first). Design sections: 3 (heartbeat), 6 (Keeper lease
 config).
-Item: `plangraph:SU-LEASE-CFG`. Independent; it can start right after approval (only SU-DOCS before it).
+Item: `plangraph:SU-LEASE-CFG`. Start it only after `plangraph:RT-P1-KEEPER-PG` (Postgres cutover) has landed on main, and
+base the branch on that head (coordination with build-L1, 2026-10-16: the same keeper files are in that port).
 
 ## READ
 - plangraph `src/plangraph/keeper/config.py:94-97,146-153` (parsed keys).

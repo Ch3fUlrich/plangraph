@@ -1,7 +1,9 @@
 # Lane A: setup core (plangraph-L2-su-core)
 
 STANDING RULES: `docs/plans/orch-setup/briefs/COMMON.md` (binding, read first). Design sections: 4, 5.
-Items, in order: `plangraph:SU-CORE`, then `plangraph:SU-ENV`. Starts once plangraph:SU-DOCS is merged.
+Items, in order: `plangraph:SU-CORE`, then `plangraph:SU-ENV`. Starts once plangraph:SU-DOCS is merged. The Python part of
+SU-ENV (keeper CLI/MCP call sites) waits for `plangraph:RT-P1-KEEPER-PG` on main (coordination with build-L1); the Rust
+part does not wait.
 
 ## READ
 - plangraph `rust/Cargo.toml` (workspace) and `rust/worker-core/src/config.rs` (existing config style).

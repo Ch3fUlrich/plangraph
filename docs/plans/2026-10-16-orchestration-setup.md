@@ -254,7 +254,7 @@ localhost URLs stay valid unchanged.
 | plangraph:SU-DOCS | Plan base + this design in docs/plans | - | the 2 base files byte-verified (body sha256), design merged via PR |
 | plangraph:SU-CORE | `plangraph` binary core: env loader, manifest, merge engine, apply/check/dry-run, exit codes | SU-DOCS | contract tests (parse-refuse, skipped on 2nd run, drift, backup only on change, atomic write, lock) green on Linux + Windows CI |
 | plangraph:SU-ENV | `.env.example`, `env check`, Python loader for keeper CLI/MCP/tools | SU-CORE | all keys of section 5 documented with defaults; precedence test; inline-secret refusal test; keeper tests green |
-| plangraph:SU-LEASE-CFG | Keeper applies lease config keys (HIGH) | SU-DOCS | test: keeper.json `default_lease` changes a claim's lease; suite green; 2 non-Claude seats |
+| plangraph:SU-LEASE-CFG | Keeper applies lease config keys (HIGH) | SU-DOCS, RT-P1-KEEPER-PG | test: keeper.json `default_lease` changes a claim's lease; suite green; 2 non-Claude seats |
 | plangraph:SU-HOOK-FLEET | Rust fleet report/inject, 1:1 port | SU-CORE | 15 ported cases green; p95 no-op < 10 ms (Windows + Linux, 200 runs, numbers in the record); Windows reparse-point refusal test |
 | plangraph:SU-HOOKS-WIRE | setup merges hook entries into settings.json | SU-HOOK-FLEET | fixture settings with foreign hooks unchanged; superseded Python entry replaced; 2nd run skipped; check reports drift |
 | autoos:SU-ADR0003A | ADR 0003a + fleet-status-hook doc points to plangraph | plangraph:SU-HOOKS-WIRE | ADR merged; docs link check green |
@@ -304,13 +304,13 @@ Rulings left to the router:
 | C launch + MCP | SU-LAUNCH, SU-RUN-TOKENS, SU-MCP-RS, SU-MCP, routing:SU-FLEET-LAUNCH-WRAP | A |
 | D repo | SU-TRAILER, SU-REPO, SU-AGENTSMD-PG/-AO/-SRV | A's SU-CORE |
 | E skills+harness | SU-SKILLS, SU-HARNESS-CFG, autoos:SU-SKILLS-CALLER | A (HARNESS after RT-P1-WORKER, CALLER after SU-CATALOG) |
-| F keeper lease | SU-LEASE-CFG | approval (independent, Python) |
+| F keeper lease | SU-LEASE-CFG | plangraph:RT-P1-KEEPER-PG on main (same keeper files; build-L1 coordination) |
 | G release | SU-RELEASE, autoos:SU-CATALOG, SU-FRESH-CHECK | SPLIT-PUBLISH, lanes A-E |
 | H guards | SU-HOOK-BASHGUARD, SU-HOOK-CTXGUARD, autoos:SU-GUARDS-CALLER | PH-ORCH-SETUP |
 | I docker | SU-DOCKER | routing:PH-RETHINK |
 
 Write sets are disjoint per lane (one module per subcommand under `rust/plangraph-cli/src/`). Lanes B-E can run in parallel
-after A; F runs at once. RT-P3 UI items are briefed by build-L1 with P3.
+after A; F and the Python half of SU-ENV wait for the keeper's Postgres cutover. RT-P3 UI items are briefed by build-L1 with P3.
 
 ## 11. Differences from the base and open points
 

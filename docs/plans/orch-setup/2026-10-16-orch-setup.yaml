@@ -3,7 +3,7 @@
 batch: 2026-10-16-orch-setup
 principal: router
 source: ../2026-10-16-orchestration-setup.md
-source_sha256: 22d00ac155d982dbf005d47f36b5da7c692ed3cc5b0ec26713677637dc245f39
+source_sha256: 7e899bd5fc81f1ad45a46ae50b63699f779822e7c3446345b6f26416393ed7df
 ops:
 - op: create
   item:
@@ -56,6 +56,7 @@ ops:
     done_criteria: 'test: a keeper.json default_lease changes a new claim''s lease; suite green (SQLite + Postgres jobs); 2 non-Claude seats'
     depends_on:
     - plangraph:SU-DOCS
+    - plangraph:RT-P1-KEEPER-PG
 - op: create
   item:
     id: SU-HOOK-FLEET

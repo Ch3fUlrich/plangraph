@@ -1,6 +1,6 @@
 # Card: plangraph-L1-orch-setup (planning L1, Opus; parent workst-L1-autoos), 2026-10-16
 
-State: DRAFT done; waiting for the routing judge pass, then operator approval.
+State: DRAFT 2ca03a4e sent to routing-00. Its next generation (after the operator /clear) gives the verdict + 5 rulings. fixes-L1 is retired (D-1455); the applier is the router or workst-L1-autoos, per the verdict. No apply or hand-off before the verdict.
 Branch: lane/orch-setup-plan, worktree H:\worktrees\plangraph-orch-setup-plan, base origin/main 27c95c3.
 
 Files:
