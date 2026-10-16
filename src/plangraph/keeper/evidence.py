@@ -119,6 +119,56 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
 # commit+ci
 # --------------------------------------------------------------------------- #
 
+def _ci_conclusion(runs: Any, commit: str) -> str | None:
+    """Newest-run-per-name CI verdict: None means ok, else the fail detail."""
+    newest: dict[str, tuple[tuple[int, str], dict]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        name = str(run.get("name", "?"))
+        rid = run.get("id")
+        rid_int = rid if isinstance(rid, int) and not isinstance(rid, bool) else 0
+        started = run.get("started_at")
+        started_str = str(started) if started is not None else ""
+        key = (rid_int, started_str)
+        prev = newest.get(name)
+        if prev is None or key > prev[0]:
+            newest[name] = (key, run)
+    if not newest:
+        return None
+    pending: list[str] = []
+    failures: list[tuple[str, str]] = []
+    seen: list[str] = []
+    for name in sorted(newest):
+        run = newest[name][1]
+        conc_raw = run.get("conclusion")
+        if conc_raw is None or (
+            isinstance(conc_raw, str) and conc_raw.strip() == ""
+        ):
+            pending.append(name)
+            continue
+        conc = str(conc_raw).strip()
+        if conc == "":
+            pending.append(name)
+            continue
+        if "status" in run and str(run.get("status")).strip().lower() != "completed":
+            pending.append(name)
+            continue
+        norm = conc.lower()
+        seen.append(norm)
+        if norm in ("success", "skipped", "neutral"):
+            continue
+        failures.append((name, str(conc_raw)))
+    if failures:
+        inner = ", ".join(f"{n}={c}" for n, c in failures)
+        return f"CI is not green for {commit} ({inner})"
+    if pending:
+        return f"CI pending for {commit} ({', '.join(pending)}), retry later"
+    if seen and all(c == "skipped" for c in seen):
+        return f"CI only skipped for {commit}"
+    return None
+
+
 class CommitCiVerifier:
     """A commit on ``main`` made for this item, dated after the claim, CI green."""
 
@@ -202,10 +252,9 @@ class CommitCiVerifier:
             return _fail(f"no CI check-runs found for {commit}", ref)
         if any(str(run.get("head_sha", "")) != commit for run in runs):
             return _fail(f"CI check-runs are for another sha than {commit}", ref)
-        not_green = [run for run in runs if str(run.get("conclusion", "")).lower() != "success"]
-        if not_green:
-            names = ", ".join(str(run.get("name", "?")) for run in not_green[:3])
-            return _fail(f"CI is not green for {commit} ({names})", ref)
+        detail = _ci_conclusion(runs, commit)
+        if detail is not None:
+            return _fail(detail, ref)
         return Result(True, f"commit {commit} on main with Plan-Item and green CI", ref)
 
 
