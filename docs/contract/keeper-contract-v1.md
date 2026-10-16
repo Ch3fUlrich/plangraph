@@ -90,7 +90,7 @@ Malformed client input must never produce `500`.
 | verb | who may call it |
 | --- | --- |
 | `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default) |
-| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review` | router |
+| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
 | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
 | `claim` | l1 or worker scoped to the item's project |
 | `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only) |
@@ -171,6 +171,7 @@ States: `open`, `claimed`, `in_review`, `done`, `cancelled`.
 | in_review | claimed | `verdict ok:false` (reviewer) | fresh lease, same epoch |
 | in_review | open | second consecutive `verdict ok:false` in one epoch | holder cleared |
 | in_review | claimed | `withdraw_review` (router) | decision names the key in `Closes:` |
+| in_review | claimed | `reopen` (router) | recorded decision, reason |
 | in_review | done | `verdict ok:true` | see review rules |
 | claimed, in_review | done | `close_on_decision` (router) | tier `none`, decision evidence, hashed batch file |
 | open, claimed, in_review | done | `answer` (router) | kind `question`/`decision`, decision names key |
@@ -229,7 +230,7 @@ Every state change appends exactly one record per effect to an append-only log.
   `changes_requested`, `review_verdict`, `review_passed`,
   `closed_on_decision`, `answered`, `cancelled`, `priority_set`,
   `waiver_set`, `legacy_state_set`, `run_recorded`, `token_minted`,
-  `outage_recorded`, `review_withdrawn`, `kind_set`, `heartbeat` (reserved).
+  `outage_recorded`, `review_withdrawn`, `kind_set`, `item_reopened`, `heartbeat` (reserved).
 
 Events per successful verb: `create_items`/`import_items` one `item_created`
 per item (legacy imports with state `claimed`/`in_review` add `claimed`
@@ -241,8 +242,8 @@ ok:false` `changes_requested`; passing verdict `review_verdict` then (when
 done) `review_passed`; `cancel` `cancelled`; `waive_second_family`
 `waiver_set`; `close_on_decision` `closed_on_decision` (`decision_ids`,
 `batch_ref`, `sha256`); `answer` `answered`; `set_legacy_state`
-`legacy_state_set`; `withdraw_review` `review_withdrawn`; `set_kind`
-`kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
+`legacy_state_set`; `withdraw_review` `review_withdrawn`; `reopen`
+`item_reopened`; `set_kind` `kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
 `item_defined` per re-pointed dependent + `cancelled` (old);
 `record_run` `run_recorded`; `mint_run_token` `token_minted` (never the token);
 `apply_ops` the events of each op, in order, in one transaction. Refused

@@ -20,7 +20,7 @@ __all__ = ["fold_tokens", "verify_tokens"]
 REVOKE_ALL = frozenset({
     "claimed", "released", "lease_expired", "cancelled", "review_passed",
     "closed_on_decision", "answered", "changes_requested", "legacy_state_set",
-    "review_withdrawn"})
+    "review_withdrawn", "item_reopened"})
 MAX_LIFE_S = 86400
 MAX_GRACE_S = 86400   # cumulative outage grace per token, as store_outbox.TOKEN_GRACE_MAX_S
 RUN_PREFIX = "run:"

@@ -242,6 +242,14 @@ kinds include `decision` (or whose done-criteria ask for no commit); the
 decision must name the key in `Closes:`. `200 {key, state:"claimed", epoch,
 lease_until}` [Withdraw]. Same epoch, fresh lease, reviewer cleared.
 
+### `POST /v1/reopen`
+Router. `{key, reason: "<=500 chars", decision_id: "D-<n>"}` for an `in_review`
+item; the decision only has to be recorded (no `Closes:` naming).
+`200 {key, state:"claimed", epoch, claimed_by, lease_until}` [Reopen]. Same
+claimant at epoch+1 (round reset, reviewer and waiver cleared, fresh lease,
+live run tokens revoked); it never closes the item. `400 validation|
+evidence_unverified|bad_state`.
+
 ### `POST /v1/set_kind`
 Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
 `operator` true and the kind's default `wait`. `200 {key, kind, was:"lane"}`

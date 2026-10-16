@@ -293,6 +293,15 @@ the item must be decision-closable: its evidence kinds include `decision`, or it
 commit/merge/CI/seats. It never records a verdict; the claimant then attaches decision evidence and the router
 closes it on the decision.
 
+## Reopen a review (PG-REOPEN)
+
+`reopen(key, reason, decision_id)` (router only; `pg reopen KEY D-NNN --reason TEXT`, MCP `reopen`) moves an
+`in_review` item back to `claimed` for the same claimant at a fresh work epoch (+1, round reset, reviewer and
+waiver cleared, fresh default lease) with one hash-chained `item_reopened` event and revokes the item's live run
+tokens. The decision only has to be recorded - no `Closes:` naming - and the reason (non-empty, <= 500 chars) is
+carried by the event. It never closes an item and never records a verdict; evidence, rounds and verdicts of the
+superseded epoch no longer count, so the claimant attaches what the new epoch relies on again.
+
 ## Operator question choices (QA-IMPORT, D-865)
 
 question / decision / operator_task items may carry `choices` = `{options: [{id, label, consequence}], default,
