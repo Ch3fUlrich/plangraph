@@ -1,4 +1,4 @@
-"""Contract 10: decision-backed router verbs (waive, withdraw, answer, close refusals).
+"""Contract 10: decision-backed router verbs (waive, withdraw, reopen, answer, close refusals).
 
 These use the fixture decisions file (capability ``decisions``): ``D-1`` is a
 plain recorded decision, ``D-2`` closes ``demo:CLOSE-1``/``ANS-1``/``WD-1`` and
@@ -66,6 +66,28 @@ def test_withdraw_review_returns_an_item_to_the_claimant(kp):
     assert row["state"] == "claimed" and row["claimed_by"] == "worker1" and row["lease_until"]
     err(kp.post("withdraw_review", "router", {"key": key, "decision_id": "D-2"}), 400, "bad_state")
     assert submit(kp, key, epoch)["round"] == 2               # the claimant may submit again
+
+
+def test_reopen_returns_in_review_item_at_new_epoch(kp):
+    need(kp, "decisions")
+    key = _fixture_item(kp, "ROPEN-1")
+    epoch = to_in_review(kp, key)
+    for who in ("lead", "worker1", "reviewer1"):
+        err(kp.post("reopen", who, {"key": key, "reason": "redo the work",
+                                    "decision_id": "D-1"}), 403, "forbidden")
+    err(kp.post("reopen", "router", {"key": key, "decision_id": "D-1"}), 400, "validation")   # no reason
+    err(kp.post("reopen", "router", {"key": key, "reason": "   ",
+                                     "decision_id": "D-1"}), 400, "validation")               # blank reason
+    err(kp.post("reopen", "router", {"key": key, "reason": "redo the work",
+                                     "decision_id": "D-999"}), 400, "evidence_unverified")
+    out = ok(kp.post("reopen", "router", {"key": key, "reason": "redo the work",
+                                          "decision_id": "D-1"}), "Reopen")
+    assert out["key"] == key and out["state"] == "claimed" and out["epoch"] == epoch + 1
+    row = show(kp, key)
+    assert row["state"] == "claimed" and row["epoch"] == epoch + 1
+    assert row["claimed_by"] == "worker1" and row["lease_until"]     # same claimant, fresh lease
+    err(kp.post("reopen", "router", {"key": key, "reason": "again",
+                                     "decision_id": "D-1"}), 400, "bad_state")
 
 
 def test_answer_closes_a_question_on_a_decision(kp):

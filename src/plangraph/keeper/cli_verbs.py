@@ -360,6 +360,13 @@ def cmd_withdraw(args, session):
                  lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
 
 
+def cmd_reopen(args, session):
+    return write(session, "reopen",
+                 {"key": args.key, "decision_id": args.decision_id,
+                  "reason": args.reason},
+                 lambda r: f"{args.key} reopened -> {r.get('state')} epoch {r.get('epoch')}")
+
+
 def cmd_set_kind(args, session):
     return write(session, "set_kind", {"key": args.key, "kind": args.kind},
                  lambda r: f"{r.get('key')} kind {r.get('was')} -> {r.get('kind')}")
