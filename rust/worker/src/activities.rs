@@ -336,6 +336,28 @@ fn merge_fenced(
     Ok(map_merge(outcome, head_of_main()?))
 }
 
+/// The keeper lock owner id of this worker process: pid plus a random suffix
+/// drawn once at first use, so two workers on different hosts (same pid) or one
+/// restarted worker never share an id. No host name goes into it or the logs.
+pub(crate) fn merge_owner_id() -> &'static str {
+    use std::hash::{BuildHasher, Hasher};
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        // RandomState is seeded from the OS per instance; two draws give 128 bits.
+        let draw = || {
+            std::collections::hash_map::RandomState::new()
+                .build_hasher()
+                .finish()
+        };
+        format!(
+            "pg-worker-{}-{:016x}{:016x}",
+            std::process::id(),
+            draw(),
+            draw()
+        )
+    })
+}
+
 /// Merge `branch` into `main_branch`: keeper lock, then fencing + file lock,
 /// then rebase / confinement / check as needed, then fast-forward. The keeper
 /// lock is released on every path; a keeper that cannot grant it means
@@ -347,7 +369,7 @@ pub(crate) fn do_merge(
     input: &MergeInput,
 ) -> Result<MergeResult, mergelock::MergeError> {
     let repo = Path::new(&input.repo);
-    let owner = format!("pg-worker-{}", std::process::id());
+    let owner = merge_owner_id();
     let fence = match keeper.acquire_merge_lock(&input.repo, &owner, merge_lock_ttl_s(cfg)) {
         Ok(f) => f,
         Err(e) => {
@@ -1005,6 +1027,18 @@ mod tests {
         assert_eq!(res.outcome, "retry_later");
         // Nothing merged.
         assert_eq!(git(p, &["rev-parse", "main"]), base);
+    }
+
+    #[test]
+    fn merge_owner_id_is_stable_in_process_and_carries_a_random_suffix() {
+        let a = merge_owner_id();
+        assert_eq!(a, merge_owner_id());
+        let rest = a
+            .strip_prefix(&format!("pg-worker-{}-", std::process::id()))
+            .expect(a);
+        assert_eq!(rest.len(), 32);
+        assert!(rest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(&rest[..16], &rest[16..], "two independent draws");
     }
 
     #[test]
