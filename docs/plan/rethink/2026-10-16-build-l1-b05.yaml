@@ -1,0 +1,70 @@
+# build-L1 2026-10-16 b05: projector follow-ups (build-L2-projector DONE note 03:2xZ, PR #16 main 7ec2bb5; contract docs/projector.md "Contract with the Card workflow (v1)").
+batch: 2026-10-16-build-l1-b05
+principal: routing-00
+source: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md
+source_sha256: 8ddbccd1129dd3609b5b6fcc01fc7d06156ce704c428301467954570d6907b96
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: RT-P1-WORKER-PROJ-V1
+    kind: lane
+    owner: build-L1
+    review_tier: high
+    evidence_kinds: [commit+ci]
+    estimate_h: 3
+    estimate_src: plan
+    priority: 2
+    track: RETHINK
+    depends_on: [plangraph:RT-P1-WORKER-CODE, plangraph:RT-P1-PROJECTOR-CODE]
+    title: 'Rust Card workflow conforms to projector contract v1'
+    done_criteria: rust/worker Card workflow follows docs/projector.md contract v1 (memo plan_key, activity type attempt, maximum_attempts=1, result exit_class/outcome); a recorded worker history projects via plangraph.projector with no unknown-shape alarm (test in CI); 2 seats incl. non-Claude
+    description: 'Projector L2 note: projector parses Card histories by contract v1; the worker (PR #13) was built in parallel and is not proven to match. Gates E2E.'
+  - project: plangraph
+    id: PROJECTOR-ATTEMPT-EVENT
+    kind: lane
+    owner: build-L1
+    review_tier: standard
+    evidence_kinds: [commit+ci]
+    estimate_h: 2
+    estimate_src: plan
+    priority: 4
+    track: RETHINK
+    depends_on: [plangraph:RT-P1-PROJECTOR-CODE]
+    title: 'Keeper event type for projected attempts'
+    done_criteria: schema.py adds an attempt event type (PG migration + SQLite upgrade); projector emits it instead of only append-only attempt rows + state_set; changelog/replay show attempts; contract tests unchanged or versioned; 1 seat
+    description: 'Projector L2 open item 1: today attempts are rows + state_set events only (no dedicated keeper event). Non-gating.'
+  - project: plangraph
+    id: PROJECTOR-RECONCILE-SCHED
+    kind: lane
+    owner: build-L1
+    review_tier: standard
+    evidence_kinds: [commit+ci]
+    estimate_h: 1
+    estimate_src: plan
+    priority: 2
+    track: RETHINK
+    depends_on: [plangraph:RT-P1-PROJECTOR-CODE]
+    title: 'Nightly projector reconcile scheduled on the keeper host'
+    done_criteria: a systemd timer (or the deploy's scheduler, not an agent cron per D-1377) runs python -m plangraph.projector reconcile nightly on the keeper host; unit + install docs in deploy/; a mismatch raises the Inbox alarm (test); 1 seat
+    description: 'Projector L2 open item 3; RT-P1-PROJECTOR done_criteria already require the nightly reconciler, this is the scheduler piece.'
+- op: edit
+  key: plangraph:RT-P1-E2E
+  fields:
+    depends_on:
+    - autoos:RT-P1-CLASS-COMBOS
+    - plangraph:RT-P1-CONTRACT
+    - plangraph:RT-P1-GOVERNOR
+    - plangraph:RT-P1-INBOX
+    - plangraph:RT-P1-PLANNER-KIT
+    - plangraph:RT-P1-PROJECTOR
+    - plangraph:RT-P1-WORKER
+    - plangraph:RT-P1-WORKER-PROJ-V1
+- op: edit
+  key: plangraph:RT-P1-PROJECTOR
+  fields:
+    depends_on:
+    - plangraph:RT-P1-KEEPER-PG
+    - plangraph:RT-P1-PROJECTOR-CODE
+    - server:RT-P1-TEMPORAL-CHECK
+    - plangraph:PROJECTOR-RECONCILE-SCHED
