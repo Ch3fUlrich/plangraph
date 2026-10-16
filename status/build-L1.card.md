@@ -14,12 +14,12 @@ PROJECTOR-LIVE-NAMESPACE-FLAKE (PR #25 ae5b749, head bfa0fd9, seat ns-flake-seat
 ## Open
 | Item | State | Next |
 |---|---|---|
-| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | doc PR #26 (trailer) -> CI green -> merge -> evidence commit+ci + 2 adjudicated verdicts (live-sync-seats/final/{gptoss,qwen}); keep f3bac63 until 10-17 06:42Z |
-| PROJECTOR-ALARMS-READER (p3) | claimed 06:5xZ (lease 08:52Z); brief briefs/l2-projector-alarms-reader.md 25bead7 | L2-LAUNCH build-L2-alarms-reader asked (coding.vm) -> MERGE-READY -> judge |
+| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | PR #26 merged afc2a4e (docs, no CI); evidence decision D-1438 ok, commit+ci unverified blocks submit -> BLOCKED to routing 06:5xZ (drop/waive); then submit + 2 verdicts live-sync-seats/final; keep f3bac63 to 10-17 06:42Z |
+| PROJECTOR-ALARMS-READER (p3) | claimed 06:5xZ (lease 08:52Z); brief briefs/l2-projector-alarms-reader.md 25bead7 | L2 build-L2-alarms-reader 8d58f6a0 launched (coding.vm) -> MERGE-READY -> judge |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: last 06:5xZ (LIVE-SYNC hb, ALARMS-READER claim); renew by 08:4xZ. L2s: live-sync + ns-flake told stop.
+Leases: last 06:5xZ (LIVE-SYNC hb, ALARMS-READER claim); renew by 08:4xZ. L2s live: alarms-reader 8d58f6a0 (coding.vm); live-sync stopped, ns-flake told stop.
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
