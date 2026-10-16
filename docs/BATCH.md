@@ -26,9 +26,21 @@ ops:                       # applied in order
   - {op: priority, key: project:ID, priority: <int>}   # router set_priority, same transaction
   - {op: rehome, key: project:ID, new_project: <project>, host: <host or omit>}
   - {op: set_kind, key: project:ID, kind: question|operator_task}   # router: open lane -> operator item
+  - {op: add_dep, key: project:ID, dep: <key or bare id>}           # link one dependency (router)
+  - {op: remove_dep, key: project:ID, dep: <key or bare id>}        # unlink one dependency (router)
 ```
 
 `rehome` only moves OPEN, non-done items (the keeper refuses others) and records an alias `old -> new`.
+
+`add_dep`/`remove_dep` change exactly ONE entry of `key`'s `depends_on` (a bare
+`dep` id means the item's own project, then the alias table) and run every
+check the `edit` op runs, in the same transaction. A dep `add_dep` already has
+or `remove_dep` lacks writes nothing and appends no event: the result carries
+`warnings` (`dependency <key> already present` / `dependency <key> not
+present`). A dep naming an item the keeper holds `cancelled` is dropped from
+the resulting list with `warning: dropped cancelled dependency <key>` instead
+of refusing (a full `edit` of `depends_on` drops it the same way); an unknown
+dep key is refused as before.
 
 Only the keys shown above are allowed (per op and top level); duplicate YAML
 keys are refused. Keys are `project:ID`. A multi-item `create` lists every
@@ -51,7 +63,7 @@ batch continues. Output: one `ok` per op, then
 exit 0; on refusal `op <n> <op> <key>: <code> <message>` plus
 `resume with --from <n>`, exit 1.
 `ref` must be a mapping; `kind`/`note`/`reason`/
-`state`/`repo`/`key` must be strings, `fields` a JSON-encodable mapping; unhashable
+`state`/`repo`/`key`/`dep` must be strings, `fields` a JSON-encodable mapping; unhashable
 YAML keys are refused (`invalid mapping key`); relative `source` resolves beside the batch file's real path (after symlinks). Token must be printable ASCII without whitespace; non-UTF-8 token files exit 2 with exception class name only.
 
 ## Atomic mode (default) and `--per-op`

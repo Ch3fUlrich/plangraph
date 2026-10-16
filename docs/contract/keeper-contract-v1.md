@@ -250,7 +250,8 @@ per item (a `create_items` item with `under` adds one `item_defined`
 `{fields: ["depends_on"]}` on the gate, in the same transaction; legacy imports
 with state `claimed`/`in_review` add `claimed`
 (+`submitted`)); `edit_definition` one `item_defined` (+`priority_set` if it
-carried `priority`); `set_priority` `priority_set`; `claim` `claimed`;
+carried `priority`; a `depends_on` entry naming a `cancelled` item is dropped
+from the edit with a `warnings` result instead of refusing); `set_priority` `priority_set`; `claim` `claimed`;
 `delegate` `delegated`; **`heartbeat` none**; `release` `released`;
 `add_evidence[_router]` `evidence_added`; `submit` `submitted`; `verdict
 ok:false` `changes_requested`; passing verdict `review_verdict` then (when
@@ -290,6 +291,8 @@ ops:                          # applied in order
   - {op: cancel, key: "demo:A", reason: "..."}
   - {op: rehome, key: "demo:A", new_project: other, host: box1}
   - {op: set_kind, key: "demo:A", kind: question}                           # or operator_task
+  - {op: add_dep, key: "demo:A", dep: "demo:B"}                             # one dependency (bare id = own project)
+  - {op: remove_dep, key: "demo:A", dep: "demo:B"}
 ```
 
 * Only the keys shown are allowed (per op and at top level); duplicate YAML
@@ -298,7 +301,15 @@ ops:                          # applied in order
 * Op to verb: `create`->`create_items`, `edit`->`edit_definition`,
   `legacy_state`->`set_legacy_state`, `add_evidence`->`add_evidence_router`,
   `close_on_decision`, `cancel`, `priority`->`set_priority`, `rehome`,
-  `set_kind`. Router only.
+  `set_kind`. `add_dep`/`remove_dep` run `edit_definition`'s inner edit on one
+  dependency and have no single route: `--per-op` posts each of them as its own
+  one-op `apply_ops` call. Router only.
+* `add_dep` (link one `dep`) and `remove_dep` (unlink it) honour the edit's
+  auth/state/graph checks in the same transaction. A dep already present
+  (`add_dep`) or absent (`remove_dep`) writes nothing and appends no event; a
+  dep naming a `cancelled` item is dropped from the resulting list with
+  `warnings: ["dropped cancelled dependency <key>"]` (a full `edit` of
+  `depends_on` drops it the same way); an unknown dep key is refused.
 * **Default mode: one `apply_ops` call** `{ops, batch_ref}`, all or nothing in
   one transaction (max 500 ops). Later ops see earlier ones; the whole graph
   is validated once at the end. Any refusal rolls everything back and names
@@ -318,7 +329,9 @@ ops:                          # applied in order
   mismatch prints `principal mismatch` and calls nothing else.
 * `apply_ops` over HTTP: `{"applied": N, "results": [...]}`; `results` holds
   one object per op in op order: `{"created": [keys]}` for `create`, and an
-  object with the affected `key` for every other op; a bad op list is
+  object with the affected `key` for every other op (an op that drops a
+  cancelled dependency or changes nothing adds `warnings: [string]`); a bad op
+  list is
   `400 validation`; the failing op's code and status are returned with the
   `op <n> ...` message; a non-router is `403`.
 
