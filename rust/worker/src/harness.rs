@@ -12,8 +12,10 @@
 //! lexically, so a broken link is judged the same as a working one.
 
 use pg_worker_core::stall::{Opts, Supervised, supervise_with_cancel};
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 
 /// One agent invocation: where it runs, which model, what to do.
 pub struct HarnessRun<'a> {
@@ -65,6 +67,148 @@ impl Harness for Opencode {
             // A self-update mid-run would replace the very binary we supervise.
             .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
         cmd
+    }
+}
+
+/// The Claude Code CLI in print mode: `claude -p <prompt> --model <m>`.
+///
+/// Same shape as [`Opencode`]: no shell, the prompt is one argv element, stdin
+/// is closed and the process runs in the attempt worktree, so the worktree
+/// sandbox and the write-set confinement apply unchanged. Claude is one leg
+/// among several, never a hard dependency of the worker.
+#[derive(Debug, Clone)]
+pub struct ClaudeCode {
+    pub bin: String,
+}
+
+impl ClaudeCode {
+    pub fn new() -> Self {
+        ClaudeCode {
+            bin: "claude".into(),
+        }
+    }
+}
+
+impl Default for ClaudeCode {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Harness for ClaudeCode {
+    fn name(&self) -> &str {
+        "claude"
+    }
+
+    fn command(&self, run: &HarnessRun) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        cmd.arg("-p")
+            .arg(run.prompt)
+            .arg("--model")
+            .arg(run.model)
+            .current_dir(run.workdir)
+            .stdin(Stdio::null())
+            // A self-update mid-run would replace the very binary we supervise.
+            .env("DISABLE_AUTOUPDATER", "1");
+        cmd
+    }
+}
+
+/// The env var naming the opencode server an [`OpencodeServer`] leg attaches to.
+pub const OPENCODE_SERVER_ENV: &str = "PG_OPENCODE_SERVER_URL";
+
+/// Why an [`OpencodeServer`] could not be built.
+#[derive(Debug, thiserror::Error)]
+pub enum HarnessConfigError {
+    #[error("{0} is not set; there is deliberately no default server")]
+    MissingServerUrl(&'static str),
+}
+
+/// `opencode run --attach <url> -m <model> <prompt>`: the opencode CLI driving
+/// an already running opencode server. This is the fallback leg when a hosted
+/// provider is rate limited. The URL comes only from configuration, never from
+/// a default, so no host is baked into the worker.
+#[derive(Debug, Clone)]
+pub struct OpencodeServer {
+    pub bin: String,
+    pub url: String,
+}
+
+impl OpencodeServer {
+    pub fn new(url: impl Into<String>) -> Self {
+        OpencodeServer {
+            bin: "opencode".into(),
+            url: url.into(),
+        }
+    }
+
+    /// Build from `PG_OPENCODE_SERVER_URL`; an unset or empty value is an error.
+    pub fn from_env() -> Result<Self, HarnessConfigError> {
+        Self::from_value(std::env::var(OPENCODE_SERVER_ENV).ok().as_deref())
+    }
+
+    /// The env lookup without the env, so it is testable without mutating it.
+    fn from_value(value: Option<&str>) -> Result<Self, HarnessConfigError> {
+        match value.map(str::trim) {
+            Some(url) if !url.is_empty() => Ok(Self::new(url)),
+            _ => Err(HarnessConfigError::MissingServerUrl(OPENCODE_SERVER_ENV)),
+        }
+    }
+}
+
+impl Harness for OpencodeServer {
+    fn name(&self) -> &str {
+        "opencode-server"
+    }
+
+    fn command(&self, run: &HarnessRun) -> Command {
+        let mut cmd = Command::new(&self.bin);
+        cmd.arg("run")
+            .arg("--attach")
+            .arg(&self.url)
+            .arg("-m")
+            .arg(run.model)
+            .arg(run.prompt)
+            .current_dir(run.workdir)
+            .stdin(Stdio::null())
+            .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
+        cmd
+    }
+}
+
+/// Harnesses by name. A leg's `harness` field selects one; a name nobody
+/// registered is a contract defect, not a crash.
+#[derive(Clone, Default)]
+pub struct HarnessRegistry {
+    by_name: HashMap<String, Arc<dyn Harness>>,
+}
+
+impl HarnessRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register `h` under `name`, replacing any earlier entry.
+    pub fn register(&mut self, name: impl Into<String>, h: Arc<dyn Harness>) -> &mut Self {
+        self.by_name.insert(name.into(), h);
+        self
+    }
+
+    /// Builder form of [`register`](Self::register).
+    pub fn with(mut self, name: impl Into<String>, h: Arc<dyn Harness>) -> Self {
+        self.register(name, h);
+        self
+    }
+
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Harness>> {
+        self.by_name.get(name).cloned()
+    }
+
+    /// Registered names, sorted.
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.by_name.keys().cloned().collect();
+        v.sort();
+        v
     }
 }
 
@@ -209,6 +353,75 @@ mod tests {
                 .and_then(|(_, v)| v),
             Some(OsStr::new("1"))
         );
+    }
+
+    fn argv(c: &Command) -> Vec<String> {
+        c.get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn claude_command_is_print_mode_without_a_shell() {
+        let run = HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "some-claude-model",
+            prompt: "fix; rm -rf $HOME",
+        };
+        let c = ClaudeCode::new().command(&run);
+        assert_eq!(c.get_program(), OsStr::new("claude"));
+        // The hostile-looking prompt stays one argv element.
+        assert_eq!(
+            argv(&c),
+            ["-p", "fix; rm -rf $HOME", "--model", "some-claude-model"]
+        );
+        assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
+    }
+
+    #[test]
+    fn opencode_server_attaches_to_the_configured_url() {
+        let run = HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "some/model",
+            prompt: "fix the bug",
+        };
+        let h = OpencodeServer::new("http://127.0.0.1:4096");
+        assert_eq!(h.name(), "opencode-server");
+        let c = h.command(&run);
+        assert_eq!(c.get_program(), OsStr::new("opencode"));
+        assert_eq!(
+            argv(&c),
+            [
+                "run",
+                "--attach",
+                "http://127.0.0.1:4096",
+                "-m",
+                "some/model",
+                "fix the bug"
+            ]
+        );
+        assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
+    }
+
+    #[test]
+    fn opencode_server_has_no_default_url() {
+        assert!(matches!(
+            OpencodeServer::from_value(None),
+            Err(HarnessConfigError::MissingServerUrl(_))
+        ));
+        assert!(OpencodeServer::from_value(Some("  ")).is_err());
+        let h = OpencodeServer::from_value(Some(" http://127.0.0.1:4096 ")).unwrap();
+        assert_eq!(h.url, "http://127.0.0.1:4096");
+    }
+
+    #[test]
+    fn registry_looks_up_by_name() {
+        let reg = HarnessRegistry::new()
+            .with("opencode", Arc::new(Opencode::new()))
+            .with("claude", Arc::new(ClaudeCode::new()));
+        assert_eq!(reg.names(), ["claude", "opencode"]);
+        assert_eq!(reg.get("claude").unwrap().name(), "claude");
+        assert!(reg.get("opencode-server").is_none());
     }
 
     struct Fake {

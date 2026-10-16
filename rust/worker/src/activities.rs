@@ -8,7 +8,7 @@
 //! `pub(crate)` functions so they can be tested without a Temporal server.
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
-use crate::harness::Harness;
+use crate::harness::HarnessRegistry;
 use crate::keeper::{Alarm, AttemptReport, Claim, Keeper};
 use crate::mergelock::{self, MergeOutcome};
 use pg_worker_core::budget;
@@ -120,7 +120,7 @@ pub struct JanitorInput {
 #[derive(Clone)]
 pub struct Deps {
     pub keeper: Arc<dyn Keeper>,
-    pub harness: Arc<dyn Harness>,
+    pub harnesses: HarnessRegistry,
     pub cfg: Config,
     pub patterns: Patterns,
 }
@@ -258,13 +258,17 @@ impl CardActivities {
         if cancelled {
             cancel_flag.store(true, Ordering::SeqCst);
         }
+        // The leg names its harness; one this worker never registered is a
+        // contract defect for the planner, not a retry for the budget (the
+        // attempt reports it, after creating its worktree).
+        let harness = deps.harnesses.get(&input.leg.harness);
         let mut handle = {
             let cancel_flag = cancel_flag.clone();
             let input = input.clone();
             tokio::task::spawn_blocking(move || {
                 let is_cancelled = || cancel_flag.load(Ordering::SeqCst);
-                attempt::run_attempt(
-                    &*deps.harness,
+                attempt::run_attempt_with(
+                    harness.as_deref(),
                     &deps.cfg,
                     &deps.patterns,
                     &input,
@@ -418,7 +422,7 @@ impl CardActivities {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::harness::HarnessRun;
+    use crate::harness::{Harness, HarnessRun};
     use crate::keeper::StubKeeper;
     use pg_worker_core::config::Tier;
     use pg_worker_core::worktree;
@@ -441,7 +445,7 @@ mod tests {
     fn deps() -> Deps {
         Deps {
             keeper: Arc::new(StubKeeper::default()),
-            harness: Arc::new(Fake),
+            harnesses: HarnessRegistry::new().with("opencode", Arc::new(Fake)),
             cfg: tiny(),
             patterns: Patterns::default(),
         }
@@ -475,6 +479,7 @@ mod tests {
                 id: "leg-1".to_string(),
                 tier: Tier::Free,
                 model: "some/model".to_string(),
+                harness: "opencode".to_string(),
             }],
             workroot: "/w".to_string(),
             main_branch: "main".to_string(),

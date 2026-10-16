@@ -602,6 +602,7 @@ fn legs_for(input: &CardInput, limited: &[String]) -> Vec<Leg> {
         .map(|l| Leg {
             id: l.id.clone(),
             tier: l.tier,
+            harness: l.harness.clone(),
             limited: limited.iter().any(|id| id == &l.id),
         })
         .collect()
@@ -680,6 +681,7 @@ mod tests {
             id: id.to_string(),
             tier,
             model: "some/model".to_string(),
+            harness: "opencode".to_string(),
         }
     }
 
@@ -725,11 +727,13 @@ mod tests {
                 Leg {
                     id: "a".to_string(),
                     tier: Tier::Free,
+                    harness: "opencode".to_string(),
                     limited: false,
                 },
                 Leg {
                     id: "b".to_string(),
                     tier: Tier::Paid,
+                    harness: "opencode".to_string(),
                     limited: true,
                 },
             ]

@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QUEUE};
 use pg_worker::attempt::LegSpec;
-use pg_worker::harness::{Harness, HarnessRun};
+use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
 use pg_worker::workflow::Card;
 use pg_worker_core::config::{Config, Tier};
@@ -46,7 +46,9 @@ const CANCEL_BUDGET: Duration = Duration::from_secs(150);
 type Handle = WorkflowHandle<Client, Card>;
 
 /// Runs `sh -c <script>` inside the attempt's worktree, standing in for a real
-/// agent CLI so a test can dictate exactly what the attempt does.
+/// agent CLI so a test can dictate exactly what the attempt does. The leg's
+/// model reaches the script as `$PG_MODEL`, so one script can behave
+/// differently per leg (for example, hit a limit on one model only).
 struct ShellHarness {
     script: String,
 }
@@ -58,7 +60,10 @@ impl Harness for ShellHarness {
 
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&self.script).current_dir(run.workdir);
+        cmd.arg("-c")
+            .arg(&self.script)
+            .env("PG_MODEL", run.model)
+            .current_dir(run.workdir);
         cmd
     }
 }
@@ -90,9 +95,14 @@ impl Env {
         let workroot_path = workroot.path().to_path_buf();
 
         let keeper = Arc::new(StubKeeper::default());
-        let harness: Arc<dyn Harness> = Arc::new(ShellHarness {
+        // The shell stands in for every harness name a leg may use, so a test
+        // picks the "family" of a leg purely by its `harness` field.
+        let shell: Arc<dyn Harness> = Arc::new(ShellHarness {
             script: script.to_string(),
         });
+        let harnesses = HarnessRegistry::new()
+            .with("opencode", shell.clone())
+            .with("claude", shell);
         // These timeouts are the activities' (heartbeat cadence, stall kill).
         // The long timeouts keep a starved host from ending an attempt by
         // timeout, so a cancel test can only pass via the cancel path; the
@@ -111,7 +121,7 @@ impl Env {
         let dyn_keeper: Arc<dyn Keeper> = keeper.clone();
         let deps = Deps {
             keeper: dyn_keeper,
-            harness,
+            harnesses,
             cfg,
             patterns: Patterns::default(),
         };
@@ -186,13 +196,20 @@ impl Env {
     /// `plan_key` from the workflow id; the caller passes the bare `id` around
     /// and `workflow_id` owns the prefix.
     async fn start(&self, id: &str, claim: Claim) -> Handle {
+        let legs = vec![LegSpec {
+            id: "leg-1".to_string(),
+            tier: Tier::Free,
+            model: "some/model".to_string(),
+            harness: "opencode".to_string(),
+        }];
+        self.start_with_legs(id, claim, legs).await
+    }
+
+    /// Like [`start`](Self::start), with the card's legs given by the caller.
+    async fn start_with_legs(&self, id: &str, claim: Claim, legs: Vec<LegSpec>) -> Handle {
         let input = CardInput {
             claim,
-            legs: vec![LegSpec {
-                id: "leg-1".to_string(),
-                tier: Tier::Free,
-                model: "some/model".to_string(),
-            }],
+            legs,
             workroot: self.workroot.to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
         };
@@ -260,6 +277,60 @@ async fn finish(name: &str, id: &str, handle: &Handle) -> CardOutput {
     .expect("card result within 120s")
     .expect("card workflow returns a result");
     record(name, id, handle).await;
+    out
+}
+
+/// `(combo, exit_class)` of every finished `attempt` activity, in order, read
+/// from the workflow history. This is the same payload the projector reads.
+async fn attempt_outcomes(handle: &Handle) -> Vec<(String, String)> {
+    let bytes = handle
+        .fetch_history(WorkflowFetchHistoryOptions::default())
+        .to_json()
+        .await
+        .expect("fetch history json");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("history is json");
+    let mut out = Vec::new();
+    for ev in value["events"].as_array().expect("events array") {
+        let Some(data) = ev["attributes"]["ActivityTaskCompletedEventAttributes"]["result"]
+            ["payloads"][0]["data"]
+            .as_str()
+        else {
+            continue;
+        };
+        let Ok(result) = serde_json::from_slice::<serde_json::Value>(&b64_decode(data)) else {
+            continue;
+        };
+        if let (Some(combo), Some(class)) =
+            (result["combo"].as_str(), result["exit_class"].as_str())
+        {
+            out.push((combo.to_string(), class.to_string()));
+        }
+    }
+    out
+}
+
+/// Standard base64 (padding optional); enough to read history payloads
+/// without a crate. Invalid characters are skipped.
+fn b64_decode(s: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => continue,
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
     out
 }
 
@@ -452,6 +523,81 @@ async fn happy_attempt_merges_into_main() {
             "keeper completed: {:?}",
             env.keeper.completed()
         );
+        env.stop();
+    })
+    .await;
+}
+
+/// D-1533: no hard Claude dependency. The first leg is a Claude-family leg that
+/// hits its usage window; the card must continue on the other family's leg
+/// without counting that as an attempt, and still merge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn usage_limit_reroutes_to_non_claude_leg() {
+    in_local(async {
+        let script = r#"if [ "$PG_MODEL" = "claude-ish/model" ]; then echo "5-hour limit reached"; exit 1; fi; echo ok > out.txt"#;
+        let Some(env) = env_or_skip("usage-limit", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-usage-limit";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-usage-limit-{}", unique());
+        let legs = vec![
+            LegSpec {
+                id: "claude-leg".to_string(),
+                tier: Tier::Free,
+                model: "claude-ish/model".to_string(),
+                harness: "claude".to_string(),
+            },
+            LegSpec {
+                id: "open-leg".to_string(),
+                tier: Tier::Free,
+                model: "open/model".to_string(),
+                harness: "opencode".to_string(),
+            },
+        ];
+        let handle = env.start_with_legs(&id, claim, legs).await;
+
+        let out = finish("usage_limit_reroute", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(
+            attempt_outcomes(&handle).await,
+            vec![
+                ("claude-leg".to_string(), "usage_limit".to_string()),
+                ("open-leg".to_string(), "ok".to_string()),
+            ]
+        );
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        env.stop();
+    })
+    .await;
+}
+
+/// A leg naming a harness this worker never registered is the plan's fault:
+/// the card goes back to the planner instead of crashing or retrying.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unknown_harness_goes_to_planner() {
+    in_local(async {
+        let Some(env) = env_or_skip("unknown-harness", "echo ok > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-unknown-harness";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-unknown-harness-{}", unique());
+        let legs = vec![LegSpec {
+            id: "ghost-leg".to_string(),
+            tier: Tier::Free,
+            model: "some/model".to_string(),
+            harness: "no-such-harness".to_string(),
+        }];
+        let handle = env.start_with_legs(&id, claim, legs).await;
+
+        let out = finish("unknown_harness", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "planner", "{out:?}");
         env.stop();
     })
     .await;

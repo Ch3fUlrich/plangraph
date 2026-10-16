@@ -88,6 +88,10 @@ impl Default for Patterns {
                 r"(?i)quota",
                 r"(?i)usage limit",
                 r"(?i)too many requests",
+                // Claude CLI: subscription window and prepaid credit exhaustion.
+                r"(?i)5-hour limit reached",
+                r"(?i)usage limit reached",
+                r"(?i)credit balance is too low",
             ],
             &[
                 r"\b5\d\d\b.*(error|unavailable|gateway|overloaded)",
@@ -95,6 +99,7 @@ impl Default for Patterns {
                 r"(?i)connection (refused|reset)",
                 r"(?i)service unavailable",
                 r"(?i)overloaded",
+                r"(?i)overloaded_error",
                 r"(?i)econnrefused|econnreset",
             ],
             &[
@@ -230,6 +235,26 @@ mod tests {
             ("502", crash("upstream returned status 502"), Outage),
             ("refused", crash("connect: Connection refused"), Outage),
             ("overloaded", crash("API is overloaded"), Outage),
+            (
+                "claude 5-hour limit",
+                crash("Claude AI usage limit: 5-hour limit reached, resets 3am"),
+                UsageLimit,
+            ),
+            (
+                "claude usage limit",
+                crash("Claude usage limit reached. Try again later"),
+                UsageLimit,
+            ),
+            (
+                "claude overloaded_error",
+                crash(r#"{"type":"error","error":{"type":"overloaded_error"}}"#),
+                Outage,
+            ),
+            (
+                "claude credit balance",
+                crash("Credit balance is too low to access the API"),
+                UsageLimit,
+            ),
             ("unknown crash", crash("segfault"), WorkerCrash),
             (
                 "500 lines is not an outage",

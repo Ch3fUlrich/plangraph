@@ -6,8 +6,9 @@
 //! 1. `ok` -> `Done`; `contract_defect` -> `ToPlanner`; `probe_fail` -> `Backoff`;
 //!    `cancelled` / `needs_input` -> `Park`; `flaky_check` -> `Quarantine`.
 //! 2. `usage_limit` / `outage` -> `Reroute` to the next unlimited leg of the same
-//!    tier, or `Wait` (exponential, jittered, capped) when every leg of the tier is
-//!    limited. These never consume attempts.
+//!    tier; failing that, to an unlimited leg of a *different harness* in any tier
+//!    (lowest tier first); else `Wait` (exponential, jittered, capped). These
+//!    never consume attempts.
 //! 3. Context overflow -> `UpgradeClass` (128k -> 256k -> 1m), then `Park`.
 //! 4. Two identical failures with an unchanged diff -> `Quarantine`.
 //! 5. Fewer than `retries_per_tier` attempts on the tier -> `Retry`; otherwise
@@ -67,6 +68,9 @@ impl Attempt {
 pub struct Leg {
     pub id: String,
     pub tier: Tier,
+    /// The agent harness / model family behind the leg (`opencode`, `claude`, ...).
+    /// Only compared for equality: a limit on one family is rerouted to another.
+    pub harness: String,
     /// Caller-tracked: currently rate-limited or down.
     pub limited: bool,
 }
@@ -190,6 +194,27 @@ fn reroute_or_wait(cfg: &Config, inp: &Input, last: &Attempt) -> Action {
                 leg: leg.id.clone(),
             };
         }
+    }
+    // Every leg of the tier is limited. No hard dependency on one provider:
+    // a limit on one harness/family (say a Claude window) falls through to an
+    // unlimited leg of another harness in ANY tier, lowest tier index first,
+    // before the card sits in a Wait. Ties keep the caller's leg order. A
+    // same-harness leg of another tier is not a fallback (it shares the limit),
+    // so that case still waits.
+    let failed_harness = inp
+        .legs
+        .iter()
+        .find(|l| l.id == last.leg)
+        .map(|l| l.harness.as_str());
+    let fallback = inp
+        .legs
+        .iter()
+        .filter(|l| !l.limited && Some(l.harness.as_str()) != failed_harness)
+        .min_by_key(|l| l.tier);
+    if let Some(leg) = fallback {
+        return Action::Reroute {
+            leg: leg.id.clone(),
+        };
     }
     let delay = exp_delay(cfg.wait_base, inp.waits, cfg.wait_cap, inp.jitter);
     Action::Wait {

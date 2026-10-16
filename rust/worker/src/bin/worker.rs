@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use pg_worker::activities::{CardActivities, Deps, TASK_QUEUE};
 use pg_worker::buildid;
-use pg_worker::harness::{Harness, Opencode};
+use pg_worker::harness::{ClaudeCode, HarnessRegistry, Opencode, OpencodeServer};
 use pg_worker::keeper::{HttpKeeper, Keeper, StubKeeper};
 use pg_worker::workflow::Card;
 use pg_worker_core::config::Config;
@@ -35,6 +35,40 @@ fn env_or(name: &str, default: &str) -> String {
     }
 }
 
+/// Opencode is always registered. Claude and the opencode server are optional
+/// legs: they exist only when their binary is on `PATH` / their URL is set, so
+/// a worker without them still runs and a card naming them becomes a planner
+/// defect instead of a crash loop.
+fn build_registry() -> HarnessRegistry {
+    let mut reg = HarnessRegistry::new();
+    let opencode_bin = env_or("PG_HARNESS_BIN", "opencode");
+    reg.register(
+        "opencode",
+        Arc::new(Opencode {
+            bin: opencode_bin.clone(),
+        }),
+    );
+    let claude_bin = env_or("PG_CLAUDE_BIN", "claude");
+    if binary_on_path(&claude_bin) {
+        reg.register("claude", Arc::new(ClaudeCode { bin: claude_bin }));
+    }
+    if let Ok(mut server) = OpencodeServer::from_env() {
+        server.bin = opencode_bin;
+        reg.register("opencode-server", Arc::new(server));
+    }
+    reg
+}
+
+/// True when `bin` is an existing path or resolves through `PATH`.
+fn binary_on_path(bin: &str) -> bool {
+    let p = std::path::Path::new(bin);
+    if p.components().count() > 1 {
+        return p.is_file();
+    }
+    std::env::var_os("PATH")
+        .is_some_and(|paths| std::env::split_paths(&paths).any(|d| d.join(bin).is_file()))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let addr = env_or("PG_TEMPORAL_ADDR", "http://127.0.0.1:7233");
@@ -44,12 +78,11 @@ async fn main() -> anyhow::Result<()> {
         Ok(url) if !url.is_empty() => Arc::new(HttpKeeper::new(&url)),
         _ => Arc::new(StubKeeper::default()),
     };
-    let harness: Arc<dyn Harness> = Arc::new(Opencode {
-        bin: env_or("PG_HARNESS_BIN", "opencode"),
-    });
+    let harnesses = build_registry();
+    println!("harnesses: {}", harnesses.names().join(", "));
     let deps = Deps {
         keeper,
-        harness,
+        harnesses,
         cfg: Config::default(),
         patterns: Patterns::default(),
     };

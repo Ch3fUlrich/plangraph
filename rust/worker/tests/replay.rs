@@ -60,6 +60,14 @@ async fn replays_check_fails() {
 }
 
 #[tokio::test]
+async fn replays_usage_limit_reroute() {
+    replayer()
+        .replay_workflow(history("usage_limit_reroute"))
+        .await
+        .expect("usage_limit_reroute history replays");
+}
+
+#[tokio::test]
 async fn replays_cancel() {
     replayer()
         .replay_workflow(history("cancel"))
