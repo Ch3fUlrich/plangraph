@@ -65,6 +65,10 @@ impl Card {
         // the activity.
         let op = ctx.cancellation_token().child_token();
         ctx.state_mut(|s| s.op = Some(op.clone()));
+        // A signal can be applied before this body runs, when `op` was still empty.
+        if ctx.state(|s| s.cancel_requested) {
+            op.cancel_with_reason("cancel before start".to_string());
+        }
 
         // Local state, rebuilt exactly on replay.
         let mut history: Vec<Attempt> = Vec::new();
@@ -77,6 +81,11 @@ impl Card {
         let mut leg: LegSpec = input.legs[0].clone();
 
         loop {
+            // A cancel that landed between attempts must not start another one.
+            if ctx.state(|s| s.cancel_requested) {
+                run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                return Ok(cancelled(n));
+            }
             n += 1;
 
             // Time and jitter enter the workflow only here.
@@ -84,6 +93,13 @@ impl Card {
                 .execute_activity(CardActivities::tick, (), activity_options(&cfg))
                 .await?;
             let now = UNIX_EPOCH + Duration::from_millis(tick.unix_ms);
+
+            // A cancel that landed while `tick` ran would hit an `op` no activity is
+            // listening to yet, so it is checked again before the attempt is scheduled.
+            if ctx.state(|s| s.cancel_requested) {
+                run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                return Ok(cancelled(n - 1));
+            }
 
             // The budget, not Temporal, decides retries: one attempt per activity run.
             let retry = RetryPolicy::builder()

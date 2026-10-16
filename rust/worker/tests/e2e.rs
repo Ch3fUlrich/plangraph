@@ -66,12 +66,14 @@ struct Env {
     keeper: Arc<StubKeeper>,
     client: Client,
     task_queue: String,
-    worker: tokio::task::JoinHandle<()>,
+    worker: std::cell::RefCell<Option<tokio::task::JoinHandle<()>>>,
+    /// A built worker not yet polling, for tests that signal before any worker runs.
+    held: std::cell::RefCell<Option<Worker>>,
     _runtime: Runtime,
 }
 
 impl Env {
-    async fn new(addr: &str, name: &str, script: &str) -> Env {
+    async fn new(addr: &str, name: &str, script: &str, start: bool) -> Env {
         let repo = tempfile::tempdir().expect("repo tempdir");
         let repo_path = repo.path().to_path_buf();
         let base_sha = init_repo(&repo_path);
@@ -128,9 +130,14 @@ impl Env {
         let mut worker = Worker::new(&runtime, wclient, opts).expect("build worker");
         // The run loop only ends on shutdown or an unresolvable error; the test
         // aborts it in `Drop`, so the value is intentionally discarded.
-        let worker = tokio::task::spawn_local(async move {
-            let _ = worker.run().await;
-        });
+        let (worker, held) = if start {
+            let handle = tokio::task::spawn_local(async move {
+                let _ = worker.run().await;
+            });
+            (Some(handle), None)
+        } else {
+            (None, Some(worker))
+        };
 
         Env {
             _repo: repo,
@@ -141,7 +148,8 @@ impl Env {
             keeper,
             client,
             task_queue,
-            worker,
+            worker: std::cell::RefCell::new(worker),
+            held: std::cell::RefCell::new(held),
             _runtime: runtime,
         }
     }
@@ -184,14 +192,26 @@ impl Env {
     }
 
     fn stop(&self) {
-        self.worker.abort();
+        if let Some(w) = self.worker.borrow().as_ref() {
+            w.abort();
+        }
+    }
+
+    /// Begin polling with a worker that was built but held back.
+    fn resume(&self) {
+        if let Some(mut worker) = self.held.borrow_mut().take() {
+            let handle = tokio::task::spawn_local(async move {
+                let _ = worker.run().await;
+            });
+            *self.worker.borrow_mut() = Some(handle);
+        }
     }
 }
 
 impl Drop for Env {
     fn drop(&mut self) {
         // Abort the poll loop before the temporary directories are removed.
-        self.worker.abort();
+        self.stop();
     }
 }
 
@@ -199,7 +219,16 @@ impl Drop for Env {
 /// print the skip line and return.
 async fn env_or_skip(name: &str, script: &str) -> Option<Env> {
     match std::env::var("PG_TEMPORAL_ADDR") {
-        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script).await),
+        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script, true).await),
+        _ => None,
+    }
+}
+
+/// Like `env_or_skip`, but the worker is built and held: nothing polls until
+/// `Env::resume`, so a workflow and its signals queue up first.
+async fn env_or_skip_paused(name: &str, script: &str) -> Option<Env> {
+    match std::env::var("PG_TEMPORAL_ADDR") {
+        Ok(addr) if !addr.is_empty() => Some(Env::new(&addr, name, script, false).await),
         _ => None,
     }
 }
@@ -421,7 +450,8 @@ async fn cancel_signal_stops_a_running_attempt() {
         // The attempt sleeps for ten minutes, far past the deadline below, so a
         // pass can only mean the cancel signal killed it rather than the script
         // ending on its own.
-        let Some(env) = env_or_skip("cancel", "sleep 600").await else {
+        let marker = started_marker();
+        let Some(env) = env_or_skip("cancel", &started_script(&marker)).await else {
             println!("skipped: PG_TEMPORAL_ADDR unset");
             return;
         };
@@ -429,10 +459,9 @@ async fn cancel_signal_stops_a_running_attempt() {
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
         let handle = env.start(&format!("e2e-cancel-{}", unique()), claim).await;
 
-        // Time the whole cancellation from just before the signal. The 25s
-        // budget covers the 2s settle plus the time to reap the sleeping attempt.
+        // Signal only once the harness is really running, not after a guess.
+        wait_for_marker(&marker).await;
         let started = std::time::Instant::now();
-        tokio::time::sleep(Duration::from_secs(2)).await;
         handle
             .signal(
                 Card::cancel,
@@ -456,6 +485,105 @@ async fn cancel_signal_stops_a_running_attempt() {
             elapsed < Duration::from_secs(25),
             "cancel took {elapsed:?}, expected under 25s"
         );
+        env.stop();
+    })
+    .await;
+}
+
+/// A marker path the harness touches the moment it starts running.
+fn started_marker() -> PathBuf {
+    std::env::temp_dir().join(format!("pg-e2e-started-{}", unique()))
+}
+
+fn started_script(marker: &Path) -> String {
+    format!("touch '{}'; sleep 600", marker.display())
+}
+
+/// Poll until the harness has touched `marker`.
+async fn wait_for_marker(marker: &Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "attempt never started (no marker)"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Send `cancel` and require a `cancelled` outcome inside the budget.
+async fn cancel_and_expect(env: &Env, handle: &Handle) {
+    let started = std::time::Instant::now();
+    handle
+        .signal(
+            Card::cancel,
+            "operator".to_string(),
+            WorkflowSignalOptions::default(),
+        )
+        .await
+        .expect("send cancel signal");
+    let out = tokio::time::timeout(
+        Duration::from_secs(25),
+        handle.get_result(WorkflowGetResultOptions::default()),
+    )
+    .await
+    .expect("cancel takes effect within 25s")
+    .expect("cancelled card returns a result");
+    assert_eq!(out.outcome, "cancelled", "{out:?}");
+    assert!(started.elapsed() < Duration::from_secs(25));
+    env.stop();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_immediately_after_start_is_honoured() {
+    in_local(async {
+        let marker = started_marker();
+        let Some(env) = env_or_skip("cancel-now", &started_script(&marker)).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-cancel-now", &["out.txt"], "test -f out.txt");
+        let handle = env
+            .start(&format!("e2e-cancel-now-{}", unique()), claim)
+            .await;
+        // No settle at all: the signal races the workflow's first tasks.
+        cancel_and_expect(&env, &handle).await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_while_the_first_activity_is_pending_is_honoured() {
+    in_local(async {
+        let marker = started_marker();
+        let Some(env) = env_or_skip_paused("cancel-pending", &started_script(&marker)).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-cancel-pending", &["out.txt"], "test -f out.txt");
+        let handle = env
+            .start(&format!("e2e-cancel-pending-{}", unique()), claim)
+            .await;
+        // Nothing polls yet, so the first activity is queued and unstarted when the
+        // signal lands; the worker only comes up afterwards.
+        handle
+            .signal(
+                Card::cancel,
+                "operator".to_string(),
+                WorkflowSignalOptions::default(),
+            )
+            .await
+            .expect("send cancel signal");
+        env.resume();
+        let out = tokio::time::timeout(
+            Duration::from_secs(25),
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("cancel takes effect within 25s")
+        .expect("cancelled card returns a result");
+        assert_eq!(out.outcome, "cancelled", "{out:?}");
+        assert!(!marker.exists(), "no attempt may start after the cancel");
         env.stop();
     })
     .await;
