@@ -10,7 +10,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 |---|---|
 | `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` |
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
-| `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold) |
+| `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`. |
 | `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…, ctx=…, batch_roots=…)`, mixed in from `store_create`/`store_verbs`/`store_review`/`store_waiver`/`store_close`/`store_read`/`store_reap`/`store_support`; every verb takes `(principal, …)` |
 | `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
@@ -32,6 +32,14 @@ priority, source, note, description, host, corrects, state, epoch, claimed_by, d
 Event types: `item_created, item_defined, claimed, delegated, released, lease_expired, evidence_added, submitted,
 changes_requested, review_passed, cancelled, priority_set, kind_set`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
 transaction as the event; `verify_integrity` proves cache == fold.
+
+**Unknown event types (PG-FOLD-UNKNOWN-TYPE).** A `type` outside `schema.EVENT_TYPES` was written by a newer keeper: this build cannot
+replay it, so `fold(events, unknown=…)` records `{"seq","type","key"}` in an optional side channel and never touches item state (the
+event is otherwise skipped, so the cache cannot drift and an old rebuild cannot undo it). `verify_integrity` turns each entry into one
+problem `{"key": key-or-None, "code": "unknown_event_type", "field": "type", "expected": None, "got": kind, "seq": seq}`; `pg admin
+verify` prints it as `KEY unknown_event_type type=… seq=…` (`-` for a keeper-level, keyless event). Types in `EVENT_TYPES` with no fold
+branch — `review_verdict`, `token_minted`, `outage_recorded` — are known no-ops (replayed by `token_fold`/the store) and are **never**
+reported as unknown.
 
 ## Locking (prevention)
 Triggers key off `EXISTS (SELECT 1 FROM events WHERE key=… AND type IN ('review_passed','closed_on_decision'))` (never the cache) — the
