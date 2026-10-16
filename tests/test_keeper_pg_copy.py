@@ -19,7 +19,8 @@ needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service 
 
 TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
           "outbox_seen", "audit_log", "audit_findings",
-          "cards", "attempts", "decisions", "questions", "answers", "budget")
+          "cards", "attempts", "decisions", "questions", "answers", "budget",
+          "projector_applied", "projector_watermark", "projector_alarms")
 
 
 @pytest.fixture
@@ -177,3 +178,57 @@ def test_apply_copies_verbatim_and_refuses_a_second_run(source, cfg_path, capsys
         import psycopg
         with psycopg.connect(DSN, autocommit=True) as raw:
             raw.execute(f'DROP SCHEMA IF EXISTS "{db_pg.derive_schema(cfg.db)}" CASCADE')
+
+
+PROJECTOR_ROWS = (
+    "INSERT INTO projector_applied(workflow_id,run_id,activity_id,attempt,kind,key,n,applied_at)"
+    " VALUES('wf-1','run-1','act-1',1,'attempt','plan:a',3,'2026-01-01T00:00:00Z'),"
+    "('wf-1','run-1','act-1',1,'state','plan:a',NULL,'2026-01-01T00:00:01Z')",
+    "INSERT INTO projector_watermark(workflow_id,run_id,run_ord,event_id,status,plan_key,updated_at)"
+    " VALUES('wf-1','run-1',2,17,'running','plan:a','2026-01-01T00:00:02Z')",
+    "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at,cleared_at)"
+    " VALUES(4,'drift','wf-1','plan:a','d','2026-01-01T00:00:03Z',NULL),"
+    "(9,'drift','wf-1','plan:b','e','2026-01-01T00:00:04Z','2026-01-01T00:00:05Z')",
+)
+PROJECTOR_TABLES = ("projector_applied", "projector_watermark", "projector_alarms")
+
+
+@needs_pg
+def test_projector_tables_are_counted_and_copied_verbatim(source, cfg_path, capsys):
+    from plangraph.keeper import db_pg
+    cfg = config.load_config(cfg_path)
+    raw = sqlite3.connect(str(source), isolation_level=None)
+    try:
+        for stmt in PROJECTOR_ROWS:
+            raw.execute(stmt)
+        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        order = {"projector_applied": "workflow_id,run_id,activity_id,attempt,kind",
+                 "projector_watermark": "workflow_id", "projector_alarms": "id"}
+        want = {t: [tuple(r) for r in raw.execute(f"SELECT * FROM {t} ORDER BY {order[t]}")]
+                for t in PROJECTOR_TABLES}
+    finally:
+        raw.close()
+    counts, _ = raw_counts(source)
+    assert [counts[t] for t in PROJECTOR_TABLES] == [2, 1, 2]
+    try:
+        assert copy(cfg_path, "--dry-run", "--src", str(source)) == 0
+        rows = {line.split()[0]: line.split()[1] for line in capsys.readouterr().out.splitlines()
+                if line.split() and line.split()[0] in PROJECTOR_TABLES}
+        assert rows == {t: str(counts[t]) for t in PROJECTOR_TABLES}
+        assert copy(cfg_path, "--apply", "--src", str(source)) == 0
+        assert "copied and verified" in capsys.readouterr().out
+        conn = kdb.open_db(cfg.db, backend="postgres", dsn=DSN)
+        try:
+            for t in PROJECTOR_TABLES:
+                assert conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] == counts[t]
+                have = [tuple(r) for r in conn.execute(
+                    f"SELECT * FROM {t} ORDER BY {order[t]}")]
+                assert have == want[t]
+        finally:
+            conn.close()
+        assert copy(cfg_path, "--apply", "--src", str(source)) == 2
+        assert "not empty" in capsys.readouterr().err
+    finally:
+        import psycopg
+        with psycopg.connect(DSN, autocommit=True) as pg:
+            pg.execute(f'DROP SCHEMA IF EXISTS "{db_pg.derive_schema(cfg.db)}" CASCADE')
