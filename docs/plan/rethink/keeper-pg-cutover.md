@@ -42,10 +42,11 @@ Backup of the stopped db (folds WAL): `mkdir -p -m 700 $LIVE/backups/pg-cutover-
 The keeper has no read-only flag. Read-only = the old unit **stopped** and the SQLite file `chmod 0400` for 48 h; reads go to the new PG keeper; offline readers use the signed `plan.snapshot.json` fallback (`pg sync pull`, cli_local READ-ONLY fallback). Writes to the old keeper are impossible by construction.
 Freeze fingerprint (done at the end of section 2, after the unit is stopped and the backup is taken):
 ```
+# Run every command block of sections 2-7 as a script under `bash -eo pipefail` (or stop at the first non-zero rc); a failed gate must never fall through to the next line.
 # WAL gate (the keeper runs journal_mode=WAL, db.py open_db): committed frames may live only in keeper.db-wal. Never delete a non-empty WAL.
 { [ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');r=c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone();c.close();raise SystemExit(r[0])"; } \
   && [ ! -s $LIVE/keeper.db-wal ] && echo WAL-EMPTY-OR-MISSING || { echo "checkpoint failed or WAL still non-empty: STOP, do not hash, report to router"; false; }   # unit is stopped; checkpoint rc is checked (busy flag 0) AND the WAL re-tested
-rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal         # only reached with a missing or 0-byte WAL (the 0-byte file holds no frames)
+[ ! -s $LIVE/keeper.db-wal ] && rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal   # re-tested and bound with &&: only a missing or 0-byte WAL is deleted (it holds no frames)
 chmod 0400 $LIVE/keeper.db
 sha256sum $LIVE/keeper.db | tee $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256
 ```
@@ -93,9 +94,9 @@ systemctl --user stop plangraph-keeper                                          
 systemctl --user stop plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer
 rm ~/.config/systemd/user/plangraph-keeper.service.d/pg-backend.conf             # switch the env back (or restore plangraph-keeper.service.d.pre-pg)
 systemctl --user daemon-reload
-chmod 0600 $LIVE/keeper.db
 [ ! -s $LIVE/keeper.db-wal ] || { echo "non-empty WAL: never delete it; STOP, report"; false; }   # at freeze it was folded and removed; a non-empty one now means a stray writer
-rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal   # 0-byte or missing only
+[ ! -s $LIVE/keeper.db-wal ] && rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal   # 0-byte or missing only
+chmod 0600 $LIVE/keeper.db                       # only after the WAL guard passed
 systemctl --user start plangraph-keeper                                          # old unit, sqlite config unchanged
 unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA                                         # clean shell so the CLI hits sqlite
 pg --config $KJ admin verify; pg --config $KJ whoami; pg --config $KJ ready      # rc0 each
