@@ -32,14 +32,19 @@ pub fn tail_lines(text: &str, n: usize) -> String {
 }
 
 /// Run `cmd` via `sh -c` in `dir`; kill it after `timeout`.
+///
+/// The child gets the secret-free environment of [`crate::sandbox_env`] and a
+/// private `HOME` next to `dir`, never the worker's own environment.
 pub fn run_check(
     cmd: &str,
     dir: &Path,
     timeout: Duration,
     tail_n: usize,
 ) -> io::Result<CheckResult> {
+    let home = crate::sandbox_env::HomeGuard::for_dir(dir)?;
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd).current_dir(dir);
+    crate::sandbox_env::confine(&mut c, home.path());
     let opts = Opts {
         timeout: Some(timeout),
         grace: Duration::from_secs(2),
@@ -79,6 +84,30 @@ mod tests {
         std::fs::write(d.path().join("marker"), "").unwrap();
         let r = run_check("ls marker; echo e >&2", d.path(), T, 50).unwrap();
         assert!(r.tail.contains("marker") && r.tail.contains('e'));
+    }
+
+    #[test]
+    fn check_runs_without_worker_secrets_and_with_a_private_home() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("c1-1");
+        std::fs::create_dir(&dir).unwrap();
+        // Unique to this test: no other test reads or sets it.
+        std::env::set_var("PG_SENTINEL_SECRET_CHECK", "hunter2");
+        let r = run_check("env", &dir, T, 500).unwrap();
+        assert!(r.passed());
+        assert!(
+            !r.tail.contains("SENTINEL") && !r.tail.contains("hunter2"),
+            "{}",
+            r.tail
+        );
+        let home = root.path().join("c1-1.home");
+        assert!(
+            r.tail.contains(&format!("HOME={}", home.display())),
+            "{}",
+            r.tail
+        );
+        // The private home is removed once the check is done.
+        assert!(!home.exists());
     }
 
     #[test]

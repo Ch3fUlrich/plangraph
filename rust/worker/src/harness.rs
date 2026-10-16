@@ -28,6 +28,11 @@ pub struct HarnessRun<'a> {
 pub trait Harness: Send + Sync {
     fn name(&self) -> &str;
     fn command(&self, run: &HarnessRun) -> Command;
+    /// The executable behind this harness, for the startup version pin.
+    /// `None` for a harness with no single binary (a test double).
+    fn binary(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// The `opencode run` CLI.
@@ -53,6 +58,10 @@ impl Default for Opencode {
 impl Harness for Opencode {
     fn name(&self) -> &str {
         "opencode"
+    }
+
+    fn binary(&self) -> Option<&str> {
+        Some(&self.bin)
     }
 
     fn command(&self, run: &HarnessRun) -> Command {
@@ -98,6 +107,10 @@ impl Default for ClaudeCode {
 impl Harness for ClaudeCode {
     fn name(&self) -> &str {
         "claude"
+    }
+
+    fn binary(&self) -> Option<&str> {
+        Some(&self.bin)
     }
 
     fn command(&self, run: &HarnessRun) -> Command {
@@ -161,6 +174,10 @@ impl Harness for OpencodeServer {
         "opencode-server"
     }
 
+    fn binary(&self) -> Option<&str> {
+        Some(&self.bin)
+    }
+
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
         cmd.arg("run")
@@ -214,15 +231,120 @@ impl HarnessRegistry {
 
 /// Build the command for `h` and run it under the stall/timeout watchdog.
 ///
+/// The child never inherits the worker's environment: it gets the allowlist of
+/// [`pg_worker_core::sandbox_env`] (`PATH`, `LANG`, `TERM`, toolchain
+/// locations, the agent CLIs' own `OPENCODE_*` / `CLAUDE_CODE_*` settings),
+/// whatever the harness set on its command itself, and `home` as `HOME`.
+/// `PG_*`, `TEMPORAL_*` and provider keys therefore stay with the worker.
+///
 /// `cancelled` is polled while the child runs so a cancel kills the process
 /// group promptly instead of waiting for stall, timeout or natural exit.
 pub fn run_harness(
     h: &dyn Harness,
     run: &HarnessRun,
+    home: &Path,
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
 ) -> std::io::Result<Supervised> {
-    supervise_with_cancel(h.command(run), opts, cancelled)
+    let mut cmd = h.command(run);
+    pg_worker_core::sandbox_env::confine(&mut cmd, home);
+    supervise_with_cancel(cmd, opts, cancelled)
+}
+
+/// Env var pinning harness versions, `name=version` pairs separated by commas
+/// (for example `opencode=1.2.3,claude=2.0.1`). Unset means no pin.
+pub const VERSIONS_ENV: &str = "PG_HARNESS_VERSIONS";
+
+/// Why the startup version pin refused to start the worker.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PinError {
+    #[error("{VERSIONS_ENV} entry {0:?} is not name=version")]
+    Malformed(String),
+    #[error("harness {0:?} is pinned but not registered or has no binary")]
+    Unavailable(String),
+    #[error("harness {name:?} could not report its version: {why}")]
+    Unrunnable { name: String, why: String },
+    #[error("harness {name:?} is version {found:?}, pinned to {want:?}")]
+    Mismatch {
+        name: String,
+        want: String,
+        found: String,
+    },
+}
+
+/// Parse `name=version,name=version`. Empty entries are skipped.
+pub fn parse_pins(spec: &str) -> Result<Vec<(String, String)>, PinError> {
+    let mut out = Vec::new();
+    for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        match part.split_once('=') {
+            Some((n, v)) if !n.trim().is_empty() && !v.trim().is_empty() => {
+                out.push((n.trim().to_string(), v.trim().to_string()));
+            }
+            _ => return Err(PinError::Malformed(part.to_string())),
+        }
+    }
+    Ok(out)
+}
+
+/// True when the `--version` output names exactly `want` as one of its
+/// whitespace-separated tokens (a leading `v` is ignored), so `1.2.3` does not
+/// match `1.2.30`.
+fn version_matches(output: &str, want: &str) -> bool {
+    let want = want.trim_start_matches('v');
+    output
+        .split_whitespace()
+        .any(|t| t.trim_start_matches('v') == want)
+}
+
+/// Fail closed on a version drift: for every pinned name run `<bin> --version`
+/// and require the pinned version. A pinned harness that is not registered, has
+/// no binary, cannot run or reports another version is an error. Harnesses
+/// without a pin are not checked.
+pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(), PinError> {
+    for (name, want) in pins {
+        let bin = reg
+            .get(name)
+            .and_then(|h| h.binary().map(str::to_string))
+            .ok_or_else(|| PinError::Unavailable(name.clone()))?;
+        let mut cmd = Command::new(&bin);
+        cmd.arg("--version").stdin(Stdio::null());
+        let opts = Opts {
+            timeout: Some(std::time::Duration::from_secs(15)),
+            grace: std::time::Duration::from_secs(1),
+            ..Opts::default()
+        };
+        let r = pg_worker_core::stall::supervise(cmd, &opts).map_err(|e| PinError::Unrunnable {
+            name: name.clone(),
+            why: e.to_string(),
+        })?;
+        let out = String::from_utf8_lossy(&r.output).into_owned();
+        if r.code != Some(0) || r.timed_out {
+            return Err(PinError::Unrunnable {
+                name: name.clone(),
+                why: format!("exit {:?}, timed out: {}", r.code, r.timed_out),
+            });
+        }
+        if !version_matches(&out, want) {
+            return Err(PinError::Mismatch {
+                name: name.clone(),
+                want: want.clone(),
+                found: out.trim().to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Apply [`VERSIONS_ENV`] (already read by the caller) to `reg`. `None` or an
+/// empty value is "no pin": the caller logs a warning and goes on.
+pub fn check_version_pins(reg: &HarnessRegistry, spec: Option<&str>) -> Result<bool, PinError> {
+    match spec.map(str::trim) {
+        Some(s) if !s.is_empty() => {
+            verify_pins(reg, &parse_pins(s)?)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 /// Errors from the symlink sandbox check.
@@ -447,12 +569,173 @@ mod tests {
             model: "m",
             prompt: "p",
         };
-        let r = run_harness(&Fake { script: "echo hi" }, &run, &Opts::default(), &|| {
-            false
-        })
+        let home = tempfile::tempdir().unwrap();
+        let r = run_harness(
+            &Fake { script: "echo hi" },
+            &run,
+            home.path(),
+            &Opts::default(),
+            &|| false,
+        )
         .unwrap();
         assert_eq!(r.code, Some(0));
         assert!(String::from_utf8_lossy(&r.output).contains("hi"));
+    }
+
+    #[test]
+    fn harness_child_does_not_see_worker_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let run = HarnessRun {
+            workdir: dir.path(),
+            model: "m",
+            prompt: "p",
+        };
+        // Unique to this test: no other test reads or sets it.
+        // SAFETY: nothing else touches this name, and the child is spawned below.
+        unsafe { std::env::set_var("PG_SENTINEL_SECRET_HARNESS", "hunter2") };
+        let r = run_harness(
+            &Fake { script: "env" },
+            &run,
+            home.path(),
+            &Opts::default(),
+            &|| false,
+        )
+        .unwrap();
+        let out = String::from_utf8_lossy(&r.output).into_owned();
+        assert!(
+            !out.contains("SENTINEL") && !out.contains("hunter2"),
+            "{out}"
+        );
+        assert!(
+            out.contains(&format!("HOME={}", home.path().display())),
+            "{out}"
+        );
+        assert!(out.contains("PATH="), "{out}");
+    }
+
+    #[test]
+    fn harness_own_env_survives_the_scrub() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let run = HarnessRun {
+            workdir: dir.path(),
+            model: "m",
+            prompt: "p",
+        };
+        // The real harnesses set this on their own command.
+        struct Own;
+        impl Harness for Own {
+            fn name(&self) -> &str {
+                "own"
+            }
+            fn command(&self, _r: &HarnessRun) -> Command {
+                let mut c = Command::new("sh");
+                c.arg("-c")
+                    .arg("echo auto=$OPENCODE_DISABLE_AUTOUPDATE")
+                    .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
+                c
+            }
+        }
+        let r = run_harness(&Own, &run, home.path(), &Opts::default(), &|| false).unwrap();
+        assert!(String::from_utf8_lossy(&r.output).contains("auto=1"));
+    }
+
+    #[test]
+    fn real_harnesses_report_their_binary() {
+        assert_eq!(Opencode::new().binary(), Some("opencode"));
+        assert_eq!(ClaudeCode::new().binary(), Some("claude"));
+        assert_eq!(OpencodeServer::new("u").binary(), Some("opencode"));
+        assert_eq!(Fake { script: "" }.binary(), None);
+    }
+
+    #[test]
+    fn pins_parse_and_reject_garbage() {
+        assert_eq!(
+            parse_pins("opencode=1.2.3, claude=2.0.1,").unwrap(),
+            vec![
+                ("opencode".to_string(), "1.2.3".to_string()),
+                ("claude".to_string(), "2.0.1".to_string())
+            ]
+        );
+        assert!(parse_pins("").unwrap().is_empty());
+        for bad in ["opencode", "=1", "opencode="] {
+            assert_eq!(
+                parse_pins(bad).unwrap_err(),
+                PinError::Malformed(bad.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn version_match_is_exact_per_token() {
+        assert!(version_matches("opencode 1.2.3\n", "1.2.3"));
+        assert!(version_matches("v1.2.3", "1.2.3"));
+        assert!(!version_matches("1.2.30", "1.2.3"));
+        assert!(!version_matches("", "1.2.3"));
+    }
+
+    /// A fake CLI that answers `--version` with `out` and the given exit code.
+    fn fake_bin(dir: &Path, name: &str, out: &str, code: i32) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\necho '{out}'\nexit {code}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    fn registry_with(bin: String) -> HarnessRegistry {
+        HarnessRegistry::new().with("opencode", Arc::new(Opencode { bin }))
+    }
+
+    #[test]
+    fn version_pin_accepts_a_match_and_rejects_a_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let reg = registry_with(fake_bin(d.path(), "oc", "opencode 1.2.3", 0));
+        assert_eq!(check_version_pins(&reg, Some("opencode=1.2.3")), Ok(true));
+        assert_eq!(
+            check_version_pins(&reg, Some("opencode=9.9.9")),
+            Err(PinError::Mismatch {
+                name: "opencode".into(),
+                want: "9.9.9".into(),
+                found: "opencode 1.2.3".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn version_pin_fails_closed_when_unavailable() {
+        let d = tempfile::tempdir().unwrap();
+        // Pinned but not registered.
+        let reg = registry_with(fake_bin(d.path(), "oc", "opencode 1.2.3", 0));
+        assert_eq!(
+            check_version_pins(&reg, Some("claude=2.0.1")),
+            Err(PinError::Unavailable("claude".into()))
+        );
+        // Registered, but the binary does not exist.
+        let missing = registry_with(d.path().join("nope").to_string_lossy().into_owned());
+        assert!(matches!(
+            check_version_pins(&missing, Some("opencode=1.2.3")),
+            Err(PinError::Unrunnable { .. })
+        ));
+        // Registered, but `--version` fails.
+        let broken = registry_with(fake_bin(d.path(), "bad", "boom", 3));
+        assert!(matches!(
+            check_version_pins(&broken, Some("opencode=1.2.3")),
+            Err(PinError::Unrunnable { .. })
+        ));
+        // Garbage in the variable is an error, not a silent no-pin.
+        assert!(matches!(
+            check_version_pins(&reg, Some("opencode")),
+            Err(PinError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn unset_pin_is_no_pin() {
+        let reg = HarnessRegistry::new();
+        assert_eq!(check_version_pins(&reg, None), Ok(false));
+        assert_eq!(check_version_pins(&reg, Some("  ")), Ok(false));
     }
 
     #[test]

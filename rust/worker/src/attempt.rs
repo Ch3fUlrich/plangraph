@@ -201,7 +201,10 @@ fn run_attempt_inner(
         grace: cfg.kill_grace,
         max_output: 1 << 20,
     };
-    let sup = run_harness(h, &run, &opts, cancelled)?;
+    // The agent's private HOME lives beside the worktree (never in its diff) and
+    // goes away with the attempt; the check below reuses it.
+    let home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
+    let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
 

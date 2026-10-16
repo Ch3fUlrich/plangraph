@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use pg_worker::activities::{CardActivities, Deps, TASK_QUEUE};
 use pg_worker::buildid;
-use pg_worker::harness::{ClaudeCode, HarnessRegistry, Opencode, OpencodeServer};
+use pg_worker::harness::{self, ClaudeCode, HarnessRegistry, Opencode, OpencodeServer};
 use pg_worker::keeper::{HttpKeeper, Keeper, StubKeeper};
 use pg_worker::workflow::Card;
 use pg_worker_core::config::Config;
@@ -80,6 +80,16 @@ async fn main() -> anyhow::Result<()> {
     };
     let harnesses = build_registry();
     println!("harnesses: {}", harnesses.names().join(", "));
+    // Fail closed on a harness version drift; unset means no pin.
+    let pins = std::env::var(harness::VERSIONS_ENV).ok();
+    match harness::check_version_pins(&harnesses, pins.as_deref()) {
+        Ok(true) => println!("harness versions pinned and verified"),
+        Ok(false) => eprintln!(
+            "warning: {} is unset; harness versions are not pinned",
+            harness::VERSIONS_ENV
+        ),
+        Err(e) => anyhow::bail!("harness version pin: {e}"),
+    }
     let deps = Deps {
         keeper,
         harnesses,
