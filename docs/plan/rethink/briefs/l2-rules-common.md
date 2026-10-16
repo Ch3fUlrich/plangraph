@@ -27,3 +27,4 @@
 - Messaging + beats (D-1364, binding): message build-L1 only for BLOCKED/decision needed, DONE/MERGE-READY with sha, GO requests,
   incidents, launch/recycle requests. No acks, "noted", ALIVE, status relays or progress chatter; at most one batched message per beat.
   L2s run NO beat cron; wait on messages and your own tool results.
+- PR head trailer (D-935, build-L1 gen-5 2026-10-16): CI runs only on the PR head, so the head commit (incl. a "Merge origin/main" commit) must carry `Plan-Item: plangraph:<KEY>` (full key). Else commit+ci evidence cannot verify (INBOX 1cb7acc, WORKER bff8725).
