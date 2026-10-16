@@ -15,7 +15,7 @@ PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; 
 | Item | State | Next |
 |---|---|---|
 | RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
-| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | MERGE-READY PR #22 3c87c67 (CI rust/spike/worker green att-1; seats on 0f7bf4d, delta fmt-only verified) | waiting seats branch seats/tls-0f7bf4d; merge --merge; DONE note: rust/worker binary too; real gRPC round trip = TEMPORAL-CHECK manual (rust/TLS.md) |
+| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | FIXING: qwen seat on 3c87c67 = fix (V1 TLS vars + http:// unchecked; wrong-CA negative; key assert nit); openai PASS (seats/tls-3c87c67 8102011) | L2 fixes -> MERGE-READY new sha -> workst-L1-autoos re-seats both -> merge --merge; DONE note: rust/worker too, gRPC round trip = TEMPORAL-CHECK manual |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
