@@ -53,6 +53,9 @@ const QUESTION_PARK_REASON: &str = "question unanswered";
 /// Alarm reason when the keeper would not store the agent's question.
 const QUESTION_REFUSED_REASON: &str = "question not recorded";
 
+/// Alarm reason when the `ask_question` activity failed even after its retries.
+const QUESTION_ASK_FAILED_REASON: &str = "question not recorded (keeper unreachable)";
+
 /// Alarm reason when the default was taken but the keeper refused to record it.
 const QUESTION_TIMEOUT_REFUSED_REASON: &str = "question_timeout not recorded";
 
@@ -142,8 +145,17 @@ impl Card {
     /// wait, so it is not consumed.
     fn accept_answer(&mut self, raw: serde_json::Value) {
         match serde_json::from_value::<AnswerSignal>(raw) {
-            Ok(a) if self.answers.len() < MAX_STORED_ANSWERS => self.answers.push(a),
-            Ok(_) => eprintln!("answer signal dropped: too many answers stored"),
+            Ok(mut a) => {
+                // Cap before it enters workflow state and history, not only
+                // where it is injected into a prompt.
+                a.text = question::cap_text(&a.text);
+                if self.answers.len() >= MAX_STORED_ANSWERS {
+                    // Keep the newest: the oldest answer is long consumed.
+                    eprintln!("answer signal buffer full: dropping the oldest answer");
+                    self.answers.remove(0);
+                }
+                self.answers.push(a);
+            }
             Err(e) => eprintln!("answer signal ignored: {e}"),
         }
     }
@@ -727,7 +739,9 @@ async fn question_step(
         .map_or(cfg.wait_cap, Duration::from_secs);
     let plan = question::plan_wait(&q, cap);
 
-    let asked: Option<i64> = ctx
+    // An activity error here (after its transient retries) parks the card with
+    // an alarm: the question could not be stored, so nobody can answer it.
+    let asked: Result<Option<i64>, _> = ctx
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
@@ -736,7 +750,24 @@ async fn question_step(
             },
             activity_options(cfg),
         )
-        .await?;
+        .await;
+    let asked = match asked {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ask_question failed: {e}");
+            return park_question(
+                ctx,
+                cfg,
+                input,
+                base_sha,
+                tier,
+                &q,
+                QUESTION_ASK_FAILED_REASON,
+                n,
+            )
+            .await;
+        }
+    };
     let Some(qid) = asked else {
         return park_question(
             ctx,
@@ -1162,6 +1193,25 @@ mod tests {
             card.accept_answer(serde_json::json!({"question_id": i, "text": "t"}));
         }
         assert_eq!(card.answers.len(), MAX_STORED_ANSWERS);
+        // The newest are kept, the oldest dropped.
+        assert_eq!(
+            card.answers.last().unwrap().question_id,
+            MAX_STORED_ANSWERS as i64 + 9
+        );
+        assert_eq!(card.answers[0].question_id, 10);
+    }
+
+    #[test]
+    fn stored_answer_text_is_capped() {
+        let mut card = Card::default();
+        let long = "x".repeat(question::MAX_TEXT_CHARS + 500);
+        card.accept_answer(serde_json::json!({"question_id": 1, "text": long}));
+        let got = card.answer_text(1).unwrap();
+        assert!(got.ends_with(question::TRUNCATION_MARKER));
+        assert_eq!(
+            got.chars().count(),
+            question::MAX_TEXT_CHARS + question::TRUNCATION_MARKER.chars().count()
+        );
     }
 
     #[test]

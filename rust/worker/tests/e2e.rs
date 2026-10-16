@@ -915,6 +915,36 @@ async fn needs_input_default_survives_keeper_and_alarm_outage() {
     .await;
 }
 
+/// A keeper outage on `ask_question` (5xx, after every retry) parks the card
+/// with an alarm instead of failing the workflow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_ask_outage_parks_with_an_alarm() {
+    in_local(async {
+        let script = r#"echo 'PG_QUESTION: {"text":"which db?"}'"#;
+        let Some(env) = env_or_skip("needs-input-ask-outage", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_ask_status(Some(503));
+        let claim = env.claim("e2e-ask-outage", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-ask-outage-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_ask_outage", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert!(env.keeper.questions().is_empty());
+        let alarms = env.keeper.alarms();
+        assert!(
+            alarms
+                .iter()
+                .any(|a| a.reason.starts_with("question not recorded")),
+            "{alarms:?}"
+        );
+        env.stop();
+    })
+    .await;
+}
+
 /// Shell preamble that finds the shared repo from inside an attempt worktree
 /// (the common git dir is absolute there) and lands a commit on `main` while
 /// the attempt is still running, so the merge sees a moved base.
