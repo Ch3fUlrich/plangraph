@@ -47,7 +47,11 @@ pub fn tls_from_env() -> Result<Option<TlsOptions>, String> {
 pub fn tls_from_vars(get: impl Fn(&str) -> Option<String>) -> Result<Option<TlsOptions>, String> {
     // `VAR= cargo run` must not turn TLS on with an empty path, so an empty
     // value is folded into "unset".
-    let setting = |name: &str| get(name).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let setting = |name: &str| {
+        get(name)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
 
     let cert = setting(CERT);
     let key = setting(KEY);
@@ -176,10 +180,7 @@ mod tests {
 
     #[test]
     fn cert_and_key_without_ca_is_refused() {
-        let map = map(&[
-            (CERT, "cert.pem".to_string()),
-            (KEY, "key.pem".to_string()),
-        ]);
+        let map = map(&[(CERT, "cert.pem".to_string()), (KEY, "key.pem".to_string())]);
         let err = run(&map).unwrap_err();
         assert!(err.contains("missing"), "{err}");
         assert!(err.contains(CA), "{err}");
