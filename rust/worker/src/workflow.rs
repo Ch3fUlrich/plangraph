@@ -273,7 +273,7 @@ impl Card {
                         check_hash: String::new(),
                         check_tail: String::new(),
                         context_overflow: false,
-                        branch: format!("attempt/{}/{n}", input.claim.card),
+                        branch: AttemptId::new(input.claim.card.clone(), n).branch(),
                         head: String::new(),
                         output_tail: String::new(),
                         // The projector records a missing field as absent; a

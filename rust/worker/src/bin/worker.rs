@@ -13,7 +13,15 @@
 //!
 //! `PG_HARNESS_VERSIONS` (`name=version,...`) pins the agent CLIs. Unset is only
 //! a startup warning, not an error, so live deployments MUST set it: without it
-//! a CLI upgrade changes agent behaviour unnoticed. Worker deployment versioning is opt-in via
+//! a CLI upgrade changes agent behaviour unnoticed.
+//!
+//! `PG_OPENCODE_SERVER_URL` is a bare `http(s)://host[:port]` URL: userinfo
+//! (`user:pass@`) and other schemes are rejected at startup. Tokens go through
+//! the harness env, never the URL or argv (argv is world-readable).
+//!
+//! The merge-lock fence high-water mark (`mergelock`) relies on the keeper
+//! issuing strictly monotonic fence tokens: a keeper that reuses or rewinds a
+//! token would let a stale holder pass the fence. Worker deployment versioning is opt-in via
 //! [`pg_worker::buildid::from_env`], which stays off unless a valid build id is
 //! available (see that module for the switch).
 

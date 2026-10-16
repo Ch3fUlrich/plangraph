@@ -145,7 +145,8 @@ mod tests {
         git(p, &["branch", "attempt/malformed"]).unwrap();
         git(p, &["branch", "attempt-ish/c/9"]).unwrap();
         // orphan attempt branch without worktree
-        git(p, &["branch", "attempt/orphan/3"]).unwrap();
+        let orphan3 = AttemptId::new("orphan", 3);
+        git(p, &["branch", &orphan3.branch()]).unwrap();
 
         let live_set: HashSet<_> = [live.clone()].into();
         let b = base.clone();
@@ -158,34 +159,34 @@ mod tests {
         };
         let rep = sweep(p, &live_set, &spec).unwrap();
         assert!(rep.failed.is_empty(), "{:?}", rep.failed);
-        let mut got: Vec<(String, ProbeOutcome)> = rep
+        let mut got: Vec<(AttemptId, ProbeOutcome)> = rep
             .removed
             .iter()
-            .map(|r| (r.id.to_string(), r.outcome))
+            .map(|r| (r.id.clone(), r.outcome))
             .collect();
         got.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(
-            got,
-            vec![
-                ("c#2".to_string(), ProbeOutcome::Partial),
-                ("d#1".to_string(), ProbeOutcome::Nothing),
-                ("orphan#3".to_string(), ProbeOutcome::Nothing),
-            ]
-        );
+        let mut want = vec![
+            (dead_done.clone(), ProbeOutcome::Partial),
+            (dead_nothing.clone(), ProbeOutcome::Nothing),
+            (orphan3, ProbeOutcome::Nothing),
+        ];
+        want.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(got, want);
         assert!(rep.removed.iter().find(|r| r.id == dead_done).unwrap().head != base);
 
         assert!(wl.path.join("g.txt").exists());
         assert!(!wd.path.exists());
-        assert_eq!(
-            branches(p),
-            [
-                "attempt-ish/c/9",
-                "attempt/c/1",
-                "attempt/malformed",
-                "feature/x",
-                "main"
-            ]
-        );
+        assert_eq!(branches(p), {
+            let mut v = vec![
+                "attempt-ish/c/9".to_string(),
+                live.branch(),
+                "attempt/malformed".to_string(),
+                "feature/x".to_string(),
+                "main".to_string(),
+            ];
+            v.sort();
+            v
+        });
         // idempotent
         assert!(sweep(p, &live_set, &spec).unwrap().removed.is_empty());
     }
@@ -200,7 +201,8 @@ mod tests {
         write(&w.path, "f.txt", "x");
         let head = commit_all(&w.path, "work");
         // branch-only attempt with commits: classified Partial, removed as before
-        git(p, &["branch", "attempt/orphan/2", &head]).unwrap();
+        let orphan2 = AttemptId::new("orphan", 2);
+        git(p, &["branch", &orphan2.branch(), &head]).unwrap();
         let b = base.clone();
         let base_for = move |_: &AttemptId| b.clone();
         let spec = ProbeSpec {
@@ -212,9 +214,13 @@ mod tests {
         let rep = sweep(p, &HashSet::new(), &spec).unwrap();
         assert_eq!(rep.done, vec![(id.clone(), head.clone())]);
         assert_eq!(rep.removed.len(), 1);
-        assert_eq!(rep.removed[0].id, AttemptId::new("orphan", 2));
+        assert_eq!(rep.removed[0].id, orphan2);
         assert!(w.path.exists());
-        assert_eq!(branches(p), ["attempt/c/1", "main"]);
+        assert_eq!(branches(p), {
+            let mut v = vec![id.branch(), "main".to_string()];
+            v.sort();
+            v
+        });
         // stays listed on every sweep
         assert_eq!(sweep(p, &HashSet::new(), &spec).unwrap().done.len(), 1);
     }

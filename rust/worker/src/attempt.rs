@@ -639,7 +639,7 @@ mod tests {
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
-        assert_eq!(res.branch, "attempt/c1/1");
+        assert_eq!(res.branch, AttemptId::new("c1", 1).branch());
         assert_ne!(res.head, base);
         assert!(!res.diff_hash.is_empty());
         assert_eq!(h.runs(), 1);
@@ -774,8 +774,8 @@ mod tests {
             let res = run_attempt(&h, &cfg, &Patterns::default(), &inp, &|| false).unwrap();
             assert_eq!(res.exit_class, ExitClass::Ok);
         }
-        let d1 = root.path().join("c1-1");
-        let d2 = root.path().join("c1-2");
+        let d1 = root.path().join(AttemptId::new("c1", 1).dir_name());
+        let d2 = root.path().join(AttemptId::new("c1", 2).dir_name());
         assert!(d1.exists() && d2.exists());
         assert_ne!(d1, d2);
     }
@@ -946,7 +946,12 @@ mod tests {
         inp.answers = vec!["use sqlite".to_string()];
         let res = run_attempt(&Echo, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
-        let written = std::fs::read_to_string(root.path().join("c1-2/out.txt")).unwrap();
+        let written = std::fs::read_to_string(
+            root.path()
+                .join(AttemptId::new("c1", 2).dir_name())
+                .join("out.txt"),
+        )
+        .unwrap();
         assert!(written.starts_with("do the thing"), "{written}");
         assert!(written.ends_with("use sqlite"), "{written}");
     }
@@ -964,7 +969,11 @@ mod tests {
         assert_eq!(res.harness.as_deref(), Some("no-such"));
         assert_eq!(res.combo.as_deref(), Some("leg-1"));
         // The worktree exists so the probe that follows has something to look at.
-        assert!(root.path().join("c1-3").is_dir());
+        assert!(
+            root.path()
+                .join(AttemptId::new("c1", 3).dir_name())
+                .is_dir()
+        );
     }
 
     #[test]
