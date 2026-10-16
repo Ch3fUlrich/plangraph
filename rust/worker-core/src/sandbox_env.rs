@@ -181,7 +181,7 @@ mod tests {
         assert!(
             !lines
                 .iter()
-                .any(|l| l.contains("SENTINEL") || l.contains("hunter2")),
+                .any(|l| l.contains("PG_SENTINEL_SECRET_SANDBOX_ENV") || l.contains("hunter2")),
             "worker secret leaked into the child: {lines:?}"
         );
         assert!(lines.contains(&"PG_MARK=explicit".to_string()), "{lines:?}");
@@ -191,7 +191,8 @@ mod tests {
         );
         assert!(lines.iter().any(|l| l.starts_with("PATH=")), "{lines:?}");
         // Nothing outside the allowlist survives: every name is passed,
-        // explicit or HOME.
+        // explicit or HOME. (`is_passed` includes the agent prefixes, which a
+        // sibling test legitimately sets in this process.)
         for l in &lines {
             let name = l.split('=').next().unwrap();
             assert!(

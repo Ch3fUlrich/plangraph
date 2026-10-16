@@ -370,7 +370,7 @@ pub(crate) fn do_merge(
 ) -> Result<MergeResult, mergelock::MergeError> {
     let repo = Path::new(&input.repo);
     let owner = merge_owner_id();
-    let fence = match keeper.acquire_merge_lock(&input.repo, &owner, merge_lock_ttl_s(cfg)) {
+    let fence = match keeper.acquire_merge_lock(&input.repo, owner, merge_lock_ttl_s(cfg)) {
         Ok(f) => f,
         Err(e) => {
             let main_head = git(repo, &["rev-parse", &input.main_branch])?;
