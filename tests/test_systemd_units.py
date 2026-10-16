@@ -42,6 +42,8 @@ def test_unit_structure():
 
 
 def test_execstart_matches_cli():
+    lines = read(SERVICE).splitlines()
+    assert sum(line.startswith("ExecStart=") for line in lines) == 1, "exactly one ExecStart (strict=False keeps the last)"
     tokens = shlex.split(parse(SERVICE).get("Service", "ExecStart"), posix=True)
     assert tokens[0] == "/usr/bin/python3", tokens
     assert tokens[1:3] == ["-m", "plangraph.projector"], tokens
@@ -92,3 +94,4 @@ def test_systemd_readme():
     assert SERVICE.name in body, "README must mention the service unit"
     assert TIMER.name in body, "README must mention the timer unit"
     assert "enable --now" in body, "README must show enable --now"
+    assert body.count("```") % 2 == 0, "README has an unclosed code fence"
