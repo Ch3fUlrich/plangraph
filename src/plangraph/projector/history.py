@@ -87,6 +87,17 @@ def _plan_key(started: dict, workflow_id: str) -> Optional[str]:
     return None
 
 
+#: Workflow type names of this contract (the rust worker records Card, the python one CardWorkflow).
+_CARD_TYPES = ("Card", "CardWorkflow")
+
+
+def _is_card(started: dict) -> bool:
+    """True for a Card workflow of this contract: workflow type Card or a plan_key memo."""
+    if _dict(started.get("workflowType")).get("name") in _CARD_TYPES:
+        return True
+    return decode_payload(_dict(_dict(started.get("memo")).get("fields")).get("plan_key")) is not None
+
+
 def _events(history: Any) -> list[tuple[int, str, dict]]:
     events = history.get("events") if isinstance(history, dict) else None
     if not isinstance(events, list) or not events:
@@ -125,7 +136,9 @@ def _exit_class(name: str, attrs: dict, result: dict) -> str:
 
 def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProjection:
     events = _events(history)
-    plan_key = _plan_key(_attrs(events[0][2], events[0][1]), workflow_id)
+    started = _attrs(events[0][2], events[0][1])
+    plan_key = _plan_key(started, workflow_id)
+    card = _is_card(started)       # an unrelated workflow in the namespace never raises shape alarms
 
     acts: dict[int, dict] = {}
     open_acts: set[int] = set()
@@ -143,7 +156,7 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
         attrs = _attrs(ev, name)
         if name == "ACTIVITY_TASK_SCHEDULED":
             atype = _dict(attrs.get("activityType")).get("name")
-            if atype not in KNOWN_ACTIVITY_TYPES:
+            if card and atype not in KNOWN_ACTIVITY_TYPES:
                 issues.append(ShapeIssue(workflow_id, run_id, str(attrs.get("activityId", "")),
                                          f"unknown activity type {atype!r}"))
             if atype in ATTEMPT_ACTIVITY_TYPES:
@@ -174,7 +187,7 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
                     problem = "attempt result lacks exit_class"
                 else:
                     problem = None
-                if problem:
+                if problem and card:
                     issues.append(ShapeIssue(workflow_id, run_id, act["activity_id"], problem))
             exit_class = _exit_class(name, attrs, result)
             if plan_key is not None:

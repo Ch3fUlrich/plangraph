@@ -115,3 +115,7 @@ def test_unreadable_watermark_table_is_a_named_error():
                             _run=lambda principal, action, key, fn: fn(0.0))
     body = routes._projector_watermark(store, SimpleNamespace(role="router", projects=None))
     assert body == {"error": "watermark unreadable: OperationalError"}
+
+
+def test_page_renders_a_withheld_alarm_count_as_na_not_zero():
+    assert "b.open_alarms==null?\"n/a\"" in PAGE and "(b.open_alarms||0)" not in PAGE
