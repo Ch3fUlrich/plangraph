@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/.claude/jobs/29c2f028/tmp/qwen3.json",
+      "sha256": "39b48d38730a0b81fdec97969a4624a72d2d37d10410ffb206a80655b1bb7365",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "94b1c773-d928-4d03-b53a-7f77f915da64",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - delta adds only behavioral tests around real skipped/neutral verdicts; no test-only branches, no env-gated code paths, no fixtures that only exist to keep a test green: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "0f356c67e5c6c46a812b814f22144df1eab32b6a9ce85e50774873fd02ccd694"
+}

@@ -1,0 +1,31 @@
+=== part /home/s/.claude/jobs/29c2f028/tmp/qwen3.json
+V1 evidence.py:_ci_conclusion — delta review
+
+The delta correctly fixes the skipped-masks-failure case the probe asks about.
+
+Trace: run 100 pytest=failure (sid=101, rid=11), run 200 pytest=skipped (sid=102, rid=21), same ("wf",7,app,"pytest") group, ranks ordered by (workflow.run_id, check-run id, started_at). `_completed` returns True for both. `newest_completed = (rank_200, run200)`. `_norm_conc(run200)="skipped"` → excluded from `best`; `best=(rank_100, run100)`. Fallback not taken. Pending check: no non-completed run with rank > rank_100. Group verdict = pytest=failure. Probe satisfied.
+
+The skipped-only fallback (`if best is None: best = newest_completed`) also behaves correctly when all completed are skipped/neutral, preserving "CI only skipped".
+
+Concerns probed but not false-greens (they are false-reds or conservative changes, so out of V1 scope):
+- Older cancelled + newer skipped: cancelled wins now (e.g. 100 cancelled, 200 skipped → detail "cancelled" instead of the prior "only skipped"). Contradicts the earlier "an older cancelled is ignored once a newer completed exists" clause, but blocks (not a mask).
+- Pending interplay: pending at rank between an older real verdict and a newer skipped now marks the group pending (was "only skipped"). Also conservative.
+- `_norm_conc(None)` returns "" (not "none"), so legacy fake with empty conclusion is filtered by `_completed` before ever reaching normalization; no masking.
+- Conclusion strings outside {success, failure, cancelled, skipped, neutral, action_required, timed_out, stale} are treated as "real verdicts" and flow to downstream classification; no path silently turns a non-green verdict into None.
+- Fallback with all-neutral is not covered by the added tests, but at worst yields a distinct "only skipped"-style blocker message; not a green.
+
+Concrete failing input for a real false-green: no finding from this delta. (Prior false-greens listed as already fixed.)
+
+V2 evidence.py:_ci_conclusion — PR path regression
+
+The delta does not touch plain groups, the group-key construction, or the "pending"/"failure"/"only skipped" message formatting. `_norm_conc` and the new best/newest_completed selection are gated inside `if g["wf"]:`. Non-wf (PR-only / non-dispatch) runs continue to use the untouched branch. Message formats for PR paths preserved. No finding.
+
+V3 evidence_ci.py:check_runs/_page_all — API field honesty
+
+The delta diff shows no changes in evidence_ci.py; no new join, pagination, head_sha-query construction, or second-call handling is introduced. Prior V3 findings (if any) remain unchanged and outside delta scope. No finding.
+
+TEST-GAMING: no - delta adds only behavioral tests around real skipped/neutral verdicts; no test-only branches, no env-gated code paths, no fixtures that only exist to keep a test green: 0 hits
+
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass
