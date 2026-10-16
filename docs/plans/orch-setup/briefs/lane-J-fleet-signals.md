@@ -22,6 +22,9 @@ Items, in order: `plangraph:HOST-SAMPLES-API`, `plangraph:HOST-AGENT`, then `pla
   - `nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.free,memory.total --format=csv,noheader`;
   - `free` / `nproc` in WSL.
 
+Allowed extra Rust deps: `sysinfo`, `nvml-wrapper`. HIGH tier for HOST-SAMPLES-API and HOST-AGENT (D-1522: a new ingest-scoped
+token): 2 distinct-family seats including a non-Claude seat, no waiver.
+
 ## WRITE SCOPE
 - Keeper: a new `host_samples` module, a migration, routes `POST /hosts/<id>/samples` and `GET /hosts`, `GET /hosts/<id>`.
   Tests `tests/test_host_samples*.py`.
@@ -48,7 +51,7 @@ Follow design 12.1 exactly. Key points:
   - memory: Linux `MemAvailable`, Windows Available Bytes.
 - **Service:**
   - Linux: systemd `--user` with linger, `NoNewPrivileges=yes`;
-  - Windows: a logon-start entry for the current user;
+  - Windows: a per-user Run key entry (`HKCU\...\Run`), not Task Scheduler;
   - installed by `plangraph setup apply` under the same idempotency contract (section 4); `setup check` reports drift.
 - **Sessions:**
   - Claude context = the last assistant usage (input + cache_read + cache_creation), read-only from the transcript;

@@ -3,11 +3,12 @@
 STANDING RULES: `docs/plans/orch-setup/briefs/COMMON.md` (binding, read first). Design sections: 2, 3, 6 (Launcher, Run tokens,
 MCP entry).
 Items, in order:
-- `plangraph:SU-LAUNCH`, `routing:SU-FLEET-LAUNCH-WRAP`, `plangraph:SU-RUN-TOKENS` (HIGH);
+- `plangraph:SU-LAUNCH`, `plangraph:SU-RUN-TOKENS` (HIGH);
 - `plangraph:SU-MCP-RS` (HIGH, can run in parallel with SU-LAUNCH);
 - `plangraph:SU-MCP` (HIGH).
 
-Starts once SU-CORE is merged; SU-MCP-RS also needs SU-ENV.
+Starts once SU-CORE is merged; SU-MCP-RS also needs SU-ENV. `routing:SU-FLEET-LAUNCH-WRAP` is owned by build-L1 (D-1522); this
+lane only hands it the merged SU-LAUNCH CLI contract (send the sha to workst-L1-autoos, which forwards it).
 
 ## SU-MCP-RS spec (HIGH)
 - `plangraph mcp`: a stdio JSON-RPC MCP server.
@@ -46,7 +47,7 @@ Starts once SU-CORE is merged; SU-MCP-RS also needs SU-ENV.
 - Produce `docs/SETUP.md` guidance and a generator so a `start-<name>.ps1` is one line calling `plangraph launch`. Do NOT edit
   `C:\fleet\launch` yourself; workst-L1-autoos switches the files.
 
-## SU-FLEET-LAUNCH-WRAP spec
+## SU-FLEET-LAUNCH-WRAP spec (for build-L1, reference only)
 `bin/fleet-launch` keeps its CLI and exit codes and delegates to `plangraph launch --bg` when the binary is found. Otherwise
 it keeps the old path with a warning line. A dry-run output test covers both paths. ctx-watchdog is unchanged.
 

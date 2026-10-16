@@ -3,7 +3,7 @@
 batch: 2026-10-16-orch-setup
 principal: router
 source: ../2026-10-16-orchestration-setup.md
-source_sha256: 2723fb244f1d12397b1e1b00276ae91bd26553b01dd6b3323eab1ad71318efcb
+source_sha256: d9b0c5344b707ef614c7577958012403c55df0b978b206b7f0696a0c6918469e
 ops:
 - op: create
   item:
@@ -19,6 +19,9 @@ ops:
     depends_on: []
     evidence_kinds:
     - commit+ci
+    estimate_h: 1.0
+    estimate_src: plan
+    priority: 1
 - op: create
   item:
     id: SU-CORE
@@ -34,6 +37,9 @@ ops:
     - plangraph:SU-DOCS
     evidence_kinds:
     - commit+ci
+    estimate_h: 10.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-ENV
@@ -41,7 +47,7 @@ ops:
     kind: lane
     track: ORCH-SETUP
     owner: workst-L1-autoos
-    review_tier: standard
+    review_tier: high
     title: 'One env file: .env.example, plangraph env check, stdlib loader for the Python keeper CLI/MCP/tools'
     description: '~/.config/plangraph/plangraph.env, override PLANGRAPH_ENV_FILE (S6). Section 5. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
     done_criteria: all keys of section 5 documented with defaults; precedence test (env > file > default); inline-secret refusal test; keeper suite green
@@ -49,6 +55,9 @@ ops:
     - plangraph:SU-CORE
     evidence_kinds:
     - commit+ci
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-LEASE-CFG
@@ -65,6 +74,9 @@ ops:
     - plangraph:RT-P1-KEEPER-PG
     evidence_kinds:
     - commit+ci
+    estimate_h: 3.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-HOOK-FLEET
@@ -81,6 +93,9 @@ ops:
     - plangraph:SU-CORE
     evidence_kinds:
     - commit+ci
+    estimate_h: 8.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-HOOKS-WIRE
@@ -96,6 +111,9 @@ ops:
     - plangraph:SU-HOOK-FLEET
     evidence_kinds:
     - commit+ci
+    estimate_h: 3.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-ADR0003A
@@ -111,6 +129,9 @@ ops:
     - plangraph:SU-HOOKS-WIRE
     evidence_kinds:
     - commit+ci
+    estimate_h: 1.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-LAUNCH
@@ -126,21 +147,28 @@ ops:
     - plangraph:SU-CORE
     evidence_kinds:
     - commit+ci
+    estimate_h: 8.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-FLEET-LAUNCH-WRAP
     project: routing
     kind: lane
     track: ORCH-SETUP
-    owner: routing-00
+    owner: build-L1
     review_tier: standard
     title: bin/fleet-launch delegates to plangraph launch (same CLI, same record)
-    description: 'Last change routing needs from the setup track (S8). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    description: 'Last change routing needs from the setup track (S8). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md. Owner build-L1 (D-1522: the router never executes project work); the
+      router merges into routing.'
     done_criteria: same CLI and record; dry-run output test; ctx-watchdog unchanged
     depends_on:
     - plangraph:SU-LAUNCH
     evidence_kinds:
-    - commit+ci
+    - commit
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-RUN-TOKENS
@@ -156,6 +184,9 @@ ops:
     - plangraph:SU-LAUNCH
     evidence_kinds:
     - commit+ci
+    estimate_h: 5.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-MCP-RS
@@ -172,6 +203,9 @@ ops:
     - plangraph:SU-ENV
     evidence_kinds:
     - commit+ci
+    estimate_h: 10.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-MCP
@@ -188,6 +222,9 @@ ops:
     - plangraph:SU-LAUNCH
     evidence_kinds:
     - commit+ci
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-TRAILER
@@ -203,6 +240,9 @@ ops:
     - plangraph:SU-CORE
     evidence_kinds:
     - commit+ci
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-REPO
@@ -218,6 +258,9 @@ ops:
     - plangraph:SU-TRAILER
     evidence_kinds:
     - commit+ci
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-AGENTSMD-PG
@@ -233,6 +276,9 @@ ops:
     - plangraph:SU-REPO
     evidence_kinds:
     - commit+ci
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-AGENTSMD-AO
@@ -248,6 +294,9 @@ ops:
     - plangraph:SU-REPO
     evidence_kinds:
     - commit+ci
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-AGENTSMD-SRV
@@ -262,7 +311,10 @@ ops:
     depends_on:
     - plangraph:SU-REPO
     evidence_kinds:
-    - commit+ci
+    - commit
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-SKILLS
@@ -278,6 +330,9 @@ ops:
     - plangraph:SU-CORE
     evidence_kinds:
     - commit+ci
+    estimate_h: 5.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-HARNESS-CFG
@@ -294,6 +349,9 @@ ops:
     - plangraph:RT-P1-WORKER
     evidence_kinds:
     - commit+ci
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-RELEASE
@@ -310,6 +368,9 @@ ops:
     - plangraph:SPLIT-PUBLISH
     evidence_kinds:
     - commit+ci
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-CATALOG
@@ -326,6 +387,9 @@ ops:
     - autoos:SU-ADR0003A
     evidence_kinds:
     - commit+ci
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-SKILLS-CALLER
@@ -342,6 +406,9 @@ ops:
     - autoos:SU-CATALOG
     evidence_kinds:
     - commit+ci
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-FRESH-CHECK
@@ -378,6 +445,9 @@ ops:
     evidence_kinds:
     - commit+ci
     - run-record
+    estimate_h: 4.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: PH-ORCH-SETUP
@@ -387,12 +457,16 @@ ops:
     owner: workst-L1-autoos
     review_tier: standard
     title: 'Phase ORCH-SETUP done: mechanical setup of the orchestration system'
-    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md. Freeze exception: operator approval <date>, D-1297 (tooling freeze; the router fills <date> at apply). No lane starts
+      before it.'
     done_criteria: all deps done
     depends_on:
     - plangraph:SU-FRESH-CHECK
     evidence_kinds:
     - any
+    estimate_h: 0.5
+    estimate_src: plan
+    priority: 1
 - op: create
   item:
     id: SU-HOOK-BASHGUARD
@@ -408,6 +482,9 @@ ops:
     - plangraph:PH-ORCH-SETUP
     evidence_kinds:
     - commit+ci
+    estimate_h: 5.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-HOOK-CTXGUARD
@@ -423,6 +500,9 @@ ops:
     - plangraph:PH-ORCH-SETUP
     evidence_kinds:
     - commit+ci
+    estimate_h: 5.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SU-GUARDS-CALLER
@@ -438,6 +518,9 @@ ops:
     - plangraph:SU-HOOK-BASHGUARD
     evidence_kinds:
     - commit+ci
+    estimate_h: 2.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: PH-ORCH-GUARDS
@@ -455,6 +538,9 @@ ops:
     - autoos:SU-GUARDS-CALLER
     evidence_kinds:
     - any
+    estimate_h: 0.5
+    estimate_src: plan
+    priority: 1
 - op: create
   item:
     id: Q-API-PUSH
@@ -473,6 +559,9 @@ ops:
     evidence_kinds:
     - commit+ci
     - run-record
+    estimate_h: 10.0
+    estimate_src: plan
+    priority: 3
 - op: create
   item:
     id: RT-P3-PLAN-MODE
@@ -489,6 +578,9 @@ ops:
     - plangraph:RT-P2-DECISIONS
     evidence_kinds:
     - commit+ci
+    estimate_h: 12.0
+    estimate_src: plan
+    priority: 3
 - op: create
   item:
     id: RT-P3-HISTORY
@@ -505,6 +597,9 @@ ops:
     - plangraph:RT-P3-PLAN-MODE
     evidence_kinds:
     - commit+ci
+    estimate_h: 10.0
+    estimate_src: plan
+    priority: 3
 - op: create
   item:
     id: HOST-SAMPLES-API
@@ -512,7 +607,7 @@ ops:
     kind: lane
     track: FLEET-CAPACITY
     owner: workst-L1-autoos
-    review_tier: standard
+    review_tier: high
     title: 'Keeper host-sample store: ingest with per-host token, server-side staleness, rollups and retention'
     description: 'Router order D-1514 item 1; S20. Section 12.1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
     done_criteria: ingest + read API tests on Postgres; server-clock received_at, seq gaps; stale after 3 / down after 10 missed samples; range partitions; raw 14 d, 1-min 90 d, 1-h 2 y rollups run by the
@@ -522,6 +617,9 @@ ops:
     - plangraph:RT-P1-KEEPER-PG
     evidence_kinds:
     - commit+ci
+    estimate_h: 6.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: HOST-AGENT
@@ -529,17 +627,20 @@ ops:
     kind: lane
     track: FLEET-CAPACITY
     owner: workst-L1-autoos
-    review_tier: standard
+    review_tier: high
     title: 'plangraph host-agent user service: samples CPU, memory, GPU, disk and agent processes, pushes every 60 s'
     description: 'D-1514 item 1; S20; no cron (D-1377). Section 12.1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
     done_criteria: 'samples from Linux, Windows and WSL2 (own node with its memory cap) reach a test keeper; GPU via NVML with nvidia-smi fallback; payload test: no paths, args, env or prompts; setup installs
-      the user service (systemd --user + linger, Windows logon start), 2nd run skipped, check reports drift; < 1 % CPU'
+      the user service (systemd --user + linger, Windows per-user Run key; no Task Scheduler), 2nd run skipped, check reports drift; < 1 % CPU'
     depends_on:
     - plangraph:SU-CORE
     - plangraph:SU-ENV
     - plangraph:HOST-SAMPLES-API
     evidence_kinds:
     - commit+ci
+    estimate_h: 12.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: AGENT-SESSION-SIGNALS
@@ -558,6 +659,9 @@ ops:
     evidence_kinds:
     - commit+ci
     - run-record
+    estimate_h: 6.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: GATEWAY-AVAILABILITY-SIGNALS
@@ -574,6 +678,9 @@ ops:
     evidence_kinds:
     - commit+ci
     - run-record
+    estimate_h: 5.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: PLACEMENT-RULES
@@ -584,13 +691,17 @@ ops:
     review_tier: high
     title: 'Placement rules: one typed schema, audited keeper edits, per-host env overrides with documented precedence'
     description: 'D-1514 item 3; S21. Section 12.3. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
-    done_criteria: setup/placement-rules.schema.toml drives loader, validation and UI form; env keys PG_RULE_<NAME>_<UNIT> derived; precedence test process env > env file > keeper > default; override allow-list;
-      invalid key falls back + reported; audit events with rollback as forward event; overrides reported per sample; last-known-good cache
+    done_criteria: 'setup/placement-rules.schema.toml drives loader, validation and UI form; env keys PG_RULE_<NAME>_<UNIT> derived; precedence test process env > env file > keeper (host, then fleet) >
+      default; seed values: HostMemoryFloor 6144 MiB + alarm 3000 MiB, HostWorkerCap 6 fleet, 4 on the AutoOS dispatch VM (D-081), 5 live L2 on the Proxmox host (D-1485); override allow-list; invalid key
+      falls back + reported; audit events with rollback as forward event; overrides reported per sample; last-known-good cache'
     depends_on:
     - plangraph:SU-ENV
     - plangraph:HOST-SAMPLES-API
     evidence_kinds:
     - commit+ci
+    estimate_h: 8.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: PLACEMENT-ENGINE
@@ -609,6 +720,9 @@ ops:
     - plangraph:GATEWAY-AVAILABILITY-SIGNALS
     evidence_kinds:
     - commit+ci
+    estimate_h: 14.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: SPAWN-USES-PLACEMENT
@@ -616,7 +730,7 @@ ops:
     kind: lane
     track: FLEET-CAPACITY
     owner: workst-L1-autoos
-    review_tier: standard
+    review_tier: high
     title: autoos-agent spawn places every run through the plangraph placement API and holds a SlotLease
     description: 'D-1514 item 2; S22, S23. Section 12.4. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
     done_criteria: 'CLI + MCP spawn hold a lease; local admission only as offline fallback with last-known-good rules (test); folded done-criteria pass: fan-out beyond budget queued (T2-BUDGET), workstation
@@ -628,6 +742,9 @@ ops:
     evidence_kinds:
     - commit+ci
     - run-record
+    estimate_h: 6.0
+    estimate_src: plan
+    priority: 2
 - op: create
   item:
     id: UI-FLEET-TAB
@@ -646,6 +763,9 @@ ops:
     - plangraph:PLACEMENT-RULES
     evidence_kinds:
     - commit+ci
+    estimate_h: 10.0
+    estimate_src: plan
+    priority: 3
 - op: create
   item:
     id: WORKER-USES-PLACEMENT
@@ -663,6 +783,9 @@ ops:
     - plangraph:RT-P1-GOVERNOR
     evidence_kinds:
     - commit+ci
+    estimate_h: 5.0
+    estimate_src: plan
+    priority: 3
 - op: create
   item:
     id: PH-FLEET-CAPACITY
@@ -672,7 +795,8 @@ ops:
     owner: workst-L1-autoos
     review_tier: standard
     title: 'Phase FLEET-CAPACITY done: host signals, placement rules and API, AutoOS caller, UI tab'
-    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md. Freeze exception: operator approval <date>, D-1297 (tooling freeze; the router fills <date> at apply). No lane starts
+      before it.'
     done_criteria: all deps done
     depends_on:
     - plangraph:HOST-SAMPLES-API
@@ -685,6 +809,9 @@ ops:
     - plangraph:UI-FLEET-TAB
     evidence_kinds:
     - any
+    estimate_h: 0.5
+    estimate_src: plan
+    priority: 1
 - op: create
   item:
     id: SU-DOCKER
@@ -702,6 +829,9 @@ ops:
     - plangraph:PH-ORCH-GUARDS
     evidence_kinds:
     - commit+ci
+    estimate_h: 6.0
+    estimate_src: plan
+    priority: 2
 - op: edit
   key: autoos:PH-AO-FLEET
   fields:

@@ -257,6 +257,16 @@ localhost URLs stay valid unchanged.
 
 ## 9. Plan items (track ORCH-SETUP unless noted; batch: `orch-setup/2026-10-16-orch-setup.yaml`)
 
+Router verdict D-1522, applied in the batch:
+- Every create carries `estimate_h` and a priority below the RT-P1 critical path: lanes 2, SU-DOCS and gates 1, build-L1 P3
+  items 3.
+- HIGH tier (2 distinct-family seats incl. non-Claude, no waiver) also for SU-ENV, HOST-SAMPLES-API, HOST-AGENT and
+  autoos:SPAWN-USES-PLACEMENT.
+- `routing:SU-FLEET-LAUNCH-WRAP` and `server:SU-AGENTSMD-SRV` close on `commit` (no CI on those merge branches).
+- Freeze exception: PH-ORCH-SETUP and PH-FLEET-CAPACITY carry "freeze exception: operator approval <date>, D-1297". No lane
+  starts before the approval.
+- The router applies the batch via apply_ops (principal router) after the operator approves.
+
 | Key | Title | Deps | Done (check) |
 |---|---|---|---|
 | plangraph:SU-DOCS | Plan base + this design in docs/plans | - | the 2 base files byte-verified (body sha256), design merged via PR |
@@ -267,7 +277,7 @@ localhost URLs stay valid unchanged.
 | plangraph:SU-HOOKS-WIRE | setup merges hook entries into settings.json | SU-HOOK-FLEET | fixture settings with foreign hooks unchanged; superseded Python entry replaced; 2nd run skipped; check reports drift |
 | autoos:SU-ADR0003A | ADR 0003a + fleet-status-hook doc points to plangraph | plangraph:SU-HOOKS-WIRE | ADR merged; docs link check green |
 | plangraph:SU-LAUNCH | `plangraph launch` with record before start | SU-CORE | record fields match fleet-launch; interactive + --bg; Windows + WSL; ps1 one-liners; watchdog fixture reads the record |
-| routing:SU-FLEET-LAUNCH-WRAP | fleet-launch delegates to `plangraph launch` | plangraph:SU-LAUNCH | same CLI and record; dry-run output test |
+| routing:SU-FLEET-LAUNCH-WRAP | fleet-launch delegates to `plangraph launch` (owner build-L1; evidence `commit`) | plangraph:SU-LAUNCH | same CLI and record; dry-run output test |
 | plangraph:SU-RUN-TOKENS | Launcher mints run-bound child tokens (HIGH) | SU-LAUNCH | child whoami = run principal; token 0600, never printed, revoked at end; 2 non-Claude seats |
 | plangraph:SU-MCP-RS | Rust `plangraph mcp` stdio server, 1:1 with the Python MCP (HIGH) | SU-CORE, SU-ENV | contract test: same tool list, schemas, results and error codes as the Python MCP against a test keeper; 2 seats |
 | plangraph:SU-MCP | User-scope plangraph MCP entry | SU-MCP-RS, SU-LAUNCH | 2nd run skipped; a launched session's whoami ok; supersedes autoos:AO-PG-MCP-WIRE |
@@ -311,7 +321,7 @@ Operator rulings (S19), applied in the same batch:
 |---|---|---|
 | A core | SU-CORE, SU-ENV | approval + SU-DOCS merged |
 | B hooks | SU-HOOK-FLEET, SU-HOOKS-WIRE, autoos:SU-ADR0003A | A's SU-CORE |
-| C launch + MCP | SU-LAUNCH, SU-RUN-TOKENS, SU-MCP-RS, SU-MCP, routing:SU-FLEET-LAUNCH-WRAP | A |
+| C launch + MCP | SU-LAUNCH, SU-RUN-TOKENS, SU-MCP-RS, SU-MCP (routing:SU-FLEET-LAUNCH-WRAP: build-L1) | A |
 | D repo | SU-TRAILER, SU-REPO, SU-AGENTSMD-PG/-AO/-SRV | A's SU-CORE |
 | E skills+harness | SU-SKILLS, SU-HARNESS-CFG, autoos:SU-SKILLS-CALLER | A (HARNESS after RT-P1-WORKER, CALLER after SU-CATALOG) |
 | F keeper lease | SU-LEASE-CFG | plangraph:RT-P1-KEEPER-PG on main (same keeper files; build-L1 coordination) |
@@ -373,7 +383,7 @@ Consul/Unleash/LaunchDarkly config layering and audit, Claude Code statusline/ho
 ### 12.1 Signals (`plangraph host-agent`)
 
 - **Process.** A long-running loop in the same binary, installed by `plangraph setup apply` as a user service (systemd
-  `--user` with linger on Linux, a logon-start service on Windows). No cron (D-1377). It runs unprivileged and is outbound-only.
+  `--user` with linger on Linux, a per-user Run key entry on Windows). No cron, systemd timer or Task Scheduler entry (D-1377). It runs unprivileged and is outbound-only.
   It pushes to the keeper every `PG_HOST_SAMPLE_S` (default 60 s), with a 5-10 s internal sampling and mean + max per window.
 - **Identity.** `PG_HOST_ID` (env file) plus a per-host token file `PG_HOST_TOKEN_FILE`, scoped to sample ingest only.
   Provisioned outside setup, like root tokens (11.5). Host names exist only in the env files and in keeper data, never in
@@ -416,8 +426,8 @@ One check per name (Kubernetes plugin style). Filters are hard; scores rank the 
 | Rule | Kind | Meaning | Replaces / source |
 |---|---|---|---|
 | HostFresh | filter | the host has a sample newer than 3 intervals | new |
-| HostWorkerCap | filter | live + granted workers < cap (default 6) | AO-ADMISSION cap 6, T2-BUDGET |
-| HostMemoryFloor | filter | `MemAvailable` minus the estimates of granted-but-unstarted jobs >= floor + job estimate | AO-ADMISSION floor, T2-BUDGET, D-081/D-1485 (values confirmed by routing) |
+| HostWorkerCap | filter | live agent sessions + granted leases on the host < cap; default 6, per-host values in the keeper: 4 local lane units on the AutoOS dispatch VM (D-081), 5 live L2 sessions on the Proxmox host (D-1485) | AO-ADMISSION cap 6, T2-BUDGET, D-081, D-1485 |
+| HostMemoryFloor | filter | `MemAvailable` minus the estimates of granted-but-unstarted jobs >= floor + job estimate; dispatch floor 6144 MiB (D-081). Below the alarm level of 3000 MiB (routerctl's hard floor) the UI and Inbox raise an alarm | AO-ADMISSION floor, T2-BUDGET, D-081 |
 | HostGpuFit | filter | the job needs a GPU and the host has VRAM free >= the job's need | new |
 | ProviderConcurrencyCap | filter | in-flight runs per provider/model < cap | OVH-GUARD style caps |
 | ProviderCooldown | filter | the provider is not cooling down (429 `Retry-After`, breaker open, spend cap until reset), fleet-wide | new; no per-host penalty |
@@ -438,7 +448,9 @@ One check per name (Kubernetes plugin style). Filters are hard; scores rank the 
 - **Env keys are derived mechanically**: `PG_RULE_<SNAKE_NAME>_<UNIT>`, with the units `_COUNT`, `_MIB`, `_PCT`, `_S` and
   `_ENABLED`. Examples: `PG_RULE_HOST_WORKER_CAP_COUNT=6`, `PG_RULE_HOST_MEMORY_FLOOR_MIB=6144`,
   `PG_RULE_OVERFLOW_QUEUE_TIMEOUT_S=1800`. `plangraph env check` knows them from the schema.
-- **Precedence**: process env > env file > keeper > schema default. Only `host_overridable` keys may be set per host. An
+- **Scope.** A keeper value is fleet-wide or per host. The per-host value wins over the fleet value, so D-081 and D-1485 are
+  per-host keeper values, not env overrides.
+- **Precedence**: process env > env file > keeper (host, then fleet) > schema default. Only `host_overridable` keys may be set per host. An
   invalid or non-overridable key is skipped for that key only, and reported; the agent still starts. Only an unparsable file
   refuses.
 - **Keeper edits** (UI or API) are attributed, append-only events (who, when, why, before/after, version). A rollback is a new

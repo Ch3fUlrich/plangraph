@@ -1,4 +1,5 @@
-# Lane K: placement rules and API (plangraph-L2-fc-placement), HIGH tier
+# Lane K: placement rules and API (plangraph-L2-fc-placement), HIGH tier (all three items; SPAWN-USES-PLACEMENT for the
+# lease-token forgery refusal, D-1522)
 
 STANDING RULES: `docs/plans/orch-setup/briefs/COMMON.md` (binding, read first). Design sections: 12.2-12.4.
 Items, in order: `plangraph:PLACEMENT-RULES`, `plangraph:PLACEMENT-ENGINE`, `autoos:SPAWN-USES-PLACEMENT`.
@@ -12,7 +13,8 @@ Items, in order: `plangraph:PLACEMENT-RULES`, `plangraph:PLACEMENT-ENGINE`, `aut
 - The done-criteria of the four folded items: `autoos:T2-BUDGET`, `autoos:WS-4`, `autoos:AO-SLOT-GRANT-TOKEN`,
   `autoos:AO-ADMISSION-OC-SHARED`. Read them from the keeper (cancelled rows keep their text). They are acceptance tests
   here.
-- D-081 / D-1485 (memory floors). Ask workst-L1-autoos for the text if you cannot read the decision log.
+- D-081: no new local dispatch below MemAvailable 6144 MiB; at most 4 local lane units on the AutoOS dispatch VM. D-1485: at most
+  5 live L2 sessions on the Proxmox host (a count cap, so HostWorkerCap). The alarm level is 3000 MiB (routerctl hard floor).
 - Lane J's sample schema and `setup/env.schema.toml`.
 
 ## WRITE SCOPE
