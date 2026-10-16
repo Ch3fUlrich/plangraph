@@ -15,7 +15,7 @@ KEEPER-LIVE-SYNC (live 1b923e5 GO D-1437; PR #26/#27 828e68e; judge ACCEPT adjud
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
-| PROJECTOR-ALARMS-READER (p3) | claimed 06:5xZ (lease 08:52Z); brief briefs/l2-projector-alarms-reader.md 25bead7 | L2 build-L2-alarms-reader 8d58f6a0 launched (coding.vm) -> MERGE-READY -> judge |
+| PROJECTOR-ALARMS-READER (p3) | MERGE-READY a4bf956 PR #28 (CI 38869689039 green, gpt-oss PASS) REJECTED 08:0xZ: /v1/alarms unscoped by project; role gate = auth -> HIGH (D-1442) | L2 fixes scoping + tests, 2 seats (gpt-oss+qwen) on new head -> judge server-L1-routing -> merge |
 | CI-PYTEST-SPEED (p2, D-1457) | claimed 07:5xZ (lease 09:56Z); brief briefs/l2-ci-pytest-speed.md a402661 | launch accepted, gated on workst Docker/H: window (runners offline 07:56Z, ETA 08:10Z; >09:00Z -> coding.vm by router) |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
