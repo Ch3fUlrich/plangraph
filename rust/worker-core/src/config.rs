@@ -42,6 +42,10 @@ pub struct Config {
     pub wait_base: Duration,
     pub wait_cap: Duration,
     pub backoff_base: Duration,
+    /// Questions a card may have answered; the next `needs_input` parks it.
+    /// Asking takes no retry budget, so this is what bounds a card that keeps
+    /// asking.
+    pub max_question_rounds: u32,
 }
 
 impl Default for Config {
@@ -58,6 +62,7 @@ impl Default for Config {
             wait_base: Duration::from_secs(60),
             wait_cap: Duration::from_secs(24 * 3600),
             backoff_base: Duration::from_secs(30),
+            max_question_rounds: 3,
         }
     }
 }
@@ -76,6 +81,7 @@ mod tests {
         assert_eq!(c.check_tail_lines, 50);
         assert_eq!((c.retries_per_tier, c.promotions), (3, 1));
         assert_eq!(c.wait_cap.as_secs(), 86_400);
+        assert_eq!(c.max_question_rounds, 3);
     }
 
     #[test]

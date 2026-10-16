@@ -24,7 +24,7 @@ use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QU
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
-use pg_worker::workflow::{AnswerSignal, Card};
+use pg_worker::workflow::Card;
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::Patterns;
 use tempfile::TempDir;
@@ -89,6 +89,7 @@ struct Env {
     held: std::cell::RefCell<Option<Worker>>,
     /// Question wait cap handed to the next card, in seconds; unset = 24 h.
     question_cap_s: std::cell::Cell<Option<u64>>,
+    max_rounds: std::cell::Cell<Option<u32>>,
     _runtime: Runtime,
 }
 
@@ -179,6 +180,7 @@ impl Env {
             worker: std::cell::RefCell::new(worker),
             held: std::cell::RefCell::new(held),
             question_cap_s: std::cell::Cell::new(None),
+            max_rounds: std::cell::Cell::new(None),
             _runtime: runtime,
         }
     }
@@ -220,6 +222,7 @@ impl Env {
             workroot: self.workroot.to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
             question_wait_cap_s: self.question_cap_s.get(),
+            max_question_rounds: self.max_rounds.get(),
         };
         let wf_id = workflow_id(id);
         self.client
@@ -236,6 +239,11 @@ impl Env {
     /// Cap how long the next card waits for an answer, so a test never sleeps 24 h.
     fn set_question_cap(&self, secs: u64) {
         self.question_cap_s.set(Some(secs));
+    }
+
+    /// Questions the next card may have answered before it is parked.
+    fn set_max_rounds(&self, n: u32) {
+        self.max_rounds.set(Some(n));
     }
 
     fn stop(&self) {
@@ -633,7 +641,13 @@ fn ask_then_work(packet: &str, needle: &str) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn needs_input_answer_signal_resumes() {
     in_local(async {
-        let script = ask_then_work(r#"{"text":"which db?"}"#, "use sqlite");
+        // Every attempt appends its working directory next to the repo, so the
+        // test can see the answered attempt did not reuse the asking one's.
+        let script = format!(
+            r#"R=$(dirname "$(git rev-parse --git-common-dir)"); echo "$PWD" >> "$R/cwds.txt"
+{}"#,
+            ask_then_work(r#"{"text":"which db?"}"#, "use sqlite")
+        );
         let Some(env) = env_or_skip("needs-input-answer", &script).await else {
             println!("skipped: PG_TEMPORAL_ADDR unset");
             return;
@@ -647,12 +661,12 @@ async fn needs_input_answer_signal_resumes() {
         handle
             .signal(
                 Card::answer,
-                AnswerSignal {
-                    question_id: qid,
-                    key: "demo:A".to_string(),
-                    text: "use sqlite".to_string(),
-                    source: "answer".to_string(),
-                },
+                serde_json::json!({
+                    "question_id": qid,
+                    "key": "demo:A",
+                    "text": "use sqlite",
+                    "source": "answer",
+                }),
                 WorkflowSignalOptions::default(),
             )
             .await
@@ -670,6 +684,13 @@ async fn needs_input_answer_signal_resumes() {
         );
         assert_eq!(env.keeper.questions().len(), 1);
         assert!(env.keeper.question_timeouts().is_empty());
+        // The answered attempt is a new attempt: a fresh number, a fresh worktree.
+        let ns: Vec<u32> = env.keeper.attempts().iter().map(|a| a.n).collect();
+        assert_eq!(ns, vec![1, 2], "attempt numbers must not repeat");
+        let cwds = std::fs::read_to_string(env.repo.join("cwds.txt")).unwrap();
+        let cwds: Vec<&str> = cwds.lines().collect();
+        assert_eq!(cwds.len(), 2, "{cwds:?}");
+        assert_ne!(cwds[0], cwds[1], "the answered attempt reused a worktree");
         let sha = out.merged_sha.clone().expect("a merged card has a sha");
         assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
         env.stop();
@@ -775,6 +796,120 @@ async fn needs_input_risk_tagged_never_defaults() {
             env.keeper.alarms()
         );
         assert_eq!(env.keeper.parked().len(), 1);
+        env.stop();
+    })
+    .await;
+}
+
+/// A card that keeps asking is bounded: with the limit at 2, the third
+/// `needs_input` parks it with alarm `question rounds exhausted` and the keeper
+/// is never asked a third question.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_rounds_are_bounded() {
+    in_local(async {
+        // Never satisfied: it asks on every attempt.
+        let script = r#"echo 'PG_QUESTION: {"text":"again?"}'"#;
+        let Some(env) = env_or_skip("needs-input-rounds", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.set_max_rounds(2);
+        let claim = env.claim("e2e-rounds", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-rounds-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        for round in 1..=2 {
+            let qid = wait_for_questions(&env, round).await;
+            handle
+                .signal(
+                    Card::answer,
+                    serde_json::json!({
+                        "question_id": qid, "key": "demo:A", "text": "ok", "source": "answer",
+                    }),
+                    WorkflowSignalOptions::default(),
+                )
+                .await
+                .expect("send answer signal");
+        }
+        let out = finish("needs_input_rounds", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(
+            env.keeper.questions().len(),
+            2,
+            "no third question is asked"
+        );
+        assert!(
+            env.keeper
+                .alarms()
+                .iter()
+                .any(|a| a.reason == "question rounds exhausted"),
+            "{:?}",
+            env.keeper.alarms()
+        );
+        assert_eq!(env.keeper.parked().len(), 1);
+        env.stop();
+    })
+    .await;
+}
+
+/// An answer for another question, an unparsable payload and a payload with
+/// extra fields and no `key`/`source` never wedge the card: only the matching
+/// one is consumed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_tolerates_odd_answer_signals() {
+    in_local(async {
+        let script = ask_then_work(r#"{"text":"which db?"}"#, "use sqlite");
+        let Some(env) = env_or_skip("needs-input-odd-signals", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-odd", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-odd-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let qid = wait_for_questions(&env, 1).await;
+        for payload in [
+            serde_json::json!({"question_id": qid + 40, "text": "use postgres"}),
+            serde_json::json!("not an object"),
+            serde_json::json!({"question_id": "x", "text": 5}),
+            serde_json::json!({"question_id": qid, "text": "use sqlite", "extra": [1, 2]}),
+        ] {
+            handle
+                .signal(Card::answer, payload, WorkflowSignalOptions::default())
+                .await
+                .expect("send answer signal");
+        }
+        let out = finish("needs_input_odd_signals", &id, &handle).await;
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(env.keeper.questions().len(), 1);
+        env.stop();
+    })
+    .await;
+}
+
+/// A keeper outage on `record_question_timeout` (5xx, after the in-activity
+/// retries) and a dead alarm sink must not fail the card: it takes the default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_default_survives_keeper_and_alarm_outage() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":1}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-outage", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_timeout_status(Some(503));
+        env.keeper.set_alarm_down(true);
+        let claim = env.claim("e2e-outage", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-outage-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_outage", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        // One call plus the bounded transient retries.
+        assert_eq!(env.keeper.question_timeouts().len(), 4);
         env.stop();
     })
     .await;

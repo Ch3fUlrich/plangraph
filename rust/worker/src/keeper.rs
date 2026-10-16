@@ -271,6 +271,11 @@ struct StubState {
     question_timeouts: Vec<i64>,
     /// When set, `record_question_timeout` is refused like a 403.
     timeout_refused: bool,
+    /// When set, `record_question_timeout` fails with this status (a 5xx here
+    /// is a transient outage); checked before `timeout_refused`.
+    timeout_status: Option<u16>,
+    /// When set, `alarm` fails with a 500 (the alarm is not recorded).
+    alarm_down: bool,
 }
 
 impl StubKeeper {
@@ -311,6 +316,16 @@ impl StubKeeper {
     /// worker token without the router or system role.
     pub fn set_timeout_refused(&self, refused: bool) {
         self.lock().timeout_refused = refused;
+    }
+
+    /// Make `record_question_timeout` fail with `status` every time.
+    pub fn set_timeout_status(&self, status: Option<u16>) {
+        self.lock().timeout_status = status;
+    }
+
+    /// Make every `alarm` call fail, as an unreachable alarm sink would.
+    pub fn set_alarm_down(&self, down: bool) {
+        self.lock().alarm_down = down;
     }
 
     pub fn push_claim(&self, c: Claim) {
@@ -366,7 +381,11 @@ impl Keeper for StubKeeper {
     }
 
     fn alarm(&self, a: &Alarm) -> Result<(), KeeperError> {
-        self.lock().alarms.push(a.clone());
+        let mut s = self.lock();
+        if s.alarm_down {
+            return Err(KeeperError::Status(500));
+        }
+        s.alarms.push(a.clone());
         Ok(())
     }
 
@@ -412,7 +431,9 @@ impl Keeper for StubKeeper {
     fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError> {
         let mut s = self.lock();
         s.question_timeouts.push(question_id);
-        if s.timeout_refused {
+        if let Some(code) = s.timeout_status {
+            Err(KeeperError::Status(code))
+        } else if s.timeout_refused {
             Err(KeeperError::Status(403))
         } else {
             Ok(())
