@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from plangraph.keeper import evidence_ci
+from plangraph.keeper.evidence_ci import CIAdapter
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter, parse_trailers
 from plangraph.keeper.evidence_runs import RunRecordAdapter
@@ -289,3 +291,223 @@ def test_semaphore_http_errors_distinct_and_token_free(monkeypatch, tmp_path, co
         SemaphoreAdapter().get(5, 1)
     assert str(excinfo.value) == msg
     assert "TOK" not in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------- #
+# CIAdapter (gh api: check-runs, plus the workflow runs behind them)
+# --------------------------------------------------------------------------- #
+
+_SHA = "a" * 40
+
+
+def _fake_gh(monkeypatch, checks, *, runs=None, runs_rc=0):
+    """Serve ``gh api`` from fixtures: *checks* for the check-runs endpoint,
+    *runs* for ``actions/runs`` (one payload, or a list of per-page payloads);
+    *runs_rc* fails every workflow-runs call with that exit code.  ``runs=None``
+    means the workflow-runs endpoint must never be asked.  Returns the list of
+    requested API paths so a test can count and inspect the calls."""
+    paths: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        assert cmd[:2] == ["gh", "api"], cmd
+        path = cmd[2]
+        paths.append(path)
+        if "/actions/runs" in path:
+            if runs_rc:
+                return subprocess.CompletedProcess(cmd, runs_rc, "", "gh failed")
+            if runs is None:
+                raise AssertionError(f"workflow-runs endpoint must not be called: {path}")
+            page = int(path.rsplit("page=", 1)[1])
+            payload = runs if isinstance(runs, dict) else runs[page - 1]
+        else:
+            payload = checks
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(evidence_ci.subprocess, "run", fake_run)
+    return paths
+
+
+def _check(app_slug, suite_id, *, name="build", check_id=1):
+    """One check-run as GitHub returns it, for the app under *app_slug*."""
+    return {
+        "id": check_id, "name": name, "status": "completed", "conclusion": "success",
+        "started_at": "2026-10-16T00:00:00Z", "head_sha": _SHA,
+        "app": {"slug": app_slug}, "check_suite": {"id": suite_id},
+        "details_url": f"https://example.invalid/{check_id}",
+    }
+
+
+def test_ci_adapter_backfills_workflow_for_dispatch_and_pr_suites(monkeypatch):
+    checks = {
+        "total_count": 3,
+        "check_runs": [
+            _check("github-actions", 111, name="build"),
+            _check("github-actions", 222, name="test", check_id=2),
+            _check("circleci", 333, name="lint", check_id=3),  # not an actions suite
+        ],
+    }
+    runs = {
+        "total_count": 2,
+        "workflow_runs": [
+            {"id": 9001, "check_suite_id": 111, "event": "push", "name": "CI",
+             "workflow_id": 5, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+            {"id": 9002, "check_suite_id": 222, "event": "pull_request", "name": "Tests",
+             "workflow_id": 7, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+        ],
+    }
+    paths = _fake_gh(monkeypatch, checks, runs=runs)
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert out[0]["workflow"] == {
+        "event": "push", "workflow_id": 5, "name": "CI", "run_id": 9001,
+    }
+    assert out[1]["workflow"] == {
+        "event": "pull_request", "workflow_id": 7, "name": "Tests", "run_id": 9002,
+    }
+    # The sha-scoped workflow-runs endpoint was used for the second call only.
+    assert len(paths) == 2
+    assert paths[1].startswith(
+        f"repos/owner/repo/actions/runs?head_sha={_SHA}&per_page=100&page=1"
+    )
+    # Existing keys are untouched alongside the added one.
+    assert out[0]["name"] == "build"
+    assert out[0]["check_suite"] == {"id": 111}
+
+
+def test_ci_adapter_unmatched_suite_gets_no_workflow_key(monkeypatch):
+    checks = {"total_count": 2, "check_runs": [
+        _check("github-actions", 777, name="build"),
+        _check("github-actions", 111, name="test", check_id=2),  # suite matches below
+    ]}
+    runs = {
+        "total_count": 1,
+        "workflow_runs": [
+            {"id": 42, "check_suite_id": 111, "event": "push", "name": "CI",
+             "workflow_id": 5, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+        ],
+    }
+    _fake_gh(monkeypatch, checks, runs=runs)
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(out) == 2
+    assert "workflow" not in out[0]  # no workflow run shares suite 777
+    assert out[1]["workflow"] == {"event": "push", "workflow_id": 5,
+                                  "name": "CI", "run_id": 42}
+    assert out[0]["id"] == 1  # everything else stays as collected
+
+
+def test_ci_adapter_null_check_suite_ids_never_backfill(monkeypatch):
+    # A null check-suite id on either side may never match: the run keyed under
+    # None used to backfill the check-run whose own check_suite.id is None.
+    checks = {"total_count": 2, "check_runs": [
+        _check("github-actions", None, name="build"),
+        _check("github-actions", 111, name="test", check_id=2),
+    ]}
+    runs = {
+        "total_count": 2,
+        "workflow_runs": [
+            {"id": 9001, "check_suite_id": None, "event": "push", "name": "CI",
+             "workflow_id": 5, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+            {"id": 9002, "check_suite_id": 111, "event": "push", "name": "CI",
+             "workflow_id": 5, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+        ],
+    }
+    _fake_gh(monkeypatch, checks, runs=runs)
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(out) == 2
+    assert "workflow" not in out[0]  # no key is ever invented for a null suite
+    assert out[1]["workflow"] == {"event": "push", "workflow_id": 5,
+                                  "name": "CI", "run_id": 9002}
+
+
+def test_ci_adapter_bool_check_suite_id_never_backfills(monkeypatch):
+    # True == 1 in Python: without the int-only gate a bool suite id would
+    # hijack suite 1 and invent a 'workflow' key on either side of the match.
+    run = {"id": 42, "check_suite_id": True, "event": "push", "name": "CI",
+           "workflow_id": 5, "run_attempt": 1,
+           "status": "completed", "conclusion": "success"}
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 1)]}
+    _fake_gh(monkeypatch, checks, runs={"total_count": 1, "workflow_runs": [run]})
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert "workflow" not in out[0]  # a bool workflow-run suite id matches nothing
+
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", True)]}
+    run = dict(run, check_suite_id=1)
+    _fake_gh(monkeypatch, checks, runs={"total_count": 1, "workflow_runs": [run]})
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert "workflow" not in out[0]  # a bool check-run suite id is no key either
+
+
+def test_ci_adapter_workflow_run_without_workflow_id_gets_no_key(monkeypatch):
+    # The suite matches, but the run has no workflow_id to group by: the
+    # check-run keeps its plain suite key instead of a half-empty 'workflow'.
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 111)]}
+    runs = {
+        "total_count": 1,
+        "workflow_runs": [
+            {"id": 42, "check_suite_id": 111, "event": "workflow_dispatch",
+             "name": "CI", "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+        ],
+    }
+    _fake_gh(monkeypatch, checks, runs=runs)
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(out) == 1
+    assert "workflow" not in out[0]
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": None}, {"id": True}, {"id": 0}, {"id": "42"},
+    {"workflow_id": None}, {"workflow_id": True}, {"workflow_id": 0},
+    {"event": None}, {"event": 7},
+])
+def test_ci_adapter_incomplete_workflow_run_gets_no_key(monkeypatch, bad):
+    # 'workflow' is written only from a positive int id and workflow_id
+    # (bool excluded) and a str event; anything else adds no key at all.
+    run = {"id": 42, "check_suite_id": 111, "event": "push", "name": "CI",
+           "workflow_id": 5, "run_attempt": 1,
+           "status": "completed", "conclusion": "success"}
+    run.update(bad)
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 111)]}
+    _fake_gh(monkeypatch, checks, runs={"total_count": 1, "workflow_runs": [run]})
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert "workflow" not in out[0]
+
+
+def test_ci_adapter_without_actions_runs_makes_exactly_one_gh_call(monkeypatch):
+    checks = {"total_count": 2, "check_runs": [
+        _check("circleci", 111, name="lint"),
+        _check("codecov", 222, name="coverage", check_id=2),
+    ]}
+    paths = _fake_gh(monkeypatch, checks)  # runs=None: second call must not happen
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(out) == 2
+    assert len(paths) == 1
+    assert "/check-runs" in paths[0]
+
+
+def test_ci_adapter_workflow_runs_truncated_is_refused(monkeypatch):
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 111)]}
+    runs = [
+        {"total_count": 250,
+         "workflow_runs": [{"id": i, "check_suite_id": 111, "event": "push",
+                            "name": "CI", "workflow_id": 5, "run_attempt": 1,
+                            "status": "completed", "conclusion": "success"}
+                           for i in range(1, 101)]},
+        {"total_count": 250, "workflow_runs": []},
+    ]
+    paths = _fake_gh(monkeypatch, checks, runs=runs)
+    with pytest.raises(RuntimeError, match="workflow-runs truncated"):
+        CIAdapter().check_runs("owner/repo", _SHA)
+    assert any(p.endswith("page=2") and "/actions/runs" in p for p in paths)
+
+
+def test_ci_adapter_gh_failure_on_second_call_raises(monkeypatch):
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 111)]}
+    paths = _fake_gh(monkeypatch, checks, runs_rc=2)
+    with pytest.raises(RuntimeError, match="gh api exited 2"):
+        CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(paths) == 2  # the failure came from the workflow-runs call

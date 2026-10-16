@@ -24,6 +24,19 @@ __all__ = ["CIAdapter"]
 _SLUG_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
+def _pos_int(value: object) -> int | None:
+    """A real positive int id, else None.
+
+    Shared by both halves of the workflow backfill (workflow-run suite ids and
+    check-run suite ids, then the run and workflow ids behind the 'workflow'
+    key): bool is not an id (``True == 1`` would hijack suite 1) and a digit
+    string is not an id here either — GitHub sends ints.
+    """
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def slug_from_remote(url: str) -> str | None:
     """Turn a git remote URL into ``owner/repo`` (``None`` if unrecognisable)."""
     url = url.strip()
@@ -76,19 +89,95 @@ class CIAdapter:
         into a slug through its ``origin`` remote. The sha and the slug are both
         validated before any process runs; the API path is assembled from those
         validated components only, so no user text can inject a query.
+        When any check-run comes from GitHub Actions, the workflow runs for the
+        sha are fetched through the same gated paging and backfilled onto the
+        check-runs whose check-suite id matches (``workflow`` key); only a
+        positive int suite id counts on either side, and the key is written
+        only when the matched run also has a positive int id and workflow_id
+        and a string event.
         Raises on a non-zero ``gh`` exit or unparseable output — the verifier
         catches and sanitises that.
         """
         if not valid_commit_ref(sha):
             raise ValueError("check-runs requires a full lowercase commit sha")
         owner, repo = self._validated_slug(self._slug(repo_slug_or_path))
-        base = "repos/{}/{}/commits/{}/check-runs".format(
-            quote(owner, safe=""), quote(repo, safe=""), quote(sha, safe="")
+        # Both endpoints are assembled from these validated components only,
+        # so neither the slug nor the sha can inject a query or a path segment.
+        quoted = quote(owner, safe=""), quote(repo, safe=""), quote(sha, safe="")
+        collected = self._page_all(
+            "repos/{}/{}/commits/{}/check-runs".format(*quoted),
+            "",
+            "check_runs",
+            "check-runs",
+            owner,
+            repo,
         )
+        # A check-run from GitHub Actions only summarises the workflow run that
+        # produced it, so fetch those runs for the sha — but only when such a
+        # run exists: no actions check-run, no second ``gh`` call at all.
+        if any(
+            isinstance(run.get("app"), dict)
+            and run["app"].get("slug") == "github-actions"
+            for run in collected
+        ):
+            workflows = self._page_all(
+                "repos/{}/{}/actions/runs".format(quoted[0], quoted[1]),
+                f"head_sha={quoted[2]}&",
+                "workflow_runs",
+                "workflow-runs",
+                owner,
+                repo,
+            )
+            # First run wins per suite: the API lists newest first, so retries
+            # collapse onto the latest attempt. Only a positive int suite id on
+            # either side matches (bool excluded), and a matched run adds a
+            # 'workflow' key only when its id, workflow_id and str event are
+            # all usable — a suite with no usable run simply gets no key.
+            by_suite: dict = {}
+            for w in workflows:
+                suite_id = _pos_int(w.get("check_suite_id"))
+                if suite_id is None:
+                    continue
+                by_suite.setdefault(suite_id, w)
+            for run in collected:
+                suite = run.get("check_suite")
+                suite_id = _pos_int(suite.get("id")) if isinstance(suite, dict) else None
+                if suite_id is None:
+                    continue
+                wf = by_suite.get(suite_id)
+                if wf is None:
+                    continue
+                run_id = _pos_int(wf.get("id"))
+                wf_id = _pos_int(wf.get("workflow_id"))
+                event = wf.get("event")
+                if run_id is None or wf_id is None or not isinstance(event, str):
+                    continue
+                run["workflow"] = {
+                    "event": event,
+                    "workflow_id": wf_id,
+                    "name": wf.get("name"),
+                    "run_id": run_id,
+                }
+        return collected
+
+    # -- helpers ------------------------------------------------------------
+    def _page_all(
+        self, base: str, query: str, key: str, label: str, owner: str, repo: str
+    ) -> list[dict]:
+        """Collect every item under *key* across pages, refusing truncation.
+
+        Shared by the check-runs and the workflow-runs lookups so both carry
+        the same contract: at most 10 pages of 100, a non-zero ``gh`` exit
+        raises, and a ``total_count`` larger than what was collected fails
+        closed instead of returning a partial list. *base* is the API path
+        without a query; *query* is any prefix already opened there (empty for
+        check-runs, the ``head_sha`` scoping for workflow runs); *label* names
+        the list in the truncation error.
+        """
         collected: list[dict] = []
         total: int | None = None
         for page in range(1, 11):
-            path = f"{base}?per_page=100&page={page}"
+            path = f"{base}?{query}per_page=100&page={page}"
             proc = subprocess.run(
                 [self._gh, "api", path],
                 capture_output=True,
@@ -99,24 +188,23 @@ class CIAdapter:
             if proc.returncode != 0:
                 raise RuntimeError(f"gh api exited {proc.returncode} for {owner}/{repo}")
             data = json.loads(proc.stdout)
-            page_runs = data.get("check_runs") if isinstance(data, dict) else None
-            if not isinstance(page_runs, list):
-                page_runs = []
-            collected.extend([r for r in page_runs if isinstance(r, dict)])
+            page_items = data.get(key) if isinstance(data, dict) else None
+            if not isinstance(page_items, list):
+                page_items = []
+            collected.extend([r for r in page_items if isinstance(r, dict)])
             raw_total = data.get("total_count") if isinstance(data, dict) else None
             if isinstance(raw_total, int) and not isinstance(raw_total, bool):
                 total = raw_total
                 if len(collected) >= total:
                     break
-            if len(page_runs) < 100:
+            if len(page_items) < 100:
                 break
         if total is not None and total > len(collected):
             raise RuntimeError(
-                f"check-runs truncated for {owner}/{repo}: expected {total}, got {len(collected)}"
+                f"{label} truncated for {owner}/{repo}: expected {total}, got {len(collected)}"
             )
         return collected
 
-    # -- helpers ------------------------------------------------------------
     @staticmethod
     def _validated_slug(slug: object) -> tuple[str, str]:
         if not isinstance(slug, str) or not _SLUG_RE.fullmatch(slug):
