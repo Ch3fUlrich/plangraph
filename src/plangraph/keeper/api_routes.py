@@ -11,18 +11,18 @@ from ..inbox import routes as _inbox
 from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
-           "ROUTER_VERBS", "READ_CALLS"]
+           "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
-              "answers", "progress", "changelog", "audit-meta"}
+              "answers", "progress", "changelog", "audit-meta", "metrics"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
-               "withdraw_review", "set_kind"}
+               "withdraw_review", "set_kind", "set_metrics", "governor_override"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -105,6 +105,16 @@ def _mint_run_token(store, principal, body, need):
                                 need(body, "role"), need(body, "run_id"))
 
 
+def _set_metrics(store, principal, body, need):
+    return store.set_metrics(principal, body.get("day"), body.get("items"))   # role first (403)
+
+
+def _governor_override(store, principal, body, need):
+    return store.log_governor_override(principal, body.get("start_kind"),
+                                       body.get("initiator"), body.get("reason"),
+                                       body.get("provider"))   # role first (403)
+
+
 def _replay(store, principal, body, need):
     return store.replay(principal, body.get("entries"))   # M2B-OUTBOX: principal checked first (403)
 
@@ -120,3 +130,9 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "set_legacy_state": _set_legacy_state,
                 "apply_ops": _apply_ops,
                 "record_run": _record_run}
+
+
+#: Write verbs whose store method checks the role itself and admits more than the
+#: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
+ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "governor_override": _governor_override}
