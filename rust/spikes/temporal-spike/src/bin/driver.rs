@@ -198,7 +198,14 @@ async fn all(c: &Client, fixtures: Option<&str>) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let addr = std::env::var("SPIKE_ADDR").unwrap_or_else(|_| "http://127.0.0.1:7233".into());
-    let conn = Connection::connect(ConnectionOptions::new(Url::from_str(&addr)?).build()).await?;
+    let tls = temporal_spike::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?;
+    temporal_spike::tls::require_https(&addr, &tls).map_err(|e| anyhow::anyhow!(e))?;
+    let conn = Connection::connect(
+        ConnectionOptions::new(Url::from_str(&addr)?)
+            .maybe_tls_options(tls)
+            .build(),
+    )
+    .await?;
     let c = Client::new(conn, ClientOptions::new("default").build())?;
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args
