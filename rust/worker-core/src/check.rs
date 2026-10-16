@@ -61,7 +61,7 @@ pub fn run_check(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

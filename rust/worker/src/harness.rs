@@ -748,7 +748,10 @@ mod tests {
         unsafe { std::env::set_var("PG_PROBE_SENTINEL", "x") };
         unsafe { std::env::set_var("TEMPORAL_PROBE_SENTINEL", "x") };
         let reg = registry_with(p.to_string_lossy().into_owned());
-        assert_eq!(check_version_pins(&reg, Some("opencode=clean-1.0")), Ok(true));
+        assert_eq!(
+            check_version_pins(&reg, Some("opencode=clean-1.0")),
+            Ok(true)
+        );
     }
 
     #[test]
