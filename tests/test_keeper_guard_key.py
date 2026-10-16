@@ -1,4 +1,4 @@
-"""PL-33: the credential refusal names the item key; path-like tokens pass.
+"""PL-33: the credential refusal names the item key; paths near a credential word stay refused (D-388, D-1558).
 
 Synthetic strings only: ``admin/hunter22`` style, never a real credential.
 The message format is ``[<key>: ]<field> looks like it contains a credential at
@@ -13,8 +13,7 @@ from plangraph.keeper.errors import Refused
 
 SECRET = "admin/hunter2secret"
 
-#: near a credential keyword, but path-like: two-plus '/', no '=' or ':',
-#: last '/'-segment ends in a file extension -> NOT a credential shape.
+#: path-like text near a credential keyword: NO exemption (D-388), still refused.
 PATHS = [
     "see docs/plan/manual-triage-2026-10-02.md for login steps",
     "server:MT-003 uses ops/runbooks/login-flow.md",
@@ -22,7 +21,7 @@ PATHS = [
     "src/plangraph/keeper/credential_guard.py password check",
 ]
 
-#: credential pairs (plus one hiding beside an exempted path) -> still refused.
+#: credential pairs (plus one beside a path) -> refused.
 REAL = [
     "login admin/hunter2secret",
     "password: svc/Xk9fT2mQ",
@@ -122,18 +121,20 @@ def test_batch_position_three_is_named_and_the_op_prefix_survives(w):
         assert w.store._item(rolled) is None
 
 
-# --------------------------------------------------- path-like tokens pass
+# --------------------------------------------------- paths stay refused (D-388)
 @pytest.mark.parametrize("text", PATHS)
-def test_path_like_tokens_are_not_credential_shapes(text):
-    assert find_shapes(text) == []
-    assert mask(text) == (text, 0)
+def test_path_like_tokens_near_a_credential_word_are_still_shapes(text):
+    assert find_shapes(text)
+    assert mask(text)[1] >= 1
 
 
 @pytest.mark.parametrize("text", PATHS)
-def test_a_path_near_a_credential_word_still_creates(w, text):
-    w.store.create_items(w.p("router"), [
-        defn("P", note=text), defn("G2", ["P"], kind="goal")])
-    assert w.store._item("demo:P")["note"] == text
+def test_create_refuses_a_path_near_a_credential_word_naming_the_key(w, text):
+    with pytest.raises(Refused) as exc:
+        w.store.create_items(w.p("router"), [
+            defn("P", note=text), defn("G2", ["P"], kind="goal")])
+    assert "demo:P: note looks like it contains a credential" in exc.value.msg
+    assert w.store._item("demo:P") is None
 
 
 # --------------------------------------------------- real secrets still fail
@@ -157,22 +158,21 @@ def test_create_refuses_real_secrets_naming_the_key(w, text):
 
 # --------------------------------------------------- mask stays consistent
 def test_mask_redacts_exactly_the_set_find_shapes_returns():
-    mixed = f"login {SECRET} and see {PATHS[0]}"
+    mixed = f"login see {PATHS[0]} then {SECRET}"
     hits = find_shapes(mixed)
-    assert len(hits) == 1 and mixed[hits[0].start():hits[0].end()] == SECRET
+    assert len(hits) == 2 and mixed[hits[-1].start():hits[-1].end()] == SECRET
     text, count = mask(mixed)
     assert count == len(hits)
-    assert text == f"login [redacted] and see {PATHS[0]}"
-    assert SECRET not in text
+    assert text.endswith("then [redacted]") and SECRET not in text
 
 
 def test_mask_all_counts_the_same_matches_as_find_shapes():
     value = {"note": f"password {SECRET}", "path": PATHS[1], "n": 3}
     assert len(find_shapes(value["note"])) == 1
-    assert find_shapes(value["path"]) == []
+    assert len(find_shapes(value["path"])) == 1
     masked, count = mask_all(value)
-    assert count == 1 and SECRET not in masked["note"]
-    assert masked["path"] == value["path"] and masked["n"] == 3
+    assert count == 2 and SECRET not in masked["note"]
+    assert "[redacted]" in masked["path"] and masked["n"] == 3
 
 
 @pytest.mark.parametrize("gap", [121, 200])

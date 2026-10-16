@@ -54,7 +54,7 @@ rules = ["credential-shape"]
 path = "tests/test_keeper_credential_guard.py"
 rules = ["credential-shape"]
 # PL-33 key/path refusal cases: the same reviewed synthetic pair strings, plus
-# path-like tokens that must NOT be shapes.
+# path-like strings near a credential word (still refused, D-388).
 [[scrub.allow]]
 path = "tests/test_keeper_guard_key.py"
 rules = ["credential-shape"]
