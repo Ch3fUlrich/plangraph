@@ -1,0 +1,410 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+Review the diff below (plangraph PG-FOLD-UNKNOWN-TYPE, HIGH: keeper engine). Answer each vector V1..Vn under its own heading with file:function evidence; say PASS or a concrete defect (input -> wrong output).
+V1 keeper/events.py:fold: an event whose type is not in schema.EVENT_TYPES never touches item state (including keyless events or unseen keys), is recorded in the side-channel list; types in EVENT_TYPES without a branch (review_verdict, token_minted, outage_recorded, heartbeat) are known no-ops and never reported; fold(events) old single-arg signature and return value unchanged for all callers.
+V2 keeper/events.py:verify_integrity: one problem per unknown event {key|None, code unknown_event_type, field type, expected None, got type, seq}; chain verification (verify_chain) independent; fold/verify agree on a chain with only known types (no false positives); no SQLite-only construct (PG parity via db_pg).
+V3 keeper/cli_admin.py:_problem_line and other consumers of verify_integrity problems (grep cache_mismatch consumers): a None key and extra `seq` field do not crash any renderer / API / audit path; exit codes unchanged.
+V4 negative/event-replay paths in tests/test_keeper_fold_unknown_type.py: synthetic unknown type on a valid hash chain, parametrised all EVENT_TYPES, item state unchanged by an unknown event, old call style; plus the alias-forbidden test added in tests/test_keeper_create_under.py (L1 passes an alias that resolves to another project's gate -> forbidden, nothing written).
+=== DIFF ===
+diff --git a/docs/KEEPER.md b/docs/KEEPER.md
+index 2484eb8b..c1a5c31e 100644
+--- a/docs/KEEPER.md
++++ b/docs/KEEPER.md
+@@ -10,7 +10,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not
+ |---|---|
+ | `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` |
+ | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
+-| `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold) |
++| `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
+ | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`. |
+ | `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…, ctx=…, batch_roots=…)`, mixed in from `store_create`/`store_verbs`/`store_review`/`store_waiver`/`store_close`/`store_read`/`store_reap`/`store_support`; every verb takes `(principal, …)` |
+ | `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
+@@ -33,6 +33,14 @@ Event types: `item_created, item_defined, claimed, delegated, released, lease_ex
+ changes_requested, review_passed, cancelled, priority_set, kind_set`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
+ transaction as the event; `verify_integrity` proves cache == fold.
+ 
++**Unknown event types (PG-FOLD-UNKNOWN-TYPE).** A `type` outside `schema.EVENT_TYPES` was written by a newer keeper: this build cannot
++replay it, so `fold(events, unknown=…)` records `{"seq","type","key"}` in an optional side channel and never touches item state (the
++event is otherwise skipped, so the cache cannot drift and an old rebuild cannot undo it). `verify_integrity` turns each entry into one
++problem `{"key": key-or-None, "code": "unknown_event_type", "field": "type", "expected": None, "got": kind, "seq": seq}`; `pg admin
++verify` prints it as `KEY unknown_event_type type=… seq=…` (`-` for a keeper-level, keyless event). Types in `EVENT_TYPES` with no fold
++branch — `review_verdict`, `token_minted`, `outage_recorded` — are known no-ops (replayed by `token_fold`/the store) and are **never**
++reported as unknown.
++
+ ## Locking (prevention)
+ Triggers key off `EXISTS (SELECT 1 FROM events WHERE key=… AND type IN ('review_passed','closed_on_decision'))` (never the cache) — the
+ two events that finish an item (X7b adds the router's decision close beside the passed review), and also treat
+diff --git a/src/plangraph/keeper/cli_admin.py b/src/plangraph/keeper/cli_admin.py
+index 7122ac57..bb900c52 100644
+--- a/src/plangraph/keeper/cli_admin.py
++++ b/src/plangraph/keeper/cli_admin.py
+@@ -110,6 +110,19 @@ def _cmd_revoke(args, cfg) -> int:
+     return 0
+ 
+ 
++def _problem_line(problem) -> str:
++    """One line per integrity problem; unknown types name the type and seq.
++
++    Every other problem keeps its plain dict repr (the contract greps the
++    codes out of it), but an ``unknown_event_type`` carries no expected/got
++    pair, so it reads as a sentence instead.
++    """
++    if problem.get("code") == "unknown_event_type":
++        return (f"{problem.get('key') or '-'} unknown_event_type"
++                f" type={problem.get('got')} seq={problem.get('seq')}")
++    return str(problem)
++
++
+ def _cmd_verify(args, cfg) -> int:
+     conn = _open(cfg)
+     try:
+@@ -118,7 +131,7 @@ def _cmd_verify(args, cfg) -> int:
+     finally:
+         conn.close()
+     for problem in problems:
+-        print(problem)
++        print(_problem_line(problem))
+     if problems:
+         print(f"{len(problems)} problem(s)", file=sys.stderr)
+         return 2
+diff --git a/src/plangraph/keeper/events.py b/src/plangraph/keeper/events.py
+index 0f06c5a6..42e5be5e 100644
+--- a/src/plangraph/keeper/events.py
++++ b/src/plangraph/keeper/events.py
+@@ -4,7 +4,9 @@ Each event's hash is ``sha256(prev_hash + canonical_json(event))`` where the
+ canonical event is the ordered dict of ``ts, actor, role, model, key, type,
+ payload`` (``prev_hash`` and ``hash`` are deliberately excluded).  The genesis
+ event has an empty ``prev_hash``.  ``fold`` replays events into the cached item
+-state; ``verify_integrity`` proves the cache equals that replay.
++state; ``verify_integrity`` proves the cache equals that replay.  An event type
++this build does not know (a newer keeper wrote it) never reaches the cache: it
++is reported as ``unknown_event_type`` with its ``seq``.
+ """
+ from __future__ import annotations
+ 
+@@ -15,6 +17,9 @@ from collections import Counter
+ from .token_fold import verify_tokens
+ 
+ from .item_fields import SMALL_FIELDS
++# PG-FOLD-UNKNOWN-TYPE: schema imports nothing back, so no cycle -- ``events``
++# may name the authoritative list of types this build knows how to replay.
++from .schema import EVENT_TYPES
+ 
+ __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
+            "verify_chain", "verify_integrity", "FIELDS"]
+@@ -125,7 +130,7 @@ def _fold_run(item, payload):
+              for s in seats if isinstance(s, dict)])
+ 
+ 
+-def fold(events):
++def fold(events, unknown=None):
+     """Replay *events* (oldest first) into ``key -> cached state``.
+ 
+     Every field ``verify_integrity`` compares is reconstructed here, including
+@@ -133,15 +138,32 @@ def fold(events):
+     lifecycle columns a raw writer might tamper with.  Events that the store
+     does not emit yet (``heartbeat``) are still handled, so the fold is the
+     contract the store must meet.
++
++    PG-FOLD-UNKNOWN-TYPE: a ``kind`` outside :data:`EVENT_TYPES` was written by
++    a newer keeper; this build cannot replay it, so it must not silently
++    disappear (the cache would drift, or an old rebuild would undo the event).
++    Such an event never touches item state -- it is only recorded in the
++    optional *unknown* list as ``{"seq", "type", "key"}``.  Types that are in
++    ``EVENT_TYPES`` but have no branch here (``review_verdict``,
++    ``token_minted``, ``outage_recorded``) are known no-ops: they are replayed
++    by ``token_fold``/the store and are never reported as unknown.  *events*
++    and the return value are unchanged from the single-argument signature.
+     """
+     state = {}
+     for event in events:
++        kind = event["type"]
++        if kind not in EVENT_TYPES:
++            # Unknown type: side channel only, before any state is touched --
++            # including for a keyless event or a key this fold has not seen.
++            if unknown is not None:
++                unknown.append({"seq": event["seq"], "type": kind,
++                                "key": event.get("key")})
++            continue
+         key = event.get("key")
+         if key is None:
+             continue
+         payload = event.get("payload") or {}
+         item = state.setdefault(key, _new_state())
+-        kind = event["type"]
+         if kind == "item_created":
+             item["state"] = "open"
+             item["epoch"] = 0
+@@ -302,10 +324,16 @@ def verify_integrity(conn):
+     tolerance described below, and the recomputed per-key evidence counts
+     (total and verified).
+ 
+-    Returns a list of ``{key, code, field, expected, got}`` problems.
++    Returns a list of ``{key, code, field, expected, got}`` problems.  One
++    extra problem per event whose ``type`` is not in ``EVENT_TYPES`` is
++    appended (PG-FOLD-UNKNOWN-TYPE): ``{key (None for a keyless event), code
++    "unknown_event_type", field "type", expected None, got kind, seq}`` --
++    a type a newer keeper wrote, which this build cannot replay, so the cache
++    must not be trusted silently.
+     """
+     all_events = read_events(conn)
+-    folded = fold(all_events)
++    unknown = []
++    folded = fold(all_events, unknown=unknown)
+     cached = {row["key"]: row for row in conn.execute(
+         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
+         "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
+@@ -320,6 +348,10 @@ def verify_integrity(conn):
+         shapes.setdefault(row["key"], []).append(
+             (row["epoch"], row["kind"], bool(row["verified"])))
+     problems = []
++    for entry in unknown:   # PG-FOLD-UNKNOWN-TYPE: one problem per replay-blind event
++        problems.append({"key": entry["key"], "code": "unknown_event_type",
++                         "field": "type", "expected": None,
++                         "got": entry["type"], "seq": entry["seq"]})
+     for key, expected in folded.items():
+         row = cached.get(key)
+         if row is None:
+diff --git a/tests/test_keeper_create_under.py b/tests/test_keeper_create_under.py
+index 00b09e6c..1b5f5b02 100644
+--- a/tests/test_keeper_create_under.py
++++ b/tests/test_keeper_create_under.py
+@@ -132,6 +132,37 @@ def test_l1_may_not_attach_under_a_project_it_does_not_own(w):
+     assert _snapshot(w) == before
+ 
+ 
++def test_l1_alias_resolving_to_another_projects_gate_is_forbidden(w):
++    """An alias key is a pointer, not a licence: ``under`` may name the old key
++    of a gate that ``rehome`` moved to another project, but the attach is still
++    judged on where the gate LIVES (project B), not on the alias' project A."""
++    w.store.create_items(w.p("router"), [defn("GATE", kind="goal")])
++    w.store.rehome(w.p("router"), "demo:GATE", "other")   # -> other:GATE
++    assert w.store.resolve_key("demo:GATE") == "other:GATE"
++    # the L1 under test owns project A only (the fixture's l1both owns both)
++    assert w.p("l1main").projects == ["demo"]
++
++    def gate_edges():
++        return [(r["src"], r["dst"]) for r in w.conn.execute(
++            "SELECT src,dst FROM edges WHERE src=? OR dst=?",
++            ("other:GATE", "other:GATE"))]
++
++    assert gate_edges() == []                     # nothing yet for the gate
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:           # alias -> other:GATE (project B)
++        w.store.create_items(w.p("l1main"), [defn("NEW", under="demo:GATE")])
++    assert exc.value.code == "forbidden"
++    assert _snapshot(w) == before                 # no item, no edge, no event
++    assert w.store._item("demo:NEW") is None      # NO item was created
++    assert gate_edges() == []                     # NO edge row for the gate
++    # control: the router runs the very same attach and it succeeds
++    out = w.store.create_items(w.p("router"), [defn("CTRL", under="demo:GATE")])
++    assert out["created"] == ["demo:CTRL"]
++    assert out["attached"] == [{"key": "demo:CTRL", "under": "other:GATE"}]
++    assert gate_edges() == [("other:GATE", "demo:CTRL")]   # G -> N, written at last
++    assert _problems(w) == [] and verify_integrity(w.conn) == []
++
++
+ @pytest.mark.parametrize("who", ["workerA", "reviewer", "reader", "system"])
+ def test_roles_that_may_not_create_cannot_attach(w, who):
+     before = _snapshot(w)
+diff --git a/tests/test_keeper_fold_unknown_type.py b/tests/test_keeper_fold_unknown_type.py
+new file mode 100644
+index 00000000..e8d9c013
+--- /dev/null
++++ b/tests/test_keeper_fold_unknown_type.py
+@@ -0,0 +1,186 @@
++"""PG-FOLD-UNKNOWN-TYPE: an event type this build cannot replay is never silently skipped.
++
++Mutations killed: ``fold`` dropping a ``kind`` outside ``EVENT_TYPES`` without a
++trace (the cache drifts, or an old rebuild later undoes the newer keeper's
++event), ``verify_integrity`` staying green over such an event, a *known* type
++being reported as unknown, ``fold``'s old single-argument call style breaking,
++and ``pg admin verify`` hiding the type/seq of the unknown event.
++
++The synthetic event goes in through ``store._append`` -- the same hash-chained
++append path the store uses -- so ``verify_chain`` must stay green throughout.
++"""
++from __future__ import annotations
++
++import ast
++from argparse import Namespace
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++
++from keeper_util import World, seed, to_in_review
++from plangraph.keeper import cli_admin
++from plangraph.keeper import events as events_mod
++from plangraph.keeper.events import fold, read_events, verify_chain, verify_integrity
++from plangraph.keeper.schema import EVENT_TYPES
++
++UNKNOWN = "zz_future_event"      # a type only a newer keeper knows
++
++#: in ``EVENT_TYPES`` but with no branch in ``fold``: replayed by
++#: ``token_fold``/the store instead, so a known no-op, never "unknown".
++BRANCHLESS = {"review_verdict", "token_minted", "outage_recorded"}
++
++#: every field any branch may read, so a known type replays without a KeyError.
++RICH = {"epoch": 1, "claimed_by": "l1main", "lease_until": "2030-01-01T00:00:00Z",
++        "state": "claimed", "round": 1, "priority": 2, "review_tier": "standard",
++        "kind": "lane", "wait": None, "operator": False, "decision_id": "D-1",
++        "run_id": "run-1", "seats": [], "worker": "workerA"}
++
++COLUMNS = ("state", "epoch", "round", "claimed_by", "delegate", "lease_until",
++           "reviewer", "review_waiver", "priority", "run_ids")
++
++
++@pytest.fixture
++def w(tmp_path):
++    world = World(tmp_path)
++    yield world
++    world.close()
++
++
++def _row(world, key):
++    return tuple(world.conn.execute(
++        f"SELECT {','.join(COLUMNS)} FROM items WHERE key=?", (key,)).fetchone())
++
++
++def _unknown(world):
++    return [p for p in verify_integrity(world.conn)
++            if p["code"] == "unknown_event_type"]
++
++
++# --------------------------------------------------------------- the headline
++def test_unknown_type_is_reported_once_and_the_item_state_is_untouched(w):
++    (key,) = seed(w, [("A", [])])
++    epoch = to_in_review(w, key)                     # normal verbs first
++    assert verify_chain(w.conn) == [] and verify_integrity(w.conn) == []
++
++    before_fold = fold(read_events(w.conn))
++    before_row = _row(w, key)
++
++    # the same hash-chained append path the store uses
++    seq, digest = w.store._append(w.p("router"), key, UNKNOWN,
++                                  {"note": "written by a newer keeper"}, w.clock())
++
++    assert w.conn.execute("SELECT hash FROM events WHERE seq=?",
++                          (seq,)).fetchone()[0] == digest
++    assert verify_chain(w.conn) == []                # the chain is still valid
++
++    problems = verify_integrity(w.conn)
++    assert [p for p in problems if p["code"] != "unknown_event_type"] == []
++    assert [p for p in problems if p["code"] == "unknown_event_type"] == [
++        {"key": key, "code": "unknown_event_type", "field": "type",
++         "expected": None, "got": UNKNOWN, "seq": seq}]
++    # the "right" seq: the seq of that very event as the log replays it
++    assert seq == [e["seq"] for e in read_events(w.conn)
++                   if e["type"] == UNKNOWN][-1]
++
++    after_fold = fold(read_events(w.conn))
++    assert after_fold == before_fold                 # no state, no new key
++    assert after_fold[key]["state"] == "in_review" and after_fold[key]["epoch"] == epoch
++    assert _row(w, key) == before_row                # and no cache row moved
++
++
++def test_unknown_type_without_a_key_reports_a_none_key(w):
++    (key,) = seed(w, [("A", [])])
++    seq, _ = w.store._append(w.p("router"), None, UNKNOWN, {}, w.clock())
++    assert verify_chain(w.conn) == []
++    assert _unknown(w) == [{"key": None, "code": "unknown_event_type",
++                            "field": "type", "expected": None,
++                            "got": UNKNOWN, "seq": seq}]
++
++
++def test_admin_verify_line_names_the_type_and_seq(w, capsys):
++    (key,) = seed(w, [("A", [])])
++    seq, _ = w.store._append(w.p("router"), key, UNKNOWN, {}, w.clock())
++    cfg = SimpleNamespace(db=str(w.path), db_options={})
++    assert cli_admin._cmd_verify(Namespace(), cfg) == 2
++    out = capsys.readouterr().out
++    assert f"{key} unknown_event_type type={UNKNOWN} seq={seq}" in out
++    # a problem with a None key still prints a readable line
++    assert f"- unknown_event_type type={UNKNOWN} seq={seq}" in cli_admin._problem_line(
++        {"key": None, "code": "unknown_event_type", "field": "type",
++         "expected": None, "got": UNKNOWN, "seq": seq})
++    # every other problem keeps its dict repr (the contract greps codes from it)
++    assert "cache_mismatch" in cli_admin._problem_line(
++        {"key": key, "code": "cache_mismatch", "field": "state",
++         "expected": "open", "got": "claimed"})
++
++
++# ------------------------------------------------- a clean chain stays clean
++def test_known_types_only_reports_no_unknown_problems(w):
++    (key,) = seed(w, [("A", [])])
++    to_in_review(w, key)
++    assert _unknown(w) == []
++    assert verify_integrity(w.conn) == []            # not even another code
++
++
++def _fold_branch_kinds():
++    """The ``kind`` literals the ``fold`` if/elif chain actually compares."""
++    tree = ast.parse(Path(events_mod.__file__).read_text(encoding="utf-8"))
++    fold_node = next(n for n in tree.body
++                     if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
++                     and n.name == "fold")
++    kinds = set()
++    for node in ast.walk(fold_node):
++        if not (isinstance(node, ast.Compare)
++                and isinstance(node.left, ast.Name) and node.left.id == "kind"):
++            continue
++        for comparator in node.comparators:
++            if isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
++                kinds.add(comparator.value)
++            elif isinstance(comparator, (ast.Tuple, ast.List)):
++                kinds.update(elt.value for elt in comparator.elts
++                             if isinstance(elt, ast.Constant))
++    return kinds
++
++
++def test_every_event_type_is_branched_or_intentionally_ignored():
++    """PG-FOLD-UNKNOWN-TYPE audit: no EVENT_TYPES member is *neither*."""
++    branched = _fold_branch_kinds()
++    # every branch handles a type this build declares (no dead/drifted branch)
++    assert branched <= set(EVENT_TYPES)
++    # ... and every declared type either has a branch or is a documented no-op
++    assert set(EVENT_TYPES) - branched == BRANCHLESS
++
++
++@pytest.mark.parametrize("kind", EVENT_TYPES)
++def test_every_known_type_appends_without_an_unknown_problem(w, kind):
++    """DB level: each EVENT_TYPES member folds as a known no-op/op, never as unknown."""
++    key = f"demo:F_{kind}"
++    w.store._append(w.p("router"), key, kind, RICH, w.clock())
++    assert verify_chain(w.conn) == []
++    assert _unknown(w) == []
++
++
++@pytest.mark.parametrize("kind", EVENT_TYPES)
++def test_every_known_type_folds_without_being_reported(kind):
++    """Fold level: the side channel stays empty for every type this build knows."""
++    seen = []
++    state = fold([{"seq": 7, "type": kind, "key": "demo:A", "payload": RICH}],
++                 unknown=seen)
++    assert seen == []
++    assert "demo:A" in state                          # folded as a known type
++
++
++# ------------------------------------------------------- backward compatibility
++def test_fold_keeps_the_old_single_argument_call_style():
++    events_ = [{"seq": 1, "type": "item_created", "key": "p:X", "actor": "r",
++                "payload": {"priority": 3}},
++               {"seq": 2, "type": UNKNOWN, "key": "p:X", "actor": "r",
++                "payload": {"from": "future"}}]
++    old_style = fold(events_)                         # exactly what every caller does
++    assert old_style["p:X"]["state"] == "open" and old_style["p:X"]["priority"] == 3
++    seen = []
++    assert fold(events_, unknown=seen) == old_style   # same bytes, side channel filled
++    assert seen == [{"seq": 2, "type": UNKNOWN, "key": "p:X"}]
++    # an unknown type never creates an item entry of its own
++    assert fold([{"seq": 1, "type": UNKNOWN, "key": "p:Y", "payload": {}}]) == {}
+
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)

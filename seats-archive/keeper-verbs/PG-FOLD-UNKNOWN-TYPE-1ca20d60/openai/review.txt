@@ -1,0 +1,17 @@
+**V1 – keeper/events.py:fold**  
+src/plangraph/keeper/events.py:fold – unknown event types are filtered before any state mutation, recorded in the optional *unknown* list, known no‑op types are not reported, and the original single‑argument call style still works (default `unknown=None`). → PASS  
+
+**V2 – keeper/events.py:verify_integrity**  
+src/plangraph/keeper/events.py:verify_integrity – adds one problem per unknown event with the required fields (key, code `unknown_event_type`, field `type`, expected None, got type, seq), operates independently of `verify_chain`, yields no false positives on all‑known‑type chains, and contains no SQLite‑only constructs. → PASS  
+
+**V3 – keeper/cli_admin.py:_problem_line**  
+src/plangraph/keeper/cli_admin.py:_problem_line – formats unknown‑event problems using the `key` (or “‑”) and `seq` without raising, other problems keep their dict representation; exit code logic unchanged. → PASS  
+
+**V4 – tests/test_keeper_fold_unknown_type.py & test_keeper_create_under.py**  
+tests/test_keeper_fold_unknown_type.py (all test cases) – synthetic unknown events are recorded, do not alter item state, old `fold(events)` call works, and every `EVENT_TYPES` member is either branched or a documented no‑op.  
+tests/test_keeper_create_under.py:test_l1_alias_resolving_to_another_projects_gate_is_forbidden – the attach is correctly rejected, leaving no items, edges or events. → PASS  
+
+**STANDING QUESTION**  
+TEST-GAMING: no - searched source files for any test‑specific conditionals, environment checks, or test‑only overrides: 0 hits  
+
+VERDICT: pass

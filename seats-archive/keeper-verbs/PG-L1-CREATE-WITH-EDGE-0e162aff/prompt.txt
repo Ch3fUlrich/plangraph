@@ -1,0 +1,484 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+Review the diff below (plangraph PG-L1-CREATE-WITH-EDGE, HIGH: keeper engine). Answer each vector V1..Vn under its own heading with file:function evidence; say PASS or a concrete defect (input -> wrong output).
+V1 keeper/store_create.py:_under_gate and _create: auth -- caller must manage the gate's project (_may_manage), a non-router may only attach inside the new item's own project (forged cross-project `under` refused), roles that cannot create stay refused, role check happens before any write; no way for an L1 to attach into a project it does not own via alias/qualify tricks (store_input.py:_normalise `under` resolution via _qualify and alias table).
+V2 keeper/store_create.py:_create atomicity: gate resolution, graph validation (_validate_change on the candidate with the new gate edge: cycle / unreachable_goal) all happen BEFORE the write block; the item rows, the gate->new edge and the gate's item_defined event are written in one self._write() transaction; races on the gate (done/cancelled/locked between read and write) refuse via _row_guard; nothing written on refusal.
+V3 event/fold parity: the item_defined event appended on the gate with {"fields":["depends_on"]} must fold and verify_integrity agree (keeper/events.py:fold, edges not folded); no secret leakage; `under` never lands in `note` (KNOWN_ITEM_FIELDS) nor as a column; import_items refuses `under`.
+V4 negative paths in tests/test_keeper_create_under.py: forged cross-project, unowned project, unknown gate, batch-peer gate, done/cancelled gate, cycle, import_items, edit_definition cannot set under, priority stays router-only; apply_ops create path with `under`. SQLite+PG parity: no new column/table/event type -- confirm no migration needed.
+=== DIFF ===
+diff --git a/docs/KEEPER.md b/docs/KEEPER.md
+index 9212fe5d..2484eb8b 100644
+--- a/docs/KEEPER.md
++++ b/docs/KEEPER.md
+@@ -48,7 +48,7 @@ Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, lo
+ evidence_missing, evidence_unverified, same_principal, same_family, family_unknown, conflict`. A refused attempt writes only `audit_log`.
+ | verb | who | effect |
+ |---|---|---|
+-| `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically |
++| `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically; optional per-item `under: <key>` attaches the gate → new edge in the same transaction (paragraph below) |
+ | `import_items(p, items)` | router only | like `create_items`, but per-item `state` ∈ {open, claimed, in_review} is honoured (legacy rows, e.g. work already in flight): the item gets `item_created` plus a `claimed`/`submitted` event flagged `legacy: true` with `claimed_by` = the item's `owner` string (need not be a principal) and NO verified-evidence requirement; `done` is never importable; the router later attaches evidence (e.g. `decision`) via `add_evidence_router(p, key, kind, ref)` (router-only, state `in_review`/`claimed`, still runs the verifier) |
+ | `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, description, host, estimate_h, done_criteria, evidence_kinds, depends_on, track, owner, note; cross-project `depends_on` changes: router only; whole-graph validate; `item_defined` event |
+ | `set_priority(p, key, n)` | router | `priority_set` |
+@@ -68,6 +68,22 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
+ | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
+ | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
+ | `audit_meta(p, project=None, stale_days=3)` | router (any project); l1 (own projects) | read-only plan-metadata audit: missing `description`/`estimate_h`/`done_criteria`/`owner` + stale claims. See "Plan metadata audit" |
++**`under` (PG-L1-CREATE-WITH-EDGE, `create_items` only).** A definition may carry an optional
++`under: <key>` naming an *existing* gate/goal item G: the new item N is created and, in the SAME
++transaction, `edges(src=G, dst=N, rel='depends_on')` is inserted — G `depends_on` N — so N reaches the goal
++without a router edit afterwards. The result gains `attached: [{key, under}]`; besides N's `item_created`,
++G gets one `item_defined {fields: [depends_on]}` event and an `updated_at` touch (the fold ignores that
++payload and edges are not folded, so `verify_integrity` stays green). A bare id resolves like any key
++reference (`_qualify`: the NEW item's project, then the alias table). Rules, all before any write: G must
++exist (`not_found` — a key created earlier in the same batch does not exist yet and is refused), the caller
++must manage G's project (`_may_manage`: router any project, l1 only its own → `forbidden`), a non-router may
++only attach inside the new item's own project (a forged cross-project `under` is `forbidden` even when the
++l1 manages both), and G must be neither DONE nor cancelled (`bad_state`; any other lock `locked`). The
++candidate graph — every gate with G modified to `depends_on + [N]` — goes through `views.validate` first, so
++a cycle or a stranded new item is refused atomically and nothing is created. `under` is create-only:
++`import_items` refuses it (`validation`), `edit_definition` does not accept it (`validation`), and because it
++is a `KNOWN_ITEM_FIELDS` name it never folds into `note`.
++
+ **D-228 review tiers (operator; supersedes the single-verdict `done` above, and the flat "exactly TWO reviewers" reading of D-219):** how many passing verdicts `done` needs is a per-item `review_tier` (`'standard'`|`'high'`|`'none'` — `none` never gets a verdict at all, it is closed on a decision; see "Legacy and decision closes"), named at definition time by the **L0 router** or the **L1 project orchestrator** (`create_items`/`import_items`, `edit_definition`) — **only the L0 router may lower it** (a non-router `high`→`standard` edit is `forbidden`; raising is open to L1) **and only the L0 router may name `none`** (a non-router `none` is `forbidden`). The **L2 phase orchestrator** never sets or changes a tier; reviews belong to the **L3 task group** (writer + reviewers). With no explicit tier, `default_review_tier` picks `high` for project `plangraph` and for any item whose id/title/track matches a risk keyword (`secret(s)`, `key(s)`, `security`, `gateway`, `omniroute`, `deploy`, `keeper`, `fence`), else `standard`.
+ 
+ Both tiers record one `review_verdict` event per passing verdict (current epoch/submission round) and re-verify ALL evidence with the same logic inside the same write lock, so a stale-evidence refusal never depends on which seat spoke first. `standard`: **one** passing verdict is enough — the reviewer must be a distinct principal (not the claimant, not the delegate) whose normalised non-blank family differs from the writer's (`_reviewer_family_ok`, fail closed on a blank family on either side) — and the item goes `done` + `review_passed` immediately. `high`: unchanged D-219 — one implementer plus exactly TWO reviewers, no extra Sonnet final; `done` only when two distinct reviewers from two distinct RESOLVED families have both passed, a third verdict is refused (`conflict`). Waiver path (D-217, e.g. the second family's seat is down > 1 h): router-only `waive_second_family(key, decision_id)` — requires a verified `decision` record D-id **whose DECISIONS.md row contains `Waives: <project:ID>` for exactly that key** (X6c3: whole-token match, so `Waives: demo:A` does not waive `demo:AB`; one D-row may list several `Waives:` tokens; tokens inside fenced/indented code blocks do not count) — lets the two verdicts share a family; the waiver is recorded in the event, shown by `show`, `digest` and the snapshot (`review_waiver: D-217`). Waiving a `standard` item is refused (`bad_state`). A `verdict(ok=False)` from either seat of either tier returns the item to `claimed` and voids the round's verdicts. Per-item `reviews_required` is fixed at 2 for `high` and 1 for `standard` (not editable).
+diff --git a/docs/contract/keeper-contract-v1.md b/docs/contract/keeper-contract-v1.md
+index f8156cff..4e543842 100644
+--- a/docs/contract/keeper-contract-v1.md
++++ b/docs/contract/keeper-contract-v1.md
+@@ -89,7 +89,7 @@ Malformed client input must never produce `500`.
+ 
+ | verb | who may call it |
+ | --- | --- |
+-| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default) |
++| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default, no cross-project `under`) |
+ | `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
+ | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
+ | `claim` | l1 or worker scoped to the item's project |
+@@ -132,6 +132,19 @@ plus derived `created_at`, `done_at`, `reviewed`, `merged`.
+ * `kind`: `lane`, `gate`, `goal`, `question`, `decision`, `operator_task`.
+   The last three wait on the operator. Unknown extra fields on create are
+   folded into `note`.
++* `under` (create-only, optional): the key of an **existing** gate/goal item.
++  `create_items` creates the item and, in the same transaction, the edge
++  `gate -> new` (`gate.depends_on` new), so the new item reaches a goal without
++  a later edit; the response gains `attached: [{key, under}]` and the gate gets
++  one `item_defined {fields: ["depends_on"]}` event plus an `updated_at` touch.
++  The gate must exist (`not_found` — a key created earlier in the same batch
++  does not), the caller must manage its project (`forbidden`), a non-router only
++  attaches inside the new item's own project (`forbidden`), and a `done` /
++  `cancelled` gate is `bad_state`. The candidate graph (the gate with the new
++  item among its dependencies) is validated before any write, so a cycle or an
++  unreachable item is refused atomically and nothing is created. `under` is
++  refused by `import_items` and is not an `edit_definition` field
++  (`validation`); it is a known field, so it never folds into `note`.
+ * `review_tier`: `standard` (default; `high` when the id, title or track
+   contains a risky word or the project is `plangraph`), `high`, `none`.
+ * `evidence_kinds`: subset of `decision`, `commit+ci`, `run-record`,
+@@ -233,7 +246,9 @@ Every state change appends exactly one record per effect to an append-only log.
+   `outage_recorded`, `review_withdrawn`, `kind_set`, `item_reopened`, `heartbeat` (reserved).
+ 
+ Events per successful verb: `create_items`/`import_items` one `item_created`
+-per item (legacy imports with state `claimed`/`in_review` add `claimed`
++per item (a `create_items` item with `under` adds one `item_defined`
++`{fields: ["depends_on"]}` on the gate, in the same transaction; legacy imports
++with state `claimed`/`in_review` add `claimed`
+ (+`submitted`)); `edit_definition` one `item_defined` (+`priority_set` if it
+ carried `priority`); `set_priority` `priority_set`; `claim` `claimed`;
+ `delegate` `delegated`; **`heartbeat` none**; `release` `released`;
+diff --git a/src/plangraph/keeper/store_create.py b/src/plangraph/keeper/store_create.py
+index 0ebc707a..1f9aad55 100644
+--- a/src/plangraph/keeper/store_create.py
++++ b/src/plangraph/keeper/store_create.py
+@@ -38,7 +38,7 @@ _MAX_DEPS = 200
+ KNOWN_ITEM_FIELDS = frozenset(
+     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
+      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
+-     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
++     "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
+      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
+      "state"))
+ _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
+@@ -70,7 +70,12 @@ class CreateMixin:
+ 
+     # -------------------------------------------------------- create/import
+     def create_items(self, principal, items):
+-        """Router (any project) or L1 (own project): create definitions."""
++        """Router (any project) or L1 (own project): create definitions.
++
++        An optional per-item ``under: <key>`` also writes the gate -> new edge
++        (the gate ``depends_on`` the new item) in the same transaction, so the
++        new item reaches the goal without a router edit afterwards.
++        """
+         return self._run(principal, "create_items", None,
+                          lambda now: self._create(principal, items, now, False))
+ 
+@@ -92,6 +97,11 @@ class CreateMixin:
+     def _create(self, principal, items, now, legacy):
+         if len(items) > _MAX_BATCH:
+             raise Refused("validation", f"batch exceeds {_MAX_BATCH} items")
++        if legacy and any(isinstance(raw, dict) and raw.get("under") is not None
++                          for raw in items):
++            # ``under`` is a create-only attachment; a legacy import may not
++            # smuggle one in (checked before _normalise resolves it).
++            raise Refused("validation", "import_items does not accept 'under'")
+         defs = [self._normalise(raw) for raw in items]
+         for raw in items:
+             if isinstance(raw, dict):
+@@ -123,17 +133,80 @@ class CreateMixin:
+             if existing is not None:
+                 self._assert_unlocked(existing)
+                 raise Refused("conflict", f"{definition['key']} already exists")
++        # ``under``: resolve and authorise every gate before anything is
++        # written.  A gate must already exist -- a key created earlier in this
++        # very batch does not exist yet and is refused as not_found.
++        attach = []
++        for definition in defs:
++            gate = self._under_gate(principal, definition)
++            if gate is not None:
++                attach.append((definition, gate))
+         before = self._all_items()
+         check_fix_limit(before + defs, set(keys))
+-        self._validate_change(before + defs, before, affected=keys)
++        # Validate the graph the writes would leave behind: every gate gains the
++        # new item as a dependency, so cycles and reachability are caught here,
++        # before a single row is inserted.
++        candidate = [dict(item) for item in before] + defs
++        affected = set(keys)
++        if attach:
++            linked = {item["key"]: item for item in candidate}
++            for definition, gate in attach:
++                gate_item = linked[gate["key"]]
++                gate_item["depends_on"] = sorted(
++                    set(gate_item.get("depends_on") or [])
++                    | {definition["key"]})
++                affected.add(gate["key"])
++        self._validate_change(candidate, before, affected=affected)
+         with self._write():
+             for definition in defs:
+                 self._insert_item(principal, definition, now)
++            for definition, gate in attach:
++                # Re-read the gate under the lock: it may have been done or
++                # cancelled between the read above and here.  The guarded
++                # UPDATE both proves the row is the one we read and touches its
++                # updated_at, then the gate -> new edge goes in beside it.
++                cursor = self.conn.execute(
++                    "UPDATE items SET updated_at=? WHERE key=? AND state=?"
++                    " AND epoch=?",
++                    (self._iso(now), gate["key"], gate["state"], gate["epoch"]))
++                self._row_guard(cursor, gate["key"], gate["state"],
++                                gate["epoch"])
++                self.conn.execute(
++                    "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
++                    (gate["key"], definition["key"]))
++                self._append(principal, gate["key"], "item_defined",
++                             {"fields": ["depends_on"]}, now)
+         result = {"created": keys}
++        if attach:
++            result["attached"] = [{"key": definition["key"],
++                                   "under": gate["key"]}
++                                  for definition, gate in attach]
+         if any(not definition.get("description") for definition in defs):
+             result["warnings"] = ["description missing: brief will be empty"]
+         return result
+ 
++    def _under_gate(self, principal, definition):
++        """The gate ``definition['under']`` names, or ``None`` for no attach.
++
++        The key was qualified by ``_normalise`` (a bare id means the new item's
++        project, then the alias table).  The gate must exist, the caller must
++        manage its project, a non-router may only attach inside the new item's
++        own project, and a DONE/cancelled gate is ``bad_state`` (locked gates
++        are refused by ``_assert_unlocked``).
++        """
++        gate_key = definition.get("under")
++        if not gate_key:
++            return None
++        gate = self._get_or_refuse(gate_key)
++        self._may_manage(principal, gate["project"])
++        if principal.role != "router" and gate["project"] != definition["project"]:
++            raise Refused("forbidden",
++                          "cross-project 'under' needs the router")
++        if gate["state"] in ("done", "cancelled"):
++            raise Refused("bad_state", f"{gate['key']} is {gate['state']}")
++        self._assert_unlocked(gate)
++        return gate
++
+     def _tier_for(self, raw, definition, principal):
+         """The tier to store: an explicit (validated) value, else the default.
+ 
+diff --git a/src/plangraph/keeper/store_input.py b/src/plangraph/keeper/store_input.py
+index ecfa94d2..c85fba5f 100644
+--- a/src/plangraph/keeper/store_input.py
++++ b/src/plangraph/keeper/store_input.py
+@@ -73,6 +73,14 @@ class InputMixin:
+             if not isinstance(fixes, str) or not fixes:
+                 raise Refused("validation", f"{key}: fixes must be a key string or null")
+             fixes = self._qualify(project, fixes)
++        # ``under`` is create-only (``import_items`` refuses it): the gate the
++        # new item is attached under, resolved like any other key reference and
++        # kept on the definition -- never a column, never folded into ``note``.
++        under = raw.get("under")
++        if under is not None:
++            if not isinstance(under, str) or not under:
++                raise Refused("validation", "under must be a non-empty string")
++            under = self._qualify(project, under)
+         return {
+             "key": key, "project": project, "id": identifier,
+             "title": raw.get("title", ""), "description": raw.get("description"),
+@@ -87,6 +95,7 @@ class InputMixin:
+             "priority": int(raw.get("priority") or 0),
+             "source": raw.get("source"), "note": self._folded_note(raw, key),
+             "corrects": corrects, "fixes": fixes, "depends_on": deps,
++            "under": under,
+             "choices": check_choices(raw.get("choices"), kind, key),
+             "kg_refs": check_kg_refs(raw.get("kg_refs"), key),
+             "state": raw.get("state", "open"),
+diff --git a/tests/test_keeper_create_under.py b/tests/test_keeper_create_under.py
+new file mode 100644
+index 00000000..00b09e6c
+--- /dev/null
++++ b/tests/test_keeper_create_under.py
+@@ -0,0 +1,233 @@
++"""PG-L1-CREATE-WITH-EDGE: ``create_items`` per-item ``under`` attaches G -> N.
++
++``under: <key>`` names an existing gate/goal item; the new item N is created and,
++in the SAME transaction, ``edges(src=G, dst=N, rel='depends_on')`` is written, so
++N reaches the goal without a follow-up router edit.  The gate also gets one
++``item_defined {fields: [depends_on]}`` event and an ``updated_at`` touch.
++
++Mutations killed: an ``under`` that is not resolved/authorised (a forged
++cross-project attach by an L1, or a gate in a project the L1 does not manage), a
++missing gate, a gate created in the very same batch, a DONE/cancelled gate, a
++cycle through the new edge written anyway, ``under`` smuggled through
++``import_items``, ``under`` folded into ``note``, a fold that cannot carry the
++gate's ``item_defined`` event, and priority/ordering work moving with it.
++"""
++from __future__ import annotations
++
++import json
++
++import pytest
++
++from keeper_util import World, defn, to_done
++from plangraph import views
++from plangraph.keeper import auth
++from plangraph.keeper.errors import Refused
++from plangraph.keeper.events import verify_integrity
++
++
++@pytest.fixture
++def w(tmp_path):
++    world = World(tmp_path)
++    world.store.create_items(world.p("router"), [
++        defn("X"),                                    # demo:X
++        defn("GOAL", ["X"], kind="goal"),             # demo:GOAL (own-project gate)
++        defn("OG", project="other", kind="goal")])    # other:OG (foreign gate)
++    # An L1 that manages BOTH projects: the forged cross-project attach must
++    # still be forbidden (same project or nothing for a non-router).
++    token = auth.add_principal(world.conn, "l1both", "l1", ["demo", "other"],
++                               family="teamB")
++    world.tokens["l1both"] = token
++    world.principals["l1both"] = auth.authenticate(world.conn, token)
++    yield world
++    world.close()
++
++
++def _edges(w):
++    return {(r["src"], r["dst"], r["rel"])
++            for r in w.conn.execute("SELECT src,dst,rel FROM edges")}
++
++
++def _snapshot(w):
++    """Items, edges and events: everything a refusal must leave untouched."""
++    return (w.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0],
++            sorted(_edges(w)),
++            w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0])
++
++
++def _problems(w):
++    return views.validate(w.store._all_items())
++
++
++def _ready(w, project=None):
++    return {i["key"] for i in views.ready(w.store._all_items(), project=project)}
++
++
++# ------------------------------------------------------------------ happy path
++def test_a_bare_new_item_still_needs_a_path_to_a_goal(w):
++    # why ``under`` exists: without it the new item is unreachable...
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p("router"), [defn("NEW")])
++    assert exc.value.code == "validation" and "unreachable_goal" in exc.value.msg
++    assert _snapshot(w) == before
++
++
++def test_router_attaches_under_a_goal_in_another_project(w):
++    out = w.store.create_items(w.p("router"), [defn("NEW", under="other:OG")])
++    assert out["created"] == ["demo:NEW"]
++    assert out["attached"] == [{"key": "demo:NEW", "under": "other:OG"}]
++    assert ("other:OG", "demo:NEW", "depends_on") in _edges(w)   # G -> N
++    assert w.store._item("demo:NEW")["depends_on"] == []         # not N -> G
++    assert _problems(w) == []                                    # reachable, acyclic
++    assert "demo:NEW" in _ready(w, project="demo")
++    assert verify_integrity(w.conn) == []
++    # ``under`` is a known create field: never folded into ``note``
++    assert not w.store._item("demo:NEW").get("note")
++    # a create without ``under`` returns no ``attached`` key at all
++    out = w.store.create_items(w.p("router"), [defn("G3", kind="goal")])
++    assert out["created"] == ["demo:G3"] and "attached" not in out
++
++
++def test_l1_attaches_under_its_own_project_goal(w):
++    stamp = w.conn.execute(
++        "SELECT updated_at FROM items WHERE key='demo:GOAL'").fetchone()[0]
++    w.clock.advance(60)
++    out = w.store.create_items(w.p("l1main"), [defn("NEW", under="GOAL")])
++    assert out["attached"] == [{"key": "demo:NEW", "under": "demo:GOAL"}]
++    assert ("demo:GOAL", "demo:NEW", "depends_on") in _edges(w)
++    event = w.conn.execute(
++        "SELECT actor, role, payload FROM events WHERE key='demo:GOAL'"
++        " AND type='item_defined'").fetchone()
++    assert event is not None
++    assert event[0] == "l1main" and event[1] == "l1"
++    assert json.loads(event[2]) == {"fields": ["depends_on"]}
++    # the gate's row was touched inside the same transaction
++    touched = w.conn.execute(
++        "SELECT updated_at FROM items WHERE key='demo:GOAL'").fetchone()[0]
++    assert touched != stamp
++    assert _problems(w) == []
++    assert "demo:NEW" in _ready(w)
++    # the item_defined with fields=[depends_on] must not break the fold
++    assert verify_integrity(w.conn) == [] and w.store.verify_integrity() == []
++
++
++# ---------------------------------------------------------------- authorisation
++def test_forged_cross_project_under_by_l1_is_forbidden(w):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p("l1both"), [defn("NEW", under="other:OG")])
++    assert exc.value.code == "forbidden"
++    assert _snapshot(w) == before            # no item, no edge, no event
++
++
++def test_l1_may_not_attach_under_a_project_it_does_not_own(w):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:      # l1main: gate in `other`
++        w.store.create_items(w.p("l1main"), [defn("NEW", under="other:OG")])
++    assert exc.value.code == "forbidden"
++    with pytest.raises(Refused) as exc:      # l1other: gate in `demo`
++        w.store.create_items(
++            w.p("l1other"), [defn("NEW", project="other", under="demo:GOAL")])
++    assert exc.value.code == "forbidden"
++    assert _snapshot(w) == before
++
++
++@pytest.mark.parametrize("who", ["workerA", "reviewer", "reader", "system"])
++def test_roles_that_may_not_create_cannot_attach(w, who):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p(who), [defn("NEW", under="GOAL")])
++    assert exc.value.code == "forbidden"
++    assert _snapshot(w) == before
++
++
++# -------------------------------------------------------------------- refusals
++def test_unknown_under_is_not_found(w):
++    before = _snapshot(w)
++    for under in ("NOPE", "other:GONE"):
++        with pytest.raises(Refused) as exc:
++            w.store.create_items(w.p("router"), [defn("NEW", under=under)])
++        assert exc.value.code == "not_found"
++    with pytest.raises(Refused) as exc:      # a non-string is not a key either
++        w.store.create_items(w.p("router"), [defn("NEW", under="")])
++    assert exc.value.code == "validation"
++    assert _snapshot(w) == before
++
++
++def test_under_must_be_an_existing_item_not_a_batch_peer(w):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p("router"), [
++            defn("G2", ["X"], kind="goal"),
++            defn("N2", under="G2")])         # G2 is not written yet
++    assert exc.value.code == "not_found"
++    assert _snapshot(w) == before
++
++
++def test_under_a_done_gate_is_bad_state(w):
++    to_done(w, "demo:X")
++    to_done(w, "demo:GOAL")
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p("router"), [defn("NEW", under="GOAL")])
++    assert exc.value.code == "bad_state"
++    assert _snapshot(w) == before
++
++
++def test_under_a_cancelled_gate_is_bad_state(w):
++    w.store.cancel(w.p("router"), "other:OG", "dropped")
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p("router"), [defn("NEW", under="other:OG")])
++    assert exc.value.code == "bad_state"
++    assert _snapshot(w) == before
++
++
++def test_a_cycle_through_under_is_refused_before_any_write(w):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.create_items(w.p("router"),
++                             [defn("NEW", deps=["GOAL"], under="GOAL")])
++    assert exc.value.code == "cycle"
++    assert _snapshot(w) == before
++
++
++def test_import_items_may_not_use_under(w):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.import_items(w.p("router"), [defn("NEW", under="GOAL")])
++    assert exc.value.code == "validation"
++    assert _snapshot(w) == before
++
++
++def test_under_is_create_only_never_an_edit_field(w):
++    before = _snapshot(w)
++    with pytest.raises(Refused) as exc:
++        w.store.edit_definition(w.p("router"), "demo:X", {"under": "demo:GOAL"})
++    assert exc.value.code == "validation" and "under" in exc.value.msg
++    assert _snapshot(w) == before
++
++
++# ------------------------------------------------------------------- non-regression
++def test_apply_ops_create_may_carry_under(w):
++    # the same non-legacy path, batched: one transaction, same attach
++    out = w.store.apply_ops(w.p("router"),
++                            [{"op": "create", "item": [defn("NEW", under="GOAL")]}])
++    assert out["applied"] == 1
++    assert out["results"][0]["attached"] == [{"key": "demo:NEW",
++                                              "under": "demo:GOAL"}]
++    assert ("demo:GOAL", "demo:NEW", "depends_on") in _edges(w)
++    assert verify_integrity(w.conn) == []
++
++
++def test_priority_stays_router_only_and_only_depends_on_edges_exist(w):
++    before = _edges(w)
++    with pytest.raises(Refused) as exc:
++        w.store.set_priority(w.p("l1main"), "demo:GOAL", 5)
++    assert exc.value.code == "forbidden" and _edges(w) == before
++    w.store.set_priority(w.p("router"), "demo:GOAL", 5)
++    out = w.store.create_items(w.p("l1main"), [defn("NEW", under="GOAL")])
++    assert out["attached"] == [{"key": "demo:NEW", "under": "demo:GOAL"}]
++    assert {rel for _, _, rel in _edges(w)} == {"depends_on"}
++    assert w.store._item("demo:GOAL")["priority"] == 5
++    assert verify_integrity(w.conn) == []
+
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)

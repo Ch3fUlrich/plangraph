@@ -1,0 +1,24 @@
+**V1 – keeper/store_reopen.py:_reopen**  
+PASS – `src/plangraph/keeper/store_reopen.py:_reopen` checks router role first, validates `reason` and `decision_id`, requires `state == "in_review"`, creates a fresh epoch (`epoch+1`) with a single transaction guarded by a race‑check, never closes or records a review verdict, and issues a fresh lease.
+
+**V2 – keeper/events.py:fold ('item_reopened') vs store_reopen.py UPDATE**  
+PASS – `src/plangraph/keeper/events.py:fold` mirrors the columns written by `src/plangraph/keeper/store_reopen.py:_reopen` (`state, epoch, round, claimed_by, delegate, lease_until, reviewer, review_waiver`). `verify_integrity` therefore agrees, and a replay sequence `claim → submit → reopen → submit` behaves as expected (old‑epoch submit is refused).
+
+**V3 – keeper/store_tokens.py:_REVOKE_ALL and keeper/token_fold.py:REVOKE_ALL**  
+PASS – Both `src/plangraph/keeper/store_tokens.py:_REVOKE_ALL` and `src/plangraph/keeper/token_fold.py:REVOKE_ALL` include `"item_reopened"`. Consequently live run tokens are revoked on reopen, and old‑epoch `submit`/`close` are rejected while the next close still requires fresh evidence and a passing review.
+
+**V4 – keeper/api_routes.py, cli.py/cli_verbs.py, mcp.py**  
+PASS – `src/plangraph/keeper/api_routes.py` adds `"reopen"` to `WRITE_VERBS` and routes it via `_reopen`; `src/plangraph/keeper/cli.py` registers the `reopen` command and `src/plangraph/keeper/cli_verbs.py:cmd_reopen` builds the correct body; `src/plangraph/keeper/mcp.py` defines the `"reopen"` tool and route. Role gating is enforced in `store.reopen`, and contract documents (`KEEPER.md`, `keeper-contract-v1.json/md`) list the route consistently.
+
+**V5 – negative paths and DB parity**  
+PASS – Tests in `tests/test_keeper_reopen.py` and `tests/contract/test_decisions.py` verify:
+- `bad_state` for `open`, `claimed`, `done` (store raises `Refused("bad_state", …)`),
+- missing or malformed decision IDs (`validation` / `evidence_unverified`),
+- empty or >500‑char reasons (`validation`),
+- double reopen (`bad_state`),
+- and that the event type `item_reopened` has no CHECK constraint in the schema (no such constraint exists in `src/plangraph/keeper/schema_pg.py`). All these paths are correctly enforced.
+
+**STANDING QUESTION**  
+TEST-GAMING: no - searched src/ and tests/ for test‑specific condition checks or special‑casing logic: 0 hits
+
+**VERDICT: pass**

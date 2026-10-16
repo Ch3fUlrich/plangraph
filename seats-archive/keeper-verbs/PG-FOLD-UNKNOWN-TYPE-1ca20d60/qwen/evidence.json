@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/code/plangraph-worktrees/keeper-verbs-seats/PG-FOLD-UNKNOWN-TYPE-1ca20d60/qwen/review.json",
+      "sha256": "be04c061de5cd24d5342c45b83ffdb18c336e5027ac104342f15b7ecb28f9c92",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "212cc90a-80ec-4da8-ab22-469af24ae602",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "cf88a2a8f506c8a33827c1b0c0751088906b3101f844376c2bbcbbc4d1543e7b"
+}

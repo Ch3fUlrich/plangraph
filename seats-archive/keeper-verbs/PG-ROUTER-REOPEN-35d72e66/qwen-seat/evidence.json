@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/code/plangraph-worktrees/keeper-verbs-seats/PG-ROUTER-REOPEN-35d72e66/qwen/review.json",
+      "sha256": "429af6bf5aaf69222f30d466beb121b4fd5a7ea847b75af4dcdb2073b81eea28",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "38eb9cc6-4e92-4be4-883a-c335be7ea6d3",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched the diff in src (store_reopen/events/api_routes/cli/mcp/schema/tokens/token_fold) and tests for test-only branches, env/CI gates, or hardcoded fixtures: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "08bb7e5e7d2aed1ea36825669f7862740b76a8afab62d12ea34b5870919bb6f7"
+}

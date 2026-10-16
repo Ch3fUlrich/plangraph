@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/code/plangraph-worktrees/keeper-verbs-seats/PG-L1-CREATE-WITH-EDGE-0e162aff/qwen/review.json",
+      "sha256": "d44db501f6592be7aef6e20da3e667985adb8ae38933bd50d7c7794ac07b27ed",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "490a5838-4233-41a5-afc6-a36a4831964c",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched src/ for environment-gated branches or test-only conditionals in the production diff and found none: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "912e219751811e77f3cb8342906562a6253e184b18c14a2fec7675144cfeb513"
+}

@@ -1,0 +1,686 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+Review the diff below (plangraph PG-ROUTER-REOPEN, HIGH: keeper engine). Answer each vector V1..Vn under its own heading with file:function evidence; say PASS or a concrete defect (input -> wrong output).
+V1 keeper/store_reopen.py:_reopen: router-only role check precedes validation; reason/decision validation; in_review -> claimed with same claimed_by and epoch+1 under one transaction with race guard; never closes or passes a review; fresh lease.
+V2 keeper/events.py:fold ('item_reopened') vs store_reopen.py UPDATE columns: fold==cache parity for state, epoch, round, claimed_by, delegate, lease_until, reviewer, review_waiver; verify_integrity agrees; replay of a sequence claim->submit->reopen->submit.
+V3 keeper/store_tokens.py:_REVOKE_ALL and keeper/token_fold.py:REVOKE_ALL: run tokens of the old epoch revoked; fold/verify agree; old-epoch submit/close refused (epoch-scoped evidence) and next close still needs commit+ci plus a passing review at tier.
+V4 keeper/api_routes.py:_reopen/ROUTER_VERBS/WRITE_VERBS, cli.py/cli_verbs.py:cmd_reopen, mcp.py:reopen: all three doors wired, role gating reaches the store before body validation, no way for non-router principals to call it; contract docs/json consistent.
+V5 negative paths in tests/test_keeper_reopen.py and tests/contract/test_decisions.py: bad_state for open/claimed/done, unknown decision, empty/oversize reason, double reopen; SQLite+PG parity: event type has no DB CHECK (no migration) -- confirm none exists in schema.py/schema_pg.py.
+=== DIFF ===
+diff --git a/docs/KEEPER.md b/docs/KEEPER.md
+index 0459ffab..9212fe5d 100644
+--- a/docs/KEEPER.md
++++ b/docs/KEEPER.md
+@@ -293,6 +293,15 @@ the item must be decision-closable: its evidence kinds include `decision`, or it
+ commit/merge/CI/seats. It never records a verdict; the claimant then attaches decision evidence and the router
+ closes it on the decision.
+ 
++## Reopen a review (PG-REOPEN)
++
++`reopen(key, reason, decision_id)` (router only; `pg reopen KEY D-NNN --reason TEXT`, MCP `reopen`) moves an
++`in_review` item back to `claimed` for the same claimant at a fresh work epoch (+1, round reset, reviewer and
++waiver cleared, fresh default lease) with one hash-chained `item_reopened` event and revokes the item's live run
++tokens. The decision only has to be recorded - no `Closes:` naming - and the reason (non-empty, <= 500 chars) is
++carried by the event. It never closes an item and never records a verdict; evidence, rounds and verdicts of the
++superseded epoch no longer count, so the claimant attaches what the new epoch relies on again.
++
+ ## Operator question choices (QA-IMPORT, D-865)
+ 
+ question / decision / operator_task items may carry `choices` = `{options: [{id, label, consequence}], default,
+diff --git a/docs/contract/keeper-contract-v1-routes.md b/docs/contract/keeper-contract-v1-routes.md
+index d1a470d1..029d9ed4 100644
+--- a/docs/contract/keeper-contract-v1-routes.md
++++ b/docs/contract/keeper-contract-v1-routes.md
+@@ -242,6 +242,14 @@ kinds include `decision` (or whose done-criteria ask for no commit); the
+ decision must name the key in `Closes:`. `200 {key, state:"claimed", epoch,
+ lease_until}` [Withdraw]. Same epoch, fresh lease, reviewer cleared.
+ 
++### `POST /v1/reopen`
++Router. `{key, reason: "<=500 chars", decision_id: "D-<n>"}` for an `in_review`
++item; the decision only has to be recorded (no `Closes:` naming).
++`200 {key, state:"claimed", epoch, claimed_by, lease_until}` [Reopen]. Same
++claimant at epoch+1 (round reset, reviewer and waiver cleared, fresh lease,
++live run tokens revoked); it never closes the item. `400 validation|
++evidence_unverified|bad_state`.
++
+ ### `POST /v1/set_kind`
+ Router. `{key, kind:"question"|"operator_task"}` for an `open` `lane`; sets
+ `operator` true and the kind's default `wait`. `200 {key, kind, was:"lane"}`
+diff --git a/docs/contract/keeper-contract-v1.json b/docs/contract/keeper-contract-v1.json
+index 0ff4427c..a8627c42 100644
+--- a/docs/contract/keeper-contract-v1.json
++++ b/docs/contract/keeper-contract-v1.json
+@@ -49,6 +49,7 @@
+     {"method": "POST", "path": "/v1/mint_run_token", "roles": ["router", "l1"], "request": "MintBody", "response": "MintToken"},
+     {"method": "POST", "path": "/v1/replay", "roles": ["run_token"], "request": "ReplayBody", "response": "Replay"},
+     {"method": "POST", "path": "/v1/withdraw_review", "roles": ["router"], "request": "WithdrawBody", "response": "Withdraw"},
++    {"method": "POST", "path": "/v1/reopen", "roles": ["router"], "request": "ReopenBody", "response": "Reopen"},
+     {"method": "POST", "path": "/v1/set_kind", "roles": ["router"], "request": "SetKindBody", "response": "SetKind"}
+   ],
+   "$defs": {
+@@ -99,6 +100,7 @@
+     "MintToken": {"type": "object", "properties": {"key": {"type": "string"}, "role": {"enum": ["writer", "reviewer"]}, "run_id": {"type": "string"}, "epoch": {"type": "integer"}, "expires_at": {"type": "string"}, "token": {"type": "string"}}, "required": ["key", "role", "run_id", "epoch", "expires_at", "token"]},
+     "Replay": {"type": "object", "properties": {"results": {"type": "array", "items": {"type": "object", "properties": {"id": {"type": ["string", "null"]}, "result": {"type": "string"}}, "required": ["id", "result"]}}}, "required": ["results"]},
+     "Withdraw": {"type": "object", "properties": {"key": {"type": "string"}, "state": {"const": "claimed"}, "epoch": {"type": "integer"}, "lease_until": {"type": "string"}}, "required": ["key", "state", "epoch", "lease_until"]},
++    "Reopen": {"type": "object", "properties": {"key": {"type": "string"}, "state": {"const": "claimed"}, "epoch": {"type": "integer"}, "claimed_by": {"type": ["string", "null"]}, "lease_until": {"type": "string"}}, "required": ["key", "state", "epoch", "claimed_by", "lease_until"]},
+     "SetKind": {"type": "object", "properties": {"key": {"type": "string"}, "kind": {"enum": ["question", "operator_task"]}, "was": {"const": "lane"}}, "required": ["key", "kind", "was"]},
+     "ItemDef": {"type": "object", "properties": {"project": {"type": "string"}, "id": {"type": "string"}, "title": {"type": "string"}, "kind": {"enum": ["lane", "gate", "goal", "question", "decision", "operator_task"]}, "description": {"type": ["string", "null"]}, "depends_on": {"type": "array", "items": {"type": "string"}}, "evidence_kinds": {"type": "array", "items": {"type": "string"}}, "review_tier": {"enum": ["standard", "high", "none"]}, "done_criteria": {"type": ["string", "null"]}, "owner": {"type": ["string", "null"]}, "track": {"type": ["string", "null"]}, "estimate_h": {"type": ["number", "null"]}, "priority": {"type": "integer"}, "operator": {"type": "boolean"}, "host": {"type": ["string", "null"]}, "wait": {"type": ["string", "null"]}, "note": {"type": ["string", "null"]}, "state": {"enum": ["open", "claimed", "in_review"]}}, "required": ["project", "id"]},
+     "CreateItems": {"oneOf": [{"type": "object", "properties": {"items": {"type": "array", "items": {"$ref": "#/$defs/ItemDef"}}}, "required": ["items"]}, {"type": "array", "items": {"$ref": "#/$defs/ItemDef"}}]},
+@@ -122,6 +124,7 @@
+     "MintBody": {"type": "object", "properties": {"key": {"type": "string"}, "role": {"enum": ["writer", "reviewer"]}, "run_id": {"type": "string"}}, "required": ["key", "role", "run_id"]},
+     "ReplayBody": {"type": "object", "properties": {"entries": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "object", "properties": {"id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}, "verb": {"type": "string"}, "body": {"type": "object"}}, "required": ["id", "verb", "body"]}}}, "required": ["entries"]},
+     "WithdrawBody": {"type": "object", "properties": {"key": {"type": "string"}, "decision_id": {"type": "string", "pattern": "^D-[0-9]+$"}}, "required": ["key", "decision_id"]},
++    "ReopenBody": {"type": "object", "properties": {"key": {"type": "string"}, "reason": {"type": "string"}, "decision_id": {"type": "string", "pattern": "^D-[0-9]+$"}}, "required": ["key", "reason", "decision_id"]},
+     "SetKindBody": {"type": "object", "properties": {"key": {"type": "string"}, "kind": {"enum": ["question", "operator_task"]}}, "required": ["key", "kind"]},
+     "Empty": {"type": "object"},
+     "Event": {"type": "object", "properties": {"seq": {"type": "integer", "minimum": 1}, "ts": {"type": "string"}, "actor": {"type": ["string", "null"]}, "role": {"type": ["string", "null"]}, "model": {"type": ["string", "null"]}, "key": {"type": ["string", "null"]}, "type": {"type": "string"}, "payload": {"type": "object"}, "prev_hash": {"type": "string", "pattern": "^([0-9a-f]{64})?$"}, "hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "required": ["seq", "ts", "actor", "role", "model", "key", "type", "payload", "prev_hash", "hash"], "additionalProperties": false},
+diff --git a/docs/contract/keeper-contract-v1.md b/docs/contract/keeper-contract-v1.md
+index 221b92ac..f8156cff 100644
+--- a/docs/contract/keeper-contract-v1.md
++++ b/docs/contract/keeper-contract-v1.md
+@@ -90,7 +90,7 @@ Malformed client input must never produce `500`.
+ | verb | who may call it |
+ | --- | --- |
+ | `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default) |
+-| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review` | router |
++| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
+ | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
+ | `claim` | l1 or worker scoped to the item's project |
+ | `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only) |
+@@ -171,6 +171,7 @@ States: `open`, `claimed`, `in_review`, `done`, `cancelled`.
+ | in_review | claimed | `verdict ok:false` (reviewer) | fresh lease, same epoch |
+ | in_review | open | second consecutive `verdict ok:false` in one epoch | holder cleared |
+ | in_review | claimed | `withdraw_review` (router) | decision names the key in `Closes:` |
++| in_review | claimed | `reopen` (router) | recorded decision, reason |
+ | in_review | done | `verdict ok:true` | see review rules |
+ | claimed, in_review | done | `close_on_decision` (router) | tier `none`, decision evidence, hashed batch file |
+ | open, claimed, in_review | done | `answer` (router) | kind `question`/`decision`, decision names key |
+@@ -229,7 +230,7 @@ Every state change appends exactly one record per effect to an append-only log.
+   `changes_requested`, `review_verdict`, `review_passed`,
+   `closed_on_decision`, `answered`, `cancelled`, `priority_set`,
+   `waiver_set`, `legacy_state_set`, `run_recorded`, `token_minted`,
+-  `outage_recorded`, `review_withdrawn`, `kind_set`, `heartbeat` (reserved).
++  `outage_recorded`, `review_withdrawn`, `kind_set`, `item_reopened`, `heartbeat` (reserved).
+ 
+ Events per successful verb: `create_items`/`import_items` one `item_created`
+ per item (legacy imports with state `claimed`/`in_review` add `claimed`
+@@ -241,8 +242,8 @@ ok:false` `changes_requested`; passing verdict `review_verdict` then (when
+ done) `review_passed`; `cancel` `cancelled`; `waive_second_family`
+ `waiver_set`; `close_on_decision` `closed_on_decision` (`decision_ids`,
+ `batch_ref`, `sha256`); `answer` `answered`; `set_legacy_state`
+-`legacy_state_set`; `withdraw_review` `review_withdrawn`; `set_kind`
+-`kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
++`legacy_state_set`; `withdraw_review` `review_withdrawn`; `reopen`
++`item_reopened`; `set_kind` `kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
+ `item_defined` per re-pointed dependent + `cancelled` (old);
+ `record_run` `run_recorded`; `mint_run_token` `token_minted` (never the token);
+ `apply_ops` the events of each op, in order, in one transaction. Refused
+diff --git a/src/plangraph/keeper/api_routes.py b/src/plangraph/keeper/api_routes.py
+index e7955c4b..b23c80ca 100644
+--- a/src/plangraph/keeper/api_routes.py
++++ b/src/plangraph/keeper/api_routes.py
+@@ -22,7 +22,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
+                "cancel", "reap", "waive_second_family", "close_on_decision",
+                "set_legacy_state", "apply_ops", "migrate_descriptions",
+                "rehome", "record_run", "answer", "mint_run_token", "replay",
+-               "withdraw_review", "set_kind", "set_metrics", "governor_override"}
++               "withdraw_review", "reopen", "set_kind", "set_metrics",
++               "governor_override"}
+ READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
+ WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
+ TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
+@@ -64,6 +65,11 @@ def _withdraw_review(store, principal, body, need):
+     return store.withdraw_review(principal, body.get("key"), body.get("decision_id"))  # role first (403)
+ 
+ 
++def _reopen(store, principal, body, need):
++    return store.reopen(principal, body.get("key"), body.get("reason"),
++                        body.get("decision_id"))   # role first (403)
++
++
+ def _set_legacy_state(store, principal, body, need):
+     return store.set_legacy_state(principal, need(body, "key"),
+                                   need(body, "state"), body.get("note", ""))
+@@ -123,6 +129,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
+                 "replay": _replay,
+                 "close_on_decision": _close_on_decision,
+                 "withdraw_review": _withdraw_review,
++                "reopen": _reopen,
+                 "set_kind": _set_kind,
+                 "answer": _answer,
+                 "rehome": _rehome,
+diff --git a/src/plangraph/keeper/cli.py b/src/plangraph/keeper/cli.py
+index fd352f6f..8f75ff22 100644
+--- a/src/plangraph/keeper/cli.py
++++ b/src/plangraph/keeper/cli.py
+@@ -38,6 +38,7 @@ HANDLERS = {
+     "cancel": cli_verbs.cmd_cancel,
+     "waive": cli_verbs.cmd_waive,
+     "withdraw": cli_verbs.cmd_withdraw,
++    "reopen": cli_verbs.cmd_reopen,
+     "set-kind": cli_verbs.cmd_set_kind,
+     "close": cli_verbs.cmd_close,
+     "legacy": cli_verbs.cmd_legacy,
+@@ -146,6 +147,11 @@ def _add_writes(sub):
+     withdraw.add_argument("key")
+     withdraw.add_argument("decision_id", metavar="D-NNN")
+ 
++    reopen = _p(sub, "reopen", help="router: take an in_review item back to its claimant at a fresh epoch")
++    reopen.add_argument("key")
++    reopen.add_argument("decision_id", metavar="D-NNN")
++    reopen.add_argument("--reason", required=True, help="why the work is redone (recorded, <= 500 chars)")
++
+     set_kind = _p(sub, "set-kind", help="router: turn an open lane into a question / operator_task")
+     set_kind.add_argument("key")
+     set_kind.add_argument("kind", help="question or operator_task (the keeper checks)")
+diff --git a/src/plangraph/keeper/cli_verbs.py b/src/plangraph/keeper/cli_verbs.py
+index e0816fc3..eaef0189 100644
+--- a/src/plangraph/keeper/cli_verbs.py
++++ b/src/plangraph/keeper/cli_verbs.py
+@@ -360,6 +360,13 @@ def cmd_withdraw(args, session):
+                  lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
+ 
+ 
++def cmd_reopen(args, session):
++    return write(session, "reopen",
++                 {"key": args.key, "decision_id": args.decision_id,
++                  "reason": args.reason},
++                 lambda r: f"{args.key} reopened -> {r.get('state')} epoch {r.get('epoch')}")
++
++
+ def cmd_set_kind(args, session):
+     return write(session, "set_kind", {"key": args.key, "kind": args.kind},
+                  lambda r: f"{r.get('key')} kind {r.get('was')} -> {r.get('kind')}")
+diff --git a/src/plangraph/keeper/events.py b/src/plangraph/keeper/events.py
+index 125e9fd8..0f06c5a6 100644
+--- a/src/plangraph/keeper/events.py
++++ b/src/plangraph/keeper/events.py
+@@ -204,6 +204,19 @@ def fold(events):
+             item["state"] = "claimed"
+             item["reviewer"] = None
+             item["lease_until"] = payload.get("lease_until")
++        elif kind == "item_reopened":   # PG-REOPEN: back to the claimant, fresh epoch
++            # The store opens a new work epoch (+1, round 0, reviewer and
++            # waiver cleared, fresh lease) and keeps the holder; replay exactly
++            # the columns it wrote so ``verify_integrity`` agrees.  The
++            # delegate of the claim is intentionally left alone: the reopen
++            # changes who holds the work only as far as the epoch.
++            item["state"] = "claimed"
++            item["epoch"] = payload["epoch"]
++            item["claimed_by"] = payload["claimed_by"]
++            item["reviewer"] = None
++            item["round"] = 0
++            item["review_waiver"] = None
++            item["lease_until"] = payload["lease_until"]
+         elif kind == "review_passed":
+             item["state"] = "done"
+             item["reviewer"] = event.get("actor")
+diff --git a/src/plangraph/keeper/mcp.py b/src/plangraph/keeper/mcp.py
+index 8348b97d..35445a12 100644
+--- a/src/plangraph/keeper/mcp.py
++++ b/src/plangraph/keeper/mcp.py
+@@ -69,6 +69,9 @@ TOOLS = (
+     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
+           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
+           ("key", "decision_id")),
++    _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
++          {"key": {"type": "string"}, "decision_id": {"type": "string"},
++           "reason": {"type": "string"}}, ("key", "decision_id", "reason")),
+     _tool("set_kind", "Router: turn an open lane into a question or operator_task (waits on the operator).",
+           {"key": {"type": "string"},
+            "kind": {"type": "string", "enum": ["question", "operator_task"]}},
+@@ -131,6 +134,7 @@ _ROUTES = {
+     "waive_second_family": ("POST", "waive_second_family"),
+     "close_on_decision": ("POST", "close_on_decision"),
+     "withdraw_review": ("POST", "withdraw_review"),
++    "reopen": ("POST", "reopen"),
+     "set_kind": ("POST", "set_kind"),
+     "answer": ("POST", "answer"),
+     "set_legacy_state": ("POST", "set_legacy_state"),
+diff --git a/src/plangraph/keeper/schema.py b/src/plangraph/keeper/schema.py
+index afd97b73..1434726c 100644
+--- a/src/plangraph/keeper/schema.py
++++ b/src/plangraph/keeper/schema.py
+@@ -39,8 +39,8 @@ EVENT_TYPES = (
+     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
+     "priority_set", "heartbeat",
+     "waiver_set", "legacy_state_set", "run_recorded", "answered",
+-    "token_minted", "outage_recorded", "review_withdrawn", "kind_set",
+-    "state_set",
++    "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
++    "kind_set", "state_set",
+ )
+ 
+ #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
+diff --git a/src/plangraph/keeper/store.py b/src/plangraph/keeper/store.py
+index 2251dc06..78784f5a 100644
+--- a/src/plangraph/keeper/store.py
++++ b/src/plangraph/keeper/store.py
+@@ -33,6 +33,7 @@ from .store_names import NamesMixin
+ from .store_needs import NeedsMixin
+ from .store_outbox import OutboxMixin
+ from .store_withdraw import WithdrawMixin
++from .store_reopen import ReopenMixin
+ from .store_kind import KindMixin
+ from .store_changelog import ChangelogMixin
+ from .store_ops import OpsMixin
+@@ -67,7 +68,7 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
+ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
+             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
+             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
+-            TokensMixin, OutboxMixin, WithdrawMixin, KindMixin,
++            TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
+             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin):
+     """State machine, locking and audit over one keeper connection."""
+ 
+diff --git a/src/plangraph/keeper/store_reopen.py b/src/plangraph/keeper/store_reopen.py
+new file mode 100644
+index 00000000..69b5e225
+--- /dev/null
++++ b/src/plangraph/keeper/store_reopen.py
+@@ -0,0 +1,81 @@
++"""PG-REOPEN: the router takes an ``in_review`` item back to its claimant at a fresh epoch.
++
++``reopen(principal, key, reason, decision_id)`` moves ``in_review -> claimed``
++and opens a **new work epoch** (+1, ``round`` reset, ``reviewer`` and
++``review_waiver`` cleared, fresh default lease) with one hash-chained
++``item_reopened`` event.  The verdicts, the rounds and the evidence that were
++accumulated under the old epoch belong to work that is being redone, so
++everything the new epoch relies on must be attached again: a submit or a close
++still pointing at the superseded epoch fails closed afterwards.  It never
++closes an item and never passes or fails a review.
++
++Guards: router principal only; a non-empty reason of at most 500 characters; a
++``D-NNN`` decision id that is recorded in the decisions file (no ``Closes:``
++naming is required -- unlike ``withdraw_review``, the reason states why the
++work is being redone); and the item must be ``in_review``.
++"""
++from __future__ import annotations
++
++import re
++
++from .errors import Refused
++
++__all__ = ["ReopenMixin"]
++
++_REASON_MAX = 500
++
++
++class ReopenMixin:
++    """Router-only ``reopen``."""
++
++    def reopen(self, principal, key, reason, decision_id):
++        return self._run(principal, "reopen", key,
++                         lambda now: self._reopen(principal, key, reason,
++                                                  decision_id, now))
++
++    def _reopen(self, principal, key, reason, decision_id, now):
++        self._require_role(principal, "router")
++        if not isinstance(reason, str) or not reason.strip():
++            raise Refused("validation", "reason must be a non-empty string")
++        if len(reason) > _REASON_MAX:
++            raise Refused("validation",
++                          f"reason must be at most {_REASON_MAX} characters")
++        if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
++            raise Refused("validation", "decision_id must look like D-NNN")
++        item = self._get_or_refuse(key)
++        # State first: a finished or idle item is a bad_state, whatever its
++        # lock status, so the caller learns what it must do instead.
++        if item["state"] != "in_review":
++            raise Refused("bad_state", f"{key} is {item['state']}, not in_review")
++        self._assert_unlocked(item)
++        decisions = self._decisions_adapter(item, now)
++        try:
++            recorded = decisions.has(decision_id)
++        except Exception:  # noqa: BLE001 - an unreadable decisions file fails closed
++            recorded = False
++        if not recorded:
++            raise Refused("evidence_unverified",
++                          f"decision {decision_id} is not in the decisions file")
++        lease = self._iso(now + self.default_lease)
++        with self._write():
++            fresh = self._get_or_refuse(key)
++            self._assert_unlocked(fresh)
++            if fresh["state"] != "in_review" or fresh["epoch"] != item["epoch"]:
++                raise Refused("conflict", f"{key} changed under the transaction")
++            new_epoch = fresh["epoch"] + 1
++            claimed_by = fresh["claimed_by"]
++            self._append(principal, key, "item_reopened",
++                         {"reason": reason, "decision_id": decision_id,
++                          "claimed_by": claimed_by, "epoch": new_epoch,
++                          "lease_until": lease}, now)
++            # Mirror the ``claimed`` event's column set on the epoch move
++            # (round/waiver/reviewer cleared, holder kept), guarded on the
++            # state and epoch read above so a lost race refuses.
++            cursor = self.conn.execute(
++                "UPDATE items SET state='claimed', epoch=epoch+1, round=0,"
++                " reviewer=NULL, review_waiver=NULL, lease_until=?, updated_at=?"
++                " WHERE key=? AND state='in_review' AND epoch=?",
++                (lease, self._iso(now), key, item["epoch"]))
++            self._race_guard(cursor, key, "in_review", item["epoch"])
++        return {"key": key, "state": "claimed", "epoch": new_epoch,
++                "claimed_by": claimed_by, "lease_until": lease}
+diff --git a/src/plangraph/keeper/store_tokens.py b/src/plangraph/keeper/store_tokens.py
+index 94160862..2c722584 100644
+--- a/src/plangraph/keeper/store_tokens.py
++++ b/src/plangraph/keeper/store_tokens.py
+@@ -44,7 +44,7 @@ _STATE = {"writer": "claimed", "reviewer": "in_review"}
+ _REVOKE_ALL = frozenset({
+     "claimed", "released", "lease_expired", "cancelled", "review_passed",
+     "closed_on_decision", "answered", "changes_requested", "legacy_state_set",
+-    "review_withdrawn"})
++    "review_withdrawn", "item_reopened"})
+ 
+ 
+ class TokensMixin:
+diff --git a/src/plangraph/keeper/token_fold.py b/src/plangraph/keeper/token_fold.py
+index 2b324e20..2d3f49fe 100644
+--- a/src/plangraph/keeper/token_fold.py
++++ b/src/plangraph/keeper/token_fold.py
+@@ -20,7 +20,7 @@ __all__ = ["fold_tokens", "verify_tokens"]
+ REVOKE_ALL = frozenset({
+     "claimed", "released", "lease_expired", "cancelled", "review_passed",
+     "closed_on_decision", "answered", "changes_requested", "legacy_state_set",
+-    "review_withdrawn"})
++    "review_withdrawn", "item_reopened"})
+ MAX_LIFE_S = 86400
+ MAX_GRACE_S = 86400   # cumulative outage grace per token, as store_outbox.TOKEN_GRACE_MAX_S
+ RUN_PREFIX = "run:"
+diff --git a/tests/contract/test_contract_file.py b/tests/contract/test_contract_file.py
+index 82cd80c8..dc76fca3 100644
+--- a/tests/contract/test_contract_file.py
++++ b/tests/contract/test_contract_file.py
+@@ -38,7 +38,7 @@ def test_contract_file_is_self_consistent():
+         for field in ("request", "response"):
+             if field in route:
+                 assert route[field] in defs, (route["path"], field)
+-    assert len(seen) == 43
++    assert len(seen) == 44
+ 
+ 
+ def test_markdown_documents_every_route():
+diff --git a/tests/contract/test_decisions.py b/tests/contract/test_decisions.py
+index da140dd5..813f7ed5 100644
+--- a/tests/contract/test_decisions.py
++++ b/tests/contract/test_decisions.py
+@@ -1,4 +1,4 @@
+-"""Contract 10: decision-backed router verbs (waive, withdraw, answer, close refusals).
++"""Contract 10: decision-backed router verbs (waive, withdraw, reopen, answer, close refusals).
+ 
+ These use the fixture decisions file (capability ``decisions``): ``D-1`` is a
+ plain recorded decision, ``D-2`` closes ``demo:CLOSE-1``/``ANS-1``/``WD-1`` and
+@@ -68,6 +68,28 @@ def test_withdraw_review_returns_an_item_to_the_claimant(kp):
+     assert submit(kp, key, epoch)["round"] == 2               # the claimant may submit again
+ 
+ 
++def test_reopen_returns_in_review_item_at_new_epoch(kp):
++    need(kp, "decisions")
++    key = _fixture_item(kp, "ROPEN-1")
++    epoch = to_in_review(kp, key)
++    for who in ("lead", "worker1", "reviewer1"):
++        err(kp.post("reopen", who, {"key": key, "reason": "redo the work",
++                                    "decision_id": "D-1"}), 403, "forbidden")
++    err(kp.post("reopen", "router", {"key": key, "decision_id": "D-1"}), 400, "validation")   # no reason
++    err(kp.post("reopen", "router", {"key": key, "reason": "   ",
++                                     "decision_id": "D-1"}), 400, "validation")               # blank reason
++    err(kp.post("reopen", "router", {"key": key, "reason": "redo the work",
++                                     "decision_id": "D-999"}), 400, "evidence_unverified")
++    out = ok(kp.post("reopen", "router", {"key": key, "reason": "redo the work",
++                                          "decision_id": "D-1"}), "Reopen")
++    assert out["key"] == key and out["state"] == "claimed" and out["epoch"] == epoch + 1
++    row = show(kp, key)
++    assert row["state"] == "claimed" and row["epoch"] == epoch + 1
++    assert row["claimed_by"] == "worker1" and row["lease_until"]     # same claimant, fresh lease
++    err(kp.post("reopen", "router", {"key": key, "reason": "again",
++                                     "decision_id": "D-1"}), 400, "bad_state")
++
++
+ def test_answer_closes_a_question_on_a_decision(kp):
+     need(kp, "decisions")
+     key = _fixture_item(kp, "ANS-1", kind="question", evidence_kinds=[])
+diff --git a/tests/test_keeper_reopen.py b/tests/test_keeper_reopen.py
+new file mode 100644
+index 00000000..5349f309
+--- /dev/null
++++ b/tests/test_keeper_reopen.py
+@@ -0,0 +1,218 @@
++"""PG-REOPEN: router-only ``in_review -> claimed`` at a fresh work epoch.
++
++Mutations killed: a non-router caller allowed, a reason that is missing or
++unbounded, a decision that is not recorded (or malformed), a reopen from any
++state but ``in_review``, an old-epoch submit or close accepted after the
++reopen, the fold disagreeing with the cache, and the live run tokens of the
++item left unrevoked.
++"""
++from __future__ import annotations
++
++import hashlib
++from types import SimpleNamespace
++
++import pytest
++
++from keeper_util import (FakeVerifier, World, defn, to_claimed, to_done,
++                         to_in_review)
++from plangraph.keeper import auth, store_tokens, token_fold
++from plangraph.keeper.errors import Refused
++from plangraph.keeper.evidence_decisions import DecisionsAdapter
++from plangraph.keeper.events import verify_integrity
++
++KEY = "demo:ISSUE"
++
++
++class _Runs:
++    """A run record that knows one writer run, for the token test."""
++
++    def valid_run_id(self, run_id):
++        return isinstance(run_id, str) and run_id.replace("-", "").isalnum()
++
++    def job(self, run_id):
++        if run_id != "w1":
++            raise FileNotFoundError(run_id)
++        return {"request": {"title": f"work on {KEY}"}, "task": ""}
++
++
++def _decisions(tmp_path, body):
++    path = tmp_path / "DECISIONS.md"
++    path.write_text("| ID | Note | Scope |\n|---|---|---|\n" + body, encoding="utf-8")
++    return DecisionsAdapter(path)
++
++
++@pytest.fixture
++def w(tmp_path):
++    world = World(tmp_path)
++    world.store.create_items(world.p("router"), [
++        defn("ISSUE", evidence_kinds=("decision",), done_criteria="upstream issue filed"),
++        defn("RUN", evidence_kinds=("semaphore-task",), done_criteria="semaphore run green"),
++        defn("CODE", evidence_kinds=("commit+ci",), done_criteria="merged; CI green; 2 seats"),
++        defn("DEC", evidence_kinds=("decision", "commit"), review_tier="none"),
++        defn("G", ["ISSUE", "RUN", "CODE", "DEC"], kind="goal")])
++    world.store.ctx = SimpleNamespace(
++        decisions=_decisions(
++            tmp_path,
++            "| D-900 | closes | Closes: demo:ISSUE demo:RUN demo:CODE |\n"
++            "| D-901 | other | Closes: demo:OTHER |\n"
++            "| D-902 | reopen | Closes: demo:DEC |\n"),
++        runs=_Runs())
++    yield world
++    world.close()
++
++
++def _row(w, key):
++    return w.conn.execute(
++        "SELECT state, epoch, round, claimed_by, delegate, reviewer,"
++        " review_waiver, lease_until FROM items WHERE key=?", (key,)).fetchone()
++
++
++# --------------------------------------------------------------- happy path
++def test_router_reopens_to_the_claimant_at_a_fresh_epoch(w):
++    epoch = to_in_review(w, KEY)
++    out = w.store.reopen(w.p("router"), KEY, "review seats were wrong", "D-900")
++    assert (out["state"], out["epoch"], out["claimed_by"]) == ("claimed", epoch + 1, "l1main")
++    row = _row(w, KEY)
++    assert (row["state"], row["epoch"], row["round"]) == ("claimed", epoch + 1, 0)
++    assert row["claimed_by"] == "l1main" and row["reviewer"] is None
++    assert row["review_waiver"] is None and row["lease_until"] == out["lease_until"]
++    assert verify_integrity(w.conn) == []
++    ev = w.conn.execute("SELECT payload FROM events WHERE key=?"
++                        " AND type='item_reopened'", (KEY,)).fetchone()
++    assert ev is not None and '"D-900"' in ev["payload"]
++    assert "review seats were wrong" in ev["payload"]
++
++
++def test_a_500_character_reason_is_accepted(w):
++    epoch = to_in_review(w, KEY)
++    out = w.store.reopen(w.p("router"), KEY, "r" * 500, "D-900")
++    assert out["state"] == "claimed" and out["epoch"] == epoch + 1
++
++
++def test_a_recorded_decision_needs_no_closes_naming(w):
++    """Unlike ``withdraw_review``, reopen is keyed on the reason, not on Closes:"""
++    to_in_review(w, KEY)
++    out = w.store.reopen(w.p("router"), KEY, "wrong lane picked it up", "D-901")
++    assert out["state"] == "claimed"
++
++
++# --------------------------------------------------------------- authorisation
++@pytest.mark.parametrize("who", ["l1main", "l1other", "reviewer", "workerA", "reader", "system"])
++def test_only_the_router_may_reopen(w, who):
++    to_in_review(w, KEY)
++    with pytest.raises(Refused) as exc:
++        w.store.reopen(w.p(who), KEY, "a reason", "D-900")
++    assert exc.value.code == "forbidden"
++    assert _row(w, KEY)["state"] == "in_review"
++
++
++# ---------------------------------------------------------------- validation
++@pytest.mark.parametrize("reason", ["", "   ", None, 7, "x" * 501])
++def test_reason_must_be_a_bounded_non_empty_string(w, reason):
++    to_in_review(w, KEY)
++    with pytest.raises(Refused) as exc:
++        w.store.reopen(w.p("router"), KEY, reason, "D-900")
++    assert exc.value.code == "validation"
++    assert _row(w, KEY)["state"] == "in_review"
++
++
++def test_decision_must_be_recorded(w):
++    to_in_review(w, KEY)
++    for did, code in (("D-999", "evidence_unverified"), ("D-90x", "validation"),
++                      ("not-a-d", "validation"), ("", "validation"),
++                      (None, "validation")):
++        with pytest.raises(Refused) as exc:
++            w.store.reopen(w.p("router"), KEY, "a reason", did)
++        assert exc.value.code == code
++    assert _row(w, KEY)["state"] == "in_review"
++
++
++# ------------------------------------------------------------------- bad state
++def test_only_from_in_review(w):
++    with pytest.raises(Refused) as exc:                                # open
++        w.store.reopen(w.p("router"), KEY, "a reason", "D-900")
++    assert exc.value.code == "bad_state"
++
++
++def test_a_claimed_item_cannot_be_reopened(w):
++    to_claimed(w, KEY)
++    with pytest.raises(Refused) as exc:
++        w.store.reopen(w.p("router"), KEY, "a reason", "D-900")
++    assert exc.value.code == "bad_state"
++    assert _row(w, KEY)["state"] == "claimed"
++
++
++def test_a_done_item_cannot_be_reopened(w):
++    to_done(w, KEY)
++    with pytest.raises(Refused) as exc:
++        w.store.reopen(w.p("router"), KEY, "a reason", "D-900")
++    assert exc.value.code == "bad_state"
++    assert _row(w, KEY)["state"] == "done"
++
++
++# -------------------------------------------------------- the epoch really moved
++def test_submit_of_the_old_epoch_is_refused(w):
++    epoch = to_in_review(w, KEY)
++    out = w.store.reopen(w.p("router"), KEY, "redo the work", "D-900")
++    assert out["epoch"] == epoch + 1
++    with pytest.raises(Refused) as exc:
++        w.store.submit(w.p("l1main"), KEY, epoch)
++    assert exc.value.code == "epoch_stale"
++    # the old epoch's evidence does not satisfy the new one either
++    with pytest.raises(Refused) as exc:
++        w.store.submit(w.p("l1main"), KEY, out["epoch"])
++    assert exc.value.code == "evidence_missing"
++    assert verify_integrity(w.conn) == []
++
++
++def test_close_without_fresh_evidence_for_the_new_epoch_is_refused(w, tmp_path):
++    key = "demo:DEC"
++    w.store.verifiers["commit"] = FakeVerifier(ok=True)   # X7b router-only kind
++    root = tmp_path / "plan"
++    root.mkdir()
++    batch = root / "batch.md"
++    batch.write_text("batch body\n", encoding="utf-8")
++    w.store.batch_roots = [str(root)]
++    batch_ref = f"{batch}@{hashlib.sha256(batch.read_bytes()).hexdigest()}"
++
++    epoch = to_claimed(w, key)
++    w.store.add_evidence_router(w.p("router"), key, "decision", {"id": "D-902"})
++    w.store.add_evidence_router(w.p("router"), key, "commit", {"sha": "a" * 40})
++    w.store.submit(w.p("l1main"), key, epoch)
++
++    out = w.store.reopen(w.p("router"), key, "commit never landed", "D-902")
++    assert out["state"] == "claimed" and out["epoch"] == epoch + 1
++    assert verify_integrity(w.conn) == []
++    # a fresh decision row proves the refusal below is about the stale commit
++    w.store.add_evidence_router(w.p("router"), key, "decision", {"id": "D-902"})
++    with pytest.raises(Refused) as exc:
++        w.store.close_on_decision(w.p("router"), key, batch_ref)
++    assert exc.value.code == "evidence_unverified"
++    assert exc.value.msg == "no commit evidence"
++    assert w.store._item(key)["state"] == "claimed"
++    # the new epoch closes once the commit evidence is re-attached
++    w.store.add_evidence_router(w.p("router"), key, "commit", {"sha": "b" * 40})
++    assert w.store.close_on_decision(w.p("router"), key, batch_ref)["state"] == "done"
++    assert verify_integrity(w.conn) == []
++
++
++# ---------------------------------------------------------------------- tokens
++def test_reopen_revokes_live_tokens_of_the_item():
++    assert "item_reopened" in store_tokens._REVOKE_ALL
++    assert store_tokens._REVOKE_ALL == token_fold.REVOKE_ALL
++
++
++def test_a_live_writer_token_is_revoked_by_the_reopen(w):
++    epoch = to_claimed(w, KEY)
++    token = w.store.mint_run_token(w.p("l1main"), KEY, "writer", "w1")["token"]
++    writer = auth.authenticate(w.conn, token)
++    w.store.add_evidence(w.p("l1main"), KEY, epoch, "decision", {"id": "D-1"})
++    w.store.submit(w.p("l1main"), KEY, epoch)
++    w.store.reopen(w.p("router"), KEY, "redo the work", "D-900")
++    row = w.conn.execute("SELECT revoked_at FROM run_tokens WHERE token_sha256=?",
++                         (auth.hash_token(token),)).fetchone()
++    assert row["revoked_at"] is not None
++    with pytest.raises(Refused) as exc:
++        w.store.heartbeat(writer, KEY, epoch)
++    assert exc.value.code == "forbidden"
++    assert verify_integrity(w.conn) == []
+diff --git a/tests/test_mcp.py b/tests/test_mcp.py
+index 98c6178c..4397b8a5 100644
+--- a/tests/test_mcp.py
++++ b/tests/test_mcp.py
+@@ -140,7 +140,7 @@ def test_tools_list_count_and_budget(api):
+                api.client)
+     (reply,) = replies(text)
+     tools = reply["result"]["tools"]
+-    assert len(tools) == 32  # +set_kind (PG-SET-KIND), +withdraw_review (D-867), +mint_run_token (M2B), +create, +edit (PG-MCP-WRITE), +record_run, +answer/needs_you/answers (MODEL-KINDS), +audit_meta (PG-AUDIT-META)
++    assert len(tools) == 33  # +set_kind (PG-SET-KIND), +withdraw_review (D-867), +mint_run_token (M2B), +create, +edit (PG-MCP-WRITE), +record_run, +answer/needs_you/answers (MODEL-KINDS), +audit_meta (PG-AUDIT-META), +reopen (PG-ROUTER-REOPEN)
+     assert {tool["name"] for tool in tools} == {tool["name"] for tool in TOOLS}
+     assert len(text.encode("utf-8")) < 9000  # the ~2,500-token budget
+ 
+
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)

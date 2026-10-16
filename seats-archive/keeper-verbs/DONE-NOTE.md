@@ -1,0 +1,7 @@
+# keeper-verbs batch (D-1542) — writer provenance (judge D-1061 flag 2026-10-16)
+Commit author/Co-Authored-By on L2 commits = harness default (Claude), NOT the writer. Real writers (autoos-agent, opencode client, model omniroute/mimo-v2.6-flash; verified AutoOS/logs/workers/<run>.json for c83f50):
+- #39 PG-ROUTER-REOPEN 35d72e66: mimo runs 20261016-202956-pg-router-reopen-writer-3da8be (core), -204515-...-0547d0 (doors); -d85e67 died (ctx, no output). Claude (L2) wrote 1 line: tests/test_keeper_e2e.py:305 tool count 32->33.
+- #40 PG-L1-CREATE-WITH-EDGE 0e162aff: mimo run 20261016-210039-pg-l1-create-with-edge-w-b6fd98. Claude: 0 code lines; hand-resolved cherry-pick conflict docs/contract/keeper-contract-v1.md role-matrix (~3 lines).
+- #41 PG-FOLD-UNKNOWN-TYPE 1ca20d60: mimo runs 20261016-212037-pg-fold-unknown-type-wri-c83f50 + 20261016-212937-alias-under-test-389ae4. Claude: 0 lines.
+No no_free_leg_available fallback. Seats qwen3.8-flash/qodercli (alibaba) + gpt-oss (openai) countable (both != writer xiaomi). From now on: trailer line 'Writer: <model> <run id>'.
+Live order: deploy FOLD (#41) first or inside the 5-verb batch; batch packet = roll forward only after first new event type.

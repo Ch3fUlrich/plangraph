@@ -1,0 +1,19 @@
+**V1 keeper/store_reopen.py:_reopen**  
+Evidence: `store_reopen.py` – role check via `self._require_role(principal, "router")` occurs before any validation; reason length and non‑empty checks; decision_id format validated; state check `if item["state"] != "in_review"`; claimed_by retained; new epoch `new_epoch = fresh["epoch"] + 1`; single transaction with `with self._write(): … UPDATE … WHERE state='in_review' AND epoch=?` and `_race_guard`; no closing or review‑passing logic; lease recomputed with `lease = self._iso(now + self.default_lease)`. **PASS**
+
+**V2 keeper/events.py:fold**  
+Evidence: `events.py` – `elif kind == "item_reopened":` sets `item["state"] = "claimed"`, `item["epoch"] = payload["epoch"]`, `item["claimed_by"] = payload["claimed_by"]`, `item["reviewer"] = None`, `item["round"] = 0`, `item["review_waiver"] = None`, `item["lease_until"] = payload["lease_until"]`. These columns match those written by `_reopen`. `verify_integrity` later checks consistency and passes in tests. **PASS**
+
+**V3 keeper/store_tokens.py & keeper/token_fold.py**  
+Evidence: `store_tokens.py` – `_REVOKE_ALL` now includes `"item_reopened"`; `token_fold.py` – `REVOKE_ALL` also includes `"item_reopened"` and matches `_REVOKE_ALL`. Old‑epoch submit/close refusal is enforced by epoch checks in `store.py` (`_assert_unlocked`, state/epoch validation) and token revocation is applied via the shared revoke set. **PASS**
+
+**V4 keeper/api_routes.py, cli.py, mcp.py**  
+Evidence: `api_routes.py` – `WRITE_VERBS` now contains `"reopen"`; `ROUTER_VERBS` maps `"reopen"` to `_reopen`; `_reopen` calls `store.reopen(principal, ...)` after role check. `cli.py` adds `reopen` sub‑command; `cli_verbs.py` implements `cmd_reopen` calling `write(session, "reopen", …)`. `mcp.py` registers tool `"reopen"` and route. Only principals with router role are allowed (contract and JSON also list router). **PASS**
+
+**V5 Negative paths & DB parity**  
+Evidence: `tests/test_keeper_reopen.py` checks all bad‑state, missing/oversize reason, malformed decision, non‑router callers, double reopen, old‑epoch submit/close refusal, token revocation, and verifies that `verify_integrity` returns empty. `tests/contract/test_decisions.py` includes reopen cases. `src/plangraph/keeper/schema.py` lists `EVENT_TYPES` including `"item_reopened"` but no CHECK constraint is added elsewhere (no migration in `schema_pg.py`). Hence SQLite and PostgreSQL have identical handling. **PASS**
+
+**STANDING QUESTION**  
+TEST-GAMING: no - searched production source files for test‑specific overrides, environment checks, or constants matching test expectations: 0 hits
+
+VERDICT: pass
