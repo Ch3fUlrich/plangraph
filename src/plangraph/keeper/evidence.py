@@ -120,8 +120,30 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
 # --------------------------------------------------------------------------- #
 
 def _ci_conclusion(runs: Any, commit: str) -> str | None:
-    """Newest-run-per-(suite, app, name) CI verdict: None means ok, else the fail detail. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
-    newest: dict[tuple[Any, Any, str], tuple[tuple[int, str], dict]] = {}
+    """Newest-run-per-group CI verdict: None means ok, else the fail detail. Plain groups are (suite, app, name); a workflow_dispatch run forms a ("wf", workflow_id, app, name) group across suites that a matching PR run joins. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
+
+    def _id_int(value: Any) -> int:
+        # Same coercion as check-run ids: bool is not an id, digit strings rank as ints.
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        return 0
+
+    def _hashable(value: Any) -> Any:
+        # gh hands us ints; an unhashable id from a fake is then simply no key.
+        try:
+            hash(value)
+        except TypeError:
+            return None
+        return value
+
+    # Pass 1: parse the runs and collect the (workflow, app, name) keys that have
+    # a workflow_dispatch run, so a PR run with the same key joins that wf group.
+    parsed: list[dict] = []
+    dispatch_keys: set = set()
     for run in runs:
         if not isinstance(run, dict):
             continue
@@ -129,66 +151,108 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
         suite: Any = None
         cs = run.get("check_suite")
         if isinstance(cs, dict) and "id" in cs:
-            sid = cs["id"]
-            try:
-                hash(sid)
-            except TypeError:
-                pass
-            else:
-                suite = sid
+            suite = _hashable(cs["id"])
         app: Any = None
         ap = run.get("app")
         if isinstance(ap, dict) and "slug" in ap:
-            slug = ap["slug"]
-            try:
-                hash(slug)
-            except TypeError:
-                pass
-            else:
-                app = slug
-        rid = run.get("id")
-        if isinstance(rid, bool):
-            rid_int = 0
-        elif isinstance(rid, int):
-            rid_int = rid
-        elif isinstance(rid, str) and rid.isdigit():
-            rid_int = int(rid)
-        else:
-            rid_int = 0
+            app = _hashable(ap["slug"])
+        rid_int = _id_int(run.get("id"))
         started = run.get("started_at")
         started_str = str(started) if started is not None else ""
-        key = (rid_int, started_str)
-        gkey = (suite, app, name)
-        prev = newest.get(gkey)
-        if prev is None or key > prev[0]:
-            newest[gkey] = (key, run)
-    if not newest:
+        wf = run.get("workflow")
+        event: str | None = None
+        wf_id = wf_rid = 0
+        in_wf = isinstance(wf, dict)
+        if in_wf:
+            raw_event = wf.get("event")
+            event = str(raw_event) if raw_event is not None else None
+            wf_id = _id_int(wf.get("workflow_id"))
+            wf_rid = _id_int(wf.get("run_id"))
+            if event == "workflow_dispatch":
+                dispatch_keys.add((wf_id, app, name))
+        parsed.append({"name": name, "suite": suite, "app": app, "run": run,
+                       "event": event, "wf_id": wf_id, "in_wf": in_wf,
+                       "key": (rid_int, started_str), "wf_rid": wf_rid})
+
+    # Pass 2: group. A wf group ranks by (workflow.run_id, check-run id,
+    # started_at) because check-run ids are NOT chronological across runs: a
+    # rerun gets new ids that can be lower or higher than other runs' ids.
+    groups: dict[Any, dict] = {}
+    for rec in parsed:
+        is_wf = rec["event"] == "workflow_dispatch"
+        if not is_wf and rec["in_wf"]:
+            # Any other event (pull_request, ...) keeps its suite key unless a
+            # dispatch exists for the same workflow, app and check name.
+            is_wf = (rec["wf_id"], rec["app"], rec["name"]) in dispatch_keys
+        if is_wf:
+            gkey: Any = ("wf", rec["wf_id"], rec["app"], rec["name"])
+            rank: Any = (rec["wf_rid"], rec["key"][0], rec["key"][1])
+            sort: Any = rec["wf_id"]
+            suffix: Any = f"workflow {rec['wf_id']}"
+        else:
+            gkey = (rec["suite"], rec["app"], rec["name"])
+            rank = rec["key"]
+            sort = rec["suite"]
+            suffix = f"suite {rec['suite']}" if rec["suite"] is not None else None
+        g = groups.get(gkey)
+        if g is None:
+            g = {"name": rec["name"], "app": rec["app"], "wf": is_wf,
+                 "sort": sort, "suffix": suffix, "runs": []}
+            groups[gkey] = g
+        g["runs"].append((rank, rec["run"]))
+    if not groups:
         return f"no CI check-runs found for {commit}"
+
+    def _completed(run: dict) -> bool:
+        # Non-empty conclusion and status absent-or-completed (legacy fakes).
+        conc_raw = run.get("conclusion")
+        if conc_raw is None or str(conc_raw).strip() == "":
+            return False
+        return not ("status" in run and str(run.get("status")).strip().lower() != "completed")
+
     pending_groups: list[tuple[str, Any, Any]] = []
     failure_groups: list[tuple[str, Any, Any, str]] = []
     seen: list[str] = []
-    for gkey in sorted(newest, key=lambda k: (k[2], str(k[0]), str(k[1]))):
-        run = newest[gkey][1]
-        name = gkey[2]
-        suite, app = gkey[0], gkey[1]
+    for gkey in sorted(groups, key=lambda k: (groups[k]["name"], str(groups[k]["sort"]), str(groups[k]["app"]))):
+        g = groups[gkey]
+        if g["wf"]:
+            # Only completed runs compete inside a wf group; a non-completed run
+            # ranked newer than the newest completed one (or none at all) is pending.
+            best: tuple[Any, dict] | None = None
+            for rank, run in g["runs"]:
+                if _completed(run) and (best is None or rank > best[0]):
+                    best = (rank, run)
+            if best is None or any(
+                rank > best[0] and not _completed(run) for rank, run in g["runs"]
+            ):
+                pending_groups.append((g["name"], g["suffix"], g["app"]))
+                continue
+            run = best[1]
+        else:
+            # Plain groups keep today's rule: the newest run alone is evaluated.
+            best = None
+            for rank, run in g["runs"]:
+                if best is None or rank > best[0]:
+                    best = (rank, run)
+            run = best[1]
         conc_raw = run.get("conclusion")
         if conc_raw is None or (
             isinstance(conc_raw, str) and conc_raw.strip() == ""
         ):
-            pending_groups.append((name, suite, app))
+            pending_groups.append((g["name"], g["suffix"], g["app"]))
             continue
         conc = str(conc_raw).strip()
         if conc == "":
-            pending_groups.append((name, suite, app))
+            pending_groups.append((g["name"], g["suffix"], g["app"]))
             continue
         if "status" in run and str(run.get("status")).strip().lower() != "completed":
-            pending_groups.append((name, suite, app))
+            pending_groups.append((g["name"], g["suffix"], g["app"]))
             continue
         norm = conc.lower()
         seen.append(norm)
         if norm in ("success", "skipped", "neutral"):
             continue
-        failure_groups.append((name, suite, app, str(conc_raw)))
+        failure_groups.append((g["name"], g["suffix"], g["app"], str(conc_raw)))
     if failure_groups:
         from collections import Counter
 
@@ -198,7 +262,7 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
             if counts[n] <= 1:
                 return n
             if s is not None:
-                return f"{n} (suite {s})"
+                return f"{n} ({s})"
             if a is not None:
                 return f"{n} ({a})"
             return n
@@ -216,7 +280,7 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
             if counts[n] <= 1:
                 return n
             if s is not None:
-                return f"{n} (suite {s})"
+                return f"{n} ({s})"
             if a is not None:
                 return f"{n} ({a})"
             return n

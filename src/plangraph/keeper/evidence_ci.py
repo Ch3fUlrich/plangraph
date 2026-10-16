@@ -76,19 +76,79 @@ class CIAdapter:
         into a slug through its ``origin`` remote. The sha and the slug are both
         validated before any process runs; the API path is assembled from those
         validated components only, so no user text can inject a query.
+        When any check-run comes from GitHub Actions, the workflow runs for the
+        sha are fetched through the same gated paging and backfilled onto the
+        check-runs whose check-suite matches (``workflow`` key).
         Raises on a non-zero ``gh`` exit or unparseable output — the verifier
         catches and sanitises that.
         """
         if not valid_commit_ref(sha):
             raise ValueError("check-runs requires a full lowercase commit sha")
         owner, repo = self._validated_slug(self._slug(repo_slug_or_path))
-        base = "repos/{}/{}/commits/{}/check-runs".format(
-            quote(owner, safe=""), quote(repo, safe=""), quote(sha, safe="")
+        # Both endpoints are assembled from these validated components only,
+        # so neither the slug nor the sha can inject a query or a path segment.
+        quoted = quote(owner, safe=""), quote(repo, safe=""), quote(sha, safe="")
+        collected = self._page_all(
+            "repos/{}/{}/commits/{}/check-runs".format(*quoted),
+            "",
+            "check_runs",
+            "check-runs",
+            owner,
+            repo,
         )
+        # A check-run from GitHub Actions only summarises the workflow run that
+        # produced it, so fetch those runs for the sha — but only when such a
+        # run exists: no actions check-run, no second ``gh`` call at all.
+        if any(
+            isinstance(run.get("app"), dict)
+            and run["app"].get("slug") == "github-actions"
+            for run in collected
+        ):
+            workflows = self._page_all(
+                "repos/{}/{}/actions/runs".format(quoted[0], quoted[1]),
+                f"head_sha={quoted[2]}&",
+                "workflow_runs",
+                "workflow-runs",
+                owner,
+                repo,
+            )
+            # First run wins per suite: the API lists newest first, so retries
+            # collapse onto the latest attempt. A suite with no matching run
+            # simply gets no key — nothing is invented for it.
+            by_suite: dict = {}
+            for w in workflows:
+                by_suite.setdefault(w.get("check_suite_id"), w)
+            for run in collected:
+                suite = run.get("check_suite")
+                wf = by_suite.get(suite.get("id")) if isinstance(suite, dict) else None
+                if wf is None:
+                    continue
+                run["workflow"] = {
+                    "event": wf.get("event"),
+                    "workflow_id": wf.get("workflow_id"),
+                    "name": wf.get("name"),
+                    "run_id": wf.get("id"),
+                }
+        return collected
+
+    # -- helpers ------------------------------------------------------------
+    def _page_all(
+        self, base: str, query: str, key: str, label: str, owner: str, repo: str
+    ) -> list[dict]:
+        """Collect every item under *key* across pages, refusing truncation.
+
+        Shared by the check-runs and the workflow-runs lookups so both carry
+        the same contract: at most 10 pages of 100, a non-zero ``gh`` exit
+        raises, and a ``total_count`` larger than what was collected fails
+        closed instead of returning a partial list. *base* is the API path
+        without a query; *query* is any prefix already opened there (empty for
+        check-runs, the ``head_sha`` scoping for workflow runs); *label* names
+        the list in the truncation error.
+        """
         collected: list[dict] = []
         total: int | None = None
         for page in range(1, 11):
-            path = f"{base}?per_page=100&page={page}"
+            path = f"{base}?{query}per_page=100&page={page}"
             proc = subprocess.run(
                 [self._gh, "api", path],
                 capture_output=True,
@@ -99,24 +159,23 @@ class CIAdapter:
             if proc.returncode != 0:
                 raise RuntimeError(f"gh api exited {proc.returncode} for {owner}/{repo}")
             data = json.loads(proc.stdout)
-            page_runs = data.get("check_runs") if isinstance(data, dict) else None
-            if not isinstance(page_runs, list):
-                page_runs = []
-            collected.extend([r for r in page_runs if isinstance(r, dict)])
+            page_items = data.get(key) if isinstance(data, dict) else None
+            if not isinstance(page_items, list):
+                page_items = []
+            collected.extend([r for r in page_items if isinstance(r, dict)])
             raw_total = data.get("total_count") if isinstance(data, dict) else None
             if isinstance(raw_total, int) and not isinstance(raw_total, bool):
                 total = raw_total
                 if len(collected) >= total:
                     break
-            if len(page_runs) < 100:
+            if len(page_items) < 100:
                 break
         if total is not None and total > len(collected):
             raise RuntimeError(
-                f"check-runs truncated for {owner}/{repo}: expected {total}, got {len(collected)}"
+                f"{label} truncated for {owner}/{repo}: expected {total}, got {len(collected)}"
             )
         return collected
 
-    # -- helpers ------------------------------------------------------------
     @staticmethod
     def _validated_slug(slug: object) -> tuple[str, str]:
         if not isinstance(slug, str) or not _SLUG_RE.fullmatch(slug):

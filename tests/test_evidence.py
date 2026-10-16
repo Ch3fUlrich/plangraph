@@ -8,6 +8,9 @@ are covered in ``test_evidence_adapters.py``; the other three verifiers in
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from evidence_fakes import CLAIM, ITEM, OTHER_SHA, SHA, FakeCI, FakeGit, make_ctx, verify
@@ -411,3 +414,144 @@ def test_commit_ci_legacy_runs_without_suite_group_by_name():
 
 def test_ci_conclusion_all_non_dict_fails_closed():
     assert ev._ci_conclusion([None, 42, "x"], SHA) == f"no CI check-runs found for {SHA}"
+
+
+# --------------------------------------------------------------------------- #
+# commit+ci: workflow-dispatch runs grouped across suites
+# --------------------------------------------------------------------------- #
+
+def _wf_run(run_id, *, sid, rid, conclusion, status="completed",
+            name="pytest", event="workflow_dispatch", wf=7):
+    """A real-shaped check-run with the adapter-added ``workflow`` field."""
+    run = {"name": name, "id": rid, "head_sha": SHA, "status": status,
+           "conclusion": conclusion, "check_suite": {"id": sid},
+           "app": {"slug": "github-actions"},
+           "started_at": "2026-10-16T09:00:00Z",
+           "workflow": {"event": event, "workflow_id": wf, "name": "tests",
+                        "run_id": run_id}}
+    return run
+
+
+def test_ci_wf_cancelled_then_green_dispatch_different_suites_ok():
+    # One workflow dispatched twice: the first attempt was cancelled in suite A,
+    # the rerun went green in suite B -- the wf group must pick the rerun.
+    runs = [
+        _wf_run(9001, sid=11, rid=1, conclusion="cancelled"),
+        _wf_run(9002, sid=12, rid=2, conclusion="success"),
+    ]
+    assert ev._ci_conclusion(runs, SHA) is None
+
+
+def test_ci_wf_green_then_failed_dispatch_fails():
+    # The later dispatch failed even though its check-run id is LOWER than the
+    # green run's: inside a wf group the workflow run id decides, not the id.
+    runs = [
+        _wf_run(9001, sid=11, rid=500, conclusion="success"),
+        _wf_run(9002, sid=11, rid=400, conclusion="failure"),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "not green" in detail
+    assert "pytest=failure" in detail
+
+
+def test_ci_wf_pr_only_two_suites_stay_separate():
+    # No dispatch exists for this workflow, so PR runs keep the old
+    # (suite, app, name) keys: the failed suite still blocks today's way.
+    runs = [
+        _wf_run(8001, sid=21, rid=1, conclusion="failure", event="pull_request"),
+        _wf_run(8002, sid=22, rid=2, conclusion="success", event="pull_request"),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "not green" in detail
+    assert "failure" in detail
+    assert "pending" not in detail.lower()
+
+
+def test_ci_wf_pr_failure_then_later_green_dispatch_ok():
+    # The PR run's suite failed, but a later dispatch of the same workflow went
+    # green: the PR run joins the wf group and the green rerun wins.
+    runs = [
+        _wf_run(8001, sid=31, rid=10, conclusion="failure", event="pull_request"),
+        _wf_run(8002, sid=32, rid=11, conclusion="success"),
+    ]
+    assert ev._ci_conclusion(runs, SHA) is None
+
+
+def test_ci_wf_dispatch_failure_after_pr_green_fails():
+    # Same workflow, reversed verdicts: the later dispatch failure blocks even
+    # though the PR run (separate suite) was green.
+    runs = [
+        _wf_run(8001, sid=41, rid=30, conclusion="success", event="pull_request"),
+        _wf_run(8002, sid=42, rid=25, conclusion="failure"),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "not green" in detail
+    assert "pytest=failure" in detail
+
+
+def test_ci_wf_newer_in_progress_dispatch_after_green_is_pending():
+    # A dispatch that is still running outranks the older green one, so the
+    # group waits even though its check-run id is lower.
+    runs = [
+        _wf_run(9001, sid=51, rid=60, conclusion="success"),
+        _wf_run(9002, sid=51, rid=55, conclusion=None, status="in_progress"),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "pending" in detail.lower()
+
+
+def test_ci_wf_check_run_id_not_chronological_green_wins():
+    # Real data: a rerun gets check-run ids that can be LOWER than the older,
+    # failed run's ids. Ranking is (workflow.run_id, check-run id, started_at).
+    runs = [
+        _wf_run(9000, sid=61, rid=900, conclusion="failure"),
+        _wf_run(9001, sid=62, rid=7, conclusion="success"),
+    ]
+    assert ev._ci_conclusion(runs, SHA) is None
+
+
+def test_ci_wf_group_without_completed_run_is_pending():
+    runs = [_wf_run(9001, sid=71, rid=1, conclusion=None, status="in_progress")]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "pending" in detail.lower()
+
+
+def test_ci_wf_ambiguous_name_disambiguates_with_workflow_id():
+    runs = [
+        _wf_run(9001, sid=11, rid=1, conclusion="failure", wf=7),
+        _wf_run(9002, sid=12, rid=2, conclusion="failure", wf=99),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "pytest (workflow 7)=failure" in detail
+    assert "pytest (workflow 99)=failure" in detail
+
+
+def test_ci_conclusion_runs_without_workflow_key_unchanged():
+    runs = [
+        {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "failure"},
+        {"name": "build", "id": 2, "head_sha": SHA, "conclusion": "success"},
+    ]
+    assert ev._ci_conclusion(runs, SHA) is None
+    flipped = [
+        {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "success"},
+        {"name": "build", "id": 2, "head_sha": SHA, "conclusion": "failure"},
+    ]
+    detail = ev._ci_conclusion(flipped, SHA)
+    assert detail is not None
+    assert "build=failure" in detail
+
+
+def test_ci_conclusion_replay_fixture_prererun_ok():
+    # Replay of the real 998f8f3 pre-rerun payload: a cancelled first attempt,
+    # a cancelled PR run and a dispatch whose pytest-postgres failed, all beaten
+    # by the newest dispatch run -- verdict must be green.
+    data = json.loads(
+        (Path(__file__).parent / "fixtures" / "ci_998f8f3_prererun.json").read_text()
+    )
+    assert ev._ci_conclusion(data["check_runs"], data["sha"]) is None
