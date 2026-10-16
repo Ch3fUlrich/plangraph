@@ -1,0 +1,22 @@
+{
+  "seat": "openai",
+  "head": "8a3995e259fe2d24d1fff128f6347136808843ac",
+  "plan_item": "plangraph:PROJECTOR-RECONCILE-SCHED",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "test_gaming_line": "TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits",
+  "verdict_line": "VERDICT: pass",
+  "requested_model": "ovhcloud/gpt-oss-120b",
+  "served_model": "gpt-oss-120b",
+  "served_equals_pinned": true,
+  "provider": "ovhcloud",
+  "http_status": 200,
+  "finish_reason": "stop",
+  "tokens": "in 3507, out 2203",
+  "call_log_id": "1792125065489-001535",
+  "correlation_id": "60dd551c-86fb-48b2-bdc6-fd96e5ae2ca3",
+  "session_tag": "rec8a3995e-a1-gptoss/gpt-oss-120b/e1eb24cf66c54bb5a95ecaf3e4c7f5b2",
+  "prompt_sha256": "5f3a2bab72f57bf136e86951641d55cd5a04eefd55ce5a86103669a55e463c03",
+  "review_sha256": "70e7c6550daa55331a06867c88aa566337876a740170dbbeb6f7d03d629714fe",
+  "attempts": 1
+}

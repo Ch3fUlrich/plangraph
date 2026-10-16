@@ -1,0 +1,29 @@
+**V1 Unit correctness**  
+- `deploy/systemd/plangraph-projector-reconcile.service:parse` – contains a valid `[Unit]` with `After=plangraph-keeper.service` (user‑unit reference is allowed).  
+- `deploy/systemd/plangraph-projector-reconcile.service:parse` – `Type=oneshot`, `WorkingDirectory=%h/...`, `Environment=PYTHONPATH=%h/...`, `EnvironmentFile=-%h/...`, `TimeoutStartSec=15min` are all supported systemd directives for user units.  
+- `deploy/systemd/plangraph-projector-reconcile.timer:parse` – `OnCalendar=*-*-* 03:30:00`, `RandomizedDelaySec=10min`, `Persistent=true`, `Unit=plangraph-projector-reconcile.service`, `WantedBy=timers.target` are all valid and correctly scoped.
+
+**V2 CLI fit**  
+- `deploy/systemd/plangraph-projector-reconcile.service:parse` – `ExecStart=/usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json reconcile`.  
+- `plangraph/projector/cli.py:_build_parser` (invoked via `cli._build_parser()` in tests) parses the token list `[ "--config", "%h/.local/share/plangraph/keeper.json", "reconcile" ]`, confirming the global `--config` appears before the subcommand as required.  
+- Exit‑code contract (0 on alarms, non‑zero on failure) is respected because the unit relies on the process exit status; no extra flags alter this behavior.
+
+**V3 Test quality**  
+- `tests/test_systemd_units.py:test_unit_structure` – verifies service is oneshot and lacks an `[Install]` section; timer has correct `WantedBy`.  
+- `tests/test_systemd_units.py:test_execstart_matches_cli` – checks exact token order, absence of disallowed flags, and successful parsing of CLI arguments.  
+- `tests/test_systemd_units.py:test_timer_schedule` – ensures nightly schedule, `Persistent=true`, and presence of `RandomizedDelaySec`.  
+- `tests/test_systemd_units.py:test_no_machine_specific_paths` – guards against hard‑coded home directories, IPs, or “cron” mentions; also enforces that absolute paths start with `%h`.  
+- `tests/test_systemd_units.py:test_docs_operations_section` and `test_systemd_readme` – confirm documentation references and README fence balance.  
+These tests will fail if any of the examined properties regress, providing strong coverage without vacuous passes.
+
+**V4 Docs accuracy**  
+- `docs/projector.md` Operations section now states: “Nightly reconcile runs as the systemd user timer `plangraph-projector-reconcile.timer` … runs `python -m plangraph.projector --config <keeper.json> reconcile`.”  
+- This matches the unit files (`plangraph-projector-reconcile.service` and `.timer`) and the CLI semantics described above. No contradictory timing or command information is present.
+
+**V5 Public‑repo hygiene**  
+- No hard‑coded hostnames, IP addresses (except the allowed “127.0.0.1” check), usernames, or token‑like strings appear in the new files.  
+- Paths use the `%h` home‑directory specifier, and the README uses `$USER`, both of which are generic.  
+- The test suite explicitly rejects any stray IPs or absolute home paths, and the repository passes those checks.
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits  
+VERDICT: pass

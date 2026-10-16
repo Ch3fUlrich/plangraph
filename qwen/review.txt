@@ -1,0 +1,32 @@
+=== part C:\fleet\seats\plangraph\reconcile-8a3995e\qwen\out.json
+Reviewing the final head inline: unit pair, CLI fit, test quality, docs, and hygiene.
+
+**V1 Unit correctness**
+- Pair is valid as user units: oneshot service (no `[Install]`, correct — only the timer is enabled), timer with `Unit=` matching the service filename, `WantedBy=timers.target` (plangraph-projector-reconcile.timer:11). `%h` expands in user units, so WorkingDirectory/PYTHONPATH/config paths resolve.
+- `EnvironmentFile=-%h/...` (service:9) — leading `-` for optional file is correct systemd syntax.
+- `TimeoutStartSec=15min` (service:11) and `RandomizedDelaySec=10min` (timer:6) — time-suffix syntax valid on reasonably current systemd (RandomizedDelaySec suffixes need v235+; acceptable).
+- `OnCalendar=*-*-* 03:30:00` (timer:5) is valid calendar syntax.
+- `After=plangraph-keeper.service` (service:3) is only ordering; if the keeper unit is absent it's silently ignored, so it cannot break the timer. Prior-pass fix confirmed present (no network-online.target).
+- Nit (not a blocker): `/usr/bin/python3` is distro-specific (Absence in, e.g., some environments would fail the unit); README §4 tells users to edit paths but doesn't mention the interpreter.
+
+**V2 CLI fit**
+- `ExecStart=/usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json reconcile` (service:10) places `--config` before the subcommand, matching the argparse global-option shape. Correct.
+- Exit semantics: no `SuccessExitStatus`, so only exit 0 succeeds — matches "0 even when alarms raised, 1 runtime, 2 bad config", and the service comment states exactly that. A mismatch is surfaced as a `projector_alarms` row, not a unit failure; a config/runtime failure fails the unit. Correct in both directions.
+
+**V3 Test quality (tests/test_systemd_units.py)**
+- Regression-catching: wrong subcommand or flag order → `cli._build_parser().parse_args(tokens[3:])` (test_execstart_matches_cli:39) raises SystemExit; missing Persistent → test_timer_schedule:52 fails; cron mention → test_no_machine_specific_paths:66; home path → both the raw-line `/home/`/`/Users/` check and the absolute-token `%h` check. README truncation caught by fence-parity assertion. Helpers `read/parse/section` are not pytest-collected (no `test_` prefix), so no vacuous collection. Not vacuous overall.
+- Gaps/nits: `configparser` with `strict=False` keeps the LAST duplicate key, so a duplicated `Environment=` line would be silently dropped (the code comments acknowledge this for ExecStart, and a dedicated count assertion covers ExecStart only). `OnCalendar` is only substring-checked for "03:30" — malformed calendar syntax would pass (no `systemd-analyze verify` equivalent in-process; accepted limitation of a "lint/parse test"). `section()` matches a heading by `startswith`, so an "## Operations Extra" heading would also match — trivial.
+- Portability: `shlex`/`configparser`/`Path.read_text(encoding="utf-8")` are fine on Windows; the real coupling is `from plangraph.projector import cli` (test file:8) — the test fails if the CLI import drags heavy/optional deps; presumably fine since test_projector_reconcile.py already imports the package.
+
+**V4 Docs accuracy**
+- docs/projector.md Operations bullet matches the units: 03:30, up-to-10-min random delay, Persistent=true, oneshot service name, `--config <keeper.json> reconcile`, exit-code claims, "No agent cron", and `deploy/systemd/` pointer — all consistent with the files.
+- README table, install/verify steps, JSON-line stdout claim (`raised/cleared/open_alarms/counts`), "ships files only" deploy note — all consistent with the stated goal and CLI facts.
+- One unverifiable-here claim: "read it with `plangraph.projector.reconcile.open_alarms`" — the API path should be spot-checked against the module before merge; everything else cross-references cleanly.
+
+**V5 Public-repo hygiene**
+- No hostnames, no IPs (IPV4 regex also enforced in test), no user names; all machine paths go through `%h`. The `.claude/worktrees/proposal` worktree path in WorkingDirectory/PYTHONPATH is generic, not personal, and README §4 explicitly instructs editing it. No token-shaped strings anywhere in the diff. Clean.
+
+TEST-GAMING: no - searched tests/ and the diff for test-only branches, env checks, and assertion-weakening shortcuts (duplicate-key drop and OnCalendar substring are lint gaps, not gaming): 0 hits
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

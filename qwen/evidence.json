@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "C:\\fleet\\seats\\plangraph\\reconcile-8a3995e\\qwen\\out.json",
+      "sha256": "2346a1e05a224ed907a55b1eb3e718a85556f0a5d844c8a28677124e2339826c",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "c6211d3b-cb17-478c-91ce-c269345e385f",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched tests/ and the diff for test-only branches, env checks, and assertion-weakening shortcuts (duplicate-key drop and OnCalendar substring are lint gaps, not gaming): 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "02ced1bbfbde5089591b7fa3115e4515675e250aacc4bf42221e24c6006554ef"
+}
