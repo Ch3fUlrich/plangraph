@@ -54,7 +54,7 @@ Paths must be relative and without `..`.
 | `read_missing` | a `read_set` entry does not exist under the repo root |
 | `write_overlap` | write set overlaps one of a running card in the same project |
 | `estimate_missing` / `estimate_too_big` | no estimate / estimate above 0.55 x window |
-| `leg_request_too_big` | estimate above the first leg's `max_request_tokens` |
+| `leg_request_too_big` | estimate or context pack above the first leg's `max_request_tokens` |
 | `no_risk_tags` | `risk_tags` is null (direct `check_card` calls only, see below) |
 | `no_window_class` | window class unset |
 | `bad_path` | absolute, `~`, drive or `..` path |

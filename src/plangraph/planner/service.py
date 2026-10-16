@@ -100,9 +100,12 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
               require_heldout: bool = False) -> GateResult:
     """Gate the stored card of ``key`` and move its item to ``ready`` or ``needs_input``.
 
-    A route failure adds a ``no_route`` finding.  Only items in ``GATEABLE_STATES`` are
-    touched.  Not ready: ``needs_input`` plus one open question without default (the
-    planner queue); an identical open question is reused, so a repeat call writes nothing.
+    A route failure adds a ``no_route`` finding.  A context pack above the first leg's
+    ``max_request_tokens`` adds ``leg_request_too_big`` (built best effort: a pack that
+    cannot be built at all is skipped, a ``PackTooBig`` is reported).  Only items in
+    ``GATEABLE_STATES`` are touched.  Not ready: ``needs_input`` plus one open question
+    without default (the planner queue); an identical open question is reused, so a
+    repeat call writes nothing.
     """
     card = store.get_card(principal, key)
     project = key.split(":", 1)[0]
@@ -114,16 +117,33 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     except ValueError as exc:  # RouteError is a ValueError
         route_error = str(exc)
     leg_max = route.first_leg.max_request_tokens if route is not None else None
+    pack_tokens: int | None = None
+    pack_error: str | None = None
+    if route is not None:
+        try:
+            pack_tokens = context_pack.build_pack(
+                card, repo_root=Path(repo_root), key=key,
+                budget_tokens=context_pack.pack_budget(route.window_class)).tokens
+        except context_pack.PackTooBig as exc:
+            pack_tokens = None
+            pack_error = str(exc)
+        except (ValueError, OSError):
+            pack_tokens = None  # best effort: no pack, no pack finding
     kw: dict[str, Any] = {}
     if dry_run is not None:
         kw["dry_run"] = dry_run
     verdict = readiness.check_card(
         card, key=key, repo_root=Path(repo_root),
         running_write_sets=running_write_sets(store, project, exclude=key),
-        leg_max_request=leg_max, require_heldout=require_heldout, **kw)
+        leg_max_request=leg_max, pack_tokens=pack_tokens,
+        require_heldout=require_heldout, **kw)
     if route_error is not None:
         verdict = readiness.Verdict(
             key, verdict.findings + (readiness.Finding("no_route", route_error),))
+    if pack_error is not None:
+        verdict = readiness.Verdict(
+            key, verdict.findings + (
+                readiness.Finding("leg_request_too_big", f"pack too big: {pack_error}"),))
 
     state = _item_state(store, key)
     if state not in GATEABLE_STATES:
