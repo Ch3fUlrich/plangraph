@@ -1,0 +1,145 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+Task: review a live-sync plan for a production SQLite-backed task keeper daemon. Live code = commit f3bac63; target T = 1b923e5 (116 commits ahead). The doc below claims the upgrade is safe and rollback needs a backup restore. Judge the doc and the dry-run log. Vectors:
+V1 migration safety: is a no-version-table, idempotent CREATE IF NOT EXISTS migration on open adequate; any data-loss or lock risk on a live WAL db (backup procedure, concurrent writers)?
+V2 rollback claim: is "code swap safe only until T writes design-3 events; else restore backup" correct and complete? Anything missing (snapshot signature, hash chain anchors, outbox)?
+V3 dry-run coverage: what was NOT exercised that could break the live restart (verbs, env, config keys, unauth /inbox surface, Postgres lazy imports)?
+V4 secrets/hygiene: does the doc or log leak anything sensitive?
+V5 restart procedure gaps for the operator (ordering, verification after restart, abort criteria).
+
+=== DOC
+# KEEPER-LIVE-SYNC: live tree f3bac63 -> origin/main T=1b923e5
+
+Plan-Item: plangraph:KEEPER-LIVE-SYNC. Dry run on copies only; live keeper.db/keeper.json/service untouched.
+Live = branch worktree-proposal @ f3bac63 (= 7e5a61e + PR #24). T = 1b923e58ba598291aa1a19c6645a64306e452ebf. 116 commits, 171 files; keeper runtime = 51 src files.
+
+## 1. Review f3bac63..T (keeper runtime)
+- **Schema** SCHEMA_VERSION 9->10 is a constant only: no version table, no user_version. Migration = idempotent `db._upgrade` on every non-create `open_db`
+  (CREATE ... IF NOT EXISTS, DML-free). New tables: cards, attempts, decisions, questions, answers, budget (`schema.DESIGN3_DDL`) and
+  projector_applied, projector_watermark, projector_alarms (`projector.ddl.SQLITE`). All empty after migrate. attempts/decisions/answers append-only via triggers.
+  No existing table altered; no ALTER on existing columns; `_ADDED_COLUMNS` unchanged.
+- **Events** new type `state_set` (`store_cards.set_state`: design-3 states needs_input/waiting/failed/parked/running/ready). `events.append` now assigns `seq` itself (was AUTOINCREMENT): same numbering on SQLite. Hash chain format unchanged.
+- **Daemon** `daemon.run` passes `cfg.db_options` to `lock_keeper/open_db`; optional `backup_prune` thread (default OFF). Backend default sqlite; Postgres only if `backend`=postgres in keeper.json or env PG_KEEPER_BACKEND. Postgres modules (db_pg, schema_pg, copy_to_pg) import lazily; system python3 starts fine without psycopg.
+- **HTTP** new unauthenticated static `GET /inbox` (form page, 200 on copy); new authed doors /v1/questions, ask_question, answer_question, resignal_question (`inbox.routes`; signal to Temporal only via TEMPORAL_* env, failure never fails the answer).
+- **CLI** new `pg admin migrate | copy-to-pg | prune-backups`; `pg admin init` unchanged.
+- **Config keys** daemon now reads (all OPTIONAL, defaults safe): `backend`, `dsn`, `pg_schema`, `backup_prune{enabled,dir,keep,daily_days,interval_s}`.
+  **New required key: none.** Live keeper.json keys (label, db, snapshot, bind, repos, runs_dir, decisions_file, batch_roots, signing_key, snapshot_pubkey, ci) load unchanged.
+- **Env** new optional names: PG_KEEPER_BACKEND, PG_DSN, PG_SCHEMA, TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE. Unit env (semaphore vars) unchanged and still read. Keep PG_KEEPER_BACKEND unset.
+- **Unit** ExecStart `python3 -m plangraph.keeper.daemon --config ...keeper.json`: module path unchanged. Only the tree changes (WorkingDirectory/PYTHONPATH -> a checkout of T). build-L1 chooses the path.
+
+## 2. Dry run on copy (commands + counts)
+Scratch 0700 dir `.sessions/live-sync/`, files 0600: `sqlite3.Connection.backup` of keeper.db (ro URI) -> copyA.db, copyB.db; configs = live keeper.json with db/snapshot/bind changed (127.0.0.1:18787/18788); signing_key/snapshot_pubkey by path (read-only). integrity_check ok.
+1. `pg admin verify` (T code, before): chain and cache integrity ok
+2. `pg admin migrate`: schema up to date. `pg admin verify`: ok.
+3. Row counts before == after for all 10 original tables: aliases 12, audit_findings 34, audit_log 50733, edges 2557, events 6227, evidence 1053, items 1732, outbox_seen 0, principals 24, run_tokens 0. +9 new tables, each 0.
+4. Daemon (`python3 -m plangraph.keeper.daemon --config keeper-A.json`) up on 18787, `GET /inbox` 200, `/v1/snapshot` 401 without token.
+5. Read verbs rc=0: whoami ready blocked waves critical percent alerts digest progress changelog(--since 0) audit-meta snapshot aliases render(--out) ; admin verify, verify-snapshot (signature ok after first write), prune-backups (dry), migrate (again), replay (no outbox), set-kind/evidence usage paths. `sync pull` needs a reader-config `pull` object (not keeper.json): not applicable. `verify-anchor`: "anchors not configured" (live has no anchor keys; same as before).
+6. Write cycle IN THE COPY: define scratch goal `plangraph:LIVESYNC-DRY`, priority, claim (worker, 1h), heartbeat, release, cancel: all rc=0. Chain ok after. Deltas vs step 3: items +1, events +5, principals +2 (two dry principals), audit_log +60 (every read verb logs). Nothing else.
+Not exercised: submit/evidence/verdict/waive/withdraw/close/legacy/rehome/delegate/token (--help parsed only), Postgres backend, Temporal signal, backup_prune thread.
+
+## 3. Rollback rehearsal (copyB: migrated by T, then run with f3bac63)
+- `git archive f3bac63 src` -> old tree; `admin verify` with OLD code on T-migrated copy: ok; OLD daemon starts and serves (whoami/ready/percent/alerts/snapshot/digest rc=0, `/inbox` 404 as expected); OLD `define` works; verify ok.
+- Extra tables are ignored by old code. **But** once T writes a design-3 event (`set_state` -> `state_set`, item state `parked`), OLD `admin verify` reports `cache_mismatch field=state expected=open got=parked`. Therefore: rollback via code swap is safe only while T has written no design-3 state/cards/attempts/questions. After that, **rollback = stop keeper, restore the pre-restart backup db (and json), start f3bac63.** Take that backup before restart (sqlite .backup, not cp, WAL).
+
+## 4. Seats
+(see seats/ dir on branch lane/keeper-live-sync-seats results below)
+
+=== DRY-RUN LOG
+# dry-run log (stdout bodies stripped)
+whoami rc=0 bytes=55
+ready rc=0 bytes=1242
+blocked rc=0 bytes=50456
+waves rc=0 bytes=23774
+critical rc=0 bytes=488
+percent rc=0 bytes=5
+alerts rc=0 bytes=8850
+digest rc=0 bytes=1112
+progress rc=0 bytes=7300
+changelog rc=2 bytes=117
+audit-meta rc=0 bytes=13784
+snapshot rc=0 bytes=72
+aliases rc=0 bytes=511
+rc=2 pg.sh define --file /home/s/code/plangraph-worktrees/.sessions/live-sync/item.json
+rc=2 pg.sh show plangraph:LIVESYNC-DRY
+rc=0 pg.sh changelog --since 0
+rc=0 pg.sh render --out /home/s/code/plangraph-worktrees/.sessions/live-sync/render.html
+rc=2 pg.sh priority plangraph:LIVESYNC-DRY 5
+rc=0 pg.sh whoami
+rc=2 pg.sh claim plangraph:LIVESYNC-DRY --lease 1h
+not_found: no item 'plangraph:LIVESYNC-DRY'
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "/usr/lib/python3.12/json/__init__.py", line 293, in load
+    return loads(fp.read(),
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 337, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/json/decoder.py", line 355, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+rc=2 pg.sh heartbeat plangraph:LIVESYNC-DRY --epoch
+rc=2 pg.sh release plangraph:LIVESYNC-DRY --epoch
+rc=2 pg.sh cancel plangraph:LIVESYNC-DRY --reason dryrun
+rc=0 pg.sh admin verify
+rc=1 pg.sh admin verify-snapshot
+rc=0 pg.sh snapshot
+--- run2
+rc=0 pg.sh define --file /home/s/code/plangraph-worktrees/.sessions/live-sync/item.json
+rc=0 pg.sh show plangraph:LIVESYNC-DRY
+rc=0 pg.sh changelog --since 0
+rc=0 pg.sh render --out /home/s/code/plangraph-worktrees/.sessions/live-sync/render.html
+rc=0 pg.sh priority plangraph:LIVESYNC-DRY 5
+rc=0 pg.sh whoami
+rc=0 pg.sh claim plangraph:LIVESYNC-DRY --lease 1h
+rc=0 pg.sh heartbeat plangraph:LIVESYNC-DRY
+rc=0 pg.sh release plangraph:LIVESYNC-DRY
+rc=0 pg.sh cancel plangraph:LIVESYNC-DRY --reason dryrun
+rc=0 pg.sh admin verify
+rc=0 pg.sh admin verify-snapshot
+rc=0 pg.sh snapshot
+rc=2 admin verify-anchor
+rc=0 admin prune-backups --dir /home/s/code/plangraph-worktrees/.sessions/live-sync
+rc=0 admin migrate
+rc=0 admin export --help
+rc=0 replay
+rc=1 sync pull
+rc=2 set-kind plangraph:NOPE question
+rc=2 evidence plangraph:NOPE decision x
+rc=0 verdict plangraph:NOPE --help
+rc=0 waive --help
+rc=0 withdraw --help
+rc=0 close --help
+rc=0 legacy --help
+rc=0 rehome --help
+rc=0 migrate-descriptions --help
+rc=0 submit --help
+rc=0 delegate --help
+rc=2 token plangraph:NOPE --role worker --run r1
+GET /inbox 200
+GET /v1/snapshot 401
+# rollback
+old/whoami rc=0
+old/ready rc=0
+old/percent rc=0
+old/alerts rc=0
+old/snapshot rc=0
+old/digest rc=0
+chain and cache integrity ok
+define ok
+chain and cache integrity ok
+chain and cache integrity ok
+1 problem(s)
+{'key': 'plangraph:LIVESYNC-DRY', 'code': 'cache_mismatch', 'field': 'state', 'expected': 'open', 'got': 'parked'}
+
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)
