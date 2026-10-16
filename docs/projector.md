@@ -101,7 +101,7 @@ Tables (migration 3, `ddl.py`, PG and SQLite variants, created only through the 
 * `projector_applied(workflow_id, run_id, activity_id, attempt, kind, key, n, applied_at, PRIMARY KEY (workflow_id, run_id,
   activity_id, attempt, kind))`, `kind` in `attempt | state`.
 * `projector_watermark(workflow_id PRIMARY KEY, run_id, run_ord, event_id, status, plan_key, updated_at)`; the row with
-  workflow_id `*` is the global watermark (`event_id` unused, `updated_at` = completion of the last full scan). The UI shows it: `GET /v1/projector_watermark` (read-only, same auth gate as `GET /v1/questions`) returns `{global, workflows, open_alarms}` and the inbox page prints one line from it.
+  workflow_id `*` is the global watermark (`event_id` unused, `updated_at` = completion of the last full scan). The UI shows it: `GET /v1/projector_watermark` (read-only, same auth gate as `GET /v1/questions`) returns `{global, workflows, open_alarms}` (`open_alarms` is `null` for project-restricted callers: the count is not project-scoped) and the inbox page prints one line from it.
 * `projector_alarms(id, kind, workflow_id, key, detail, raised_at, cleared_at)`; open = `cleared_at IS NULL`.
 
 Writes go through the keeper `Store` (`record_attempt`, `set_state`) with a `system` principal, never raw SQL on keeper tables.

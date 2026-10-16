@@ -122,3 +122,15 @@ def test_every_worker_activity_is_a_known_type():
     assert {"ask_question", "record_question_timeout", "janitor"} <= set(names), names
     for name in names:
         assert name == "attempt" or f"CardActivities::{name}" in KNOWN_ACTIVITY_TYPES, name
+
+
+def test_rebuild_from_history_yields_identical_alarm_rows_twice(world, projector):
+    h = attempt_history()
+    events(h, "ACTIVITY_TASK_SCHEDULED")[0]["activityTaskScheduledEventAttributes"][
+        "activityType"]["name"] = "mystery"
+    projector.apply_run(project_history(copy.deepcopy(h), workflow_id="card:demo:A", run_id="r1"),
+                        run_ord=0)
+    first = alarms(world)
+    projector.apply_run(project_history(copy.deepcopy(h), workflow_id="card:demo:A", run_id="r1"),
+                        run_ord=0)
+    assert len(first) == 1 and alarms(world) == first
