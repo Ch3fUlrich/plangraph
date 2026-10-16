@@ -19,6 +19,7 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
@@ -26,6 +27,12 @@ from temporalio.common import RetryPolicy
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 from plangraph.projector.temporal_source import TemporalSource
+
+try:
+    from plangraph.projector.temporal_source import _run   # fresh loop, or a helper thread inside one
+except ImportError:                                        # no helper: a fresh loop of our own
+    def _run(factory):
+        return asyncio.run(factory())
 
 RECORDER_PATH = Path(__file__).with_name("projector_record.py")
 RESERVED_PORTS = {17233}             # another dev server runs there; never bind or stop it
@@ -98,9 +105,28 @@ class DevServer:
 
     @staticmethod
     def _namespace_ready(source: TemporalSource) -> bool:
-        """The frontend answers before the ``default`` namespace exists: a listing proves it does."""
+        """True once every service holds the ``default`` namespace, not just the frontend.
+
+        The frontend answers ``list_workflows`` before history and matching have loaded the
+        namespace, so a listing alone only proves the gRPC frontend is up: on a slow CI host the
+        first ``start_workflow`` still dies with ``RPCError: Namespace default is not found``.
+        Start a throwaway workflow (matching + history accept it), terminate it, then describe it
+        (history reads it back).  Any exception means "not ready": ``start()`` retries every 0.3 s
+        until its own deadline.
+        """
+
+        async def probe() -> None:
+            client = await source._connect()
+            wid = f"readiness-probe-{uuid4().hex}"
+            handle = await client.start_workflow(
+                "ReadinessProbe", id=wid, task_queue="readiness-probe",
+                execution_timeout=timedelta(seconds=30))
+            await handle.terminate("readiness probe")
+            await client.get_workflow_handle(wid).describe()   # history must serve reads, too
+
         try:
             source.list_workflows()
+            _run(probe)
             return True
         except Exception:  # noqa: BLE001 - not ready yet
             return False
