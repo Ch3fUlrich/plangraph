@@ -105,7 +105,7 @@ function loadWatermark(){
     var w=$("wm");
     if(!r.ok||b.error){w.textContent="projector watermark: unavailable";return}
     var g=b.global;
-    w.textContent="projector watermark: "+(g?(g.updated_at+" ("+(g.age_s==null?"?":g.age_s)+"s ago)"):"never run")+" - "+(b.open_alarms||0)+" open alarm(s)";
+    w.textContent="projector watermark: "+(g?(g.updated_at+" ("+(g.age_s==null?"?":g.age_s)+"s ago)"):"never run")+" - "+(b.open_alarms==null?"n/a":b.open_alarms)+" open alarm(s)";
   })})
   .catch(function(){$("wm").textContent="projector watermark: unavailable"});
 }

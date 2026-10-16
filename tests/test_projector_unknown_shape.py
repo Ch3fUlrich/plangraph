@@ -123,3 +123,35 @@ def test_rebuild_from_history_yields_identical_alarm_rows_twice(world, projector
     projector.apply_run(project_history(copy.deepcopy(h), workflow_id="card:demo:A", run_id="r1"),
                         run_ord=0)
     assert len(first) == 1 and alarms(world) == first
+
+
+def with_mystery(h, wf_type=None):
+    h = copy.deepcopy(h)
+    events(h, "ACTIVITY_TASK_SCHEDULED")[0]["activityTaskScheduledEventAttributes"][
+        "activityType"]["name"] = "mystery"
+    if wf_type is not None:
+        h["events"][0]["workflowExecutionStartedEventAttributes"]["workflowType"] = {"name": wf_type}
+    return h
+
+
+def test_foreign_workflow_with_unknown_activities_raises_no_alarm(world, projector):
+    h = with_mystery(attempt_history(), "SomethingElse")
+    proj = project_history(h, workflow_id="other:X", run_id="r1")
+    assert proj.shape_issues == ()
+    projector.apply_run(proj, run_ord=0)
+    assert alarms(world) == []
+
+
+def test_card_workflow_with_one_unknown_activity_raises_exactly_one(world, projector):
+    for wf_type in ("Card", "CardWorkflow"):
+        proj = project_history(with_mystery(attempt_history(), wf_type), workflow_id="card:demo:A",
+                               run_id="r1")
+        assert len(proj.shape_issues) == 1
+        projector.apply_run(proj, run_ord=0)
+        projector.apply_run(proj, run_ord=0)
+    assert len(alarms(world)) == 1
+
+
+def test_plan_key_memo_marks_a_card_workflow_whatever_its_type(world, projector):
+    h = with_mystery(load(ROOT / "tests/fixtures/temporal/01_ok_single.json"), "Renamed")
+    assert len(project_history(h, workflow_id="x", run_id="r1").shape_issues) == 1
