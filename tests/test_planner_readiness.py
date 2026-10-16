@@ -252,6 +252,28 @@ def test_leg_request_too_big(tmp_path):
     assert both.codes() == ["estimate_too_big", "leg_request_too_big"]
 
 
+def test_pack_tokens_vs_leg_max(tmp_path):
+    card = good_card(estimate_tokens=1000)
+    assert gate(tmp_path, card, leg_max_request=5000, pack_tokens=4999).ready
+    assert gate(tmp_path, card, leg_max_request=5000, pack_tokens=5000).ready
+    over = gate(tmp_path, card, leg_max_request=5000, pack_tokens=5001)
+    assert over.codes() == ["leg_request_too_big"]
+    assert "pack" in over.findings[0].message
+    assert over.findings[0].message == "pack 5001 > 5000"
+
+
+def test_pack_tokens_ignored_without_leg_max(tmp_path):
+    assert gate(tmp_path, good_card(), pack_tokens=10**9).ready
+    assert gate(tmp_path, good_card(), pack_tokens=10**9).codes() == []
+
+
+def test_estimate_and_pack_both_over_share_one_code(tmp_path):
+    card = good_card(estimate_tokens=5000)
+    v = gate(tmp_path, card, leg_max_request=4999, pack_tokens=6000)
+    assert v.codes() == ["leg_request_too_big"]
+    assert [f.message for f in v.findings] == ["5000 > 4999", "pack 6000 > 4999"]
+
+
 def test_require_heldout(tmp_path):
     assert gate(tmp_path, good_card()).ready
     assert gate(tmp_path, good_card(), require_heldout=True).codes() == ["no_heldout"]

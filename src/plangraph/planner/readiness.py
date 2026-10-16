@@ -289,6 +289,7 @@ def _read_exists(entry: str, repo_root: Path) -> bool:
 def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
                running_write_sets: Mapping[str, Sequence[str]] = _EMPTY,
                leg_max_request: int | None = None,
+               pack_tokens: int | None = None,
                dry_run: Callable[[str, Path], tuple[bool, str]] = default_dry_run,
                require_heldout: bool = False) -> Verdict:
     """Gate one card; every failing rule adds a ``Finding`` (order as documented)."""
@@ -344,6 +345,10 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
                 f"{est} > {USABLE_FRACTION} * {WINDOW_TOKENS[window]} ({window})")
         if leg_max_request is not None and est > leg_max_request:
             add("leg_request_too_big", f"{est} > {leg_max_request}")
+
+    if leg_max_request is not None and isinstance(pack_tokens, int) \
+            and pack_tokens > leg_max_request:
+        add("leg_request_too_big", f"pack {pack_tokens} > {leg_max_request}")
 
     if require_heldout:
         held = card.get("heldout_check")

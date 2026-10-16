@@ -7,7 +7,12 @@ import pytest
 
 from keeper_util import World, seed
 from plangraph.planner import service
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, Leg
+
+#: One tiny leg: small enough that a padded write file pushes the pack over it.
+TINY_LEG = Leg(id="tiny-free", tier="free", harness="opencode", model="tiny-model",
+               family="tiny", windows=("128k",), max_request_tokens=3000,
+               trains_on_data=False)
 
 
 @pytest.fixture
@@ -128,6 +133,41 @@ def test_estimate_too_big_for_class(w, repo):
     result = gate(w, repo, key)
     assert "estimate_too_big" in result.verdict.codes()
     assert result.state == "needs_input"
+
+
+def test_pack_over_first_leg_max_needs_input(w, repo):
+    (key,) = seed(w, [("A", [])])
+    put(w, key, estimate_tokens=1000)
+    (repo / "src" / "a.py").write_text(
+        "WRITE_MARKER = 1\n" + "# padding\n" * 3000, encoding="utf-8")
+    result = gate(w, repo, key, legs=(TINY_LEG,))
+    assert result.state == "needs_input" and not result.ready
+    assert result.verdict.codes() == ["leg_request_too_big"]
+    assert any(f.code == "leg_request_too_big" and "pack " in f.message
+               for f in result.verdict.findings)
+    assert state_of(w, key) == "needs_input"
+    rows = open_questions(w, key)
+    assert len(rows) == 1 and rows[0][2] is None
+    assert "leg_request_too_big" in rows[0][1] and "pack" in rows[0][1]
+    assert result.question_id == rows[0][0]
+    again = gate(w, repo, key, legs=(TINY_LEG,))
+    assert again.question_id == result.question_id and again.state == "needs_input"
+    assert len(open_questions(w, key)) == 1
+
+
+def test_pack_too_big_reports_pack_finding(w, repo):
+    (key,) = seed(w, [("A", [])])
+    pads = [f"src/pad{i}.py" for i in range(4)]
+    for name in pads:
+        (repo / name).write_text("x" * 90000, encoding="utf-8")
+    put(w, key, estimate_tokens=1000, write_set=pads)
+    result = gate(w, repo, key, legs=(TINY_LEG,))
+    assert result.state == "needs_input"
+    assert result.verdict.codes() == ["leg_request_too_big"]
+    assert any(f.message.startswith("pack too big: ") for f in result.verdict.findings)
+    rows = open_questions(w, key)
+    assert len(rows) == 1 and "leg_request_too_big" in rows[0][1]
+    assert "pack too big" in rows[0][1]
 
 
 def test_all_legs_unavailable_gives_no_route(w, repo):

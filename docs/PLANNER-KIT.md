@@ -16,6 +16,7 @@ a keeper `Store` (`put_card`, `get_card`, `set_state`, `ask_question`).
 | `routing.py` | `route_card` (window class + leg plan), `next_after_failure` (retry/rotate/promote/park) |
 | `context_pack.py` | `build_pack`, `pack_budget`: write set then read set under a token budget |
 | `service.py` | `gate_card`, `route_for_card`, `pack_for_card`, `import_batch`, `running_write_sets` |
+| `shadow.py` | `route_with_shadow` (optional audit-only shadow answerer, D18), `record_outcome`, `read_rows`, `summarize` |
 
 ## Card YAML
 
@@ -54,7 +55,7 @@ Paths must be relative and without `..`.
 | `read_missing` | a `read_set` entry does not exist under the repo root |
 | `write_overlap` | write set overlaps one of a running card in the same project |
 | `estimate_missing` / `estimate_too_big` | no estimate / estimate above 0.55 x window |
-| `leg_request_too_big` | estimate above the first leg's `max_request_tokens` |
+| `leg_request_too_big` | estimate or context pack above the first leg's `max_request_tokens` |
 | `no_risk_tags` | `risk_tags` is null (direct `check_card` calls only, see below) |
 | `no_window_class` | window class unset |
 | `bad_path` | absolute, `~`, drive or `..` path |
@@ -100,6 +101,19 @@ then `# FILE <path> (write)` blocks, then `(read)` blocks, each in a fenced bloc
 read files over budget or size are skipped. Entries beyond the 50-file expansion cap are
 listed in `skipped` as `(path, "entry_cap")`. Binary write files are skipped.
 
+## Shadow hook
+
+`shadow.py` (D18): `route_with_shadow(card, answerer=..., log_path=..., **route_kw)` routes with
+`route_card` first and always returns that route unchanged - the shadow answer is audited, never
+the decision. Off unless `PLANGRAPH_PLANNER_SHADOW` is `1/true/yes/on`; the JSONL log path is
+`log_path` or `PLANGRAPH_PLANNER_SHADOW_LOG`. Each call appends one `decision` row (card_key,
+rules, shadow answer, `shadow_error`, `agree` on the first leg id) and `record_outcome(decision_id,
+outcome)` appends an `outcome` row joined by id; `read_rows`/`summarize` read them back, skipping
+bad lines. Answerer exceptions are recorded and ignored, log-write errors swallowed; the answerer
+gets a deep copy of the card and route, and `heldout_check`/`check_cmd`/`write_set` never reach
+the log. The answerer is injected (fake in tests), so the kit still makes no model calls and no
+store or schema change.
+
 ## Tests
 
 ```
@@ -111,6 +125,5 @@ also runs in the Postgres CI job.
 
 ## Not here
 
-- The Jev shadow hook (running the gate beside the existing planner).
 - The planning-skill rewrite that emits cards.
 - The live worker that claims `ready` items, spawns a leg and records attempts.
