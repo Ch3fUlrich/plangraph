@@ -14,7 +14,7 @@ TEMPORAL-SPIKE-TLS (PR #22 bae9b82; tls-seats; gRPC round trip = TEMPORAL-CHECK 
 ## Open
 | Item | State | Next |
 |---|---|---|
-| KEEPER-CI-CONCLUSIONS (D-1403 prio1 HIGH) | CHANGE by judge server-L1-routing on 1621385 (name-collapse across suites = false green; empty->fail closed; paginate) | L2 fixing -> 1 delta seat -> re-judge -> GO -> merge, D-915 keeper restart (ff live proposal tree), tell workst-L1-autoos re-add CI-WORKST-RUNNER |
+| KEEPER-CI-CONCLUSIONS (D-1403 prio1 HIGH) | MERGE-READY #24 5f56487 (judge CHANGE fixed; 106 tests + live a1b1da8 ok; delta seat openai PASS ci-conclusions-seats-5f56487) | re-judge asked server-L1-routing 05:5xZ -> GO -> merge, D-915 keeper restart (ff live proposal tree), tell workst-L1-autoos re-add CI-WORKST-RUNNER |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
