@@ -210,12 +210,36 @@ pub fn admit_fence(_lock: &MergeLock, repo: &Path, token: u64) -> Result<bool, M
     if token < seen {
         return Ok(false);
     }
-    std::fs::write(&path, token.to_string())?;
+    write_fence_atomically(&path, token)?;
     Ok(true)
 }
 
-/// Rebase the branch checked out in `worktree` onto `onto`. A conflict is
-/// aborted (leaving the worktree as it was) and reported as `false`.
+/// Replace the fence file with `token` so a crash leaves either the old or the
+/// new value, never a torn one: write a temp sibling, fsync it, rename over,
+/// then fsync the directory so the rename itself is durable.
+fn write_fence_atomically(path: &Path, token: u64) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp = dir.join(format!("{FENCE_NAME}.tmp.{}", std::process::id()));
+    let res = (|| {
+        let mut f = File::create(&tmp)?;
+        f.write_all(token.to_string().as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)?;
+        File::open(dir)?.sync_all()
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
+/// Rebase the branch checked out in `worktree` onto `onto`.
+///
+/// A real conflict (the rebase stopped and left rebase state behind) is aborted,
+/// leaving the worktree as it was, and reported as `Ok(false)`. Any other git
+/// failure (bad revision, hook failure, io) is an `Err`: it is not a conflict.
+/// A failing `rebase --abort` is an error too, never ignored.
 pub fn rebase_onto(worktree: &Path, onto: &str) -> Result<bool, MergeError> {
     check_rev(onto)?;
     let rebased = git(
@@ -229,11 +253,31 @@ pub fn rebase_onto(worktree: &Path, onto: &str) -> Result<bool, MergeError> {
             onto,
         ],
     );
-    if rebased.is_err() {
-        let _ = git(worktree, &["rebase", "--abort"]);
-        return Ok(false);
+    let Err(failure) = rebased else {
+        return Ok(true);
+    };
+    if !rebase_in_progress(worktree)? {
+        return Err(failure.into());
     }
-    Ok(true)
+    git(worktree, &["rebase", "--abort"])?;
+    Ok(false)
+}
+
+/// True when git left an interrupted rebase in `worktree` (a conflict stop).
+fn rebase_in_progress(worktree: &Path) -> Result<bool, MergeError> {
+    for name in ["rebase-merge", "rebase-apply"] {
+        let raw = git(worktree, &["rev-parse", "--git-path", name])?;
+        let p = Path::new(&raw);
+        let full = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            worktree.join(p)
+        };
+        if full.exists() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Map a merge outcome to the exit class the orchestrator records.
@@ -569,5 +613,75 @@ mod tests {
             "scratch worktree was not cleaned up:\n{listing}"
         );
         assert_eq!(git(p, &["rev-parse", "refs/heads/main"]), base);
+    }
+
+    #[test]
+    fn fence_write_leaves_no_temp_file_and_overwrites() {
+        let (r, _base) = repo();
+        let lock = MergeLock::acquire(r.path(), Duration::from_secs(5)).unwrap();
+        assert!(admit_fence(&lock, r.path(), 2).unwrap());
+        assert!(admit_fence(&lock, r.path(), 9).unwrap());
+        let dir = git_common_dir(r.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(FENCE_NAME)).unwrap(), "9");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    fn attempt_worktree(r: &Path, base: &str, root: &Path) -> PathBuf {
+        let wt = root.join("wt-nc");
+        git(
+            r,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "attempt/nc/1",
+                "--",
+                wt.to_str().unwrap(),
+                base,
+            ],
+        );
+        write(&wt, "x.txt", "x");
+        commit_all(&wt, "attempt");
+        wt
+    }
+
+    #[test]
+    fn rebase_onto_a_missing_revision_is_an_error_not_a_conflict() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let wt = attempt_worktree(r.path(), &base, root.path());
+        let before = git(&wt, &["rev-parse", "HEAD"]);
+        let res = rebase_onto(&wt, "0123456789abcdef0123456789abcdef01234567");
+        assert!(matches!(res, Err(MergeError::Git(_))), "{res:?}");
+        assert_eq!(git(&wt, &["rev-parse", "HEAD"]), before);
+    }
+
+    #[test]
+    fn rebase_onto_a_failing_hook_is_an_error_not_a_conflict() {
+        use std::os::unix::fs::PermissionsExt;
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let wt = attempt_worktree(r.path(), &base, root.path());
+        write(r.path(), "y.txt", "y");
+        let moved = commit_all(r.path(), "advance");
+        let hooks = git_common_dir(r.path()).unwrap().join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-rebase");
+        std::fs::write(
+            &hook,
+            "#!/bin/sh
+exit 1
+",
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let res = rebase_onto(&wt, &moved);
+        assert!(matches!(res, Err(MergeError::Git(_))), "{res:?}");
     }
 }
