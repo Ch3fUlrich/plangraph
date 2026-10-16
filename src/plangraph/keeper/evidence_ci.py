@@ -24,6 +24,19 @@ __all__ = ["CIAdapter"]
 _SLUG_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
+def _pos_int(value: object) -> int | None:
+    """A real positive int id, else None.
+
+    Shared by both halves of the workflow backfill (workflow-run suite ids and
+    check-run suite ids, then the run and workflow ids behind the 'workflow'
+    key): bool is not an id (``True == 1`` would hijack suite 1) and a digit
+    string is not an id here either — GitHub sends ints.
+    """
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def slug_from_remote(url: str) -> str | None:
     """Turn a git remote URL into ``owner/repo`` (``None`` if unrecognisable)."""
     url = url.strip()
@@ -78,7 +91,10 @@ class CIAdapter:
         validated components only, so no user text can inject a query.
         When any check-run comes from GitHub Actions, the workflow runs for the
         sha are fetched through the same gated paging and backfilled onto the
-        check-runs whose check-suite matches (``workflow`` key).
+        check-runs whose check-suite id matches (``workflow`` key); only a
+        positive int suite id counts on either side, and the key is written
+        only when the matched run also has a positive int id and workflow_id
+        and a string event.
         Raises on a non-zero ``gh`` exit or unparseable output — the verifier
         catches and sanitises that.
         """
@@ -113,21 +129,34 @@ class CIAdapter:
                 repo,
             )
             # First run wins per suite: the API lists newest first, so retries
-            # collapse onto the latest attempt. A suite with no matching run
-            # simply gets no key — nothing is invented for it.
+            # collapse onto the latest attempt. Only a positive int suite id on
+            # either side matches (bool excluded), and a matched run adds a
+            # 'workflow' key only when its id, workflow_id and str event are
+            # all usable — a suite with no usable run simply gets no key.
             by_suite: dict = {}
             for w in workflows:
-                by_suite.setdefault(w.get("check_suite_id"), w)
+                suite_id = _pos_int(w.get("check_suite_id"))
+                if suite_id is None:
+                    continue
+                by_suite.setdefault(suite_id, w)
             for run in collected:
                 suite = run.get("check_suite")
-                wf = by_suite.get(suite.get("id")) if isinstance(suite, dict) else None
+                suite_id = _pos_int(suite.get("id")) if isinstance(suite, dict) else None
+                if suite_id is None:
+                    continue
+                wf = by_suite.get(suite_id)
                 if wf is None:
                     continue
+                run_id = _pos_int(wf.get("id"))
+                wf_id = _pos_int(wf.get("workflow_id"))
+                event = wf.get("event")
+                if run_id is None or wf_id is None or not isinstance(event, str):
+                    continue
                 run["workflow"] = {
-                    "event": wf.get("event"),
-                    "workflow_id": wf.get("workflow_id"),
+                    "event": event,
+                    "workflow_id": wf_id,
                     "name": wf.get("name"),
-                    "run_id": wf.get("id"),
+                    "run_id": run_id,
                 }
         return collected
 

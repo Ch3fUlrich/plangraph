@@ -397,6 +397,86 @@ def test_ci_adapter_unmatched_suite_gets_no_workflow_key(monkeypatch):
     assert out[0]["id"] == 1  # everything else stays as collected
 
 
+def test_ci_adapter_null_check_suite_ids_never_backfill(monkeypatch):
+    # A null check-suite id on either side may never match: the run keyed under
+    # None used to backfill the check-run whose own check_suite.id is None.
+    checks = {"total_count": 2, "check_runs": [
+        _check("github-actions", None, name="build"),
+        _check("github-actions", 111, name="test", check_id=2),
+    ]}
+    runs = {
+        "total_count": 2,
+        "workflow_runs": [
+            {"id": 9001, "check_suite_id": None, "event": "push", "name": "CI",
+             "workflow_id": 5, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+            {"id": 9002, "check_suite_id": 111, "event": "push", "name": "CI",
+             "workflow_id": 5, "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+        ],
+    }
+    _fake_gh(monkeypatch, checks, runs=runs)
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(out) == 2
+    assert "workflow" not in out[0]  # no key is ever invented for a null suite
+    assert out[1]["workflow"] == {"event": "push", "workflow_id": 5,
+                                  "name": "CI", "run_id": 9002}
+
+
+def test_ci_adapter_bool_check_suite_id_never_backfills(monkeypatch):
+    # True == 1 in Python: without the int-only gate a bool suite id would
+    # hijack suite 1 and invent a 'workflow' key on either side of the match.
+    run = {"id": 42, "check_suite_id": True, "event": "push", "name": "CI",
+           "workflow_id": 5, "run_attempt": 1,
+           "status": "completed", "conclusion": "success"}
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 1)]}
+    _fake_gh(monkeypatch, checks, runs={"total_count": 1, "workflow_runs": [run]})
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert "workflow" not in out[0]  # a bool workflow-run suite id matches nothing
+
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", True)]}
+    run = dict(run, check_suite_id=1)
+    _fake_gh(monkeypatch, checks, runs={"total_count": 1, "workflow_runs": [run]})
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert "workflow" not in out[0]  # a bool check-run suite id is no key either
+
+
+def test_ci_adapter_workflow_run_without_workflow_id_gets_no_key(monkeypatch):
+    # The suite matches, but the run has no workflow_id to group by: the
+    # check-run keeps its plain suite key instead of a half-empty 'workflow'.
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 111)]}
+    runs = {
+        "total_count": 1,
+        "workflow_runs": [
+            {"id": 42, "check_suite_id": 111, "event": "workflow_dispatch",
+             "name": "CI", "run_attempt": 1,
+             "status": "completed", "conclusion": "success"},
+        ],
+    }
+    _fake_gh(monkeypatch, checks, runs=runs)
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert len(out) == 1
+    assert "workflow" not in out[0]
+
+
+@pytest.mark.parametrize("bad", [
+    {"id": None}, {"id": True}, {"id": 0}, {"id": "42"},
+    {"workflow_id": None}, {"workflow_id": True}, {"workflow_id": 0},
+    {"event": None}, {"event": 7},
+])
+def test_ci_adapter_incomplete_workflow_run_gets_no_key(monkeypatch, bad):
+    # 'workflow' is written only from a positive int id and workflow_id
+    # (bool excluded) and a str event; anything else adds no key at all.
+    run = {"id": 42, "check_suite_id": 111, "event": "push", "name": "CI",
+           "workflow_id": 5, "run_attempt": 1,
+           "status": "completed", "conclusion": "success"}
+    run.update(bad)
+    checks = {"total_count": 1, "check_runs": [_check("github-actions", 111)]}
+    _fake_gh(monkeypatch, checks, runs={"total_count": 1, "workflow_runs": [run]})
+    out = CIAdapter().check_runs("owner/repo", _SHA)
+    assert "workflow" not in out[0]
+
+
 def test_ci_adapter_without_actions_runs_makes_exactly_one_gh_call(monkeypatch):
     checks = {"total_count": 2, "check_runs": [
         _check("circleci", 111, name="lint"),

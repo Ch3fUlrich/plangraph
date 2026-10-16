@@ -561,6 +561,27 @@ def test_ci_wf_bool_workflow_id_is_not_grouped():
                       "(pytest (suite 91)=failure, pytest (suite 92)=failure)")
 
 
+def test_ci_wf_missing_run_id_stays_plain_suite_groups():
+    # A 'workflow' dict with no usable run_id counts as no 'workflow' at all,
+    # exactly like a missing workflow_id: without a positive run_id neither
+    # dispatch may join a wf group, so both keep their own plain
+    # (suite, app, name) key and the newer failure blocks instead of losing the
+    # rank race inside a shared ("wf", 7, ...) group, where the older green run
+    # wins on its higher check-run id (900 vs 7) and wrongly reports green.
+    older_green = _wf_run(9000, sid=95, rid=900, conclusion="success")
+    newer_failed = _wf_run(9001, sid=96, rid=7, conclusion="failure")
+    older_green["workflow"].pop("run_id")
+    newer_failed["workflow"].pop("run_id")
+    assert ev._ci_conclusion([older_green, newer_failed], SHA) == f"CI is not green for {SHA} (pytest=failure)"
+    # The same trap with only the newer failure lacking a run_id: its run with
+    # run_id 9000 still ranks the green run newest inside the merged group, so
+    # the failure must again sit in its own plain suite group and block.
+    older_green = _wf_run(9000, sid=97, rid=900, conclusion="success")
+    newer_failed = _wf_run(9001, sid=98, rid=7, conclusion="failure")
+    newer_failed["workflow"].pop("run_id")
+    assert ev._ci_conclusion([older_green, newer_failed], SHA) == f"CI is not green for {SHA} (pytest=failure)"
+
+
 def test_ci_conclusion_runs_without_workflow_key_unchanged():
     runs = [
         {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "failure"},
