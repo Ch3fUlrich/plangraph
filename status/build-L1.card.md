@@ -1,4 +1,4 @@
-# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-8 (D-1473, 2026-10-16 09:1xZ, effort medium; beat cron 2ad2cac6 13,43)
+# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-8 (D-1473, 2026-10-16 09:1xZ, effort medium; beat cron 7cf1cc93 13,43)
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md · design (binding, 14a): .../docs/reports/2026-10-15-rethink-setup-design.md
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: D-1442 judge only HIGH (keeper engine/live, schema, auth), standard = self-approve on seats. Cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
@@ -15,7 +15,7 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
-| KEEPER-CI-NEWEST-WINS (p2 HIGH, D-1479) | claimed epoch 1 (lease 12:25Z); brief e82499e; L2-LAUNCH build-L2-ci-newest-wins asked (free slot) | MERGE-READY -> judge -> merge -> D-915 restart |
+| KEEPER-CI-NEWEST-WINS (p2 HIGH, D-1479) | claimed epoch 1 (lease 12:25Z); brief e82499e; routed to workst-L1-autoos (workst launch); no session id by 12:00Z -> tell routing, coding.vm | MERGE-READY -> judge -> merge -> D-915 restart |
 | CI-PG-CONTRACT-TIMEOUT (p2) | root cause api.py:168 _snapshot (D-1477); instr #31 merged de11496 (head 3d4f2e8, CI 38884699086, seats gpt-oss+Qwen pass H:\worktrees\seat-pgt-*.out); L2 pytest-speed stood down | after SNAPSHOT-PG: 10 green runs, evidence, verdicts |
 | KEEPER-SNAPSHOT-PG (p1 HIGH, D-1477) | claimed epoch 1 (lease 12:04Z); brief 8dd562b; L2 build-L2-snapshot-pg c37d8d91 coding.vm, lane/keeper-snapshot-pg | gates RT-P1-KEEPER-PG; MERGE-READY -> judge |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
