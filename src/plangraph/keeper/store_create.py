@@ -30,7 +30,8 @@ from .store_tiers import (
 )
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
-             "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "done_criteria", "evidence_kinds",
+             "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
+             "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
@@ -38,7 +39,7 @@ _MAX_DEPS = 200
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
-     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
+     "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
@@ -54,12 +55,19 @@ def _defined_payload(fields):
     """``item_defined`` payload: the changed field names plus the new tier value.
 
     The fold replays this to reconstruct ``review_tier``; it needs the value,
-    not just the name, so ``verify_integrity`` can agree with the table.
+    not just the name, so ``verify_integrity`` can agree with the table.  The
+    estimate pair rides along for the same reason: an event must say what the
+    edit actually stored.  ``fold`` ignores names it does not compare
+    (``estimate_h``/``estimate_src`` are definition columns, not cached ones),
+    so carrying them keeps the event honest without touching the replay.
     """
     payload = {"fields": sorted(fields)}
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
     for name in SMALL_FIELDS:
+        if name in fields:
+            payload[name] = fields[name]
+    for name in ("estimate_h", "estimate_src"):
         if name in fields:
             payload[name] = fields[name]
     return payload
@@ -70,7 +78,12 @@ class CreateMixin:
 
     # -------------------------------------------------------- create/import
     def create_items(self, principal, items):
-        """Router (any project) or L1 (own project): create definitions."""
+        """Router (any project) or L1 (own project): create definitions.
+
+        An optional per-item ``under: <key>`` also writes the gate -> new edge
+        (the gate ``depends_on`` the new item) in the same transaction, so the
+        new item reaches the goal without a router edit afterwards.
+        """
         return self._run(principal, "create_items", None,
                          lambda now: self._create(principal, items, now, False))
 
@@ -85,13 +98,18 @@ class CreateMixin:
         unknown = {name: raw[name] for name in raw
                    if name not in KNOWN_ITEM_FIELDS}
         for name, value in unknown.items():
-            guard(name, value)
+            guard(name, value, key)
         return fold_checked(raw.get("note"), unknown, key) if unknown \
             else raw.get("note")
 
     def _create(self, principal, items, now, legacy):
         if len(items) > _MAX_BATCH:
             raise Refused("validation", f"batch exceeds {_MAX_BATCH} items")
+        if legacy and any(isinstance(raw, dict) and raw.get("under") is not None
+                          for raw in items):
+            # ``under`` is a create-only attachment; a legacy import may not
+            # smuggle one in (checked before _normalise resolves it).
+            raise Refused("validation", "import_items does not accept 'under'")
         defs = [self._normalise(raw) for raw in items]
         for raw in items:
             if isinstance(raw, dict):
@@ -123,16 +141,79 @@ class CreateMixin:
             if existing is not None:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
+        # ``under``: resolve and authorise every gate before anything is
+        # written.  A gate must already exist -- a key created earlier in this
+        # very batch does not exist yet and is refused as not_found.
+        attach = []
+        for definition in defs:
+            gate = self._under_gate(principal, definition)
+            if gate is not None:
+                attach.append((definition, gate))
         before = self._all_items()
         check_fix_limit(before + defs, set(keys))
-        self._validate_change(before + defs, before, affected=keys)
+        # Validate the graph the writes would leave behind: every gate gains the
+        # new item as a dependency, so cycles and reachability are caught here,
+        # before a single row is inserted.
+        candidate = [dict(item) for item in before] + defs
+        affected = set(keys)
+        if attach:
+            linked = {item["key"]: item for item in candidate}
+            for definition, gate in attach:
+                gate_item = linked[gate["key"]]
+                gate_item["depends_on"] = sorted(
+                    set(gate_item.get("depends_on") or [])
+                    | {definition["key"]})
+                affected.add(gate["key"])
+        self._validate_change(candidate, before, affected=affected)
         with self._write():
             for definition in defs:
                 self._insert_item(principal, definition, now)
+            for definition, gate in attach:
+                # Re-read the gate under the lock: it may have been done or
+                # cancelled between the read above and here.  The guarded
+                # UPDATE both proves the row is the one we read and touches its
+                # updated_at, then the gate -> new edge goes in beside it.
+                cursor = self.conn.execute(
+                    "UPDATE items SET updated_at=? WHERE key=? AND state=?"
+                    " AND epoch=?",
+                    (self._iso(now), gate["key"], gate["state"], gate["epoch"]))
+                self._row_guard(cursor, gate["key"], gate["state"],
+                                gate["epoch"])
+                self.conn.execute(
+                    "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
+                    (gate["key"], definition["key"]))
+                self._append(principal, gate["key"], "item_defined",
+                             {"fields": ["depends_on"]}, now)
         result = {"created": keys}
+        if attach:
+            result["attached"] = [{"key": definition["key"],
+                                   "under": gate["key"]}
+                                  for definition, gate in attach]
         if any(not definition.get("description") for definition in defs):
             result["warnings"] = ["description missing: brief will be empty"]
         return result
+
+    def _under_gate(self, principal, definition):
+        """The gate ``definition['under']`` names, or ``None`` for no attach.
+
+        The key was qualified by ``_normalise`` (a bare id means the new item's
+        project, then the alias table).  The gate must exist, the caller must
+        manage its project, a non-router may only attach inside the new item's
+        own project, and a DONE/cancelled gate is ``bad_state`` (locked gates
+        are refused by ``_assert_unlocked``).
+        """
+        gate_key = definition.get("under")
+        if not gate_key:
+            return None
+        gate = self._get_or_refuse(gate_key)
+        self._may_manage(principal, gate["project"])
+        if principal.role != "router" and gate["project"] != definition["project"]:
+            raise Refused("forbidden",
+                          "cross-project 'under' needs the router")
+        if gate["state"] in ("done", "cancelled"):
+            raise Refused("bad_state", f"{gate['key']} is {gate['state']}")
+        self._assert_unlocked(gate)
+        return gate
 
     def _tier_for(self, raw, definition, principal):
         """The tier to store: an explicit (validated) value, else the default.
@@ -249,7 +330,28 @@ class CreateMixin:
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
         edit_fields = dict(rest)
-        self._check_text(edit_fields)
+        self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
+        # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
+        # audit-meta ``default`` marker keeps flagging the item forever.  An
+        # ``estimate_h`` edit that does not say where the number came from
+        # attributes it to the editing principal and records the auto-fill.
+        auto_src = False
+        effective_h = edit_fields.get("estimate_h", item.get("estimate_h"))
+        if "estimate_h" in edit_fields and effective_h is None:
+            # Clearing the estimate clears its source; a source cannot outlive it.
+            if edit_fields.get("estimate_src") is not None:
+                raise Refused("validation", "estimate_src needs an estimate_h")
+            edit_fields["estimate_src"] = None
+        elif "estimate_h" in edit_fields and "estimate_src" not in edit_fields:
+            edit_fields["estimate_src"] = principal.name
+            auto_src = True
+        if edit_fields.get("estimate_src") is not None or (
+                "estimate_src" in edit_fields and effective_h is not None):
+            src = edit_fields["estimate_src"]
+            if not isinstance(src, str) or not src.strip():
+                raise Refused("validation", "estimate_src must be a non-empty string")
+            if effective_h is None:
+                raise Refused("validation", "estimate_src needs an estimate_h")
         check_model_fields(edit_fields, item["kind"], key)
         if "review_tier" in edit_fields:
             validated_review_tier(edit_fields["review_tier"])
@@ -271,6 +373,8 @@ class CreateMixin:
         before = self._all_items()
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
+        by_key = {it["key"]: it for it in candidate}
+        dropped = []
         for field, value in edit_fields.items():
             if field == "depends_on":
                 if not isinstance(value, (list, tuple)):
@@ -282,11 +386,23 @@ class CreateMixin:
                     raise Refused("validation",
                                   "depends_on entries must be strings")
                 deps = [self._qualify(item["project"], d) for d in value]
-                if any(not d.startswith(item["project"] + ":") for d in deps) \
+                # A dependency on an item that is cancelled is dropped from the
+                # resulting list instead of refusing the edit: the rest of the
+                # list stands, the caller is told what went away, and the graph
+                # validates (views.validate would report depends_on_cancelled).
+                # An unknown key is kept here and refused by _validate_change.
+                kept = []
+                for dep in deps:
+                    target = by_key.get(dep)
+                    if target is not None and target["state"] == "cancelled":
+                        dropped.append(f"dropped cancelled dependency {dep}")
+                        continue
+                    kept.append(dep)
+                if any(not d.startswith(item["project"] + ":") for d in kept) \
                         and principal.role != "router":
                     raise Refused("forbidden",
                                   "cross-project dependency needs the router")
-                me["depends_on"] = deps
+                me["depends_on"] = kept
             elif field == "kg_refs":
                 value = edit_fields["kg_refs"] = me["kg_refs"] = check_kg_refs(value, key)
             elif field == "choices":
@@ -356,6 +472,10 @@ class CreateMixin:
                         "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
                         (key, dep))
             payload = _defined_payload(edit_fields)
+            if auto_src:
+                # The event says the source was written by this edit, not asked
+                # for by the caller (``fold`` ignores the extra key).
+                payload["estimate_src_auto"] = True
             if tier_edit:
                 # D-434 marker: the state the router re-tiered through; the
                 # fold reads it to replay the round bump that voids verdicts.
@@ -363,7 +483,12 @@ class CreateMixin:
             self._append(principal, key, "item_defined", payload, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
-        return {"key": key}
+        result = {"key": key}
+        if dropped:
+            # Only when something was actually dropped: every caller (the HTTP
+            # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
+            result["warnings"] = dropped
+        return result
 
     def set_priority(self, principal, key, n):
         return self._run(principal, "set_priority", key,

@@ -1,0 +1,208 @@
+# rehearsal 2026-10-16 T=102e4885 vs live 3fd91bd6; postgres:17-alpine container ls102e-pg17 --memory 1g, 127.0.0.1 random port, trust auth, one container, removed at end
+# data: read-only pg_dump -n keeper of the live schema via the runtime role (7006 events, schema migration 4, 0 item_reopened), restored into roles keeper (owner, non-super) + keeper_rt (runtime)
+# commands that name a path: <T tree> = worktree at 102e4885, <old tree> = live-3fd91bd6 worktree; scratch config, scratch tokens 0600, scratch snapshot key; no live keeper/schema/port touched
+# note: first scratch run s2 had a driver error (my fixture created lanes before the goal: unreachable_goal); no state was written; fixture reordered, s3 is the run of record
+
+## s1: container, live dump, restore
+MemAvailable:   10227872 kB
+run rc=0
+dump rc=0
+-rw-r--r-- 1 root root 1363068 Oct 16 22:43 live.dump
+8ae1e40381e37434
+CREATE ROLE
+CREATE ROLE
+CREATE DATABASE
+roles rc=0
+restore rc=0
+7006
+4
+0
+
+## s2: T admin verify/migrate (no migration pending), principals, daemon health
+# T=102e4885
+# step 1: T admin verify + migrate as owner on the restored live copy (claim: no migration pending)
+$ pgc <T tree>/src postgresql://keeper@<pg> admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <T tree>/src postgresql://keeper@<pg> admin migrate
+schema up to date
+rc=0
+schema_version|4
+item_reopened_events|0
+$ pgc <T tree>/src postgresql://keeper@<pg> admin snapshot-keygen --private <scratch>/scratch/sign.key --public <scratch>/scratch/sign.pub
+key pair written: private <scratch>/scratch/sign.key (0600), public <scratch>/scratch/sign.pub
+rc=0
+add-principal reh-router role=router rc=0
+add-principal reh-l1 role=l1 rc=0
+add-principal reh-worker role=worker rc=0
+# counts before (after principals; principals/audit not counted)
+events|7006 items|1808 evidence|1137 edges|2649 
+# daemon (T) as keeper_rt on 127.0.0.1:<port>
+# daemon environ: PYTHONPATH=<T tree>/src
+health http=200
+snapshot http=200
+
+## s3: T daemon as keeper_rt: new verbs + gates
+# counts before (after principals; principals/audit not counted)
+events|7006 items|1808 evidence|1137 edges|2649 
+# daemon (T) as keeper_rt on 127.0.0.1:<port>
+# daemon environ: PYTHONPATH=<T tree>/src
+health http=200
+snapshot http=200
+# setup: goal + lanes as router
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "G", "title": "t G", "kind": "goal", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["any"], "operator": false}]}
+http=200
+{"created": ["rehs:G"], "warnings": ["description missing: brief will be empty"]}
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "A", "title": "t A", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:A", "rehs:B", "rehs:C"], "attached": [{"key": "rehs:A", "under": "rehs:G"}, {"key": "rehs:B", "under": "rehs:G"}, {"key": "rehs:C", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#40) create-with-edge: under=rehs:G
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "N", "title": "t N", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:N"], "attached": [{"key": "rehs:N", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#43) deps ops: add_dep / remove_dep via apply_ops
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "remove_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=403
+{"error": "forbidden", "msg": "role 'worker' may not do this"}
+# (#42) estimate_src edit
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_h": 5, "estimate_src": "plan"}}
+http=200
+{"key": "rehs:B"}
+# (#44) guard key: credential-shaped estimate_src refused, message names key + field, no value echo
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_src": "login user/secret12345"}}
+http=400
+{"error": "validation", "msg": "rehs:B: estimate_src looks like it contains a credential at chars 6-22 (us*** (len 16)) ; remove it"}
+# (#39) reopen: l1 claims A, evidence, submit -> in_review; router reopens
+$ POST /v1/claim {"key": "rehs:A"}
+http=200
+{"key": "rehs:A", "epoch": 1, "lease_until": "2026-10-17T00:45:18Z"}
+$ POST /v1/add_evidence {"key": "rehs:A", "epoch": 1, "kind": "decision", "ref": {"id": "D-900"}}
+http=200
+{"key": "rehs:A", "kind": "decision", "verified": true, "detail": "decision D-900 is recorded", "ref": {"id": "D-900"}}
+$ POST /v1/submit {"key": "rehs:A", "epoch": 1}
+http=200
+{"key": "rehs:A", "epoch": 1, "round": 1, "state": "in_review"}
+$ POST /v1/reopen {"key": "rehs:A", "decision_id": "D-900", "reason": "rehearsal"}
+http=403
+{"error": "forbidden", "msg": "role 'l1' may not do this"}
+$ POST /v1/reopen {"key": "rehs:A", "decision_id": "D-900", "reason": "rehearsal reopen"}
+http=200
+{"key": "rehs:A", "state": "claimed", "epoch": 2, "claimed_by": "reh-l1", "lease_until": "2026-10-17T00:45:18Z"}
+$ POST /v1/submit {"key": "rehs:A", "epoch": 1}
+http=409
+{"error": "epoch_stale", "msg": "epoch 1 != current 2"}
+DRIVER OK
+driver rc=0
+$ pgc <T tree>/src postgresql://keeper_rt@<pg> admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <T tree>/src postgresql://keeper_rt@<pg> admin verify-snapshot
+snapshot signature ok
+rc=0
+# new events by type:
+claimed|1 evidence_added|1 item_created|5 item_defined|7 item_reopened|1 submitted|1 
+# counts after
+events|7022 items|1813 evidence|1138 edges|2653 
+# original items untouched: 1808 
+daemon stopped
+
+## s4: rollback window (A) and roll-forward-only (B)
+# old tree: 3fd91bd6  T: 102e4885
+# A. rollback window: fresh restore of live dump into db keeper2
+CREATE DATABASE
+# T daemon on keeper2, all new verbs except reopen
+# setup: goal + lanes as router
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "G", "title": "t G", "kind": "goal", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["any"], "operator": false}]}
+http=200
+{"created": ["rehs:G"], "warnings": ["description missing: brief will be empty"]}
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "A", "title": "t A", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:A", "rehs:B", "rehs:C"], "attached": [{"key": "rehs:A", "under": "rehs:G"}, {"key": "rehs:B", "under": "rehs:G"}, {"key": "rehs:C", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#40) create-with-edge: under=rehs:G
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "N", "title": "t N", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:N"], "attached": [{"key": "rehs:N", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#43) deps ops: add_dep / remove_dep via apply_ops
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "remove_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=403
+{"error": "forbidden", "msg": "role 'worker' may not do this"}
+# (#42) estimate_src edit
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_h": 5, "estimate_src": "plan"}}
+http=200
+{"key": "rehs:B"}
+# (#44) guard key: credential-shaped estimate_src refused, message names key + field, no value echo
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_src": "login user/secret12345"}}
+http=400
+{"error": "validation", "msg": "rehs:B: estimate_src looks like it contains a credential at chars 6-22 (us*** (len 16)) ; remove it"}
+# (#39) reopen: l1 claims A, evidence, submit -> in_review; router reopens
+$ POST /v1/claim {"key": "rehs:A"}
+http=200
+{"key": "rehs:A", "epoch": 1, "lease_until": "2026-10-17T00:45:58Z"}
+$ POST /v1/add_evidence {"key": "rehs:A", "epoch": 1, "kind": "decision", "ref": {"id": "D-900"}}
+http=200
+{"key": "rehs:A", "kind": "decision", "verified": true, "detail": "decision D-900 is recorded", "ref": {"id": "D-900"}}
+$ POST /v1/submit {"key": "rehs:A", "epoch": 1}
+http=200
+{"key": "rehs:A", "epoch": 1, "round": 1, "state": "in_review"}
+DRIVER OK (no reopen: rollback-window copy)
+item_reopened_events|0
+events|7021
+# rollback to 3fd91bd6 on keeper2 (valid: no item_reopened)
+$ pgc[OLD] keeper2 admin verify
+chain and cache integrity ok
+rc=0
+$ pgc[OLD] keeper2 admin verify-snapshot
+snapshot signature ok
+rc=0
+# old daemon environ: PYTHONPATH=<old tree>/src
+old health http=200
+old whoami http=200
+old snapshot http=200
+old reopen route (absent expected 404) http=404
+old write (set_priority) http=200
+$ pgc[OLD] keeper2 admin verify
+chain and cache integrity ok
+rc=0
+$ pgc[T] keeper2 admin verify
+chain and cache integrity ok
+rc=0
+# B. roll-forward-only: db keeper (has item_reopened from s3 run): 3fd91bd6 verify
+item_reopened_events|1
+$ pgc[OLD] keeper admin verify
+4 problem(s)
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'state', 'expected': 'in_review', 'got': 'claimed'}
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'epoch', 'expected': 1, 'got': 2}
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'round', 'expected': 1, 'got': 0}
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'lease_until', 'expected': None, 'got': '2026-10-17T00:45:18Z'}
+rc=2
+$ pgc[OLD] keeper admin verify-snapshot
+snapshot signature ok
+rc=0
+# old daemon on the reopened db: start + snapshot + whoami + claimed item read
+old health http=200
+rehs:A | t A
+state claimed | kind lane | track T0 | prio 0 | epoch 2
+claimed_by reh-l1 | delegate - | lease 2026-10-17T00:45:18Z | reviewer -
+deps -
+unblocks rehs:G
+evidence decision✓
+done c
+reviews - http=200
+old snapshot http=200
+# old daemon log tail (reopened db):
+# T verify on reopened db still ok:
+$ pgc[T] keeper admin verify
+chain and cache integrity ok
+rc=0

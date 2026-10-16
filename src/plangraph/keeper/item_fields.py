@@ -155,13 +155,13 @@ def is_control(c):
     return ord(c) < 32 or 127 <= ord(c) < 160 or unicodedata.category(c) in ("Cf", "Zl", "Zp")
 
 
-def _choice_text(name, value, cap, where):
+def _choice_text(name, value, cap, where, key=None):
     if not isinstance(value, str) or not value.strip() or len(value) > cap:
         raise Refused("validation", f"{where}choices {name} must be 1-{cap} characters")
     if any(is_control(c) for c in value):
         raise Refused("validation", f"{where}choices {name} must not contain control characters")
     from .credential_guard import guard
-    guard(f"choices {name}", value)
+    guard(f"choices {name}", value, key)
     return value.strip()
 
 
@@ -200,11 +200,12 @@ def check_choices(value, kind, key=None):
             raise Refused("validation", f"{where}choices option id must be unique [a-z0-9-]+")
         seen.add(oid)
         from .credential_guard import guard
-        guard("choices option id", oid)
-        entry = {"id": oid, "label": _choice_text("label", opt.get("label"), LABEL_CAP, where)}
+        guard("choices option id", oid, key)
+        entry = {"id": oid, "label": _choice_text("label", opt.get("label"), LABEL_CAP,
+                                                  where, key)}
         if opt.get("consequence") is not None:
             entry["consequence"] = _choice_text("consequence", opt["consequence"],
-                                                CONSEQUENCE_CAP, where)
+                                                CONSEQUENCE_CAP, where, key)
         out["options"].append(entry)
     default = value.get("default")
     if default is not None and (not isinstance(default, str) or default not in seen):
@@ -221,7 +222,7 @@ def check_choices(value, kind, key=None):
             raise Refused("validation", f"{where}choices deadline is not a date") from exc
     out["deadline"] = deadline
     if value.get("blocks") is not None:
-        out["blocks"] = _choice_text("blocks", value["blocks"], BLOCKS_CAP, where)
+        out["blocks"] = _choice_text("blocks", value["blocks"], BLOCKS_CAP, where, key)
     if not out["options"] and out["default"] is None and out["deadline"] is None \
             and out["blocks"] is None:
         return None

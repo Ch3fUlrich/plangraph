@@ -64,7 +64,7 @@ def _load_list(value):
     return parsed if isinstance(parsed, list) else []
 
 
-def _text(name, value, required=False, cap=_TEXT_CAP):
+def _text(name, value, required=False, cap=_TEXT_CAP, key=None):
     if value is None:
         if required:
             raise Refused("validation", f"{name} is required")
@@ -74,11 +74,11 @@ def _text(name, value, required=False, cap=_TEXT_CAP):
                       if required else f"{name} must be a string or null")
     if len(value) > cap:
         raise Refused("validation", f"{name} exceeds {cap} characters")
-    guard(name, value)
+    guard(name, value, key)
     return value
 
 
-def _str_list(name, value, allowed=None):
+def _str_list(name, value, allowed=None, key=None):
     if value is None:
         return []
     if not isinstance(value, (list, tuple)) or len(value) > _LIST_CAP:
@@ -91,7 +91,7 @@ def _str_list(name, value, allowed=None):
         if allowed is not None and entry not in allowed:
             raise Refused("validation", f"{name} entry {entry!r} is not one of"
                           f" {list(allowed)}")
-        guard(name, entry)
+        guard(name, entry, key)
         if entry not in out:
             out.append(entry)
     return out
@@ -155,15 +155,16 @@ class CardsMixin:
         if window is not None and window not in WINDOW_CLASSES:
             raise Refused("validation", f"window_class must be one of {list(WINDOW_CLASSES)}")
         values = {
-            "outcome": _text("outcome", card.get("outcome"), required=True),
-            "check_cmd": _text("check_cmd", card.get("check_cmd")),
-            "heldout_check": _text("heldout_check", card.get("heldout_check")),
+            "outcome": _text("outcome", card.get("outcome"), required=True, key=key),
+            "check_cmd": _text("check_cmd", card.get("check_cmd"), key=key),
+            "heldout_check": _text("heldout_check", card.get("heldout_check"), key=key),
             "window_class": window,
-            "risk_tags": _dump(_str_list("risk_tags", card.get("risk_tags"), RISK_TAGS)),
+            "risk_tags": _dump(_str_list("risk_tags", card.get("risk_tags"),
+                                         RISK_TAGS, key=key)),
             "estimate_tokens": _count("estimate_tokens", card.get("estimate_tokens")),
         }
         for name in _CARD_LISTS:
-            values[name] = _dump(_str_list(name, card.get(name)))
+            values[name] = _dump(_str_list(name, card.get(name), key=key))
         with self._write():
             item = self._get_or_refuse(key)
             self._may_write_for(principal, item["project"])
@@ -214,7 +215,8 @@ class CardsMixin:
         ended = self._iso_or_none("ended_at", attempt.get("ended_at"))
         if started and ended and self._parse_iso(ended) < self._parse_iso(started):
             raise Refused("validation", "ended_at is before started_at")
-        text = {name: _text(name, attempt.get(name), cap=512) for name in _ATTEMPT_TEXT}
+        text = {name: _text(name, attempt.get(name), cap=512, key=key)
+                for name in _ATTEMPT_TEXT}
         tokens_in = _count("tokens_in", attempt.get("tokens_in"))
         tokens_out = _count("tokens_out", attempt.get("tokens_out"))
         cost = _number("cost", attempt.get("cost"))
@@ -275,11 +277,11 @@ class CardsMixin:
     def _ask_question(self, principal, key, text, default_answer, deadline, risk_tags,
                       now):
         self._require_role(principal, "router", "l1", "worker", "spawner", "system")
-        body = _text("text", text, required=True)
-        default = _text("default_answer", default_answer)
+        body = _text("text", text, required=True, key=key)
+        default = _text("default_answer", default_answer, key=key)
         if default is not None and not default.strip():
             raise Refused("validation", "default_answer must not be blank")
-        tags = _str_list("risk_tags", risk_tags, QUESTION_TAGS)
+        tags = _str_list("risk_tags", risk_tags, QUESTION_TAGS, key=key)
         if default is not None and NO_DEFAULT_TAGS.intersection(tags):
             raise Refused("validation",
                           "a risk-tagged question (auth, secrets, money, live-step,"
@@ -387,7 +389,7 @@ class CardsMixin:
             raise Refused("validation",
                           f"state must be one of {list(SETTABLE_STATES)}; claim, review,"
                           " done and cancel have their own verbs")
-        why = _text("reason", reason or "", cap=500)
+        why = _text("reason", reason or "", cap=500, key=key)
         with self._write():
             item = self._get_or_refuse(key)
             self._may_write_for(principal, item["project"])
