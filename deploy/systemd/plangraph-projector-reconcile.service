@@ -1,0 +1,12 @@
+[Unit]
+Description=plangraph projector: nightly reconcile of open Temporal workflows vs keeper state (writes projector_alarms)
+After=network-online.target plangraph-keeper.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/proposal/src
+EnvironmentFile=-%h/.config/plangraph/projector.env
+ExecStart=/usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json reconcile
+TimeoutStartSec=15min
+# exit 0 even when alarms were raised (they are rows in projector_alarms); non-zero only on a runtime/config failure.
