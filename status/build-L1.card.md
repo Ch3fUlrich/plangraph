@@ -3,19 +3,18 @@ Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-b
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
-## Main = cf9fc7b (CI on workst runner since #17 5188310)
+## Main = 69a47cd (CI on workst runner since #17 5188310)
 DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
 RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ),
 RT-P1-INBOX-CODE (PR #18 b5f45c9; router evidence commit 68a9180, kinds->[commit]; openai seat inbox-seats/r2-1cb7acc),
 RT-P1-WORKER-CODE (PR #13 merged main 66d87fe, head dd954e7 CI attempt-1 green; early-cancel hole fixed; openai = gpt-oss delta seat
 worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/verdict-alibaba + adjudication-alibaba.md),
-PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
+WORKER-PROJ-V1 (PR #20 69a47cd; worker-proj-seats), PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
 
 ## Open
 | Item | State | Next |
 |---|---|---|
-| RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
-| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | FIX #2: qwen on d5e676a TEST-GAMING yes (verified: KEY_PEM lacks SECRET-KEY-MARKER; L2 report overclaimed); openai PASS (seats/tls-d5e676a 7c1536b) | L2 fixes -> re-seat -> merge --merge; raise item: main flake activities.rs:484 f64 ulp; DONE note: rust/worker too, gRPC round trip = TEMPORAL-CHECK manual |
+| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | FIX #2: qwen on d5e676a TEST-GAMING yes (verified: KEY_PEM lacks SECRET-KEY-MARKER; L2 report overclaimed); openai PASS (seats/tls-d5e676a 7c1536b) | L2 fixes -> re-seat -> merge --merge; DONE note: rust/worker too, gRPC round trip = TEMPORAL-CHECK manual |
 | KEEPER-CI-CONCLUSIONS (D-1403 prio1 HIGH) | L2 build-L2-ci-conclusions running (workst, session_014goniaGUn8x6JJ3PLrrGrJ, D-1404) | brief briefs/l2-keeper-ci-conclusions.md; judge server-L1-routing; after merge: D-915 keeper restart, tell workst-L1-autoos re-add CI-WORKST-RUNNER evidence |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
