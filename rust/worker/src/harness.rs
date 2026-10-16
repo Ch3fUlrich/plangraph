@@ -296,6 +296,11 @@ fn version_matches(output: &str, want: &str) -> bool {
         .any(|t| t.trim_start_matches('v') == want)
 }
 
+/// True for "Text file busy" (ETXTBSY) from a spawn.
+fn is_text_busy(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::ExecutableFileBusy || e.raw_os_error() == Some(26)
+}
+
 /// Fail closed on a version drift: for every pinned name run `<bin> --version`
 /// and require the pinned version. A pinned harness that is not registered, has
 /// no binary, cannot run or reports another version is an error. Harnesses
@@ -306,14 +311,26 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
             .get(name)
             .and_then(|h| h.binary().map(str::to_string))
             .ok_or_else(|| PinError::Unavailable(name.clone()))?;
-        let mut cmd = Command::new(&bin);
-        cmd.arg("--version").stdin(Stdio::null());
         let opts = Opts {
             timeout: Some(std::time::Duration::from_secs(15)),
             grace: std::time::Duration::from_secs(1),
             ..Opts::default()
         };
-        let r = pg_worker_core::stall::supervise(cmd, &opts).map_err(|e| PinError::Unrunnable {
+        // A sibling thread forking while the binary was just written can make
+        // exec fail with ETXTBSY (os error 26); that clears in milliseconds.
+        let mut tries = 0;
+        let r = loop {
+            let mut cmd = Command::new(&bin);
+            cmd.arg("--version").stdin(Stdio::null());
+            match pg_worker_core::stall::supervise(cmd, &opts) {
+                Err(e) if is_text_busy(&e) && tries < 5 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                other => break other,
+            }
+        }
+        .map_err(|e| PinError::Unrunnable {
             name: name.clone(),
             why: e.to_string(),
         })?;
@@ -679,8 +696,18 @@ mod tests {
     fn fake_bin(dir: &Path, name: &str, out: &str, code: i32) -> String {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\necho '{out}'\nexit {code}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Write under a temp name, flush and close, then rename into place, so
+        // no open write fd on the final path can meet a concurrent fork+exec.
+        let tmp = dir.join(format!(".{name}.tmp"));
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(format!("#!/bin/sh\necho '{out}'\nexit {code}\n").as_bytes())
+                .unwrap();
+            f.sync_all().unwrap();
+        }
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::rename(&tmp, &p).unwrap();
         p.to_string_lossy().into_owned()
     }
 
