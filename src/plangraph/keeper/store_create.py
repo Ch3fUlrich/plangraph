@@ -90,7 +90,7 @@ class CreateMixin:
         unknown = {name: raw[name] for name in raw
                    if name not in KNOWN_ITEM_FIELDS}
         for name, value in unknown.items():
-            guard(name, value)
+            guard(name, value, key)
         return fold_checked(raw.get("note"), unknown, key) if unknown \
             else raw.get("note")
 
@@ -322,7 +322,7 @@ class CreateMixin:
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
         edit_fields = dict(rest)
-        self._check_text(edit_fields)
+        self._check_text(edit_fields, key)
         check_model_fields(edit_fields, item["kind"], key)
         if "review_tier" in edit_fields:
             validated_review_tier(edit_fields["review_tier"])

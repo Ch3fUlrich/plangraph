@@ -24,10 +24,13 @@ class InputMixin:
     """``_check_text``, ``_normalise`` and ``_qualify`` for :class:`Store`."""
 
     @staticmethod
-    def _check_text(fields):
-        """Refuse oversize, non-string or credential-shaped text, naming the field."""
+    def _check_text(fields, key=None):
+        """Refuse oversize, non-string or credential-shaped text, naming the field.
+
+        *key* (when known) prefixes a credential refusal so a batch can tell
+        which item failed (PL-33)."""
         for field in GUARDED_FIELDS:
-            guard(field, fields.get(field))
+            guard(field, fields.get(field), key)
         for field, cap in _TEXT_CAPS.items():
             value = fields.get(field)
             if value is None:
@@ -42,12 +45,14 @@ class InputMixin:
             check_wait(fields["wait"])
 
     def _normalise(self, raw):
-        self._check_text(raw)
         project = raw.get("project")
         identifier = raw.get("id")
+        # The item key is known before any check: name it in a credential
+        # refusal so a batch of 40 items says which one failed (PL-33).
+        key = f"{project}:{identifier}" if project and identifier else None
+        self._check_text(raw, key)
         if not project or not identifier:
             raise Refused("validation", "each item needs project and id")
-        key = f"{project}:{identifier}"
         if raw.get("key") and raw["key"] != key:
             raise Refused("validation", f"key {raw['key']!r} != {key!r}")
         raw_deps = raw.get("depends_on") or []
