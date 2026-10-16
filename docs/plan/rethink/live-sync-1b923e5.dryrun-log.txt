@@ -12,10 +12,10 @@ changelog rc=2 bytes=117
 audit-meta rc=0 bytes=13784
 snapshot rc=0 bytes=72
 aliases rc=0 bytes=511
-rc=2 pg.sh define --file /home/s/code/plangraph-worktrees/.sessions/live-sync/item.json
+rc=2 pg.sh define --file item.json
 rc=2 pg.sh show plangraph:LIVESYNC-DRY
 rc=0 pg.sh changelog --since 0
-rc=0 pg.sh render --out /home/s/code/plangraph-worktrees/.sessions/live-sync/render.html
+rc=0 pg.sh render --out render.html
 rc=2 pg.sh priority plangraph:LIVESYNC-DRY 5
 rc=0 pg.sh whoami
 rc=2 pg.sh claim plangraph:LIVESYNC-DRY --lease 1h
@@ -41,10 +41,10 @@ rc=0 pg.sh admin verify
 rc=1 pg.sh admin verify-snapshot
 rc=0 pg.sh snapshot
 --- run2
-rc=0 pg.sh define --file /home/s/code/plangraph-worktrees/.sessions/live-sync/item.json
+rc=0 pg.sh define --file item.json
 rc=0 pg.sh show plangraph:LIVESYNC-DRY
 rc=0 pg.sh changelog --since 0
-rc=0 pg.sh render --out /home/s/code/plangraph-worktrees/.sessions/live-sync/render.html
+rc=0 pg.sh render --out render.html
 rc=0 pg.sh priority plangraph:LIVESYNC-DRY 5
 rc=0 pg.sh whoami
 rc=0 pg.sh claim plangraph:LIVESYNC-DRY --lease 1h
@@ -55,7 +55,7 @@ rc=0 pg.sh admin verify
 rc=0 pg.sh admin verify-snapshot
 rc=0 pg.sh snapshot
 rc=2 admin verify-anchor
-rc=0 admin prune-backups --dir /home/s/code/plangraph-worktrees/.sessions/live-sync
+rc=0 admin prune-backups --dir live-sync
 rc=0 admin migrate
 rc=0 admin export --help
 rc=0 replay
