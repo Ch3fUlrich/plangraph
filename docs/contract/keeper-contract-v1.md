@@ -89,7 +89,7 @@ Malformed client input must never produce `500`.
 
 | verb | who may call it |
 | --- | --- |
-| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default) |
+| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default, no cross-project `under`) |
 | `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
 | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
 | `claim` | l1 or worker scoped to the item's project |
@@ -132,6 +132,19 @@ plus derived `created_at`, `done_at`, `reviewed`, `merged`.
 * `kind`: `lane`, `gate`, `goal`, `question`, `decision`, `operator_task`.
   The last three wait on the operator. Unknown extra fields on create are
   folded into `note`.
+* `under` (create-only, optional): the key of an **existing** gate/goal item.
+  `create_items` creates the item and, in the same transaction, the edge
+  `gate -> new` (`gate.depends_on` new), so the new item reaches a goal without
+  a later edit; the response gains `attached: [{key, under}]` and the gate gets
+  one `item_defined {fields: ["depends_on"]}` event plus an `updated_at` touch.
+  The gate must exist (`not_found` — a key created earlier in the same batch
+  does not), the caller must manage its project (`forbidden`), a non-router only
+  attaches inside the new item's own project (`forbidden`), and a `done` /
+  `cancelled` gate is `bad_state`. The candidate graph (the gate with the new
+  item among its dependencies) is validated before any write, so a cycle or an
+  unreachable item is refused atomically and nothing is created. `under` is
+  refused by `import_items` and is not an `edit_definition` field
+  (`validation`); it is a known field, so it never folds into `note`.
 * `review_tier`: `standard` (default; `high` when the id, title or track
   contains a risky word or the project is `plangraph`), `high`, `none`.
 * `evidence_kinds`: subset of `decision`, `commit+ci`, `run-record`,
@@ -233,7 +246,9 @@ Every state change appends exactly one record per effect to an append-only log.
   `outage_recorded`, `review_withdrawn`, `kind_set`, `item_reopened`, `heartbeat` (reserved).
 
 Events per successful verb: `create_items`/`import_items` one `item_created`
-per item (legacy imports with state `claimed`/`in_review` add `claimed`
+per item (a `create_items` item with `under` adds one `item_defined`
+`{fields: ["depends_on"]}` on the gate, in the same transaction; legacy imports
+with state `claimed`/`in_review` add `claimed`
 (+`submitted`)); `edit_definition` one `item_defined` (+`priority_set` if it
 carried `priority`); `set_priority` `priority_set`; `claim` `claimed`;
 `delegate` `delegated`; **`heartbeat` none**; `release` `released`;
