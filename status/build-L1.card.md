@@ -10,7 +10,7 @@ RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-C
 ## Open
 | Item | State | Next |
 |---|---|---|
-| RT-P1-WORKER-CODE (HIGH) | claimed; PR #13 bff8725 CI ✓ workst | GO sent 03:3xZ to build-L2-worker-code: qwen delta seat on 37d4a2b..22922ec -> MERGE-READY; L1 spot-check, merge, evidence, 2 verdicts (openai seat worker-code-seats/openai-37d4a2b) |
+| RT-P1-WORKER-CODE (HIGH) | claimed; PR #13 bff8725 HOLD | qwen delta seat pass (worker-code-seats/qwen-delta-22922ec, sha ok). HOLD 03:4xZ: rust-worker attempt 1 failed e2e cancel 25s timeout (job 116791673094) -> suspected early-cancel race (signal before attempt starts = V11 again). L2 to verify workflow.rs, add 0s/pending-cancel e2e, poll instead of 2s settle, attempt-1 green. Then merge + 2 verdicts (openai worker-code-seats/openai-37d4a2b) |
 | RT-P1-INBOX-CODE | claimed; PR #18 0596fec CI red (billing, pre-#17) | GO sent: merge main 7ec2bb5 (Migration 4), push -> workst CI -> MERGE-READY |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d); claim+evidence once workst-L1-autoos closes CI-WORKST-RUNNER |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
