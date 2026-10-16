@@ -1,42 +1,37 @@
-CARD: /home/s/code/plangraph-worktrees/build-L1/docs/build-L1-handoff.card.md (read this first; D-1377)
-# build-L1 handoff #4 — 2026-10-15 ~21:10Z (gen-4 5fadc0, context cap 230k)
+CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
+# build-L1 handoff #5 — 2026-10-16 ~04:05Z (gen-5 5fadc0, ctx cap 230k)
 
-Read first: brief `/home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md`, design (binding, 14a)
-`/home/s/code/routing-worktrees/rethink-setup/docs/reports/2026-10-15-rethink-setup-design.md` (§2-4, 11, 14a), card `status/build-L1.card.md`
-(state log + FOR ROUTER + FOR OPERATOR), this file, operator answers `docs/plan/rethink/build-operator-rounds.md` (all binding). Control branch = `build-L1` (never merged).
-Startup: skill unattended-orchestration + main-orchestrator.md, SKILL-READ reply. NO crons (D-1377): wait via one background command that exits. No ALIVE/acks/status chatter; messages only BLOCKED, DONE/MERGE-READY+sha, GO, incident, launch/recycle; max one batched message per beat. L2s get no beat cron.
+Read first: brief /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md, card above, operator rounds
+docs/plan/rethink/build-operator-rounds.md, L2 rules docs/plan/rethink/briefs/l2-rules-common.md (incl. D-1380, D-1390, PR-head trailer).
+Startup: skill unattended-orchestration (+ references/main-orchestrator.md); heartbeat claimed leases FIRST (`ops/pg.sh heartbeat plangraph:<KEY>`).
+Rules: D-1377 no crons (wait = one background cmd that exits); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch;
+D-1390 effort MEDIUM (successor runs at medium; every L2-LAUNCH says "sonnet medium"); D-935 defaults logged in card FOR OPERATOR. Output caveman.
+Router (routing) is ACTIVE. Operator was present 03:2x-04:0xZ (asked for a progress report + CI speed proposal).
 
-## Situation at handoff
-- Router PAUSED (D-1374) until ~04:10Z: do NOT message routing; queue launch/recycle/item edits in card "FOR ROUTER".
-- Operator away until ~04:4xZ: NO AskUserQuestion; decide reversible questions with the default (D-935), log in card "FOR OPERATOR".
-- Spawner admission floor 4608 MB still refuses L3 on coding.vm (MemAvail ~4.3-4.5 GB; D-1352 1 GB floor pending at fixes-L1) -> leftover
-  closed tasks ran as in-session Sonnet subagents (recorded fallback). Writer leg 1 = `omniroute/mimo-v2.6-flash` (MIMO-FIXED: live OmniRoute combos
-  pin mimo-v2.6-flash/pro to the mimo provider, evidence /home/s/seat-evidence/mimo-combos-d1375/); deepinfra removed (operator).
+## State
+- main 66d87fe. All 7 RT-P1 *-CODE lanes done in the keeper (+ CI-PARALLEL). PRs #8 #11-#18 merged.
+- Claimed by build-L1 (leases ~05:40-05:53Z; background heartbeat job may have died with this session -> renew FIRST):
+  plangraph:RT-P1-WORKER-PROJ-V1 (HIGH; L2 = build-L2-worker-code reused, workstation), plangraph:PROJECTOR-RECONCILE-SCHED
+  (L2 build-L2-reconcile, workstation; branch lane/projector-reconcile-sched pushed), plangraph:RT-P1-TEMPORAL-SPIKE-TLS (prio 1, gates
+  server:RT-P1-TEMPORAL-CHECK; L2 build-L2-temporal-tls via workst-L1-autoos; scope = spike + rust/worker mTLS — record "and rust/worker
+  binary" in DONE note/evidence, router could not edit criteria while claimed).
+- CI-RUNS-ON-WORKST: open, blocked on autoos:CI-WORKST-RUNNER; label switch to [self-hosted, fleet-ci] is fixes-L2-cipool's (D-1390).
+- Deploy chain (KEEPER-PG, WORKER, PROJECTOR, PLANNER-KIT, INBOX, REVIEW, E2E) gates on server:RT-P1-PG-DEPLOY + TEMPORAL-CHECK
+  (server-L1-main; PG + Temporal move to cloud.vm D-1386, cloud.vm being started D-1388). GOVERNOR also needs routing:RT-P0-BASELINE.
+- AO-DEEPINFRA-REMOVE: send L2-LAUNCH build-L2-deepinfra (sonnet medium) when fixes-L1 merges priv-writers; brief briefs/l2-deepinfra-remove.md.
+- CI speed proposal sent 04:0xZ to routing (+ FYI fixes-L2-cipool, workst-L1-autoos): docs/plan/rethink/research/2026-10-16-ci-speed-proposal.md.
+  Await routing GO/items; nothing for build-L1 to build there.
 
-## Merged today (main 2a7733e)
-PR #8 W1+W2 (1779d2d), PR #14 W3 copy-to-pg (3495f09), PR #11 CI-PARALLEL (2a7733e, CI 38804468942 both ✓).
+## Judge protocol (what worked this gen)
+MERGE-READY -> CI both jobs green on PR head (attempt 1) + head trailer `Plan-Item: plangraph:<KEY>` -> seats present (copy job-tmp seat dirs
+to durable plangraph-worktrees/<lane>-seats/) -> spot-check diff vs brief -> `gh pr ready N && gh pr merge N --merge --match-head-commit SHA`
+-> `ops/pg.sh evidence KEY --kind commit+ci --commit <head sha>` -> submit -> verdicts:
+`python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family anthropic --token-dir ~/.config/plangraph`
+(HIGH = openai + alibaba). Qwen/qodercli out.json -> seat dir via `python3 ops/qseat.py OUT [--adjudication ADJ] part.json...`.
+Trap: kind `commit` = router-only; a merge-commit head without trailer -> router add_evidence_router + evidence_kinds edit (INBOX case).
+Lesson: a CI flake on the code path a fix touched = suspect the fix (WORKER early-cancel hole was real).
 
-## Items
-| Key | State | Next |
-|---|---|---|
-| RT-P1-KEEPER-PG-CODE (HIGH) | claimed; all code merged | final seats dir `/home/s/code/plangraph-worktrees/keeper-pg-seats/final-221e9b2/` (adjudication.md): gpt-oss 6/6 valid (P6 fix REFUTED), qwen 5/6 valid (P1/P4 fix REFUTED), qwen P5 rerun was running (Sonnet subagent) — read adjudication.md; if P5 valid+pass/refuted -> evidence + submit + 2 verdicts (`seat_verdict.py`). keeper-pg L2 retired (successor f59247 told to stand down; its handoff marked SUPERSEDED). |
-| CI-PARALLEL | claimed; merged | evidence: `pg evidence --kind commit` is router-only ("use add_evidence_router"), `--kind ci` unknown -> find the right kinds (CLI help / docs/KEEPER.md / how CONTRACT was closed), trailer commit 824b63f (Plan-Item: plangraph:CI-PARALLEL), CI run 38804468942; seat /home/s/code/plangraph/out/seat-ci-parallel-e91a415 (gpt-oss pass). |
-| RT-P1-WORKER-CODE (HIGH) | claimed; PR #13 37d4a2b CI 4/4 ✓ | L2 build-L2-worker-code (workstation bridge session_01HYhk6BmNF9o65Z6McuQxJE) HOLDS head. qwen r2 seat verified: /home/s/code/plangraph-worktrees/worker-code-seats/qwen-37d4a2b (pass/fix-minor accepted/pass). openai seat running (Sonnet subagent) -> /home/s/code/plangraph-worktrees/worker-code-seats/openai-37d4a2b/adjudication.md. If no CONFIRMED HIGH: mark ready + merge #13 (`--match-head-commit`), then evidence/submit. Writers used paid deepseek via omniroute (noted FOR OPERATOR). |
-| RT-P1-REVIEW-CODE | claimed; PR #12 98d6f8e CI ✓ | L2 build-L2-review-code: asked to add verdict.py <-> tools/seat_verdict.py parity test + fix (fenced/backtick last VERDICT line), drop inline json alias; then MERGE-READY. Seat qwen pass /home/s/code/plangraph-worktrees/review-code-seats/qwen1. Check #12 mergeable after main moved. |
-| RT-P1-PROJECTOR-CODE (HIGH) | claimed | L2 build-L2-projector (19f2b154). Approved: Migration(3) + db.py hook; copy_to_pg TABLES += 3 projector tables. Was idle at 20:47 -> nudged. |
-| RT-P1-PLANNER-KIT-CODE | claimed | L2 build-L2-planner-kit (fa68f6c5). Migration 5 reserved; copy_to_pg TABLES pre-approved. |
-| RT-P1-INBOX-CODE | claimed | L2 build-L2-inbox (93ce361d). Migration 4 reserved; copy_to_pg TABLES pre-approved. |
-| AO-DEEPINFRA-REMOVE (autoos) | offloaded to build-L1 by fixes-L1 | brief briefs/l2-deepinfra-remove.md; launch only after fixes-L1 merges priv-writers (order maingreen -> ordrift -> priv-writers -> reviewcall-mimo -> deepinfra); L2-LAUNCH queued in FOR ROUTER; fixes-L1 merges. |
-| CI-RUNS-ON-WORKST | open | after autoos:CI-WORKST-RUNNER (workst-L1-autoos). |
-| server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1; D-1375 criteria edit (B2 optional) queued FOR ROUTER. |
-
-Leases: heartbeat all 7 claimed items each beat (`ops/pg.sh heartbeat plangraph:<KEY>`); last 20:47Z.
-
-## Tools (ops/ on this branch)
-- `ops/pg.sh` keeper CLI (token build-L1). Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family <fam> --token-dir ~/.config/plangraph`.
-- Seats: openai `ops/seat.sh ovh/gpt-oss-120b PROMPT OUTDIR TITLE`; qwen via qodercli ONLY (empty dir, first line "You have NO tools...", `timeout 900 qodercli -p --model Qwen3.8-Flash --tools "" --no-session-persistence -o json "$(cat P)"`). NEVER ovh Qwen. Append ops/tail.md. Max 4 seats fleet-wide.
-- Workstation files arrive via Taildrop: `tailscale file get <newdir>`, check sha256, extract.
-- Merge: `gh pr ready N && gh pr merge N --merge --match-head-commit <sha>` after CI both jobs + seats; migration numbers: projector 3, inbox 4, planner-kit 5 (lowest free at rebase).
-
-## L2 protocol
-Briefs: docs/plan/rethink/briefs/ (l2-rules-common.md binding, incl. D-1364 + writer legs). L2 report -> judge (CI, seat evidence, spot-check code) -> merge -> evidence -> submit -> seat_verdict -> `L2-DONE <name>` (to routing once unpaused).
+## Other
+- Control branch build-L1: stale tests.yml removed (7dd051b); commits there never trigger CI now.
+- Unused local worktree /home/s/code/plangraph-worktrees/reconcile-sched (my forced remove was permission-denied; leave or ask operator).
+- Card is 41-44 lines; trim to <=40 when next edited.

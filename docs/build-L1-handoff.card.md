@@ -1,4 +1,4 @@
-# build-L1 card — 2026-10-16 03:4xZ (gen-5 successor; see status/build-L1.card.md, it is current)
+# build-L1 card — 2026-10-16 ~04:05Z (gen-5 at ctx cap; handoff #5 = docs/build-L1-handoff.md; status/build-L1.card.md is current)
 Goal: rethink P1 bootstrap (plangraph RT-P1-*). Brief /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md; detail docs/build-L1-handoff.md + status/build-L1.card.md (log, FOR ROUTER, FOR OPERATOR); operator rounds docs/plan/rethink/build-operator-rounds.md (binding). Branch build-L1 (never merged).
 Rules: D-1377 NO crons (wait = one background cmd that exits); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults; output caveman.
 Start: skill unattended-orchestration + main-orchestrator.md -> SKILL-READ; heartbeat 7 leases (`ops/pg.sh heartbeat plangraph:<KEY>`) FIRST.
