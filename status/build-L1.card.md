@@ -14,7 +14,7 @@ worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/ve
 | Item | State | Next |
 |---|---|---|
 | RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
-| PROJECTOR-RECONCILE-SCHED | claimed (b05) | brief briefs/l2-projector-reconcile-sched.md; branch pushed @66d87fe; L2 on WORKSTATION via workst-L1-autoos (coding.vm MemAvail 3.1 GB; local worktree reconcile-sched unused) |
+| PROJECTOR-RECONCILE-SCHED | MERGE-READY PR #21 4e11857 (CI green on rerun; 1st red = live-Temporal test_ok_attempt flake, untouched file) | diff ok; seats seats/reconcile-4e11857 -> ../reconcile-seats refused by seat_verdict (openai review!=reply hash, no TEST-GAMING; qwen no served_model/finish) -> L2 rebuilding. Follow-up for router: Inbox has no projector_alarms reader |
 | RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | claimed 04:2xZ | gates server:RT-P1-TEMPORAL-CHECK; brief briefs/l2-temporal-tls.md (spike + rust/worker mTLS; router agreed, criteria edit refused while claimed -> record "and rust/worker binary" in DONE note + evidence); L2 routed to workst-L1-autoos |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
