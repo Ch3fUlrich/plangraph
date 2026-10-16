@@ -18,7 +18,7 @@ on:
 # CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
 # but never a workflow_dispatch run (timing measurements must finish).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -87,6 +87,10 @@ jobs:
           --health-retries 10
     env:
       PG_KEEPER_BACKEND: postgres
+      # per-route keeper latency table at the end of the run (tests/contract/conftest.py)
+      PG_CONTRACT_LATENCY_DIR: /tmp/pg-contract-latency
+      # root-cause hunt (CI-PG-CONTRACT-TIMEOUT): on a hung request dump the keeper's thread stacks
+      PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Python version for the venv cache key
@@ -145,5 +149,5 @@ jobs:
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
-          python -m pytest -q -n 8 --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+          python -m pytest -q -n 8 --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
             tests/test_projector_ddl.py $FILES
