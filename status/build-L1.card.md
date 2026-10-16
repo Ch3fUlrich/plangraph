@@ -16,6 +16,7 @@ PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; 
 |---|---|---|
 | RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
 | RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | FIXING: qwen seat on 3c87c67 = fix (V1 TLS vars + http:// unchecked; wrong-CA negative; key assert nit); openai PASS (seats/tls-3c87c67 8102011) | L2 fixes -> MERGE-READY new sha -> workst-L1-autoos re-seats both -> merge --merge; DONE note: rust/worker too, gRPC round trip = TEMPORAL-CHECK manual |
+| KEEPER-CI-CONCLUSIONS (D-1403 prio1 HIGH) | claimed 05:0xZ | brief briefs/l2-keeper-ci-conclusions.md; L2-LAUNCH asked (workst); judge server-L1-routing; after merge: D-915 keeper restart, tell workst-L1-autoos re-add CI-WORKST-RUNNER evidence |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
@@ -31,7 +32,6 @@ Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 04:03Z (gen-6). L2
 - Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph on workst runner; D-1380 local fallback.
 D-1380 local-CI fallback (l2-rules-common). D-1390: L2-LAUNCH "sonnet medium"; plangraph CI label -> [self-hosted, fleet-ci] by fixes-L2-cipool (covers CI-RUNS-ON-WORKST label part).
 
-D-1402 05:0xZ: keeper ci+=autoos, keeper restarted; commit+ci still false (skipped Windows check-run not green) -> routing decides verifier fix.
 ## FOR OPERATOR
 - Fix GitHub billing, or confirm workstation-only CI is final. Worker-code writers used paid deepseek via omniroute.
 - D-935 defaults (gen-5): KEEPER-PG verdicts recorded as per-family aggregates of 6-7 part seats; fix findings (gpt-oss g6, qwen q1/q4)
