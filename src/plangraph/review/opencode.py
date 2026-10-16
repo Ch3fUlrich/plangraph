@@ -20,6 +20,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from .qoder import RATE_LIMIT_PATTERN
 
@@ -44,9 +45,24 @@ def is_rate_limited(text: str | None) -> bool:
     return bool(_RATE_LIMIT.search(text or ""))
 
 
+def check_inputs(model: str, server_url: str | None) -> None:
+    """Reject a model/url that would parse as a flag, a url with userinfo, or a non-http(s) scheme."""
+    if not isinstance(model, str) or not model.strip() or model.lstrip().startswith("-"):
+        raise ValueError("unsafe opencode model %r" % (model,))
+    if server_url:
+        if server_url.lstrip().startswith("-"):
+            raise ValueError("unsafe opencode server url (starts with '-')")
+        parts = urlsplit(server_url.strip())
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("opencode server url must be http(s) with a host")
+        if "@" in parts.netloc or parts.username or parts.password:
+            raise ValueError("opencode server url must not carry userinfo")
+
+
 def argv(prompt: str, model: str = DEFAULT_MODEL, server_url: str | None = None,
          binary: str = "opencode") -> list[str]:
-    """CLI argv for one call (no shell)."""
+    """CLI argv for one call (no shell); ValueError for an unsafe model or server url."""
+    check_inputs(model, server_url)
     cmd = [binary, "run", "-m", model]
     if server_url:
         cmd += ["--attach", server_url]
@@ -85,14 +101,16 @@ def run(prompt: str, *, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEO
     server = (source.get(SERVER_ENV_VAR) or "").strip()
     sha = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     started = _utc_now()
-    cmd = argv(prompt, model=model, server_url=server or None, binary=binary)
-
     def failed(reason: str, error: str, rc: int | None = None,
                stderr: str = "") -> OpencodeResult:
         return OpencodeResult(rc=rc, text="", finish_reason=reason, model=model,
                               prompt_sha256=sha, started=started,
                               finished=_utc_now(), error=error, stderr=stderr)
 
+    try:
+        cmd = argv(prompt, model=model, server_url=server or None, binary=binary)
+    except ValueError as exc:
+        return failed("error", str(exc))
     try:
         with tempfile.TemporaryDirectory() as tmp:
             done = runner(cmd, cwd=tmp, capture_output=True, text=True,

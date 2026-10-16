@@ -38,7 +38,7 @@ DEFAULT_MODEL = "Qwen3.8-Flash"
 DEFAULT_TIMEOUT = 900
 # A bare "429" is a port or a count; only a rate-limit phrase or an HTTP/status 429 counts.
 RATE_LIMIT_PATTERN = (r"rate[ _-]?limit|too many requests"
-                      r"|\bhttp[/ _-]*(?:status[ :=]*)?429\b|\bstatus(?: code)?[ :=]+429\b"
+                      r"|\bhttp(?:/\d(?:\.\d)?)?[ /_-]*(?:status[ :=]*)?429\b|\bstatus(?: code)?[ :=]+429\b"
                       r"|\b429[ :-]+too many")
 _RATE_LIMIT = re.compile(RATE_LIMIT_PATTERN, re.I)
 
@@ -202,17 +202,22 @@ def run(prompt: str, *, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEO
     finish = classify(parsed)
     limited = is_rate_limited(stderr) and (
         finish != "stop" or getattr(completed, "returncode", 0) not in (0, None))
+    rc = getattr(completed, "returncode", None)
+    error = "rate limit" if limited else None
+    if rc not in (0, None) and not limited:
+        # A non-zero exit means the reply may be partial or corrupt: incomplete, retriable.
+        finish, error = "error", "exit %s" % rc
     usage = parsed.get("usage") or None
     if isinstance(usage, dict) and not usage:
         usage = None
-    return QoderResult(rc=getattr(completed, "returncode", None),
+    return QoderResult(rc=rc,
                        text=parsed["text"],
                        finish_reason=finish,
                        num_turns=parsed["num_turns"],
                        is_error=parsed["is_error"], model=model,
                        prompt_sha256=sha, started=started,
                        finished=_utc_now(),
-                       error="rate limit" if limited else None,
+                       error=error,
                        usage=usage, rate_limited=limited)
 
 

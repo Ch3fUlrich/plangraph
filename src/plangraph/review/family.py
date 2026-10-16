@@ -11,6 +11,7 @@ from dataclasses import dataclass
 __all__ = [
     "FAMILIES",
     "HIGH_RISK",
+    "is_high_risk",
     "Leg",
     "LEGS",
     "FamilyError",
@@ -31,6 +32,19 @@ FAMILIES = (
 
 # Risk tags that need two reviewer families at phase end.
 HIGH_RISK = frozenset({"auth", "secrets", "live-step", "public-release", "high"})
+# A normalised tag containing any of these is high risk ("High-Risk", "live_step", "money-transfer").
+_HIGH_RISK_PARTS = ("auth", "secret", "money", "live", "public-release", "high", "critical")
+
+
+def _risk_tag(value: object) -> str:
+    """Normalised risk tag: trimmed, lowercase, ``_``/space become ``-``."""
+    return re.sub(r"[_\s]+", "-", str(value or "").strip().lower())
+
+
+def is_high_risk(tags: object) -> bool:
+    """True when any tag (one or several) is high risk after normalisation."""
+    items = [tags] if tags is None or isinstance(tags, str) else list(tags)
+    return any(part in _risk_tag(t) for t in items for part in _HIGH_RISK_PARTS)
 
 
 class FamilyError(ValueError):
@@ -151,7 +165,7 @@ def families_for_risk(risk: str | list | tuple | set | frozenset | None,
         tags = {_norm(risk)}
     else:
         tags = {_norm(item) for item in risk}
-    need = 2 if tags & HIGH_RISK else 1
+    need = 2 if (tags & HIGH_RISK or is_high_risk(tags)) else 1
     writer = _family_key(writer_family)
     found: list[str] = []
     for leg in (LEGS if legs is None else legs):

@@ -25,13 +25,24 @@ def _word(verdict: Any) -> str | None:
     return word if word in ("pass", "fix", "halt") else None
 
 
+def _files(value: Any) -> list[str]:
+    """File list from a list/tuple/set or ONE bare string (never iterated per character)."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [str(f) for f in value]
+    return [str(value)]
+
+
 def _finding(item: Any, phase: str, n: int) -> dict:
     """Normalise one finding (str or dict) to title/finding/files."""
-    if isinstance(item, str):
-        text, files, title = item.strip(), [], ""
+    if not isinstance(item, dict):
+        text, files, title = str(item if item is not None else "").strip(), [], ""
     else:
         text = str(item.get("finding") or item.get("text") or "").strip()
-        files = [str(f) for f in (item.get("files") or [])]
+        files = _files(item.get("files"))
         title = str(item.get("title") or "").strip()
     if not title:
         first = text.splitlines()[0] if text else "finding"
@@ -58,7 +69,7 @@ def plan_actions(verdict: Any, phase: str, key: str | None = None) -> dict:
         findings = list(_get(verdict, "findings") or [])
         if not findings:
             findings = [reason or "review asked for a fix without details"]
-        files = [str(f) for f in (_get(verdict, "files") or [])]
+        files = _files(_get(verdict, "files"))
         for n, item in enumerate(findings, 1):
             card = _finding(item, phase, n)
             if not card["files"]:
