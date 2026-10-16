@@ -16,11 +16,11 @@ KEEPER-LIVE-SYNC (live 1b923e5 GO D-1437; PR #26/#27 828e68e; judge ACCEPT adjud
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
 | PROJECTOR-ALARMS-READER (p3) | claimed 06:5xZ (lease 08:52Z); brief briefs/l2-projector-alarms-reader.md 25bead7 | L2 build-L2-alarms-reader 8d58f6a0 launched (coding.vm) -> MERGE-READY -> judge |
-| CI-PYTEST-SPEED (p2, D-1457) | claimed 07:5xZ (lease 09:56Z); brief briefs/l2-ci-pytest-speed.md a402661 | L2-LAUNCH build-L2-pytest-speed asked (workst) -> MERGE-READY w/ 3 timings -> judge self (standard) |
+| CI-PYTEST-SPEED (p2, D-1457) | claimed 07:5xZ (lease 09:56Z); brief briefs/l2-ci-pytest-speed.md a402661 | launch accepted, gated on workst Docker/H: window (runners offline 07:56Z, ETA 08:10Z; >09:00Z -> coding.vm by router) |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: ALARMS-READER (08:52Z, renew by 08:4xZ), CI-PYTEST-SPEED (09:56Z). L2 live: alarms-reader 8d58f6a0 (coding.vm, pushed a4bf956 + seats, no DDL).
+Leases: renewed 07:57Z (ALARMS-READER, CI-PYTEST-SPEED); renew by 09:4xZ. L2: alarms-reader busy (a4bf956+seats). Incident 07:5xZ: fixes-L1/-L2s gone -> routing.
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
