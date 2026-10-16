@@ -23,6 +23,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_BUILD_JOBS: "8"   # cap per-job cargo parallelism: 4 concurrent jobs share one box (D-1393)
+
 jobs:
   worker:
     runs-on: [self-hosted, fleet-ci]
