@@ -43,13 +43,13 @@ The keeper has no read-only flag. Read-only = the old unit **stopped** and the S
 Freeze fingerprint (done at the end of section 2, after the unit is stopped and the backup is taken):
 ```
 # WAL gate (the keeper runs journal_mode=WAL, db.py open_db): committed frames may live only in keeper.db-wal. Never delete a non-empty WAL.
-[ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');print(c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall());c.close()"   # unit is stopped: fold the WAL into the .db
-[ ! -s $LIVE/keeper.db-wal ] && echo WAL-EMPTY-OR-MISSING || { echo "WAL still non-empty: STOP, do not hash, report to router"; false; }
+{ [ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');r=c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone();c.close();raise SystemExit(r[0])"; } \
+  && [ ! -s $LIVE/keeper.db-wal ] && echo WAL-EMPTY-OR-MISSING || { echo "checkpoint failed or WAL still non-empty: STOP, do not hash, report to router"; false; }   # unit is stopped; checkpoint rc is checked (busy flag 0) AND the WAL re-tested
 rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal         # only reached with a missing or 0-byte WAL (the 0-byte file holds no frames)
 chmod 0400 $LIVE/keeper.db
 sha256sum $LIVE/keeper.db | tee $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256
 ```
-The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK`. A mismatch means something wrote to the old file: do NOT roll back to it by hash alone; restore from the backup copy `$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db` only if its own sha256 matches `SHA256SUMS` of that backup, else stop and report to the router.
+The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK`. A mismatch means something wrote to the old file: do NOT roll back to it by hash alone; restore from the backup copy `$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db` only if `(cd $LIVE/backups/pg-cutover-<sha>-<UTC> && sha256sum -c SHA256SUMS)` prints OK, else stop and report to the router.
 
 ## 4. Copy (T0+, after freeze and backup)
 Config for the copy = a copy of `$KJ` with `"backend":"postgres","pg_schema":"keeper"` added, saved 0600 as `$LIVE/keeper-pg.json` (no dsn key; `db` unchanged). Export the MIGRATOR dsn from `<PG_MIGRATOR_DSN_FILE>` into `PG_DSN` in that shell only (never echo, never in argv).
@@ -88,6 +88,7 @@ Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 - Rollback BEFORE any PG write that matters (only valid until the first md-sync run or `pg replay` after the switch, section 6.4; compare `select max(seq) from keeper.events` with the recorded boundary, equal = no writes). Exact commands:
 ```
 sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256        # must print OK, else stop (section 3)
+[ "$(psql "$PG_DSN" -Atc 'select max(seq) from keeper.events')" = "<boundary seq from 6.4>" ] || { echo "PG took writes: use the AFTER-writes path below"; false; }   # exact path only if equal
 systemctl --user stop plangraph-keeper                                           # the PG keeper
 systemctl --user stop plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer
 rm ~/.config/systemd/user/plangraph-keeper.service.d/pg-backend.conf             # switch the env back (or restore plangraph-keeper.service.d.pre-pg)
