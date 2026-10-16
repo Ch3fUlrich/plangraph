@@ -107,6 +107,7 @@ class E2E:
         return path
 
     def head(self):
+        self.server.flush_snapshot()    # KEEPER-SNAPSHOT-PG: debounced writer, level it first
         return json.loads(self.snapshot.read_text(encoding="utf-8"))["head"]
 
 
@@ -216,8 +217,8 @@ def test_full_lifecycle_done_is_locked_and_audited(tmp_path):
                  {"key": KEY, "ok": True, "reason": "agreed"})):
             status, body = call(e2e.base, "POST", path, token=token, body=payload)
             assert status == 200, (path, body)
-            json.loads(e2e.snapshot.read_text(encoding="utf-8"))  # always valid
             heads.append(e2e.head())
+            json.loads(e2e.snapshot.read_text(encoding="utf-8"))  # always valid
         assert heads[-1] and len(set(heads)) == len(heads)  # rewritten each write
 
         status, body = call(e2e.base, "GET", "/v1/show?key=" + KEY + "&fmt=json",
@@ -272,6 +273,7 @@ def test_cli_snapshot_fallback_read_only(tmp_path, monkeypatch):
     try:
         status, _ = call(e2e.base, "POST", "/v1/set_priority",
                          token=e2e.tokens["router"], body={"key": KEY, "n": 1})
+        e2e.server.flush_snapshot()
         assert status == 200 and e2e.snapshot.is_file()
         e2e.stop()
         monkeypatch.setenv("PG_URL", e2e.base)

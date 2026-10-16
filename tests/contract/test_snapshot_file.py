@@ -7,6 +7,7 @@ Local keeper only (the file lives on the keeper host).
 """
 import base64
 import json
+import time
 
 import pytest
 
@@ -15,6 +16,16 @@ pytest.importorskip("cryptography")
 import contract_harness as harness  # noqa: E402
 from contract_schema import assert_valid  # noqa: E402
 from contract_world import make_plan, ok, snapshot  # noqa: E402
+
+
+def on_disk_at_least(kp, path, head_seq, timeout=10.0):
+    """The file once it reflects *head_seq*: it is rebuilt after writes go quiet (bounded staleness)."""
+    deadline = time.time() + timeout
+    while True:
+        snap = json.loads(path.read_bytes())
+        if snap["head_seq"] >= head_seq or time.time() > deadline:
+            return snap
+        time.sleep(0.05)
 
 
 @pytest.fixture(scope="module")
@@ -29,14 +40,14 @@ def signed(tmp_path_factory):
 def test_snapshot_file_follows_every_write_and_matches_the_http_body(signed):
     plan = make_plan(signed)
     path = signed.dir / "plan.snapshot.json"
-    on_disk = json.loads(path.read_bytes())
-    assert_valid(on_disk, "Snapshot")
     live = snapshot(signed)
+    on_disk = on_disk_at_least(signed, path, live["head_seq"])
+    assert_valid(on_disk, "Snapshot")
     assert on_disk["head"] == live["head"] and on_disk["head_seq"] == live["head_seq"]
     assert {i["key"] for i in on_disk["items"]} == {i["key"] for i in live["items"]}
     assert plan.key in {i["key"] for i in on_disk["items"]}
     ok(signed.post("claim", "worker1", {"key": plan.key}), "Claim")
-    again = json.loads(path.read_bytes())
+    again = on_disk_at_least(signed, path, on_disk["head_seq"] + 1)
     assert again["head_seq"] > on_disk["head_seq"]
     assert not list(signed.dir.glob("plan.snapshot.json.*.tmp"))        # atomic: no temp leftovers
 
@@ -44,6 +55,7 @@ def test_snapshot_file_follows_every_write_and_matches_the_http_body(signed):
 def test_signature_is_ed25519_over_the_domain_separated_bytes(signed):
     from cryptography.hazmat.primitives import serialization
     make_plan(signed)
+    on_disk_at_least(signed, signed.dir / "plan.snapshot.json", snapshot(signed)["head_seq"])
     body = (signed.dir / "plan.snapshot.json").read_bytes()
     sig = base64.b64decode((signed.dir / "plan.snapshot.json.sig").read_text().strip(), validate=True)
     assert len(sig) == 64
@@ -56,6 +68,7 @@ def test_signature_is_ed25519_over_the_domain_separated_bytes(signed):
 def test_tampered_snapshot_fails_verification(signed):
     make_plan(signed)
     path = signed.dir / "plan.snapshot.json"
+    on_disk_at_least(signed, path, snapshot(signed)["head_seq"])      # level: no rewrite races the tamper
     original = path.read_bytes()
     try:
         path.write_bytes(original.replace(b'"items"', b'"itemz"', 1))

@@ -95,9 +95,20 @@ class Config:
         self.review_overdue_s = int(data.get("review_overdue_s", 4 * 3600))
         self.lease_warn_s = int(data.get("lease_warn_s", 15 * 60))
         self.reap_interval = float(data.get("reap_interval", 60))
+        # KEEPER-SNAPSHOT-PG: the snapshot file is rebuilt after writes go quiet for this long
+        # (<= 0: synchronously after every write) and at most max_delay_s after a change.
+        self.snapshot_debounce_s = self._seconds(data, "snapshot_debounce_s", 0.25)
+        self.snapshot_max_delay_s = self._seconds(data, "snapshot_max_delay_s", 2.0)
         self.backup_prune = self._backup_prune(data.get("backup_prune"))
 
     # ------------------------------------------------------------- helpers
+    @staticmethod
+    def _seconds(data, name, default) -> float:
+        value = data.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+            raise ConfigError(f"{name} must be a number of seconds >= 0")
+        return float(value)
+
     @staticmethod
     def _db_options(data) -> dict:
         """Backend options for ``db.open_db``/``lock_keeper`` (only what the file sets)."""

@@ -162,6 +162,7 @@ def test_snapshot_rewritten_after_write(srv, w, tmp_path):
     assert not snap.exists()
     call(srv, "/v1/claim", method="POST", body={"key": "demo:A"},
          token=w.tok("l1main"))
+    srv.flush_snapshot()          # KEEPER-SNAPSHOT-PG: the file is rebuilt after writes go quiet
     assert snap.exists()
     data = json.loads(snap.read_text())
     assert data["head"] and {it["key"] for it in data["items"]} >= {"demo:A"}
