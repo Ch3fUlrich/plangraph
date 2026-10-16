@@ -37,8 +37,17 @@ pub const TASK_QUEUE: &str = "pg-cards";
 /// How long a worker waits for a competing merge before giving up.
 const MERGE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long the keeper-held merge lock stays valid without a release.
-const MERGE_LOCK_TTL_S: u64 = 120;
+/// Seconds the keeper-held merge lock stays valid without a release.
+///
+/// The lock is taken before the file lock, so it must outlive the whole merge
+/// activity: the wait for a competing merge ([`MERGE_LOCK_TIMEOUT`]) plus the
+/// confinement recheck, rebase and post-rebase check, all of which the merge
+/// activity's start-to-close timeout (`cfg.start_to_close`, see
+/// `workflow::once_options`) already bounds. A fixed 120 s could expire under a
+/// slow check and let a second merger in while this one was still running.
+fn merge_lock_ttl_s(cfg: &Config) -> u64 {
+    cfg.start_to_close.as_secs().max(1) + MERGE_LOCK_TIMEOUT.as_secs()
+}
 
 /// Input of the `card` workflow: the claim, the legs it may run on, and where.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,11 +125,6 @@ pub struct MergeInput {
     pub main_branch: String,
     pub branch: String,
     pub base_sha: String,
-    /// Fencing token a caller already holds. When absent the token from the
-    /// lock this merge acquires is used; a token below the highest one the
-    /// repo has admitted means the lock was lost and the merge is refused.
-    #[serde(default)]
-    pub fence_token: Option<u64>,
     /// The attempt worktree (branch checked out). Needed to rebase when main
     /// moved; empty means a moved base is only reported.
     #[serde(default)]
@@ -262,7 +266,7 @@ pub(crate) fn map_merge(o: MergeOutcome, main_head: String) -> MergeResult {
 /// base is reported as `error`, never as `nothing`.
 pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
     let id = AttemptId::new(input.card.clone(), input.n);
-    let dir = Path::new(&input.workroot).join(format!("{}-{}", input.card, input.n));
+    let dir = Path::new(&input.workroot).join(id.dir_name());
     let outcome = probe::probe(
         &dir,
         &input.base_sha,
@@ -312,8 +316,9 @@ fn merge_fenced(
     let head_of_main = || git(repo, &["rev-parse", &main_ref]);
 
     // Fencing: the repo side remembers the highest token it admitted, so a
-    // holder whose keeper lock expired cannot land a late merge.
-    let token = input.fence_token.unwrap_or(fence.token);
+    // holder whose keeper lock expired cannot land a late merge. The token is
+    // always the one the keeper granted this merge; a caller cannot name one.
+    let token = fence.token;
     if !mergelock::admit_fence(&lock, repo, token)? {
         return Ok(merge_result(
             "merge_refused",
@@ -372,19 +377,43 @@ pub(crate) fn do_merge(
 ) -> Result<MergeResult, mergelock::MergeError> {
     let repo = Path::new(&input.repo);
     let owner = format!("pg-worker-{}", std::process::id());
-    let fence = match keeper.acquire_merge_lock(&input.repo, &owner, MERGE_LOCK_TTL_S) {
+    let fence = match keeper.acquire_merge_lock(&input.repo, &owner, merge_lock_ttl_s(cfg)) {
         Ok(f) => f,
         Err(e) => {
             let main_head = git(repo, &["rev-parse", &input.main_branch])?;
             return Ok(merge_result("retry_later", main_head, e.to_string()));
         }
     };
-    let result = merge_fenced(cfg, input, &fence);
-    // A refused release (stale token, keeper down) cannot undo or change what
-    // the repo-side fence and file lock already decided, so it is dropped; the
-    // keeper's own ttl reclaims a lock it never saw released.
-    let _ = keeper.release_merge_lock(&input.repo, &fence);
-    result
+    // Released on every exit, including an early `?` or a panic in the merge.
+    let _lease = KeeperLease {
+        keeper,
+        repo: &input.repo,
+        fence,
+    };
+    merge_fenced(cfg, input, &_lease.fence)
+}
+
+/// The keeper-held merge lock, released on drop.
+///
+/// A refused release (stale token, keeper down) cannot undo or change what the
+/// repo-side fence and file lock already decided, so it does not fail the
+/// merge; it is logged, and the keeper's own ttl reclaims a lock it never saw
+/// released.
+struct KeeperLease<'a> {
+    keeper: &'a dyn Keeper,
+    repo: &'a str,
+    fence: Fence,
+}
+
+impl Drop for KeeperLease<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.keeper.release_merge_lock(self.repo, &self.fence) {
+            eprintln!(
+                "merge lock release for {} (token {}) failed: {e}",
+                self.repo, self.fence.token
+            );
+        }
+    }
 }
 
 /// Sweep dead attempts of `repo`, treating none as live, and report how many
@@ -725,7 +754,6 @@ mod tests {
             main_branch: "main".to_string(),
             branch: "attempt/c1/1".to_string(),
             base_sha: "b".to_string(),
-            fence_token: Some(3),
             worktree: "/w/c1-1".to_string(),
             check_cmd: Some("true".to_string()),
             confine: Some(ConfineSpec {
@@ -953,7 +981,6 @@ mod tests {
             main_branch: "main".to_string(),
             branch: branch.to_string(),
             base_sha: base.to_string(),
-            fence_token: None,
             worktree: String::new(),
             check_cmd: None,
             confine: None,
@@ -1055,13 +1082,40 @@ mod tests {
         keeper.expire_merge_lock();
         let first = merge(&keeper, &merge_input(p, "attempt/c2/1", &base));
         assert_eq!(first.outcome, "merged");
-        // ... then a holder still carrying token 1 is turned away.
-        let mut late = merge_input(p, "attempt/c1/1", &first.main_head);
-        late.fence_token = Some(1);
+        // ... then a holder whose keeper token is below the highest the repo
+        // admitted is turned away (here the repo has seen a newer holder).
+        let fence_file = git(p, &["rev-parse", "--git-common-dir"]);
+        let fence_file = p.join(fence_file).join("pg-merge.fence");
+        std::fs::write(&fence_file, "99").unwrap();
+        let late = merge_input(p, "attempt/c1/1", &first.main_head);
         let res = merge(&keeper, &late);
         assert_eq!(res.outcome, "merge_refused");
         assert_eq!(git(p, &["rev-parse", "main"]), first.main_head);
         assert!(!keeper.merge_lock_held());
+    }
+
+    #[test]
+    fn keeper_lease_releases_on_panic() {
+        let keeper = StubKeeper::default();
+        let fence = keeper.acquire_merge_lock("/r", "o", 60).unwrap();
+        assert!(keeper.merge_lock_held());
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lease = KeeperLease {
+                keeper: &keeper,
+                repo: "/r",
+                fence,
+            };
+            panic!("merge blew up");
+        }));
+        assert!(r.is_err());
+        assert!(!keeper.merge_lock_held());
+    }
+
+    #[test]
+    fn merge_lock_ttl_covers_the_merge_activity_window() {
+        let mut cfg = tiny();
+        cfg.start_to_close = Duration::from_secs(900);
+        assert!(merge_lock_ttl_s(&cfg) >= 900 + MERGE_LOCK_TIMEOUT.as_secs());
     }
 
     #[test]

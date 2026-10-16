@@ -247,7 +247,7 @@ pub fn run_harness(
     cancelled: &dyn Fn() -> bool,
 ) -> std::io::Result<Supervised> {
     let mut cmd = h.command(run);
-    pg_worker_core::sandbox_env::confine(&mut cmd, home);
+    pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
     supervise_with_cancel(cmd, opts, cancelled)
 }
 
@@ -301,6 +301,27 @@ fn is_text_busy(e: &std::io::Error) -> bool {
     e.kind() == std::io::ErrorKind::ExecutableFileBusy || e.raw_os_error() == Some(26)
 }
 
+/// A throwaway private `HOME` for a `--version` probe, removed on drop.
+struct ProbeHome(PathBuf);
+
+impl ProbeHome {
+    fn new(name: &str) -> std::io::Result<ProbeHome> {
+        let safe: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let p = std::env::temp_dir().join(format!("pg-probe-{}-{safe}.home", std::process::id()));
+        std::fs::create_dir_all(&p)?;
+        Ok(ProbeHome(p))
+    }
+}
+
+impl Drop for ProbeHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Fail closed on a version drift: for every pinned name run `<bin> --version`
 /// and require the pinned version. A pinned harness that is not registered, has
 /// no binary, cannot run or reports another version is an error. Harnesses
@@ -311,6 +332,12 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
             .get(name)
             .and_then(|h| h.binary().map(str::to_string))
             .ok_or_else(|| PinError::Unavailable(name.clone()))?;
+        // Same confined env and a private HOME as a real run: the probe must
+        // not see the worker's PG_* / TEMPORAL_* either.
+        let home = ProbeHome::new(name).map_err(|e| PinError::Unrunnable {
+            name: name.clone(),
+            why: format!("private HOME: {e}"),
+        })?;
         let opts = Opts {
             timeout: Some(std::time::Duration::from_secs(15)),
             grace: std::time::Duration::from_secs(1),
@@ -322,6 +349,7 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
         let r = loop {
             let mut cmd = Command::new(&bin);
             cmd.arg("--version").stdin(Stdio::null());
+            pg_worker_core::sandbox_env::confine_harness(&mut cmd, &home.0);
             match pg_worker_core::stall::supervise(cmd, &opts) {
                 Err(e) if is_text_busy(&e) && tries < 5 => {
                     tries += 1;
@@ -727,6 +755,29 @@ mod tests {
                 want: "9.9.9".into(),
                 found: "opencode 1.2.3".into(),
             })
+        );
+    }
+
+    #[test]
+    fn version_probe_child_sees_no_worker_secrets() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        // The fake CLI prints its environment; the pin matches on a token that
+        // is present only if PG_/TEMPORAL_ variables are absent.
+        let p = d.path().join("envdump");
+        std::fs::write(
+            &p,
+            "#!/bin/sh\nif env | grep -q '^PG_PROBE_SENTINEL=\\|^TEMPORAL_PROBE_SENTINEL='; then echo leaked; else echo clean-1.0; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Unique names; no other test reads or sets them.
+        unsafe { std::env::set_var("PG_PROBE_SENTINEL", "x") };
+        unsafe { std::env::set_var("TEMPORAL_PROBE_SENTINEL", "x") };
+        let reg = registry_with(p.to_string_lossy().into_owned());
+        assert_eq!(
+            check_version_pins(&reg, Some("opencode=clean-1.0")),
+            Ok(true)
         );
     }
 

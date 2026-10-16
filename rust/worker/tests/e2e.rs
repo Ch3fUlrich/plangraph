@@ -11,6 +11,9 @@
 //! cancel signal. If `PG_RECORD_DIR` is set the fetched history is written
 //! there as a fixture for the offline replay tests.
 
+#![cfg(unix)]
+
+use pg_worker_core::exit_class::ExitClass;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -578,6 +581,24 @@ async fn usage_limit_reroutes_to_non_claude_leg() {
                 ("open-leg".to_string(), "ok".to_string()),
             ]
         );
+        // The provider-limited attempt did not consume budget: the keeper saw
+        // it as `usage_limit` (a class the budget never counts), and the very
+        // next attempt ran as an ordinary first try on the other leg, with no
+        // retry, promotion or wait in between.
+        let reports = env.keeper.attempts();
+        let seen: Vec<(u32, String, ExitClass)> = reports
+            .iter()
+            .map(|r| (r.n, r.leg.clone(), r.exit_class))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (1, "claude-leg".to_string(), ExitClass::UsageLimit),
+                (2, "open-leg".to_string(), ExitClass::Ok),
+            ],
+            "{reports:?}"
+        );
+        assert_eq!(out.attempts, 2, "{out:?}");
         let sha = out.merged_sha.clone().expect("a merged card has a sha");
         assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
         env.stop();

@@ -201,6 +201,27 @@ mod tests {
         );
     }
 
+    /// The Claude limit patterns are phrases, not the bare word "usage": CLI
+    /// usage text and a check whose output merely mentions usage stay what
+    /// they are.
+    #[test]
+    fn the_word_usage_alone_is_not_a_limit() {
+        let p = Patterns::default();
+        // A failing check (harness exit 0) whose output says "usage".
+        let mut s = base();
+        s.check = Some(CheckOutcome::Fail);
+        s.stderr = "usage: tool [options]\nerror: bad flag; usage of memory high".into();
+        assert_eq!(p.classify(&s).class, ExitClass::CheckFail);
+        // A crashing harness printing its own usage banner is a crash.
+        let mut s = base();
+        s.exit_code = Some(2);
+        s.stderr = "Usage: claude [options] [prompt]\nerror: unknown option".into();
+        assert_eq!(p.classify(&s).class, ExitClass::WorkerCrash);
+        // The real thing still matches.
+        s.stderr = "Claude usage limit reached. Try again later".into();
+        assert_eq!(p.classify(&s).class, ExitClass::UsageLimit);
+    }
+
     #[test]
     fn classification_table() {
         use ExitClass::*;

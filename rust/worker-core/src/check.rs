@@ -33,8 +33,8 @@ pub fn tail_lines(text: &str, n: usize) -> String {
 
 /// Run `cmd` via `sh -c` in `dir`; kill it after `timeout`.
 ///
-/// The child gets the secret-free environment of [`crate::sandbox_env`] and a
-/// private `HOME` next to `dir`, never the worker's own environment.
+/// The child gets the secret-free environment of [`crate::sandbox_env`]
+/// (no agent credentials, unlike the harness) and a private `HOME` next to `dir`, never the worker's own environment.
 pub fn run_check(
     cmd: &str,
     dir: &Path,
@@ -44,7 +44,7 @@ pub fn run_check(
     let home = crate::sandbox_env::HomeGuard::for_dir(dir)?;
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd).current_dir(dir);
-    crate::sandbox_env::confine(&mut c, home.path());
+    crate::sandbox_env::confine_check(&mut c, home.path());
     let opts = Opts {
         timeout: Some(timeout),
         grace: Duration::from_secs(2),
@@ -61,7 +61,7 @@ pub fn run_check(
     })
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
