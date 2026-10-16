@@ -132,6 +132,37 @@ def test_l1_may_not_attach_under_a_project_it_does_not_own(w):
     assert _snapshot(w) == before
 
 
+def test_l1_alias_resolving_to_another_projects_gate_is_forbidden(w):
+    """An alias key is a pointer, not a licence: ``under`` may name the old key
+    of a gate that ``rehome`` moved to another project, but the attach is still
+    judged on where the gate LIVES (project B), not on the alias' project A."""
+    w.store.create_items(w.p("router"), [defn("GATE", kind="goal")])
+    w.store.rehome(w.p("router"), "demo:GATE", "other")   # -> other:GATE
+    assert w.store.resolve_key("demo:GATE") == "other:GATE"
+    # the L1 under test owns project A only (the fixture's l1both owns both)
+    assert w.p("l1main").projects == ["demo"]
+
+    def gate_edges():
+        return [(r["src"], r["dst"]) for r in w.conn.execute(
+            "SELECT src,dst FROM edges WHERE src=? OR dst=?",
+            ("other:GATE", "other:GATE"))]
+
+    assert gate_edges() == []                     # nothing yet for the gate
+    before = _snapshot(w)
+    with pytest.raises(Refused) as exc:           # alias -> other:GATE (project B)
+        w.store.create_items(w.p("l1main"), [defn("NEW", under="demo:GATE")])
+    assert exc.value.code == "forbidden"
+    assert _snapshot(w) == before                 # no item, no edge, no event
+    assert w.store._item("demo:NEW") is None      # NO item was created
+    assert gate_edges() == []                     # NO edge row for the gate
+    # control: the router runs the very same attach and it succeeds
+    out = w.store.create_items(w.p("router"), [defn("CTRL", under="demo:GATE")])
+    assert out["created"] == ["demo:CTRL"]
+    assert out["attached"] == [{"key": "demo:CTRL", "under": "other:GATE"}]
+    assert gate_edges() == [("other:GATE", "demo:CTRL")]   # G -> N, written at last
+    assert _problems(w) == [] and verify_integrity(w.conn) == []
+
+
 @pytest.mark.parametrize("who", ["workerA", "reviewer", "reader", "system"])
 def test_roles_that_may_not_create_cannot_attach(w, who):
     before = _snapshot(w)
