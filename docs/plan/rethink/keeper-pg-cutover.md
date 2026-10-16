@@ -14,7 +14,7 @@ Rehearsal on a throwaway PG16 container from a copy of backup `live-sync-8165c22
 Chain head seq=6254 hash=0d6f6305...5eb9 equal on both. Extra gate (rehearsal only, `rowhash.py` = sha256 of every row in PK order, all 19 tables): 0 diffs.
 Gates green on PG: `admin copy-to-pg --dry-run` rc0; `--apply` rc0 ("copied and verified"); 2nd `--apply` rc2 "target is not empty" (re-run safe); `admin verify` rc0; `admin verify-snapshot` rc0; `admin migrate` rc0.
 Scratch keeper on PG (own port, never 8787): whoami, ready, show plangraph:RT-P1-KEEPER-PG, percent rc0; `/v1/alarms` `/inbox` `/v1/questions` HTTP 200; `admin verify` rc0 with daemon up.
-Findings (no copy_to_pg defect): (a) **no read-only mode exists in the keeper** (see 3, router decision R1); (b) `admin verify-anchor` rc2 "anchors not configured" on this config (live keeper.json has no anchor keys; skip gate unless anchors get enabled);
+Findings (no copy_to_pg defect): (a) **no read-only mode exists in the keeper** (see 3; D-1476 R1 = old unit stopped + chmod 0400); (b) `admin verify-anchor` rc2 "anchors not configured" on this config (live keeper.json has no anchor keys; skip gate unless anchors get enabled);
 (c) `verify-snapshot` needs the `cryptography` package (live python has it; a scratch venv did not); (d) `show` needs the project-qualified key.
 
 ## 1. Preconditions (all must hold before step 2)
@@ -38,11 +38,16 @@ systemctl --user is-active plangraph-keeper       # inactive
 Clients that write while it is down queue in their own outbox (`PG_OUTBOX`) and replay AFTER the switch with `pg replay`; announce the window to L1s first (router message) so they do not claim mid-freeze. `plangraph-md-sync-halt.service` is a stopper only; leave it.
 Backup of the stopped db (folds WAL): `mkdir -p -m 700 $LIVE/backups/pg-cutover-<sha>-<UTC> && python3 -c "import sqlite3;s=sqlite3.connect('file:$LIVE/keeper.db?mode=ro',uri=True);d=sqlite3.connect('$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db');s.backup(d)"`, then `sha256sum` it, record `select count(*)` of all 19 tables from it into `counts.json` (as `counts-before.json` in earlier backups), copy `$KJ`, `plan.snapshot.json(.sig)` beside it, `chmod 0600`. All following steps read ONLY this backup (`--src`); the live file stays untouched.
 
-## 3. Old keeper "read-only 48 h" (router decision R1 before GO)
-The keeper has **no read-only flag** (grep of `src/plangraph/keeper`: none; adding one is a separate HIGH code change). Options:
-- **R1a (recommended, no code):** old unit stays **stopped** for 48 h, `chmod 0400 $LIVE/keeper.db` and keep the backup; reads go to the new PG keeper; offline readers use the signed `plan.snapshot.json` fallback (`pg sync pull`, cli_local READ-ONLY fallback). Writes to the old keeper are impossible by construction.
-- R1b: a read-only mode patch (HIGH lane) so the old keeper serves reads on a second port. Blocks the cutover on that lane.
-Rollback (section 7) works with R1a only if nothing wrote to PG that matters (see 7).
+## 3. Old keeper "read-only 48 h" (D-1476 R1 = option a; no read-only code lane)
+The keeper has no read-only flag. Read-only = the old unit **stopped** and the SQLite file `chmod 0400` for 48 h; reads go to the new PG keeper; offline readers use the signed `plan.snapshot.json` fallback (`pg sync pull`, cli_local READ-ONLY fallback). Writes to the old keeper are impossible by construction.
+Freeze fingerprint (done at the end of section 2, after the unit is stopped and the backup is taken):
+```
+[ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');c.execute('PRAGMA wal_checkpoint(TRUNCATE)');c.close()"   # fold a leftover WAL so the .db alone is complete
+rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm
+chmod 0400 $LIVE/keeper.db
+sha256sum $LIVE/keeper.db | tee $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256
+```
+The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK`. A mismatch means something wrote to the old file: do NOT roll back to it; stop and report to the router.
 
 ## 4. Copy (T0+, after freeze and backup)
 Config for the copy = a copy of `$KJ` with `"backend":"postgres","pg_schema":"keeper"` added, saved 0600 as `$LIVE/keeper-pg.json` (no dsn key; `db` unchanged). Export the MIGRATOR dsn from `<PG_MIGRATOR_DSN_FILE>` into `PG_DSN` in that shell only (never echo, never in argv).
@@ -77,8 +82,23 @@ Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 5. Record in the lane card: start time, head seq, counts, sha of the tree.
 
 ## 7. 48 h window and rollback
-- During 48 h: old sqlite file untouched (chmod 0400), backup dir kept, PG backups running. After 48 h with no incident and a second `admin verify`: router GO to retire (delete nothing automatically; archive the file).
-- Rollback BEFORE any PG write that matters (nothing since switch except reads/heartbeats): `systemctl --user stop plangraph-keeper`; remove drop-in `pg-backend.conf` (or restore `plangraph-keeper.service.d.pre-pg`); `chmod 0600 $LIVE/keeper.db`; `rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm`; `daemon-reload`; `start`; then in a clean shell (`unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA`, so the CLI hits the sqlite config) `pg --config $KJ admin verify`, `whoami`, `ready` rc0; re-run md-sync/render timers. The sqlite file is the pre-freeze state, so this is exact.
+- During 48 h: old unit stopped, sqlite file untouched (`chmod 0400`, hash recorded in section 3), backup dir kept, PG backups running.
+- Rollback BEFORE any PG write that matters (nothing since switch except reads/heartbeats). Exact commands:
+```
+sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256        # must print OK, else stop (section 3)
+systemctl --user stop plangraph-keeper                                           # the PG keeper
+systemctl --user stop plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer
+rm ~/.config/systemd/user/plangraph-keeper.service.d/pg-backend.conf             # switch the env back (or restore plangraph-keeper.service.d.pre-pg)
+systemctl --user daemon-reload
+chmod 0600 $LIVE/keeper.db
+rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm
+systemctl --user start plangraph-keeper                                          # old unit, sqlite config unchanged
+unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA                                         # clean shell so the CLI hits sqlite
+pg --config $KJ admin verify; pg --config $KJ whoami; pg --config $KJ ready      # rc0 each
+systemctl --user start plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer
+```
+  The sqlite file is the pre-freeze state, so this is exact. Afterwards the PG schema is inert (drop it before any re-copy, section 4).
+- End of window (T0+48 h): explicit **delete-or-archive decision**, never automatic. Preconditions: `sha256sum -c` OK, a second `pg admin verify` on PG rc0, no incident, PG backup of the same day restore-tested. The router records one of: (archive) move `keeper.db` and the backup dir to cold storage with their `.sha256` files and keep 90 days, or (delete) `shred -u`/`rm` the file after the router names the file hash in a GO. Until the decision, the file stays `chmod 0400` and the rollback above stays valid. Retire GO is section 8 step 4.
 - Rollback AFTER PG took writes: the sqlite file does NOT contain them. Either accept the loss window (list writes since the switch from PG `select seq,type,key from keeper.events where seq>6254`), or re-import them by hand through the client verbs. Decide with the router before the GO; document the head seq at switch time as the loss boundary.
 - psql note: a DSN passed as `psql "$PG_DSN"` is visible in the process table to other local users; on a shared host use libpq env (`PGHOST PGUSER PGDATABASE PGPASSFILE`) instead.
 - Abort in steps 4-5 needs only: scratch cleanup, dropping the populated target schema if it will not be reused (PG owner; re-copy needs an empty one, section 4) and un-freeze (start timers, `systemctl --user start plangraph-keeper` on the unchanged sqlite config).
@@ -87,7 +107,7 @@ Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 Separate explicit GO per step, each naming sha and scope; ACCEPT of the PR is not a GO:
 `GO (D-825 form) KEEPER-PG-CUTOVER step 1+2 freeze+backup+copy+verify (sections 2,4,5) naming lane/<merged-sha> tree <live worktree sha>, backup dir pg-cutover-<sha>-<UTC>, PG target schema keeper on <PG-DEPLOY item verified>; abort = start old unit unchanged.`
 `GO (D-825 form) KEEPER-PG-CUTOVER step 3 switch (section 6) naming head seq <N> hash <h> verified, drop-in pg-backend.conf; rollback = section 7.`
-`GO ... step 4 retire sqlite after 48 h` (after a green second verify). Router decisions needed first: R1 (read-only option, section 3), loss-window policy (section 7), which timeslot (all writers paused ~15 min estimated: copy of 62.9k rows took seconds in rehearsal).
+`GO ... step 4 delete-or-archive sqlite after 48 h` naming the file sha256 and the choice (after the section 7 preconditions). Router decisions needed first: loss-window policy (section 7), which timeslot (all writers paused ~15 min estimated: copy of 62.9k rows took seconds in rehearsal).
 
 ## 9. Hygiene
 Hermetic tests (D-852) for any wrapper script that automates sections 2-6: stub `systemctl`/`psql` on PATH plus a guard test that fails when the real ones are reachable. This PR adds no apply/deploy tooling: only this doc, the log and the read-only digest script `keeper-pg-cutover.rowhash.py` (opens sqlite `mode=ro`, PG select only).
