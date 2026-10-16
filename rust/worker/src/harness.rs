@@ -33,6 +33,22 @@ pub trait Harness: Send + Sync {
     fn binary(&self) -> Option<&str> {
         None
     }
+    /// Refuse a run whose arguments could be parsed as options by the CLI
+    /// (option smuggling). The prompt is safe because it follows `--`; a
+    /// model name has no such protection.
+    fn validate(&self, run: &HarnessRun) -> Result<(), String> {
+        reject_option_like("model", run.model)
+    }
+}
+
+/// An argument the CLI would read as an option (leading `-`) or an empty one.
+fn reject_option_like(what: &str, value: &str) -> Result<(), String> {
+    if value.is_empty() || value.starts_with('-') {
+        return Err(format!(
+            "refusing {what} {value:?}: empty or starts with '-'"
+        ));
+    }
+    Ok(())
 }
 
 /// The `opencode run` CLI.
@@ -70,6 +86,8 @@ impl Harness for Opencode {
         cmd.arg("run")
             .arg("-m")
             .arg(run.model)
+            // `--` ends options: a prompt starting with `-` stays the prompt.
+            .arg("--")
             .arg(run.prompt)
             .current_dir(run.workdir)
             .stdin(Stdio::null())
@@ -116,9 +134,11 @@ impl Harness for ClaudeCode {
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
         cmd.arg("-p")
-            .arg(run.prompt)
             .arg("--model")
             .arg(run.model)
+            // `--` ends options: a prompt starting with `-` stays the prompt.
+            .arg("--")
+            .arg(run.prompt)
             .current_dir(run.workdir)
             .stdin(Stdio::null())
             // A self-update mid-run would replace the very binary we supervise.
@@ -185,11 +205,17 @@ impl Harness for OpencodeServer {
             .arg(&self.url)
             .arg("-m")
             .arg(run.model)
+            .arg("--")
             .arg(run.prompt)
             .current_dir(run.workdir)
             .stdin(Stdio::null())
             .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
         cmd
+    }
+
+    fn validate(&self, run: &HarnessRun) -> Result<(), String> {
+        reject_option_like("model", run.model)?;
+        reject_option_like("server url", &self.url)
     }
 }
 
@@ -246,6 +272,8 @@ pub fn run_harness(
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
 ) -> std::io::Result<Supervised> {
+    h.validate(run)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let mut cmd = h.command(run);
     pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
     supervise_with_cancel(cmd, opts, cancelled)
@@ -495,7 +523,7 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(args, ["run", "-m", "some/model", "fix the bug"]);
+        assert_eq!(args, ["run", "-m", "some/model", "--", "fix the bug"]);
         assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
         assert_eq!(
             c.get_envs()
@@ -523,7 +551,13 @@ mod tests {
         // The hostile-looking prompt stays one argv element.
         assert_eq!(
             argv(&c),
-            ["-p", "fix; rm -rf $HOME", "--model", "some-claude-model"]
+            [
+                "-p",
+                "--model",
+                "some-claude-model",
+                "--",
+                "fix; rm -rf $HOME"
+            ]
         );
         assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
     }
@@ -547,6 +581,7 @@ mod tests {
                 "http://127.0.0.1:4096",
                 "-m",
                 "some/model",
+                "--",
                 "fix the bug"
             ]
         );
@@ -562,6 +597,62 @@ mod tests {
         assert!(OpencodeServer::from_value(Some("  ")).is_err());
         let h = OpencodeServer::from_value(Some(" http://127.0.0.1:4096 ")).unwrap();
         assert_eq!(h.url, "http://127.0.0.1:4096");
+    }
+
+    #[test]
+    fn option_like_prompt_stays_after_double_dash_in_every_harness() {
+        let run = HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "m",
+            prompt: "--dangerously-skip-permissions",
+        };
+        let hs: Vec<Box<dyn Harness>> = vec![
+            Box::new(Opencode::new()),
+            Box::new(ClaudeCode::new()),
+            Box::new(OpencodeServer::new("http://127.0.0.1:4096")),
+        ];
+        for h in hs {
+            let a = argv(&h.command(&run));
+            let n = a.len();
+            assert_eq!(a[n - 2], "--", "{}: {a:?}", h.name());
+            assert_eq!(a[n - 1], run.prompt);
+        }
+    }
+
+    #[test]
+    fn option_like_model_or_url_is_refused() {
+        let bad = HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "--config=evil",
+            prompt: "p",
+        };
+        let ok = HarnessRun {
+            model: "some/model",
+            ..HarnessRun {
+                workdir: bad.workdir,
+                model: "",
+                prompt: "p",
+            }
+        };
+        for h in [
+            &Opencode::new() as &dyn Harness,
+            &ClaudeCode::new(),
+            &OpencodeServer::new("http://127.0.0.1:4096"),
+        ] {
+            assert!(h.validate(&bad).is_err(), "{}", h.name());
+            assert!(h.validate(&ok).is_ok(), "{}", h.name());
+        }
+        assert!(OpencodeServer::new("--evil").validate(&ok).is_err());
+        let home = tempfile::tempdir().unwrap();
+        let e = run_harness(
+            &Opencode::new(),
+            &bad,
+            home.path(),
+            &Opts::default(),
+            &|| false,
+        )
+        .unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]
