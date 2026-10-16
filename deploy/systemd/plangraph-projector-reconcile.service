@@ -1,6 +1,6 @@
 [Unit]
 Description=plangraph projector: nightly reconcile of open Temporal workflows vs keeper state (writes projector_alarms)
-After=network-online.target plangraph-keeper.service
+After=plangraph-keeper.service
 
 [Service]
 Type=oneshot
