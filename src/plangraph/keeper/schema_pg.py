@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ..projector.ddl import PG as PROJECTOR_PG
 from .schema import EXIT_CLASSES, WINDOW_CLASSES
 
 __all__ = ["Migration", "MIGRATIONS", "LATEST", "parse_tables", "table_bodies",
@@ -395,7 +396,8 @@ CREATE TRIGGER trg_answers_append_only_truncate BEFORE TRUNCATE ON answers
 """
 
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
-              Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2))
+              Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
+              Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

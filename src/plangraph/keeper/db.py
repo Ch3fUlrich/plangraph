@@ -16,6 +16,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema import ALIASES_DDL, DESIGN3_DDL, OUTBOX_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS
 
@@ -137,6 +138,7 @@ def _upgrade(conn):
     conn.executescript(RUN_TOKENS_DDL)
     conn.executescript(OUTBOX_DDL)
     conn.executescript(DESIGN3_DDL)
+    conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
 
 
@@ -169,7 +171,7 @@ def open_db(path, *, create: bool = False,
     conn.execute("PRAGMA trusted_schema=OFF")
     conn.execute("PRAGMA journal_mode=WAL")
     if create:
-        conn.executescript(SCHEMA)
+        conn.executescript(SCHEMA + PROJECTOR_SQLITE)
     else:
         present = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'"
