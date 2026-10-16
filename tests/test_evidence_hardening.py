@@ -189,7 +189,10 @@ def test_ci_adapter_builds_path_from_validated_components(monkeypatch):
 
     monkeypatch.setattr(evidence_ci.subprocess, "run", fake_run)
     CIAdapter().check_runs("My-Org/repo.name", SHA)
-    assert seen["cmd"][:3] == ["gh", "api", f"repos/My-Org/repo.name/commits/{SHA}/check-runs"]
+    assert seen["cmd"][:2] == ["gh", "api"]
+    assert seen["cmd"][2].startswith(f"repos/My-Org/repo.name/commits/{SHA}/check-runs")
+    assert "per_page=100" in seen["cmd"][2]
+    assert "page=1" in seen["cmd"][2]
 
 
 # --------------------------------------------------------------------------- #
@@ -366,3 +369,41 @@ def test_semaphore_opener_ignores_proxy_env(monkeypatch):
     default = urllib.request.build_opener()
     assert any(isinstance(h, urllib.request.ProxyHandler) and h.proxies
                for h in default.handlers)  # the env really is read by default
+
+
+def test_ci_adapter_paginates_two_pages(monkeypatch):
+    calls: list = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        path = cmd[2]
+        if path.endswith("page=1"):
+            runs = [{"id": i, "name": f"c{i}"} for i in range(1, 101)]
+            payload = {"check_runs": runs, "total_count": 105}
+        elif path.endswith("page=2"):
+            runs = [{"id": i, "name": f"c{i}"} for i in range(101, 106)]
+            payload = {"check_runs": runs, "total_count": 105}
+        else:
+            raise AssertionError(f"unexpected page in {path!r}")
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(evidence_ci.subprocess, "run", fake_run)
+    runs = CIAdapter().check_runs("owner/repo", SHA)
+    assert len(runs) == 105
+    assert any("per_page=100" in c[2] and c[2].endswith("page=2") for c in calls)
+    assert any("per_page=100" in c[2] and c[2].endswith("page=1") for c in calls)
+
+
+def test_ci_adapter_truncated_raises(monkeypatch):
+    def fake_run(cmd, **kwargs):
+        path = cmd[2]
+        if path.endswith("page=1"):
+            runs = [{"id": i, "name": f"c{i}"} for i in range(1, 101)]
+            payload = {"check_runs": runs, "total_count": 250}
+        else:
+            payload = {"check_runs": [], "total_count": 250}
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(evidence_ci.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError, match="check-runs truncated"):
+        CIAdapter().check_runs("owner/repo", SHA)

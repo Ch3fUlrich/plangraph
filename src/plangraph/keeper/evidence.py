@@ -119,6 +119,115 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
 # commit+ci
 # --------------------------------------------------------------------------- #
 
+def _ci_conclusion(runs: Any, commit: str) -> str | None:
+    """Newest-run-per-(suite, app, name) CI verdict: None means ok, else the fail detail. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
+    newest: dict[tuple[Any, Any, str], tuple[tuple[int, str], dict]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        name = str(run.get("name", "?"))
+        suite: Any = None
+        cs = run.get("check_suite")
+        if isinstance(cs, dict) and "id" in cs:
+            sid = cs["id"]
+            try:
+                hash(sid)
+            except TypeError:
+                pass
+            else:
+                suite = sid
+        app: Any = None
+        ap = run.get("app")
+        if isinstance(ap, dict) and "slug" in ap:
+            slug = ap["slug"]
+            try:
+                hash(slug)
+            except TypeError:
+                pass
+            else:
+                app = slug
+        rid = run.get("id")
+        if isinstance(rid, bool):
+            rid_int = 0
+        elif isinstance(rid, int):
+            rid_int = rid
+        elif isinstance(rid, str) and rid.isdigit():
+            rid_int = int(rid)
+        else:
+            rid_int = 0
+        started = run.get("started_at")
+        started_str = str(started) if started is not None else ""
+        key = (rid_int, started_str)
+        gkey = (suite, app, name)
+        prev = newest.get(gkey)
+        if prev is None or key > prev[0]:
+            newest[gkey] = (key, run)
+    if not newest:
+        return f"no CI check-runs found for {commit}"
+    pending_groups: list[tuple[str, Any, Any]] = []
+    failure_groups: list[tuple[str, Any, Any, str]] = []
+    seen: list[str] = []
+    for gkey in sorted(newest, key=lambda k: (k[2], str(k[0]), str(k[1]))):
+        run = newest[gkey][1]
+        name = gkey[2]
+        suite, app = gkey[0], gkey[1]
+        conc_raw = run.get("conclusion")
+        if conc_raw is None or (
+            isinstance(conc_raw, str) and conc_raw.strip() == ""
+        ):
+            pending_groups.append((name, suite, app))
+            continue
+        conc = str(conc_raw).strip()
+        if conc == "":
+            pending_groups.append((name, suite, app))
+            continue
+        if "status" in run and str(run.get("status")).strip().lower() != "completed":
+            pending_groups.append((name, suite, app))
+            continue
+        norm = conc.lower()
+        seen.append(norm)
+        if norm in ("success", "skipped", "neutral"):
+            continue
+        failure_groups.append((name, suite, app, str(conc_raw)))
+    if failure_groups:
+        from collections import Counter
+
+        counts = Counter(n for n, _, _, _ in failure_groups)
+
+        def _fail_disp(n: str, s: Any, a: Any) -> str:
+            if counts[n] <= 1:
+                return n
+            if s is not None:
+                return f"{n} (suite {s})"
+            if a is not None:
+                return f"{n} ({a})"
+            return n
+
+        inner = ", ".join(
+            f"{_fail_disp(n, s, a)}={c}" for n, s, a, c in failure_groups
+        )
+        return f"CI is not green for {commit} ({inner})"
+    if pending_groups:
+        from collections import Counter
+
+        counts = Counter(n for n, _, _ in pending_groups)
+
+        def _pend_disp(n: str, s: Any, a: Any) -> str:
+            if counts[n] <= 1:
+                return n
+            if s is not None:
+                return f"{n} (suite {s})"
+            if a is not None:
+                return f"{n} ({a})"
+            return n
+
+        displays = [_pend_disp(n, s, a) for n, s, a in pending_groups]
+        return f"CI pending for {commit} ({', '.join(displays)}), retry later"
+    if seen and all(c == "skipped" for c in seen):
+        return f"CI only skipped for {commit}"
+    return None
+
+
 class CommitCiVerifier:
     """A commit on ``main`` made for this item, dated after the claim, CI green."""
 
@@ -202,10 +311,9 @@ class CommitCiVerifier:
             return _fail(f"no CI check-runs found for {commit}", ref)
         if any(str(run.get("head_sha", "")) != commit for run in runs):
             return _fail(f"CI check-runs are for another sha than {commit}", ref)
-        not_green = [run for run in runs if str(run.get("conclusion", "")).lower() != "success"]
-        if not_green:
-            names = ", ".join(str(run.get("name", "?")) for run in not_green[:3])
-            return _fail(f"CI is not green for {commit} ({names})", ref)
+        detail = _ci_conclusion(runs, commit)
+        if detail is not None:
+            return _fail(detail, ref)
         return Result(True, f"commit {commit} on main with Plan-Item and green CI", ref)
 
 
