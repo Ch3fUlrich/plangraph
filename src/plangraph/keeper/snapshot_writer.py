@@ -15,12 +15,20 @@ database.  Rewrites stay atomic (temp file + rename; signature first, see snapsh
 """
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
 from .snapshot_io import write_snapshot
 
-__all__ = ["SnapshotWriter"]
+__all__ = ["SnapshotWriter", "ALARM_AFTER"]
+
+#: Consecutive failed builds before an ALARM line (a single failure retries quietly-ish: one line).
+ALARM_AFTER = 3
+
+
+def _log(message):
+    print(f"keeper: {message}", file=sys.stderr, flush=True)
 
 
 class SnapshotWriter(threading.Thread):
@@ -35,6 +43,8 @@ class SnapshotWriter(threading.Thread):
         self._first = None         # monotonic time of the oldest unwritten mark
         self._last = None          # monotonic time of the newest mark
         self._halt = False
+        self.failures = 0          # consecutive failed builds (resets on success)
+        self.alarm = False         # up once failures reach ALARM_AFTER, until a build succeeds
 
     def mark(self):
         """A change was committed (caller holds ``server.lock``): schedule a rebuild."""
@@ -53,8 +63,10 @@ class SnapshotWriter(threading.Thread):
                 gen = self._gen
             try:
                 write_snapshot(self.server, self.server.system)
-            except Exception:      # noqa: BLE001 - a committed write stays committed; retry later
+            except Exception as exc:   # noqa: BLE001 - a committed write stays committed; retry later
+                self._failed(exc)
                 return False
+            self._succeeded()
         with self._cond:
             if gen >= self._written:
                 self._written = gen
@@ -63,6 +75,21 @@ class SnapshotWriter(threading.Thread):
             else:
                 self._first = self._last = time.monotonic()
         return True
+
+    def _failed(self, exc):
+        """Log one line per failed build (exception type only: messages can carry paths)."""
+        self.failures += 1
+        _log(f"snapshot build failed ({type(exc).__name__}), "
+             f"{self.failures} consecutive; plan.snapshot.json is stale, retrying")
+        if self.failures == ALARM_AFTER:
+            self.alarm = True
+            _log(f"ALARM snapshot writer failed {ALARM_AFTER} consecutive builds: "
+                 "plan.snapshot.json lags the database; check disk space, permissions, signing key")
+
+    def _succeeded(self):
+        if self.failures:
+            _log(f"snapshot build recovered after {self.failures} failed attempts")
+        self.failures, self.alarm = 0, False
 
     def run(self):
         while True:
@@ -88,6 +115,7 @@ class SnapshotWriter(threading.Thread):
             if not pending:
                 return
             write_snapshot(self.server, self.server.system)
+            self._succeeded()
         with self._cond:
             self._written = max(self._written, gen)
             if self._written == self._gen:

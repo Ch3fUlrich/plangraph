@@ -15,8 +15,9 @@ import base64
 import json
 import os
 import sys
+import time
 
-from . import config as config_mod, snapshot_sign
+from . import config as config_mod, snapshot_io, snapshot_sign
 
 __all__ = ["FORMAT", "MAX_BYTES", "envelope", "main"]
 
@@ -39,7 +40,9 @@ def envelope(cfg) -> bytes:
     if not pubkey or not getattr(cfg, "signing_key", None):
         raise snapshot_sign.SignError("snapshot signing is not configured; nothing is served")
     path = cfg.snapshot
-    for _ in range(2):   # the keeper writes .sig then the snapshot: a racing read retries once
+    for attempt in range(2):   # the keeper writes .sig then the snapshot: a racing read retries once
+        if attempt:
+            time.sleep(snapshot_io.RETRY_PAUSE_S)
         body = _read(path)
         try:
             sig = _read(snapshot_sign.sig_path(path)).decode("ascii").strip()

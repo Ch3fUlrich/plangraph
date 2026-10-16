@@ -114,6 +114,31 @@ def test_stop_flushes_a_pending_change(fake):
     assert len(fake.builds) == 1 and not w.is_alive()
 
 
+def test_build_failures_are_logged_and_a_streak_raises_one_alarm(fake, capsys):
+    fake.fail = 4
+    w = _writer(fake, debounce=0.02, max_delay=0.05)
+    try:
+        _mark(w)
+        assert _until(lambda: fake.builds, 5)
+        err = capsys.readouterr().err
+        assert err.count("snapshot build failed") == 4 and "OSError" in err
+        assert err.count("ALARM") == 1
+        assert "snapshot build recovered" in err and not w.alarm and w.failures == 0
+    finally:
+        w.stop()
+
+
+def test_alarm_flag_is_up_while_the_streak_lasts(fake, capsys):
+    fake.fail = 10**6
+    w = _writer(fake, debounce=0.02, max_delay=0.05)
+    try:
+        _mark(w)
+        assert _until(lambda: w.alarm, 5) and w.failures >= snapshot_writer.ALARM_AFTER
+    finally:
+        fake.fail = 0
+        w.stop()
+
+
 def test_a_failed_build_is_retried_and_does_not_kill_the_thread(fake):
     fake.fail = 2
     w = _writer(fake, debounce=0.05, max_delay=0.1)
@@ -242,20 +267,10 @@ def test_a_reader_never_sees_a_torn_or_unverifiable_snapshot(daemon):
 
     def reader():
         while not stop.is_set():
-            # parses JSON and verifies the signature; the documented sig/body gap (new sig, old
-            # body) is retried by the reader, and a loaded runner can starve it for a moment,
-            # so only a read that never verifies in 5 tries (or any torn JSON) counts as torn.
-            for attempt in range(5):
-                try:
-                    snapshot_io.read_snapshot(path, pub)
-                    break
-                except snapshot_io.SignError:
-                    time.sleep(0.01)
-                except Exception as exc:                  # noqa: BLE001 - torn JSON etc.
-                    bad.append(repr(exc))
-                    break
-            else:
-                bad.append("never verified in 5 tries")
+            try:
+                snapshot_io.read_snapshot(path, pub)      # production retry: 2 tries, one short pause
+            except Exception as exc:                      # noqa: BLE001 - torn JSON or no verify
+                bad.append(repr(exc))
             reads[0] += 1
 
     thread = threading.Thread(target=reader)
@@ -268,3 +283,20 @@ def test_a_reader_never_sees_a_torn_or_unverifiable_snapshot(daemon):
         stop.set()
         thread.join()
     assert reads[0] > 20 and not bad, bad[:3]
+
+
+def test_startup_snapshot_is_written_under_the_server_lock(tmp_path, monkeypatch):
+    from plangraph.keeper import daemon
+    world = World(tmp_path)
+    seed(world, [("A", [])])
+    path = tmp_path / "keeper.json"
+    path.write_text(json.dumps({"db": str(world.path), "snapshot": str(tmp_path / "s.json"),
+                                "bind": "127.0.0.1:0"}), encoding="utf-8")
+    os.chmod(path, 0o600)
+    owned = []
+    real = api.write_snapshot
+    monkeypatch.setattr(api, "write_snapshot",
+                        lambda srv, who: (owned.append(srv.lock._is_owned()), real(srv, who)))
+    world.close()
+    daemon.run(config.load_config(path), ready=lambda srv: signal.raise_signal(signal.SIGINT))
+    assert owned and owned[0] is True, "startup rebuild must hold server.lock"
