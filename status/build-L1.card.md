@@ -13,11 +13,11 @@ DONE in keeper (gen-1..8): see handoff #8 + git log of this card. Gen-9: none ne
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z; drop-ins 1b923e5/8165c22/cd85d13 | after 2026-10-17 06:42Z: ask routing to retire old drop-ins + worktree-proposal |
-| server:RT-P1-PG-DEPLOY | open, unclaimed (server-L1-main; walfix3 in review) | gates PG cutover GOs (KEEPER-PG / TEMPORAL-CHECK / RT-P1) — next critical step |
+| plangraph:RT-P1-KEEPER-PG | CLAIMED epoch 1 (lease ~2h, heartbeat each beat). PG-DEPLOY done D-1499 (PG17 cloud.vm .159:5432, role keeper=owner). BLOCKED sent 14:0xZ: no DSN file on coding.vm; role split (default single keeper); loss-window default. venv-pg ready (~/.local/share/plangraph/venv-pg, psycopg 3.3.6) | DSN -> rehearsal (scratch schema) -> GO step1+2 -> GO step3 switch (+ExecStart venv-pg) -> 48h -> GO step4; then server:RT-P1-PG-DRILL-POSTCUT (rows>0) |
 | CI-RUNS-ON-WORKST | in_review; label switch = autoos:CI-RUNS-ON-POOL (workst-L1-autoos, D-1455) | HOLD: router re-scoping to private repos (operator S18: public repo = GitHub-hosted) |
 | ORCH-SETUP coord | plangraph-L1-orch-setup draft lane/orch-setup-plan 2ca03a4e (await routing): no RT-P1 freeze; SU-LEASE-CFG + SU-ENV start AFTER KEEPER-PG cutover (rebased); new RT-P3-ASK-PUSH/PLAN-MODE/HISTORY owned by me | send orch-setup DONE w/ cutover sha |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (workst-L1-autoos) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
-Leases: none. L2 live: none (ci-newest-wins stopped; worktree removed 13:0xZ, seat archived l2-cards/ci-newest-wins). pytest-speed L2 idle (done #30).
+Leases: plangraph:RT-P1-KEEPER-PG (heartbeat: PG_URL=http://127.0.0.1:8787 PG_TOKEN_FILE=~/.config/plangraph/build-L1.token pg heartbeat <key>). L2 live: none (ci-newest-wins stopped; worktree removed 13:0xZ, seat archived l2-cards/ci-newest-wins). pytest-speed L2 idle (done #30).
 
 ## Traps
 - systemd drop-ins apply in lexical order: name new live-sync drop-ins to sort LAST (check MainPID environ PYTHONPATH after start).
