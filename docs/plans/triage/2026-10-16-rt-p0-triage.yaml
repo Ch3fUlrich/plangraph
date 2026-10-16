@@ -1,10 +1,32 @@
-# routing:RT-P0-TRIAGE 2026-10-16 (plangraph-L1-plan2). Apply AFTER the orch-setup batch (lane/orch-setup-plan e976bcaf)
-# and after operator approval. Principal router. Built on snapshot 20:34Z + the orch-setup batch.
+# routing:RT-P0-TRIAGE 2026-10-16 rev 2 (plangraph-L1-plan2). Built on the LIVE keeper after the orch-setup apply (D-1532).
+# Operator pre-approved, conditional on the router verdict. Principal router.
 batch: 2026-10-16-rt-p0-triage
 principal: router
 source: 2026-10-16-rt-p0-triage.md
-source_sha256: 7b10f85be411bf9e636177cacffdcb1e0071dfcb579bce51d2eb8c5d150561f3
+source_sha256: bb89ca07579e827d1b54d612975dc12b21e162d6e801d7a2ece11821ab6a8b66
 ops:
+- op: create
+  item:
+    id: ORCH-RUNS-WITHOUT-CLAUDE
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    priority: 2
+    estimate_h: 6.0
+    estimate_src: plan
+    evidence_kinds:
+    - run-record
+    title: 'Orchestration runs with Claude off: one full L1->L2->L3 lane on non-Claude models only'
+    description: 'Operator order D-1533 (2026-10-16): plangraph multi-agent orchestration is usable with ANY model family; the opencode server on the coding VM stays the Claude rate-limit fallback. A drill,
+      not a gate: it needs a run record, so it is a lane under PH-ORCH-SETUP. Report: plangraph docs/plans/triage/2026-10-16-rt-p0-triage.md.'
+    done_criteria: 'one full L1->L2->L3 lane completed with Claude disabled: orchestrators, writer and 2 seats all on non-Claude models; keeper verbs (claim, heartbeat, evidence, done) exercised; run record
+      with model ids per step'
+    depends_on:
+    - plangraph:SU-LAUNCH
+    - autoos:SPAWN-USES-PLACEMENT
+    - plangraph:RT-P1-WORKER
 - op: edit
   key: autoos:AO-400LOC
   fields:
@@ -44,6 +66,12 @@ ops:
     - autoos:AO-WSCONFIG
     - autoos:RS-GEMINI-PARAMS
     - autoos:SPAWN-USES-PLACEMENT
+    - autoos:AO-CLAUDE-SEAT-BASH
+    - autoos:AO-GATE-TK
+    - autoos:AO-L2-SEAT-INTEGRITY
+    - autoos:AO-RETRY-GATES
+    - autoos:AO-ROLE-GATE
+    - autoos:AO-SPAWN-PIN-UX
 - op: edit
   key: autoos:PH-MCP-ONE
   fields:
@@ -74,13 +102,14 @@ ops:
     - autoos:RS-PLAN-ROWS
     - autoos:RS-RENAME-CI
     - autoos:RS-SPAWN-TEMPLATES
+    - autoos:DECIDE-RS-L3-COST
 - op: edit
   key: autoos:PH-WS-SHIFT
   fields:
     depends_on:
+    - autoos:SPAWN-USES-PLACEMENT
     - autoos:WS-1
     - autoos:WS-3
-    - autoos:SPAWN-USES-PLACEMENT
     - autoos:WS-6
 - op: edit
   key: autoos:T4-FENCE
@@ -101,9 +130,20 @@ ops:
   key: autoos:WS-6
   fields:
     depends_on:
+    - autoos:SPAWN-USES-PLACEMENT
     - autoos:WS-1
     - autoos:WS-3
-    - autoos:SPAWN-USES-PLACEMENT
+- op: edit
+  key: plangraph:KG-OMNIGRAPH-REMOVE
+  fields:
+    depends_on:
+    - plangraph:KG-VIEW
+    - plangraph:RT-P3-TABS
+    - plangraph:SU-DOCKER
+- op: edit
+  key: plangraph:MEM-OMNIGRAPH-MERGE
+  fields:
+    note: 'Operator 2026-10-16: the retire-viewer/seed step waits for plangraph:RT-P3-TABS (Knowledge tab inside the plangraph UI) and plangraph:SU-DOCKER (container merge); the other steps do not.'
 - op: edit
   key: plangraph:PG-L2-SMALLFIX-RULE
   fields:
@@ -138,6 +178,12 @@ ops:
     - plangraph:UI-TESTS-TABLE-QA
     - plangraph:UI-WRITES
 - op: edit
+  key: plangraph:PH-ORCH-SETUP
+  fields:
+    depends_on:
+    - plangraph:SU-FRESH-CHECK
+    - plangraph:ORCH-RUNS-WITHOUT-CLAUDE
+- op: edit
   key: plangraph:PH-QA-FLOW
   fields:
     depends_on:
@@ -151,6 +197,11 @@ ops:
     - plangraph:PG-QUESTIONS-CHOICES
     - plangraph:PG-UI-BRIEF
 - op: edit
+  key: plangraph:RT-P5-JEV
+  fields:
+    done_criteria: report comparing free Jev shadow answers with rule decisions and outcomes on >= 200 cards; adopt only at >= 95 % agreement with no unsafe upgrade (threshold carried from autoos:T1-JEV,
+      D-1530); decision row adopt/reject (D18)
+- op: edit
   key: routing:GATE-P1
   fields:
     depends_on:
@@ -161,6 +212,7 @@ ops:
     - autoos:T3-CIGREEN
     - autoos:T3-CIMAIN
     - autoos:T4-FENCE
+    - autoos:T4-HARDEN
 - op: edit
   key: routing:GATE-P2
   fields:
@@ -191,9 +243,13 @@ ops:
     - autoos:T7-GRAPH-USE
     - routing:T7-GRAPH-R
     - server:T6-HEAL
+    - autoos:T2-XSECRET
+    - autoos:T4-ZEN
 - op: edit
   key: routing:GOAL
   fields:
+    title: 'Rethink complete: many agents from different providers work unattended on many projects, one overview (D-1285)'
+    done_criteria: 'routing:PH-RETHINK done; every non-terminal item reaches GOAL (operator 2026-10-16: retarget from Plan v3)'
     depends_on:
     - autoos:OP-MANAGE-KEY
     - autoos:OP-WS-RELAUNCH
@@ -221,6 +277,10 @@ ops:
     - great-wiki:GOAL-GW
     - invest:PH-INVEST
     - plangraph:PG-M4
+    - plangraph:PH-FLEET-CAPACITY
+    - plangraph:PH-ORCH-GUARDS
+    - plangraph:SU-DOCKER
+    - plangraph:WORKER-USES-PLACEMENT
     - routing:GATE-P3
     - routing:LESSONS-ENFORCE
     - routing:PH-AUDIT-1002
@@ -253,6 +313,7 @@ ops:
     - server:T6-UPDATES-IMPL
     - workst-gen:PH-GEN-SERVER
     - workstation:OP-GROK-STEPS
+    - routing:PH-RETHINK
 - op: edit
   key: routing:PH-AUDIT-1002
   fields:
@@ -365,10 +426,10 @@ ops:
   key: routing:ROUTE-PG-SSOT
   fields:
     depends_on:
-    - plangraph:SU-MCP
     - plangraph:PG-PROXY-ACCESS
     - plangraph:PG-REMOTE
     - plangraph:PG-WIN-MCP
+    - plangraph:SU-MCP
 - op: edit
   key: routing:ROUTE-SKILLS
   fields:
@@ -499,7 +560,7 @@ ops:
 - op: cancel
   key: autoos:RS-LIT-TABLE
   reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9; research R1-R5/W1-W7. Literature table on multi-level orchestration; architecture A (no persistent levels) decided with its own research (design sections
-    0, 1).'
+    0, 1). Partial table (1 of 7 sources) kept as a doc: <link set by the router at apply>.'
 - op: cancel
   key: autoos:RS-LIVE-SYNC
   reason: 'RT-P0-TRIAGE 2026-10-16: superseded by autoos:RT-P0-OR-DRIFT; plangraph:SU-HARNESS-CFG. Combos.json vs live drift check duplicates RT-P0-OR-DRIFT; opencode user config writing is SU-HARNESS-CFG.'
