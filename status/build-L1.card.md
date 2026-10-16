@@ -3,18 +3,18 @@ Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-b
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: D-1377 no crons; D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
-## Main = 7ec2bb5 (CI on workst runner since #17 5188310)
+## Main = cf9fc7b (CI on workst runner since #17 5188310)
 DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
 RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ),
 RT-P1-INBOX-CODE (PR #18 b5f45c9; router evidence commit 68a9180, kinds->[commit]; openai seat inbox-seats/r2-1cb7acc),
 RT-P1-WORKER-CODE (PR #13 merged main 66d87fe, head dd954e7 CI attempt-1 green; early-cancel hole fixed; openai = gpt-oss delta seat
-worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/verdict-alibaba + adjudication-alibaba.md).
+worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/verdict-alibaba + adjudication-alibaba.md),
+PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
 
 ## Open
 | Item | State | Next |
 |---|---|---|
 | RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
-| PROJECTOR-RECONCILE-SCHED | MERGE-READY PR #21 4e11857 (CI green on rerun; 1st red = live-Temporal test_ok_attempt flake, untouched file) | diff ok; seats seats/reconcile-4e11857 -> ../reconcile-seats refused by seat_verdict (openai review!=reply hash, no TEST-GAMING; qwen no served_model/finish) -> L2 rebuilding. Follow-up for router: Inbox has no projector_alarms reader |
 | RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | claimed 04:2xZ | gates server:RT-P1-TEMPORAL-CHECK; brief briefs/l2-temporal-tls.md (spike + rust/worker mTLS; router agreed, criteria edit refused while claimed -> record "and rust/worker binary" in DONE note + evidence); L2 routed to workst-L1-autoos |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
