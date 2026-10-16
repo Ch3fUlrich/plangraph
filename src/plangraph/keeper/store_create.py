@@ -98,7 +98,7 @@ class CreateMixin:
         unknown = {name: raw[name] for name in raw
                    if name not in KNOWN_ITEM_FIELDS}
         for name, value in unknown.items():
-            guard(name, value)
+            guard(name, value, key)
         return fold_checked(raw.get("note"), unknown, key) if unknown \
             else raw.get("note")
 
@@ -330,7 +330,7 @@ class CreateMixin:
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
         edit_fields = dict(rest)
-        self._check_text(edit_fields)          # caps + credential guard (incl. estimate_src)
+        self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
         # audit-meta ``default`` marker keeps flagging the item forever.  An
         # ``estimate_h`` edit that does not say where the number came from
