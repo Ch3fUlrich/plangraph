@@ -44,7 +44,7 @@ _STATE = {"writer": "claimed", "reviewer": "in_review"}
 _REVOKE_ALL = frozenset({
     "claimed", "released", "lease_expired", "cancelled", "review_passed",
     "closed_on_decision", "answered", "changes_requested", "legacy_state_set",
-    "review_withdrawn"})
+    "review_withdrawn", "item_reopened"})
 
 
 class TokensMixin:

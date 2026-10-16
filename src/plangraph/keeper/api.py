@@ -45,7 +45,8 @@ __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
 
 MAX_BODY = 1024 * 1024  # 1 MiB
 from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
-from .api_routes import READ_CALLS, ROUTER_VERBS, TEXT_DEFAULT as _TEXT_DEFAULT
+from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
+                         TEXT_DEFAULT as _TEXT_DEFAULT)
 from .api_routes import WRITE_VERBS as _WRITE_VERBS
 
 
@@ -265,6 +266,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
             data = store.audit_meta(principal, project=project,
                                     stale_days=self._one(query, "stale_days"))
             return (audit_meta.render(data), True) if as_text else (data, False)
+        if name == "metrics":
+            return (store.get_metrics(principal, day=self._one(query, "day"),
+                                      since=self._one(query, "since"),
+                                      metric=self._one(query, "metric")), False)
         if name in READ_CALLS:
             data = READ_CALLS[name](store, principal, project)
             text = getattr(fmt, name + "_text")
@@ -326,6 +331,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                                              self._need(body, "decision_id"))
         if name in ROUTER_VERBS:
             return ROUTER_VERBS[name](store, principal, body, self._need)
+        if name in ROLE_CHECKED_VERBS:
+            return ROLE_CHECKED_VERBS[name](store, principal, body, self._need)
         if name == "reap":
             return store.reap(principal)
         raise Refused("not_found", f"no write verb {name!r}")
