@@ -1,0 +1,161 @@
+# rehearsal 2026-10-16T08:50:17Z base 8165c22; source = sqlite backup copy (sha256 f82b3563...), PG16 alpine container --memory 1g, DSN=$PG_DSN (trust auth, no password)
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin copy-to-pg --dry-run --src $SCRATCH/keeper-copy.db
+copy-to-pg dry-run (target untouched)
+source events head: seq=6254 hash=0d6f6305972caae6a4615c1aac9a1f415e89ddc49492ec6c32cd4c4605275eb9
+table            source
+events              6254
+items               1734
+evidence            1060
+edges               2559
+principals            24
+aliases               12
+run_tokens             0
+outbox_seen            0
+audit_log          51225
+audit_findings        34
+cards                  0
+attempts               0
+decisions              0
+questions              0
+answers                0
+budget                 0
+projector_applied        0
+projector_watermark        0
+projector_alarms        0
+total              62902
+source chain ok
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin copy-to-pg --apply --src $SCRATCH/keeper-copy.db
+copy-to-pg apply
+source events head: seq=6254 hash=0d6f6305972caae6a4615c1aac9a1f415e89ddc49492ec6c32cd4c4605275eb9
+table            source    target
+events              6254      6254
+items               1734      1734
+evidence            1060      1060
+edges               2559      2559
+principals            24        24
+aliases               12        12
+run_tokens             0         0
+outbox_seen            0         0
+audit_log          51225     51225
+audit_findings        34        34
+cards                  0         0
+attempts               0         0
+decisions              0         0
+questions              0         0
+answers                0         0
+budget                 0         0
+projector_applied        0         0
+projector_watermark        0         0
+projector_alarms        0         0
+total              62902
+copied and verified
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin copy-to-pg --apply --src $SCRATCH/keeper-copy.db
+copy-to-pg: target is not empty (events, items, evidence, edges, principals, aliases, audit_log, audit_findings): copy-to-pg only fills an empty keeper
+rc=2
+
+$ $SCRATCH/venv/bin/python $SCRATCH/rowhash.py $SCRATCH/keeper-copy.db postgresql://postgres@127.0.0.1:38505/keeper /home/s/code/plangraph-worktrees/pg-prep/src
+events               sqlite=6edec9fb5944d79e pg=6edec9fb5944d79e ok
+items                sqlite=9edf30b7c795dd64 pg=9edf30b7c795dd64 ok
+evidence             sqlite=2024581a098cc4ed pg=2024581a098cc4ed ok
+edges                sqlite=7b3cadc6cc93e434 pg=7b3cadc6cc93e434 ok
+principals           sqlite=76b62ce69aebf03e pg=76b62ce69aebf03e ok
+aliases              sqlite=86c184bc33665166 pg=86c184bc33665166 ok
+run_tokens           sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+outbox_seen          sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+audit_log            sqlite=7b6a32b8a2a6fb72 pg=7b6a32b8a2a6fb72 ok
+audit_findings       sqlite=65bfeec189ad7be6 pg=65bfeec189ad7be6 ok
+cards                sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+attempts             sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+decisions            sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+questions            sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+answers              sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+budget               sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+projector_applied    sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+projector_watermark  sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+projector_alarms     sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+DIFFS 0
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify
+chain and cache integrity ok
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-snapshot --snapshot $SCRATCH/src/plan.snapshot.json --pubkey /home/s/.config/plangraph/snapshot-signing.pub
+snapshot NOT verified: the 'cryptography' package is required for snapshot signing
+rc=1
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-anchor
+anchors not configured (anchor_socket + anchor_log, or anchor_file)
+rc=2
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin migrate
+schema up to date
+rc=0
+
+# note: first verify-snapshot failed on scratch venv missing cryptography (env, not a defect); rerun after pip install cryptography
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-snapshot --snapshot $SCRATCH/src/plan.snapshot.json --pubkey /home/s/.config/plangraph/snapshot-signing.pub
+snapshot signature ok
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin add-principal rehearsal-router --role router
+rehearsal-router token (shown once): <redacted>
+rc=0
+
+# scratch keeper: python -m plangraph.keeper.daemon --config keeper.json (bind 127.0.0.1:$PGPORT+1, never 8787); PG_URL=http://127.0.0.1:$KP PG_TOKEN_FILE=<scratch token file>
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json whoami
+rehearsal-router | role router | projects - | family -
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json ready
+server:OP-MT216-PROWLARR-ROTATE | OP: rotate the leaked Prowlarr API key, delete .leaked-backup (MT-216) | est 0h | unblocks 1 | prio 9
+autoos:AO-ROLE-GATE | Spawner role/depth gate + exit.json fields | est 4h | unblocks 2 | prio 8
+server:OP-HEAL-ACCESS | HolmesGPT pilot access: gateway token + OmniRoute client-key file (prox places) | est 0h | unblocks 1 | prio 8
+autoos:AO-TASKKEY | Spawner task_key: fetch item, refuse unless claimed by caller/delegate, render brief, addendum | est 4h | unblocks 2 | prio 6
+autoos:RS-GEMINI-PARAMS | Gemini: thinking_level instead of thinking_budget; drop temperature/top_p/top_k | est 4h | unblocks 2 | prio 6
+autoos:BASHGUARD-ORCH-HARDEN | bash-guard orchestrator mode: normalise paths, allowlist commands, fail closed | est 4h | unblocks 1 | prio 6
+autoos:AO-CHANGELOG-DOCS | check-changelog-docs + .docs-map | est 3h | unblocks 2 | prio 5
+great-wiki:GW-MCP-AGENT-SKILLS-REF | great-wiki .mcp.json: drop doc-string references to /home/s/code/agent-skills (clone retirement) | est 0.5h | unblocks 1 | prio 5
+autoos:RS-RENAME-CI | CI verdict after the layer rename + faik push | est 1h | unblocks 1 | prio 5
+workst-ebn:EBN-DON011187-TRANSFER | OP: DON011187 data transfer | est 1h | unblocks 1 | prio 5
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json show RT-P1-KEEPER-PG
+not_found: no item 'RT-P1-KEEPER-PG'
+rc=2
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json percent
+32.3%
+rc=0
+
+$ curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer <tok>" http://127.0.0.1:$KP/v1/alarms
+http 200
+
+$ curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer <tok>" http://127.0.0.1:$KP/inbox
+http 200
+
+$ curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer <tok>" http://127.0.0.1:$KP/v1/questions
+http 200
+
+# note: show needs the project-qualified key (rc 2 above was my unqualified key)
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json show plangraph:RT-P1-KEEPER-PG
+plangraph:RT-P1-KEEPER-PG | Port the Python keeper to Postgres + cards/attempts/decisions tables
+state open | kind lane | track RETHINK | prio 1 | epoch 0
+claimed_by - | delegate - | lease - | reviewer -
+deps plangraph:RT-P1-CONTRACT=done, plangraph:RT-P1-KEEPER-PG-CODE=done, server:RT-P1-PG-DEPLOY=open
+unblocks plangraph:RT-P1-GOVERNOR, plangraph:RT-P1-PLANNER-KIT, plangraph:RT-P1-PROJECTOR, plangraph:RT-P1-WORKER, routing:RT-P1
+evidence -
+desc Source: D-1285 rethink design (docs/reports/2026-10-15-rethink-setup-design.md, operator rounds 1-10 verbatim in docs/plan/rethink/operator-rounds.md).
+done keeper runs on Postgres with existing tests green; new tables cards (check, read/write sets, class, risk tags), attempts, decisions (operator rows), questions/answers, budget; states needs_input/waiting/failed/parked; blue-green migration from SQLite: old keeper read-only 48 h, row counts + hash chain verified before cutover; 2 seats incl. non-Claude
+reviews -
+rc=0
+
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify
+chain and cache integrity ok
+rc=0
+
+# cleanup: kill scratch keeper (rc 0), docker rm -f pg-prep-rehearsal (rc 0); no container left
