@@ -15,10 +15,11 @@ on:
       - "!CHANGELOG*"
   workflow_dispatch:
 
-# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run.
+# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
+# but never a workflow_dispatch run (timing measurements must finish).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -66,7 +67,7 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - name: pytest
-        run: python -m pytest -q -n 8 --dist loadgroup tests
+        run: python -m pytest -q -n 8 --dist loadgroup --durations=30 tests
 
   pytest-postgres:
     runs-on: [self-hosted, fleet-ci]
