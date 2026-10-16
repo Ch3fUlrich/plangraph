@@ -1,0 +1,77 @@
+# V1 — Byte Identity
+
+**store_read._snapshot**: The evidence path swaps `self._evidence(item["key"])` per item for `evidence.get(item["key"], [])` where `evidence` comes from `self._evidence_by_key()`. The review path swaps `self._round_verdicts(item)` for `self._current_round(item, verdicts.get(item["key"], []))` where `verdicts` comes from `self._verdicts_by_key()`. Decision text receives the pre-fetched dict.
+
+**store_support._evidence_by_key**: Queries `SELECT id,key,epoch,kind,ref,verified,detail,at FROM evidence ORDER BY id` (global, no WHERE). The old `_evidence(key)` used the same columns with `WHERE key=? ORDER BY id`. Grouping a globally-id-ordered result by key yields per-key lists in id order — identical to the old per-key query result. The row-to-record conversion is factored into `_evidence_record(row)` which does the same `_json_dict` and `bool()` casts. Byte-identical.
+
+**store_review._verdicts_by_key**: `SELECT key,payload FROM events WHERE type='review_verdict' ORDER BY seq` (global). Old `_round_verdicts`: `SELECT payload FROM events WHERE key=? AND type='review_verdict' ORDER BY seq`. Per-key subsequence of a globally-seq-ordered result preserves seq order. `_current_round` applies the same epoch/round integer filter as the old inline loop. Byte-identical.
+
+**_current_round**: Extracted verbatim from `_round_verdicts` — same `int(p.get("epoch",-1)) == epoch and int(p.get("round",-1)) == round_no` predicate. No behavioural change.
+
+**decision_text**: Passes `evidence` dict into `_decision_text` which falls back to `self._evidence(item["key"])` if evidence is None (other callers). Logic is unchanged; only the per-item query is precomputed. No divergence.
+
+No ordering or filter regressions found.
+
+# V2 — Lost-Write / Torn Snapshot
+
+**Atomicity**: `write_snapshot` in `snapshot_io` remains temp-file + `os.replace`. A reader never sees a partial file regardless of the debounce.
+
+**Generation accounting in SnapshotWriter._write_locked**: Acquires `server.lock`, reads `_gen` under `_cond`, calls `write_snapshot`, releases `server.lock`, then updates `_written` under `_cond`. Since HTTP write handlers call `mark()` while holding `server.lock`, no new commit can interleave with the build — the database state read during `write_snapshot` is consistent.
+
+**The tiny post-lock gap**: Between releasing `server.lock` and acquiring `_cond`, one `mark()` could slip in. This causes a redundant re-`_first` reset (conservative), never a lost update, because `_written` advances monotonically to the gen captured at the build's start.
+
+**flush()**: Acquires `server.lock`, reads gen/pending under `_cond`, writes synchronously, then bumps `_written = max(_written, gen)`. Safe against concurrent `_write_locked` (serialized by `server.lock`). Raises on error so the caller knows.
+
+**server_close**: Calls `writer.stop()` → `flush()` → halt → join(5s). Wrapped in `suppress(Exception)`. On graceful shutdown the file is level. Daemon-thread kill after join timeout loses nothing uncommitted (startup rebuild covers it).
+
+**daemon.run startup rebuild**: `api.write_snapshot(server, server.system)` before serving. Wrapped in try/except so a corrupted state (e.g., disk full) never blocks startup. A later successful write overwrites.
+
+**Failed build path**: `_write_locked` returns False; the run loop resets `_first = _last = now` and backs off by one debounce before retrying. Committed data is never lost; the file simply remains stale until the next successful build.
+
+**No torn-write or lost-write vectors identified.**
+
+# V3 — Staleness vs Consumers
+
+**API response path** (`api._snapshot` with debounce > 0): Calls `writer.mark()` (microseconds: one lock + counter bump) and returns. The HTTP response does NOT wait for the snapshot build. Client-visible latency is reduced to the DB commit + response overhead.
+
+**Staleness bound**: `due = min(_last + debounce_s, _first + max_delay_s)`. With defaults 0.25/2.0: under a steady write stream, `_first` is the oldest unwritten mark timestamp. After at most 2 s a build fires. After build completion, `_first` is reset (or None). Effective bound: `max_delay_s + build_time` for the last batch, matching the docstring contract.
+
+**Failed builds**: Each failure resets `_first` to the retry time, extending staleness by one backoff per failure. This is not a regression against the old path (where a failed synchronous write also left the file stale until the next write). The reaper (60 s) and CLI consumers tolerate this.
+
+**Reaper**: Reads the snapshot file every 60 s. A ≤2 s lag is irrelevant at that cadence.
+
+**snapshot_serve / snapshot_pull**: Remote consumers poll or fetch. A 2 s lag on an HTTP pull is within the documented staleness contract (the old sync path could also lag if the rebuild was in flight under `server.lock` and the handler blocked).
+
+**cli_verbs local fallback**: CLI tools that read `plan.snapshot.json` as a fallback see the same bounded staleness. Acceptable for a human-triggered read.
+
+**Steady write stream**: max_delay_s prevents starvation. Each build takes O(items) reads but holds `server.lock` during the DB reads. HTTP handlers that need `server.lock` for writes will briefly block. At 1000 items (~870 ms old, now one bulk pass) the build should be faster, but the lock is still held for the build duration. The bound holds for staleness of the file, not for handler latency.
+
+# V4 — PG / SQLite Parity
+
+Both backends run the same code path: `Store._snapshot` → `_evidence_by_key` → `_verdicts_by_key` → `_current_round`. No backend branch exists in the diff.
+
+**Ordering**: `ORDER BY id` and `ORDER BY seq` are both integer monotonics present in either backend's schema. No `ORDER BY` with locale-dependent columns introduced.
+
+**Types**: `_evidence_record` applies `bool(record["verified"])` — PG BOOLEAN and SQLite INTEGER→bool both produce the same Python bool. `_json_dict(record.get("ref"))` handles PG JSON/JSONB (returns dict or str) and SQLite TEXT. Same as the pre-refactor code path.
+
+**Event payload**: `json.loads(row["payload"] or "{}")` — identical in both. `_verdicts_by_key` returns `dict[key→[payload]]` just as the old per-key path did.
+
+No divergence found. The set-based queries issue no backend-specific SQL.
+
+# V5 — Bench Honesty
+
+The bench file (`tools/bench_keeper_snapshot.py`) is in `tools/`, not in the `src/` diff provided. Based on the material's own description and what can be inferred:
+
+- **Sequential writes**: If the bench measures throughput of sequential committed writes (one at a time), it validates the `mark()` fast path but does NOT measure contention when `_write_locked` holds `server.lock` and incoming requests must wait. Real traffic with concurrent readers/writers under debounce will show higher tail latency than sequential bench p50.
+
+- **p50 only**: Reporting the median hides the occasional spike when a request arrives during a ~build-time `server.lock` hold. At 2 s max_delay and non-trivial build time, the p99 is the more honest metric for an interactive API.
+
+- **Builder lock contention**: The old synchronous path held `server.lock` for the entire O(items) rebuild on every write. The new path holds it once per debounce/max_delay window instead of per-write, so contention frequency drops proportionally. However, the bench table likely doesn't include a row showing "request wait time when a build is in-flight" because that's a rare event under sequential testing.
+
+- **What the table does not show**: (a) The per-write p50 improvement is real but the absolute gain depends on item count — at N=10 the old cost was negligible. (b) The bench almost certainly doesn't measure `plan.snapshot.json` staleness during the run (that's the correctness claim, not a perf claim). (c) Memory usage of loading all evidence/verdicts in bulk is omitted; at very large N the two bulk queries load everything into Python dicts, unlike the old per-key cursor. (d) The 2 s flush-on-shutdown tail is not measured.
+
+The improvement claim (one bulk read vs N per-item reads on the request path) is structurally sound; the bench numbers are directionally correct but understate tail risk in a concurrent setting.
+
+---
+
+The change is well-scoped, preserves byte identity of the snapshot output, introduces no lost-write or torn-file vectors, maintains PG/SQLite parity through backend-agnostic SQL, and the staleness bound is structurally sound (max_delay + one build). The only material gaps are: (1) the `server.lock` hold during builds still blocks HTTP handlers in a short window and this contention cost is not benchmarked in concurrent mode; (2) the bench reports p50 under sequential writes which understates p99 tail latency; (3) the large-N memory profile of the two bulk dict loads is not measured. None of these are correctness regressions — they are honest-claim and tail-latency gaps in the evidence package rather than in the code.

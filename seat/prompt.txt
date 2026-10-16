@@ -1,0 +1,366 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+Review of HIGH change plangraph:KEEPER-SNAPSHOT-PG head ba7b199. Python keeper: Store._snapshot now loads evidence and review verdicts with one set query each (was per item); the API no longer rewrites plan.snapshot.json on the request thread but marks a SnapshotWriter thread (debounce 0.25 s, max delay 2 s, flush on server_close, startup rebuild in daemon; debounce 0 = old synchronous behaviour). Vectors, answer each with file:function evidence:
+V1 byte identity: store_read._snapshot, store_support._evidence_by_key, store_review._verdicts_by_key/_current_round vs the old per-item path (ordering, round/epoch filter, decision_text source).
+V2 lost-write / torn snapshot: snapshot_writer.SnapshotWriter (mark/_write_locked/flush/stop generation accounting, races with writes under server.lock), snapshot_io.write_snapshot atomicity, KeeperHTTPServer.server_close, daemon.run shutdown and startup.
+V3 staleness vs consumers: api._snapshot, Reaper, snapshot_serve/snapshot_pull/cli_verbs local fallback; is the staleness bound real (max_delay) incl. failed builds and a steady write stream?
+V4 PG/SQLite parity: same code path both backends; any query that differs in ordering or types.
+V5 bench honesty: tools/bench_keeper_snapshot.py (sequential writes, p50 only, builder lock contention, what the table does not show).
+Material (diff vs main, src only):
+diff --git a/src/plangraph/keeper/api.py b/src/plangraph/keeper/api.py
+index 8a0b484..da759d3 100644
+--- a/src/plangraph/keeper/api.py
++++ b/src/plangraph/keeper/api.py
+@@ -16,9 +16,10 @@ Routes (contract):
+ * Refusals are 4xx ``{"error": code, "msg": …}``; unexpected failures are a 500
+   with no internals.  Bodies over 1 MiB are rejected with 413.
+ 
+-After every committed write the server rewrites ``plan.snapshot.json``
+-atomically (temp file + ``os.replace``) and a background reaper thread calls
+-``Store.reap`` every 60 s.
++After committed writes the server rewrites ``plan.snapshot.json`` atomically (temp
++file + ``os.replace``): synchronously, or with ``snapshot_debounce_s > 0`` off the
++request path with bounded staleness (``snapshot_writer``).  A background reaper
++thread calls ``Store.reap`` every 60 s.
+ """
+ from __future__ import annotations
+ 
+@@ -34,6 +35,7 @@ from pathlib import Path
+ from .. import inbox, views
+ from . import outage
+ from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
++from .snapshot_writer import SnapshotWriter
+ from . import api_routes, audit_meta, auth, brief, changelog, fmt
+ from .auth import Principal, RunPrincipal
+ from .errors import Refused
+@@ -166,6 +168,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
+             remaining -= len(chunk)
+ 
+     def _snapshot(self, principal):
++        writer = self.server.snapshot_writer
++        if writer is not None:     # debounced: rebuilt off the request path (snapshot_writer)
++            writer.mark()
++            return
+         try:
+             write_snapshot(self.server, principal)
+         except Exception:  # a committed write stays committed
+@@ -384,6 +390,12 @@ class KeeperHTTPServer(ThreadingHTTPServer):
+         self.system = system or Principal("system", "system", [], None)
+         self.reaper = None
+         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
++        self.snapshot_writer = None
++        debounce = float(getattr(config, "snapshot_debounce_s", 0) or 0)
++        if debounce > 0:         # KEEPER-SNAPSHOT-PG: 0 = rewrite synchronously after each write
++            self.snapshot_writer = SnapshotWriter(
++                self, debounce, getattr(config, "snapshot_max_delay_s", 2.0))
++            self.snapshot_writer.start()
+         super().__init__(address, KeeperHandler)
+ 
+     def start_reaper(self):
+@@ -397,8 +409,17 @@ class KeeperHTTPServer(ThreadingHTTPServer):
+             self.reaper.stop()
+             self.reaper = None
+ 
++    def flush_snapshot(self):
++        """Bring ``plan.snapshot.json`` level with the database (no-op when synchronous)."""
++        if self.snapshot_writer is not None:
++            self.snapshot_writer.flush()
++
+     def server_close(self):
+         self.stop_reaper()
++        writer, self.snapshot_writer = self.snapshot_writer, None
++        if writer is not None:
++            with suppress(Exception):     # shutdown never hangs on a snapshot error
++                writer.stop()
+         super().server_close()
+ 
+ 
+diff --git a/src/plangraph/keeper/config.py b/src/plangraph/keeper/config.py
+index 27beb95..6b5c34c 100644
+--- a/src/plangraph/keeper/config.py
++++ b/src/plangraph/keeper/config.py
+@@ -95,9 +95,20 @@ class Config:
+         self.review_overdue_s = int(data.get("review_overdue_s", 4 * 3600))
+         self.lease_warn_s = int(data.get("lease_warn_s", 15 * 60))
+         self.reap_interval = float(data.get("reap_interval", 60))
++        # KEEPER-SNAPSHOT-PG: the snapshot file is rebuilt after writes go quiet for this long
++        # (<= 0: synchronously after every write) and at most max_delay_s after a change.
++        self.snapshot_debounce_s = self._seconds(data, "snapshot_debounce_s", 0.25)
++        self.snapshot_max_delay_s = self._seconds(data, "snapshot_max_delay_s", 2.0)
+         self.backup_prune = self._backup_prune(data.get("backup_prune"))
+ 
+     # ------------------------------------------------------------- helpers
++    @staticmethod
++    def _seconds(data, name, default) -> float:
++        value = data.get(name, default)
++        if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
++            raise ConfigError(f"{name} must be a number of seconds >= 0")
++        return float(value)
++
+     @staticmethod
+     def _db_options(data) -> dict:
+         """Backend options for ``db.open_db``/``lock_keeper`` (only what the file sets)."""
+diff --git a/src/plangraph/keeper/daemon.py b/src/plangraph/keeper/daemon.py
+index 497ab2a..55df4b9 100644
+--- a/src/plangraph/keeper/daemon.py
++++ b/src/plangraph/keeper/daemon.py
+@@ -66,6 +66,10 @@ def run(cfg, *, host=None, port=None, ready=None):
+         if server.anchorer is not None:
+             server.anchorer.record(conn, "start")
+         server.start_reaper()
++        try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
++            api.write_snapshot(server, server.system)
++        except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
++            print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
+         stop = threading.Event()
+         _install_signals(stop)
+         thread = threading.Thread(target=server.serve_forever, daemon=True,
+diff --git a/src/plangraph/keeper/snapshot_writer.py b/src/plangraph/keeper/snapshot_writer.py
+new file mode 100644
+index 0000000..8ac4a8c
+--- /dev/null
++++ b/src/plangraph/keeper/snapshot_writer.py
+@@ -0,0 +1,105 @@
++"""Debounced, coalescing ``plan.snapshot.json`` writer (KEEPER-SNAPSHOT-PG).
++
++The snapshot is derived state: the write that changed the plan is committed in the database
++before the HTTP response, the file is rebuilt from the database afterwards.  Rebuilding on every
++write put an O(items) read on the request path (PG: ~870 ms per write at 1000 items).  Here a
++write only ``mark()``s the writer; one thread rebuilds once the writes went quiet for
++``debounce_s``, and never later than ``max_delay_s`` after the first unwritten change, so a
++steady stream of writes cannot starve the file.
++
++Contract (bounded staleness): the file lags the database by at most ``max_delay_s`` plus one
++build while the keeper runs; ``flush()`` (shutdown, tests) brings it level before returning; a
++crash loses nothing committed because the startup rebuild (daemon) re-derives it from the
++database.  Rewrites stay atomic (temp file + rename; signature first, see snapshot_io).
++``debounce_s <= 0`` keeps the old behaviour: the request thread rewrites it synchronously.
++"""
++from __future__ import annotations
++
++import threading
++import time
++
++from .snapshot_io import write_snapshot
++
++__all__ = ["SnapshotWriter"]
++
++
++class SnapshotWriter(threading.Thread):
++    def __init__(self, server, debounce_s, max_delay_s):
++        super().__init__(name="keeper-snapshot", daemon=True)
++        self.server = server
++        self.debounce_s = float(debounce_s)
++        self.max_delay_s = max(float(max_delay_s), self.debounce_s)
++        self._cond = threading.Condition()
++        self._gen = 0              # bumped by every mark()
++        self._written = 0          # the _gen the file reflects
++        self._first = None         # monotonic time of the oldest unwritten mark
++        self._last = None          # monotonic time of the newest mark
++        self._halt = False
++
++    def mark(self):
++        """A change was committed (caller holds ``server.lock``): schedule a rebuild."""
++        with self._cond:
++            now = time.monotonic()
++            self._gen += 1
++            self._last = now
++            if self._first is None:
++                self._first = now
++            self._cond.notify_all()
++
++    def _write_locked(self):
++        """Rebuild under the server lock; True when the file now reflects the database."""
++        with self.server.lock:     # writes mark() under this lock, so ``gen`` is exact
++            with self._cond:
++                gen = self._gen
++            try:
++                write_snapshot(self.server, self.server.system)
++            except Exception:      # noqa: BLE001 - a committed write stays committed; retry later
++                return False
++        with self._cond:
++            if gen >= self._written:
++                self._written = gen
++            if self._written == self._gen:
++                self._first = self._last = None
++            else:
++                self._first = self._last = time.monotonic()
++        return True
++
++    def run(self):
++        while True:
++            with self._cond:
++                while not self._halt and self._written == self._gen:
++                    self._cond.wait()
++                if self._halt:
++                    return
++                due = min(self._last + self.debounce_s, self._first + self.max_delay_s)
++                wait = due - time.monotonic()
++                if wait > 0:
++                    self._cond.wait(wait)      # more marks move ``due`` out; re-evaluate
++                    continue
++            if not self._write_locked():
++                with self._cond:               # failed build: back off one debounce, then retry
++                    self._first = self._last = time.monotonic()
++
++    def flush(self):
++        """Synchronously bring the file level with the database (raises on a write error)."""
++        with self.server.lock:
++            with self._cond:
++                gen, pending = self._gen, self._written != self._gen
++            if not pending:
++                return
++            write_snapshot(self.server, self.server.system)
++        with self._cond:
++            self._written = max(self._written, gen)
++            if self._written == self._gen:
++                self._first = self._last = None
++
++    def stop(self):
++        """Flush what is pending, then end the thread."""
++        try:
++            self.flush()
++        finally:
++            with self._cond:
++                self._halt = True
++                self._cond.notify_all()
++            if self.is_alive() and threading.current_thread() is not self:
++                self.join(timeout=5)
+diff --git a/src/plangraph/keeper/store_read.py b/src/plangraph/keeper/store_read.py
+index 85ed5c1..04c1d29 100644
+--- a/src/plangraph/keeper/store_read.py
++++ b/src/plangraph/keeper/store_read.py
+@@ -197,10 +197,12 @@ class ReadMixin:
+                 fixed.setdefault(item["fixes"], []).append(item["key"])
+         created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
+         answers = self.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
++        evidence = self._evidence_by_key()      # set-based: one query each, not one per item
++        verdicts = self._verdicts_by_key()
+         out = []
+         for item in items:
+             reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
+-                       for v in self._round_verdicts(item)]
++                       for v in self._current_round(item, verdicts.get(item["key"], []))]
+             out.append({
+                 "project": item["project"], "id": item["id"], "key": item["key"],
+                 "title": item["title"], "description": item["description"],
+@@ -226,7 +228,7 @@ class ReadMixin:
+                 "review_waiver": item.get("review_waiver"), "reviews": reviews,
+                 "evidence": [{"kind": r["kind"], "ref": r["ref"],
+                               "verified": r["verified"], "at": r["at"]}
+-                             for r in self._evidence(item["key"])],
++                             for r in evidence.get(item["key"], [])],
+                 "updated_at": item["updated_at"],
+                 "corrected_by": sorted(corrected.get(item["key"], [])),
+                 "fixes": item.get("fixes"),
+@@ -250,7 +252,7 @@ class ReadMixin:
+                 "items": out,
+                 "aliases": {a["old"]: a["new"] for a in self._aliases()},
+                 "activity": self._activity(now),
+-                "decision_text": self._decision_text(items, now),
++                "decision_text": self._decision_text(items, now, evidence),
+                 "progress": progress(out)}   # PROGRESS-PANEL: the page's static panel
+ 
+     def _activity(self, now):
+@@ -285,13 +287,15 @@ class ReadMixin:
+         except Exception:  # noqa: BLE001 - snapshot never raises
+             return []
+ 
+-    def _decision_text(self, items, now):
++    def _decision_text(self, items, now, evidence=None):
+         """Map of decision id -> cell text for ids cited by item evidence."""
+         try:
+             wanted: list[str] = []
+             seen: set[str] = set()
+             for item in items:
+-                for record in self._evidence(item["key"]):
++                records = (evidence.get(item["key"], []) if evidence is not None
++                           else self._evidence(item["key"]))
++                for record in records:
+                     if record.get("kind") != "decision":
+                         continue
+                     ref = record.get("ref") or {}
+diff --git a/src/plangraph/keeper/store_review.py b/src/plangraph/keeper/store_review.py
+index 6b86f48..9bf07c7 100644
+--- a/src/plangraph/keeper/store_review.py
++++ b/src/plangraph/keeper/store_review.py
+@@ -84,17 +84,25 @@ class ReviewMixin:
+         returns the item to ``claimed`` and the next ``submit`` bumps ``round``,
+         so the earlier round's verdicts no longer match.
+         """
+-        epoch, round_no = int(item["epoch"]), int(item.get("round") or 0)
+-        out = []
+-        for row in self.conn.execute(
++        return self._current_round(item, [
++            json.loads(row["payload"] or "{}") for row in self.conn.execute(
+                 "SELECT payload FROM events WHERE key=? AND type='review_verdict'"
+-                " ORDER BY seq", (item["key"],)):
+-            payload = json.loads(row["payload"] or "{}")
+-            if (int(payload.get("epoch", -1)) == epoch
+-                    and int(payload.get("round", -1)) == round_no):
+-                out.append(payload)
++                " ORDER BY seq", (item["key"],))])
++
++    def _verdicts_by_key(self):
++        """``key -> [payload]`` of every ``review_verdict`` in one query (seq order)."""
++        out = {}
++        for row in self.conn.execute(
++                "SELECT key,payload FROM events WHERE type='review_verdict' ORDER BY seq"):
++            out.setdefault(row["key"], []).append(json.loads(row["payload"] or "{}"))
+         return out
+ 
++    @staticmethod
++    def _current_round(item, payloads):
++        epoch, round_no = int(item["epoch"]), int(item.get("round") or 0)
++        return [p for p in payloads
++                if int(p.get("epoch", -1)) == epoch and int(p.get("round", -1)) == round_no]
++
+     def _verdict(self, principal, key, ok, reason, now):
+         self._require_role(principal, "reviewer")
+         item = self._get_or_refuse(key)
+diff --git a/src/plangraph/keeper/store_support.py b/src/plangraph/keeper/store_support.py
+index 800a0b0..c13a86c 100644
+--- a/src/plangraph/keeper/store_support.py
++++ b/src/plangraph/keeper/store_support.py
+@@ -133,16 +133,26 @@ class SupportMixin:
+             out.append(item)
+         return out
+ 
++    @staticmethod
++    def _evidence_record(row):
++        record = dict(row)
++        record["ref"] = _json_dict(record.get("ref"))
++        record["verified"] = bool(record["verified"])
++        return record
++
+     def _evidence(self, key):
+         rows = self.conn.execute(
+             "SELECT id,key,epoch,kind,ref,verified,detail,at FROM evidence"
+             " WHERE key=? ORDER BY id", (key,)).fetchall()
+-        out = []
+-        for row in rows:
+-            record = dict(row)
+-            record["ref"] = _json_dict(record.get("ref"))
+-            record["verified"] = bool(record["verified"])
+-            out.append(record)
++        return [self._evidence_record(row) for row in rows]
++
++    def _evidence_by_key(self):
++        """``key -> [record]`` for every item in one query (same rows as ``_evidence``)."""
++        out = {}
++        for row in self.conn.execute(
++                "SELECT id,key,epoch,kind,ref,verified,detail,at FROM evidence"
++                " ORDER BY id"):
++            out.setdefault(row["key"], []).append(self._evidence_record(row))
+         return out
+ 
+     def _verified_evidence_ids(self, item):
+
+Tests added: tests/test_keeper_snapshot_setbased.py (byte identity vs legacy copy, query count independent of N), tests/test_keeper_snapshot_writer.py (coalescing, starvation cap, flush, stop, retry, SIGTERM, SIGKILL+restart, torn-read stress), contract/test_snapshot_file.py polls head_seq.
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)

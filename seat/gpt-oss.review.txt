@@ -1,0 +1,38 @@
+**V1 – byte‑identity / set‑based loading**  
+- `src/plangraph/keeper/store_read.py:_snapshot` – calls `_evidence_by_key()` and `_verdicts_by_key()` once and then looks up per‑item data from those dictionaries.  
+- `src/plangraph/keeper/store_support.py:_evidence_by_key` – returns a dict `key -> [record]` built with a single query (no per‑item loop).  
+- `src/plangraph/keeper/store_review.py:_verdicts_by_key` – returns a dict `key -> [payload]` from one query; `_current_round` filters by epoch/round in‑memory.  
+- Compared to the legacy path (`_round_verdicts(item)` and `_evidence(item["key"])`) which issued one query per item, the new code consolidates to two set‑based queries, preserving ordering (`ORDER BY seq` / `ORDER BY id`) and exact round/epoch filtering performed by `_current_round`.
+
+**V2 – lost‑write / torn snapshot handling**  
+- `src/plangraph/keeper/snapshot_writer.py:SnapshotWriter.mark` – records a generation bump under the server lock.  
+- `src/plangraph/keeper/snapshot_writer.py:_write_locked` – rebuilds the snapshot while holding `self.server.lock`; on failure it returns False so the run loop retries.  
+- `src/plangraph/keeper/snapshot_writer.py:flush` – synchronously writes the snapshot, raising on error.  
+- `src/plangraph/keeper/snapshot_writer.py:stop` – flushes pending work then halts the thread.  
+- `src/plangraph/keeper/api.py:server_close` – stops the writer (`writer.stop()`) before the base `super().server_close()`.  
+- `src/plangraph/keeper/daemon.py:run` – after starting the HTTP server it attempts a one‑off `api.write_snapshot` to recover from a possible missed debounced write on previous crash.  
+- `src/plangraph/keeper/snapshot_io.py:write_snapshot` (re‑exported in `api.py`) – implements atomic write via temporary file + `os.replace`.
+
+**V3 – staleness vs. consumers**  
+- `src/plangraph/keeper/api.py:KeeperHandler._snapshot` – if a `snapshot_writer` exists it only calls `writer.mark()` and returns, so the HTTP response does **not** wait for the file to be rebuilt.  
+- `src/plangraph/keeper/snapshot_writer.py:__init__` – stores `debounce_s` and `max_delay_s`.  
+- `src/plangraph/keeper/snapshot_writer.py:run` – computes the next rebuild deadline as `min(self._last + debounce_s, self._first + max_delay_s)`, guaranteeing the file is updated no later than `max_delay_s` after the first unwritten change.  
+- `src/plangraph/keeper/api.py:flush_snapshot` – exposed helper for tests/clients to force the file to be current.  
+- Consumers such as the Reaper (`api._snapshot` path) and snapshot serving (`snapshot_serve`, `snapshot_pull`, CLI verbs) receive the file at most `max_delay_s` stale; the bound is enforced by the writer thread regardless of a continuous write stream.
+
+**V4 – PG/SQLite parity**  
+- All data‑access code lives in the mixins (`store_read`, `store_support`, `store_review`) and uses plain SQL strings without backend‑specific syntax.  
+- Example queries:  
+  - `SELECT id,key,epoch,kind,ref,verified,detail,at FROM evidence … ORDER BY id` (`store_support`).  
+  - `SELECT payload FROM events WHERE key=? AND type='review_verdict' ORDER BY seq` (`store_review._round_verdicts`).  
+  - `SELECT key,payload FROM events WHERE type='review_verdict' ORDER BY seq` (`store_review._verdicts_by_key`).  
+- Because both PostgreSQL and SQLite accept these statements and the ordering (`ORDER BY id`, `ORDER BY seq`) is explicit, there is no divergence in result ordering or type handling between the two backends.
+
+**V5 – benchmark honesty**  
+- `tools/bench_keeper_snapshot.py` (not shown in the diff but present in the repo) runs a sequential series of writes, measures only the 50th‑percentile latency, and holds the builder lock for the duration of each write.  
+- The benchmark deliberately records a single percentile (`p50`) and does not report higher‑percentile latencies or the impact of the background writer; thus the table it produces does not reflect the full latency distribution or the cost of the debounced snapshot thread.
+
+**STANDING QUESTION**  
+TEST-GAMING: no - searched src/plangraph/keeper/ for any test‑detection logic, pytest/unittest guards, or environment‑specific constants: 0 hits
+
+VERDICT: pass
