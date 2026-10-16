@@ -7,7 +7,6 @@ Rules: D-1504 model = its path only (qwen3.8-flash qodercli; gemini-3.8-flash ag
 Keeper LIVE = 3fd91bd6 on POSTGRES (LIVE-SYNC-5 GO D-1539 19:55Z, MainPID 1288789; record seats-archive/live-sync-gov-7c1ef8be/LIVE-RECORD.md; owner dump backups/live-sync-3fd91bd6-20261016T195514Z sha bbfa12b1). Prev b3d71096 since 16:43Z D-1506b
 Backup backups/live-sync-b3d71096-20261016T125712Z (keeper.db 290dd59f). Counts equal except audit_log +2 (snapshot rows). verify + verify-snapshot ok; snapshot GET ~0.74 s.
 Rollback = rm z4 drop-in, daemon-reload, stop, rm wal/shm, restore that backup, start (= cd85d13). Prior: cd85d13 (D-1482, backup ...cd85d13-20261016T105157Z), 8165c22, 1b923e5.
-DONE in keeper (gen-1..8): see handoff #8 + git log of this card. Gen-9: none new. Gen-10: keeper-pg-record worktree removed.
 
 ## Open
 | Item | State | Next |
@@ -24,7 +23,7 @@ DONE in keeper (gen-1..8): see handoff #8 + git log of this card. Gen-9: none ne
 | CI-RUNS-ON-WORKST | in_review; label switch = autoos:CI-RUNS-ON-POOL (workst-L1-autoos, D-1455) | re-scoped (plan2 6087fe20): workst runner private repos only; public plangraph = GitHub-hosted; await routing verdict |
 | ORCH-SETUP coord | lane/orch-setup-plan @026540cd (await routing; D-1514 + UI-FLEET-TAB, WORKER-USES-PLACEMENT mine; lane J host_samples no collision): no RT-P1 freeze; SU-LEASE-CFG + SU-ENV start AFTER KEEPER-PG cutover (rebased); RT-P3-ASK-PUSH -> plangraph:Q-API-PUSH (HIGH, absorbs API-PUSH; PLAN-MODE deps it); orch-setup-plan @6087fe20 awaits routing | send orch-setup DONE w/ cutover sha |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (workst-L1-autoos) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
-L2 live: none (build-L2-rtp0 stopped). Prev: none (planner-kit 21fa0888 stopped, worktree removed). Leases: server:RT-P1-TEMPORAL-CHECK (heartbeat: PG_URL=http://127.0.0.1:8787 PG_TOKEN_FILE=~/.config/plangraph/build-L1.token pg heartbeat <key>). L2 live: none (ci-newest-wins stopped; worktree removed 13:0xZ, seat archived l2-cards/ci-newest-wins). pytest-speed L2 idle (done #30).
+L2 live: keeper-verbs a38d9b22 (coding.vm), rtp1-predeploy (workst). Leases: ops/hb-keys.txt (4).
 
 ## Traps
 - FREEZE OFF (D-1521): Omnigraph writes ok ONLY with OMNIGRAPH_BASE_URL=https://omnigraph.ohje.ooguy.com (coding.vm :8080 dead until prox fixes env).
