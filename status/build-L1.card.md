@@ -23,6 +23,7 @@ DONE in keeper (gen-1..8): see handoff #8 + git log of this card. Gen-9: none ne
 L2 live: none (planner-kit 21fa0888 stopped, worktree removed). Leases: server:RT-P1-TEMPORAL-CHECK (heartbeat: PG_URL=http://127.0.0.1:8787 PG_TOKEN_FILE=~/.config/plangraph/build-L1.token pg heartbeat <key>). L2 live: none (ci-newest-wins stopped; worktree removed 13:0xZ, seat archived l2-cards/ci-newest-wins). pytest-speed L2 idle (done #30).
 
 ## Traps
+- FREEZE ON (D-1398 L7): NO Omnigraph writes (all graphs) until routing FREEZE OFF; keeper unaffected.
 - systemd drop-ins apply in lexical order: name new live-sync drop-ins to sort LAST (check MainPID environ PYTHONPATH after start).
 - commit+ci verifier now newest-wins per (workflow, job) live; dispatch suites still: never cancel a dispatch on a head sha.
 - zsh: `git push origin $T:refs/...` breaks (:r modifier) -> brace. Bash guard denies unquoted heredoc with $(...).
