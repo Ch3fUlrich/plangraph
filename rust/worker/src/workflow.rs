@@ -108,8 +108,9 @@ enum MergeStep {
     /// Main moved or the attempt would not fast-forward; the value is the new base.
     Moved(String),
     /// The merge itself said no (post-rebase check, confinement, stale fence);
-    /// the class goes to the policy, the text is the check tail.
-    Failed(ExitClass, String),
+    /// the class goes to the policy, the text is the check tail, the last value
+    /// is main's head at that moment (the base the retry must start from).
+    Failed(ExitClass, String, String),
     /// The keeper would not grant the merge lock; nothing was merged.
     RetryLater,
 }
@@ -375,7 +376,7 @@ impl Card {
                         }
                         MergeStep::RetryLater => {
                             merge_retries += 1;
-                            if merge_retries > MERGE_RETRY_CAP {
+                            if merge_retry_exhausted(merge_retries) {
                                 let packet = packet_for(
                                     &input.claim.card,
                                     leg.tier,
@@ -399,19 +400,27 @@ impl Card {
                             branch_to_merge = Some(branch);
                             continue;
                         }
-                        MergeStep::Failed(class, tail) => {
+                        MergeStep::Failed(class, tail, main_head) => {
                             // The branch was judged under the lock; probing it again
                             // would only find the same commits and loop back here.
                             probed = true;
                             check_tail = tail;
-                            history.push(Attempt {
-                                exit_class: class,
-                                leg: leg.id.clone(),
-                                tier: leg.tier,
-                                diff_hash: diff_hash.clone(),
-                                check_hash: check_hash.clone(),
-                                context_overflow: false,
-                            });
+                            // The retry starts from where main is now, not from the
+                            // stale base the failed merge was rebased away from.
+                            adopt_base(&mut base_sha, main_head);
+                            // This is the same attempt `n`, now judged: it replaces
+                            // its entry instead of adding a second one (budget).
+                            replace_attempt(
+                                &mut history,
+                                Attempt {
+                                    exit_class: class,
+                                    leg: leg.id.clone(),
+                                    tier: leg.tier,
+                                    diff_hash: diff_hash.clone(),
+                                    check_hash: check_hash.clone(),
+                                    context_overflow: false,
+                                },
+                            );
                         }
                         MergeStep::Moved(main_head) => {
                             // The worker already tried to rebase this attempt onto the
@@ -420,15 +429,18 @@ impl Card {
                             // from a fresh worktree; probing the branch again would
                             // only re-merge the same commits and count the conflict twice.
                             probed = true;
-                            base_sha = main_head;
-                            history.push(Attempt {
-                                exit_class: ExitClass::RebaseConflict,
-                                leg: leg.id.clone(),
-                                tier: leg.tier,
-                                diff_hash: diff_hash.clone(),
-                                check_hash: check_hash.clone(),
-                                context_overflow: false,
-                            });
+                            adopt_base(&mut base_sha, main_head);
+                            replace_attempt(
+                                &mut history,
+                                Attempt {
+                                    exit_class: ExitClass::RebaseConflict,
+                                    leg: leg.id.clone(),
+                                    tier: leg.tier,
+                                    diff_hash: diff_hash.clone(),
+                                    check_hash: check_hash.clone(),
+                                    context_overflow: false,
+                                },
+                            );
                         }
                     }
                 }
@@ -851,13 +863,38 @@ fn map_merge_result(r: MergeResult) -> MergeStep {
         "merged" => MergeStep::Merged(r.sha.unwrap_or(r.main_head)),
         "retry_later" => MergeStep::RetryLater,
         "base_moved" | "conflict" => MergeStep::Moved(r.main_head),
-        "check_fail" => MergeStep::Failed(ExitClass::CheckFail, r.detail),
-        "contract_defect" => MergeStep::Failed(ExitClass::ContractDefect, r.detail),
-        "merge_refused" => MergeStep::Failed(ExitClass::MergeRefused, r.detail),
+        "check_fail" => MergeStep::Failed(ExitClass::CheckFail, r.detail, r.main_head),
+        "contract_defect" => MergeStep::Failed(ExitClass::ContractDefect, r.detail, r.main_head),
+        "merge_refused" => MergeStep::Failed(ExitClass::MergeRefused, r.detail, r.main_head),
         other => MergeStep::Failed(
             ExitClass::MergeRefused,
             format!("unknown merge outcome {other:?}"),
+            r.main_head,
         ),
+    }
+}
+
+/// True once the keeper merge lock has stayed unavailable for more than
+/// [`MERGE_RETRY_CAP`] retries: the card parks instead of waiting again.
+fn merge_retry_exhausted(retries: u32) -> bool {
+    retries > MERGE_RETRY_CAP
+}
+
+/// Carry main's head forward as the base for the next worktree. An empty head
+/// (an activity that could not read it) keeps the old base.
+fn adopt_base(base_sha: &mut String, main_head: String) {
+    if !main_head.is_empty() {
+        *base_sha = main_head;
+    }
+}
+
+/// Record the merge-time verdict on attempt `n`: it is that attempt's own
+/// (last) entry, so it is replaced, never followed by a second entry that would
+/// make the budget count one attempt twice.
+fn replace_attempt(history: &mut Vec<Attempt>, judged: Attempt) {
+    match history.last_mut() {
+        Some(last) => *last = judged,
+        None => history.push(judged),
     }
 }
 
@@ -1199,7 +1236,8 @@ mod tests {
     fn unknown_merge_outcome_is_refused_not_moved() {
         for o in ["", "moved", "MERGED", "rebase_conflict", "something_new"] {
             match map_merge_result(merge_result_of(o)) {
-                MergeStep::Failed(ExitClass::MergeRefused, d) => {
+                MergeStep::Failed(ExitClass::MergeRefused, d, h) => {
+                    assert_eq!(h, "h");
                     assert!(d.contains("unknown merge outcome"), "{o}: {d}")
                 }
                 other => panic!("{o:?} mapped to {other:?}"),
@@ -1216,6 +1254,58 @@ mod tests {
         assert!(matches!(
             map_merge_result(merge_result_of("merged")),
             MergeStep::Merged(s) if s == "s"
+        ));
+    }
+
+    #[test]
+    fn merge_time_failures_carry_main_head_as_the_new_base() {
+        for o in ["check_fail", "contract_defect", "merge_refused"] {
+            match map_merge_result(merge_result_of(o)) {
+                MergeStep::Failed(_, _, h) => assert_eq!(h, "h", "{o}"),
+                other => panic!("{o}: {other:?}"),
+            }
+        }
+        let mut base = "old".to_string();
+        adopt_base(&mut base, "new".to_string());
+        assert_eq!(base, "new");
+        adopt_base(&mut base, String::new());
+        assert_eq!(base, "new", "an empty head keeps the base");
+    }
+
+    #[test]
+    fn a_merge_time_verdict_replaces_the_attempts_entry_not_adds_one() {
+        // Attempt 1 ran ok (entry pushed), then failed its post-rebase check.
+        let mut history = vec![attempt(ExitClass::Ok)];
+        replace_attempt(&mut history, attempt(ExitClass::CheckFail));
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].exit_class, ExitClass::CheckFail);
+        // Only the judged entry consumes budget: one attempt, not two.
+        assert_eq!(history.iter().filter(|a| a.consumes_attempt()).count(), 1);
+        // An earlier attempt's entry is untouched.
+        let mut two = vec![attempt(ExitClass::CheckFail), attempt(ExitClass::Ok)];
+        replace_attempt(&mut two, attempt(ExitClass::RebaseConflict));
+        assert_eq!(two.len(), 2);
+        assert_eq!(two[0].exit_class, ExitClass::CheckFail);
+        assert_eq!(two[1].exit_class, ExitClass::RebaseConflict);
+    }
+
+    #[test]
+    fn retry_later_cap_parks_with_merge_refused() {
+        assert!(!merge_retry_exhausted(0));
+        assert!(!merge_retry_exhausted(MERGE_RETRY_CAP));
+        assert!(merge_retry_exhausted(MERGE_RETRY_CAP + 1));
+        // The park packet the loop builds for it.
+        let p = packet_for(
+            "c-1",
+            Tier::Free,
+            ExitClass::MergeRefused,
+            MERGE_LOCK_PARK_REASON,
+        );
+        assert_eq!(p.exit_class, ExitClass::MergeRefused);
+        assert_eq!(p.check_tail, MERGE_LOCK_PARK_REASON);
+        assert!(matches!(
+            map_merge_result(merge_result_of("retry_later")),
+            MergeStep::RetryLater
         ));
     }
 
