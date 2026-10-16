@@ -457,7 +457,7 @@ async fn writing_outside_the_write_set_goes_to_planner() {
         let id = format!("e2e-contract-{}", unique());
         let handle = env.start(&id, claim).await;
 
-        let out = finish("contract", &id, &handle).await;
+        let out = finish("contract_defect", &id, &handle).await;
         assert_eq!(out.outcome, "parked", "{out:?}");
         assert_eq!(out.detail, "planner", "{out:?}");
         assert!(
@@ -481,7 +481,7 @@ async fn a_check_that_never_passes_stops_the_card() {
         let id = format!("e2e-check-fail-{}", unique());
         let handle = env.start(&id, claim).await;
 
-        let out = finish("check-fail", &id, &handle).await;
+        let out = finish("check_fails", &id, &handle).await;
         let parked = out.outcome == "parked" && out.detail == "parked";
         let quarantined = out.outcome == "failed" && out.detail == "quarantined";
         assert!(parked || quarantined, "unexpected outcome {out:?}");

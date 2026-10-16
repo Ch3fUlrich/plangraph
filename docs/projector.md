@@ -36,7 +36,12 @@ Language: Python (`temporalio` SDK, optional import; the keeper never imports it
 * Fixtures and the CI test: `rust/worker/tests/fixtures/projector/*.json` are `temporal workflow show --output json` captures
   of the real e2e runs (the Rust SDK's own history JSON, `tests/fixtures/*.json`, is a different layout used only for replay).
   Re-record with `PG_TEMPORAL_ADDR=... PG_RECORD_DIR=<dir> PG_TEMPORAL_CLI=<path to temporal> cargo test --test e2e` in
-  `rust/worker`, copy `<name>.proj.json` over the fixture; the checks are `tests/test_projector_worker_history.py`.
+  `rust/worker`, the e2e records `<name>.json` (SDK layout, replay fixture, copy to `rust/worker/tests/fixtures/<name>.json`)
+  and `<name>.proj.json` (proto-JSON, copy to `rust/worker/tests/fixtures/projector/<name>.json`) with names `happy`,
+  `contract_defect`, `check_fails`, `cancel` (1:1 with the fixture files); the checks are
+  `tests/test_projector_worker_history.py`. The `check_fails` run may end `parked` or `failed` (quarantined) depending on
+  the budget, so after re-recording update the exact expectations in `tests/test_projector_worker_history.py` (`EXPECTED`)
+  to the new capture.
 
 ## History -> records (`history.py`, pure, no temporalio import, input = proto-JSON history dict)
 
