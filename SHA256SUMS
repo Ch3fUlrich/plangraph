@@ -3,4 +3,8 @@ fd9bd99129534acdffbf6475a0bb9a77d2cfad8996a7539ae3137d74106a6aca *./PROMPT.md
 c869776caca7773661d19454f26a3433b1fbce2b7cd0ecafac0e74f3ad796a7e *./openai-attempt1-reply.txt
 2c25ccc16d13b43089e162c98938d53096db86b1793d0920466c15c73388643c *./openai/evidence.json
 c869776caca7773661d19454f26a3433b1fbce2b7cd0ecafac0e74f3ad796a7e *./openai/review.txt
-ff267dc7c77d2e8bd67e4be32c98098af8aac136733ee66abc1eb80d21eaf101 *./qwen-raw/out.json
+ff267dc7c77d2e8bd67e4be32c98098af8aac136733ee66abc1eb80d21eaf101 *./qwen-raw/out-attempt1.json
+8d46f8d50c8dde31b658230437079675517d68771844cb3ecdeee3170b4f5e37 *./qwen-raw/out-attempt2.json
+4d49c25dc81ef05dec0e8be58c74701ccc765a9855f0237b190a7824f5ed0582 *./qwen-raw/out-attempt3.json
+92607657b138363a3ef3c02944872346cdbe003ce7580b0a40a28c8fbb3e930b *./qwen/evidence.json
+e681f277e315da095c9cdac2e3981659dde82c1e98d6b03b719986ed8251ae27 *./qwen/review.txt

@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "C:\\fleet\\seats\\plangraph\\tls-c8b14fa\\qwen\\out-attempt3.json",
+      "sha256": "4d49c25dc81ef05dec0e8be58c74701ccc765a9855f0237b190a7824f5ed0582",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "04e65710-1462-473b-ab26-8b9932876868",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - inspected all tls tests and both binaries: production code has no test-only branches and every refusal rule is asserted against real error contents: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "2cff9bd7642298773cb4ab5588119d40175b64f509a119286afb077d7b64d388"
+}

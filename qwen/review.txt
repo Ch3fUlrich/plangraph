@@ -1,0 +1,54 @@
+=== part C:\fleet\seats\plangraph\tls-c8b14fa\qwen\out-attempt3.json
+# HIGH-style Security Review — env-driven mTLS for Temporal connection
+
+## V1 Fail-open
+No env/config combination silently downgrades an intended-TLS connect:
+- `tls_from_vars` (rust/worker/src/tls.rs) folds empty/whitespace-only values into "unset" (`setting` closure with `trim()` + `filter(!is_empty())`), so `VAR=` cannot half-enable TLS. All unset ⇒ `Ok(None)` = plain connect, which is the documented, unchanged baseline — an opt-in, not a silent fallback from an intended TLS state.
+- Partial CERT/KEY/CA set ⇒ hard `Err` naming missing vars, before any file read; SERVER_NAME alone (with all three unset) ⇒ hard `Err`. Covered by `cert_alone_is_refused`, `cert_and_key_without_ca_is_refused`, `server_name_alone_is_refused`.
+- CA is mandatory whenever TLS is on: there is no env combination that yields `TlsOptions` without `server_root_ca_cert`, so the "system-roots-only" and "unauthenticated TLS" states are unreachable through this helper. `client_tls_options` is always `Some`, so no server-only-TLS-without-client-cert state either.
+- `http://` URL + TLS vars ⇒ `require_https` refuses at startup in all three binaries (`tls.is_some() && !addr...starts_with("https://")`), case-insensitively; `https_with_tls_is_accepted` / `http_with_tls_is_refused` / `http_without_tls_stays_plain` pin the rule.
+- Residual (design-level, not a defect of this diff): there is no "TLS required" enforcement switch, so if the three env vars are accidentally lost in a deployment, the worker silently connects plaintext. This is the documented HIGH-style opt-in contract (TLS.md), but a deployment-side guard would strengthen it. LOW/observation.
+
+## V2 Secret handling
+Clean within this code:
+- `read_pem` maps IO failure to `format!("{var}: cannot read {path}: {e}")` — variable name and path only, never contents; explicit negative assert in `missing_file_names_var_and_path` (`!err.contains("SECRET-KEY-MARKER")`).
+- All error strings built here (`tls_from_vars`, `require_https`) interpolate only var names, paths, and the address. `require_https`'s error embeds `addr` — addresses are not secret (also echoed in TLS.md).
+- Key bytes flow only into `ClientTlsOptions`/`TlsOptions`, which are consumed by `ConnectionOptions::maybe_tls_options` and never `Debug`-printed or logged in the changed code.
+- Unverifiable from the diff alone: whether temporalio-client 1.1.0 derives `Debug` on `ClientTlsOptions` and prints raw key bytes if some future caller logs the options struct. Not reachable today; note only.
+
+## V3 Server verification
+- CA bytes are passed via `server_root_ca_cert`, and the handshake check (`rust/tls-handshake-check.sh`) behaviorally proves verification: wrong CA is refused, and wrong server name is refused (`run otherca.crt` / `run ca.crt wrong.test` asserting the server never logs "depth=0 CN = client", i.e. handshake fails before client-cert presentation is accepted).
+- No insecure/skip-verify option is set or exposed; there is no path that builds `TlsOptions` without the CA, so accidental system-roots-only verification is impossible here.
+- Caveat: the "wrong server name refused" test conflates any handshake failure with name-verification failure (a timeout would also pass the assert), and the SDK's exact use of `domain` (SNI + SAN match, per TLS.md "set SERVER_NAME to a SAN when connecting by IP") is external behavior I can only vouch for via that script. Adequate, with the noted imprecision.
+
+## V4 Error paths
+- No `unwrap`/`panic!` on the production path: `tls_from_env`/`require_https` return `Result<_, String>`; binaries convert with `map_err(anyhow::anyhow!)?` in `anyhow::Result` mains. `unwrap()` appears only in `#[cfg(test)]` helpers.
+- The `let (Some(..)) = ... else { Err }` block is dead-code defensive, not a panic.
+- Paths are `trim()`ed before `std::fs::read`, so trailing newline/space from `$(cat)`-style env wiring won't spuriously fail (no test pins this; minor gap).
+- Non-PEM file contents are read as opaque bytes and deferred to the SDK; failure surfaces at connect, not as a panic here.
+- Cosmetic defect: the `require_https` error literal contains a run of stray spaces (`...is not an https:// URL;              refusing...`) — looks like a hard-wrap artifact embedded in the message. Harmless, fix wording.
+
+## V5 Wiring
+All three connect sites in the diff are converted identically — `tls_from_env()` → `require_https()` → `ConnectionOptions::new(...).maybe_tls_options(tls).build()`:
+- rust/worker/src/bin/worker.rs (main)
+- rust/spikes/temporal-spike/src/bin/worker.rs (main)
+- rust/spikes/temporal-spike/src/bin/driver.rs (main)
+No remaining `Connection::connect` appears in the diff context, and each binary's only connect was the one patched. I cannot see the full tree here, so "no other plain connect elsewhere" rests on the diff plus the stated test evidence; the spike `lib.rs`/`activities` code shown doesn't connect. Duplication note: tls.rs exists as two byte-identical copies (worker + spike) plus a third export path — drift risk; a shared crate or build-time check would be safer. LOW/observation.
+
+## V6 Test quality
+- 10 unit tests pin every refusal rule: none-set, empty-as-unset, full-set field-by-field asserts (cert/key/CA bytes and domain), cert-alone, cert+key-without-CA, server-name-alone, unreadable-file naming, https accepted, http refused with TLS, http allowed without TLS. `cert_alone_is_refused` uses nonexistent paths so it also proves the refusal happens before any file read — a real, non-vacuous ordering assertion.
+- `missing_file_names_var_and_path` includes an explicit anti-leak assert (SECRET-KEY-MARKER). Good.
+- Full-set test depends on `TlsOptions` fields being publicly readable; if that's true of SDK 1.1.0 it's fine (it compiles per the evidence), and the asserts compare exact bytes rather than `is_some()`.
+- Shell check asserts positive cert presentation and both negative cases; weaknesses: no `set -e`, fixed `sleep`s, and negatives conflate "refused" with "any failure". Not gaming, but imprecise.
+- No production `cfg(test)`/test-only branches; no asserts that can pass vacuously (no `assert!(x || true)` patterns, all error asserts use `contains` with the failure message printed).
+
+## Minor findings roll-up
+1. LOW: no TLS-required enforcement mode — lost env vars silently mean plaintext (documented opt-in design).
+2. LOW: stray whitespace run inside `require_https` error message (cosmetic).
+3. LOW: three byte-identical `tls.rs` copies — future drift risk; consolidate.
+4. INFO: wrong-name/wrong-CA shell assertions conflate any handshake failure with the intended cause.
+
+TEST-GAMING: no - inspected all tls tests and both binaries: production code has no test-only branches and every refusal rule is asserted against real error contents: 0 hits
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass
