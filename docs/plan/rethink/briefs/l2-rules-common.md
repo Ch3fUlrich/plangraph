@@ -28,3 +28,4 @@
   incidents, launch/recycle requests. No acks, "noted", ALIVE, status relays or progress chatter; at most one batched message per beat.
   L2s run NO beat cron; wait on messages and your own tool results.
 - PR head trailer (D-935, build-L1 gen-5 2026-10-16): CI runs only on the PR head, so the head commit (incl. a "Merge origin/main" commit) must carry `Plan-Item: plangraph:<KEY>` (full key). Else commit+ci evidence cannot verify (INBOX 1cb7acc, WORKER bff8725).
+- D-1380 (operator, prio 1): CI never waits for a GitHub reset. If GitHub CI does not start within 10 min or fails for infra (quota/billing/runner offline), run the repo CI command locally (workstation, or coding.vm within the 1 GB floor) and record by sha: sha, command, exit, log path, host -> report it in MERGE-READY and proceed. plangraph CI = `pytest -n auto` (SQLite) + pytest-postgres job (tests.yml) + rust/rust-worker (cargo test; Temporal SDK builds on workstation).
