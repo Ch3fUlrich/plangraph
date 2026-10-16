@@ -1,6 +1,6 @@
 """Recorded ``rust/worker`` Card histories project cleanly and apply to the keeper.
 
-The five fixtures are proto-JSON ``temporal workflow show --output json`` captures of real
+The seven fixtures are proto-JSON ``temporal workflow show --output json`` captures of real
 ``Card`` runs; the projector must read them without coercing an attempt to ``worker_crash`` or
 an unknown shape (docs/projector.md, "Contract with the Card workflow (v1)").  Runs on whichever
 backend ``PG_KEEPER_BACKEND`` selects (``keeper_util.World``), same code path.
@@ -16,7 +16,8 @@ from plangraph.projector.models import ATTEMPT_ACTIVITY_TYPES, EXIT_CLASSES
 from keeper_util import World, seed
 
 FIXTURES = Path(__file__).parents[1] / "rust" / "worker" / "tests" / "fixtures" / "projector"
-NAMES = ("happy", "contract_defect", "check_fails", "cancel", "usage_limit_reroute")
+NAMES = ("happy", "contract_defect", "check_fails", "cancel", "usage_limit_reroute",
+         "needs_input_answered", "needs_input_timeout")
 KEY = "demo:A"          # the seeded item's key; a run's plan key must equal it to apply
 
 #: Hand-verified projections: status, outcome, attempts' exit classes, states in order, and, for
@@ -42,6 +43,19 @@ EXPECTED = {
         "status": "completed", "outcome": "done", "exits": ["usage_limit", "ok"],
         "states": ["running", "waiting", "running"],
         "attempt": {"harness": "shell", "model": "claude-ish/model", "combo": "claude-leg", "class_": "128k"},
+    },
+    # RT-P1 inbox: the agent asks, the card waits (item state needs_input), then resumes on the
+    # same leg and merges. The question attempt takes no retry budget; the answer arrived as the
+    # ``answer`` signal in one fixture and as the question's default after its deadline in the other.
+    "needs_input_answered": {
+        "status": "completed", "outcome": "done", "exits": ["needs_input", "ok"],
+        "states": ["running", "needs_input", "running"],
+        "attempt": {"harness": "shell", "model": "some/model", "combo": "leg-1", "class_": "128k"},
+    },
+    "needs_input_timeout": {
+        "status": "completed", "outcome": "done", "exits": ["needs_input", "ok"],
+        "states": ["running", "needs_input", "running"],
+        "attempt": {"harness": "shell", "model": "some/model", "combo": "leg-1", "class_": "128k"},
     },
 }
 
@@ -112,12 +126,14 @@ def attempts(world, key=KEY):
             for r in rows(world, "attempts", "n") if r["key"] == key]
 
 
-@pytest.mark.parametrize("name", ["happy", "check_fails"])
+@pytest.mark.parametrize("name", ["happy", "check_fails", "needs_input_answered",
+                                  "needs_input_timeout"])
 def test_apply_writes_attempt_rows(world, projector, name):
     # The seeded item is ``demo:A``, so the run applies under the id that yields that plan key.
     p = project(name, workflow_id=f"card:{KEY}")
     assert p.plan_key == KEY and p.attempts
-    assert projector.apply_run(p, run_ord=0).attempts_written == len(p.attempts)
+    first = projector.apply_run(p, run_ord=0)
+    assert first.attempts_written == len(p.attempts) and first.unmapped == 0
     assert [r["exit_class"] for r in attempts(world)] == [a.exit_class for a in p.attempts]
     again = projector.apply_run(p, run_ord=0)
     assert (again.attempts_written, again.attempts_existing) == (0, len(p.attempts))

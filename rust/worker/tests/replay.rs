@@ -68,6 +68,22 @@ async fn replays_usage_limit_reroute() {
 }
 
 #[tokio::test]
+async fn replays_needs_input_answered() {
+    replayer()
+        .replay_workflow(history("needs_input_answered"))
+        .await
+        .expect("needs_input_answered history replays");
+}
+
+#[tokio::test]
+async fn replays_needs_input_timeout() {
+    replayer()
+        .replay_workflow(history("needs_input_timeout"))
+        .await
+        .expect("needs_input_timeout history replays");
+}
+
+#[tokio::test]
 async fn replays_cancel() {
     replayer()
         .replay_workflow(history("cancel"))
