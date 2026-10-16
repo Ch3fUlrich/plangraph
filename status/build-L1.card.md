@@ -14,7 +14,7 @@ WORKER-PROJ-V1 (PR #20 69a47cd; worker-proj-seats), PROJECTOR-RECONCILE-SCHED (P
 ## Open
 | Item | State | Next |
 |---|---|---|
-| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | FIX #2: qwen on d5e676a TEST-GAMING yes (verified: KEY_PEM lacks SECRET-KEY-MARKER; L2 report overclaimed); openai PASS (seats/tls-d5e676a 7c1536b) | L2 fixes -> re-seat -> merge --merge; DONE note: rust/worker too, gRPC round trip = TEMPORAL-CHECK manual |
+| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | MERGE-READY #22 c8b14fa (fix #2 verified: marker in KEY_PEM, copies identical; CI 3/3 att-1) | re-seat on c8b14fa by workst-L1-autoos (seats/tls-c8b14fa) -> merge --merge; DONE note: rust/worker too, gRPC round trip = TEMPORAL-CHECK manual |
 | KEEPER-CI-CONCLUSIONS (D-1403 prio1 HIGH) | L2 build-L2-ci-conclusions running (workst, session_014goniaGUn8x6JJ3PLrrGrJ, D-1404) | brief briefs/l2-keeper-ci-conclusions.md; judge server-L1-routing; after merge: D-915 keeper restart, tell workst-L1-autoos re-add CI-WORKST-RUNNER evidence |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
