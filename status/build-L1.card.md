@@ -9,18 +9,17 @@ RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-C
 RT-P1-INBOX-CODE (PR #18 b5f45c9; router evidence commit 68a9180, kinds->[commit]; openai seat inbox-seats/r2-1cb7acc),
 RT-P1-WORKER-CODE (PR #13 merged main 66d87fe, head dd954e7 CI attempt-1 green; early-cancel hole fixed; openai = gpt-oss delta seat
 worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/verdict-alibaba + adjudication-alibaba.md),
-KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restarted 06:05Z, a1b1da8 ok), TEMPORAL-SPIKE-TLS (PR #22 bae9b82; tls-seats; gRPC round trip = TEMPORAL-CHECK manual), WORKER-PROJ-V1 (PR #20 69a47cd; worker-proj-seats), PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
+PROJECTOR-LIVE-NAMESPACE-FLAKE (PR #25 ae5b749, head bfa0fd9, seat ns-flake-seats openai; DONE sent), KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restarted 06:05Z, a1b1da8 ok), TEMPORAL-SPIKE-TLS (PR #22 bae9b82; tls-seats; gRPC round trip = TEMPORAL-CHECK manual), WORKER-PROJ-V1 (PR #20 69a47cd; worker-proj-seats), PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
 
 ## Open
 | Item | State | Next |
 |---|---|---|
-| PROJECTOR-LIVE-NAMESPACE-FLAKE (D-1433 p2) | claimed; L2 forwarded D-1434 (workst) | brief briefs/l2-live-namespace-flake.md |
-| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | keep worktree-proposal f3bac63 until 2026-10-17 06:42Z; seat verdicts/evidence on item; L2 stop |
-| PROJECTOR-ALARMS-READER (p3) | open | after LIVE-SYNC |
+| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | doc PR #26 (trailer) -> CI green -> merge -> evidence commit+ci + 2 adjudicated verdicts (live-sync-seats/final/{gptoss,qwen}); keep f3bac63 until 10-17 06:42Z |
+| PROJECTOR-ALARMS-READER (p3) | claimed 06:5xZ (lease 08:52Z); brief briefs/l2-projector-alarms-reader.md 25bead7 | L2-LAUNCH build-L2-alarms-reader asked (coding.vm) -> MERGE-READY -> judge |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 06:21Z (renew by 08:1xZ). Beat 06:31Z: live-sync seat round-4 fcc0ab9 (no SYNC-READY yet), ns-flake lane/live-namespace-flake 4102844 running.
+Leases: last 06:5xZ (LIVE-SYNC hb, ALARMS-READER claim); renew by 08:4xZ. L2s: live-sync + ns-flake told stop.
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
