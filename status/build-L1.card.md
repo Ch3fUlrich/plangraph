@@ -32,6 +32,7 @@ D-1380: local-CI fallback in briefs/l2-rules-common.md. D-1393 CI speed: nothing
 - Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph on workst runner; D-1380 local fallback.
 D-1390: L2-LAUNCH = "sonnet medium"; build-L1 effort medium at next recycle; plangraph CI label -> [self-hosted, fleet-ci] by fixes-L2-cipool (covers CI-RUNS-ON-WORKST label part).
 
+D-1402 05:0xZ: keeper ci+=autoos, keeper restarted; commit+ci still false (skipped Windows check-run not green) -> routing decides verifier fix.
 ## FOR OPERATOR
 - Fix GitHub billing, or confirm workstation-only CI is final. Worker-code writers used paid deepseek via omniroute.
 - D-935 defaults (gen-5): KEEPER-PG verdicts recorded as per-family aggregates of 6-7 part seats; fix findings (gpt-oss g6, qwen q1/q4)
