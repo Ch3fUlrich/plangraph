@@ -1,7 +1,7 @@
 # Common rules for build-L1 L2s (bind the L2 and every L3; copy into each L3 brief)
 - Load skill `unattended-orchestration` first. L2 = Sonnet orchestrator: split, brief, spawn, review; never write code itself, never merge
-- D-437/D-1317 (binding): on CODING.VM only tool-less writers/seats (review-call: L2 applies the returned diff); tool-using opencode L3s (autoos-agent spawn) only on the workstation. Commit trailer adds `Writer: <model> <run id> [tool-less]`.
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
+- D-437/D-1317 (binding): on CODING.VM only tool-less writers/seats (review-call: L2 applies the returned diff); tool-using opencode L3s (autoos-agent spawn) only on the workstation. Commit trailer adds `Writer: <model> <run id> [tool-less]`.
 - L3 writers (operator 2026-10-15 ~19:10Z: cut Claude usage): autoos-agent `spawn` with opencode, leg order
   (1) `omniroute/mimo-v2.6-flash` (MIMO-FIXED 2026-10-15 ~20:5xZ: live OmniRoute combo pins it to mimo/mimo-v2.6-flash, smoke 200 from the mimo provider; a 402 or any OpenRouter id on this leg = incident, report to build-L1, never use openrouter/xiaomi or deepinfra mimo ids), (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
   (3) OpenRouter free (`omniroute/or-north-mini-code-free`, `or-laguna-s-2.1-free`, `or-nemotron-3-super-free`), (4) qodercli
