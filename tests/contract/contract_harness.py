@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -37,6 +38,10 @@ SRC = ROOT / "src"
 
 #: Per-request socket timeout (seconds) for every HTTP call to the keeper.
 REQUEST_TIMEOUT = 20
+
+#: One ``(method, route, seconds, status)`` per request this process made; ``conftest`` dumps it
+#: (``PG_CONTRACT_LATENCY_DIR``) so CI can print p50/p95/max per route.  ``status`` is 0 on a timeout.
+LATENCY: list[tuple[str, str, float, int]] = []
 
 
 def _start_timeout() -> float:
@@ -120,11 +125,18 @@ class Keeper:
             req.add_header("Content-Type", "application/json")
         for name, value in (headers or {}).items():
             req.add_header(name, value)
+        route = "/" + "/".join(path.split("?")[0].split("/")[1:3])
+        started = time.perf_counter()
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 out = Resp(resp.status, dict(resp.headers), resp.read())
         except urllib.error.HTTPError as exc:
             out = Resp(exc.code, dict(exc.headers), exc.read())
+        except TimeoutError:
+            LATENCY.append((method, route, time.perf_counter() - started, 0))
+            self._diagnose_timeout(method, path, time.perf_counter() - started)
+            raise
+        LATENCY.append((method, route, time.perf_counter() - started, out.status))
         if out.status not in (401, 404, 405):     # the route ran past authentication
             CALLED.add((method, "/" + "/".join(path.split("?")[0].split("/")[1:3])))
         return out
@@ -142,6 +154,37 @@ class Keeper:
         if self.config is None:
             raise RuntimeError("no admin config for this keeper")
         return run_cli(["--config", str(self.config), "admin", *args])
+
+    def _diagnose_timeout(self, method, path, elapsed):
+        """Say WHY a request hung, on stderr (shown in the failure report): keeper liveness, the
+        Postgres backends and lock waits at this instant, and (``PG_CONTRACT_ABORT_ON_TIMEOUT=1``)
+        the keeper's thread stacks via SIGABRT + ``faulthandler`` (kills that keeper)."""
+        lines = [f"[contract-diag] {method} {path} no answer after {elapsed:.1f}s "
+                 f"(timeout {REQUEST_TIMEOUT}s), keeper exit={self.proc.poll() if self.proc else 'n/a'}"]
+        dsn = os.environ.get("PG_DSN")
+        if dsn:
+            try:
+                import psycopg
+                with psycopg.connect(dsn, connect_timeout=5, autocommit=True) as conn:
+                    for row in conn.execute(
+                            "SELECT pid, state, wait_event_type, wait_event, "
+                            "round(extract(epoch FROM now()-state_change)::numeric,1), left(query,90) "
+                            "FROM pg_stat_activity WHERE datname=current_database() "
+                            "AND pid<>pg_backend_pid() ORDER BY state_change"):
+                        lines.append(f"[contract-diag] pg backend {row}")
+                    waits = conn.execute("SELECT count(*) FROM pg_locks WHERE NOT granted").fetchone()[0]
+                    lines.append(f"[contract-diag] pg ungranted locks: {waits}")
+            except Exception as exc:                    # diagnostics must never mask the timeout
+                lines.append(f"[contract-diag] pg probe failed: {type(exc).__name__}: {exc}")
+        if self.proc is not None and os.environ.get("PG_CONTRACT_ABORT_ON_TIMEOUT") == "1":
+            try:
+                os.kill(self.proc.pid, signal.SIGABRT)
+                self.proc.wait(timeout=10)
+                lines.append("[contract-diag] keeper stderr after SIGABRT:\n"
+                             + self.proc.stderr.read().decode(errors="replace")[-6000:])
+            except Exception as exc:
+                lines.append(f"[contract-diag] abort failed: {type(exc).__name__}: {exc}")
+        print("\n".join(lines), file=sys.stderr)
 
     def stop(self):
         if self.proc is not None:
@@ -239,7 +282,7 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
     proc = subprocess.Popen(
         [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
          "--host", "127.0.0.1", "--port", str(port)],
-        env=_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        env=_env({"PYTHONFAULTHANDLER": "1"}), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     keeper = Keeper(f"http://127.0.0.1:{port}", tokens,
                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
                     batch_dir, runs_dir, proc)
