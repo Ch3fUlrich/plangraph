@@ -38,7 +38,7 @@ _MAX_DEPS = 200
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
      "agent_id", "phase_kind", "fixes", "choices", "kg_refs", "kind", "track", "owner", "owner_family",
-     "estimate_h", "estimate_src", "depends_on", "corrects", "done_criteria",
+     "estimate_h", "estimate_src", "depends_on", "under", "corrects", "done_criteria",
      "evidence_kinds", "operator", "priority", "review_tier", "source", "note",
      "state"))
 _ITEM_COLUMNS = ("key", "project", "id", "title", "description", "host", "wait", "layer", "role",
@@ -70,7 +70,12 @@ class CreateMixin:
 
     # -------------------------------------------------------- create/import
     def create_items(self, principal, items):
-        """Router (any project) or L1 (own project): create definitions."""
+        """Router (any project) or L1 (own project): create definitions.
+
+        An optional per-item ``under: <key>`` also writes the gate -> new edge
+        (the gate ``depends_on`` the new item) in the same transaction, so the
+        new item reaches the goal without a router edit afterwards.
+        """
         return self._run(principal, "create_items", None,
                          lambda now: self._create(principal, items, now, False))
 
@@ -92,6 +97,11 @@ class CreateMixin:
     def _create(self, principal, items, now, legacy):
         if len(items) > _MAX_BATCH:
             raise Refused("validation", f"batch exceeds {_MAX_BATCH} items")
+        if legacy and any(isinstance(raw, dict) and raw.get("under") is not None
+                          for raw in items):
+            # ``under`` is a create-only attachment; a legacy import may not
+            # smuggle one in (checked before _normalise resolves it).
+            raise Refused("validation", "import_items does not accept 'under'")
         defs = [self._normalise(raw) for raw in items]
         for raw in items:
             if isinstance(raw, dict):
@@ -123,16 +133,79 @@ class CreateMixin:
             if existing is not None:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
+        # ``under``: resolve and authorise every gate before anything is
+        # written.  A gate must already exist -- a key created earlier in this
+        # very batch does not exist yet and is refused as not_found.
+        attach = []
+        for definition in defs:
+            gate = self._under_gate(principal, definition)
+            if gate is not None:
+                attach.append((definition, gate))
         before = self._all_items()
         check_fix_limit(before + defs, set(keys))
-        self._validate_change(before + defs, before, affected=keys)
+        # Validate the graph the writes would leave behind: every gate gains the
+        # new item as a dependency, so cycles and reachability are caught here,
+        # before a single row is inserted.
+        candidate = [dict(item) for item in before] + defs
+        affected = set(keys)
+        if attach:
+            linked = {item["key"]: item for item in candidate}
+            for definition, gate in attach:
+                gate_item = linked[gate["key"]]
+                gate_item["depends_on"] = sorted(
+                    set(gate_item.get("depends_on") or [])
+                    | {definition["key"]})
+                affected.add(gate["key"])
+        self._validate_change(candidate, before, affected=affected)
         with self._write():
             for definition in defs:
                 self._insert_item(principal, definition, now)
+            for definition, gate in attach:
+                # Re-read the gate under the lock: it may have been done or
+                # cancelled between the read above and here.  The guarded
+                # UPDATE both proves the row is the one we read and touches its
+                # updated_at, then the gate -> new edge goes in beside it.
+                cursor = self.conn.execute(
+                    "UPDATE items SET updated_at=? WHERE key=? AND state=?"
+                    " AND epoch=?",
+                    (self._iso(now), gate["key"], gate["state"], gate["epoch"]))
+                self._row_guard(cursor, gate["key"], gate["state"],
+                                gate["epoch"])
+                self.conn.execute(
+                    "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
+                    (gate["key"], definition["key"]))
+                self._append(principal, gate["key"], "item_defined",
+                             {"fields": ["depends_on"]}, now)
         result = {"created": keys}
+        if attach:
+            result["attached"] = [{"key": definition["key"],
+                                   "under": gate["key"]}
+                                  for definition, gate in attach]
         if any(not definition.get("description") for definition in defs):
             result["warnings"] = ["description missing: brief will be empty"]
         return result
+
+    def _under_gate(self, principal, definition):
+        """The gate ``definition['under']`` names, or ``None`` for no attach.
+
+        The key was qualified by ``_normalise`` (a bare id means the new item's
+        project, then the alias table).  The gate must exist, the caller must
+        manage its project, a non-router may only attach inside the new item's
+        own project, and a DONE/cancelled gate is ``bad_state`` (locked gates
+        are refused by ``_assert_unlocked``).
+        """
+        gate_key = definition.get("under")
+        if not gate_key:
+            return None
+        gate = self._get_or_refuse(gate_key)
+        self._may_manage(principal, gate["project"])
+        if principal.role != "router" and gate["project"] != definition["project"]:
+            raise Refused("forbidden",
+                          "cross-project 'under' needs the router")
+        if gate["state"] in ("done", "cancelled"):
+            raise Refused("bad_state", f"{gate['key']} is {gate['state']}")
+        self._assert_unlocked(gate)
+        return gate
 
     def _tier_for(self, raw, definition, principal):
         """The tier to store: an explicit (validated) value, else the default.

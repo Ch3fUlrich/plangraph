@@ -73,6 +73,14 @@ class InputMixin:
             if not isinstance(fixes, str) or not fixes:
                 raise Refused("validation", f"{key}: fixes must be a key string or null")
             fixes = self._qualify(project, fixes)
+        # ``under`` is create-only (``import_items`` refuses it): the gate the
+        # new item is attached under, resolved like any other key reference and
+        # kept on the definition -- never a column, never folded into ``note``.
+        under = raw.get("under")
+        if under is not None:
+            if not isinstance(under, str) or not under:
+                raise Refused("validation", "under must be a non-empty string")
+            under = self._qualify(project, under)
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
@@ -87,6 +95,7 @@ class InputMixin:
             "priority": int(raw.get("priority") or 0),
             "source": raw.get("source"), "note": self._folded_note(raw, key),
             "corrects": corrects, "fixes": fixes, "depends_on": deps,
+            "under": under,
             "choices": check_choices(raw.get("choices"), kind, key),
             "kg_refs": check_kg_refs(raw.get("kg_refs"), key),
             "state": raw.get("state", "open"),
