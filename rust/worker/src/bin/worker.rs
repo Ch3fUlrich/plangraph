@@ -8,9 +8,13 @@
 //! with an error rather than running against an in-memory stand-in that would
 //! claim nothing and silently drop every report, park and merge lock. Local
 //! tests and examples opt in to the stand-in explicitly with `PG_KEEPER_STUB=1`
-//! (ignored when `PG_KEEPER_URL` is set). With a keeper URL, `PG_KEEPER_TOKEN`
-//! (the worker role's bearer token) must be set and non-empty. Worker deployment
-//! versioning is opt-in via
+//! (ignored when `PG_KEEPER_URL` is set); it is local-only and must never be
+//! set on a live deployment. With a keeper URL, `PG_KEEPER_TOKEN` (the worker
+//! role bearer token) must be set and non-empty.
+//!
+//! `PG_HARNESS_VERSIONS` (`name=version,...`) pins the agent CLIs. Unset is only
+//! a startup warning, not an error, so live deployments MUST set it: without it
+//! a CLI upgrade changes agent behaviour unnoticed. Worker deployment versioning is opt-in via
 //! [`pg_worker::buildid::from_env`], which stays off unless a valid build id is
 //! available (see that module for the switch).
 

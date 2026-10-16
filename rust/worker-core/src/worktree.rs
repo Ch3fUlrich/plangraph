@@ -44,9 +44,16 @@ impl AttemptId {
     }
 }
 
-/// Longest readable part of a sanitised segment (a 9-byte `-<hash>` follows,
-/// and a segment up to that total is already safe, which keeps it idempotent).
+/// Longest readable part of a sanitised segment (a `-<hash>` of [`HASH_LEN`] hex
+/// digits follows, and a segment up to that total is already safe, which keeps
+/// it idempotent).
 const SEGMENT_MAX: usize = 48;
+
+/// Hex digits of the 64-bit key hash appended to a rewritten segment (the whole
+/// FNV-1a 64 value, so accidental collisions between distinct keys are out of reach).
+const HASH_LEN: usize = 16;
+/// Length of the `-<hash>` suffix.
+const SUFFIX_LEN: usize = HASH_LEN + 1;
 
 /// `key` as one safe path/ref segment: non-empty, only `[A-Za-z0-9._-]`, no
 /// `..`, no leading `-` or `.`, no trailing `.` or `.lock`. A key that already
@@ -59,7 +66,7 @@ pub fn safe_segment(key: &str) -> String {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
     if ok_chars
         && !key.is_empty()
-        && key.len() <= SEGMENT_MAX + 9
+        && key.len() <= SEGMENT_MAX + SUFFIX_LEN
         && !key.contains("..")
         && !key.starts_with(['-', '.'])
         && !key.ends_with('.')
@@ -81,7 +88,10 @@ pub fn safe_segment(key: &str) -> String {
     if clean.is_empty() || clean.starts_with('-') {
         clean.insert(0, '_');
     }
-    format!("{clean}-{}", &crate::hash::hash_bytes(key.as_bytes())[..8])
+    format!(
+        "{clean}-{}",
+        &crate::hash::hash_bytes(key.as_bytes())[..HASH_LEN]
+    )
 }
 
 impl fmt::Display for AttemptId {
@@ -220,9 +230,13 @@ mod tests {
             assert!(!s.is_empty() && s != bad, "{bad:?} -> {s:?}");
             assert!(!s.contains('/') && !s.contains(".."), "{s}");
             assert!(!s.starts_with(['-', '.']), "{s}");
-            assert!(s.len() <= SEGMENT_MAX + 9, "{s}");
+            assert!(s.len() <= SEGMENT_MAX + SUFFIX_LEN, "{s}");
             assert_eq!(safe_segment(&s), s, "idempotent for {bad:?}");
         }
+        // The suffix is the full 64-bit hash, not a 32-bit prefix.
+        let seg = safe_segment("a/b");
+        let (_, h) = seg.rsplit_once('-').unwrap();
+        assert_eq!(h.len(), 16);
     }
 
     #[test]

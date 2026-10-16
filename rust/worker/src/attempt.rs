@@ -204,6 +204,9 @@ fn run_attempt_inner(
         model: inp.leg.model.as_str(),
         prompt: prompt.as_str(),
     };
+    if let Err(why) = h.validate(&run) {
+        return defect_result(&dest, &claim.base_sha, &branch, &wt.head, why);
+    }
     let opts = Opts {
         stall: Some(cfg.stall),
         timeout: Some(cfg.start_to_close),
@@ -211,7 +214,8 @@ fn run_attempt_inner(
         max_output: 1 << 20,
     };
     // The agent's private HOME lives beside the worktree (never in its diff) and
-    // goes away with the attempt; the check below reuses it.
+    // goes away with the attempt. The check below gets its own HOME, so a login
+    // the harness persisted here never reaches the check child.
     let home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
     let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();

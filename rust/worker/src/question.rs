@@ -71,19 +71,32 @@ pub enum Scan {
 
 /// Find the last `PG_QUESTION:` line in `output` and parse it.
 pub fn scan_output(output: &str) -> Scan {
-    let Some(line) = output
+    // Newest first: a malformed line is logged and skipped, the last
+    // well-formed one wins. Only when none is usable is the (newest) defect
+    // reported.
+    let mut first_defect: Option<String> = None;
+    for line in output
         .lines()
         .rev()
         .map(str::trim_start)
-        .find(|l| l.starts_with(QUESTION_PREFIX))
-    else {
-        return Scan::None;
-    };
-    let json = line[QUESTION_PREFIX.len()..].trim();
-    match serde_json::from_str::<Question>(json) {
-        Ok(q) if q.text.trim().is_empty() => Scan::Malformed("question text is empty".into()),
-        Ok(q) => Scan::Asked(q),
-        Err(e) => Scan::Malformed(format!("PG_QUESTION is not a valid packet: {e}")),
+        .filter(|l| l.starts_with(QUESTION_PREFIX))
+    {
+        match parse_line(&line[QUESTION_PREFIX.len()..]) {
+            Ok(q) => return Scan::Asked(q),
+            Err(why) => {
+                eprintln!("PG_QUESTION line ignored: {why}");
+                first_defect.get_or_insert(why);
+            }
+        }
+    }
+    first_defect.map_or(Scan::None, Scan::Malformed)
+}
+
+fn parse_line(json: &str) -> Result<Question, String> {
+    match serde_json::from_str::<Question>(json.trim()) {
+        Ok(q) if q.text.trim().is_empty() => Err("question text is empty".into()),
+        Ok(q) => Ok(q),
+        Err(e) => Err(format!("PG_QUESTION is not a valid packet: {e}")),
     }
 }
 
@@ -180,11 +193,12 @@ mod tests {
             scan_output("PG_QUESTION: {\"text\":\"  \"}"),
             Scan::Malformed(_)
         ));
-        // The last line wins even when it is the broken one.
-        assert!(matches!(
-            scan_output("PG_QUESTION: {\"text\":\"ok\"}\nPG_QUESTION: {"),
-            Scan::Malformed(_)
-        ));
+        // A broken newer line is ignored: the last well-formed one wins.
+        let out = "PG_QUESTION: {\"text\":\"ok\"}\nPG_QUESTION: {\nPG_QUESTION: {\"text\":\" \"}";
+        let Scan::Asked(q) = scan_output(out) else {
+            panic!("expected the well-formed line");
+        };
+        assert_eq!(q.text, "ok");
     }
 
     #[test]

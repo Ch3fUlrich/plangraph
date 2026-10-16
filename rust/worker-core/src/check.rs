@@ -34,14 +34,14 @@ pub fn tail_lines(text: &str, n: usize) -> String {
 /// Run `cmd` via `sh -c` in `dir`; kill it after `timeout`.
 ///
 /// The child gets the secret-free environment of [`crate::sandbox_env`]
-/// (no agent credentials, unlike the harness) and a private `HOME` next to `dir`, never the worker's own environment.
+/// (no agent credentials, unlike the harness) and its own private `HOME` (`<dir>.home-check`, never the harness HOME), never the worker's own environment.
 pub fn run_check(
     cmd: &str,
     dir: &Path,
     timeout: Duration,
     tail_n: usize,
 ) -> io::Result<CheckResult> {
-    let home = crate::sandbox_env::HomeGuard::for_dir(dir)?;
+    let home = crate::sandbox_env::HomeGuard::for_check(dir)?;
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd).current_dir(dir);
     crate::sandbox_env::confine_check(&mut c, home.path());
@@ -91,16 +91,21 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("c1-1");
         std::fs::create_dir(&dir).unwrap();
+        // A login the harness persisted in its own HOME must be invisible here.
+        let harness_home = root.path().join("c1-1.home");
+        std::fs::create_dir(&harness_home).unwrap();
+        std::fs::write(harness_home.join("harness-login"), "t").unwrap();
         // Unique to this test: no other test reads or sets it.
         std::env::set_var("PG_SENTINEL_SECRET_CHECK", "hunter2");
-        let r = run_check("env", &dir, T, 500).unwrap();
+        let r = run_check("env; ls -a \"$HOME\"; echo done", &dir, T, 500).unwrap();
         assert!(r.passed());
+        assert!(!r.tail.contains("harness-login"), "{}", r.tail);
         assert!(
             !r.tail.contains("SENTINEL") && !r.tail.contains("hunter2"),
             "{}",
             r.tail
         );
-        let home = root.path().join("c1-1.home");
+        let home = root.path().join("c1-1.home-check");
         assert!(
             r.tail.contains(&format!("HOME={}", home.display())),
             "{}",

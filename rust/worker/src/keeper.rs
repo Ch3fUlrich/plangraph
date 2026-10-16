@@ -298,6 +298,8 @@ struct StubState {
     timeout_status: Option<u16>,
     /// When set, `alarm` fails with a 500 (the alarm is not recorded).
     alarm_down: bool,
+    /// When set, `ask_question` fails with this status every time.
+    ask_status: Option<u16>,
 }
 
 impl StubKeeper {
@@ -343,6 +345,11 @@ impl StubKeeper {
     /// Make `record_question_timeout` fail with `status` every time.
     pub fn set_timeout_status(&self, status: Option<u16>) {
         self.lock().timeout_status = status;
+    }
+
+    /// Make `ask_question` fail with `status` every time (a 5xx is an outage).
+    pub fn set_ask_status(&self, status: Option<u16>) {
+        self.lock().ask_status = status;
     }
 
     /// Make every `alarm` call fail, as an unreachable alarm sink would.
@@ -446,6 +453,9 @@ impl Keeper for StubKeeper {
 
     fn ask_question(&self, key: &str, q: &Question) -> Result<i64, KeeperError> {
         let mut s = self.lock();
+        if let Some(code) = s.ask_status {
+            return Err(KeeperError::Status(code));
+        }
         s.questions.push((key.to_string(), q.clone()));
         Ok(s.questions.len() as i64)
     }
