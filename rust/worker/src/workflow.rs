@@ -582,7 +582,6 @@ async fn merge_step(
                 main_branch: input.main_branch.clone(),
                 branch: branch.to_string(),
                 base_sha: base_sha.to_string(),
-                fence_token: None,
                 worktree: format!("{}/{}-{n}", input.workroot, input.claim.card),
                 check_cmd: Some(input.claim.check_cmd.clone()),
                 confine: Some(ConfineSpec {
@@ -593,14 +592,26 @@ async fn merge_step(
             once_options(cfg),
         )
         .await?;
-    Ok(match r.outcome.as_str() {
+    Ok(map_merge_result(r))
+}
+
+/// Map a merge activity result to the step the run loop acts on. Only the
+/// outcomes the merge activity documents are understood; any other string is
+/// refused (the park path), never guessed into a moved base or a conflict that
+/// would loop or land work.
+fn map_merge_result(r: MergeResult) -> MergeStep {
+    match r.outcome.as_str() {
         "merged" => MergeStep::Merged(r.sha.unwrap_or(r.main_head)),
         "retry_later" => MergeStep::RetryLater,
+        "base_moved" | "conflict" => MergeStep::Moved(r.main_head),
         "check_fail" => MergeStep::Failed(ExitClass::CheckFail, r.detail),
         "contract_defect" => MergeStep::Failed(ExitClass::ContractDefect, r.detail),
         "merge_refused" => MergeStep::Failed(ExitClass::MergeRefused, r.detail),
-        _ => MergeStep::Moved(r.main_head),
-    })
+        other => MergeStep::Failed(
+            ExitClass::MergeRefused,
+            format!("unknown merge outcome {other:?}"),
+        ),
+    }
 }
 
 /// Sweep dead attempts; every terminal path except `merged` runs this first.
@@ -844,6 +855,39 @@ mod tests {
             .expect("auxiliary options carry a retry policy");
         assert_eq!(retry.maximum_attempts(), 5);
         assert_eq!(retry.initial_interval(), Duration::from_secs(2));
+    }
+
+    fn merge_result_of(outcome: &str) -> MergeResult {
+        MergeResult {
+            outcome: outcome.to_string(),
+            sha: Some("s".to_string()),
+            main_head: "h".to_string(),
+            detail: "d".to_string(),
+        }
+    }
+
+    #[test]
+    fn unknown_merge_outcome_is_refused_not_moved() {
+        for o in ["", "moved", "MERGED", "rebase_conflict", "something_new"] {
+            match map_merge_result(merge_result_of(o)) {
+                MergeStep::Failed(ExitClass::MergeRefused, d) => {
+                    assert!(d.contains("unknown merge outcome"), "{o}: {d}")
+                }
+                other => panic!("{o:?} mapped to {other:?}"),
+            }
+        }
+        assert!(matches!(
+            map_merge_result(merge_result_of("base_moved")),
+            MergeStep::Moved(h) if h == "h"
+        ));
+        assert!(matches!(
+            map_merge_result(merge_result_of("conflict")),
+            MergeStep::Moved(_)
+        ));
+        assert!(matches!(
+            map_merge_result(merge_result_of("merged")),
+            MergeStep::Merged(s) if s == "s"
+        ));
     }
 
     #[test]
