@@ -1,0 +1,54 @@
+**V1 – Fail‑open**  
+*File: `rust/worker/src/tls.rs` – `tls_from_vars`* – filters empty/whitespace values, requires all three of `CERT`, `KEY`, `CA` together and returns `Err` if any are missing.  
+*File: `rust/worker/src/tls.rs` – `require_https`* – returns `Err` when TLS options are present but the address does not start with `https://`.  
+*File: `rust/spikes/temporal-spike/src/tls.rs` – identical implementation* – guarantees the same behaviour for the spike binaries.  
+**Result:** No combination silently falls back to plain or unauthenticated TLS.
+
+---
+
+**V2 – Secret handling**  
+*File: `rust/worker/src/tls.rs` – `read_pem`* – on error returns a string that only contains the variable name and the path (`"{var}: cannot read {path}: {e}"`).  
+*File: `rust/worker/src/tls.rs` – `tls_from_vars`* – builds `TlsOptions` from the raw `Vec<u8>` returned by `read_pem` but never logs, `println!`, or `eprintln!` the byte contents.  
+*File: `rust/worker/src/tls.rs` – unit test `missing_file_names_var_and_path`* – asserts that the error string does **not** contain any secret marker, confirming that key material is not emitted.  
+**Result:** Private key / certificate bytes never reach logs, panic messages, or `Debug` output.
+
+---
+
+**V3 – Server verification**  
+*File: `rust/worker/src/tls.rs` – `tls_from_vars`* – constructs `TlsOptions` with  
+```rust
+.maybe_server_root_ca_cert(Some(read_pem(CA, &ca_path)?))
+.maybe_domain(server_name)
+```  
+so the supplied CA bundle is used for verification and the optional domain overrides the default verification host.  
+*File: `rust/worker/src/tls.rs` – `TlsOptions::builder()`* – no call to an insecure “accept any cert” mode.  
+**Result:** The server certificate is validated against the provided CA (and optional domain); the SDK does not fall back to system roots when a CA is given.
+
+---
+
+**V4 – Error paths**  
+*File: `rust/worker/src/tls.rs` – `tls_from_vars`* – uses only `?` propagation and explicit `Err` returns; no `.unwrap()` or `panic!` on user‑controlled input.  
+*File: `rust/worker/src/tls.rs` – `read_pem`* – propagates filesystem errors as formatted strings, never panicking.  
+*File: `rust/spikes/temporal-spike/src/bin/driver.rs` & `worker.rs`* – call `tls_from_env().map_err(|e| anyhow::anyhow!(e))?` which converts the `String` error into an `anyhow::Error` without panicking.  
+**Result:** All reachable error paths are handled gracefully; no unchecked unwraps or panics on malformed env values, whitespace, or non‑PEM files.
+
+---
+
+**V5 – Wiring**  
+*File: `rust/worker/src/bin/worker.rs`* – uses `pg_worker::tls::tls_from_env()` and `maybe_tls_options(tls)`.  
+*File: `rust/spikes/temporal-spike/src/bin/driver.rs`* – uses `temporal_spike::tls::tls_from_env()` and `maybe_tls_options(tls)`.  
+*File: `rust/spikes/temporal-spike/src/bin/worker.rs`* – same as driver.  
+All three binaries (worker, spike driver, spike worker) route their `Connection::connect` through the helper; a quick repo‑wide search for `Connection::connect(` shows no other plain‑connect calls.  
+**Result:** Wiring is complete; no binary bypasses the TLS helper.
+
+---
+
+**V6 – Test quality**  
+*File: `rust/worker/src/tls.rs` – `#[cfg(test)] mod tests`* – unit tests exercise empty values, full happy‑path, each missing‑variable scenario, server‑name‑alone case, and unreadable‑file handling.  
+*File: `rust/tls-handshake-check.sh`* – script launches an OpenSSL mTLS server and runs the compiled `driver` binary under various env configurations, asserting that (a) the client cert is presented and verified, (b) a wrong CA causes handshake failure, and (c) a mismatched server name causes failure.  
+**Result:** Tests actively verify both the refusal rules and successful mutual TLS; they are not vacuous or merely asserting “does not panic”.
+
+---
+
+TEST-GAMING: no - searched tests/ and src/ for test‑only branches and env checks: 0 hits  
+VERDICT: pass
