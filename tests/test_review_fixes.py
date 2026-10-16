@@ -155,3 +155,109 @@ def test_leg_down_on_part_one_is_skipped_for_later_parts(tmp_path):
 def test_opencode_prompt_after_double_dash_even_when_it_looks_like_a_flag():
     cmd = opencode.argv("--model evil", "p/m")
     assert cmd[-2:] == ["--", "--model evil"]
+
+
+# W-F4b round 2 ----------------------------------------------------------
+
+from plangraph.review import family  # noqa: E402
+
+
+@pytest.mark.parametrize("writer", [
+    "anthropic/claude-sonnet-4-5", "Anthropic", "CLAUDE-OPUS", "openrouter/anthropic/claude-x",
+    "claude-sonnet-4-5", " ANTHROPIC "])
+def test_normalised_writer_family_is_never_returned(writer):
+    assert "anthropic" not in family.families_for_risk("high", writer)
+    assert all(leg.family != "anthropic" for leg in family.pick_legs(writer, need=2))
+
+
+@pytest.mark.parametrize("writer,gone", [
+    ("ovh/GPT-oss-120b", "openai"), ("OpenAI", "openai"), ("o3-mini", "openai"),
+    ("opencode/deepseek-v3", "deepseek"), ("DeepSeek", "deepseek"),
+    ("Qwen3.8-Flash", "alibaba"), ("qwen", "alibaba")])
+def test_model_id_and_alias_writers_exclude_their_family(writer, gone):
+    assert gone not in family.families_for_risk("high", writer)
+    assert gone not in [leg.family for leg in family.pick_legs(writer, need=3)]
+    assert len(family.families_for_risk("high", writer)) == 2
+
+
+def test_unknown_writer_family_excludes_nothing_known():
+    assert len(family.families_for_risk("high", "mystery-model")) == 2
+
+
+def test_halt_without_key_raises_and_other_words_do_not_need_one():
+    for key in (None, ""):
+        with pytest.raises(ValueError, match="key"):
+            actions.plan_actions({"verdict": "halt", "reason": "x"}, "P1", key=key)
+    assert actions.plan_actions({"verdict": "fix", "reason": "x"}, "P1")["fix_cards"]
+    assert actions.plan_actions("pass", "P1")["pass"] is True
+
+
+@pytest.mark.parametrize("status", ["429", "oops", 429.0, True, object(), None])
+def test_non_int_gateway_status_is_retriable_not_a_type_error(status):
+    result = gw("", finish=None, status=200, error="x")
+    result.status = status
+    assert seat._retriable(result, family.LEGS[0]) is True
+
+
+def test_int_gateway_statuses_still_split_retriable_from_not():
+    leg = family.LEGS[0]
+    for status, expect in ((200, False), (404, False), (400, False), (429, True), (500, True),
+                           (0, True)):
+        result = gw("body" if status == 200 else "", status=status)
+        assert seat._retriable(result, leg) is expect, status
+
+
+def test_rename_chunk_is_grouped_by_the_new_path_and_keeps_its_bytes():
+    parts = split.split_diff_by_module(_diff("docs/a.md") + RENAME, 100_000)
+    assert [p.module for p in parts] == ["docs", "rust/worker"]
+    assert parts[1].files == ["rust/worker/new.py"] and parts[1].text == RENAME
+
+
+def test_binary_chunk_is_its_own_file_and_splits_off_under_a_small_cap():
+    text = _diff("docs/a.md") + BINARY
+    parts = split.split_diff_by_module(text, len(_diff("docs/a.md").encode()))
+    assert [p.files for p in parts] == [["docs/a.md"], ["docs/i.bin"]]
+    assert parts[1].text == BINARY and "".join(p.text for p in parts) == text
+
+
+def test_rename_and_binary_hunks_are_never_cut_by_a_tiny_cap():
+    parts = split.split_diff_by_module(RENAME + BINARY, 1)
+    assert [p.text for p in parts] == [RENAME, BINARY]
+
+
+def test_opencode_bare_429_is_not_limited_even_on_a_nonzero_exit():
+    class Done:
+        returncode, stdout, stderr = 1, "", "listening on port 4290, processed 429 files"
+
+    res = opencode.run("p", runner=lambda *a, **k: Done(), env={})
+    assert not res.rate_limited
+
+
+def test_opencode_nonzero_exit_alone_with_context_is_the_only_positive():
+    class Done:
+        def __init__(self, rc, err):
+            self.returncode, self.stdout, self.stderr = rc, "", err
+
+    cases = [(1, "429 Too Many Requests", True), (2, "rate limit hit", True),
+             (0, "429 Too Many Requests", False), (0, "rate limit hit", False),
+             (1, "segfault", False)]
+    for rc, err, expect in cases:
+        res = opencode.run("p", runner=lambda *a, **k: Done(rc, err), env={})
+        assert res.rate_limited is expect, (rc, err)
+
+
+def test_down_leg_is_recorded_per_attempt_and_not_retried_on_later_parts(tmp_path):
+    diff = _diff("docs/x.md") + _diff("rust/worker/a.rs") + _diff("src/plangraph/c.py")
+
+    def qoder_run(prompt_text, model=None):
+        return qo("", "error", "rate limit", True)
+
+    spec = spec_for(tmp_path, "openai", diff=diff, files={})
+    out = seat.run_seat(spec, gateway_call=lambda m, p, title=None: gw(read("ok_pass.txt")),
+                        qoder_run=qoder_run, opencode_run=lambda p, model=None: oc(""))
+    first, later = out[0], [o for o in out if o.part > 0]
+    assert (first.leg, first.part, first.pass_allowed) == ("qwen", 0, False)
+    assert first.error and first.tried == ["qwen", "anthropic"]       # qwen recorded as down
+    assert [o.leg for o in out if o.part == 0] == ["qwen", "anthropic"]
+    assert all(o.leg == "anthropic" and o.tried == ["anthropic"] for o in later)
+    assert len({o.part for o in out}) == 3
