@@ -1,3 +1,4 @@
+# note: rowhash.py later changed to read PG_DSN from env (argv form below was passwordless trust auth on a throwaway container)
 # rehearsal 2026-10-16T08:50:17Z base 8165c22; source = sqlite backup copy (sha256 f82b3563...), PG16 alpine container --memory 1g, DSN=$PG_DSN (trust auth, no password)
 
 $ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin copy-to-pg --dry-run --src $SCRATCH/keeper-copy.db

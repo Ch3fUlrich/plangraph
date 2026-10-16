@@ -1,9 +1,10 @@
-"""Per-table content digest sqlite vs PG (rehearsal only): sha256 over rows in PK order."""
-import hashlib, sqlite3, sys, psycopg
-sys.path.insert(0, sys.argv[3])
+"""Per-table content digest sqlite vs PG (read-only): sha256 over rows in PK order.
+usage: PG_DSN=... python rowhash.py SQLITE_FILE SRC_DIR   (DSN from env only, never argv)"""
+import hashlib, os, sqlite3, sys, psycopg
+sys.path.insert(0, sys.argv[2])
 from plangraph.keeper.copy_to_pg import TABLES
 s = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
-p = psycopg.connect(sys.argv[2]); p.execute("set search_path=rehearsal")
+p = psycopg.connect(os.environ["PG_DSN"]); p.execute("set search_path=rehearsal")
 bad = 0
 for t in TABLES:
     info = list(s.execute(f"PRAGMA table_info({t})")); cols = [r[1] for r in info]
