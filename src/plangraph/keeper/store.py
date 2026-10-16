@@ -28,10 +28,12 @@ from .store_close import CloseMixin
 from .store_create import CreateMixin
 from .store_legacy import LegacyMixin
 from .store_input import InputMixin
+from .store_metrics import MetricsMixin
 from .store_names import NamesMixin
 from .store_needs import NeedsMixin
 from .store_outbox import OutboxMixin
 from .store_withdraw import WithdrawMixin
+from .store_reopen import ReopenMixin
 from .store_kind import KindMixin
 from .store_changelog import ChangelogMixin
 from .store_ops import OpsMixin
@@ -66,8 +68,8 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
-            TokensMixin, OutboxMixin, WithdrawMixin, KindMixin,
-            ChangelogMixin, AuditMetaMixin, CardsMixin):
+            TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
+            ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,

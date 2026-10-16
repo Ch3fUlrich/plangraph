@@ -69,6 +69,10 @@ def replay_w2(w, keys):
     w.store.set_state(system, c, "waiting", "timer")
     w.store.set_budget(router, "claude", "2026-10-15", 1500, 2.5, meter=0.4)
     w.store.set_budget(router, "claude", "2026-10-15", 1800, 3.0, meter=0.5)
+    w.store.set_metrics(router, "2026-10-15", [{"metric": "claude_weighted_tokens",
+                                                "value": 1800.5, "source": "transcripts"}])
+    w.store.set_metrics(router, "2026-10-15", [{"metric": "claude_weighted_tokens",
+                                                "value": 2000.5, "source": "transcripts"}])
     w.store.set_state(lead, c, "failed")
     w.store.set_state(lead, c, "parked")
     w.store.set_state(lead, c, "open")
@@ -84,7 +88,7 @@ def replay(w):
 
 _TABLES = {
     "cards": "key", "attempts": "id", "decisions": "id", "questions": "id",
-    "answers": "question_id", "budget": "provider, day",
+    "answers": "question_id", "budget": "provider, day", "metrics": "day, metric",
 }
 
 
@@ -101,7 +105,15 @@ def dump_tables(w):
 
 #: head of ``replay_legacy`` as produced before the design-3 work (schema v9 code): the hash
 #: chain of every pre-existing event kind must stay byte-identical.
-LEGACY_HEAD = (14, "b556064b70ef0e0c3de2f30fdb00ea2e559ddee6a315841e97ac5b92f137b55e")
+#:
+#: ``PG-ESTIMATE-SRC-EDIT`` widened the estimate edit's ``item_defined`` payload
+#: (seq 12 now carries the ``estimate_h``/``estimate_src`` values and the
+#: auto-filled source), so the chain legitimately moves from that event on --
+#: every hash after it is only the old chain seen through one wider payload.
+#: ``LEGACY_PREFIX`` pins the last head *before* it, which all the other event
+#: kinds still hash to byte for byte.
+LEGACY_PREFIX = (11, "58618aa115472f589e7ee07531c557e36f5257f926792887f16401aa3458185d")
+LEGACY_HEAD = (14, "16badb7cba6b9e76f147a98c0a1aea17eefbfbd12f27eb0e71d6480b2d08845f")
 
 
 def test_replay_chain_verifies_on_sqlite(tmp_path):
@@ -112,6 +124,7 @@ def test_replay_chain_verifies_on_sqlite(tmp_path):
     rows, _ = dump(w)
     assert [r["seq"] for r in rows] == list(range(1, len(rows) + 1))
     assert "state_set" in {r["type"] for r in rows}
+    assert rows[LEGACY_PREFIX[0] - 1]["hash"] == LEGACY_PREFIX[1]   # prefix unchanged
     assert rows[LEGACY_HEAD[0] - 1]["hash"] == LEGACY_HEAD[1]       # legacy prefix unchanged
 
 
@@ -119,6 +132,7 @@ def test_existing_event_kinds_hash_exactly_as_before(tmp_path):
     w = World(tmp_path, backend="sqlite")
     replay_legacy(w)
     rows, _ = dump(w)
+    assert rows[LEGACY_PREFIX[0] - 1]["hash"] == LEGACY_PREFIX[1]
     assert (len(rows), rows[-1]["hash"]) == LEGACY_HEAD
     assert "state_set" not in {r["type"] for r in rows}
 

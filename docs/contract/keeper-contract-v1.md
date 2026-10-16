@@ -89,8 +89,8 @@ Malformed client input must never produce `500`.
 
 | verb | who may call it |
 | --- | --- |
-| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default) |
-| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review` | router |
+| `create_items` | router (any project); l1 (own projects, no cross-project deps, no `review_tier: none`, no tier below the default, no cross-project `under`) |
+| `import_items`, `set_priority`, `add_evidence_router`, `waive_second_family`, `close_on_decision`, `set_legacy_state`, `apply_ops`, `migrate_descriptions`, `rehome`, `answer`, `set_kind`, `withdraw_review`, `reopen` | router |
 | `edit_definition`, `cancel` | router; l1 of the item's project (see state machine for limits) |
 | `claim` | l1 or worker scoped to the item's project |
 | `delegate`, `heartbeat`, `submit`, `add_evidence` | the claimant, or the delegate (`delegate` itself: claimant only) |
@@ -126,12 +126,26 @@ ones are `null` when unset): `key`, `project`, `id`, `title`, `description`,
 `kind`, `track`, `owner`, `state`, `priority` (int, higher first), `epoch`,
 `round`, `claimed_by`, `delegate`, `lease_until`, `reviewer`, `depends_on`
 (keys), `done_criteria`, `evidence_kinds`, `operator` (bool), `review_tier`,
-`review_waiver`, `estimate_h`, `host`, `wait`, `note`, `corrects`, `fixes`,
+`review_waiver`, `estimate_h`, `estimate_src`, `host`, `wait`, `note`,
+`corrects`, `fixes`,
 plus derived `created_at`, `done_at`, `reviewed`, `merged`.
 
 * `kind`: `lane`, `gate`, `goal`, `question`, `decision`, `operator_task`.
   The last three wait on the operator. Unknown extra fields on create are
   folded into `note`.
+* `under` (create-only, optional): the key of an **existing** gate/goal item.
+  `create_items` creates the item and, in the same transaction, the edge
+  `gate -> new` (`gate.depends_on` new), so the new item reaches a goal without
+  a later edit; the response gains `attached: [{key, under}]` and the gate gets
+  one `item_defined {fields: ["depends_on"]}` event plus an `updated_at` touch.
+  The gate must exist (`not_found` — a key created earlier in the same batch
+  does not), the caller must manage its project (`forbidden`), a non-router only
+  attaches inside the new item's own project (`forbidden`), and a `done` /
+  `cancelled` gate is `bad_state`. The candidate graph (the gate with the new
+  item among its dependencies) is validated before any write, so a cycle or an
+  unreachable item is refused atomically and nothing is created. `under` is
+  refused by `import_items` and is not an `edit_definition` field
+  (`validation`); it is a known field, so it never folds into `note`.
 * `review_tier`: `standard` (default; `high` when the id, title or track
   contains a risky word or the project is `plangraph`), `high`, `none`.
 * `evidence_kinds`: subset of `decision`, `commit+ci`, `run-record`,
@@ -171,6 +185,7 @@ States: `open`, `claimed`, `in_review`, `done`, `cancelled`.
 | in_review | claimed | `verdict ok:false` (reviewer) | fresh lease, same epoch |
 | in_review | open | second consecutive `verdict ok:false` in one epoch | holder cleared |
 | in_review | claimed | `withdraw_review` (router) | decision names the key in `Closes:` |
+| in_review | claimed | `reopen` (router) | recorded decision, reason |
 | in_review | done | `verdict ok:true` | see review rules |
 | claimed, in_review | done | `close_on_decision` (router) | tier `none`, decision evidence, hashed batch file |
 | open, claimed, in_review | done | `answer` (router) | kind `question`/`decision`, decision names key |
@@ -229,20 +244,23 @@ Every state change appends exactly one record per effect to an append-only log.
   `changes_requested`, `review_verdict`, `review_passed`,
   `closed_on_decision`, `answered`, `cancelled`, `priority_set`,
   `waiver_set`, `legacy_state_set`, `run_recorded`, `token_minted`,
-  `outage_recorded`, `review_withdrawn`, `kind_set`, `heartbeat` (reserved).
+  `outage_recorded`, `review_withdrawn`, `kind_set`, `item_reopened`, `heartbeat` (reserved).
 
 Events per successful verb: `create_items`/`import_items` one `item_created`
-per item (legacy imports with state `claimed`/`in_review` add `claimed`
+per item (a `create_items` item with `under` adds one `item_defined`
+`{fields: ["depends_on"]}` on the gate, in the same transaction; legacy imports
+with state `claimed`/`in_review` add `claimed`
 (+`submitted`)); `edit_definition` one `item_defined` (+`priority_set` if it
-carried `priority`); `set_priority` `priority_set`; `claim` `claimed`;
+carried `priority`; a `depends_on` entry naming a `cancelled` item is dropped
+from the edit with a `warnings` result instead of refusing); `set_priority` `priority_set`; `claim` `claimed`;
 `delegate` `delegated`; **`heartbeat` none**; `release` `released`;
 `add_evidence[_router]` `evidence_added`; `submit` `submitted`; `verdict
 ok:false` `changes_requested`; passing verdict `review_verdict` then (when
 done) `review_passed`; `cancel` `cancelled`; `waive_second_family`
 `waiver_set`; `close_on_decision` `closed_on_decision` (`decision_ids`,
 `batch_ref`, `sha256`); `answer` `answered`; `set_legacy_state`
-`legacy_state_set`; `withdraw_review` `review_withdrawn`; `set_kind`
-`kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
+`legacy_state_set`; `withdraw_review` `review_withdrawn`; `reopen`
+`item_reopened`; `set_kind` `kind_set`; `rehome` `item_created` (new, `rehomed_from`) + one
 `item_defined` per re-pointed dependent + `cancelled` (old);
 `record_run` `run_recorded`; `mint_run_token` `token_minted` (never the token);
 `apply_ops` the events of each op, in order, in one transaction. Refused
@@ -274,6 +292,8 @@ ops:                          # applied in order
   - {op: cancel, key: "demo:A", reason: "..."}
   - {op: rehome, key: "demo:A", new_project: other, host: box1}
   - {op: set_kind, key: "demo:A", kind: question}                           # or operator_task
+  - {op: add_dep, key: "demo:A", dep: "demo:B"}                             # one dependency (bare id = own project)
+  - {op: remove_dep, key: "demo:A", dep: "demo:B"}
 ```
 
 * Only the keys shown are allowed (per op and at top level); duplicate YAML
@@ -282,7 +302,15 @@ ops:                          # applied in order
 * Op to verb: `create`->`create_items`, `edit`->`edit_definition`,
   `legacy_state`->`set_legacy_state`, `add_evidence`->`add_evidence_router`,
   `close_on_decision`, `cancel`, `priority`->`set_priority`, `rehome`,
-  `set_kind`. Router only.
+  `set_kind`. `add_dep`/`remove_dep` run `edit_definition`'s inner edit on one
+  dependency and have no single route: `--per-op` posts each of them as its own
+  one-op `apply_ops` call. Router only.
+* `add_dep` (link one `dep`) and `remove_dep` (unlink it) honour the edit's
+  auth/state/graph checks in the same transaction. A dep already present
+  (`add_dep`) or absent (`remove_dep`) writes nothing and appends no event; a
+  dep naming a `cancelled` item is dropped from the resulting list with
+  `warnings: ["dropped cancelled dependency <key>"]` (a full `edit` of
+  `depends_on` drops it the same way); an unknown dep key is refused.
 * **Default mode: one `apply_ops` call** `{ops, batch_ref}`, all or nothing in
   one transaction (max 500 ops). Later ops see earlier ones; the whole graph
   is validated once at the end. Any refusal rolls everything back and names
@@ -302,7 +330,9 @@ ops:                          # applied in order
   mismatch prints `principal mismatch` and calls nothing else.
 * `apply_ops` over HTTP: `{"applied": N, "results": [...]}`; `results` holds
   one object per op in op order: `{"created": [keys]}` for `create`, and an
-  object with the affected `key` for every other op; a bad op list is
+  object with the affected `key` for every other op (an op that drops a
+  cancelled dependency or changes nothing adds `warnings: [string]`); a bad op
+  list is
   `400 validation`; the failing op's code and status are returned with the
   `op <n> ...` message; a non-router is `403`.
 

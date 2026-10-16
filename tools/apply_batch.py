@@ -26,6 +26,8 @@ OP_SPECS = {
     "priority": (["key", "priority"], {"priority": int}),
     "rehome": (["key", "new_project"], {"new_project": str}),
     "set_kind": (["key", "kind"], {"kind": str}),
+    "add_dep": (["key", "dep"], {"dep": str}),
+    "remove_dep": (["key", "dep"], {"dep": str}),
 }
 OP_ALLOWED = {
     "create": {"op", "item"},
@@ -37,6 +39,8 @@ OP_ALLOWED = {
     "priority": {"op", "key", "priority"},
     "rehome": {"op", "key", "new_project", "host"},
     "set_kind": {"op", "key", "kind"},
+    "add_dep": {"op", "key", "dep"},
+    "remove_dep": {"op", "key", "dep"},
 }
 TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops"}
 PIN_MISMATCH_MARK = "sha256 mismatch"
@@ -139,7 +143,7 @@ def validate_op(op):
                 _check_item(entry)
         else:
             _check_item(item)
-    for f in ("kind", "note", "reason", "state", "repo", "key", "host"):
+    for f in ("kind", "note", "reason", "state", "repo", "key", "host", "dep"):
         if f in op and op[f] is not None and not isinstance(op[f], str):
             raise BatchError(f"{name}: {f!r} must be str")
     if op.get("ref") is not None and not isinstance(op.get("ref"), dict):
@@ -182,6 +186,10 @@ def build_request(op, source, digest):
     if name == "rehome":
         return "rehome", {"key": op["key"], "new_project": op["new_project"],
                           "host": op.get("host")}
+    if name in ("add_dep", "remove_dep"):
+        # No single-verb route: ``--per-op`` sends the op as its own one-op
+        # apply_ops call, so it keeps the atomic verb's checks (and result).
+        return "apply_ops", {"ops": [op]}
     raise BatchError(f"unknown op {name!r}")
 class Session:
     """Bearer-token calls to the keeper API; the token is never printed."""
