@@ -35,6 +35,7 @@ stopped the supervising session. Neither changes this design.
 | S16 | The MCP entry runs a **Rust `plangraph mcp`** stdio server in the same binary: the existing tool set forwarded 1:1 to the keeper HTTP API, contract-tested against the Python MCP. No Python on client machines | AskUserQuestion |
 | S17 | Lane models: writer **gemini-3.8-flash via agy**; seats **qwen3.8-flash (qodercli)** + **opencode/muse-spark-1.3-free**; a rate-limited leg falls back to mimo-v2.6-flash, then deepseek. Seat family != writer family always. agy gets code only, never plan data | AskUserQuestion |
 | S18 | Public repo CI on **GitHub-hosted** Linux + Windows runners (tests + release builds); the workstation runner stays for private repos | AskUserQuestion |
+| S19 | Item rulings (operator decided instead of the router): `plangraph:API-PUSH` and the draft RT-P3-ASK-PUSH fold into one new item **`plangraph:Q-API-PUSH`** (the clearer name); `autoos:T2-SKILL` is cancelled as a duplicate of `plangraph:RT-P4-SKILLS-REWRITE`; `autoos:AO-CTX-RECYCLE-ALLHOSTS` folds into `plangraph:SU-HOOK-CTXGUARD` + `SU-LAUNCH`; `plangraph:CI-RUNS-ON-WORKST` is re-scoped to the private repos. Dependents are re-pointed in the same batch | AskUserQuestion |
 
 Verified facts (this round): Claude Code 2.1.301 on Windows, `claude -p`, three temp repos: AGENTS.md alone -> loaded; CLAUDE.md =
 `@AGENTS.md` -> loaded; CLAUDE.md with other text -> AGENTS.md NOT loaded. So a non-import CLAUDE.md silently hides AGENTS.md;
@@ -79,7 +80,7 @@ Today (interim, persistent fleet sessions):
 Target (base sections 2, 4, 6):
 - **Workers** hold no keeper token and use no hooks. Temporal owns every clock: activity heartbeat 30 s, timeout 2 min, retries,
   durable waits. Status is state (events); nobody sends status messages.
-- **Questions** from a worker or a session go to the keeper Inbox, then to the phone as an interactive push (RT-P3-ASK-PUSH).
+- **Questions** from a worker or a session go to the keeper Inbox, then to the phone as an interactive push (Q-API-PUSH).
   An answer becomes a Temporal signal for a worker, or is delivered to the asking Claude Code session through the plangraph MCP
   server.
 - **Planner wake** uses the same MCP path: a channel push if RT-P3-PHONE validates it, else an inbox long-poll (PG-INBOX) and the
@@ -223,7 +224,7 @@ localhost URLs stay valid unchanged.
   - mechanical rules become code (this setup, the launcher, the trailer hook and the lints are such code);
   - skills live in `plangraph/skills`;
   - a CI lint rejects skills > 500 lines.
-  - `autoos:T2-SKILL` (same content) should be cancelled as a duplicate (router ruling).
+  - `autoos:T2-SKILL` (same content) is cancelled as a duplicate (S19); `autoos:T2-COMPACT` now waits on RT-P4-SKILLS-REWRITE.
 - **(b) routing into plangraph** = `plangraph:RT-P4-ROUTER-CODE` (generic router code), `plangraph:RT-P2-DECISIONS` +
   `plangraph:RT-P4-LEDGER-CUTOVER` (decisions/questions into keeper tables), then `routing:RT-P4-ARCHIVE`. The `fleet-launch`
   wrapper (S8) is the last change routing needs from this track.
@@ -233,7 +234,8 @@ localhost URLs stay valid unchanged.
 
 ## 8. New big-plan items (router order 7; phase P3, owner build-L1)
 
-- **RT-P3-ASK-PUSH**: the page sends push notifications with interactive questions in the shape of Claude Code's question
+- **Q-API-PUSH** (absorbs `plangraph:API-PUSH`: self-hosted, D-290a; a new blocking item reaches the phone within 1 min, no
+  push for non-blocking items): the page sends push notifications with interactive questions in the shape of Claude Code's question
   prompt:
   - 2-4 options, recommended first, single or multi select, free text "Other", optional preview;
   - the answer is routed to the asking Claude Code session (the question records the session name/id from the launch record;
@@ -279,21 +281,23 @@ localhost URLs stay valid unchanged.
 | plangraph:SU-HOOK-CTXGUARD | Rust context-guard, 1:1 | PH-ORCH-SETUP | ported tests green; < 10 ms; wired by setup |
 | autoos:SU-GUARDS-CALLER | OpenCode bash-guard plugin calls the binary | plangraph:SU-HOOK-BASHGUARD | plugin tests green |
 | plangraph:PH-ORCH-GUARDS | gate: guards in Rust | the 3 guard items | all deps done |
-| plangraph:RT-P3-ASK-PUSH | Interactive push questions routed to the asking session (HIGH) | RT-P3-PHONE, PG-INBOX | phone drill: question with options answered, the asking session receives it; 2 non-Claude seats |
-| plangraph:RT-P3-PLAN-MODE | Planning mode through the UI | RT-P3-ASK-PUSH, RT-P2-DECISIONS | a proposed change approved in the UI lands as attributed events and shows in the graph |
+| plangraph:Q-API-PUSH | Self-hosted push for new blocking items + interactive push questions routed to the asking session (HIGH) | RT-P3-PHONE, PG-INBOX | blocking item on the phone within 1 min, none for non-blocking; phone drill: question with options answered, the asking session receives it; 2 non-Claude seats |
+| plangraph:RT-P3-PLAN-MODE | Planning mode through the UI | Q-API-PUSH, RT-P2-DECISIONS | a proposed change approved in the UI lands as attributed events and shows in the graph |
 | plangraph:RT-P3-HISTORY | History tab: time travel + diff | RT-P3-TABS, RT-P3-PLAN-MODE | render at any past seq equals a rebuilt snapshot (test); diff view; go-back opens a proposal |
 | plangraph:SU-DOCKER | Docker setup with the same env file (LAST) | routing:PH-RETHINK, PH-ORCH-SETUP, PH-ORCH-GUARDS | compose up from the same env file; `setup check --docker` 0 drift; fresh-setup CI green in Docker |
 
 Edits/cancels (router ops):
 - `autoos:RT-P4-INSTALLER` gains deps `plangraph:PH-ORCH-SETUP`, `autoos:SU-CATALOG` and `plangraph:SU-HARNESS-CFG`.
 - `routing:RT-P3` gains the three RT-P3 items.
-- Cancel `autoos:AO-PG-MCP-WIRE` (superseded by SU-MCP).
+- Cancel `autoos:AO-PG-MCP-WIRE` (superseded by SU-MCP); its dependent `routing:ROUTE-PG-SSOT` is re-pointed to `plangraph:SU-MCP`.
 
-Rulings left to the router:
-- `autoos:AO-CTX-RECYCLE-ALLHOSTS` (launcher + guard now here);
-- `autoos:T2-SKILL` (duplicate of RT-P4-SKILLS-REWRITE);
-- `plangraph:API-PUSH` (fold into RT-P3-ASK-PUSH);
-- `plangraph:CI-RUNS-ON-WORKST` (re-scope to private repos, S18).
+Operator rulings (S19), applied in the same batch:
+- cancel `plangraph:API-PUSH` -> folded into `plangraph:Q-API-PUSH`; `plangraph:PH-M2C-API` re-pointed to Q-API-PUSH.
+- cancel `autoos:T2-SKILL` (duplicate of RT-P4-SKILLS-REWRITE); `autoos:T2-COMPACT` re-pointed to RT-P4-SKILLS-REWRITE;
+  `routing:GATE-P2` drops the edge (the skill work is gated by RT-P4).
+- cancel `autoos:AO-CTX-RECYCLE-ALLHOSTS` -> folded into `plangraph:SU-HOOK-CTXGUARD` (done-criteria carry first_ts,
+  `ready --card` and the per-host install) + SU-LAUNCH; `routing:PH-OPPLAN-1012` drops the edge (gated by PH-ORCH-GUARDS).
+- edit `plangraph:CI-RUNS-ON-WORKST`: private repos on the workstation runner, the public repo GitHub-hosted only.
 
 ## 10. Lanes (one L2 brief each, in `orch-setup/briefs/`; run by workst-L1-autoos)
 
@@ -343,7 +347,7 @@ after A; F and the Python half of SU-ENV wait for the keeper's Postgres cutover.
    today's repo until SPLIT-PUBLISH; open lanes are then carried over as patches (SPLIT track).
 8. **SU-HARNESS-CFG is outside the setup gate.** It waits for `plangraph:RT-P1-WORKER`, so it feeds
    `autoos:RT-P4-INSTALLER` directly and does not block PH-ORCH-SETUP.
-9. **CI re-scope (S18).** `plangraph:CI-RUNS-ON-WORKST` must be re-scoped to the private repos (router ruling).
+9. **CI re-scope (S18, S19).** `plangraph:CI-RUNS-ON-WORKST` is re-scoped to the private repos in this batch.
 10. Left to the builder:
    - crate layout inside `rust/plangraph-cli`;
    - the ps1 one-liner form;

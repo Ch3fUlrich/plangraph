@@ -3,7 +3,7 @@
 batch: 2026-10-16-orch-setup
 principal: router
 source: ../2026-10-16-orchestration-setup.md
-source_sha256: 7e899bd5fc81f1ad45a46ae50b63699f779822e7c3446345b6f26416393ed7df
+source_sha256: d52bf1f52ce636795bcdc943b3abf57c368703581e9190dc641dd623c5259ea3
 ops:
 - op: create
   item:
@@ -366,8 +366,8 @@ ops:
     owner: workst-L1-autoos
     review_tier: standard
     title: Rust context-guard hook, 1:1 port of AutoOS context_guard.py
-    description: 'S5. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
-    done_criteria: ported tests green; no-op p95 < 10 ms; wired by setup
+    description: 'S5. Folds autoos:AO-CTX-RECYCLE-ALLHOSTS (D-1195 2; operator 2026-10-16): the per-host install is plangraph setup, launcher is SU-LAUNCH. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: ported tests green (incl. first_ts and `ready <handoff> --card <card>`); no-op p95 < 10 ms; wired by `plangraph setup apply` on every host OS (Linux, Windows)
     depends_on:
     - plangraph:PH-ORCH-SETUP
 - op: create
@@ -400,15 +400,16 @@ ops:
     - autoos:SU-GUARDS-CALLER
 - op: create
   item:
-    id: RT-P3-ASK-PUSH
+    id: Q-API-PUSH
     project: plangraph
     kind: lane
     track: RETHINK
     owner: build-L1
     review_tier: high
-    title: Web push with interactive questions (Claude Code question shape), answer routed to the asking session
-    description: 'Router order 7a. Section 8. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
-    done_criteria: 'phone drill: a question with options is answered and the asking Claude Code session receives it via the plangraph MCP server (or a worker gets the Temporal signal); 2 non-Claude seats'
+    title: Self-hosted web push for new blocking items, with interactive questions (Claude Code question shape) answered in the push and routed to the asking session
+    description: 'Router order 7a; operator 2026-10-16: folds plangraph:API-PUSH (D-290a, self-hosted) and the draft RT-P3-ASK-PUSH into one item. Section 8. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: a new blocking item reaches the phone within 1 min in a drill; no push for non-blocking items; a question with options is answered from the push and the asking Claude Code session receives
+      it via the plangraph MCP server (or a worker gets the Temporal signal); 2 non-Claude seats
     depends_on:
     - plangraph:RT-P3-PHONE
     - plangraph:PG-INBOX
@@ -424,7 +425,7 @@ ops:
     description: 'Router order 7b. Section 8. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
     done_criteria: a proposed change approved in the UI lands as attributed events and shows in the graph; every task update reflected live
     depends_on:
-    - plangraph:RT-P3-ASK-PUSH
+    - plangraph:Q-API-PUSH
     - plangraph:RT-P2-DECISIONS
 - op: create
   item:
@@ -471,9 +472,103 @@ ops:
     - plangraph:RT-P3-SVELTE
     - plangraph:RT-P3-TABS
     - routing:RT-P2
-    - plangraph:RT-P3-ASK-PUSH
+    - plangraph:Q-API-PUSH
     - plangraph:RT-P3-PLAN-MODE
     - plangraph:RT-P3-HISTORY
+- op: edit
+  key: plangraph:PH-M2C-API
+  fields:
+    depends_on:
+    - plangraph:API-OIDC
+    - plangraph:Q-API-PUSH
+    - plangraph:PG-CI-FORGEJO
+    - plangraph:PG-CLI-READY-FIX
+    - plangraph:PG-READY-OWNER
+    - plangraph:PG-ROUTER-REOPEN
+    - plangraph:PG-SEMAPHORE-FIX
+    - plangraph:PG-SEMAPHORE-LIVE
+    - plangraph:PG-WORKST-REPOS
+- op: cancel
+  key: plangraph:API-PUSH
+  reason: folded into plangraph:Q-API-PUSH (operator 2026-10-16)
+- op: edit
+  key: autoos:T2-COMPACT
+  fields:
+    depends_on:
+    - plangraph:RT-P4-SKILLS-REWRITE
+- op: edit
+  key: routing:GATE-P2
+  fields:
+    depends_on:
+    - autoos:AO-REGISTRY-COMBO-LEGS
+    - autoos:T1-LITELLM
+    - autoos:T1-PEER
+    - autoos:T1-PROV
+    - autoos:T2-RULES
+    - autoos:T5-BRANCHES
+    - autoos:T5-CLONE
+    - autoos:T5-FINISH
+    - autoos:T5-GRAPH
+    - autoos:T5-GROK-L2
+    - autoos:T5-HANDOFF
+    - autoos:T5-KEYS
+    - autoos:T5-PROVIDERS
+    - autoos:T5-SKILLS
+    - autoos:T5-SYNC
+    - server:T6-HA
+    - server:T6-PHONE
+    - server:T6-PILOT
+- op: cancel
+  key: autoos:T2-SKILL
+  reason: duplicate of plangraph:RT-P4-SKILLS-REWRITE (operator 2026-10-16)
+- op: edit
+  key: routing:PH-OPPLAN-1012
+  fields:
+    depends_on:
+    - autoos:AO-BZL-TARGET-TIMEOUT
+    - autoos:AO-COMBO-FREE-FIRST
+    - autoos:AO-GW-HEAVY-INFLIGHT
+    - autoos:AO-JULES-PIPELINE
+    - autoos:AO-L2-SMALLFIX-RULE
+    - autoos:AO-MIMO-WIRING
+    - autoos:AO-OVH404-COOLDOWN-SCOPE
+    - autoos:AO-QODER-ROUTE
+    - autoos:AO-VERDICT-PLAIN
+    - autoos:AO-WATCHER-BREAKER
+    - autoos:AO-WORKST-RUNNER-POOL
+    - plangraph:PG-DEC-COUNT
+    - plangraph:PG-L2-SMALLFIX-RULE
+    - plangraph:PG-NEEDS-YOU
+    - plangraph:PG-PUBLIC-READY
+    - plangraph:PG-QUESTION-CARDS
+    - routing:COORD-DIET-PILOT
+    - routing:CTX-WATCHDOG-FRESH
+    - routing:DECISION-MODELS-RESEARCH
+    - routing:HAIKU-PROPAGATE
+    - routing:JULES-PR-TRIAGE
+    - routing:PH-OPENWORK-1013
+    - routing:SKILLS-HOME-PROPOSAL
+    - routing:TEST-HARNESS-PROPOSAL
+- op: cancel
+  key: autoos:AO-CTX-RECYCLE-ALLHOSTS
+  reason: folded into plangraph:SU-HOOK-CTXGUARD + plangraph:SU-LAUNCH (operator 2026-10-16)
+- op: edit
+  key: plangraph:CI-RUNS-ON-WORKST
+  fields:
+    title: Private repos' workflows run on the workstation runner; the public plangraph repo stays on GitHub-hosted runners
+    description: 'Re-scoped by the operator 2026-10-16 (S18): self-hosted runners never run public-repo code. Private = today''s plangraph repo until SPLIT-PUBLISH, then plangraph-data, routing, server.
+      Earlier order: "do not use github runner anymore for now".'
+    done_criteria: all private-repo workflow jobs runs-on [self-hosted, workstation]; CI green there incl. pytest-postgres; the public plangraph repo's workflows use GitHub-hosted runners only; duration
+      before/after recorded
+- op: edit
+  key: routing:ROUTE-PG-SSOT
+  fields:
+    depends_on:
+    - plangraph:SU-MCP
+    - plangraph:PG-PROXY-ACCESS
+    - plangraph:PG-REMOTE
+    - plangraph:PG-WIN-MCP
+    - routing:ROUTE-PG-PRODTEST
 - op: cancel
   key: autoos:AO-PG-MCP-WIRE
   reason: superseded by plangraph:SU-MCP (orchestration setup, 2026-10-16)

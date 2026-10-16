@@ -2,8 +2,8 @@
 
 STANDING RULES: `docs/plans/orch-setup/briefs/COMMON.md` (binding, read first). Design sections: 3 (heartbeat), 6 (Keeper lease
 config).
-Item: `plangraph:SU-LEASE-CFG`. Start it only after `plangraph:RT-P1-KEEPER-PG` (Postgres cutover) has landed on main, and
-base the branch on that head (coordination with build-L1, 2026-10-16: the same keeper files are in that port).
+Item: `plangraph:SU-LEASE-CFG`. Start it only after `plangraph:RT-P1-KEEPER-PG` (Postgres cutover) has landed on main (landed: b3d71096, 2026-10-16), and
+base the branch on b3d71096 or later (coordination with build-L1, 2026-10-16: the same keeper files are in that port).
 
 ## READ
 - plangraph `src/plangraph/keeper/config.py:94-97,146-153` (parsed keys).
@@ -23,4 +23,5 @@ Only the keeper modules above plus `tests/test_keeper_lease_cfg.py` and a short 
   - heartbeat extends by the configured value;
   - absent keys behave as today;
   - the full suite is green on both CI jobs (SQLite and Postgres 16).
-- The keeper is live. Do not restart or touch any running keeper; tests only.
+- The keeper is live (backend postgres, schema `keeper`, runtime role `keeper_rt` without DDL rights). Do not restart or touch
+  any running keeper; tests only. A schema change needs a migration run by the owner, not by `keeper_rt`.

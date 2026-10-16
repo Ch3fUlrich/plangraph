@@ -2,7 +2,7 @@
 
 STANDING RULES: `docs/plans/orch-setup/briefs/COMMON.md` (binding, read first). Design sections: 4, 5.
 Items, in order: `plangraph:SU-CORE`, then `plangraph:SU-ENV`. Starts once plangraph:SU-DOCS is merged. The Python part of
-SU-ENV (keeper CLI/MCP call sites) waits for `plangraph:RT-P1-KEEPER-PG` on main (coordination with build-L1); the Rust
+SU-ENV (keeper CLI/MCP call sites) waits for `plangraph:RT-P1-KEEPER-PG` (landed: main b3d71096; base on it or later); the Rust
 part does not wait.
 
 ## READ

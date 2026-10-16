@@ -7,7 +7,7 @@ Items, in order: `plangraph:SU-RELEASE`, `autoos:SU-CATALOG`, `plangraph:SU-FRES
 - workst-L1-autoos launches this lane only when those are done.
 
 ## READ
-- plangraph `.github/workflows/*` (runner labels; plangraph CI runs on the workstation runner per `plangraph:CI-RUNS-ON-WORKST`).
+- plangraph `.github/workflows/*` (runner labels; per the re-scoped `plangraph:CI-RUNS-ON-WORKST` (S19) the private repos use the workstation runner, the public repo GitHub-hosted only).
 - AutoOS `docs/catalog.md:34-77,212-223`, the `cost-gate` component in `catalog/windows.json` (about line 251) and
   `Install-AutoOSCostGate` (`AutoOS.Install.psm1` about line 914) as the script-provider example.
 - AutoOS `AutoOS.Detect.psm1` `Get-AutoOSInstalledStatus` (about line 230) and `lib/linux/install.sh` `custom_is_installed`
