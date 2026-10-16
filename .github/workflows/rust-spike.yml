@@ -23,14 +23,13 @@ permissions:
 
 jobs:
   temporal-spike:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc (needed by the Temporal protos build script)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
-      - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Install protoc and build tools (protoc is needed by the Temporal protos build script)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler build-essential pkg-config
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:
           path: rust/spikes/temporal-spike/target

@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
         run: python -m pytest -q -n auto --dist loadgroup tests
 
   pytest-postgres:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 40
     services:
       postgres:
@@ -47,7 +47,7 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: keeper
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -55,7 +55,7 @@ jobs:
           --health-retries 10
     env:
       PG_KEEPER_BACKEND: postgres
-      PG_DSN: postgresql://postgres@127.0.0.1:5432/keeper
+      PG_PORT: ${{ job.services.postgres.ports['5432'] }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -63,6 +63,21 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-ci.txt
+      - name: Resolve Postgres service host
+        # Self-hosted runner: the job runs in a container and the service is a sibling
+        # container on the host Docker, published on a random host port; 127.0.0.1 is the
+        # runner container itself, so probe the host aliases instead.
+        run: |
+          for h in 127.0.0.1 host.docker.internal "$(ip route | awk '/default/{print $3; exit}')"; do
+            [ -n "$h" ] || continue
+            if timeout 3 bash -c "exec 3<>/dev/tcp/$h/$PG_PORT" 2>/dev/null; then
+              echo "postgres reachable at $h:$PG_PORT"
+              echo "PG_DSN=postgresql://postgres@$h:$PG_PORT/keeper" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no route to postgres service on port $PG_PORT" >&2
+          exit 1
       - name: Install test deps
         run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
       - name: Git identity for tests that commit
