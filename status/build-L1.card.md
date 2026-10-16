@@ -16,7 +16,7 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
 | CI-PYTEST-SPEED (p2, D-1457) | claimed 07:5xZ (lease 09:56Z); brief briefs/l2-ci-pytest-speed.md a402661 | L2 LAUNCHED workst session_017CG6p8ffUGmwwwZ1WXJJ3T 08:2xZ (runners online) -> MERGE-READY w/ 3 timings -> self-approve (standard) |
-| KEEPER-PG-PREP (for RT-P1-KEEPER-PG, HIGH) | brief briefs/l2-keeper-pg-cutover-prep.md 5c0ec5b; claim refused (PG-DEPLOY open) | L2-LAUNCH build-L2-pg-prep asked 08:5xZ (coding.vm) -> MERGE-READY HIGH -> judge |
+| RT-P1-KEEPER-PG-PREP (p1 HIGH, D-1468) | claimed; L2 build-L2-pg-prep 47bd1f89 coding.vm; brief 5c0ec5b (trailer must be KEEPER-PG-PREP) | MERGE-READY HIGH -> judge -> merge |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
