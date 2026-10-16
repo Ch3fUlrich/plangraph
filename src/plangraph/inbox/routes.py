@@ -7,27 +7,46 @@ Temporal signal for an already answered (or timed-out) question.  An answer send
 its signal only after the store commit, and a signal failure never fails or rolls
 back the answer.  The keeper runs no deadline timer: that lives in Temporal.
 
+``GET /v1/alarms`` lists the open (uncleared, unacknowledged) projector alarms the
+caller may see — the same project scoping as ``GET /v1/questions`` (keyless alarms
+are router/system/reader only) — and ``POST /v1/ack_alarm`` acknowledges one for
+good (router or system only).  The
+acknowledgement *is* the audit row: the successful ``ack_alarm`` ``audit_log`` entry
+keyed ``alarm:<id>`` that ``Store._run`` writes on success, so there is no separate
+acks table and no schema change; a refusal is audited ``ok=0`` and hides nothing.
+
 All handlers run after bearer auth and ``api_routes.run_gate`` in ``api.py``.
 """
 from __future__ import annotations
 
 import json
 
+from ..keeper import db_errors
 from ..keeper.errors import Refused
 from . import temporal_signal
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "PAGE_HEADERS", "page", "read", "write"]
 
-READ_VERBS = {"questions"}
-WRITE_VERBS = {"ask_question", "answer_question", "resignal_question"}
+READ_VERBS = {"questions", "alarms"}
+WRITE_VERBS = {"ask_question", "answer_question", "resignal_question", "ack_alarm"}
 
 _STATES = ("open", "answered", "timeout", "all")
-#: Roles that see every project's questions; all others see their own projects.
+#: Roles that see every project's questions and alarms; all others see their own.
 _SEES_ALL = ("router", "system", "reader")
 _SELECT = ("SELECT q.id, q.key, q.text, q.default_answer, q.deadline, q.risk_tags,"
            " q.state, q.created_at, a.ts AS a_ts, a.actor AS a_actor,"
            " a.text AS a_text, a.source AS a_source"
            " FROM questions q LEFT JOIN answers a ON a.question_id = q.id")
+#: Open projector alarms nobody has acknowledged yet: no ``ack_alarm`` audit row
+#: (``ok=1``) for ``alarm:<id>`` (portable SQL, sqlite and postgres alike).
+_ALARMS = ("SELECT id, key, kind, workflow_id, detail, raised_at FROM projector_alarms"
+           " WHERE cleared_at IS NULL"
+           " AND NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'ack_alarm'"
+           " AND a.ok = 1 AND a.key = 'alarm:' || CAST(projector_alarms.id AS TEXT))"
+           " ORDER BY id")
+#: Every database failure an alarms read can take (a missing table included): the
+#: caller gets a named error instead of a silently empty list.
+_UNREADABLE = db_errors.NO_TABLE + db_errors.OPERATIONAL + db_errors.PROGRAMMING + db_errors.DENIED
 
 
 #: Headers for ``GET /inbox``: a static page that may only call its own origin.
@@ -108,6 +127,31 @@ def _list(store, principal, query: dict) -> dict:
     return {"questions": store._run(principal, "questions", None, fn)}
 
 
+def _age_s(store, stamp, moment) -> int | None:
+    """Whole seconds between the ISO *stamp* and *moment*; ``None`` if unparsable."""
+    when = store._parse_iso(stamp)
+    return None if when is None else int(moment - when.timestamp())
+
+
+def _alarms(store, principal) -> dict:
+    """The open, unacknowledged projector alarms *principal* may see, oldest first."""
+    def fn(now):
+        try:
+            rows = store.conn.execute(_ALARMS).fetchall()
+        except _UNREADABLE as exc:      # table missing or unreadable: named, never silent
+            return {"alarms": [], "error": f"alarms unreadable: {type(exc).__name__}"}
+        moment = store.now()
+        allowed = None if principal.role in _SEES_ALL else set(principal.projects or [])
+        return {"alarms": [{"id": r["id"], "key": r["key"], "kind": r["kind"],
+                            "workflow_id": r["workflow_id"], "detail": r["detail"],
+                            "raised_at": r["raised_at"],
+                            "age_s": _age_s(store, r["raised_at"], moment)}
+                           for r in rows
+                           if allowed is None or _project(r["key"]) in allowed]}
+
+    return store._run(principal, "alarms", None, fn)
+
+
 def _stored_answer(store, question_id) -> dict | None:
     """The stored answer of *question_id* as a signal request, or ``None``."""
     row = store.conn.execute(
@@ -165,10 +209,35 @@ def _resignal(store, principal, body: dict) -> dict:
     return store._run(principal, "resignal_question", row["key"] if row else None, fn)
 
 
+def _ack(store, principal, body: dict) -> dict:
+    aid = body.get("alarm_id")
+    key = (f"alarm:{aid}" if isinstance(aid, int) and not isinstance(aid, bool)
+           else None)                       # the audit key, before _run (like _resignal)
+
+    def fn(now):
+        if principal.role not in ("router", "system"):
+            raise Refused("forbidden", "ack_alarm is router or system only")
+        if isinstance(aid, bool) or not isinstance(aid, int):
+            raise Refused("validation", "alarm_id must be an integer")
+        row = store.conn.execute("SELECT cleared_at FROM projector_alarms WHERE id=?",
+                                 (aid,)).fetchone()
+        if row is None:
+            raise Refused("not_found", f"no alarm {aid}")
+        if row["cleared_at"] is not None:
+            raise Refused("bad_state", f"alarm {aid} is cleared")
+        # the ack is the ``ok=1`` audit row ``_run`` writes for this key on success;
+        # a repeat ack just adds another one and stays idempotent.
+        return {"alarm_id": aid, "acked": True}
+
+    return store._run(principal, "ack_alarm", key, fn)
+
+
 def read(store, principal, name: str, query: dict) -> dict:
     """Dispatch a GET inbox verb (``query`` is the ``parse_qs`` mapping)."""
     if name == "questions":
         return _list(store, principal, query)
+    if name == "alarms":
+        return _alarms(store, principal)
     raise Refused("not_found", f"no read verb {name!r}")
 
 
@@ -180,4 +249,6 @@ def write(store, principal, name: str, body: dict) -> dict:
         return _answer(store, principal, body)
     if name == "resignal_question":
         return _resignal(store, principal, body)
+    if name == "ack_alarm":
+        return _ack(store, principal, body)
     raise Refused("not_found", f"no write verb {name!r}")

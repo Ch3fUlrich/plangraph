@@ -44,6 +44,44 @@ Router or system only (else 403). Body `{question_id}`. The question must be
 stored answer and returns `{"question_id", "signal": {...}}`. Audited as
 `resignal_question`.
 
+## `GET /v1/alarms`
+
+Any authenticated principal, audited as `alarms` like the other reads, with the
+same visibility rule as `GET /v1/questions`: `router`, `system` and `reader` see
+every project's alarms, other roles only the alarms whose `key` project (the part
+before the first `:`) is in their principal's projects — so a keyless alarm (an
+empty `key`, which has no project) is visible to `router`, `system` and `reader`
+only. Lists the projector alarms that are still open: `projector_alarms` rows with
+`cleared_at IS NULL` that have no successful `ack_alarm` audit row
+(`audit_log.action = 'ack_alarm'`, `ok = 1`, `key = 'alarm:<id>'`), ordered by `id`.
+
+```json
+{"alarms": [{"id": 4, "key": "demo:DEMO-1", "kind": "state_drift",
+  "workflow_id": "wf-1", "detail": "...", "raised_at": "2026-01-01T00:00:00Z",
+  "age_s": 90}]}
+```
+
+`age_s` is whole seconds from `raised_at` to `store.now()`, or `null` when the
+timestamp cannot be parsed. When the query itself fails (a missing or unreadable
+table), the reply is still `200` but carries
+`{"alarms": [], "error": "alarms unreadable: <ExceptionClass>"}` — never a silently
+empty list, and never message text or a path.
+
+## `POST /v1/ack_alarm`
+
+Router or system only (else 403). Body `{alarm_id}`: an integer, not a boolean or
+string (else `validation`). The alarm must exist (`not_found`) and must not be
+cleared (`bad_state`); acknowledging an already acknowledged alarm is idempotent
+(a second audit row, no error). The acknowledgement is stored as the successful
+`ack_alarm` audit_log row keyed `alarm:<id>` that the store writes on success —
+no schema change. A refusal is audited with `ok = 0` and does not hide the
+alarm. The reply is `{"alarm_id", "acked": true}`.
+
+## Acknowledgement storage
+
+The acknowledgement is the successful `ack_alarm` `audit_log` row keyed
+`alarm:<id>`; no new table, no new column, no migration — the schema is unchanged.
+
 ## `GET /inbox`
 
 Static, unauthenticated HTML form (not under `/v1`). Served with
