@@ -120,7 +120,6 @@ def _replay(store, principal, body, need):
 
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
-                "set_metrics": _set_metrics,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
                 "withdraw_review": _withdraw_review,
@@ -134,5 +133,6 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 
 
 #: Write verbs whose store method checks the role itself and admits more than the
-#: router (here router, l1, system, spawner), so they are not in ROUTER_VERBS.
-ROLE_CHECKED_VERBS = {"governor_override": _governor_override}
+#: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
+ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "governor_override": _governor_override}

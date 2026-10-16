@@ -264,14 +264,14 @@ def test_api_route_membership():
     assert "metrics" in api_routes.READ_VERBS
     assert "set_metrics" in api_routes.WRITE_VERBS
     assert "governor_override" in api_routes.WRITE_VERBS
-    assert "set_metrics" in api_routes.ROUTER_VERBS
+    assert "set_metrics" in api_routes.ROLE_CHECKED_VERBS
     assert "governor_override" in api_routes.ROLE_CHECKED_VERBS
 
 
 def test_route_set_metrics_passes_day_and_items_through(w):
     store, calls = _record("set_metrics")
     body = {"principal": w.p("router"), "day": DAY, "items": [item()]}
-    _call(api_routes.ROUTER_VERBS["set_metrics"], store, body["principal"], body, NEED)
+    _call(api_routes.ROLE_CHECKED_VERBS["set_metrics"], store, body["principal"], body, NEED)
     vals = _values(calls[0])
     assert body["day"] in vals
     assert body["items"] in vals
