@@ -11,6 +11,8 @@ Start: skill unattended-orchestration + main-orchestrator.md -> SKILL-READ; hear
 4. Live L2s: build-L2-projector 19f2b154 (HIGH; Migration 3; copy_to_pg TABLES approved), build-L2-inbox 93ce361d (Migration 4). Silent since ~20:45Z — check alive. build-L2-worker-code (above). Retired: keeper-pg, backup, review-code, planner-kit.
 5. AO-DEEPINFRA-REMOVE: brief docs/plan/rethink/briefs/l2-deepinfra-remove.md; launch after fixes-L1 merges priv-writers; fixes-L1 merges.
 
+- Test policy (operator 03:4xZ): small changes = affected tests only, no full suite/CI; CI path filters in the CI-switch PR. Rule in briefs/l2-rules-common.md.
+
 ## FOR ROUTER
 - L2-LAUNCH build-L2-deepinfra (after priv-writers merge).
 - Edit server:RT-P1-PG-DEPLOY criteria: B2 off-host optional (D-1375).
