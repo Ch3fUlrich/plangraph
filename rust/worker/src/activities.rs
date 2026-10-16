@@ -905,18 +905,30 @@ mod tests {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let id = AttemptId::new("c1", 1);
-        let wt = worktree::create(r.path(), &base, &root.path().join("c1-1"), &id).unwrap();
+        let wt = worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(AttemptId::new("c1", 1).dir_name()),
+            &id,
+        )
+        .unwrap();
         write(&wt.path, "done.txt", "x");
         commit_all(&wt.path, "work");
 
         let input = probe_input(r.path(), root.path(), 1, &base, "test -f done.txt");
         let res = do_probe(&tiny(), &input);
         assert_eq!(res.outcome, "already_done");
-        assert_eq!(res.branch, "attempt/c1/1");
+        assert_eq!(res.branch, AttemptId::new("c1", 1).branch());
 
         // A worktree with nothing beyond base is `nothing`, even if dirty.
         let id2 = AttemptId::new("c1", 2);
-        let wt2 = worktree::create(r.path(), &base, &root.path().join("c1-2"), &id2).unwrap();
+        let wt2 = worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(AttemptId::new("c1", 2).dir_name()),
+            &id2,
+        )
+        .unwrap();
         write(&wt2.path, "wip.txt", "x");
         let input2 = probe_input(r.path(), root.path(), 2, &base, "true");
         assert_eq!(do_probe(&tiny(), &input2).outcome, "nothing");
@@ -927,7 +939,13 @@ mod tests {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let id = AttemptId::new("c1", 1);
-        worktree::create(r.path(), &base, &root.path().join("c1-1"), &id).unwrap();
+        worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(AttemptId::new("c1", 1).dir_name()),
+            &id,
+        )
+        .unwrap();
 
         let input = probe_input(r.path(), root.path(), 1, "deadbeef", "true");
         assert_eq!(do_probe(&tiny(), &input).outcome, "error");
@@ -960,7 +978,8 @@ mod tests {
         base: &str,
     ) -> std::path::PathBuf {
         let id = AttemptId::new(card, 1);
-        let wt = worktree::create(p, base, &root.join(format!("{card}-1")), &id).unwrap();
+        let wt =
+            worktree::create(p, base, &root.join(AttemptId::new(card, 1).dir_name()), &id).unwrap();
         write(&wt.path, file, body);
         commit_all(&wt.path, "attempt");
         wt.path
@@ -1122,8 +1141,12 @@ mod tests {
         write(p, "y.txt", "y");
         let moved = commit_all(p, "advance");
 
-        let mut input = merge_input(p, "attempt/c1/1", &base);
-        input.worktree = root.path().join("c1-1").to_string_lossy().into_owned();
+        let mut input = merge_input(p, &AttemptId::new("c1", 1).branch(), &base);
+        input.worktree = root
+            .path()
+            .join(AttemptId::new("c1", 1).dir_name())
+            .to_string_lossy()
+            .into_owned();
         // The check sees the rebased tree: both files must be present.
         input.check_cmd = Some("test -f x.txt && test -f y.txt".to_string());
         let res = merge(&StubKeeper::default(), &input);
@@ -1142,8 +1165,12 @@ mod tests {
         write(p, "README.md", "main\n");
         let moved = commit_all(p, "main edit");
 
-        let mut input = merge_input(p, "attempt/c1/1", &base);
-        input.worktree = root.path().join("c1-1").to_string_lossy().into_owned();
+        let mut input = merge_input(p, &AttemptId::new("c1", 1).branch(), &base);
+        input.worktree = root
+            .path()
+            .join(AttemptId::new("c1", 1).dir_name())
+            .to_string_lossy()
+            .into_owned();
         let res = merge(&StubKeeper::default(), &input);
         assert_eq!(res.outcome, "conflict");
         assert_eq!(git(p, &["rev-parse", "main"]), moved);
@@ -1158,8 +1185,12 @@ mod tests {
         write(p, "y.txt", "y");
         let moved = commit_all(p, "advance");
 
-        let mut input = merge_input(p, "attempt/c1/1", &base);
-        input.worktree = root.path().join("c1-1").to_string_lossy().into_owned();
+        let mut input = merge_input(p, &AttemptId::new("c1", 1).branch(), &base);
+        input.worktree = root
+            .path()
+            .join(AttemptId::new("c1", 1).dir_name())
+            .to_string_lossy()
+            .into_owned();
         input.check_cmd = Some("echo broke after rebase; exit 1".to_string());
         let keeper = StubKeeper::default();
         let res = merge(&keeper, &input);
@@ -1174,7 +1205,13 @@ mod tests {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let id = AttemptId::new("c1", 1);
-        let wt = worktree::create(r.path(), &base, &root.path().join("c1-1"), &id).unwrap();
+        let wt = worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(AttemptId::new("c1", 1).dir_name()),
+            &id,
+        )
+        .unwrap();
         write(&wt.path, "half.txt", "x");
         commit_all(&wt.path, "work");
 

@@ -148,6 +148,10 @@ impl Harness for ClaudeCode {
 }
 
 /// The env var naming the opencode server an [`OpencodeServer`] leg attaches to.
+/// It must be a bare `http(s)://host[:port]` URL: userinfo (`user:pass@`) is
+/// rejected because the URL lands in the child's argv (visible to every local
+/// user via the process table). Tokens and passwords go through the harness
+/// env, never through the URL or argv.
 pub const OPENCODE_SERVER_ENV: &str = "PG_OPENCODE_SERVER_URL";
 
 /// Why an [`OpencodeServer`] could not be built.
@@ -155,6 +159,10 @@ pub const OPENCODE_SERVER_ENV: &str = "PG_OPENCODE_SERVER_URL";
 pub enum HarnessConfigError {
     #[error("{0} is not set; there is deliberately no default server")]
     MissingServerUrl(&'static str),
+    #[error("{0} must be an http:// or https:// URL")]
+    BadServerScheme(&'static str),
+    #[error("{0} must not carry credentials (user:pass@); pass tokens through the harness env")]
+    ServerUrlUserinfo(&'static str),
 }
 
 /// `opencode run --attach <url> -m <model> <prompt>`: the opencode CLI driving
@@ -183,7 +191,18 @@ impl OpencodeServer {
     /// The env lookup without the env, so it is testable without mutating it.
     fn from_value(value: Option<&str>) -> Result<Self, HarnessConfigError> {
         match value.map(str::trim) {
-            Some(url) if !url.is_empty() => Ok(Self::new(url)),
+            Some(url) if !url.is_empty() => {
+                let lower = url.to_ascii_lowercase();
+                let rest = lower
+                    .strip_prefix("http://")
+                    .or_else(|| lower.strip_prefix("https://"))
+                    .ok_or(HarnessConfigError::BadServerScheme(OPENCODE_SERVER_ENV))?;
+                let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+                if authority.contains('@') {
+                    return Err(HarnessConfigError::ServerUrlUserinfo(OPENCODE_SERVER_ENV));
+                }
+                Ok(Self::new(url))
+            }
             _ => Err(HarnessConfigError::MissingServerUrl(OPENCODE_SERVER_ENV)),
         }
     }
@@ -324,24 +343,27 @@ fn version_matches(output: &str, want: &str) -> bool {
         .any(|t| t.trim_start_matches('v') == want)
 }
 
-/// A throwaway private `HOME` for a `--version` probe, removed on drop.
-struct ProbeHome(PathBuf);
+/// A throwaway private `HOME` for a `--version` probe: a freshly created
+/// directory with a random name and mode 0700 (never a predictable path in the
+/// shared temp dir), removed on drop.
+struct ProbeHome(tempfile::TempDir);
 
 impl ProbeHome {
     fn new(name: &str) -> std::io::Result<ProbeHome> {
         let safe: String = name
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .filter(|c| c.is_ascii_alphanumeric())
+            .take(16)
             .collect();
-        let p = std::env::temp_dir().join(format!("pg-probe-{}-{safe}.home", std::process::id()));
-        std::fs::create_dir_all(&p)?;
-        Ok(ProbeHome(p))
+        tempfile::Builder::new()
+            .prefix(&format!("pg-probe-{safe}-"))
+            .suffix(".home")
+            .tempdir()
+            .map(ProbeHome)
     }
-}
 
-impl Drop for ProbeHome {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+    fn path(&self) -> &Path {
+        self.0.path()
     }
 }
 
@@ -363,7 +385,7 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
         })?;
         let mut cmd = Command::new(&bin);
         cmd.arg("--version").stdin(Stdio::null());
-        pg_worker_core::sandbox_env::confine_harness(&mut cmd, &home.0);
+        pg_worker_core::sandbox_env::confine_harness(&mut cmd, home.path());
         let opts = Opts {
             timeout: Some(std::time::Duration::from_secs(15)),
             grace: std::time::Duration::from_secs(1),
@@ -595,6 +617,23 @@ mod tests {
             Err(HarnessConfigError::MissingServerUrl(_))
         ));
         assert!(OpencodeServer::from_value(Some("  ")).is_err());
+        for bad in [
+            "http://user:pw@127.0.0.1:4096",
+            "https://tok@127.0.0.1:4096/x",
+            "HTTP://u:p@127.0.0.1",
+            "ftp://127.0.0.1:4096",
+            "file:///etc/passwd",
+            "127.0.0.1:4096",
+            "--evil",
+        ] {
+            assert!(OpencodeServer::from_value(Some(bad)).is_err(), "{bad}");
+        }
+        assert!(matches!(
+            OpencodeServer::from_value(Some("http://u:p@127.0.0.1")),
+            Err(HarnessConfigError::ServerUrlUserinfo(_))
+        ));
+        // An `@` after the authority (path/query) is not userinfo.
+        assert!(OpencodeServer::from_value(Some("https://127.0.0.1:4096/a@b")).is_ok());
         let h = OpencodeServer::from_value(Some(" http://127.0.0.1:4096 ")).unwrap();
         assert_eq!(h.url, "http://127.0.0.1:4096");
     }
