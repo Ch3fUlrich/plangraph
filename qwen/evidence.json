@@ -1,0 +1,13 @@
+{
+  "seat": "qwen",
+  "head": "4e11857c9db742897ad3c1a23e68482bfbc01a12",
+  "plan_item": "plangraph:PROJECTOR-RECONCILE-SCHED",
+  "verdict": "VERDICT: pass",
+  "model": "Qwen3.8-Flash",
+  "harness": "qodercli -p --tools '' in an empty dir (per workst-L1-autoos)",
+  "rc": 0,
+  "empty_dir_after": true,
+  "prompt_sha256": "fe7cd9d384b0a6efd274ea7f392006c000bef4b02a257ed81eeb86d4f9d62f96",
+  "review_sha256": "61bac066ff2c8827c2321fb7f3cea2cd61735a7480bb7477e3deb3642e2e4cdd",
+  "source": "workst-L1-autoos meta.txt: rc=0, empty-dir-after: []"
+}

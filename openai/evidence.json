@@ -1,0 +1,18 @@
+{
+  "seat": "openai",
+  "head": "4e11857c9db742897ad3c1a23e68482bfbc01a12",
+  "plan_item": "plangraph:PROJECTOR-RECONCILE-SCHED",
+  "verdict": "VERDICT: pass",
+  "requested_model": "ovhcloud/gpt-oss-120b",
+  "served_model": "gpt-oss-120b",
+  "served_equals_pinned": true,
+  "provider": "ovhcloud",
+  "http_status": "200",
+  "finish_reason": "stop",
+  "tokens": "in 3430, out 3275",
+  "call_log_id": "1792123995982-d43411",
+  "session_tag": "rec4e11857-gptoss/gpt-oss-120b/364589ecda5141659252d618f2de471d",
+  "prompt_sha256": "fe7cd9d384b0a6efd274ea7f392006c000bef4b02a257ed81eeb86d4f9d62f96",
+  "review_sha256": "788867ec2f5faca71ac6d777c095d7f634a651c7ad4c41582016abff2f42f6e3",
+  "source": "workst-L1-autoos evidence.txt (names only)"
+}

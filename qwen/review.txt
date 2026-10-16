@@ -1,0 +1,43 @@
+## V1 Unit correctness
+
+- Service (`plangraph-projector-reconcile.service`): `Type=oneshot` correct for a timer-activated batch job; no `[Install]` section on the service (correct — only the timer is enabled, and the test enforces this). `TimeoutStartSec=15min` is valid and honored for oneshot. Specifier `%h` expands in user-unit `WorkingDirectory`, `Environment=`, `EnvironmentFile=`, and `ExecStart` — all uses here are legal. `EnvironmentFile=-%h/...` with the `-` (optional) prefix is valid systemd syntax.
+- Timer: `OnCalendar=*-*-* 03:30:00`, `RandomizedDelaySec=10min`, `Persistent=true`, `Unit=plangraph-projector-reconcile.service`, `[Install] WantedBy=timers.target` — all valid user-timer directives; `Persistent=true` combined with the README's "cannot wake a suspended host" caveat is accurate.
+- Minor / misleading (non-blocking):
+  - `After=network-online.target` — the user manager has no `network-online.target`; `After=` on a nonexistent unit is a harmless no-op, but it conveys nothing (it won't delay the run for connectivity). Consider `After=plangraph-keeper.service` only, or drop it.
+  - `After=plangraph-keeper.service` orders only when both units start in the same transaction; a timer-fired oneshot does not pull keeper in, so this gives no guarantee keeper is up when reconcile runs. Harmless if reconcile reads keeper state directly (SQLite/keeper.json), but the directive is decorative. Worth one comment line at most.
+  - `WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal` bakes a worktree name into a deploy unit; acceptable here only because the stated context says the existing keeper unit uses the identical paths — consistency preserved, but it is a path a real deploy must edit (README §4 does say that).
+
+## V2 CLI fit
+
+- `ExecStart=/usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json reconcile` puts `--config` (argparse global) before the `reconcile` subcommand — matches the stated CLI shape.
+- Exit-code handling is right for oneshot: exit 0 with alarms raised means the unit shows success while the mismatch lands in `projector_alarms` (the inline comment in the service file states this); exit 1 (runtime) and 2 (bad config) both mark the unit failed, which is the desired surfacing. No `SuccessExitStatus` needed or misused.
+- README §3's claim that the last stdout line is one JSON object with `raised/cleared/open_alarms/counts` is consistent with "prints one JSON line"; field names can't be verified from this diff but match the shape.
+
+## V3 Test quality (`tests/test_systemd_units.py`)
+
+Regression-detection is real, not vacuous:
+- Wrong subcommand or reversed flag order: `cli._build_parser().parse_args(tokens[3:])` raises `SystemExit`, so the test fails loudly, and `ns.command`/`ns.config` are asserted directly. Duplicate/extra `ExecStart` caught by line count (the `strict=False` "keeps the last" caveat is correctly pre-empted).
+- Missing `Persistent`, missing `Unit=`, `WantedBy` regression, `Type≠oneshot`, service gaining `[Install]`: all asserted with `fallback=""` compares or section checks; `NoSectionError` also fails rather than passes.
+- Hard-coded home path / IP in units: both raw-line scan and value-token scan (`token.startswith("/")` must be `%h…` or `/usr/bin/python3`) — the `EnvironmentFile=-` leading dash and `PYTHONPATH=` prefix are handled.
+- `cron` mention in unit lines fails (comment lines exempted — inert, acceptable).
+- README truncation guard: `body.count("```") % 2 == 0` would have caught the previous extraction bug; this head's README has two balanced fences and ends cleanly at §6.
+- Portability: `pathlib` + explicit `encoding="utf-8"` + `configparser.read_string` — no shell, no symlinks, no case-sensitivity traps; safe on Windows and Linux. One dependency: importing `plangraph.projector.cli` must be importable in the test env, same as existing tests.
+- Gaps (minor, not fix-blocking): the tests don't cross-check the 03:30 time between unit, README, and docs (each is checked against itself only); the `## Operations` heading check uses `startswith("## ")` for the stop boundary, so an intervening `### ` subsection would be absorbed into the section body; hygiene scan covers only the two new unit files, not README/docs (their content is clean today, so no current exposure).
+
+## V4 Docs accuracy
+
+- README table, install steps, verify steps all match the units: names exact, `enable --now` on the timer, `loginctl enable-linger` correctly required for user timers, direct `systemctl --user start ...service` is a valid manual trigger. 03:30 + up-to-10-min randomized delay matches `OnCalendar`/`RandomizedDelaySec`. Docs correctly describe exit semantics (0 with alarms, non-zero = failed unit) and the `cleared_at IS NULL` row lifecycle, consistent with the stated behavior of `tests/test_projector_reconcile.py`'s subject.
+- `docs/projector.md` Operations bullet: timer named, command shape (`--config` before `reconcile`) matches the unit, references `deploy/systemd/` README, correctly removes the old "cron on the keeper host" option per the goal ("no agent cron"). One claim I can't verify from this material and would want confirmed against src before trusting: that alarms are now "read with `plangraph.projector.reconcile.open_alarms`" — the old text said the Inbox reads open rows. If the Inbox is still the operator-facing reader, the rewrite dropped a true claim and added a module-API one; both sentences may be true, but the swap deserves a quick check against the actual module.
+- §1 lists `pg-snapshot-pull.*` and `plangraph-keeper.service` as existing files; stated context confirms the keeper unit exists; the snapshot-pull units aren't in this diff — assumed pre-existing (they are referenced only descriptively).
+
+## V5 Public-repo hygiene
+
+- No hosts, IPs, usernames, or absolute machine paths: everything user-specific routes through `%h`. Token-shaped strings: none; `keeper.json`/`projector.env` are path references only.
+- Two soft items: the `.claude/worktrees/proposal` segment in `WorkingDirectory`/`PYTHONPATH` exposes an agent-worktree convention (mitigated: matches the existing keeper unit per context, and README §4 tells deployers to edit it); `Description=... D-1377` in the timer is an internal ticket reference — harmless but noise in a public repo.
+- The hygiene test allows `127.0.0.1` explicitly, which is fine (loopback is not identifying).
+
+Re-review note: the previously flagged README truncation/unclosed fence is fixed in this head — file is 50 lines, both fences closed, §6 complete, and the new fence-parity assertion now guards against recurrence.
+
+TEST-GAMING: no - no test-only branches or env checks in src or units; the test asserts production-shaped files against the real CLI parser: 0 hits
+
+VERDICT: pass

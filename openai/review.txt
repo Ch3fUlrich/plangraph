@@ -1,0 +1,59 @@
+**V1 – Unit correctness**  
+*File: `deploy/systemd/plangraph-projector-reconcile.service`*  
+- `[Unit]` contains `After=network-online.target plangraph-keeper.service`. `After=` accepts a space‑separated list; both entries are valid unit names. Using `network-online.target` in a user manager is allowed because systemd provides a user‑side alias.  
+- `[Service]` is `Type=oneshot`, `WorkingDirectory=%h/...`, `Environment=PYTHONPATH=%h/...`, `EnvironmentFile=-%h/.config/plangraph/projector.env`, `ExecStart=/usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json reconcile`, `TimeoutStartSec=15min`. All directives are valid for a user service; there is no stray or misspelled key.  
+*File: `deploy/systemd/plangraph-projector-reconcile.timer`*  
+- `[Timer]` supplies `OnCalendar=*-*-* 03:30:00`, `RandomizedDelaySec=10min`, `Persistent=true`, `Unit=plangraph-projector-reconcile.service`. All directives are supported for user timers.  
+- `[Install]` has `WantedBy=timers.target`, the canonical target for timers.  
+
+No invalid or misleading directives are present, and the `%h` specifier is used for all absolute paths, satisfying the test’s home‑path check.
+
+---
+
+**V2 – CLI fit**  
+*File: `deploy/systemd/plangraph-projector-reconcile.service`* (ExecStart line)  
+- Tokens after splitting:  
+  ```
+  /usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json reconcile
+  ```  
+- The global option `--config` appears **before** the subcommand `reconcile`, exactly as the CLI expects (`--config` is a global argparse option).  
+- No extra flags (e.g., `--history-dir`) are passed, matching the test’s prohibition.  
+- The test invokes `cli._build_parser().parse_args(tokens[3:])`, which receives `["--config", "%h/.local/share/plangraph/keeper.json", "reconcile"]`. The parser produces `ns.command == "reconcile"` and `ns.config` correctly set, confirming the command line aligns with the real entry point.  
+- Exit‑code semantics are documented in the service comment and in `docs/projector.md`; a non‑zero exit will cause the unit to be marked failed, which matches systemd’s handling.
+
+---
+
+**V3 – Test quality**  
+*File: `tests/test_systemd_units.py`*  
+- `test_unit_structure` asserts `Type=oneshot` and the absence of an `[Install]` section in the service, and that the timer’s `WantedBy=timers.target`. Any regression (e.g., adding an Install section or changing the type) will cause a failure.  
+- `test_execstart_matches_cli` parses the exact ExecStart line, checks the Python interpreter path, the `-m plangraph.projector` module invocation, the presence/absence of specific flags, and validates the parsed argparse namespace against the real CLI parser. A typo in the command order or missing `--config` will be caught.  
+- `test_timer_schedule` verifies the timer’s `Unit=` linkage, the nightly `OnCalendar` contains “03:30”, `Persistent=true`, and that `RandomizedDelaySec` exists. Changing the schedule or dropping persistence fails the test.  
+- `test_no_machine_specific_paths` scans every line for hard‑coded `/home/`, `/Users/`, explicit IPv4s (except 127.0.0.1), and the word “cron”. It also ensures any absolute path token (besides `/usr/bin/python3`) begins with `%h`. This prevents accidental host‑specific leaks.  
+- `test_docs_operations_section` extracts the “## Operations” section of `docs/projector.md` and asserts that the timer file name and the string `deploy/systemd` appear, guaranteeing documentation stays in sync.  
+- `test_systemd_readme` checks the README mentions both unit files, shows `enable --now`, and that Markdown fences are balanced.  
+
+The suite therefore fails on any substantive regression and does not pass vacuously. It is portable because it uses only the Python standard library and avoids OS‑specific assumptions.
+
+---
+
+**V4 – Docs accuracy**  
+*File: `docs/projector.md`* (Operations bullet)  
+- The updated bullet explicitly names `plangraph-projector-reconcile.timer`, the schedule (03:30 local, up to 10 min random delay, `Persistent=true`), and points to the `deploy/systemd/` directory for install/enable steps.  
+- It removes any reference to “cron”, matching the unit files.  
+- It clarifies the CLI invocation (`python -m plangraph.projector --config <keeper.json> reconcile`) and the exit‑code semantics, which are consistent with the service’s comment and the CLI description.  
+
+Thus the documentation mirrors the implementation.
+
+---
+
+**V5 – Public‑repo hygiene**  
+- No literal hostnames, IP addresses (other than the allowed `127.0.0.1` check), user names, or token‑like strings appear in any newly added files.  
+- Paths are expressed with the `%h` specifier, not with concrete `/home/username` strings.  
+- The only comment mentioning a host is “keeper host”, which is generic.  
+
+The repository remains free of sensitive or environment‑specific data.
+
+---
+
+REVIEW: yes - all vectors confirm correct unit behavior, CLI alignment, robust testing, accurate docs, and clean hygiene  
+VERDICT: pass
