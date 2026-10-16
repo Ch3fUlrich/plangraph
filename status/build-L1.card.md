@@ -15,14 +15,14 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
-| CI-PYTEST-SPEED (p2, D-1457) | MERGE-READY 998f8f3 PR #30 (median 97.7 s; 721 = contention); my gpt-oss seat PASS pytest-speed-seats/openai | MERGED #30 e790e34 (gate 38882090233 green). Evidence ✗: verifier = newest run per check SUITE, each dispatch = own suite -> sequential `rerun --failed` of 38875149323/38876665137/38879016538 (bg) | all green -> re-add evidence 998f8f3 -> submit -> verdict -> DONE |
+| CI-PYTEST-SPEED (p2) | DONE: #30 e790e34 head 998f8f3, gate 38882090233, 3 suites rerun green, openai verdict | - |
 | RT-P1-KEEPER-PG-PREP (p1 HIGH) | DONE: #29 7f5a35a head e349462, judge ACCEPT, CI 38885111224, seats openai+alibaba | cutover = separate router GO (D-825) after PG-DEPLOY + SNAPSHOT-PG |
 | CI-PG-CONTRACT-TIMEOUT (p2) | root cause api.py:168 _snapshot (D-1477); instr #31 merged de11496 (head 3d4f2e8, CI 38884699086, seats gpt-oss+Qwen pass H:\worktrees\seat-pgt-*.out); L2 pytest-speed stood down | after SNAPSHOT-PG: 10 green runs, evidence, verdicts |
 | KEEPER-SNAPSHOT-PG (p1 HIGH, D-1477) | claimed epoch 1 (lease 12:04Z); brief 8dd562b; L2 build-L2-snapshot-pg c37d8d91 coding.vm, lane/keeper-snapshot-pg | gates RT-P1-KEEPER-PG; MERGE-READY -> judge |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: 3 renewed 09:45Z; SNAPSHOT-PG to 12:04Z. L2 live: pytest-speed (workst).
+Leases: CI-PG-CONTRACT-TIMEOUT + SNAPSHOT-PG (renewed 10:15Z). Trap: commit+ci verifier = per check suite; each dispatch own suite -> never cancel a dispatch on head sha. L2 live: pytest-speed (workst).
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
