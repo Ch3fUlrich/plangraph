@@ -38,6 +38,7 @@ HANDLERS = {
     "cancel": cli_verbs.cmd_cancel,
     "waive": cli_verbs.cmd_waive,
     "withdraw": cli_verbs.cmd_withdraw,
+    "reopen": cli_verbs.cmd_reopen,
     "set-kind": cli_verbs.cmd_set_kind,
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
@@ -145,6 +146,11 @@ def _add_writes(sub):
     withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review")
     withdraw.add_argument("key")
     withdraw.add_argument("decision_id", metavar="D-NNN")
+
+    reopen = _p(sub, "reopen", help="router: take an in_review item back to its claimant at a fresh epoch")
+    reopen.add_argument("key")
+    reopen.add_argument("decision_id", metavar="D-NNN")
+    reopen.add_argument("--reason", required=True, help="why the work is redone (recorded, <= 500 chars)")
 
     set_kind = _p(sub, "set-kind", help="router: turn an open lane into a question / operator_task")
     set_kind.add_argument("key")

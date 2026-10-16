@@ -64,7 +64,7 @@ class AnswerMixin:
             raise Refused("validation", "answer text must be a non-empty string")
         if len(text) > ANSWER_CAP:
             raise Refused("validation", f"answer text exceeds {ANSWER_CAP} characters")
-        guard("answer text", text)
+        guard("answer text", text, key)
         if (not isinstance(decision_id, str) or not decision_id
                 or len(decision_id) > 64 or decision_id != decision_id.strip()):
             raise Refused("validation", "decision_id must be a decision id string")

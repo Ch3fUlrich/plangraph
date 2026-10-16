@@ -4,7 +4,9 @@ Each event's hash is ``sha256(prev_hash + canonical_json(event))`` where the
 canonical event is the ordered dict of ``ts, actor, role, model, key, type,
 payload`` (``prev_hash`` and ``hash`` are deliberately excluded).  The genesis
 event has an empty ``prev_hash``.  ``fold`` replays events into the cached item
-state; ``verify_integrity`` proves the cache equals that replay.
+state; ``verify_integrity`` proves the cache equals that replay.  An event type
+this build does not know (a newer keeper wrote it) never reaches the cache: it
+is reported as ``unknown_event_type`` with its ``seq``.
 """
 from __future__ import annotations
 
@@ -15,6 +17,9 @@ from collections import Counter
 from .token_fold import verify_tokens
 
 from .item_fields import SMALL_FIELDS
+# PG-FOLD-UNKNOWN-TYPE: schema imports nothing back, so no cycle -- ``events``
+# may name the authoritative list of types this build knows how to replay.
+from .schema import EVENT_TYPES
 
 __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
            "verify_chain", "verify_integrity", "FIELDS"]
@@ -125,7 +130,7 @@ def _fold_run(item, payload):
              for s in seats if isinstance(s, dict)])
 
 
-def fold(events):
+def fold(events, unknown=None):
     """Replay *events* (oldest first) into ``key -> cached state``.
 
     Every field ``verify_integrity`` compares is reconstructed here, including
@@ -133,15 +138,32 @@ def fold(events):
     lifecycle columns a raw writer might tamper with.  Events that the store
     does not emit yet (``heartbeat``) are still handled, so the fold is the
     contract the store must meet.
+
+    PG-FOLD-UNKNOWN-TYPE: a ``kind`` outside :data:`EVENT_TYPES` was written by
+    a newer keeper; this build cannot replay it, so it must not silently
+    disappear (the cache would drift, or an old rebuild would undo the event).
+    Such an event never touches item state -- it is only recorded in the
+    optional *unknown* list as ``{"seq", "type", "key"}``.  Types that are in
+    ``EVENT_TYPES`` but have no branch here (``review_verdict``,
+    ``token_minted``, ``outage_recorded``) are known no-ops: they are replayed
+    by ``token_fold``/the store and are never reported as unknown.  *events*
+    and the return value are unchanged from the single-argument signature.
     """
     state = {}
     for event in events:
+        kind = event["type"]
+        if kind not in EVENT_TYPES:
+            # Unknown type: side channel only, before any state is touched --
+            # including for a keyless event or a key this fold has not seen.
+            if unknown is not None:
+                unknown.append({"seq": event["seq"], "type": kind,
+                                "key": event.get("key")})
+            continue
         key = event.get("key")
         if key is None:
             continue
         payload = event.get("payload") or {}
         item = state.setdefault(key, _new_state())
-        kind = event["type"]
         if kind == "item_created":
             item["state"] = "open"
             item["epoch"] = 0
@@ -204,6 +226,19 @@ def fold(events):
             item["state"] = "claimed"
             item["reviewer"] = None
             item["lease_until"] = payload.get("lease_until")
+        elif kind == "item_reopened":   # PG-REOPEN: back to the claimant, fresh epoch
+            # The store opens a new work epoch (+1, round 0, reviewer and
+            # waiver cleared, fresh lease) and keeps the holder; replay exactly
+            # the columns it wrote so ``verify_integrity`` agrees.  The
+            # delegate of the claim is intentionally left alone: the reopen
+            # changes who holds the work only as far as the epoch.
+            item["state"] = "claimed"
+            item["epoch"] = payload["epoch"]
+            item["claimed_by"] = payload["claimed_by"]
+            item["reviewer"] = None
+            item["round"] = 0
+            item["review_waiver"] = None
+            item["lease_until"] = payload["lease_until"]
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")
@@ -289,10 +324,16 @@ def verify_integrity(conn):
     tolerance described below, and the recomputed per-key evidence counts
     (total and verified).
 
-    Returns a list of ``{key, code, field, expected, got}`` problems.
+    Returns a list of ``{key, code, field, expected, got}`` problems.  One
+    extra problem per event whose ``type`` is not in ``EVENT_TYPES`` is
+    appended (PG-FOLD-UNKNOWN-TYPE): ``{key (None for a keyless event), code
+    "unknown_event_type", field "type", expected None, got kind, seq}`` --
+    a type a newer keeper wrote, which this build cannot replay, so the cache
+    must not be trusted silently.
     """
     all_events = read_events(conn)
-    folded = fold(all_events)
+    unknown = []
+    folded = fold(all_events, unknown=unknown)
     cached = {row["key"]: row for row in conn.execute(
         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
         "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
@@ -307,6 +348,10 @@ def verify_integrity(conn):
         shapes.setdefault(row["key"], []).append(
             (row["epoch"], row["kind"], bool(row["verified"])))
     problems = []
+    for entry in unknown:   # PG-FOLD-UNKNOWN-TYPE: one problem per replay-blind event
+        problems.append({"key": entry["key"], "code": "unknown_event_type",
+                         "field": "type", "expected": None,
+                         "got": entry["type"], "seq": entry["seq"]})
     for key, expected in folded.items():
         row = cached.get(key)
         if row is None:

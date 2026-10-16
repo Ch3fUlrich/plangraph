@@ -10,7 +10,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 |---|---|
 | `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` |
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
-| `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold) |
+| `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`. |
 | `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…, ctx=…, batch_roots=…)`, mixed in from `store_create`/`store_verbs`/`store_review`/`store_waiver`/`store_close`/`store_read`/`store_reap`/`store_support`; every verb takes `(principal, …)` |
 | `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
@@ -33,6 +33,14 @@ Event types: `item_created, item_defined, claimed, delegated, released, lease_ex
 changes_requested, review_passed, cancelled, priority_set, kind_set`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
 transaction as the event; `verify_integrity` proves cache == fold.
 
+**Unknown event types (PG-FOLD-UNKNOWN-TYPE).** A `type` outside `schema.EVENT_TYPES` was written by a newer keeper: this build cannot
+replay it, so `fold(events, unknown=…)` records `{"seq","type","key"}` in an optional side channel and never touches item state (the
+event is otherwise skipped, so the cache cannot drift and an old rebuild cannot undo it). `verify_integrity` turns each entry into one
+problem `{"key": key-or-None, "code": "unknown_event_type", "field": "type", "expected": None, "got": kind, "seq": seq}`; `pg admin
+verify` prints it as `KEY unknown_event_type type=… seq=…` (`-` for a keeper-level, keyless event). Types in `EVENT_TYPES` with no fold
+branch — `review_verdict`, `token_minted`, `outage_recorded` — are known no-ops (replayed by `token_fold`/the store) and are **never**
+reported as unknown.
+
 ## Locking (prevention)
 Triggers key off `EXISTS (SELECT 1 FROM events WHERE key=… AND type IN ('review_passed','closed_on_decision'))` (never the cache) — the
 two events that finish an item (X7b adds the router's decision close beside the passed review), and also treat
@@ -48,9 +56,9 @@ Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, lo
 evidence_missing, evidence_unverified, same_principal, same_family, family_unknown, conflict`. A refused attempt writes only `audit_log`.
 | verb | who | effect |
 |---|---|---|
-| `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically |
+| `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically; optional per-item `under: <key>` attaches the gate → new edge in the same transaction (paragraph below) |
 | `import_items(p, items)` | router only | like `create_items`, but per-item `state` ∈ {open, claimed, in_review} is honoured (legacy rows, e.g. work already in flight): the item gets `item_created` plus a `claimed`/`submitted` event flagged `legacy: true` with `claimed_by` = the item's `owner` string (need not be a principal) and NO verified-evidence requirement; `done` is never importable; the router later attaches evidence (e.g. `decision`) via `add_evidence_router(p, key, kind, ref)` (router-only, state `in_review`/`claimed`, still runs the verifier) |
-| `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, description, host, estimate_h, done_criteria, evidence_kinds, depends_on, track, owner, note; cross-project `depends_on` changes: router only; whole-graph validate; `item_defined` event |
+| `edit_definition(p, key, fields)` | router; l1 own project | only while `open`; fields: title, description, host, estimate_h, estimate_src, done_criteria, evidence_kinds, depends_on, track, owner, note; `estimate_src` is a non-empty string (≤64 chars, credential-guarded) and needs a non-null `estimate_h`; clearing `estimate_h` (null) also clears `estimate_src`, and a non-null `estimate_src` together with a null `estimate_h` is refused; an `estimate_h` edit that omits `estimate_src` auto-fills it with the editing principal's name (one `estimate_src_auto` marker in the `item_defined` payload), so the item stops reading `default`; cross-project `depends_on` changes: router only; a `depends_on` entry naming a `cancelled` item is dropped from the list (result carries `warnings`, not a refusal); whole-graph validate; `item_defined` event |
 | `set_priority(p, key, n)` | router | `priority_set` |
 | `set_kind(p, key, kind)` | router | PG-SET-KIND: an `open` `lane` becomes a `question` or `operator_task` (`pg set-kind KEY KIND`, MCP `set_kind`, `apply_ops`/batch op `set_kind`); any other target kind, source kind or state is refused (`validation` / `bad_state` / `locked`). One `kind_set` event `{kind, was, operator, wait}`; the row gets `operator=1` and the kind's default `wait` (`answer` / `task`; an explicit `wait` is kept), as `create_items` would store. `fold` replays `kind`, `wait` and `operator`; `verify_integrity` compares `kind` and `operator` for every item that has a `kind_set` event; the HTTP/MCP door refuses fields other than `key`/`kind` |
 | `migrate_descriptions(p)` | router | moves a leading folded `description: ` note line into the `description` column of every active item (never DONE/cancelled, never overwrites); one `item_defined` event per item; idempotent. `alerts` also lists advisory `warnings` (`title_is_id`, `no_description`) |
@@ -68,6 +76,22 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
 | `audit_meta(p, project=None, stale_days=3)` | router (any project); l1 (own projects) | read-only plan-metadata audit: missing `description`/`estimate_h`/`done_criteria`/`owner` + stale claims. See "Plan metadata audit" |
+**`under` (PG-L1-CREATE-WITH-EDGE, `create_items` only).** A definition may carry an optional
+`under: <key>` naming an *existing* gate/goal item G: the new item N is created and, in the SAME
+transaction, `edges(src=G, dst=N, rel='depends_on')` is inserted — G `depends_on` N — so N reaches the goal
+without a router edit afterwards. The result gains `attached: [{key, under}]`; besides N's `item_created`,
+G gets one `item_defined {fields: [depends_on]}` event and an `updated_at` touch (the fold ignores that
+payload and edges are not folded, so `verify_integrity` stays green). A bare id resolves like any key
+reference (`_qualify`: the NEW item's project, then the alias table). Rules, all before any write: G must
+exist (`not_found` — a key created earlier in the same batch does not exist yet and is refused), the caller
+must manage G's project (`_may_manage`: router any project, l1 only its own → `forbidden`), a non-router may
+only attach inside the new item's own project (a forged cross-project `under` is `forbidden` even when the
+l1 manages both), and G must be neither DONE nor cancelled (`bad_state`; any other lock `locked`). The
+candidate graph — every gate with G modified to `depends_on + [N]` — goes through `views.validate` first, so
+a cycle or a stranded new item is refused atomically and nothing is created. `under` is create-only:
+`import_items` refuses it (`validation`), `edit_definition` does not accept it (`validation`), and because it
+is a `KNOWN_ITEM_FIELDS` name it never folds into `note`.
+
 **D-228 review tiers (operator; supersedes the single-verdict `done` above, and the flat "exactly TWO reviewers" reading of D-219):** how many passing verdicts `done` needs is a per-item `review_tier` (`'standard'`|`'high'`|`'none'` — `none` never gets a verdict at all, it is closed on a decision; see "Legacy and decision closes"), named at definition time by the **L0 router** or the **L1 project orchestrator** (`create_items`/`import_items`, `edit_definition`) — **only the L0 router may lower it** (a non-router `high`→`standard` edit is `forbidden`; raising is open to L1) **and only the L0 router may name `none`** (a non-router `none` is `forbidden`). The **L2 phase orchestrator** never sets or changes a tier; reviews belong to the **L3 task group** (writer + reviewers). With no explicit tier, `default_review_tier` picks `high` for project `plangraph` and for any item whose id/title/track matches a risk keyword (`secret(s)`, `key(s)`, `security`, `gateway`, `omniroute`, `deploy`, `keeper`, `fence`), else `standard`.
 
 Both tiers record one `review_verdict` event per passing verdict (current epoch/submission round) and re-verify ALL evidence with the same logic inside the same write lock, so a stale-evidence refusal never depends on which seat spoke first. `standard`: **one** passing verdict is enough — the reviewer must be a distinct principal (not the claimant, not the delegate) whose normalised non-blank family differs from the writer's (`_reviewer_family_ok`, fail closed on a blank family on either side) — and the item goes `done` + `review_passed` immediately. `high`: unchanged D-219 — one implementer plus exactly TWO reviewers, no extra Sonnet final; `done` only when two distinct reviewers from two distinct RESOLVED families have both passed, a third verdict is refused (`conflict`). Waiver path (D-217, e.g. the second family's seat is down > 1 h): router-only `waive_second_family(key, decision_id)` — requires a verified `decision` record D-id **whose DECISIONS.md row contains `Waives: <project:ID>` for exactly that key** (X6c3: whole-token match, so `Waives: demo:A` does not waive `demo:AB`; one D-row may list several `Waives:` tokens; tokens inside fenced/indented code blocks do not count) — lets the two verdicts share a family; the waiver is recorded in the event, shown by `show`, `digest` and the snapshot (`review_waiver: D-217`). Waiving a `standard` item is refused (`bad_state`). A `verdict(ok=False)` from either seat of either tier returns the item to `claimed` and voids the round's verdicts. Per-item `reviews_required` is fixed at 2 for `high` and 1 for `standard` (not editable).
@@ -191,7 +215,8 @@ The in-lock state/epoch/round checks still apply; only the decisions-file conten
 
 **`apply_ops(principal, ops, batch_ref=None)`** (router, `store_ops.py`; HTTP `POST
 /v1/apply_ops`, MCP tool `apply_ops`) applies a list of BATCH.md ops (`create`,
-`edit`, `legacy_state`, `add_evidence`, `close_on_decision`, `cancel`, `priority`) in one
+`edit`, `legacy_state`, `add_evidence`, `close_on_decision`, `cancel`, `priority`,
+`rehome`, `set_kind`, `add_dep`, `remove_dep`) in one
 `BEGIN IMMEDIATE`. Each op runs its single verb's inner function (same auth and
 state checks) with the whole-graph validation deferred: it runs once over the
 final graph against the graph at lock time. Any refusal or problem rolls back
@@ -202,6 +227,9 @@ verified before the lock and its state/epoch re-checked in the lock (`conflict`
 otherwise); evidence for an item an earlier op creates or moves is verified in
 the lock, and `close_on_decision` re-reads its batch and decision files in the
 lock as it always did.
+
+`add_dep {op, key, dep}` / `remove_dep {op, key, dep}` (PG-LE-DEPS-OPS) change ONE entry of `key`'s
+`depends_on`: they read the item's current edges inside the transaction (later ops see earlier ones) and delegate to the very same `edit_definition` write, so auth, `open`-state, cycle/unknown-dep/`_MAX_DEPS` validation and the `item_defined` event are the edit's. A dep `add_dep` already has or `remove_dep` lacks writes nothing, appends no event and answers `{"key", "warnings": [...]}`; a dep naming an item whose state is `cancelled` is dropped from the resulting list with `warnings ["dropped cancelled dependency <key>"]` (a full `edit` of `depends_on` drops it the same way, so `views.validate`'s `depends_on_cancelled` no longer refuses the write), an unknown dep key is still `validation`. The result keeps `{"key": ...}` alone unless something was dropped or skipped.
 
 **Credential-shape guard (D-374, `credential_guard.py`).** `create_items`/`edit_definition`/`import_items`/`apply_ops` refuse (`validation`, naming the field,
 never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field; `description` is its own column, cap 2000) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
@@ -292,6 +320,15 @@ it never stops the keeper.
 the item must be decision-closable: its evidence kinds include `decision`, or its done-criteria ask for no
 commit/merge/CI/seats. It never records a verdict; the claimant then attaches decision evidence and the router
 closes it on the decision.
+
+## Reopen a review (PG-REOPEN)
+
+`reopen(key, reason, decision_id)` (router only; `pg reopen KEY D-NNN --reason TEXT`, MCP `reopen`) moves an
+`in_review` item back to `claimed` for the same claimant at a fresh work epoch (+1, round reset, reviewer and
+waiver cleared, fresh default lease) with one hash-chained `item_reopened` event and revokes the item's live run
+tokens. The decision only has to be recorded - no `Closes:` naming - and the reason (non-empty, <= 500 chars) is
+carried by the event. It never closes an item and never records a verdict; evidence, rounds and verdicts of the
+superseded epoch no longer count, so the claimant attaches what the new epoch relies on again.
 
 ## Operator question choices (QA-IMPORT, D-865)
 

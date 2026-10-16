@@ -395,9 +395,22 @@ CREATE TRIGGER trg_answers_append_only_truncate BEFORE TRUNCATE ON answers
     FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('answers are append-only');
 """
 
+#: Logical twin of ``schema.METRICS_DDL`` (SQLite schema v11).
+_V4 = """
+CREATE TABLE metrics (
+    day         TEXT COLLATE "C" NOT NULL,
+    metric      TEXT COLLATE "C" NOT NULL,
+    value       DOUBLE PRECISION NOT NULL,
+    source      TEXT COLLATE "C" NOT NULL DEFAULT '',
+    computed_at TEXT COLLATE "C" NOT NULL,
+    PRIMARY KEY (day, metric)
+);
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
-              Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG))
+              Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
+              Migration(4, "governor: metrics", _V4))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

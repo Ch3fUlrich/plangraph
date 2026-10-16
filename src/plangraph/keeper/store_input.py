@@ -15,8 +15,11 @@ from .item_fields import (MODEL_FIELDS, check_choices, check_host, check_kg_refs
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
+# ``estimate_src`` is the audit-meta provenance marker (PG-ESTIMATE-SRC-EDIT):
+# a short label naming where the number came from, never a credential.
 _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
-              "description": DESCRIPTION_CAP, "owner": 100, "track": 100}
+              "description": DESCRIPTION_CAP, "owner": 100, "track": 100,
+              "estimate_src": 64}
 _MAX_DEPS = 200
 
 
@@ -24,10 +27,13 @@ class InputMixin:
     """``_check_text``, ``_normalise`` and ``_qualify`` for :class:`Store`."""
 
     @staticmethod
-    def _check_text(fields):
-        """Refuse oversize, non-string or credential-shaped text, naming the field."""
+    def _check_text(fields, key=None):
+        """Refuse oversize, non-string or credential-shaped text, naming the field.
+
+        *key* (when known) prefixes a credential refusal so a batch can tell
+        which item failed (PL-33)."""
         for field in GUARDED_FIELDS:
-            guard(field, fields.get(field))
+            guard(field, fields.get(field), key)
         for field, cap in _TEXT_CAPS.items():
             value = fields.get(field)
             if value is None:
@@ -42,12 +48,14 @@ class InputMixin:
             check_wait(fields["wait"])
 
     def _normalise(self, raw):
-        self._check_text(raw)
         project = raw.get("project")
         identifier = raw.get("id")
+        # The item key is known before any check: name it in a credential
+        # refusal so a batch of 40 items says which one failed (PL-33).
+        key = f"{project}:{identifier}" if project and identifier else None
+        self._check_text(raw, key)
         if not project or not identifier:
             raise Refused("validation", "each item needs project and id")
-        key = f"{project}:{identifier}"
         if raw.get("key") and raw["key"] != key:
             raise Refused("validation", f"key {raw['key']!r} != {key!r}")
         raw_deps = raw.get("depends_on") or []
@@ -73,6 +81,14 @@ class InputMixin:
             if not isinstance(fixes, str) or not fixes:
                 raise Refused("validation", f"{key}: fixes must be a key string or null")
             fixes = self._qualify(project, fixes)
+        # ``under`` is create-only (``import_items`` refuses it): the gate the
+        # new item is attached under, resolved like any other key reference and
+        # kept on the definition -- never a column, never folded into ``note``.
+        under = raw.get("under")
+        if under is not None:
+            if not isinstance(under, str) or not under:
+                raise Refused("validation", "under must be a non-empty string")
+            under = self._qualify(project, under)
         return {
             "key": key, "project": project, "id": identifier,
             "title": raw.get("title", ""), "description": raw.get("description"),
@@ -87,6 +103,7 @@ class InputMixin:
             "priority": int(raw.get("priority") or 0),
             "source": raw.get("source"), "note": self._folded_note(raw, key),
             "corrects": corrects, "fixes": fixes, "depends_on": deps,
+            "under": under,
             "choices": check_choices(raw.get("choices"), kind, key),
             "kg_refs": check_kg_refs(raw.get("kg_refs"), key),
             "state": raw.get("state", "open"),
