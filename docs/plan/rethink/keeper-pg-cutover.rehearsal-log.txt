@@ -160,3 +160,4 @@ chain and cache integrity ok
 rc=0
 
 # cleanup: kill scratch keeper (rc 0), docker rm -f pg-prep-rehearsal (rc 0); no container left
+# note: round 7 re-check of rowhash.py with PG_DSN+PG_SCHEMA env on a fresh throwaway container (removed): copy apply ok, DIFFS 0 rc0

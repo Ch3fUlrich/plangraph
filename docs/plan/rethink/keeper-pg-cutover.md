@@ -42,12 +42,14 @@ Backup of the stopped db (folds WAL): `mkdir -p -m 700 $LIVE/backups/pg-cutover-
 The keeper has no read-only flag. Read-only = the old unit **stopped** and the SQLite file `chmod 0400` for 48 h; reads go to the new PG keeper; offline readers use the signed `plan.snapshot.json` fallback (`pg sync pull`, cli_local READ-ONLY fallback). Writes to the old keeper are impossible by construction.
 Freeze fingerprint (done at the end of section 2, after the unit is stopped and the backup is taken):
 ```
-[ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');c.execute('PRAGMA wal_checkpoint(TRUNCATE)');c.close()"   # fold a leftover WAL so the .db alone is complete
-rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm
+# WAL gate (the keeper runs journal_mode=WAL, db.py open_db): committed frames may live only in keeper.db-wal. Never delete a non-empty WAL.
+[ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');print(c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchall());c.close()"   # unit is stopped: fold the WAL into the .db
+[ ! -s $LIVE/keeper.db-wal ] && echo WAL-EMPTY-OR-MISSING || { echo "WAL still non-empty: STOP, do not hash, report to router"; false; }
+rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal         # only reached with a missing or 0-byte WAL (the 0-byte file holds no frames)
 chmod 0400 $LIVE/keeper.db
 sha256sum $LIVE/keeper.db | tee $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256
 ```
-The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK`. A mismatch means something wrote to the old file: do NOT roll back to it; stop and report to the router.
+The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK`. A mismatch means something wrote to the old file: do NOT roll back to it by hash alone; restore from the backup copy `$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db` only if its own sha256 matches `SHA256SUMS` of that backup, else stop and report to the router.
 
 ## 4. Copy (T0+, after freeze and backup)
 Config for the copy = a copy of `$KJ` with `"backend":"postgres","pg_schema":"keeper"` added, saved 0600 as `$LIVE/keeper-pg.json` (no dsn key; `db` unchanged). Export the MIGRATOR dsn from `<PG_MIGRATOR_DSN_FILE>` into `PG_DSN` in that shell only (never echo, never in argv).
@@ -60,7 +62,7 @@ pg --config $LIVE/keeper-pg.json admin copy-to-pg --apply   --src $B     # rc0, 
 
 ## 5. Verify gates (all must pass; any failure = abort to section 7, still no live impact)
 1. Per-table counts: dry-run source column == `--apply` target column for all 19 tables (the tool compares and rolls back on diff); re-check independently: `psql "$PG_DSN" -Atc "select count(*) from keeper.events"` etc. vs `$LIVE/backups/pg-cutover-*/counts` (sqlite `select count(*)`).
-1b. Optional row-level digest (rehearsal tool, no writes; the rehearsal ran it with a venv python holding psycopg): `<keeper python, must import psycopg> docs/plan/rethink/keeper-pg-cutover.rowhash.py $B <src dir> ` (DSN only via env `PG_DSN`, never in argv) -> 19 lines `ok`, `DIFFS 0` (edit the `search_path` line to the real schema name first; the rehearsal used `rehearsal`). Catches in-row differences that counts and head cannot.
+1b. Optional row-level digest (rehearsal tool, no writes; the rehearsal ran it with a venv python holding psycopg): `<keeper python, must import psycopg> docs/plan/rethink/keeper-pg-cutover.rowhash.py $B <src dir> ` (DSN only via env `PG_DSN`, never in argv) -> 19 lines `ok`, `DIFFS 0` (also `PG_SCHEMA=<schema>`; the rehearsal used `rehearsal`; refuses a table without a primary key). Catches in-row differences that counts and head cannot.
 2. Chain: `PG_KEEPER_BACKEND=postgres pg --config $LIVE/keeper-pg.json admin verify` -> `chain and cache integrity ok`; head seq/hash printed by copy-to-pg equals `select seq,hash from keeper.events order by seq desc limit 1`.
 3. `pg --config $LIVE/keeper-pg.json admin verify-snapshot --snapshot $LIVE/backups/pg-cutover-*/plan.snapshot.json --pubkey ~/.config/plangraph/snapshot-signing.pub` -> `snapshot signature ok`.
 4. Smoke on a scratch keeper on PG (runtime DSN, own port e.g. 18787, scratch token minted with `admin add-principal` **only if** it is done on a throwaway schema copy; otherwise use a reader token already in the copied principals): `pg whoami`, `ready`, `show plangraph:RT-P1-KEEPER-PG`, `percent` rc0; `curl -s -o /dev/null -w '%{http_code}' -H @<token-header-file> http://127.0.0.1:18787/v1/alarms` = 200; `/inbox` = 200. `<token-header-file>` (mode 0600) holds the single line `Authorization: Bearer <token>`, so the token never appears in argv or shell history. Stop the scratch keeper.
@@ -78,12 +80,12 @@ Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 ```
 (or `backend`/`pg_schema` keys in `$KJ`; `select_backend()` in `db.py` takes the explicit config value first, else `PG_KEEPER_BACKEND`.) `$KJ` stays the same file otherwise; keep a dated copy of it.
 3. `systemctl --user daemon-reload && systemctl --user start plangraph-keeper`; wait for `GET http://127.0.0.1:8787/inbox` = 200 (the keeper takes a PG session advisory lock; second start elsewhere fails with KeeperLocked, as intended).
-4. Re-run gates 5.2 (admin verify on PG), `pg whoami`, `ready`, `percent`, `/v1/alarms`; `systemctl --user start plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer`; clients run `pg replay`.
+4. Re-run gates 5.2 (admin verify on PG), `pg whoami`, `ready`, `percent`, `/v1/alarms`. **Record the loss boundary now, before any timer or replay:** `psql "$PG_DSN" -Atc "select seq,hash from keeper.events order by seq desc limit 1"` into the lane card and GO report (expected seq 6254 + any events written by the verify smoke; no writes yet). Only then `systemctl --user start plangraph-md-sync.timer plangraph-md-sync.path plangraph-render.timer`; clients run `pg replay`. From the first replay or timer write, PG holds events the sqlite file lacks: a rollback after that point takes the AFTER-writes path of section 7, not the exact one.
 5. Record in the lane card: start time, head seq, counts, sha of the tree.
 
 ## 7. 48 h window and rollback
 - During 48 h: old unit stopped, sqlite file untouched (`chmod 0400`, hash recorded in section 3), backup dir kept, PG backups running.
-- Rollback BEFORE any PG write that matters (nothing since switch except reads/heartbeats). Exact commands:
+- Rollback BEFORE any PG write that matters (only valid until the first md-sync run or `pg replay` after the switch, section 6.4; compare `select max(seq) from keeper.events` with the recorded boundary, equal = no writes). Exact commands:
 ```
 sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256        # must print OK, else stop (section 3)
 systemctl --user stop plangraph-keeper                                           # the PG keeper
@@ -91,7 +93,8 @@ systemctl --user stop plangraph-md-sync.timer plangraph-md-sync.path plangraph-r
 rm ~/.config/systemd/user/plangraph-keeper.service.d/pg-backend.conf             # switch the env back (or restore plangraph-keeper.service.d.pre-pg)
 systemctl --user daemon-reload
 chmod 0600 $LIVE/keeper.db
-rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm
+[ ! -s $LIVE/keeper.db-wal ] || { echo "non-empty WAL: never delete it; STOP, report"; false; }   # at freeze it was folded and removed; a non-empty one now means a stray writer
+rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal   # 0-byte or missing only
 systemctl --user start plangraph-keeper                                          # old unit, sqlite config unchanged
 unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA                                         # clean shell so the CLI hits sqlite
 pg --config $KJ admin verify; pg --config $KJ whoami; pg --config $KJ ready      # rc0 each
