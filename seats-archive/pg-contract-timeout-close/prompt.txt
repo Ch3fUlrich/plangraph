@@ -1,0 +1,187 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+Review of plangraph:CI-PG-CONTRACT-TIMEOUT closure. Done criteria: root cause with per-request timings; fix without retries/skips (timeout raised only if latency proven runner-only); 10 consecutive green pytest-postgres runs under parallel load.
+Claimed root cause (measured locally on postgres:16): keeper api.py _snapshot rebuilt the full snapshot after every committed write (O(items), one PG round trip per small query): per-write p50 PG 99 ms (<100 items) -> 387 ms (300-400 items) vs SQLite 15-27 ms; shared contract keeper ~660 writes reached 0.5-1.4 s/write locally and ~1 s p50 / 5.4 s max on runners (run 38884699086), vs a 20 s socket limit. Fixed by a separate HIGH lane KEEPER-SNAPSHOT-PG (PR #32 cd85d13: set-based snapshot + debounced writer off the request path; PG write p50 8 ms at 1000 items). This lane (PR #31, head 3d4f2e8, diff below) is tests-only instrumentation: per-route latency table, pg backend/lock dump + keeper thread stacks on a timed-out request, per-dispatch concurrency group, --durations=30.
+Closing runs (workflow_dispatch on main, waves of 3-4 concurrent, none cancelled), run id / sha / pytest-postgres seconds:
+38890010881 cd85d13 286; 38890039044 cd85d13 319; 38890068397 cd85d13 365; 38890098091 cd85d13 252; 38891666109 27c95c3 238; 38891694310 27c95c3 237; 38891721519 27c95c3 176; 38892469791 27c95c3 231; 38892497635 27c95c3 223; 38892529004 27c95c3 125. All success. Before the fix: failing runs 729-765 s with 3-21 TimeoutErrors.
+Vectors: V1 is the cause real and does the evidence connect it to the CI TimeoutErrors (or is something masked)? V2 does the instrumentation diff change behaviour, add retries/skips/timeout bumps, or game tests? V3 is 10 runs under this load adequate evidence; what does it not show?
+End with exactly two lines:
+TEST-GAMING: no|yes - <reason>
+VERDICT: pass|fix
+Material (diff of PR #31 vs its base):
+diff --git a/.github/workflows/tests.yml b/.github/workflows/tests.yml
+index 40e3663..6653362 100644
+--- a/.github/workflows/tests.yml
++++ b/.github/workflows/tests.yml
+@@ -18,7 +18,7 @@ on:
+ # CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
+ # but never a workflow_dispatch run (timing measurements must finish).
+ concurrency:
+-  group: ${{ github.workflow }}-${{ github.ref }}
++  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
+   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ 
+ permissions:
+@@ -87,6 +87,10 @@ jobs:
+           --health-retries 10
+     env:
+       PG_KEEPER_BACKEND: postgres
++      # per-route keeper latency table at the end of the run (tests/contract/conftest.py)
++      PG_CONTRACT_LATENCY_DIR: /tmp/pg-contract-latency
++      # root-cause hunt (CI-PG-CONTRACT-TIMEOUT): on a hung request dump the keeper's thread stacks
++      PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
+     steps:
+       - uses: actions/checkout@v4
+       - name: Python version for the venv cache key
+@@ -145,5 +149,5 @@ jobs:
+           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                   | xargs grep -L sqlite3 | tr '\n' ' ')
+           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
+-          python -m pytest -q -n 8 --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
++          python -m pytest -q -n 8 --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+             tests/test_projector_ddl.py $FILES
+diff --git a/tests/contract/conftest.py b/tests/contract/conftest.py
+index 260ace9..b009dee 100644
+--- a/tests/contract/conftest.py
++++ b/tests/contract/conftest.py
+@@ -1,4 +1,9 @@
+ """Fixtures for the keeper contract suite (see ``contract_harness`` for modes)."""
++import json
++import os
++import statistics
++from pathlib import Path
++
+ import pytest
+ 
+ import contract_harness as harness
+@@ -27,3 +32,42 @@ def kp(tmp_path_factory):
+         yield keeper
+     finally:
+         keeper.stop()
++
++
++def _latency_dir():
++    value = os.environ.get("PG_CONTRACT_LATENCY_DIR")
++    return Path(value) if value else None
++
++
++def pytest_sessionfinish(session, exitstatus):
++    """Each xdist worker drops its per-request timings for ``pytest_terminal_summary``."""
++    out = _latency_dir()
++    if out is None or not harness.LATENCY:
++        return
++    out.mkdir(parents=True, exist_ok=True)
++    name = getattr(session.config, "workerinput", {}).get("workerid", "main")
++    (out / f"latency-{name}.json").write_text(json.dumps(harness.LATENCY), encoding="utf-8")
++
++
++def pytest_terminal_summary(terminalreporter):
++    """Per-route keeper latency (client side, loopback): count, p50, p95, max in ms, timeouts."""
++    out = _latency_dir()
++    if out is None or not out.is_dir():
++        return
++    rows = [r for f in sorted(out.glob("latency-*.json")) for r in json.loads(f.read_text())]
++    if not rows:
++        return
++    by_route: dict[str, list] = {}
++    for method, route, secs, status in rows:
++        by_route.setdefault(f"{method} {route}", []).append((secs * 1000, status))
++    write = terminalreporter.write_line
++    terminalreporter.section("keeper request latency (ms)")
++    write(f"{'route':<34}{'n':>6}{'p50':>8}{'p95':>8}{'max':>9}{'timeouts':>9}")
++    for key, vals in sorted(by_route.items(), key=lambda kv: -max(v[0] for v in kv[1]))[:25]:
++        ms = sorted(v[0] for v in vals)
++        p95 = ms[min(len(ms) - 1, int(len(ms) * 0.95))]
++        write(f"{key:<34}{len(ms):>6}{statistics.median(ms):>8.0f}{p95:>8.0f}{ms[-1]:>9.0f}"
++              f"{sum(1 for v in vals if v[1] == 0):>9}")
++    allms = sorted(v[0] for vals in by_route.values() for v in vals)
++    write(f"{'ALL':<34}{len(allms):>6}{statistics.median(allms):>8.0f}"
++          f"{allms[min(len(allms) - 1, int(len(allms) * 0.95))]:>8.0f}{allms[-1]:>9.0f}")
+diff --git a/tests/contract/contract_harness.py b/tests/contract/contract_harness.py
+index b5ed061..7dffdc9 100644
+--- a/tests/contract/contract_harness.py
++++ b/tests/contract/contract_harness.py
+@@ -23,6 +23,7 @@ from __future__ import annotations
+ 
+ import json
+ import os
++import signal
+ import socket
+ import subprocess
+ import sys
+@@ -38,6 +39,10 @@ SRC = ROOT / "src"
+ #: Per-request socket timeout (seconds) for every HTTP call to the keeper.
+ REQUEST_TIMEOUT = 20
+ 
++#: One ``(method, route, seconds, status)`` per request this process made; ``conftest`` dumps it
++#: (``PG_CONTRACT_LATENCY_DIR``) so CI can print p50/p95/max per route.  ``status`` is 0 on a timeout.
++LATENCY: list[tuple[str, str, float, int]] = []
++
+ 
+ def _start_timeout() -> float:
+     """Seconds to wait for a started keeper to answer ``/v1/health``.
+@@ -120,11 +125,18 @@ class Keeper:
+             req.add_header("Content-Type", "application/json")
+         for name, value in (headers or {}).items():
+             req.add_header(name, value)
++        route = "/" + "/".join(path.split("?")[0].split("/")[1:3])
++        started = time.perf_counter()
+         try:
+             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+                 out = Resp(resp.status, dict(resp.headers), resp.read())
+         except urllib.error.HTTPError as exc:
+             out = Resp(exc.code, dict(exc.headers), exc.read())
++        except TimeoutError:
++            LATENCY.append((method, route, time.perf_counter() - started, 0))
++            self._diagnose_timeout(method, path, time.perf_counter() - started)
++            raise
++        LATENCY.append((method, route, time.perf_counter() - started, out.status))
+         if out.status not in (401, 404, 405):     # the route ran past authentication
+             CALLED.add((method, "/" + "/".join(path.split("?")[0].split("/")[1:3])))
+         return out
+@@ -143,6 +155,37 @@ class Keeper:
+             raise RuntimeError("no admin config for this keeper")
+         return run_cli(["--config", str(self.config), "admin", *args])
+ 
++    def _diagnose_timeout(self, method, path, elapsed):
++        """Say WHY a request hung, on stderr (shown in the failure report): keeper liveness, the
++        Postgres backends and lock waits at this instant, and (``PG_CONTRACT_ABORT_ON_TIMEOUT=1``)
++        the keeper's thread stacks via SIGABRT + ``faulthandler`` (kills that keeper)."""
++        lines = [f"[contract-diag] {method} {path} no answer after {elapsed:.1f}s "
++                 f"(timeout {REQUEST_TIMEOUT}s), keeper exit={self.proc.poll() if self.proc else 'n/a'}"]
++        dsn = os.environ.get("PG_DSN")
++        if dsn:
++            try:
++                import psycopg
++                with psycopg.connect(dsn, connect_timeout=5, autocommit=True) as conn:
++                    for row in conn.execute(
++                            "SELECT pid, state, wait_event_type, wait_event, "
++                            "round(extract(epoch FROM now()-state_change)::numeric,1), left(query,90) "
++                            "FROM pg_stat_activity WHERE datname=current_database() "
++                            "AND pid<>pg_backend_pid() ORDER BY state_change"):
++                        lines.append(f"[contract-diag] pg backend {row}")
++                    waits = conn.execute("SELECT count(*) FROM pg_locks WHERE NOT granted").fetchone()[0]
++                    lines.append(f"[contract-diag] pg ungranted locks: {waits}")
++            except Exception as exc:                    # diagnostics must never mask the timeout
++                lines.append(f"[contract-diag] pg probe failed: {type(exc).__name__}: {exc}")
++        if self.proc is not None and os.environ.get("PG_CONTRACT_ABORT_ON_TIMEOUT") == "1":
++            try:
++                os.kill(self.proc.pid, signal.SIGABRT)
++                self.proc.wait(timeout=10)
++                lines.append("[contract-diag] keeper stderr after SIGABRT:\n"
++                             + self.proc.stderr.read().decode(errors="replace")[-6000:])
++            except Exception as exc:
++                lines.append(f"[contract-diag] abort failed: {type(exc).__name__}: {exc}")
++        print("\n".join(lines), file=sys.stderr)
++
+     def stop(self):
+         if self.proc is not None:
+             self.proc.terminate()
+@@ -239,7 +282,7 @@ def start_local(base: Path, signing: bool = False) -> Keeper:
+     proc = subprocess.Popen(
+         [sys.executable, "-m", "plangraph.keeper.daemon", "--config", str(cfg),
+          "--host", "127.0.0.1", "--port", str(port)],
+-        env=_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
++        env=_env({"PYTHONFAULTHANDLER": "1"}), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+     keeper = Keeper(f"http://127.0.0.1:{port}", tokens,
+                     {"decisions", "runs", "batch", "admin"}, True, base, cfg,
+                     batch_dir, runs_dir, proc)
