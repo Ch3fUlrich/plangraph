@@ -247,7 +247,7 @@ pub fn run_harness(
     cancelled: &dyn Fn() -> bool,
 ) -> std::io::Result<Supervised> {
     let mut cmd = h.command(run);
-    pg_worker_core::sandbox_env::confine(&mut cmd, home);
+    pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
     supervise_with_cancel(cmd, opts, cancelled)
 }
 
@@ -296,9 +296,25 @@ fn version_matches(output: &str, want: &str) -> bool {
         .any(|t| t.trim_start_matches('v') == want)
 }
 
-/// True for "Text file busy" (ETXTBSY) from a spawn.
-fn is_text_busy(e: &std::io::Error) -> bool {
-    e.kind() == std::io::ErrorKind::ExecutableFileBusy || e.raw_os_error() == Some(26)
+/// A throwaway private `HOME` for a `--version` probe, removed on drop.
+struct ProbeHome(PathBuf);
+
+impl ProbeHome {
+    fn new(name: &str) -> std::io::Result<ProbeHome> {
+        let safe: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        let p = std::env::temp_dir().join(format!("pg-probe-{}-{safe}.home", std::process::id()));
+        std::fs::create_dir_all(&p)?;
+        Ok(ProbeHome(p))
+    }
+}
+
+impl Drop for ProbeHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Fail closed on a version drift: for every pinned name run `<bin> --version`
@@ -311,26 +327,22 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
             .get(name)
             .and_then(|h| h.binary().map(str::to_string))
             .ok_or_else(|| PinError::Unavailable(name.clone()))?;
+        // Same confined env and a private HOME as a real run: the probe must
+        // not see the worker's PG_* / TEMPORAL_* either.
+        let home = ProbeHome::new(name).map_err(|e| PinError::Unrunnable {
+            name: name.clone(),
+            why: format!("private HOME: {e}"),
+        })?;
         let opts = Opts {
             timeout: Some(std::time::Duration::from_secs(15)),
             grace: std::time::Duration::from_secs(1),
             ..Opts::default()
         };
-        // A sibling thread forking while the binary was just written can make
-        // exec fail with ETXTBSY (os error 26); that clears in milliseconds.
-        let mut tries = 0;
-        let r = loop {
-            let mut cmd = Command::new(&bin);
-            cmd.arg("--version").stdin(Stdio::null());
-            match pg_worker_core::stall::supervise(cmd, &opts) {
-                Err(e) if is_text_busy(&e) && tries < 5 => {
-                    tries += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                other => break other,
-            }
-        }
-        .map_err(|e| PinError::Unrunnable {
+        // `supervise` retries a spawn that hits ETXTBSY (see `stall`).
+        let mut cmd = Command::new(&bin);
+        cmd.arg("--version").stdin(Stdio::null());
+        pg_worker_core::sandbox_env::confine_harness(&mut cmd, &home.0);
+        let r = pg_worker_core::stall::supervise(cmd, &opts).map_err(|e| PinError::Unrunnable {
             name: name.clone(),
             why: e.to_string(),
         })?;
@@ -694,21 +706,13 @@ mod tests {
 
     /// A fake CLI that answers `--version` with `out` and the given exit code.
     fn fake_bin(dir: &Path, name: &str, out: &str, code: i32) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        let p = dir.join(name);
-        // Write under a temp name, flush and close, then rename into place, so
-        // no open write fd on the final path can meet a concurrent fork+exec.
-        let tmp = dir.join(format!(".{name}.tmp"));
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp).unwrap();
-            f.write_all(format!("#!/bin/sh\necho '{out}'\nexit {code}\n").as_bytes())
-                .unwrap();
-            f.sync_all().unwrap();
-        }
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::rename(&tmp, &p).unwrap();
-        p.to_string_lossy().into_owned()
+        crate::testutil::write_script(
+            dir,
+            name,
+            &format!("#!/bin/sh\necho '{out}'\nexit {code}\n"),
+        )
+        .to_string_lossy()
+        .into_owned()
     }
 
     fn registry_with(bin: String) -> HarnessRegistry {
@@ -727,6 +731,26 @@ mod tests {
                 want: "9.9.9".into(),
                 found: "opencode 1.2.3".into(),
             })
+        );
+    }
+
+    #[test]
+    fn version_probe_child_sees_no_worker_secrets() {
+        let d = tempfile::tempdir().unwrap();
+        // The fake CLI prints its environment; the pin matches on a token that
+        // is present only if PG_/TEMPORAL_ variables are absent.
+        let p = crate::testutil::write_script(
+            d.path(),
+            "envdump",
+            "#!/bin/sh\nif env | grep -q '^PG_PROBE_SENTINEL=\\|^TEMPORAL_PROBE_SENTINEL='; then echo leaked; else echo clean-1.0; fi\n",
+        );
+        // Unique names; no other test reads or sets them.
+        unsafe { std::env::set_var("PG_PROBE_SENTINEL", "x") };
+        unsafe { std::env::set_var("TEMPORAL_PROBE_SENTINEL", "x") };
+        let reg = registry_with(p.to_string_lossy().into_owned());
+        assert_eq!(
+            check_version_pins(&reg, Some("opencode=clean-1.0")),
+            Ok(true)
         );
     }
 

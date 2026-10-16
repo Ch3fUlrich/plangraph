@@ -13,36 +13,24 @@ pub struct AttemptId {
     pub n: u32,
 }
 
-/// A card id as a git ref component. The keeper names items `project:id`, and
-/// `:` (like space, `~`, `^`, `?`, `*`, `[`, `\`) is not allowed in a ref, so
-/// every other byte class becomes `_`; `..` is broken up too. Idempotent, so a
-/// branch name parsed back yields the same id.
-pub fn ref_safe(card: &str) -> String {
-    let mapped: String = card
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/') {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    mapped.replace("..", "._")
-}
-
 impl AttemptId {
-    /// The card id is stored ref-safe (see [`ref_safe`]) so the branch and the
-    /// worktree directory derived from it are always valid.
     pub fn new(card: impl Into<String>, n: u32) -> Self {
         AttemptId {
-            card: ref_safe(&card.into()),
+            card: card.into(),
             n,
         }
     }
 
+    /// The branch `attempt/<segment>/<n>`; `<segment>` is [`safe_segment`] of
+    /// the card, so a hostile key cannot reach outside `attempt/`.
     pub fn branch(&self) -> String {
-        format!("{PREFIX}{}/{}", self.card, self.n)
+        format!("{PREFIX}{}/{}", safe_segment(&self.card), self.n)
+    }
+
+    /// The directory name of this attempt's worktree under the workroot:
+    /// `<segment>-<n>`. The one place that name is built.
+    pub fn dir_name(&self) -> String {
+        format!("{}-{}", safe_segment(&self.card), self.n)
     }
 
     /// Parse a short branch name (`attempt/<card>/<n>`); `None` for anything else.
@@ -54,6 +42,46 @@ impl AttemptId {
         }
         Some(AttemptId::new(card, n.parse().ok()?))
     }
+}
+
+/// Longest readable part of a sanitised segment (a 9-byte `-<hash>` follows,
+/// and a segment up to that total is already safe, which keeps it idempotent).
+const SEGMENT_MAX: usize = 48;
+
+/// `key` as one safe path/ref segment: non-empty, only `[A-Za-z0-9._-]`, no
+/// `..`, no leading `-` or `.`, no trailing `.` or `.lock`. A key that already
+/// satisfies this is returned unchanged; anything else is rewritten and gets a
+/// short stable hash of the ORIGINAL key appended, so two distinct keys never
+/// share a worktree or branch (`a/b` and `a_b` stay apart). Idempotent.
+pub fn safe_segment(key: &str) -> String {
+    let ok_chars = key
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if ok_chars
+        && !key.is_empty()
+        && key.len() <= SEGMENT_MAX + 9
+        && !key.contains("..")
+        && !key.starts_with(['-', '.'])
+        && !key.ends_with('.')
+        && !key.ends_with(".lock")
+    {
+        return key.to_string();
+    }
+    let mut clean: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(SEGMENT_MAX)
+        .collect();
+    if clean.is_empty() || clean.starts_with('-') {
+        clean.insert(0, '_');
+    }
+    format!("{clean}-{}", &crate::hash::hash_bytes(key.as_bytes())[..8])
 }
 
 impl fmt::Display for AttemptId {
@@ -137,10 +165,13 @@ mod tests {
     #[test]
     fn keeper_style_card_ids_make_valid_branches() {
         let id = super::AttemptId::new("demo:E2E-1", 2);
-        assert_eq!(id.branch(), "attempt/demo_E2E-1/2");
-        assert_eq!(super::AttemptId::parse_branch(&id.branch()), Some(id));
-        assert_eq!(super::ref_safe("a b~c^d..e"), "a_b_c_d._e");
-        assert_eq!(super::ref_safe("plain-1.x"), "plain-1.x");
+        let branch = id.branch();
+        assert!(branch.starts_with("attempt/demo_E2E-1-"), "{branch}");
+        assert!(!branch.contains(':'));
+        assert_eq!(
+            super::AttemptId::parse_branch(&branch).map(|a| a.branch()),
+            Some(branch)
+        );
     }
 
     use super::*;
@@ -162,6 +193,67 @@ mod tests {
         ] {
             assert_eq!(AttemptId::parse_branch(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn safe_keys_pass_through_and_hostile_ones_become_one_segment() {
+        for ok in ["c1", "card-1", "A_b.c", "x.y-z"] {
+            assert_eq!(safe_segment(ok), ok);
+        }
+        for bad in [
+            "",
+            "a/b",
+            "../x",
+            "..",
+            "-rf",
+            "a b",
+            ".hidden",
+            "x..y",
+            "a.lock",
+            "tr.",
+            "/abs",
+            "e\u{301}",
+            "a\nb",
+            "x".repeat(200).as_str(),
+        ] {
+            let s = safe_segment(bad);
+            assert!(!s.is_empty() && s != bad, "{bad:?} -> {s:?}");
+            assert!(!s.contains('/') && !s.contains(".."), "{s}");
+            assert!(!s.starts_with(['-', '.']), "{s}");
+            assert!(s.len() <= SEGMENT_MAX + 9, "{s}");
+            assert_eq!(safe_segment(&s), s, "idempotent for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn distinct_keys_never_share_a_segment() {
+        let keys = ["a/b", "a_b", "a b", "a\\b", "../a", "..a", "a/b/"];
+        let segs: std::collections::HashSet<String> =
+            keys.iter().map(|k| safe_segment(k)).collect();
+        assert_eq!(segs.len(), keys.len(), "{segs:?}");
+        let (x, y) = (AttemptId::new("a/b", 1), AttemptId::new("a_b", 1));
+        assert_ne!(x.branch(), y.branch());
+        assert_ne!(x.dir_name(), y.dir_name());
+    }
+
+    #[test]
+    fn traversal_card_stays_inside_workroot_and_attempt_namespace() {
+        let (repo_dir, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let id = AttemptId::new("../../evil", 1);
+        assert!(id.branch().starts_with("attempt/") && !id.branch().contains(".."));
+        let dest = root.path().join(id.dir_name());
+        assert_eq!(dest.parent().unwrap(), root.path());
+        let w = create(repo_dir.path(), &base, &dest, &id).unwrap();
+        assert_eq!(
+            git(&w.path, &["branch", "--show-current"]).unwrap(),
+            id.branch()
+        );
+        // The branch parses back to the same segment, so the janitor and the
+        // probe address the same worktree.
+        let back = AttemptId::parse_branch(&id.branch()).unwrap();
+        assert_eq!(back.branch(), id.branch());
+        assert_eq!(back.dir_name(), id.dir_name());
     }
 
     #[test]

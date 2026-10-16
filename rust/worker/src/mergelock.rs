@@ -195,10 +195,18 @@ const FENCE_NAME: &str = "pg-merge.fence";
 /// token than the new holder, so its late merge cannot land.
 pub fn admit_fence(_lock: &MergeLock, repo: &Path, token: u64) -> Result<bool, MergeError> {
     let path = git_common_dir(repo)?.join(FENCE_NAME);
-    let seen = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| t.trim().parse::<u64>().ok())
-        .unwrap_or(0);
+    // A missing file is a fresh repo (0). An unreadable or corrupt one is an
+    // error: guessing 0 would reopen the door to a stale holder.
+    let seen = match std::fs::read_to_string(&path) {
+        Ok(t) => t.trim().parse::<u64>().map_err(|e| {
+            MergeError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("corrupt fence file {}: {e}", path.display()),
+            ))
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(e) => return Err(MergeError::Io(e)),
+    };
     if token < seen {
         return Ok(false);
     }
@@ -442,6 +450,21 @@ mod tests {
     }
 
     #[test]
+    fn fence_fails_closed_on_a_corrupt_or_unreadable_file() {
+        let (r, _base) = repo();
+        let lock = MergeLock::acquire(r.path(), Duration::from_secs(5)).unwrap();
+        // Missing file: fresh repo, token 0 is admitted.
+        assert!(admit_fence(&lock, r.path(), 0).unwrap());
+        let path = git_common_dir(r.path()).unwrap().join(FENCE_NAME);
+        std::fs::write(&path, "not-a-number").unwrap();
+        assert!(admit_fence(&lock, r.path(), 7).is_err());
+        // Unreadable: a directory where the file should be.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(admit_fence(&lock, r.path(), 7).is_err());
+    }
+
+    #[test]
     fn rebase_onto_moves_the_branch_and_aborts_conflicts() {
         let (r, base) = repo();
         let p = r.path();
@@ -518,16 +541,13 @@ mod tests {
     /// directory survives inside git; only the guard removes it.
     #[test]
     fn failed_worktree_add_removes_scratch_dir() {
-        use std::os::unix::fs::PermissionsExt;
-
         let (r, base) = repo();
         let p = r.path();
         attempt_branch(p, "attempt/x/1", "x.txt", "x", &base);
 
-        let hook = p.join(".git/hooks/post-checkout");
-        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
-        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let hooks = p.join(".git/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        crate::testutil::write_script(&hooks, "post-checkout", "#!/bin/sh\nexit 1\n");
 
         // The add fails partway through, after the working tree exists.
         let err =

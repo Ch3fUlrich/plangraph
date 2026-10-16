@@ -19,6 +19,7 @@ use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
+use pg_worker_core::worktree::AttemptId;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use temporalio_common::RetryPolicy;
@@ -55,16 +56,40 @@ const QUESTION_REFUSED_REASON: &str = "question not recorded";
 /// Alarm reason when the default was taken but the keeper refused to record it.
 const QUESTION_TIMEOUT_REFUSED_REASON: &str = "question_timeout not recorded";
 
-/// The `answer` signal, exactly as the inbox sends it
-/// (`src/plangraph/inbox/temporal_signal.py`).
+/// Alarm reason when a card asked more questions than `max_question_rounds`.
+const QUESTION_ROUNDS_REASON: &str = "question rounds exhausted";
+
+/// Answer signals kept per card; a flood beyond this is dropped.
+const MAX_STORED_ANSWERS: usize = 256;
+
+/// The `answer` signal, as the inbox sends it
+/// (`src/plangraph/inbox/temporal_signal.py`): `{question_id, key, text, source}`.
+/// Unknown fields are ignored and `key` and `source` may be missing; the id and
+/// the text are required.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnswerSignal {
+    #[serde(deserialize_with = "id_from_int_or_string")]
     pub question_id: i64,
     #[serde(default)]
     pub key: String,
     pub text: String,
     #[serde(default)]
     pub source: String,
+}
+
+/// A question id sent as a JSON integer or as a decimal string.
+fn id_from_int_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    use serde::de::Error;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| D::Error::custom("question_id is not an integer")),
+        serde_json::Value::String(s) => s
+            .trim()
+            .parse()
+            .map_err(|_| D::Error::custom("question_id is not a number")),
+        _ => Err(D::Error::custom("question_id must be a number")),
+    }
 }
 
 /// How a question ended.
@@ -109,6 +134,18 @@ impl Card {
             .find(|a| a.question_id == id && a.source != "question_timeout")
             .map(|a| a.text.clone())
     }
+
+    /// Store a raw `answer` payload. One that does not parse is dropped with a
+    /// log line: a bad signal must never fail the workflow task and wedge the
+    /// card. An answer for another question is stored but never matches the
+    /// wait, so it is not consumed.
+    fn accept_answer(&mut self, raw: serde_json::Value) {
+        match serde_json::from_value::<AnswerSignal>(raw) {
+            Ok(a) if self.answers.len() < MAX_STORED_ANSWERS => self.answers.push(a),
+            Ok(_) => eprintln!("answer signal dropped: too many answers stored"),
+            Err(e) => eprintln!("answer signal ignored: {e}"),
+        }
+    }
 }
 
 #[workflow_methods]
@@ -140,6 +177,9 @@ impl Card {
         let mut leg: LegSpec = input.legs[0].clone();
         // Answers to the agent's questions; each rides in the next prompt.
         let mut answers: Vec<String> = Vec::new();
+        // Questions answered so far; at the limit the next one parks the card.
+        let mut question_rounds: u32 = 0;
+        let max_question_rounds = input.max_question_rounds.unwrap_or(cfg.max_question_rounds);
 
         loop {
             // A cancel that landed between attempts must not start another one.
@@ -280,8 +320,28 @@ impl Card {
             if result.exit_class == ExitClass::NeedsInput
                 && let Some(q) = &result.question
             {
+                if question_rounds >= max_question_rounds {
+                    // Park without asking: the keeper would only hold one more
+                    // question nobody is meant to answer.
+                    return match park_question(
+                        ctx,
+                        &cfg,
+                        &input,
+                        &base_sha,
+                        leg.tier,
+                        &q.normalized(),
+                        QUESTION_ROUNDS_REASON,
+                        n,
+                    )
+                    .await?
+                    {
+                        QuestionStep::Finished(out) => Ok(out),
+                        QuestionStep::Answer(_) => unreachable!("park_question always finishes"),
+                    };
+                }
                 match question_step(ctx, &cfg, &input, &base_sha, leg.tier, q, n).await? {
                     QuestionStep::Answer(text) => {
+                        question_rounds += 1;
                         answers.push(text);
                         continue;
                     }
@@ -557,8 +617,8 @@ impl Card {
 
     /// The inbox answer to a question the card asked.
     #[signal]
-    pub fn answer(&mut self, _ctx: &mut SyncWorkflowContext<Self>, a: AnswerSignal) {
-        self.answers.push(a);
+    pub fn answer(&mut self, _ctx: &mut SyncWorkflowContext<Self>, a: serde_json::Value) {
+        self.accept_answer(a);
     }
 
     #[signal]
@@ -715,15 +775,15 @@ async fn question_step(
                     .await?;
                 if !recorded {
                     // The default is still taken: the question window is over.
-                    ctx.execute_activity(
-                        CardActivities::alarm,
+                    raise_alarm(
+                        ctx,
+                        cfg,
                         Alarm {
                             card: card.clone(),
                             reason: QUESTION_TIMEOUT_REFUSED_REASON.to_string(),
                         },
-                        activity_options(cfg),
                     )
-                    .await?;
+                    .await;
                 }
                 Ok(QuestionStep::Answer(text))
             }
@@ -769,8 +829,11 @@ async fn merge_step(
                 main_branch: input.main_branch.clone(),
                 branch: branch.to_string(),
                 base_sha: base_sha.to_string(),
-                fence_token: None,
-                worktree: format!("{}/{}-{n}", input.workroot, input.claim.card),
+                worktree: format!(
+                    "{}/{}",
+                    input.workroot,
+                    AttemptId::new(input.claim.card.clone(), n).dir_name()
+                ),
                 check_cmd: Some(input.claim.check_cmd.clone()),
                 confine: Some(ConfineSpec {
                     allow: input.claim.allow.clone(),
@@ -780,14 +843,26 @@ async fn merge_step(
             once_options(cfg),
         )
         .await?;
-    Ok(match r.outcome.as_str() {
+    Ok(map_merge_result(r))
+}
+
+/// Map a merge activity result to the step the run loop acts on. Only the
+/// outcomes the merge activity documents are understood; any other string is
+/// refused (the park path), never guessed into a moved base or a conflict that
+/// would loop or land work.
+fn map_merge_result(r: MergeResult) -> MergeStep {
+    match r.outcome.as_str() {
         "merged" => MergeStep::Merged(r.sha.unwrap_or(r.main_head)),
         "retry_later" => MergeStep::RetryLater,
+        "base_moved" | "conflict" => MergeStep::Moved(r.main_head),
         "check_fail" => MergeStep::Failed(ExitClass::CheckFail, r.detail),
         "contract_defect" => MergeStep::Failed(ExitClass::ContractDefect, r.detail),
         "merge_refused" => MergeStep::Failed(ExitClass::MergeRefused, r.detail),
-        _ => MergeStep::Moved(r.main_head),
-    })
+        other => MergeStep::Failed(
+            ExitClass::MergeRefused,
+            format!("unknown merge outcome {other:?}"),
+        ),
+    }
 }
 
 /// Sweep dead attempts; every terminal path except `merged` runs this first.
@@ -839,16 +914,32 @@ async fn park_and_alarm(
         activity_options(cfg),
     )
     .await?;
-    ctx.execute_activity(
-        CardActivities::alarm,
+    raise_alarm(
+        ctx,
+        cfg,
         Alarm {
             card: packet.card.clone(),
             reason,
         },
-        activity_options(cfg),
     )
-    .await?;
+    .await;
     Ok(())
+}
+
+/// Raise `alarm`, best effort: a short bounded retry, and a failure is dropped.
+/// The alarm is a notification; losing it must not fail or hang a card whose
+/// state is already recorded (parked, or continuing with a default).
+async fn raise_alarm(ctx: &WorkflowContext<Card>, cfg: &Config, alarm: Alarm) {
+    let retry = RetryPolicy::builder()
+        .initial_interval(Duration::from_secs(1))
+        .maximum_attempts(3)
+        .build();
+    let opts = ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+        .retry_policy(retry)
+        .build();
+    let _ = ctx
+        .execute_activity(CardActivities::alarm, alarm, opts)
+        .await;
 }
 
 /// The budget's view of the card's legs, marking the ones currently waited on.
@@ -971,8 +1062,73 @@ mod tests {
             workroot: root.path().to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
             question_wait_cap_s: None,
+            max_question_rounds: None,
         };
         (root, input)
+    }
+
+    #[test]
+    fn answer_signal_tolerates_extra_and_missing_optional_fields() {
+        let a: AnswerSignal = serde_json::from_value(serde_json::json!({
+            "question_id": 7, "text": "yes", "extra": {"a": 1}, "more": null,
+        }))
+        .unwrap();
+        assert_eq!(
+            a,
+            AnswerSignal {
+                question_id: 7,
+                key: String::new(),
+                text: "yes".into(),
+                source: String::new(),
+            }
+        );
+        let full: AnswerSignal = serde_json::from_value(serde_json::json!({
+            "question_id": "12", "key": "k", "text": "t", "source": "answer",
+        }))
+        .unwrap();
+        assert_eq!((full.question_id, full.key.as_str()), (12, "k"));
+    }
+
+    #[test]
+    fn an_answer_for_another_question_is_not_consumed() {
+        let mut card = Card::default();
+        card.accept_answer(serde_json::json!({"question_id": 2, "text": "for two"}));
+        assert_eq!(card.answer_text(1), None);
+        card.accept_answer(serde_json::json!({"question_id": 1, "text": "for one"}));
+        assert_eq!(card.answer_text(1).as_deref(), Some("for one"));
+        // The other one is still there for its own question.
+        assert_eq!(card.answer_text(2).as_deref(), Some("for two"));
+    }
+
+    #[test]
+    fn unparsable_answers_are_ignored_not_fatal() {
+        let mut card = Card::default();
+        for bad in [
+            serde_json::json!("text"),
+            serde_json::json!(null),
+            serde_json::json!({"text": "no id"}),
+            serde_json::json!({"question_id": 1}),
+            serde_json::json!({"question_id": 1.5, "text": "t"}),
+            serde_json::json!({"question_id": [1], "text": "t"}),
+            serde_json::json!({"question_id": 1, "text": 9}),
+        ] {
+            card.accept_answer(bad);
+        }
+        assert!(card.answers.is_empty());
+        // A question_timeout signal is stored but is never an answer.
+        card.accept_answer(
+            serde_json::json!({"question_id": 3, "text": "d", "source": "question_timeout"}),
+        );
+        assert_eq!(card.answer_text(3), None);
+    }
+
+    #[test]
+    fn stored_answers_are_bounded() {
+        let mut card = Card::default();
+        for i in 0..(MAX_STORED_ANSWERS as i64 + 10) {
+            card.accept_answer(serde_json::json!({"question_id": i, "text": "t"}));
+        }
+        assert_eq!(card.answers.len(), MAX_STORED_ANSWERS);
     }
 
     #[test]
@@ -1032,6 +1188,39 @@ mod tests {
             .expect("auxiliary options carry a retry policy");
         assert_eq!(retry.maximum_attempts(), 5);
         assert_eq!(retry.initial_interval(), Duration::from_secs(2));
+    }
+
+    fn merge_result_of(outcome: &str) -> MergeResult {
+        MergeResult {
+            outcome: outcome.to_string(),
+            sha: Some("s".to_string()),
+            main_head: "h".to_string(),
+            detail: "d".to_string(),
+        }
+    }
+
+    #[test]
+    fn unknown_merge_outcome_is_refused_not_moved() {
+        for o in ["", "moved", "MERGED", "rebase_conflict", "something_new"] {
+            match map_merge_result(merge_result_of(o)) {
+                MergeStep::Failed(ExitClass::MergeRefused, d) => {
+                    assert!(d.contains("unknown merge outcome"), "{o}: {d}")
+                }
+                other => panic!("{o:?} mapped to {other:?}"),
+            }
+        }
+        assert!(matches!(
+            map_merge_result(merge_result_of("base_moved")),
+            MergeStep::Moved(h) if h == "h"
+        ));
+        assert!(matches!(
+            map_merge_result(merge_result_of("conflict")),
+            MergeStep::Moved(_)
+        ));
+        assert!(matches!(
+            map_merge_result(merge_result_of("merged")),
+            MergeStep::Merged(s) if s == "s"
+        ));
     }
 
     #[test]

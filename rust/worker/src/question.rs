@@ -10,6 +10,23 @@ use std::time::Duration;
 /// Output-line prefix that marks a question packet.
 pub const QUESTION_PREFIX: &str = "PG_QUESTION:";
 
+/// Longest question, default or answer text (in characters) that is stored or
+/// put into a prompt. Both come from outside the worker (an agent, a human),
+/// so they are cut here and the cut is marked.
+pub const MAX_TEXT_CHARS: usize = 4000;
+
+/// Appended where [`cap_text`] cut a text.
+pub const TRUNCATION_MARKER: &str = "[... truncated]";
+
+/// `s` cut to [`MAX_TEXT_CHARS`] characters plus [`TRUNCATION_MARKER`]. A text
+/// within the cap is returned unchanged; a cut never splits a character.
+pub fn cap_text(s: &str) -> String {
+    match s.char_indices().nth(MAX_TEXT_CHARS) {
+        None => s.to_string(),
+        Some((cut, _)) => format!("{}{TRUNCATION_MARKER}", &s[..cut]),
+    }
+}
+
 /// What the agent asks, with the optional fallback if nobody answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Question {
@@ -23,15 +40,19 @@ pub struct Question {
 }
 
 impl Question {
-    /// The question as the keeper will store it. A default only survives when
-    /// it can be used: it needs a deadline, and a risk-tagged question never
-    /// has one (fail closed on any tag; the keeper refuses the sensitive ones).
+    /// The question as the keeper will store it. Text and default are capped
+    /// ([`cap_text`]). An empty (or blank) default means "no default" and a
+    /// `deadline_s` of 0 means "no deadline". A default only survives when it
+    /// can be used: it needs a deadline, and a risk-tagged question never has
+    /// one (fail closed on any tag; the keeper refuses the sensitive ones).
     pub fn normalized(&self) -> Question {
-        let usable = self.deadline_s.is_some() && self.risk_tags.is_empty();
+        let deadline_s = self.deadline_s.filter(|s| *s > 0);
+        let default = self.default.as_deref().filter(|d| !d.trim().is_empty());
+        let usable = deadline_s.is_some() && self.risk_tags.is_empty();
         Question {
-            text: self.text.clone(),
-            default: if usable { self.default.clone() } else { None },
-            deadline_s: self.deadline_s,
+            text: cap_text(&self.text),
+            default: if usable { default.map(cap_text) } else { None },
+            deadline_s,
             risk_tags: self.risk_tags.clone(),
         }
     }
@@ -105,7 +126,7 @@ pub fn prompt_with_answers(prompt: &str, answers: &[String]) -> String {
     let mut out = prompt.to_string();
     for a in answers {
         out.push_str("\n\nAnswer to your question: ");
-        out.push_str(a);
+        out.push_str(&cap_text(a));
     }
     out
 }
@@ -192,6 +213,44 @@ mod tests {
             let p = plan_wait(&raw.normalized(), cap);
             assert_eq!((p.wait, p.on_timer), (cap, OnTimer::Park));
         }
+    }
+
+    #[test]
+    fn empty_default_and_zero_deadline_mean_none() {
+        // A blank default is no default, even with a deadline.
+        let n = q(Some(""), Some(9), &[]).normalized();
+        assert_eq!((n.default, n.deadline_s), (None, Some(9)));
+        assert_eq!(q(Some("  "), Some(9), &[]).normalized().default, None);
+        // A zero deadline is no deadline, so the default cannot be used.
+        let n = q(Some("d"), Some(0), &[]).normalized();
+        assert_eq!((n.default, n.deadline_s), (None, None));
+        // And the wait is then the cap, parking at the end.
+        let cap = Duration::from_secs(100);
+        let p = plan_wait(&q(Some("d"), Some(0), &[]).normalized(), cap);
+        assert_eq!((p.wait, p.on_timer), (cap, OnTimer::Park));
+    }
+
+    #[test]
+    fn untrusted_text_is_capped_with_a_marker() {
+        let long = "é".repeat(MAX_TEXT_CHARS + 50);
+        let c = cap_text(&long);
+        assert_eq!(
+            c.chars().count(),
+            MAX_TEXT_CHARS + TRUNCATION_MARKER.chars().count()
+        );
+        assert!(c.ends_with(TRUNCATION_MARKER));
+        // Exactly at the cap: untouched.
+        let at = "a".repeat(MAX_TEXT_CHARS);
+        assert_eq!(cap_text(&at), at);
+        // The question text, the default and each answer are all bounded.
+        let mut raw = q(Some(&long), Some(5), &[]);
+        raw.text = long.clone();
+        let n = raw.normalized();
+        assert!(n.text.ends_with(TRUNCATION_MARKER));
+        assert!(n.default.unwrap().ends_with(TRUNCATION_MARKER));
+        let p = prompt_with_answers("do it", &[long]);
+        assert!(p.ends_with(TRUNCATION_MARKER));
+        assert!(p.chars().count() < MAX_TEXT_CHARS + 200);
     }
 
     #[test]

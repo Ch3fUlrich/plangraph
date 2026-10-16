@@ -37,8 +37,17 @@ pub const TASK_QUEUE: &str = "pg-cards";
 /// How long a worker waits for a competing merge before giving up.
 const MERGE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long the keeper-held merge lock stays valid without a release.
-const MERGE_LOCK_TTL_S: u64 = 120;
+/// Seconds the keeper-held merge lock stays valid without a release.
+///
+/// The lock is taken before the file lock, so it must outlive the whole merge
+/// activity: the wait for a competing merge ([`MERGE_LOCK_TIMEOUT`]) plus the
+/// confinement recheck, rebase and post-rebase check, all of which the merge
+/// activity's start-to-close timeout (`cfg.start_to_close`, see
+/// `workflow::once_options`) already bounds. A fixed 120 s could expire under a
+/// slow check and let a second merger in while this one was still running.
+fn merge_lock_ttl_s(cfg: &Config) -> u64 {
+    cfg.start_to_close.as_secs().max(1) + MERGE_LOCK_TIMEOUT.as_secs()
+}
 
 /// Input of the `card` workflow: the claim, the legs it may run on, and where.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,6 +60,10 @@ pub struct CardInput {
     /// the configured wait cap (24 h). Exists so a test need not wait a day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question_wait_cap_s: Option<u64>,
+    /// Questions answered before the next one parks the card. Unset = the
+    /// configured `max_question_rounds` (3). Injectable so a test is quick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_question_rounds: Option<u32>,
 }
 
 /// Ask the keeper to store an agent question for a card.
@@ -116,11 +129,6 @@ pub struct MergeInput {
     pub main_branch: String,
     pub branch: String,
     pub base_sha: String,
-    /// Fencing token a caller already holds. When absent the token from the
-    /// lock this merge acquires is used; a token below the highest one the
-    /// repo has admitted means the lock was lost and the merge is refused.
-    #[serde(default)]
-    pub fence_token: Option<u64>,
     /// The attempt worktree (branch checked out). Needed to rebase when main
     /// moved; empty means a moved base is only reported.
     #[serde(default)]
@@ -184,17 +192,63 @@ impl CardActivities {
 
 /// The process-local fallback when heartbeats or cancellation cannot be spelled
 /// into an `ActivityError` directly: stringify and wrap.
-/// A keeper 4xx is a refusal to log and report as `None`; any other failure is
-/// an error the activity retry policy handles.
+/// How a keeper failure should be treated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Failure {
+    /// The keeper said no and asking again cannot change that: 401, 403, 409, 422.
+    Refused,
+    /// Plausibly gone in a moment: a transport error, 408, 429 or any 5xx.
+    Transient,
+    /// Anything else (another 4xx, an undecodable reply): not retried here.
+    Other,
+}
+
+fn classify(e: &crate::keeper::KeeperError) -> Failure {
+    use crate::keeper::KeeperError;
+    match e {
+        KeeperError::Http(_) => Failure::Transient,
+        KeeperError::Status(401 | 403 | 409 | 422) => Failure::Refused,
+        KeeperError::Status(408 | 429 | 500..=599) => Failure::Transient,
+        KeeperError::Status(_) | KeeperError::Decode(_) => Failure::Other,
+    }
+}
+
+/// Pauses between the tries of a keeper call that failed transiently, so a call
+/// is made at most `1 + len` times.
+const TRANSIENT_BACKOFF: [Duration; 3] = [
+    Duration::from_millis(250),
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+];
+
+/// Run `f`; while it fails transiently sleep through `backoff` and run it
+/// again. Blocking: call from `spawn_blocking`.
+fn retry_transient<T>(
+    backoff: &[Duration],
+    mut f: impl FnMut() -> Result<T, crate::keeper::KeeperError>,
+) -> Result<T, crate::keeper::KeeperError> {
+    let mut pauses = backoff.iter();
+    loop {
+        match f() {
+            Err(e) if classify(&e) == Failure::Transient => match pauses.next() {
+                Some(d) => std::thread::sleep(*d),
+                None => return Err(e),
+            },
+            other => return other,
+        }
+    }
+}
+
+/// A permanent refusal (see [`Failure::Refused`]) is logged and reported as
+/// `None`; any other failure is an error the activity retry policy handles.
 fn settle_refusal<T>(
     res: Result<T, crate::keeper::KeeperError>,
     verb: &str,
 ) -> Result<Option<T>, ActivityError> {
-    use crate::keeper::KeeperError;
     match res {
         Ok(v) => Ok(Some(v)),
-        Err(KeeperError::Status(code)) if (400..500).contains(&code) => {
-            eprintln!("keeper refused {verb}: status {code}");
+        Err(e) if classify(&e) == Failure::Refused => {
+            eprintln!("keeper refused {verb}: {e}");
             Ok(None)
         }
         Err(e) => Err(activity_error(e)),
@@ -262,7 +316,7 @@ pub(crate) fn map_merge(o: MergeOutcome, main_head: String) -> MergeResult {
 /// base is reported as `error`, never as `nothing`.
 pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
     let id = AttemptId::new(input.card.clone(), input.n);
-    let dir = Path::new(&input.workroot).join(format!("{}-{}", input.card, input.n));
+    let dir = Path::new(&input.workroot).join(id.dir_name());
     let outcome = probe::probe(
         &dir,
         &input.base_sha,
@@ -312,8 +366,9 @@ fn merge_fenced(
     let head_of_main = || git(repo, &["rev-parse", &main_ref]);
 
     // Fencing: the repo side remembers the highest token it admitted, so a
-    // holder whose keeper lock expired cannot land a late merge.
-    let token = input.fence_token.unwrap_or(fence.token);
+    // holder whose keeper lock expired cannot land a late merge. The token is
+    // always the one the keeper granted this merge; a caller cannot name one.
+    let token = fence.token;
     if !mergelock::admit_fence(&lock, repo, token)? {
         return Ok(merge_result(
             "merge_refused",
@@ -372,19 +427,43 @@ pub(crate) fn do_merge(
 ) -> Result<MergeResult, mergelock::MergeError> {
     let repo = Path::new(&input.repo);
     let owner = format!("pg-worker-{}", std::process::id());
-    let fence = match keeper.acquire_merge_lock(&input.repo, &owner, MERGE_LOCK_TTL_S) {
+    let fence = match keeper.acquire_merge_lock(&input.repo, &owner, merge_lock_ttl_s(cfg)) {
         Ok(f) => f,
         Err(e) => {
             let main_head = git(repo, &["rev-parse", &input.main_branch])?;
             return Ok(merge_result("retry_later", main_head, e.to_string()));
         }
     };
-    let result = merge_fenced(cfg, input, &fence);
-    // A refused release (stale token, keeper down) cannot undo or change what
-    // the repo-side fence and file lock already decided, so it is dropped; the
-    // keeper's own ttl reclaims a lock it never saw released.
-    let _ = keeper.release_merge_lock(&input.repo, &fence);
-    result
+    // Released on every exit, including an early `?` or a panic in the merge.
+    let _lease = KeeperLease {
+        keeper,
+        repo: &input.repo,
+        fence,
+    };
+    merge_fenced(cfg, input, &_lease.fence)
+}
+
+/// The keeper-held merge lock, released on drop.
+///
+/// A refused release (stale token, keeper down) cannot undo or change what the
+/// repo-side fence and file lock already decided, so it does not fail the
+/// merge; it is logged, and the keeper's own ttl reclaims a lock it never saw
+/// released.
+struct KeeperLease<'a> {
+    keeper: &'a dyn Keeper,
+    repo: &'a str,
+    fence: Fence,
+}
+
+impl Drop for KeeperLease<'_> {
+    fn drop(&mut self) {
+        if let Err(e) = self.keeper.release_merge_lock(self.repo, &self.fence) {
+            eprintln!(
+                "merge lock release for {} (token {}) failed: {e}",
+                self.repo, self.fence.token
+            );
+        }
+    }
 }
 
 /// Sweep dead attempts of `repo`, treating none as live, and report how many
@@ -573,8 +652,10 @@ impl CardActivities {
     }
 
     /// Store the agent's question. `Some(id)` on success, `None` when the
-    /// keeper refused it (a 4xx: retrying cannot help, the workflow parks);
-    /// a transport or 5xx failure is an activity error and is retried.
+    /// keeper refused it (401, 403, 409 or 422: retrying cannot help, the
+    /// workflow parks). A transient failure (transport, 408, 429, 5xx) is
+    /// retried here with a backoff, then becomes an activity error that the
+    /// activity retry policy handles.
     #[activity]
     pub async fn ask_question(
         self: Arc<Self>,
@@ -582,17 +663,22 @@ impl CardActivities {
         input: AskInput,
     ) -> Result<Option<i64>, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let res =
-            tokio::task::spawn_blocking(move || keeper.ask_question(&input.card, &input.question))
-                .await
-                .map_err(activity_error)?;
+        let res = tokio::task::spawn_blocking(move || {
+            retry_transient(&TRANSIENT_BACKOFF, || {
+                keeper.ask_question(&input.card, &input.question)
+            })
+        })
+        .await
+        .map_err(activity_error)?;
         settle_refusal(res, "ask_question")
     }
 
     /// Record `question_timeout` for a question whose default was taken.
-    /// `true` when recorded; `false` when the keeper refused (for example the
-    /// worker token lacks the router or system role): the refusal is logged and
-    /// the workflow raises an alarm but still continues with the default.
+    /// `true` when recorded; `false` on any failure that outlasts the transient
+    /// retries here or is a refusal (for example the worker token lacks the
+    /// router or system role): it is logged and the workflow raises an alarm
+    /// but still continues with the default. This activity never errors, so a
+    /// keeper outage cannot fail the card.
     #[activity]
     pub async fn record_question_timeout(
         self: Arc<Self>,
@@ -600,10 +686,17 @@ impl CardActivities {
         question_id: i64,
     ) -> Result<bool, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let res = tokio::task::spawn_blocking(move || keeper.record_question_timeout(question_id))
-            .await
-            .map_err(activity_error)?;
-        Ok(settle_refusal(res, "record_question_timeout")?.is_some())
+        let res = tokio::task::spawn_blocking(move || {
+            retry_transient(&TRANSIENT_BACKOFF, || {
+                keeper.record_question_timeout(question_id)
+            })
+        })
+        .await
+        .map_err(activity_error)?;
+        if let Err(e) = &res {
+            eprintln!("record_question_timeout not recorded: {e}");
+        }
+        Ok(res.is_ok())
     }
 
     /// Sweep dead attempts and report how many were removed.
@@ -630,6 +723,69 @@ mod tests {
     use pg_worker_core::worktree;
     use std::process::{Command, Stdio};
     use tempfile::TempDir;
+
+    use crate::keeper::KeeperError;
+
+    #[test]
+    fn keeper_failures_are_classified() {
+        for code in [401, 403, 409, 422] {
+            assert_eq!(classify(&KeeperError::Status(code)), Failure::Refused);
+        }
+        for code in [408, 429, 500, 502, 503, 599] {
+            assert_eq!(classify(&KeeperError::Status(code)), Failure::Transient);
+        }
+        assert_eq!(classify(&KeeperError::Http("x".into())), Failure::Transient);
+        for code in [400, 404, 410] {
+            assert_eq!(classify(&KeeperError::Status(code)), Failure::Other);
+        }
+        assert_eq!(classify(&KeeperError::Decode("x".into())), Failure::Other);
+    }
+
+    #[test]
+    fn transient_failures_are_retried_then_succeed() {
+        let mut calls = 0;
+        let r = retry_transient(&[Duration::ZERO; 3], || {
+            calls += 1;
+            if calls < 3 {
+                Err(KeeperError::Status(429))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!((r, calls), (Ok(7), 3));
+    }
+
+    #[test]
+    fn transient_failures_are_bounded_and_permanent_ones_are_not_retried() {
+        let mut calls = 0;
+        let r: Result<(), _> = retry_transient(&[Duration::ZERO; 3], || {
+            calls += 1;
+            Err(KeeperError::Status(503))
+        });
+        assert_eq!((r, calls), (Err(KeeperError::Status(503)), 4));
+        for code in [401, 403, 409, 422, 400] {
+            let mut calls = 0;
+            let r: Result<(), _> = retry_transient(&[Duration::ZERO; 3], || {
+                calls += 1;
+                Err(KeeperError::Status(code))
+            });
+            assert_eq!((r, calls), (Err(KeeperError::Status(code)), 1), "{code}");
+        }
+    }
+
+    #[test]
+    fn only_a_permanent_refusal_settles_to_none() {
+        for code in [401, 403, 409, 422] {
+            assert!(matches!(
+                settle_refusal::<i64>(Err(KeeperError::Status(code)), "v"),
+                Ok(None)
+            ));
+        }
+        for code in [408, 429, 500, 503, 400] {
+            assert!(settle_refusal::<i64>(Err(KeeperError::Status(code)), "v").is_err());
+        }
+        assert!(matches!(settle_refusal(Ok(3), "v"), Ok(Some(3))));
+    }
 
     /// A harness that is never run by these tests; it only satisfies `Deps`.
     struct Fake;
@@ -686,6 +842,7 @@ mod tests {
             workroot: "/w".to_string(),
             main_branch: "main".to_string(),
             question_wait_cap_s: None,
+            max_question_rounds: None,
         }
     }
 
@@ -725,7 +882,6 @@ mod tests {
             main_branch: "main".to_string(),
             branch: "attempt/c1/1".to_string(),
             base_sha: "b".to_string(),
-            fence_token: Some(3),
             worktree: "/w/c1-1".to_string(),
             check_cmd: Some("true".to_string()),
             confine: Some(ConfineSpec {
@@ -953,7 +1109,6 @@ mod tests {
             main_branch: "main".to_string(),
             branch: branch.to_string(),
             base_sha: base.to_string(),
-            fence_token: None,
             worktree: String::new(),
             check_cmd: None,
             confine: None,
@@ -1055,13 +1210,40 @@ mod tests {
         keeper.expire_merge_lock();
         let first = merge(&keeper, &merge_input(p, "attempt/c2/1", &base));
         assert_eq!(first.outcome, "merged");
-        // ... then a holder still carrying token 1 is turned away.
-        let mut late = merge_input(p, "attempt/c1/1", &first.main_head);
-        late.fence_token = Some(1);
+        // ... then a holder whose keeper token is below the highest the repo
+        // admitted is turned away (here the repo has seen a newer holder).
+        let fence_file = git(p, &["rev-parse", "--git-common-dir"]);
+        let fence_file = p.join(fence_file).join("pg-merge.fence");
+        std::fs::write(&fence_file, "99").unwrap();
+        let late = merge_input(p, "attempt/c1/1", &first.main_head);
         let res = merge(&keeper, &late);
         assert_eq!(res.outcome, "merge_refused");
         assert_eq!(git(p, &["rev-parse", "main"]), first.main_head);
         assert!(!keeper.merge_lock_held());
+    }
+
+    #[test]
+    fn keeper_lease_releases_on_panic() {
+        let keeper = StubKeeper::default();
+        let fence = keeper.acquire_merge_lock("/r", "o", 60).unwrap();
+        assert!(keeper.merge_lock_held());
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _lease = KeeperLease {
+                keeper: &keeper,
+                repo: "/r",
+                fence,
+            };
+            panic!("merge blew up");
+        }));
+        assert!(r.is_err());
+        assert!(!keeper.merge_lock_held());
+    }
+
+    #[test]
+    fn merge_lock_ttl_covers_the_merge_activity_window() {
+        let mut cfg = tiny();
+        cfg.start_to_close = Duration::from_secs(900);
+        assert!(merge_lock_ttl_s(&cfg) >= 900 + MERGE_LOCK_TIMEOUT.as_secs());
     }
 
     #[test]
