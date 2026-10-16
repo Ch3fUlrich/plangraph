@@ -190,6 +190,16 @@ def test_design3_tables_are_in_both_schemas():
             assert f"trg_{table}_append_only_{verb}" in triggers
 
 
+def test_metrics_table_is_in_both_schemas():
+    tables, _, _ = _sqlite_tables()
+    assert "metrics" in tables
+    mig = schema_pg.MIGRATIONS[3]
+    assert mig.version == 4
+    assert "metrics" in schema_pg.parse_tables(mig.sql)
+    for earlier in schema_pg.MIGRATIONS[:3]:
+        assert "metrics" not in schema_pg.parse_tables(earlier.sql)
+
+
 def test_pg_exit_and_window_checks_match_sqlite():
     sql = schema_pg.MIGRATIONS[1].sql
     for value in schema.EXIT_CLASSES + schema.WINDOW_CLASSES:

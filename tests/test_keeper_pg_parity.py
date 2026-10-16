@@ -69,6 +69,10 @@ def replay_w2(w, keys):
     w.store.set_state(system, c, "waiting", "timer")
     w.store.set_budget(router, "claude", "2026-10-15", 1500, 2.5, meter=0.4)
     w.store.set_budget(router, "claude", "2026-10-15", 1800, 3.0, meter=0.5)
+    w.store.set_metrics(router, "2026-10-15", [{"metric": "claude_weighted_tokens",
+                                                "value": 1800.5, "source": "transcripts"}])
+    w.store.set_metrics(router, "2026-10-15", [{"metric": "claude_weighted_tokens",
+                                                "value": 2000.5, "source": "transcripts"}])
     w.store.set_state(lead, c, "failed")
     w.store.set_state(lead, c, "parked")
     w.store.set_state(lead, c, "open")
@@ -84,7 +88,7 @@ def replay(w):
 
 _TABLES = {
     "cards": "key", "attempts": "id", "decisions": "id", "questions": "id",
-    "answers": "question_id", "budget": "provider, day",
+    "answers": "question_id", "budget": "provider, day", "metrics": "day, metric",
 }
 
 

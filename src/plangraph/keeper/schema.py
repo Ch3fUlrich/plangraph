@@ -13,9 +13,9 @@ from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
+           "METRICS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -204,6 +204,20 @@ CREATE TABLE IF NOT EXISTS budget (
     cost     REAL NOT NULL DEFAULT 0,
     meter    REAL,
     PRIMARY KEY (provider, day)
+);
+"""
+
+#: keeper metrics (schema v11): daily numeric readings keyed by ``(day, metric)``,
+#: upserted per pair.  Portable TEXT/REAL columns only (``schema_pg`` Migration 4 is
+#: the logical twin).  ``IF NOT EXISTS`` so ``db._upgrade`` installs it on a v10 database.
+METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS metrics (
+    day         TEXT NOT NULL,
+    metric      TEXT NOT NULL,
+    value       REAL NOT NULL,
+    source      TEXT NOT NULL DEFAULT '',
+    computed_at TEXT NOT NULL,
+    PRIMARY KEY (day, metric)
 );
 """
 
@@ -437,4 +451,5 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + DESIGN3_DDL
+SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
+          + DESIGN3_DDL + METRICS_DDL)

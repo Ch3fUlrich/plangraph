@@ -145,9 +145,9 @@ def test_projector_package_root_has_no_side_effects():
 
 
 def test_migration_three_is_the_projector_ddl():
-    assert ddl.LATEST_PROJECTOR_MIGRATION == 3 == schema_pg.LATEST
-    last = schema_pg.MIGRATIONS[-1]
-    assert (last.version, last.sql) == (3, ddl.PG)
+    assert ddl.LATEST_PROJECTOR_MIGRATION == 3 <= schema_pg.LATEST
+    mig = schema_pg.MIGRATIONS[ddl.LATEST_PROJECTOR_MIGRATION - 1]
+    assert (mig.version, mig.sql) == (3, ddl.PG)
     assert TABLES == set(schema_pg.parse_tables(ddl.PG))
     assert 'COLLATE "C"' in ddl.PG and "WHERE cleared_at IS NULL" in ddl.PG
 
