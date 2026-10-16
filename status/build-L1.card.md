@@ -1,4 +1,4 @@
-# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-7 (successor, 2026-10-16 06:2xZ, effort medium; beat cron daab011d)
+# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-8 (D-1473, 2026-10-16 09:1xZ, effort medium; beat cron 2ad2cac6 13,43)
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md · design (binding, 14a): .../docs/reports/2026-10-15-rethink-setup-design.md
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: D-1442 judge only HIGH (keeper engine/live, schema, auth), standard = self-approve on seats. Cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
@@ -15,13 +15,13 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
-| CI-PYTEST-SPEED (p2, D-1457) | MERGE-READY 998f8f3 PR #30 (median 97.7 s; 721 = contention); my gpt-oss seat PASS pytest-speed-seats/openai | waiting pg-job rerun 38875149323 -> merge -> evidence -> verdict |
+| CI-PYTEST-SPEED (p2, D-1457) | MERGE-READY 998f8f3 PR #30 (median 97.7 s; 721 = contention); my gpt-oss seat PASS pytest-speed-seats/openai | router order 09:13Z: hung 38875149323/38876665137 + 4 load runs cancelled 09:15Z; gate = dispatch 38879016538 (998f8f3) -> merge -> evidence -> verdict -> tell L2 un-hold load runs |
 | RT-P1-KEEPER-PG-PREP (p1 HIGH, D-1468) | claimed; L2 build-L2-pg-prep 47bd1f89 coding.vm; brief 5c0ec5b (trailer must be KEEPER-PG-PREP) | MERGE-READY HIGH -> judge -> merge |
 | CI-PG-CONTRACT-TIMEOUT (p2, D-1472) | claimed (lease 10:55Z); brief a5781e2; given to build-L2-pytest-speed (workst) as follow-on | MERGE-READY + timings + 10 runs; PG latency = KEEPER-PG risk |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: CI-PYTEST-SPEED renewed 08:2xZ (renew by 10:1xZ). L2 live: pytest-speed (workst).
+Leases: all 3 renewed 09:14Z. L2 live: pytest-speed (workst).
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
