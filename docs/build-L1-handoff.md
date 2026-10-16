@@ -1,38 +1,39 @@
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
-# build-L1 handoff #10 (gen-10 -> after /clear, 2026-10-16 ~19:1xZ)
-Startup: skill unattended-orchestration (+ references/main-orchestrator.md). NO crons (D-1377, launch order); wait via ONE background
-command that exits. Effort medium. Msgs only BLOCKED/DONE/GO-request/incident/launch. Card <= 40 lines; CARD-READY before 230k.
-Rules: D-1504 model = its path only (qwen3.8-flash ONLY qodercli; mimo-v2.6-flash ONLY mimo provider; muse opencode; gemini agy).
-D-1442 judge (server-L1-routing (ref changes on recycle; ListAgents, newest)) only HIGH; standard lanes self-approve on 1 non-Claude seat. D-825 live steps need router GO.
-FREEZE ON (D-1398 L7): no Omnigraph writes until routing FREEZE OFF (keeper unaffected).
-Operator wants: report DONE for plangraph:RT-P1-E2E to routing at once when it lands.
+# build-L1 handoff #11 (gen-10 end -> gen-11, 2026-10-16 ~21:5xZ)
+Startup: skill unattended-orchestration. NO crons (D-1377); wait via ONE background command that exits. Effort medium. Msgs only BLOCKED/DONE/
+MERGE-READY/GO/L2-LAUNCH/incident. Never AskUserQuestion; questions to routing with options+default. Card <= 40 lines.
+Rules: D-1504 model paths. D-1442 judge = server-L1-routing (ref changes on recycle: ListAgents, pick newest/active; uds sock from its last msg).
+D-1533 any model family; Claude one leg. D-437/D-1317: coding.vm only TOOL-LESS writers/seats (rules-common updated). D-1554 commit 'Writer:' trailer.
+FREEZE OFF (D-1521): Omnigraph writes only via OMNIGRAPH_BASE_URL=https://omnigraph.ohje.ooguy.com.
+
+## Leases (FIRST after clear)
+Background loop btuvjdrrb dies with /clear. Run at once: `for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done`, then restart one bg loop:
+`for i in $(seq 1 16); do sleep 1800; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done; done`. Remove keys from ops/hb-keys.txt when done.
+NEVER `pkill -f "sleep ..."` (kills own shell) — use TaskStop.
 
 ## Gen-10 landed
-- RT-P1-KEEPER-PG DONE (judge ACCEPT; verdicts alibaba qwen/qodercli + xiaomi mimo judged TG n/a; note seats-archive/keeper-pg-cutover-a6eb49f6/DONE-NOTE.md). Routing D-1512.
-  Step 4 (delete-or-archive frozen sqlite + backup pg-cutover-b3d71096-20261016T164230Z) HELD: send GO-request to routing >= 2026-10-18 16:43Z.
-- RT-P1-PLANNER-KIT DONE: PR #36 merged main e70eb566 (head 9bf0a319, CI 38938032186), seat seats-archive/planner-kit-9bf0a319. L2 21fa0888 stopped, worktree removed.
-
-## In flight: server:RT-P1-TEMPORAL-CHECK (owner build-L1, claimed epoch 1)
-- Lease: background heartbeat loop task b0cndr9ag DIES with /clear -> after clear run `ops/pg.sh heartbeat server:RT-P1-TEMPORAL-CHECK` at once
-  (lease 40 min), then restart one background loop: `for i in 1..8; sleep 2400; ops/pg.sh heartbeat server:RT-P1-TEMPORAL-CHECK`.
-- Plan: Server docs/operations/temporal-check-live-plan.md + temporal-validation-runbook.md @ improve 314c06d42.
-- GO D-1513 (routing): T1-T6 + T9; executor prox-L1-main -> its L2 prox-L2-temporal-check (1149b99b, on home). Conditions: T0 certs = operator
-  (OS-208, being minted now); T1 floors home free mem + cloud >= 3 GB; T2 exactly 5 containers; AFTER T3: build-L1 runs keeper admin verify +
-  snapshot 200 within 5 min, red -> prox rolls back T3 (--action down). T7/T8/T10 need separate GO.
-- Done: T1 PASS (BASE_MEMAVAIL_MB 19073, swap 52 MB free/2 GB note), T2 PASS (dryrun task 164707). T3 BLOCKED on certs; prox relaunches its L2 when certs exist.
-  Log: seats-archive/temporal-check/live-log.md (append each step).
-- Keeper check after T3: `ops/pg.sh admin verify` (or `ops/pg.sh snapshot`; check `ops/pg.sh --help`) + `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8787/v1/snapshot` -> 200.
-- Then: T5 idle samples (+10m/+1h/+6h/+24h, prox); T9/C probes = L2 via routing `L2-LAUNCH build-L2-temporal-probes
-  /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-temporal-check-probes.md <cwd>` (needs client certs, workstation build).
-  T11 decision row (adopt / adopt-with-workarounds / fallback) with +24h sample -> send to routing, then evidence decision + done.
-- PG headroom: Temporal pools 20 conns; PG 11/60 before deploy.
-
-## Next RT-P1 by plan order
-WORKER + PROJECTOR <- TEMPORAL-CHECK; INBOX <- PROJECTOR; REVIEW <- WORKER; GOVERNOR <- routing:RT-P0-BASELINE; CLASS-COMBOS <- autoos:RT-P0-OR-DRIFT
-(router assigns RT-P0 owners next gen); E2E <- all. Briefs exist: briefs/l2-worker-code.md, l2-projector-code.md (code parts done; write live-lane briefs).
-Other: Q-API-PUSH (ex RT-P3-ASK-PUSH, HIGH, owner build-L1; orch-setup-plan @6087fe20 awaits routing). D-1514: + UI-FLEET-TAB, WORKER-USES-PLACEMENT (orch-setup-plan @026540cd, await routing); plan2 lane J adds keeper host_samples migration (no collision with mine). CI-RUNS-ON-WORKST re-scoped (private repos only).
-ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 + worktree-proposal f3bac63.
-## Tools
-pg CLI: `ops/pg.sh <verb>` (ready/show/claim/heartbeat/evidence --kind commit+ci --commit SHA/submit). Verdict: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
-Seat dirs: qwen via ops/qseat.py; mimo via ops/seat.sh (review-call: don't add a bare TEST-GAMING line to prompts, the standing question handles it).
-Peers: routing [5a7958], server-L1-routing (ref changes on recycle; ListAgents, newest), prox-L1-main [8fa900] (Remote Control), server-L1-main.
+- RT-P0-BASELINE closed (routing main 42ffcc0, D-1528). RT-P0-MDSYNC: merged; 24h green check due 2026-10-17 18:45Z: status refused=0, md-sync timer+path
+  active, `python3 ~/code/routing/bin/routerctl` shows no md-sync line -> send routing DONE (router closes via D-row). Items in routing project: build-L1
+  token can't claim (unclaimed by order).
+- RT-P1-GOVERNOR DONE main 3fd91bd6 (#37). LIVE-SYNC-5 done (GO D-1539): keeper LIVE = 3fd91bd6, drop-in live-sync-z5-3fd91bd6.conf,
+  record seats-archive/live-sync-gov-7c1ef8be/LIVE-RECORD.md.
+- D-1542: 46 ex-plangraph-L1-main items now mine (list: snapshot owner=build-L1). Keeper verbs batch L2 build-L2-keeper-verbs (a38d9b22, coding.vm,
+  brief briefs/l2-keeper-verbs.md, wt plangraph-worktrees/keeper-verbs, seats plangraph-worktrees/keeper-verbs-seats/<KEY>-<sha>/{qwen,openai}):
+  DONE: PG-ROUTER-REOPEN (#39 de1242fc), PG-L1-CREATE-WITH-EDGE (#40 4c460c3e), PG-FOLD-UNKNOWN-TYPE (#41 30e776e2).
+  IN FIX: PG-ESTIMATE-SRC-EDIT PR #42 7fa80529 — judge CHANGE: estimate_h=None edit (auto-fill src on cleared h; explicit src with h=None accepted).
+  L2 told: fix + 2 tests + 2 delta seats + CI -> MERGE-READY -> re-judge delta. Then PG-LE-DEPS-OPS, PG-LE-GUARD-KEY (tool-less writers).
+  Writer provenance note: seats-archive/keeper-verbs/DONE-NOTE.md (append each PR; Co-Authored-By Claude = harness default).
+- After all verbs merged: ONE batched LIVE-SYNC packet (like briefs/l2-live-sync-governor.md, new L2 via routing L2-LAUNCH): rehearsal on throwaway PG17,
+  counts equal, ROLL FORWARD ONLY after first new event type (item_reopened), FOLD ships first or in batch; GO request with rehearsal + backup sha.
+## Merge recipe (HIGH): judge ACCEPT -> `gh pr ready N; gh pr merge N --merge --match-head-commit <sha>` -> `ops/pg.sh evidence K --kind commit+ci
+--commit <head>` -> submit -> verdicts: `python3 $sv --key K --seat-dir D --writer-family xiaomi --token-dir ~/.config/plangraph` per seat
+($sv = `git show origin/main:tools/seat_verdict.py > <tmp>/sv.py`; qwen dirs need ops/qseat.py OUT qwen.json if only review.json) -> DONE to routing.
+## In flight elsewhere
+- server:RT-P1-TEMPORAL-CHECK (claimed, lease): T3 blocked on operator certs OS-208 (operator back ~02:30Z). Then keeper verify + snapshot 200 within 5 min
+  after prox's T3; T5 samples; T9 probes L2 (briefs/l2-temporal-check-probes.md); T11 decision row. Log seats-archive/temporal-check/live-log.md.
+- build-L2-rtp1-predeploy (workstation, session_01SNZjahPFHjDQKjYwnPX8UU via Remote Control; launched by workst-L1-autoos): gap matrix done
+  (lane/rt-p1-gaps-predeploy 956aaaf); per-item PRs WORKER->PROJECTOR->INBOX->REVIEW; writers Windows tool-less (run-writer-local.ps1). Decided: review
+  family ban only reviewer==writer. seat_verdict ban question to routing (default keep).
+- ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 + worktree-proposal f3bac63.
+- KEEPER-PG step 4 (delete-or-archive frozen sqlite) GO request >= 2026-10-18 16:43Z.
+Peers: routing (uds 7069.sock), server-L1-routing (judge), prox-L1-main [8fa900], workst-L1-autoos [b76c36].
