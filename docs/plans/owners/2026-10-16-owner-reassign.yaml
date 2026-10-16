@@ -1,0 +1,1174 @@
+# D-1519 owner reassignment 2026-10-16 (plangraph-L1-plan2). Owner field only. Principal router.
+batch: 2026-10-16-owner-reassign
+principal: router
+source: 2026-10-16-owner-reassign.md
+source_sha256: 8e2ef990be5346f70bdccfbc62cd94a7e9e6c7be05265cbdac317e35cf5a074b
+ops:
+- op: edit
+  key: autoos:ACK-PROBE-BUDGET
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AIPRO-LIMITS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-400LOC
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-APIDOCS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-APPLY-CLUSTER-013
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-AUTO-FANOUT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-AUTOOS5-REBUILD-DRIFT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-CHANGELOG-DOCS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-CLAUDE-SEAT-BASH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-COMBO-FREE-FIRST
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-FREE-PRIVACY-CLASS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-GATE-TK
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-GROK
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-HAIKU
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-HAIKU-EXPLORE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-HAIKU-GW
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-HOSTMIRROR
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-JULES-PIPELINE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-L2-SEAT-INTEGRITY
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-LAGUNA-SEAT-CAP
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-LEDGER-DRYRUN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-MCP-CWD-INDEPENDENT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-MIMO-WIRING
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-OCRUNTIME
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-OPENCODE-JAIL
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-PREPUSH-HOOK-GITENV-2
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-PRICE-GPTOSS120B
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-PROBE-397B-TOOLS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-QODER-ROUTE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-READY-MULTI-BRIEF
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-REPORT-SCHEMA
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-RESEARCH-GLM-CODING-PLAN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-RETIRE-AGENT-SKILLS-CLONE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-RETRY-GATES
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-REVIEW-OF-XCHECKOUT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-ROLE-GATE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SKILLRULES
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SKILLS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SPAWN-FANOUT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SPAWN-KEY-PRESET
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SPAWN-PATCH-ID
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SPAWN-PIN-UX
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SPLIT1
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-SYNC-PARTIAL-PULL-RESTORE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-TASKKEY
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-TERSE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-TOOLHOME-SIZE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-VIDEO-GATE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-WRITEBACK
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-WRITER-FAMILY
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AO-WSCONFIG
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:AUTOOS-UI-PROFILES
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:BASHGUARD-ORCH-HARDEN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:BAZAARLINK-AUTODISABLE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:CHEAPEST-PROVIDER
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:COMBO-REFRESH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:COMBO-REFRESH-A4
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:CREDIT-18
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:DEVIN-BRIDGE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:DOCS-OMNIROUTE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:FA-3
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:FAMILY-TRACK
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:GEMINI38
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:GWRETRY3
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:JULES-CLOUDAGENT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:LAUNCHER-CPU-GATE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:LEAN-MCP
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:MCP-REMOTE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:MCP-SEAT-EVIDENCE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:MEMGUARD
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:OMNIUPDATE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:OR-FREE-GUARD
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:OVH-GUARD
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PH-AO-FLEET
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PH-MCP-ONE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PH-OPS-20261002
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PH-ROUTESETUP
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PH-WS-SHIFT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PROBE-LEDGER-ATOMIC
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PROV-WIRE-FREE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PROVROUTE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:PUSHGATE-TIGHTEN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:ROUTE-FRESH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-AA-SCORES
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-CHANGELOG-GATE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-FUTURE-MODELS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-GEMINI-PARAMS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-GEMINI38-LEGS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-LEDGER-WIRING
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-MODELS-DOC
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-NESTED-COMBOS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-NSCALE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-OPENCODE-MODELS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-PLAN-ROWS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-RENAME-CI
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:RS-SPAWN-TEMPLATES
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:SKILL2MCP
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:SPAWN-LONGPATH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:SPAWNER-F0-CWD
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T0-PAID
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-CLEAN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-COMBO3
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-CREDIT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-CTX
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-LITELLM
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-MM
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-NOISE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-PEER
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-PROV
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-UPGRADE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-WEBTOOLS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T1-ZEN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-CANARY
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-COMPACT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-LEAN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-MCPLIFE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-ONEPATH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-RECORD
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-RECORD-GAPS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-RESEARCHCARD
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T2-XSECRET
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-CIGREEN-WIN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-CLEAN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-PREPUSH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-PRINCIPLES
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-SCRUB
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-SPLIT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T3-WIN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T4-FENCE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T4-HARDEN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T4-ZEN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T7-GRAPH-A
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:T7-GRAPH-USE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:TIER-CONTRACT
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:U12
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:WRITER-BENCH
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:WS-1
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:WS-6
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:ZCODE
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:ZCODE-CLIENT-LANE-Z
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: autoos:ZCODE-GLM-BURN
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: plangraph:API-OIDC
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:KG-ADAPTER
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:KG-VIEW
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:M2B-OFFHOST
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:MODEL-HOST
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:MODEL-LOOP
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:MODEL-NAMES
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:MODEL-STATS
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-ANSWER-UI
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-CI-FORGEJO
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-DEC-ATTRIBUTION
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-DEC-COUNT
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-DEC-EDIT-NOTICE
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-ESTIMATE-SRC-EDIT
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-INBOX
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-L1-CREATE-WITH-EDGE
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-L2-SMALLFIX-RULE
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-LE-DEPS-OPS
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-LE-DROW-LINT
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-LE-GUARD-KEY
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-M2B
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-M3
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-NEEDS-YOU
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-OMNIGRAPH-UI
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-PROJECT-PRIORITY
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-PROXY-ACCESS
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-PUBLIC-READY
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-QUESTION-CARDS
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-ROUTER-REOPEN
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-UI-BRIEF
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PG-UI-TABICON
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C-API
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C-KG
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C-MODEL
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C-SPLIT
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C-SYNC
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:PH-QA-FLOW
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:QA-GATE
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:QA-UI
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:QA-VERBS
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:SPLIT-PUBLIC-HISTORY
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:SPLIT-PUBLISH
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:UI-TABLE
+  fields:
+    owner: build-L1
+- op: edit
+  key: plangraph:UI-WRITES
+  fields:
+    owner: build-L1
+- op: edit
+  key: routing:REFERRAL-DOCS
+  fields:
+    owner: workst-L1-autoos
+- op: edit
+  key: server:ADOPT-400LOC-CHAPTARR
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-COMICS-SUPPORT
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-AUDIO-SOULSEEK
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-AUDIO-USENET-DE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-COMICS-MANGA
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-EBOOK
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-IMPORT-AUDIO
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-IMPORT-EBOOK
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-MAGAZINES
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-CUT-RECONCILE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-DB-BACKUP
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-GAP-ABS-NOTIFY
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-GAP-FAILED-HANDLING
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-GAP-MAGAZINES
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-GAP-RECLASSIFY
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-GAP-SEED-IMPORT
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-INDEXERS
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-SCOPE-COMICS
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-SEARCH-SERIES
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-SEED-APPLY-RC
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-SEED-COUNT-STABLE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-SEED-COVERAGE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-SEED-EXPLICIT-TYPE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-TABLE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-UP-77
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-UP-ABRLIST
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-UP-MULTILANG
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:CH-UP-TABLE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-DOCKHAND-BACKUP
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-DOCKHAND-UPDATE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-GRAPHIFY-REBUILD
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-HAWSER-CHECK
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-INVEST-SCHED-BEFORE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-INVEST-SCHED-OFF
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-INVEST-SCHED-REENABLE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-KUMA-READ-PATH
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-NAVIDROME-ROTATE-CODE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-NAVIDROME-ROTATE-RUN
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-AGY-ROW
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-AUDIO-COMBOS
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-NATIVE-FC
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-OIDC-CLIENT
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-OIDC-ENV
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-OIDC-HIDEFORM
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-PROBE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-READALOUD-SRC
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-SYNC-TOOLIDS
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-TTS-VOICES
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-UPD-BACKUP
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-UPD-COMPOSE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-UPD-DEPLOY
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-WEBSEARCH-FIX
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-OWUI-WIKI-TOOL
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-REPO-CODING-FF
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-REPO-PROX-STATE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-SAB-HEALTHCHECK
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-SAB-INCOMPLETE-NVME
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-SAB-LOG-PURGE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-SAB-LOG-REDACT
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-SAB-NFS-CONFIRM
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-SAB-REGRAB-LOOP
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TDARR-CONFIRM
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TDARR-FULL-RUN
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TDARR-KEEP-FLOW
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TDARR-METRIC
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TDARR-SAMPLE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TDARR-VERIFY-PB
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TTS-DIARISE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TTS-MODEL-LIST
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TTS-RESEARCH
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TTS-SPEAKR-WIRE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:D1282-TTS-STT-FALLBACK
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:MT-PBS-HYGIENE
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PH-D1282
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PL-ACCOUNTS-V02
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PL-P10-BUILD-LINES
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PL-P10-PUBLISH
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PL-P3-HIDS
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PL-P7-DOCS-IA
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:PL-P9-CLAMAV
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-005
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-006
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-008
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-010
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-013
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-015
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-021
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-024
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-025
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-026
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-027
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-028
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-029
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-030
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-031
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-032
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-033
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-035
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-036
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-037
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-038
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-039
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-040
+  fields:
+    owner: server-L1-main
+- op: edit
+  key: server:T-041
+  fields:
+    owner: server-L1-main
