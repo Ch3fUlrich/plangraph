@@ -1,0 +1,69 @@
+## V1: Migration Safety
+
+**Idempotency is adequate for DDL, but has gaps.**
+
+`db._upgrade` (src/plangraph/keeper/db.py) runs five sequential `conn.executescript` calls plus a final `_upgrade_lock_triggers(conn)`. Each `executescript` in Python's sqlite3 with `isolation_level=None` auto-commits independently. The doc correctly acknowledges "open_db runs several idempotent scripts without one enclosing transaction" (sec 4 step 5). All CREATE statements in DESIGN3_DDL (src/plangraph/keeper/schema.py) use `IF NOT EXISTS`, confirmed by the three successful re-runs of `admin migrate` in the dry run.
+
+**Defect: `_upgrade_lock_triggers` has no code excerpt and its idempotency cannot be verified.** The doc does not mention this function at all in section 1's migration summary. If it uses `CREATE TRIGGER` without `IF NOT EXISTS`, a re-run would raise `OperationalError`. Speculation level: the dry run started the daemon (which calls `_upgrade`) three times on different copies without error, so this was exercised at least three times—but only on an already-migrated schema. A fresh f3bac63 db with partially-migrated state was never tested.
+
+**Lock/concurrency is correctly ordered.** `daemon.run` (src/plangraph/keeper/daemon.py) calls `lock_keeper` before `open_db`, so the flock is held during migration. The doc correctly notes single-writer-under-lock. WAL mode with `busy_timeout=5000ms` (`_DEFAULT_BUSY_MS`) protects against other sqlite3 connections that skip the flock, but the doc's prohibition ("do NOT run pg admin migrate against live db while daemon runs") is the right operational guard.
+
+**Backup procedure:** `.backup` (not `cp`) is mandated for WAL safety. The doc is correct: `sqlite3.Connection.backup` checkpoints the WAL into the copy atomically.
+
+---
+
+## V2: Rollback Claim
+
+**Core claim is correct but incomplete in scope.**
+
+The rehearsal (doc sec 3) demonstrates that after T writes `set_state` -> `state_set` (src/plangraph/keeper/store_cards.py, folded at src/plangraph/keeper/events.py line 247), old code's `admin verify` produces `cache_mismatch field=state expected=open got=parked`. This is because f3bac63's `events.py` fold function lacks the `elif kind == "state_set"` branch that T introduced.
+
+**Defect: The doc's rollback criterion says "no design-3 state/cards/attempts/questions" but does not name `run_recorded` events.** The events.py excerpt at line 249 shows `elif kind == "run_recorded":` is also a new handler in T. If the daemon or reaper appends `run_recorded` events as part of normal operation (the `server.start_reaper()` call in daemon.run), old code would ignore them during replay, potentially producing a different `cache_mismatch`. This path was not tested in the rehearsal. Mark as speculation because no evidence shows `run_recorded` fires automatically vs. only via a verb.
+
+**The doc correctly states** that "only `state_set` was proven to break old verify" and "the other design-3 writes were not tested against old code, so that part is deliberately conservative." This is honest but means the rollback criterion is untested for `ask_question`/`answer_question`/`resignal_question` (HTTP doors in inbox.routes), which presumably append events into the `questions`/`answers` tables and the `events` table.
+
+---
+
+## V3: Dry-Run Coverage
+
+**Unexercised paths that could still break live restart:**
+
+1. **`outage.check_and_record`** (src/plangraph/keeper/daemon.py): called unconditionally at daemon start ("freeze clocks over a downtime"). The dry run started the daemon on a fresh copy where no outage would be detected. On a live restart after a planned stop of several minutes, this function will observe a gap and record it. Its error handling and interaction with the just-migrated `outbox_seen` table is untested. If it appends an event that interacts badly with the new `seq` assignment logic or triggers, the daemon could fail at startup.
+
+2. **`server.start_reaper`** (daemon.py): starts a background thread. The dry run observed the daemon for a brief period. If the reaper writes events (e.g., expiry, `run_recorded`) after its first tick interval, those writes were never observed.
+
+3. **`anchor.enabled` / `anchor.check_start`** (daemon.py): the live config has no anchor keys so this is skipped. The dry run confirmed "anchors not configured." If anchor keys were added later, this code path could refuse startup ("refuse a rolled-back or forked DB before serving"). Not a restart defect today but an unexercised startup gate.
+
+4. **`events.append` seq-assignment change:** doc claims "same numbering on SQLite" but the concurrent-write path (two threads in the threaded API racing on `MAX(seq)+1`) was never stressed. The `check_same_thread=False` comment says "all access is serialised there" but the actual lock implementation is not shown.
+
+**Log items explained correctly:**
+- `changelog rc=2` in run 1: doc says missing `--since` arg; log confirms `rc=0 pg.sh changelog --since 0`. Correct.
+- `verify-snapshot rc=1` before first write: doc says scratch pointed at a fresh snapshot path. The log shows it succeeded (`rc=0`) after the write cycle. Correct.
+- `sync pull rc=1`: doc says this is a reader-host verb needing a reader config. The log shows `rc=1 sync pull`. Correct.
+- The JSON traceback in the log (`json.decoder.JSONDecodeError`) is from parsing an empty/invalid response during the failed run-1 cascade (all subsequent verbs hit not_found because the item was never created). The doc's "Run-1 note" explains the cascade and confirms the scratch item was redefined. The traceback itself is not mentioned; marking as minor documentation gap.
+
+---
+
+## V4: Secrets / Hygiene
+
+**No leak detected.** The doc references `signing_key` and `snapshot_pubkey` only by path ("by path (read-only)"). DSN, TEMPORAL_ADDRESS, and TEMPORAL_NAMESPACE env vars are named but never populated. The log contains no bearer tokens, no DSNs, no key material. The ports (18787/18788) are localhost scratch. Commit hashes are public. No file contents are inlined that could contain credentials.
+
+---
+
+## V5: Restart Runbook
+
+**Defect 1 — Internal contradiction on `pg admin` vs. daemon-up.** Step 4 instructs: "Verify: `pg admin verify` = chain and cache integrity ok." Step 5 then states: "Never run any `pg admin` command (migrate included) while the daemon is up; check `systemctl --user is-active plangraph-keeper` first." These directly conflict. The dry run shows `admin verify` succeeding with the daemon up (it likely opens a separate read-only connection or hits the API). The runbook must either: (a) carve out read-only commands from the prohibition, or (b) instruct stopping the daemon before verify (which would mean stopping a freshly-started production service to run a check that could be done while it's up).
+
+**Defect 2 — No client-quiesce step before backup.** Step 2 stops the daemon and backs up. But between the last WAL checkpoint (at stop) and the backup file being written, there is a window. `.backup` on a stopped db is safe because no writer exists. However, the doc does not explicitly state the daemon must be fully exited (not just SIGTERM sent). With `Restart=on-failure`, if the process dies from a signal other than a clean exit before the backup completes, a new process could grab the lock and start writing. The doc says "confirm with `is-active` and that no process holds keeper.db.lock: `fuser keeper.db.lock` prints nothing" — but this confirmation is only mentioned in the abort/restore path (step 5b), not in step 2.
+
+**No step harms the live db directly.** The backup uses `.backup` (WAL-safe), the stop is explicit, the unit edit is before start. Good.
+
+**Abort ordering (step 5a-e) is sound** — stop, confirm no process, delete WAL/SHM before placing the pre-migration backup, restore config, repoint unit, start, verify. The WAL-deletion-before-restore step correctly prevents a half-migrated WAL from corrupting the restored db.
+
+**Missing abort criterion:** If the daemon starts but the reaper or outage check crashes it, the unit's `Restart=on-failure` would loop. The doc's abort trigger "daemon exit/restart loop" is listed but there is no explicit step to prevent the restart loop (e.g., `systemctl stop` after first failure, or editing `Restart=` temporarily). The operator must notice and act.
+
+---
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+
+VERDICT: fix - [V5] runbook step 4 vs step 5 contradiction (verify is prohibited while daemon is up but also mandated as a verify step); [V5] step 2 lacks explicit daemon-exited-and-lock-released confirmation before backup; [V2] rollback criterion omits `run_recorded` which is a new T event kind (events.py line 249) with unproven impact on old verify; [V1] `_upgrade_lock_triggers` is undocumented and its idempotency on a partial-migration is untested

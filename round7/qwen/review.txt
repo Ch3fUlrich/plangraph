@@ -1,0 +1,63 @@
+## V1 Migration Safety
+
+The migration mechanism (`db.py:_upgrade`) is structurally sound: column adds are guarded by `PRAGMA table_info` checks, and all DDL statements use `IF NOT EXISTS`. The dry-run confirms idempotency (migrate ran 3x, step 5 says "schema up to date" each time).
+
+**Defect — WAL fold is conditional, not guaranteed (doc sec 4 step 2):** The doc states `.backup` of a stopped db "also folds WAL." `sqlite3.Connection.backup` does not have special WAL-fold behavior beyond normal source-DB checkpointing. If the daemon is killed (SIGKILL, OOM) rather than stopped cleanly, no checkpoint runs; the -wal file retains committed transactions. The doc's own abort sequence (sec 5b) acknowledges this by mandating "delete keeper.db-wal and keeper.db-shm BEFORE placing the backup," but step 2 takes no similar precaution. If the backup is taken after an unclean stop (e.g., the stop in step 2 times out and the unit's `Restart=on-failure` kills the process), the backup may be missing recent WAL data, and restoring it later loses those transactions. The safe procedure would be to verify no -wal/-shm exist (or checkpoint them into the main db) before calling `.backup`.
+
+**Adequate (grounded):** Concurrency is safe. `daemon.py:run` acquires `lock_keeper` before `open_db`. The doc correctly rejects the seat-raised concurrency race.
+
+**Adequate (grounded):** No data-loss vectors exist. `_upgrade` is DML-free (the docstring states this and `_ADDED_COLUMNS` only ADDs columns; all DDLs are CREATE IF NOT EXISTS). Dry-run step 3 confirms row counts unchanged.
+
+**Minor gap (speculation-level):** `_upgrade` calls `executescript` five times without an enclosing transaction. SQLite may hold an EXCLUSIVE lock during each `journal_mode=WAL` switch, causing other readers (if any bypass the flock) to hit the 5000ms `busy_timeout`. Given the flock design this is not a real concurrent writer, but the doc does not acknowledge the brief lock window.
+
+---
+
+## V2 Rollback Claim
+
+The core claim — "code swap safe only until T writes design-3 events, else restore backup" — is grounded in the copyB test (`schema.py:DESIGN3_DDL` defines the cards/attempts/decisions/questions/answers/budget tables; `store_cards.py:_set_state` writes `state_set`; `events.py` line 247 folds `state_set` as a design-3 state that does not touch claim fields, which old code doesn't know). The cache_mismatch log entry proves the break.
+
+**Defect — doc is incomplete about which design-3 write types are untested:** The doc states "Only `state_set` was proven to break old verify; the other design-3 writes were not tested against old code." The untested set (from `schema.py:DESIGN3_DDL` tables: questions/answers, cards, attempts, decisions) includes the `POST /v1/ask_question` and `/v1/answer_question` paths that the dry-run log records as rc=200 (second run) — these wrote rows to questions/answers tables that old code cannot fold. So the risk is not hypothetical; those code paths exist and are reachable, and the doc conservatively defaults to restore. This is correct in effect but the doc does not state that the second dry run actually exercised the question-answer write path that could theoretically break old verify (it's only labeled "Temporal path not fire-tested" under "Not exercised").
+
+**Defect — data-loss window understated in the runbook ordering:** The doc accepts "every write since T's first start is lost on restore." But step 4's verification procedure (whoami/ready/percent + row counts) necessarily occurs while the daemon is serving. If clients reconnect between step 3 (start) and step 4 (verify), writes accumulate. The doc says "keep the T-run window short" but gives no concrete abort timer or maximum-dwell guideline. This is an operational gap, not a code defect.
+
+---
+
+## V3 Dry-Run Coverage
+
+The doc enumerates unexercised paths: submit/evidence/verdict/waive/withdraw/close/legacy/rehome/delegate/token (only --help parsed), Postgres backend, live Temporal signal, backup_prune thread, append-only triggers of attempts/decisions/answers, /inbox non-GET methods.
+
+**Defect — daemon startup hooks not exercised on a real fork:** `daemon.py:run` calls `anchor.check_start(conn, cfg)` when `anchor.enabled(cfg)` and `outage.check_and_record(store, server.system, cfg)`. The dry-run log shows `verify-anchor rc=2 "anchors not configured"`, meaning the anchor code path was skipped (falsy `enabled()`). The doc mentions this but doesn't flag that if the live keeper.json is ever modified to include anchor keys (or if a config reload during T's code adds them), `check_start` could refuse startup on a forked/rolled-back DB — an unexercised startup failure mode at the exact moment of restart.
+
+**Defect — log item explanation gap:** The log records `rc=2 token plangraph:NOPE --role worker --run r1`. The doc's section 5 "log items read as failures, all explained" does not account for this specific rc=2. It's classified under "Not exercised" but the doc never explicitly maps this log line to an explanation (unlike changelog rc=2, verify-snapshot rc=1, sync pull rc=1, which are all individually explained). Minor completeness gap.
+
+**Adequate:** The JSONDecodeError traceback is correctly attributed to the smoke script (not keeper code) — `db.py` and `store_cards.py` have no JSON parsing of empty output. The doc explains this.
+
+**Adequate:** The "unreachable_goal" define refusal and cascading not_found errors in run-1 are correctly explained as script artifacts.
+
+---
+
+## V4 Secrets/Hygiene
+
+No credential values, tokens, or connection strings are exposed in the doc or log. The doc names key *identifiers* (`signing_key`, `snapshot_pubkey`) and states they are loaded "by path (read-only)." Ports 18787/18788 and the scratch path `.sessions/live-sync/` appear — these are ephemeral dry-run values, not production config. No PII or private hostnames leak.
+
+**No defect.**
+
+---
+
+## V5 Restart Runbook (doc section 4)
+
+**Ordering (1→2→3→4→5→6):** Stop → confirm inactive + fuser empty → backup → swap unit → start → verify. Correct sequence. The fuser check before backup is good.
+
+**Abort sequence (step 5):** stop → confirm → delete -wal/-shm → restore db/json/snapshot → repoint unit → start → verify. Ordering is safe (WAL must not meet restored db).
+
+**Defect — fuser check does not cover the WAL/shm safety before backup:** Step 2 confirms the daemon is inactive and the lock is free, then immediately calls `.backup`. But it never checks for leftover keeper.db-wal / keeper.db-shm. Compare step 5b which mandates deleting them before restore. If the daemon crashed before the stop (unit state still "active" per systemd but process dead), `systemctl stop` may return success but -wal/-shm could be orphaned and contain uncheckpointed data from a prior session that the `.backup` API will not incorporate. Asymmetric handling between step 2 and step 5b.
+
+**Defect — row-count invariant "counts >= backup counts" (step 4) does not flag the real risk:** The doc states the invariant is "no ORIGINAL row disappears." But `_upgrade` never deletes rows, and `daemon.py:run` starts a reaper (`server.start_reaper()`). If the reaper purges expired items (lease-expired rows), items count could drop below backup without any migration fault. The doc doesn't acknowledge the reaper as a legitimate row-reduction vector during the verification window. (Speculation on reaper behavior — the code excerpt only shows `start_reaper()` being called, not its implementation.)
+
+**Harmful step:** None identified. The doc correctly prohibits writing admin commands while the daemon is up and correctly sequences the stop-before-backup.
+
+---
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+
+VERDICT: fix - medium: WAL not folded/verified before .backup in step 2 (asymmetric with step 5b which mandates -wal/-shm deletion); low: daemon startup hooks (anchor.check_start, outage.check_and_record) unexercised on a real fork, could add a startup-failure mode at restart; low: reaper as unacknowledged row-reduction vector during step-4 verification; low: token rc=2 log line not individually explained in the failure-accounting list

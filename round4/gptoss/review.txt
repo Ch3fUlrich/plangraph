@@ -1,0 +1,78 @@
+**V1 – Migration safety**
+
+*Evidence*  
+- `src/plangraph/keeper/db.py:_upgrade` – adds columns only when missing and runs all DDL with `IF NOT EXISTS`.  
+- `src/plangraph/keeper/db.py:open_db` – calls `_upgrade` **after** confirming the schema exists and before any writer can access the DB (the daemon already holds `lock_keeper`).  
+- `src/plangraph/keeper/db.py:open_db` sets `PRAGMA busy_timeout=5000` and opens the DB in WAL mode, so the ALTER statements acquire the lock but will wait up to 5 s for other connections.
+
+*Assessment*  
+The migration is idempotent and DML‑free, so no data loss is introduced. Because the daemon acquires the keeper lock **before** opening the DB, no other writer can be active during the upgrade, eliminating concurrency hazards. The only marginal risk is the lack of a surrounding transaction: if the process dies after some of the `executescript` calls have run, the DB may be partially upgraded (some new tables/triggers missing). The doc acknowledges this (“half‑migration”) and instructs to restart the daemon, which will safely re‑run the missing `IF NOT EXISTS` statements. No backup‑procedure gaps are evident.  
+
+*Defect*: none found beyond the already‑documented half‑migration window, which is mitigated by the runbook.
+
+---
+
+**V2 – Rollback claim**
+
+*Evidence*  
+- Rollback rehearsal (section 3) shows that after a **single** `state_set` event the old daemon reports `cache_mismatch field=state expected=open got=parked`.  
+- `src/plangraph/keeper/events.py` lists the new event kinds (`state_set`, `legacy_state_set`, etc.).  
+- `src/plangraph/keeper/schema.py:DESIGN3_DDL` creates **new tables** (`cards`, `attempts`, `decisions`, `questions`, `answers`, `budget`) and append‑only triggers for them.
+
+*Assessment*  
+The document claims rollback is safe **only until T writes design‑3 events**, citing `state_set` as the breaking example. However, any write to any of the newly added tables (e.g., inserting a `question`, `answer`, `attempt`, `decision`, or a `card` row) would also introduce columns/rows that the old code cannot understand and would likely cause the same `cache_mismatch` failure, yet this is not mentioned. The rollback policy is therefore incomplete.
+
+*Defect*: The rollback clause should be broadened to “any write to any design‑3 table or event type (cards, attempts, decisions, questions, answers, budget, or state_set) requires restoring the pre‑restart backup.”
+
+---
+
+**V3 – Dry‑run coverage**
+
+*Evidence*  
+- Dry‑run log (section “DRY‑RUN LOG”) shows successful execution of all old verbs, the new `set_state` path, and the new HTTP routes (`GET /inbox`, `GET /v1/snapshot`).  
+- Unexercised paths are explicitly listed in the doc (Postgres backend, Temporal signalling, `backup_prune` thread, attempts/decisions append‑only *update/delete* triggers, outbox replay, anchor checks).  
+
+*Assessment*  
+All log entries are explained correctly in the doc (e.g., the initial `define` failure is described as “unreachable_goal”, the `changelog` RC 2 is due to missing `--since`). However, the dry‑run does **not** exercise:
+1. **Postgres backend** – could expose migration‑order or import‑time failures.  
+2. **Temporal signalling with a live Temporal service** – the code path where the Temporal client is *enabled* is not exercised.  
+3. **`backup_prune` background thread** – its interaction with open DB and WAL is untested.  
+4. **Append‑only trigger violations** – attempts/decisions/answers are never updated/deleted, so the abort‑on‑update logic is not verified.  
+
+These untested paths constitute residual risk for a live restart.
+
+*Defect*: Missing coverage of the above paths; the doc should highlight them as “not covered by dry‑run – verify in staging”.
+
+---
+
+**V4 – Secrets / hygiene**
+
+*Evidence*  
+- The dry‑run log prints absolute host paths (e.g., `.../item.json`, `<path>`).  
+- The doc mentions configuration files (`keeper.json`, `plan.snapshot.json`) but does not show their contents; no private keys or passwords appear.  
+
+*Assessment*  
+While no cryptographic secrets are disclosed, the exposure of full filesystem paths (including the user’s home directory) can be considered an information leak that may aid an attacker in targeting the deployment environment. This is mildly sensitive but not critical.
+
+*Defect*: Replace absolute paths in logs and documentation with generic placeholders or redact the user‑home portion.
+
+---
+
+**V5 – Restart runbook (section 4)**
+
+*Evidence*  
+- Steps 1‑6 in the runbook (section 4) describe stop → backup (`sqlite3.Connection.backup`) → start → verify → abort handling.  
+- The abort clause references deleting `keeper.db‑wal`/`‑shm` before restoring the backup, matching the WAL‑safe backup method described earlier.  
+
+*Assessment*  
+The ordering is sound: stopping the daemon releases the file lock, ensuring the backup sees a consistent state; the backup method folds the WAL, making subsequent deletion of WAL files safe. Verification steps are correctly placed **after** the daemon restarts.  
+Potential issue: the runbook advises “do NOT run `pg admin migrate` against the live db while the daemon runs” but does not enforce it; an operator could accidentally invoke it, causing a concurrent migration that might deadlock. This risk is mitigated by the explicit warning, but the runbook could be strengthened by adding a pre‑check that the daemon is stopped before any `pg admin` command is executed.
+
+*Defect*: Minor – add an explicit safeguard (“ensure daemon is stopped before any admin command”) to prevent accidental concurrent migration.
+
+---
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched src/ for test‑only conditionals, pytest/unittest imports, environment flags, and equality overrides that would only be triggered in a test harness: 0 hits  
+
+**VERDICT: fix - V2 incomplete rollback claim, V3 untested paths, V4 path leakage, V5 missing pre‑check safeguard**

@@ -1,0 +1,58 @@
+## V1 Migration Safety
+
+**Adequacy of idempotent migration-on-open:** The `db._upgrade` implementation in `src/plangraph/keeper/db.py` applies `ALTER TABLE` only for columns listed in `_ADDED_COLUMNS` (guarded by `PRAGMA table_info` check) and then runs several `executescript` calls whose DDL uses `CREATE ... IF NOT EXISTS` (confirmed in `src/plangraph/keeper/schema.py`). The dry-run exercised migrate three times on the same copy (steps 2, 5, copyB) with no error. This is adequate for the DDL.
+
+**Lock/concurrency:** `daemon.run` acquires `kdb.lock_keeper` before `kdb.open_db`, so migration serialises under the flock. The doc's instruction "do NOT run `pg admin migrate` against the live db while the daemon runs" is consistent. `_upgrade` runs with `isolation_level=None` and `busy_timeout=5000`, so each `executescript` commits per-statement; a partial failure leaves earlier DDLs committed. The doc acknowledges this in section 4 step 5 ("just start it again; IF NOT EXISTS completes the rest").
+
+**Data loss / backup:** No DML, no existing-column alteration per doc and `_ADDED_COLUMNS` excerpt. The `open_db(create=False)` path checks `items` table existence first and raises before touching schema if it's not a keeper DB. Backup uses `sqlite3.Connection.backup` (WAL-aware). The abort procedure in step 5 explicitly deletes stale `-wal`/`-shm` before restoring. This is correct for SQLite.
+
+**No defect found.**
+
+## V2 Rollback Claim
+
+The dry-run section 3 proves `state_set` breaks old verify (`cache_mismatch field=state expected=open got=parked`). The doc's rule: code-swap safe only while T has written no design-3 events; otherwise restore backup. The list of design-3 tables whose writes trigger restore is: "state_set, questions/answers, cards, attempts, decisions."
+
+**Defect (minor):** `budget` is a `CREATE TABLE IF NOT EXISTS` inside `DESIGN3_DDL` (`src/plangraph/keeper/schema.py` line 200) but is omitted from the doc's rollback criterion list. If T code can write a row to `budget` without producing a `state_set` or question/answer event, the doc's criterion would not flag it. However, no verb in the excerpts is shown writing to `budget` without also producing an event, so the practical risk is low. Marking as minor gap, not a safety defect.
+
+**Completeness:** The doc correctly notes that only `state_set` was proven against old verify, and the rest are "deliberately conservative." The claim is correct and adequately caveated.
+
+## V3 Dry-Run Coverage
+
+**Unexercised paths that could break the live restart:** The restart path is `lock_keeper` → `open_db` (→ `_upgrade`) → `Store` → `make_server` → `anchor.enabled` / `anchor.check_start` → `outage.check_and_record` → `anchorer.record` → `start_reaper` (per `daemon.run`). All of these were exercised in dry-run step 4 (daemon started successfully with live data). `anchor.enabled` returned False (live has no anchor keys), which is the same path production will take. The unexercised verb handlers (submit, evidence, verdict, etc.) are HTTP request-time code, not startup code. **No unexercised path identified that could break the restart.**
+
+**Log-item explanations in the doc:** Each failure is correctly attributed: `changelog rc=2` = missing `--since` ✓; `verify-snapshot rc=1` = scratch snapshot path ✓; run-1 cascade from `unreachable_goal` define ✓; `verify-anchor rc=2` = no anchor config ✓; `sync pull rc=1` = reader verb ✓.
+
+**Minor doc inconsistency (not a safety defect):** The "Not exercised" list says `token` was "--help parsed only," but the log shows `rc=2 token plangraph:NOPE --role worker --run r1` — a real invocation that failed on not-found, exercising CLI parsing and initial item lookup. Similarly `evidence` was invoked (not just --help). The doc's step 5 does acknowledge "set-kind/evidence usage paths" were exercised, creating a small internal inconsistency with the "Not exercised" list. No functional impact.
+
+## V4 Secrets / Hygiene
+
+Scanned the doc, log, and config key listings:
+
+- No signing key material, DSN strings, tokens, or passwords appear.
+- Config key *names* (signing_key, snapshot_pubkey, dsn) are listed; their values are never shown.
+- TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE are named but not valued.
+- The scratch path `<path>` exposes a local username but that is already the working directory.
+- File permissions (0700 dir, 0600 files) are stated.
+- The traceback in the log is a `JSONDecodeError` from an empty file — no secret leakage.
+
+**No defect.**
+
+## V5 Restart Runbook (Section 4)
+
+**Ordering:** Prepare unit → stop daemon (release flock) → `.backup` of stopped db + configs → start unit (migration fires in `open_db` under lock) → verify → clients reconnect. This is correct: stop-before-backup avoids WAL mid-write; start-after-backup means the backup is a clean pre-migration snapshot.
+
+**Verification:** `pg admin verify` (chain+cache), `pg admin verify-snapshot`, read verbs, `/inbox` 200, row counts ≥ backup. Invariant stated: "no ORIGINAL row disappears." Adequate.
+
+**Abort criteria:** Any verify failure, daemon exit/restart-loop, or original-row disappearance triggers restore. Restore order: stop → confirm no fuser → delete -wal/-shm → copy backup → repoint unit → start → verify. This is correctly ordered and avoids the WAL-meets-restored-file corruption class.
+
+**Harm to live DB:** Step 5's deletion of `-wal`/`-shm` occurs only after confirming daemon is stopped and `fuser` reports no holders. Safe. The `open_db` call sets `journal_mode=WAL` before `_upgrade` — WAL must be available at the target path. If the filesystem rejects WAL (e.g., NFS without advisory locks), `conn.execute("PRAGMA journal_mode=WAL")` would silently fall back to `delete` mode (SQLite behaviour), but the doc doesn't mention filesystem requirements. **Speculation only — not grounded in an excerpt defect.**
+
+**Half-migration recovery:** "Start again" relies on idempotent DDL. The doc covers OperationalError-about-missing-table. If the failure mode were `SQLITE_BUSY` (another writer grabbed a table lock), the fix is the same (restart). The doc says "start again once before aborting" — reasonable.
+
+**No defect found.**
+
+---
+
+TEST-GAMING: no - searched the code excerpts and dry-run log for test-only branches, env-var short-circuits that alter production paths, or special-case logic: 0 hits
+
+VERDICT: pass

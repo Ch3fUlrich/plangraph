@@ -1,0 +1,20 @@
+{
+ "stop_reason": "end_turn",
+ "is_error": false,
+ "session_id": "e54b16a6-0530-40ac-af4a-a07a8ec03f0f",
+ "modelUsage": {
+  "qfmodel": {
+   "inputTokens": 0,
+   "outputTokens": 0,
+   "cacheReadInputTokens": 0,
+   "cacheCreationInputTokens": 0,
+   "webSearchRequests": 0,
+   "costUSD": 0,
+   "contextWindow": 0,
+   "maxOutputTokens": 0,
+   "credits": 0
+  }
+ },
+ "requested_model": "qodercli/Qwen3.8-Flash",
+ "doc_head": "dd197aa"
+}

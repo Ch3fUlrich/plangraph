@@ -1,0 +1,68 @@
+**V1 – Migration safety**  
+*Evidence*: `src/plangraph/keeper/db.py:_upgrade`, `src/plangraph/keeper/db.py:open_db`, `src/plangraph/keeper/daemon.py:run`  
+
+*Assessment*  
+- `_upgrade` only adds missing columns and runs `CREATE … IF NOT EXISTS` scripts; it never issues DML, so no data loss.  
+- `open_db` calls `_upgrade` **after** the exclusive lock obtained by `lock_keeper` (called in `daemon.run` before `open_db`). The lock prevents any other process from writing while migration runs, eliminating concurrent‑writer race conditions.  
+- The migration is not wrapped in a single transaction, but each step is idempotent. If the daemon is killed mid‑migration, the next start re‑executes the same `IF NOT EXISTS` statements and finishes safely (the doc notes this as “half‑migration”).  
+- Backup procedure uses `sqlite3.Connection.backup`, which copies the DB together with WAL state; the doc’s backup step matches the recommended safe method.  
+
+*Conclusion*: The idempotent on‑open migration is adequate for data‑preservation, locking, and concurrency. No defect identified.
+
+---
+
+**V2 – Rollback claim**  
+*Evidence*: `src/plangraph/keeper/store_cards.py:set_state`, dry‑run log showing `cache_mismatch` after a `state_set` event, doc §3.  
+
+*Assessment*  
+- The old code (f3bac63) does not understand the new `state_set` event; after T writes such an event the verifier reports a cache mismatch (`field=state expected=open got=parked`).  
+- The doc correctly limits “code‑swap only while T has written no design‑3 events” and prescribes restoring the pre‑restart backup otherwise.  
+- The runbook also orders WAL cleanup before restoring (delete `*.wal`/`*.shm`), matching the requirement that a half‑finished migration must not be mixed with the restored file.  
+
+*Conclusion*: The rollback limitation is accurate and complete with respect to the observed failure mode.
+
+---
+
+**V3 – Dry‑run coverage**  
+*Evidence*: Dry‑run log excerpts, `src/plangraph/keeper/schema.py:DESIGN3_DDL` (append‑only triggers), `src/plangraph/keeper/events.py` (new `state_set` handling).  
+
+*Unexercised paths that could still break a live restart*  
+1. **Postgres backend** – never opened in the dry run; migration scripts may behave differently under `db_pg.open_pg`.  
+2. **backup_prune thread** – optional feature not started; if enabled it could spawn background I/O that interferes with shutdown.  
+3. **Temporal integration** – the dry run used the “signal disabled” path; an enabled Temporal endpoint could raise unexpected errors during `store.set_state` or question handling.  
+4. **Append‑only trigger violations** – the triggers for `attempts`, `decisions`, `answers` are never exercised with UPDATE/DELETE; a buggy client that attempts such a modification would abort the transaction.  
+
+*Log‑item explanations* – each non‑zero exit code in the dry‑run log is correctly interpreted in the doc (e.g., `changelog rc=2` = missing `--since`; `admin verify‑snapshot rc=1` = snapshot not yet written; first `define` failures = unreachable‑goal). No mismatches were found.  
+
+*Conclusion*: Coverage gaps are limited to features not exercised (Postgres, backup‑prune, Temporal, update/delete on append‑only tables). No factual error in the log explanations.
+
+---
+
+**V4 – Secrets / hygiene**  
+*Evidence*: Entire dry‑run log, the doc, and code excerpts.  
+
+*Assessment*  
+- No private keys, passwords, or tokens appear in the logs or documentation; only filenames, ports, and environment‑variable names are shown.  
+- The signing‑key and snapshot‑pubkey file paths are mentioned but their contents are never printed.  
+
+*Conclusion*: No sensitive information is leaked.
+
+---
+
+**V5 – Restart runbook (doc §4)**  
+*Evidence*: Runbook steps, `src/plangraph/keeper/daemon.py:run`, `src/plangraph/keeper/db.py:open_db`.  
+
+*Ordering & verification* – The runbook stops the service, takes a WAL‑safe `.backup`, then starts the daemon (which runs the idempotent migration). It explicitly forbids running any *writing* `pg admin` commands while the daemon is alive and requires verification (`pg admin verify`, `whoami`, `/inbox`) before considering the restart successful.  
+
+*Abort criteria* – The runbook lists any verify failure, daemon restart loop, or disappearance of original rows as abort triggers, and prescribes the exact restore order (stop → delete WAL/SHM → copy backup → restart).  
+
+*Potential harmful step* – Nothing in the described sequence would corrupt the live DB; the only risky operation (deleting WAL/SHM) is conditioned on the daemon being stopped, matching the safety requirement.  
+
+*Conclusion*: The runbook is sound; no step is likely to cause data loss or corruption beyond the already‑documented rollback window.
+
+---
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched source excerpts for test‑specific conditionals, environment switches, or altered assertions: 0 hits
+
+**VERDICT: pass**

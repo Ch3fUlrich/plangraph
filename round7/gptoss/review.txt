@@ -1,0 +1,59 @@
+**V1 – Migration safety**
+
+*Evidence*  
+- `db.py:_upgrade` – iterates over `_ADDED_COLUMNS` and runs `ALTER TABLE … ADD COLUMN` only when the column is missing; then runs a series of `executescript(...DDL)` where all objects are created with `IF NOT EXISTS`.  
+- `db.py:open_db` – calls `_upgrade` for every non‑create open, after acquiring the keeper lock in `daemon.run`.  
+- `daemon.py:run` – obtains `kdb.lock_keeper` before `open_db`, guaranteeing an exclusive lock while migration runs.  
+- `open_db` sets `PRAGMA journal_mode=WAL` and the backup procedure uses `sqlite3.Connection.backup`, which folds the WAL safely.
+
+*Assessment*  
+The migration is **idempotent and DML‑free**, so no existing rows are altered or deleted – no data loss.  The exclusive lock obtained by `lock_keeper` prevents concurrent writers from seeing a partially‑migrated schema, satisfying the concurrency requirement.  The backup step described in the runbook (`.backup` call) is safe for WAL databases.  
+
+*Residual risk* – `_upgrade` runs several `executescript` calls **outside a single transaction**; if the daemon is killed exactly between those calls the database may be left with a subset of the new objects.  The runbook’s “half‑migration” paragraph acknowledges this and instructs a second start, but the risk should be highlighted as a migration‑restart edge case.
+
+**V2 – Rollback claim**
+
+*Evidence*  
+- Rollback rehearsal (section 3 of the doc) shows that after a `state_set` event (`set_state` → `state_set`) the old daemon reports `cache_mismatch field=state expected=open got=parked`.  
+- `store_cards.py:_set_state` creates a `state_set` event and updates `items.state`.  
+- `events.py` folds `state_set` into the in‑memory item.
+
+*Assessment*  
+The claim **“code swap safe only until T writes design‑3 events … else restore backup”** is **correct for the `state_set` event** (the only design‑3 event proven to break the old verifier).  The doc conservatively extends this to all design‑3 types (cards, attempts, questions, etc.), but those were **not exercised** in the dry‑run; therefore the statement is **over‑broad** – it is correct for `state_set` but unverified for the others.  The recommended restore‑backup procedure (WAL‑safe `.backup` and removal of `-wal/-shm` files) is accurate.
+
+**V3 – Dry‑run coverage**
+
+*Unexercised paths that could still break a live restart*  
+
+| Path | Why it matters | Evidence (not exercised) |
+|------|----------------|---------------------------|
+| UPDATE/DELETE on append‑only tables (`attempts`, `decisions`, `answers`, `aliases`, `outbox_seen`) – the triggers that raise `ABORT` | If a future code path accidentally issues such a DML, the daemon would abort; not verified in dry‑run. | `schema.py:DESIGN3_DDL` defines `trg_*_append_only_update/delete` triggers. |
+| Authorizer/defensive mode violations (e.g., trying to create a table not allowed) | The authorizer (`_authorizer`) is enabled but no operation was attempted that would be blocked. | `db.py:open_db` sets `conn.set_authorizer(_authorizer)`. |
+| Postgres backend initialization | No Postgres connection was started; any migration or lock race on PG could differ. | `db.py:select_backend` and lazy import of `db_pg`. |
+| Backup‑prune background thread | The thread could interfere with file‑system state during a restart; never started in the dry‑run. | Doc mentions optional `backup_prune` thread. |
+| Temporal signal path when `TEMPORAL_*` env vars are set | Real temporal integration could raise errors not seen when the signal is disabled. | Log shows “signal disabled”. |
+| `lock_keeper` implementation details (e.g., stale lock file) | If a lock is left behind, the daemon could fail to start. Not exercised. | `daemon.py:run` calls `kdb.lock_keeper`. |
+
+*Log‑item explanations* – The doc correctly interprets each non‑zero return code:  
+- `changelog rc=2` → missing `--since`.  
+- `admin verify‑snapshot rc=1` → fresh snapshot without prior write.  
+- `admin verify‑anchor rc=2` → no anchor configuration.  
+- JSON decode error after a failed `define` → script artifact, not keeper fault.  
+All other rc = 0 entries match expected success.
+
+**V4 – Secrets / hygiene**
+
+The dry‑run log and documentation contain **no secret values** (no passwords, tokens, private keys, or signing material).  Only paths and environment‑variable names are shown; the actual secret contents (`signing_key`, `snapshot_pubkey`) are referenced by file location but not displayed.  No credential leakage is evident.
+
+**V5 – Restart runbook (section 4)**
+
+*Ordering & verification* – The sequence **stop → verify lock release → `.backup` → copy config → start → verify** follows a sound pattern.  The runbook explicitly warns to delete `keeper.db‑wal`/`‑shm` before restoring, preventing stale WAL data from contaminating the restored database.
+
+*Abort criteria* – Correctly defined: any verify failure, daemon restart loop, or disappearance of original rows triggers a full restore.
+
+*Potential harmful step* – The only risky operation would be running a **writing `pg admin` command while the daemon is up** (the runbook warns against it).  If an operator mistakenly did so, the live DB could diverge from the backup, but the runbook’s prohibition mitigates this.  All other steps are safe for the live database.
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched src/ for any conditional that checks testing frameworks, pytest-specific env vars, or test‑only constant values: 0 hits
+
+VERDICT: fix - migration half‑run risk, rollback claim over‑broad, untested append‑only triggers and authorizer paths.

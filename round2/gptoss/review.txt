@@ -1,0 +1,70 @@
+**V1 – Migration safety**
+
+- `src/plangraph/keeper/db.py:_upgrade` adds columns only if absent and runs `executescript` on DDL that is all `CREATE … IF NOT EXISTS`.  It is DML‑free, so no data loss from column addition.  
+- `src/plangraph/keeper/daemon.py:run` obtains the exclusive lock via `kdb.lock_keeper` **before** calling `open_db`, which in turn calls `_upgrade`.  Therefore there is no concurrent writer during migration.  
+- The migration is **not wrapped in a single transaction**; if the daemon is killed between scripts, a “half‑migration” can leave some tables/triggers created and others not.  The runbook acknowledges this (“if the daemon is killed mid‑start … start it again”), but the doc’s claim that the migration is “safe” hides the non‑atomic window where a client could write before all append‑only triggers are in place, potentially creating rows that later become immutable.  This gap is not addressed in the plan.  
+
+**Defect:** migration‑on‑open is idempotent but not atomic; the runbook should require the daemon to be stopped **and** the process to be restarted after a failure before accepting client writes, or the scripts should be wrapped in a transaction where SQLite permits.  
+
+---
+
+**V2 – Rollback claim**
+
+- The rollback description (doc §3) matches the observed behaviour in the dry‑run log: after a `state_set` event (design‑3) the old daemon’s `admin verify` reports a `cache_mismatch` on field `state` (see log “1 problem(s)…field=state expected=open got=parked”).  
+- `src/plangraph/keeper/store_cards.py:set_state` creates a new `state_set` event that the old code never knows about, causing the mismatch.  
+- The claim that rollback is safe **only while T has written no design‑3 events** is therefore correct.  
+
+**Defect:** the doc states “take that backup before restart (sqlite .backup, not cp, WAL)”.  It does **not** emphasise that the backup must be taken *before any design‑3 write*, otherwise the “no‑design‑3‑writes” condition is already violated and the backup will already contain the offending rows.  The wording should be tightened.  
+
+---
+
+**V3 – Dry‑run coverage**
+
+| Dry‑run log item | Explanation in doc | Unexercised / risky path |
+|------------------|--------------------|--------------------------|
+| `changelog rc=2` (missing `--since`) | Documented as “missing arg” | – |
+| `admin verify‑anchor rc=2` | Documented (“anchors not configured”) | – |
+| `GET /inbox 200` / `GET /v1/snapshot 401` | Documented (static inbox, auth) | – |
+| `pg.sh define … rc=0` … series of verbs | Documented (write cycle) | – |
+| **Missing:** `backup_prune` thread (default OFF) – never started in dry‑run. |
+| **Missing:** Postgres backend – never exercised; lazy import may fail at runtime if env variable set. |
+| **Missing:** Temporal signal path when `TEMPORAL_*` are set – only the “disabled” branch was hit. |
+| **Missing:** Append‑only triggers for **attempts**, **decisions**, **answers** – only `answer_question` writes an `answers` row; no update/delete attempts were attempted, so the abort behaviour of those triggers is untested. |
+| **Missing:** Delete/Update on existing tables (e.g., trying to modify `items` directly) – the `set_state` path uses an `UPDATE` guarded by `_race_guard`; the failure path isn’t exercised. |
+| **Missing:** Failure of `lock_keeper` (e.g., stale lock file) – not simulated. |
+| **Missing:** Restoration of a backup after a half‑migration crash – the runbook mentions it but the dry‑run never triggers the situation. |
+
+All log lines that appear in the dry‑run are correctly explained in the document; the *absence* of the above paths is the gap.
+
+**Defect:** the doc claims “dry‑run covers the upgrade”, but several critical execution paths remain untested (Postgres, Temporal, backup‑prune, delete/update attempts) and could surface after live deployment.  
+
+---
+
+**V4 – Secrets / hygiene**
+
+- No private keys, passwords, or token values appear in the dry‑run output or in the excerpts.  
+- All file‑mode hints (e.g., `0600` for backup) are proper.  
+- Environment variables that could contain credentials (`PG_DSN`, `TEMPORAL_*`) are not set in the test run and never logged.  
+
+**Finding:** No sensitive information is leaked.  
+
+---
+
+**V5 – Restart run‑book (doc §4)**
+
+- **Ordering** (stop → backup → start) matches the need for the exclusive lock (`kdb.lock_keeper`) to be released before `sqlite3.Connection.backup` is safe.  
+- **Verification** steps (admin verify, row‑count non‑decrease, `GET /inbox`) are appropriate.  
+- **Abort criteria** (any verify failure or count drop) are sensible.  
+- **Potential harm:** the runbook’s “abort = … restore the step‑2 backup AFTER deleting stale `keeper.db‑wal` and `keeper.db‑shm`” is correct, but it does **not** mention that if the daemon was killed **mid‑migration** the partially‑applied DDL could be replayed from the WAL after restore, re‑triggering the half‑migration problem.  Deleting the WAL/shm files mitigates this, but the runbook should explicitly state that **all** WAL files must be removed *before* the restored DB is reopened, otherwise the partially‑applied scripts could be re‑executed.  
+
+**Defect:** the runbook should stress the mandatory removal of *all* WAL/shm files *prior* to starting the daemon after a rollback, to guarantee a clean state.  
+
+---
+
+**STANDING QUESTION**
+
+TEST-GAMING: no - searched source for test‑specific hooks (pytest, PYTEST_CURRENT_TEST, unittest, conditional env vars, __eq__/__hash__ overrides) and for any code that behaves differently when a test flag is set; 0 hits  
+
+---
+
+**VERDICT: fix - migration non‑atomicity, uncovered execution paths, and runbook WAL‑cleanup clarification**

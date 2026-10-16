@@ -1,0 +1,52 @@
+## V1 migration safety
+
+The doc's core claim is grounded and holds. In `db.py:open_db`, the non-create path checks that the `items` table exists and then calls `db.py:_upgrade`, which only does `ALTER TABLE ... ADD COLUMN` guarded by a `PRAGMA table_info` membership check (`db.py:_ADDED_COLUMNS`) plus `executescript` of DDL that the doc and `schema.py:DESIGN3_DDL` describe as `CREATE TABLE/TRIGGER IF NOT EXISTS` and DML-free. The doc's statement that `_ADDED_COLUMNS` is unchanged and no existing table is altered is consistent with the excerpt.
+
+Concurrency and lock: `daemon.py:run` acquires `kdb.lock_keeper` (the `keeper.db.lock` flock) before `open_db`, so migration runs single-writer; the doc correctly warns not to run a writing `pg admin migrate` while the daemon is up. `busy_timeout` default is `_DEFAULT_BUSY_MS = 5000`, matching the doc. Idempotent re-runs are supported by `IF NOT EXISTS` and the dry-run log showing three successful `admin migrate` runs with no error.
+
+Defect (grounded): the doc's section 1 says "No existing table altered; no ALTER on existing columns; `_ADDED_COLUMNS` unchanged" is fine for T, but the excerpt shows `db.py:_upgrade` iterates `_ADDED_COLUMNS` with `ALTER TABLE items ADD COLUMN ...` (description/host/wait/writer_model/seat_models). These are additions of *nullable* TEXT columns to a populated `items` table; SQLite permits this and it is not data loss, so this is safe — noting for completeness, no defect.
+
+Backup procedure is sound: doc mandates `sqlite3.Connection.backup` (WAL-safe) after a confirmed stop, which folds the WAL; `db.py:open_db` sets `PRAGMA journal_mode=WAL`, so a plain `cp` would indeed miss `-wal`/`-shm` and the doc correctly forbids it.
+
+## V2 rollback claim
+
+The doc's mechanism is real and grounded. `store_cards.py:_set_state` appends a `state_set` event and does `UPDATE items SET state=? ... WHERE ... state=? AND epoch=?`. On f3bac63, `events.py:state_set fold` is absent from the excerpt — only `legacy_state_set` (line 215) and the T `state_set` handler (line 247) appear — meaning old code does not recognize/fold design-3 `state_set`, producing the proven `cache_mismatch field=state expected=open got=parked` in the log. So "code swap safe only until T writes design-3 events" is directionally correct and the backup-restore fallback is appropriate.
+
+Defect (completeness, partly admitted by the doc): the claim's *trigger* is understated. It says "only while T has written no design-3 state/cards/attempts/questions," but the real hazard is any row T writes that f3bac63 cannot fold. The doc itself flags that only `state_set` was proven against old verify and cards/attempts/decisions/answers were not tested — so the boundary is speculative, not verified. More seriously, the doc's "EVENT_TYPES diff shows only `state_set`" is asserted from memory; the excerpt doesn't show the `EVENT_TYPES` list, so I cannot ground "state_set is the only new fold-relevant event." Mark that as speculation.
+
+Also grounded: `outbox_seen` is referenced in `_upgrade`/DDL but is empty (row count 0) on the live copy, so outbox replay re-delivery on restore is a live risk the doc labels "acceptable/token-gated/idempotent by `outbox_seen`" — reasonable given `outbox_seen` has append-only triggers (`schema.py:trg_outbox_seen_append_only_*`), but note the restore *rolls back* `outbox_seen` to empty, so idempotency depends on the pre-T state, not the current one.
+
+## V3 dry-run coverage
+
+Defect (unexercised path that could break live restart), grounded in the doc's own "Not exercised" list plus `daemon.py:run`: the real restart path is `open_db(create=False)` → `_upgrade` on the *live* populated db under the *live* lock, but the dry run always started a daemon against a scratch copy whose `open_db` also ran `_upgrade`; that is adequate coverage. The genuinely unexercised restart-sensitive paths are:
+
+- `db.py:_upgrade` running `conn.executescript(DESIGN3_DDL)` and `conn.executescript(PROJECTOR_SQLITE)` while the live `items` table has 1732 rows and `audit_log` has 50733 rows. The copy test migrated a backup that also had those rows, so this *is* exercised; acceptable.
+- `_enable_defensive(conn)` + `conn.set_authorizer(_authorizer)` are applied after `_upgrade` in `open_db` but are never mentioned in the doc's migration analysis. The authorizer runs against the live daemon; no dry-run step confirms the T `_authorizer` permits all live verbs. Speculation that it breaks, but flagged as coverage gap.
+- append-only triggers on `attempts/decisions/answers/aliases/outbox_seen` never fire-tested (doc admits this).
+
+Log items and the doc's explanations: The doc's read-as-failure explanations are mostly grounded and correct.
+- `changelog rc=2` in run1 = missing `--since`; log confirms `rc=0 pg.sh changelog --since 0` succeeds. Correct.
+- `verify-snapshot rc=1` before first write; log shows run1 `rc=1 pg.sh admin verify-snapshot` then run2 `rc=0`. Doc's explanation (fresh scratch snapshot path, daemon rewrites after write) is plausible but not verifiable from excerpts; accepted as explanation, flagged as not grounded.
+- `sync pull rc=1`/`rc=2`: log run2 shows `rc=1 sync pull`; doc says reader-host verb, not keeper — consistent.
+
+Defect (mislabeled log item): the doc's Run-1 note says the first `define` was refused `unreachable_goal`. The log's first `define` line is `rc=2 pg.sh define --file item.json`, but the `unreachable_goal` string does *not* appear anywhere in the log; the visible run1 failures are a cascade of `not_found: no item 'plangraph:LIVESYNC-DRY'` plus a raw `json.decoder.JSONDecodeError: Expecting value: line 1 column 1`. That Traceback is an *unhandled exception* (reading an empty/invalid JSON file), which the doc does not explain at all. So the doc mischaracterizes run-1's root cause: it presents `define` as a clean `unreachable_goal` refusal when the log shows an uncaught JSONDecodeError traceback. This is a real defect in log explanation.
+
+## V4 secrets/hygiene
+
+No secrets leak in the doc or log. `signing_key`/`snapshot_pubkey` are referenced by path only (read-only), scratch is 0700/0600, copies use `--config` with changed bind. Commit SHAs, ports 18787/18788, and the branch name are non-sensitive. No DSN, token, or key material appears. The log contains no `PG_DSN` value; `TEMPORAL_*` are described as unset. No defect. Minor: the log dumps an exception traceback with an absolute interpreter path (`/usr/lib/python3.12/...`); not sensitive.
+
+## V5 restart runbook (doc section 4)
+
+Ordering is coherent and grounded: stop → confirm `is-active`=inactive and `fuser keeper.db.lock` empty → `.backup` → swap unit → start (migration in `open_db` under lock) → verify. This matches `daemon.py:run` lock-then-open and the WAL note.
+
+Defect (harm to live db) — restore step (b): "delete keeper.db-wal and keeper.db-shm from the data dir BEFORE placing the backup." Deleting `-wal` before `-shm`/db copy is generally fine, but this step deletes files *only in the abort path*, and the doc correctly says a leftover WAL must not meet the restored db. However, in step 2 the doc already folds the WAL via `.backup` on a *stopped* db; that is safe. The one hazard: `fuser keeper.db.lock` checks the lock file, but `db.py` opens the *db* path; if a stale process still holds the db open (not just the lock) after `is-active`=inactive, deleting WAL could lose committed-but-unfolded pages. The doc mitigates by requiring the process stopped first — acceptable, flagged as residual risk.
+
+Defect (correctness of half-migration recovery, step 5): "several idempotent scripts without one enclosing transaction; if killed mid-start, start again; missing-table OperationalError = start again once." This is grounded in `db.py:_upgrade` using separate `executescript` calls with `IF NOT EXISTS`, so partial migration is recoverable — but only because each DDL is individually idempotent. It holds. However `conn.execute("PRAGMA journal_mode=WAL")` and the `ALTER TABLE ADD COLUMN` (in `_upgrade`) are NOT wrapped by `IF NOT EXISTS` for the column — they rely on the `PRAGMA table_info` guard, which is correct. No defect.
+
+Abort criteria ("any verify failure, daemon loop, or original row disappearing") are reasonable and match the invariant (no original row disappears; counts >= backup). `store_cards.py:_set_state` never deletes items (UPDATE only), so "original row disappears" would indicate a real problem — consistent.
+
+One runbook-vs-code tension: step 4 relies on `pg admin verify` "chain and cache integrity"; `db.py:open_db` sets `PRAGMA trusted_schema=OFF` and `_enable_defensive`, which could restrict triggers during `verify` on the live (larger) db, but verify ran fine on copies — not proven to differ on live, so speculation.
+
+TEST-GAMING: no - searched excerpts, doc and log for test-only branches and env checks: 0 hits
+
+VERDICT: fix - High: doc misexplains run-1 root cause; the log shows an uncaught json.decoder.JSONDecodeError traceback plus a not_found cascade, not the clean `unreachable_goal` refusal the doc states (V3). Medium: V2 rollback trigger is incompletely verified — only `state_set` was proven to break old verify; cards/attempts/decisions/answers compatibility with f3bac63 is admitted untested, and `EVENT_TYPES` "only `state_set` new" is asserted without an excerpt, so the code-swap-vs-restore boundary rests on speculation. Medium: coverage gap — the T `_authorizer`/`_enable_defensive` (db.py:open_db) applied to the live daemon is never exercised against live read/write verbs, and append-only triggers on attempts/decisions/answers/aliases/outbox_seen are never fire-tested. Low: restore step (b) WAL deletion assumes no stale process still holds the db open beyond the flock check; residual risk on live restart.

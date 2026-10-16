@@ -1,0 +1,58 @@
+**V1 – Migration safety**
+
+*Evidence*  
+- `src/plangraph/keeper/db.py:open_db` obtains the exclusive lock via `kdb.lock_keeper` **before** calling `_upgrade` (`daemon.run` → `lock_keeper` then `open_db`).  
+- `src/plangraph/keeper/db.py:_upgrade` iterates over `_ADDED_COLUMNS` and runs `ALTER TABLE … ADD COLUMN` only when the column is absent, then executes a series of `executescript(... IF NOT EXISTS ...)` for all new tables, triggers and projector DDL.  
+- The function comment explicitly states “Add any column/table/trigger an older database lacks; **idempotent, DML‑free**”.  
+- PRAGMA settings (`journal_mode=WAL`, `busy_timeout`) are applied before the migration, and the backup procedure in the runbook uses `sqlite3.Connection.backup`, which folds the WAL safely.
+
+*Assessment*  
+The migration runs under the keeper lock, so no concurrent writers can interleave. All schema changes are idempotent and do not modify existing rows, eliminating data‑loss risk. The only non‑atomic element is the series of separate `executescript` calls, but each statement is `IF NOT EXISTS`, so a half‑finished run leaves the database in a state that a subsequent start can finish safely (the runbook explicitly mentions the “half‑migration” retry). No defect identified.
+
+---
+
+**V2 – Rollback claim**
+
+*Evidence*  
+- Rollback rehearsal (section 3 of the DOC) shows that after a `state_set` event (`store_cards.set_state` in `src/plangraph/keeper/store_cards.py:set_state`) the old daemon’s `admin verify` reports a `cache_mismatch` on the `state` field.  
+- The doc states: “rollback via code swap is safe only while T has written **no design‑3 event** … After that, restore the pre‑restart backup …”.  
+
+*Assessment*  
+The documented limitation is correct: the only demonstrated incompatibility is the new `state_set` event, and the conservative rule “any design‑3 write forces a full restore” covers this case and any future incompatibility. The rollback steps (stop → backup → restore → start) match the code requirements (WAL‑safe backup, removal of `*.wal`/`*.shm`). No defect found.
+
+---
+
+**V3 – Dry‑run coverage**
+
+*Evidence*  
+- The dry‑run log exercises read verbs, basic write verbs, the new `state_set` path, and the new `/v1/*` HTTP endpoints.  
+- Unexercised paths listed in the DOC: **Postgres backend**, **backup_prune thread**, **Temporal‑enabled signal path**, **append‑only triggers for attempts/decisions/answers** (update/delete), and higher‑level verbs `rehome`, `delegate`, `token`, etc.
+
+*Defect / uncovered risk*  
+1. **backup_prune thread** – The daemon can start the optional `backup_prune` background thread (config key `backup_prune.enabled`). This path is not exercised in the dry‑run; if the configured backup directory is missing or permissions are wrong, the thread could raise uncaught exceptions and crash the daemon.  
+2. **Non‑atomic migration** – `_upgrade` runs several `executescript` calls outside a single transaction. Although each statement is `IF NOT EXISTS`, a sudden termination (e.g., OOM or disk‑full) could leave the database with a partially applied set of DDL objects. The runbook mentions restarting to complete the migration, but does not verify that the daemon correctly detects and recovers from an **OperationalError** caused by a missing object, which could result in a start‑up failure that is not automatically retried.  
+
+*Log explanation* – All rc ≠ 0 entries in the dry‑run log are correctly explained in the DOC (e.g., `changelog rc=2` → missing `--since`; `admin verify‑snapshot rc=1` → empty snapshot path; initial `define` failure → unreachable goal). No discrepancy found.
+
+---
+
+**V4 – Secrets / hygiene**
+
+*Evidence* – The DOC and dry‑run log contain only filenames, ports, and generic config keys. No private keys, passwords, or tokens are printed. The only references to signing keys are file‑path placeholders, never the key material itself.  
+
+*Assessment* – No sensitive information is leaked. No hygiene defect.
+
+---
+
+**V5 – Restart run‑book (section 4)**
+
+*Evidence* – Steps 1‑6 of the run‑book follow the exact order required by the code: stop the daemon (releases `keeper.db.lock`), make a WAL‑safe backup via `sqlite3.Connection.backup`, delete any stray `*.wal`/`*.shm` before restoring the backup, then start the daemon (which will run `_upgrade` under the lock). Abort criteria (“any verify failure, daemon exit/restart loop, or original row disappearing”) are consistent with the safety checks performed by `pg admin verify` and the daemon’s own health checks.
+
+*Defect* – None observed. All steps are safe for the live database; the only caution already included is **do not run any `pg admin` command while the daemon is up**.
+
+---
+
+**STANDING QUESTION v2**  
+TEST‑GAMING: no - searched all production source files (src/plangraph/keeper/*.py) and configuration documentation for test‑specific conditionals, environment checks, or overridden equality/hashing logic: 0 hits  
+
+VERDICT: pass

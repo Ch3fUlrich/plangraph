@@ -1,0 +1,63 @@
+## V1 — Migration Safety (db.py:open_db, db.py:_upgrade, daemon.py:run)
+
+The idempotent approach is structurally sound: `_upgrade` uses `CREATE TABLE/INDEX/TRIGGER IF NOT EXISTS` and guarded `ALTER TABLE ADD COLUMN`. Re-running after a partial failure is safe (doc §4.5 states this, and the DDL in `schema.py:DESIGN3_DDL` confirms every statement is `IF NOT EXISTS`).
+
+**Grounded findings:**
+
+- **No enclosing transaction across `_upgrade`.** `db.py:_upgrade` executes six sequential `executescript` calls plus a `PRAGMA table_info`-guarded ALTER loop. `open_db` sets `isolation_level=None` (autocommit). If the process is killed between, say, `OUTBOX_DDL` and `DESIGN3_DDL`, the database is in a mixed-state. The doc correctly calls this out (§4.5) and advises "start again once before aborting." This is adequate given all DDL is idempotent, but it means the operator must distinguish an OperationalError from a transient half-migration vs. a real schema bug. The doc's "start again once" heuristic could mask a genuine error for one restart cycle. (Low severity, but worth explicit log inspection guidance.)
+
+- **Locking and concurrency are correctly ordered.** `daemon.py:run` calls `lock_keeper` before `open_db`, so `_upgrade` executes while the file lock is held. The doc's claim that concurrent migration races are impossible is correct per the excerpts.
+
+- **`busy_timeout=5000` is set per-connection, not per-file-lock.** The doc cites `_DEFAULT_BUSY_MS` (5000) as a concurrency mitigation, but the flock serialises daemon restarts. The 5-second SQLite busy timeout protects concurrent *CLI readers* (who also call `open_db` → `_upgrade`) after the daemon is running. Since all DDL is no-op by then, this is safe. The doc's phrasing conflates flock serialisation with SQL busy_timeout, which is a minor imprecision, not a real defect.
+
+- **Backup procedure (§4 step 2) is correct**: `sqlite3.Connection.backup` folds WAL into the backup. The doc warns against bare `cp`. No defect.
+
+## V2 — Rollback Claim (section 3, store_cards.py:set_state, events.py state_set fold)
+
+The core claim — code-swap rollback is safe until a `state_set` event is written; afterward a backup restore is mandatory — is **directionally correct** but **incomplete** in two ways:
+
+1. **The doc restricts the danger to "design-3 state/cards/attempts/questions" but `events.py` line 247 shows `state_set` is one of several new event kinds.** The excerpt only shows `state_set` and `legacy_state_set`, but `store_cards.py:_set_state` is only one write path. The `ask_question`/`answer_question`/`resignal_question` doors (doc §1 HTTP) were exercised in copyB and presumably emit new event types not visible in the excerpts. If those event types also produce cache mismatches under f3bac63 replay, the rollback boundary is broader than "no design-3 state/cards/attempts/questions." The doc does not enumerate which event kinds are design-3 vs. safe for old code. **Speculation risk:** `answer_question` might write a `question_answered` event that old code's fold doesn't know, creating the same cache_mismatch pattern seen for `state_set`.
+
+2. **Data-loss framing:** The doc says "every write since T's first start (events, claims, evidence) is lost on backup restore." This is correct, but section 3's rollback procedure ("stop keeper, restore") omits a re-announce step for writers whose leases/claims are lost. Section 4 step 6 mentions outbox replay handles client-queued entries, but lease-expiry of claims during the stop window is not addressed. If a worker heartbeat fails while the daemon is down for rollback, its lease expires; on restore, the old DB won't know about the new claim, and the worker will re-claim (which is safe) or silently orphan a run.
+
+## V3 — Dry-Run Coverage vs. Doc Claims (section 2, log)
+
+**Defect — "log items read as failures, all explained" is false.** The doc explicitly lists only three explained items: `changelog rc=2`, `verify-snapshot rc=1`, and `sync pull rc=1`. The log shows an entire run-1 write cascade failing (`define rc=2`, `show rc=2`, `priority rc=2`, `claim rc=2` with `not_found` + `JSONDecodeError`, then `heartbeat rc=2`, `release rc=2`, `cancel rc=2`). The JSONDecodeError traceback indicates the test harness tried to parse empty/invalid output. The doc's step-6 description ("all rc=0") corresponds only to run-2; run-1 failures are omitted from the "all explained" claim. A reviewer reading the doc alone would not know run-1 was a test-harness file-creation error vs. a code bug.
+
+**Unexercised path that could break live restart:**
+
+- **`aliases` and `outbox_seen` append-only triggers**: `outbox_seen` has 0 rows (log step 3), so its triggers are never fired. `aliases` has 12 rows, but no verb in the dry run writes to it. The doc's "not covered" list (§5) mentions attempts/decisions/answers triggers but **does not list aliases or outbox_seen.** If `_upgrade_lock_triggers` (in `db.py`) installs triggers that conflict with T's DDL for these tables, that is unexercised. Given `lock_keeper` runs before `open_db` and triggers are `CREATE TRIGGER IF NOT EXISTS`, this is low risk, but the doc's risk list is incomplete.
+
+- **`pg admin verify` before migration**: The doc says "schema up to date" for step-2 migrate, but the earlier `pg admin verify` already opened the db (calling `_upgrade` via `open_db(create=False)`). This means `verify` silently migrated the copy, and `migrate` was a no-op. The runbook §4 step 3's migration happens identically at daemon startup. The doc does not call out that ANY CLI verb (not just `migrate`) triggers `_upgrade` on a not-yet-migrated db, which means step 4 verification is safe but a *premature* CLI invocation (if operator runs `pg admin verify` before starting the daemon) would also perform the migration — this is fine functionally but is not documented as an alternative path.
+
+## V4 — Secrets / Hygiene
+
+**No leaks found.** `signing_key` and `snapshot_pubkey` appear only as config key names and path references. `PG_DSN` appears as an environment variable name only, no value. Log shows internal filesystem paths (`<path>`) and localhost test ports (18787/18788), not the production bind. The `item.json` traceback exposes a file path and Python stdlib path; not sensitive in a production context. No tokens, secrets, or PII in the doc or log.
+
+## V5 — Restart Runbook (section 4)
+
+**Ordering is correct:** stop → backup → swap tree → start → verify → compare counts. No step writes to the live db except the daemon's own `open_db` → `_upgrade`, which is DDL-idempotent.
+
+**Grounded defect — WAL deletion on abort is correctly ordered but under-specified.** Step 5 says: "restore the step-2 backup (db + json + snapshot) AFTER deleting stale `keeper.db-wal` and `keeper.db-shm`." This is right: restoring a `.backup`-produced db while a stale WAL exists would cause SQLite to replay WAL frames (from the T run) into the restored database, effectively corrupting the rollback. But the doc says "AFTER deleting" — a safer phrasing would be "delete WAL/SHM, then restore backup into the same filename" to avoid a window where the daemon could auto-start (systemd `Restart=` policy) and open the stale-WAL database before the restore lands. If the unit has `Restart=on-failure`, the abort sequence has a race.
+
+**Abort criteria are reasonable:** "any verify failure, daemon exit/restart loop, original-table count change." The "original-table count change" invariant ("counts >= backup counts, chain ok") correctly excludes legitimate growth from client replays. No defect.
+
+**Verification step 4 uses `pg admin verify` which calls `open_db(create=False)`:** After the daemon is running and has migrated, this is a no-op `_upgrade` plus a read. It opens a concurrent connection under WAL mode. Safe. ✓
+
+**Step 3's warning "do NOT run `pg admin migrate` against the live db while the daemon runs"** is correct advice but slightly incomplete: as noted in V3, *any* CLI verb calls `open_db` → `_upgrade`. The warning should say "do not run any `pg` CLI verb against the live db until the daemon has completed its startup migration," though in practice WAL mode + `busy_timeout` + idempotent DDL make the risk negligible.
+
+## Summary of Defects (grounded in excerpts)
+
+| Severity | Vector | Finding |
+|----------|--------|---------|
+| Medium | V3 | "log items read as failures, all explained" — run-1 write cascade (8 rc=2 items + JSONDecodeError) is NOT explained; doc omits it. |
+| Medium | V5 | Abort WAL-deletion step has a theoretical race if systemd `Restart=` policy re-launches the daemon before restore completes; doc does not mention disabling restart during abort. |
+| Low | V2 | Rollback boundary may be broader than stated: answer/question event types were written in copyB but doc doesn't confirm old-code verify passes with them present (only state_set was demonstrated). |
+| Low | V3 | "not covered" list omits aliases and outbox_seen triggers (grounded in `schema.py:DESIGN3_DDL`). |
+| Low | V1 | "start again once" heuristic could mask a persistent schema error for one cycle without operator log inspection. |
+
+No high-severity or blocking defects found. Migration is DDL-only, idempotent, and lock-ordered. Rollback is viable with the stated procedure, caveats noted. Dry run is adequate for the stated production path (SQLite, no Postgres, no Temporal). Doc does not leak secrets.
+
+TEST-GAMING: no - searched src/ and code excerpts for test-only branches, DEBUG flags, env-gated paths, and test fixtures embedded in production logic: 0 hits
+
+VERDICT: fix - Medium: V3 doc falsely claims "all log failures explained" while omitting the 8-item run-1 write-cascade failure (JSONDecodeError trace visible in log); V5 abort procedure does not warn operator to disable systemd Restart= before WAL-deletion+restore sequence. Low: V2 rollback boundary may not cover question/answer event types proven in copyB; V3 "not covered" list omits aliases/outbox_seen append-only triggers; V1 half-migration heuristic could mask persistent schema failure.

@@ -1,0 +1,36 @@
+**V1 migration safety**  
+`src/plangraph/keeper/db.py:_upgrade` adds missing columns only when they are absent and executes all DDL with `IF NOT EXISTS`. No DML is performed, and the added columns are nullable (`TEXT`). The migration runs inside `open_db` after the exclusive flock obtained by `src/plangraph/keeper/daemon.py:run → kdb.lock_keeper`, so no other writer can be active while the schema is altered. The runbook backs up the database with `sqlite3.Connection.backup` after the daemon is stopped, which is safe for WAL‑mode databases (`PRAGMA journal_mode=WAL`). → **Adequate**, no data‑loss or lock‑contention risk evident in the excerpts.
+
+**V2 rollback claim**  
+During the rollback rehearsal the old code on a T‑migrated copy fails with  
+
+```
+{'key': 'plangraph:LIVESYNC-DRY', 'code': 'cache_mismatch',
+ 'field': 'state', 'expected': 'open', 'got': 'parked'}
+```  
+
+(the `state_set` design‑3 event). This matches the doc’s statement that “code swap safe only until T writes design‑3 events … else restore backup”. The claim also covers other design‑3 tables (cards, attempts, questions) which would similarly break the old code’s cache expectations. No contradictory evidence in the material. → **Correct and complete**.
+
+**V3 dry‑run coverage**  
+Unexercised paths that could break a live restart:
+
+* **Postgres backend** – never opened in the dry run; migration code for Postgres lives in `src/plangraph/keeper/db_pg.py` (imported lazily) and could behave differently.  
+* **Temporal signal path** – the new inbox routes forward to Temporal, never invoked.  
+* **`backup_prune` thread** – mentioned in `daemon.run` comment (“optional `backup_prune` thread (default OFF)”) but not started in the dry run; it could race with a manual backup taken in the runbook.  
+* **Outbox‑related triggers** – `src/plangraph/keeper/schema.py:DESIGN3_DDL` defines append‑only triggers for `outbox_seen`; they were not exercised because no outbox writes occurred.  
+* **Other write verbs** – `submit`, `evidence`, `verdict`, `waive`, `withdraw`, `close`, `legacy`, `rehome`, `delegate`, `token` were only parsed for `--help`. Errors in those paths would not be caught.  
+
+All log items are explained in the doc: e.g. `changelog rc=2` = missing `--since`, `admin verify‑snapshot rc=1` = first‑run missing signature, `admin verify‑anchor rc=2` = “anchors not configured”. No mismatch between log and documentation.
+
+**V4 secrets / hygiene**  
+The dry‑run output contains only local file paths and command‑line return codes. No cryptographic keys, passwords, or private tokens appear. The configuration files referenced (`keeper.json`, signing key paths) are not displayed. → **No sensitive information leaked**.
+
+**V5 restart runbook**  
+Steps (stop → backup → swap → start → verify) follow the order described in section 4. The backup uses `sqlite3.Connection.backup`, which is safe after the daemon releases its lock. Verification criteria (admin verify, table‑count stability, CLI health checks) are appropriate. No step introduces a risk of corrupting the live DB; the only potential hazard would be running `pg admin migrate` while the daemon is alive, which the runbook explicitly forbids. → **Runbook is sound**.
+
+---
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched all src/*.py for test‑only conditionals, pytest/unittest env checks, and for constants that match test expectations: 0 hits
+
+VERDICT: pass

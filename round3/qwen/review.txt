@@ -1,0 +1,83 @@
+# V1: Migration Safety
+
+**Idempotent open_db._upgrade is adequate for the DDL-only changes shown.** The `_ADDED_COLUMNS` loop guards each ALTER with `PRAGMA table_info`, and all subsequent scripts use `CREATE TABLE IF NOT EXISTS` / `CREATE TRIGGER IF NOT EXISTS` (schema.py DESIGN3_DDL lines 50, 57, 70, 89, 115, 131, 151, 158, 167, 174, 186, 193). With `isolation_level=None` (db.py open_db line 38), each statement autocommits, so partial failure leaves no transactional corruption; re-running is safe.
+
+**Lock ordering is correct.** `daemon.py:run` calls `lock_keeper` before `open_db`, so `_upgrade` executes while the exclusive flock is held. No other writer can race.
+
+**Grounded defect:** The doc states `_upgrade` is "DML-free" and this is true for the shown code, but the doc's own statement "No existing table altered; no ALTER on existing columns" is misleading. `_upgrade` iterates ALL of `_ADDED_COLUMNS` (db.py line 99-102) and would issue ALTERs on the `items` table if columns were missing. The correct claim is "`_ADDED_COLUMNS` is the same list in f3bac63 and T, so no new ALTER targets are introduced" — which is what the parenthetical means, but a reader skimming could misinterpret.
+
+**Backup procedure:** The doc correctly requires stopping the daemon before `.backup` (WAL checkpoint on stop) and explicitly warns against running `pg admin migrate` while the daemon is up. No defect here.
+
+**Concurrency with other readers:** In WAL mode, read-only clients (e.g., `GET /inbox` handler) can operate during short DDL no-ops. No evidence of a writer-side lock escalation that would block the daemon's own `_write()` path during migration; migration completes before `server.start()`.
+
+---
+
+# V2: Rollback Claim
+
+**The claim is internally inconsistent across sections 3 and 4.**
+
+Section 3 (rollback rehearsal): "rollback via code swap is safe **only while T has written no design-3 state/cards/attempts/questions**" — this limits the dangerous condition to new event types and tables.
+
+Section 4 (abort/rollback criteria): "Code-swap rollback (no restore) is allowed ONLY if T wrote nothing since start; any T write (state_set, questions/answers, cards, attempts, **normal claims**) means restore the backup." — this adds "normal claims" to the trigger.
+
+**Grounded defect (moderate):** The evidence supports only `state_set` breaking old verify (`events.py:247` folds `state_set` into `item["state"]` as a new event kind; old code has no handler for it, producing cache_mismatch). Normal claims use pre-existing event kinds that old `events.py` folds correctly. The doc acknowledges this ("Only state_set was proven") but then states the broader rule as fact. A runbook reader following section 4 would over-restore (losing hours of writes for a condition that provably can't happen). The correct rule is the narrower one in section 3; the wider rule is **speculation** dressed as policy.
+
+**Completeness gap:** The doc does not mention that restoring the backup also reverts any **normal** writes (claims, heartbeats, defines) that occurred while T was running — data loss proportional to T's uptime. Section 4 step 4 notes this ("every write since T's first start is lost on backup restore") but the rollback procedure (step 5 a-e) doesn't repeat this warning at the point of action. A panicked operator might not connect the steps.
+
+**WAL handling in rollback:** Step 5(b) "delete keeper.db-wal and keeper.db-shm BEFORE placing the backup" is correct and grounded — if a stale WAL from T's writes meets a restored pre-T db, SQLite may replay those pages. No defect.
+
+---
+
+# V3: Dry-Run Coverage
+
+**Correctly explained log items:**
+- `changelog rc=2` in run 1: missing `--since` arg. Log confirms rc=0 with `--since 0` in run 2.
+- `verify-snapshot rc=1`: scratch config pointed at a new snapshot path with no prior write. Log confirms rc=0 in run 2 after writes.
+- `sync pull rc=1`: reader-host verb needing `pull` config object. Correct.
+- Run 1 cascade (rc=2 items after failed `define`): all trace to `not_found` after the `unreachable_goal` refusal. Doc explains re-run with `kind=goal`. Log confirms all-rc=0 run 2.
+
+**Unexercised path that could break the live restart (grounded concern):**
+
+`daemon.py:run` calls `outage.check_and_record(store, server.system, cfg)` (M2B-OUTBOX). The dry run never exercised the outage path because the copy daemon started fresh (no prior "shutdown" event in the copy's event history to trigger downtime detection). On a live restart, the daemon would see the gap between last event timestamp and restart time and invoke `check_and_record`. If T's outage logic interacts with the new `OUTBOX_DDL` or `outbox_seen` table in a way that differs from f3bac63, this path is untested. **Speculation:** the risk appears low because outbox_seen was already present in f3bac63 (doc lists it as an original table with 0 rows), but the specific freeze-clocks-over-downtime logic for T's code was not exercised.
+
+**Doc inaccuracy (minor):** "Not exercised: ... evidence/set-kind/token (--help parsed only)" but the log shows `rc=2 set-kind plangraph:NOPE question`, `rc=2 evidence plangraph:NOPE decision x`, `rc=2 token plangraph:NOPE --role worker --run r1` — these are real invocations (not --help), they just failed on a non-existent item. The *successful write path* for these verbs was not tested, which is the material point, but the parenthetical characterization is wrong.
+
+**Append-only triggers (outbox_seen, aliases):** The dry run never attempted UPDATE or DELETE on these. The triggers are syntactically correct in schema.py (lines 57-62, 97-102) but were never fired at runtime. This is correctly noted as a residual risk.
+
+---
+
+# V4: Secrets / Hygiene
+
+**No leaks identified in the provided material.**
+- `signing_key` / `snapshot_pubkey`: referenced by path only; actual key file contents never appear in the log or doc.
+- Config values for DSN: `PG_KEEPER_BACKEND` explicitly told to remain unset; no DSN strings appear.
+- Scratch files: 0700 dir, 0600 files, "Scratch deleted" after test.
+- The live path `<path>` is a developer-local temp path, not sensitive in the security sense.
+
+**Minor observation:** The doc exposes the full commit hash of T (`1b923e58ba598291aa1a19c6645a64306e452ebf`) and internal branch names. For a production runbook this is normal and not a leak.
+
+No defect.
+
+---
+
+# V5: Restart Runbook (Doc Section 4)
+
+**Ordering:** stop → backup → swap tree → start → verify. Correct: the stop before backup ensures WAL checkpoint and no concurrent writer. The doc says to verify with `is-active` and confirm no lock holder. No defect.
+
+**Step 3:** "do NOT run `pg admin migrate` against the live db while the daemon runs." Correct — open_db calls _upgrade which acquires the write lock via SQLite. A competing CLI migrate would block on busy_timeout (5000ms, db.py `_DEFAULT_BUSY_MS`) and then fail.
+
+**Step 4 verification:** Running `pg admin verify` while the daemon is active is safe because _upgrade is all no-ops after first migration (columns exist, IF NOT EXISTS) and the verify query path only reads. WAL mode permits concurrent readers. No defect.
+
+**Step 5 half-migration guidance:** "start it again (IF NOT EXISTS completes the rest)" — correct per code analysis. "a startup OperationalError about a missing table = start again once before aborting" — correct: if PROJECTOR_SQLITE creates tables that _upgrade_lock_triggers references, and the process is killed between them, a missing-table error is expected on retry because _upgrade re-runs the full sequence idempotently.
+
+**Abort criteria:** "any verify failure, daemon exit/restart loop, or an original row disappearing" — sound.
+
+**Grounded concern (low severity):** Step 5(a) says "confirm with `is-active` and that no keeper.db.lock holder remains." The doc correctly identifies this check. However, `lock_keeper` uses an OS-level flock (visible via `fuser` or `/proc/locks`), not a PID file. The doc doesn't specify HOW to confirm no lock holder remains. This is operational detail that could matter on a machine with stale file descriptors, but is not a logical defect in the runbook.
+
+**No step harms the live db.** The backup is read-only (`.backup` ro URI), the migration is idempotent DDL, and the rollback procedure correctly deletes WAL/SHM before placing a backup copy (preventing WAL replay against restored data).
+
+---
+
+TEST-GAMING: no - searched src/plangraph/keeper/db.py, daemon.py, store_cards.py, events.py, schema.py excerpts for test-only branches, env guards, or skip-if-test conditionals: 0 hits
+
+VERDICT: fix - V2: rollback rule in section 4 contradicts section 3 by including "normal claims" as a backup-restore trigger; the proven boundary is design-3 events only (state_set, questions/answers, cards/attempts/decisions), and the broader rule is ungrounded speculation that would cause unnecessary data loss during rollback; severity: medium (operational guidance defect).

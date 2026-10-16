@@ -1,0 +1,86 @@
+## V1: Migration Safety
+
+The idempotent migration-on-open is structurally adequate for normal operation but has a partial-failure window not addressed in the doc.
+
+**Grounded adequacy:**
+- `db._upgrade` (src/plangraph/keeper/db.py) uses `CREATE TABLE IF NOT EXISTS` and `CREATE TRIGGER IF NOT EXISTS` throughout DESIGN3_DDL, so re-running is safe (confirmed empirically in doc §5: "migrate ran 3x… all 'schema up to date'").
+- No existing tables are altered: `_ADDED_COLUMNS` is described as unchanged, and the new objects are all new tables/triggers/indexes. The `ALTER TABLE ... ADD COLUMN` loop would be a no-op on already-migrated columns.
+- `daemon.run` (src/plangraph/keeper/daemon.py) acquires the exclusive flock via `lock_keeper` BEFORE calling `open_db`, so two daemons cannot race the migration. `busy_timeout` defaults to 5000 ms (`_DEFAULT_BUSY_MS`).
+- The doc correctly prohibits `pg admin migrate` against the live db while the daemon runs.
+
+**Defect (groundable):** `_upgrade` executes five sequential `conn.executescript(...)` calls (`ALIASES_DDL`, `RUN_TOKENS_DDL`, `OUTBOX_DDL`, `DESIGN3_DDL`, `PROJECTOR_SQLITE`) without an enclosing transaction. `isolation_level=None` (line visible in `open_db`) puts every statement in autocommit. If the process is killed between, say, `OUTBOX_DDL` and `DESIGN3_DDL`, the database is in a half-migrated state. Recovery is possible (next `open_db` re-runs the missing scripts under IF NOT EXISTS), but the doc's "idempotent, DML-free" framing implies atomicity it doesn't have. Speculation risk is low (the window is milliseconds), but the runbook (step 5 abort criteria) does not list "daemon startup fails with missing-table OperationalError" as a known half-migration symptom, and no explicit "just restart" guidance appears.
+
+---
+
+## V2: Rollback Claim
+
+The doc's claim—"code-swap rollback is safe only until T writes a design-3 `state_set` event; after that restore backup"—is **directionally correct but incompletely specified**.
+
+**What the excerpts confirm:**
+- `events.py` line 247: `elif kind == "state_set"` is a new projector branch. The old code at f3bac63 lacks this branch. `store_cards.set_state` appends event kind `"state_set"` and updates the `items` row. Old replay does not fold it → `cache_mismatch` (empirically confirmed in the log's rollback section: `{'code': 'cache_mismatch', 'field': 'state', 'expected': 'open', 'got': 'parked'}`).
+- New tables (cards, attempts, questions, etc.) are invisible to old queries.
+- Old code serves fine on a T-migrated copy **until** `state_set` is written.
+
+**Incompleteness (groundable from doc §3 + code):**
+- The rollback trigger should be "any write verb that produces an event kind unknown to the old projector on an existing item." The doc only names `state_set` → `set_state`. No other new event kind is visible in the excerpts, so within the provided material the claim is correct. However, the doc does not prove that no other code path in T appends an unrecognized event on existing items (e.g., a "card_linked" event touching an item's event stream). This is **speculative risk**, not a code-grounded defect.
+- The rollback instruction ("stop keeper, restore backup db and json, start f3bac63") is correct, but the doc does not mention that the restored WAL sidecars must be cleaned up or replaced. `sqlite3.Connection.backup` produces a single file; if stale `-wal`/`-shm` files remain from the T run, old code opening the DB may replay WAL frames into it, re-introducing the `state_set` rows. The doc's own step 4 runbook warns about this for backup (`"a plain cp needs -wal/-shm too"`), but the rollback path in section 3 omits the equivalent cleanup instruction.
+
+---
+
+## V3: Dry-Run Coverage
+
+**Correctly explained log items (confirmed against log):**
+- `changelog rc=2 bytes=117` → doc: "missing --since arg"; log run2 shows `rc=0 pg.sh changelog --since 0`. ✓
+- `verify-snapshot rc=1` (run2 first occurrence before write) → doc: "copy config pointed at fresh scratch snapshot path." ✓ (then rc=0 after write cycle)
+- `sync pull rc=1` → doc: "reader-host verb, not a keeper verb." ✓
+- `rc=2 pg.sh define --file ... item.json` (run 1): The JSONDecodeError traceback shows the file was empty/malformed on first attempt, causing cascading `not_found` errors. The doc silently drops this first-attempt failure without explanation. This is a **presentation defect**: an operator reading the doc and log together would see a confusing gap. Run2 succeeds, suggesting the file was written between attempts.
+
+**Unexercised paths that could still break the live restart:**
+
+1. **`set_state` write verb on the new code (forward direction):** The log's run2 exercises claim/heartbeat/release/cancel (old verbs) but never calls `set_state` or any new card/question write path. `state_set` is only exercised in the rollback section (§3) to prove old code fails. The new code's projector fold + round-trip (write → verify → re-read state) is **not** exercised in the dry run. If the new `_append` for `state_set` has a schema bug (e.g., missing column in payload), the live daemon would fail on first `set_state` call. This is the most significant coverage gap.
+
+2. **New authenticated HTTP POST routes** (`/v1/questions`, `ask_question`, `answer_question`, `resignal_question` per doc §1 "HTTP"): Never appear in the log. Only `GET /inbox 200` is tested. A route-registration error or missing Temporal env config could cause 500s on live.
+
+3. **Append-only triggers on attempts/decisions/answers:** Doc §5 acknowledges "never written by a verb here." If a verb writes to these tables and the trigger fires unexpectedly (e.g., an UPDATE the code performs for normalization), the daemon would RAISE ABORT. Not tested.
+
+4. The "Not exercised" list in the doc omits items 1 and 2 above, understating the coverage gap.
+
+---
+
+## V4: Secrets/Hygiene
+
+**No leaks found in the doc or log.**
+- Config key names (`signing_key`, `snapshot_pubkey`) appear as identifiers only; no file contents or values.
+- The doc explicitly notes "signing_key/snapshot_pubkey by path (read-only)."
+- Ports (18787/18788) are localhost scratch, not production.
+- Commit hashes are internal git refs, not credentials.
+- The JSONDecodeError traceback exposes only stdlib paths (`/usr/lib/python3.12/json/__init__.py`), no user data.
+- File permissions (0600/0700) are stated and appropriate.
+- No DSN strings, no Temporal namespace values, no API tokens appear.
+
+No defect.
+
+---
+
+## V5: Restart Runbook (doc §4)
+
+**Ordering is correct:** checkout T → edit unit → stop daemon → backup → start → verify → (abort if needed).
+
+**Defect — spurious abort from client replay race:**
+Step 4 requires "table counts (10 originals) equal the pre-restart counts." Step 6 states "clients queued during the stop replay after start." Between step 3 (daemon starts, serving) and step 4 (operator runs count check), outbox clients on writer hosts will reconnect and replay. This increments `items`, `events`, `audit_log`, and possibly `principals`. Step 5's abort criterion is "original-table count change." The runbook will **falsely abort** if even one client replays a queued write during the verify window. The doc does not include a step to hold clients (e.g., block firewall, set a maintenance gate) or to exclude client-replay deltas from the comparison. This is grounded in the tension between step 6's description and step 4's requirement.
+
+**Other runbook observations:**
+- Step 2's backup procedure is correct: stop → `.backup` (folds WAL) → copy json/snapshot. No step would harm the live db.
+- Step 3 correctly warns against running `pg admin migrate` while daemon holds the lock.
+- Step 5 abort path ("restore step-2 backup, repoint to f3bac63, start, verify") is sound, but inherits the V2 WAL-cleanup gap (see above).
+- No step to delete or quarantine stale `-wal`/`-shm` files after restoring the backup. If `.backup` was done while clean, this shouldn't apply—but if the restore target already has `-wal` files from the aborted T run, SQLite could replay them.
+
+**No step would actively corrupt the live db.** The procedure uses `sqlite3.Connection.backup` (WAL-safe, per doc) and the daemon is stopped first.
+
+---
+
+STANDING QUESTION: Is there a test-only branch, test-environment check, or test-gaming pattern hidden in the excerpts or log? No such pattern exists: `_ADDED_COLUMNS` is unconditional production data; `select_backend` reads env/explicit param (production control flow); `open_db(create=...)` is a runtime API parameter, not a test gate; `SETTABLE_STATES` is a production constant; the `create=False` path with `RuntimeError` is production error handling. No test markers, no `if "test" in sys.argv`, no conditional code paths gated to test contexts.
+
+TEST-GAMING: no - searched src/ and log for test-only branches, env checks, and conditional guards: 0 hits
+
+VERDICT: fix - (1) Runbook §4 step-4 count check will falsely abort during client replay window (V5, high); (2) Forward dry run never exercises `set_state` write path on new code despite doc §3 implying coverage (V3, medium); (3) Rollback path in §3 omits explicit instruction to remove stale -wal/-shm before restart on old code (V2, medium); (4) New HTTP POST routes (/v1/questions, ask_question, answer_question, resignal_question) are never exercised in dry run (V3, low-medium); (5) Doc silently drops the run-1 JSONDecodeError cascade without explaining it to the operator (V3, low); (6) `_upgrade` lacks transactional atomicity—partial-failure recovery path is undocumented (V1, low)
