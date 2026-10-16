@@ -3,8 +3,8 @@ Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-b
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: D-1442 judge only HIGH (keeper engine/live, schema, auth), standard = self-approve on seats. Cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
-## Main = cd85d13 (#32 snapshot-pg 10:5xZ; #29 7f5a35a; #31 de11496; #30 e790e34 09:53Z; prev 8165c22) · keeper live cd85d13 (GO D-1482 10:52Z, drop-in live-sync-cd85d13.conf, backup backups/live-sync-cd85d13-20261016T105157Z keeper.db f1cde90f; prev 8165c22 (D-1463) / 1b923e5; worktree-proposal f3bac63 = 24 h rollback) (CI on workst runner)
-DONE in keeper (commit+ci evidence + seat verdicts): KEEPER-SNAPSHOT-PG (#32 cd85d13 head c12e5b1, judge ACCEPT cond. Qwen pass; seats-archive/snapshot-pg-c12e5b1; live 10:52Z), CI-PYTEST-SPEED (#30 e790e34), RT-P1-KEEPER-PG-PREP (#29 7f5a35a, judge ACCEPT), RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
+## Main = 27c95c3 (#33 followups 11:1xZ; #32 cd85d13; #29 7f5a35a; #31 de11496; #30 e790e34 09:53Z; prev 8165c22) · keeper live cd85d13 (GO D-1482 10:52Z, drop-in live-sync-cd85d13.conf, backup backups/live-sync-cd85d13-20261016T105157Z keeper.db f1cde90f; prev 8165c22 (D-1463) / 1b923e5; worktree-proposal f3bac63 = 24 h rollback) (CI on workst runner)
+DONE in keeper (commit+ci evidence + seat verdicts): KEEPER-SNAPSHOT-FOLLOWUPS (#33 27c95c3 head 590badd, judge ACCEPT; GO req live optional), KEEPER-SNAPSHOT-PG (#32 cd85d13 head c12e5b1, judge ACCEPT cond. Qwen pass; seats-archive/snapshot-pg-c12e5b1; live 10:52Z), CI-PYTEST-SPEED (#30 e790e34), RT-P1-KEEPER-PG-PREP (#29 7f5a35a, judge ACCEPT), RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
 RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ),
 RT-P1-INBOX-CODE (PR #18 b5f45c9; router evidence commit 68a9180, kinds->[commit]; openai seat inbox-seats/r2-1cb7acc),
 RT-P1-WORKER-CODE (PR #13 merged main 66d87fe, head dd954e7 CI attempt-1 green; early-cancel hole fixed; openai = gpt-oss delta seat
@@ -16,7 +16,7 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
 | KEEPER-CI-NEWEST-WINS (p2 HIGH, D-1479) | claimed epoch 1 (lease 12:25Z); brief e82499e; routed to workst-L1-autoos (workst launch); no session id by 12:00Z -> tell routing, coding.vm | MERGE-READY -> judge -> merge -> D-915 restart |
-| CI-PG-CONTRACT-TIMEOUT (p2) | instr #31 de11496; root fix #32 landed | D-1482: build-L2-snapshot-pg runs 10 green pg runs under load, then KEEPER-SNAPSHOT-FOLLOWUPS (p3, mine) | evidence -> verdicts |
+| CI-PG-CONTRACT-TIMEOUT (p2) | instr #31 de11496; root fix #32 landed | D-1482: build-L2-snapshot-pg runs 10 green pg runs under load (on cd85d13; run1 38890010881 ok) | evidence -> verdicts |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
