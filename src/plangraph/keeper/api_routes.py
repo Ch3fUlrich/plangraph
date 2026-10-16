@@ -22,7 +22,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
-               "withdraw_review", "set_kind", "set_metrics", "governor_override"}
+               "withdraw_review", "reopen", "set_kind", "set_metrics",
+               "governor_override"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -62,6 +63,11 @@ def _close_on_decision(store, principal, body, need):
 
 def _withdraw_review(store, principal, body, need):
     return store.withdraw_review(principal, body.get("key"), body.get("decision_id"))  # role first (403)
+
+
+def _reopen(store, principal, body, need):
+    return store.reopen(principal, body.get("key"), body.get("reason"),
+                        body.get("decision_id"))   # role first (403)
 
 
 def _set_legacy_state(store, principal, body, need):
@@ -123,6 +129,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
                 "withdraw_review": _withdraw_review,
+                "reopen": _reopen,
                 "set_kind": _set_kind,
                 "answer": _answer,
                 "rehome": _rehome,
