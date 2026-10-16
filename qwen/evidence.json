@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "C:\\fleet\\seats\\plangraph\\ci-conclusions-1621385\\qwen\\out.json",
+      "sha256": "04b565f0c952b5da63f223a9a9c05cde0179170399e0f84bbb22346350c98d37",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "a5413fd7-e9d4-4860-b942-3554deae5e51",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched src/plangraph/keeper/evidence.py and tests/test_evidence.py for test-only branches, env/flag checks, or assertions that bypass the verifier logic: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "61a1fe9693f5e62d7c5bd639b156af74d7335f0aa62901deb58bb0bdaaac4e4d"
+}

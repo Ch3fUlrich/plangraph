@@ -1,0 +1,31 @@
+V1 – Newest‑per‑name selection  
+File src/plangraph/keeper/evidence.py function _ci_conclusion implements the required logic:  
+- Picks the newest run per check name using a key `(rid_int, started_str)` where `rid_int` is derived from the raw “id” (int → value, numeric‑string → int, otherwise 0) – lines 9‑23.  
+- Tie‑breaks on the ISO‑formatted `started_at` string – line 12.  
+- Uses the check “name” or “?” when missing – line 10.  
+All tests exercising old vs. newer ids, numeric‑string ids, non‑int ids, tie‑break, and missing names pass.
+
+V2 – Pending / failure / skipped precedence and fail‑closed edge cases  
+Same function _ci_conclusion (src/plangraph/keeper/evidence.py) handles these rules:  
+- Runs with `conclusion` `None` or empty/whitespace are treated as pending – lines 28‑33.  
+- Any run whose `status` key exists and is not “completed” forces pending – lines 34‑36.  
+- Normalises `conclusion` via `strip()` and lower‑casing before classification – lines 38‑40.  
+- Success, “skipped”, and “neutral” are accepted; all other values are collected as failures and reported – lines 42‑48.  
+- If every seen conclusion is “skipped” the result is a “only skipped” failure – lines 50‑53.  
+Tests covering each branch (null conclusion, in‑progress status, whitespace/case handling, unknown conclusions, each failure subtype, all‑skipped, pending) all succeed.
+
+V3 – impossibility of a red or still‑running CI being reported as OK  
+The algorithm never classifies a run with a non‑success/skip/neutral conclusion as OK, regardless of missing fields or legacy shapes:  
+- Even legacy runs without a `status` key are evaluated by their `conclusion` (non‑empty) and will be marked as a failure if the conclusion is not in the allowed set – lines 42‑48.  
+- Runs lacking `conclusion` or with a non‑completed status are placed in the pending list, causing a non‑OK result – lines 28‑36.  
+No combination of fields can bypass these checks, and the test suite includes negative cases for all such combos, confirming the invariant.
+
+V4 – Test coverage completeness (including the a1b1da808 real‑world shape)  
+The `tests/test_evidence.py` file contains dedicated test functions for every logical branch described above:  
+- Newest‑run selection (old vs. new, tie‑break, id parsing, missing name) – tests `test_commit_ci_newest_*`.  
+- Pending and failure handling (null conclusion, in‑progress status, whitespace, unknown conclusion, each failure value, all‑skipped, no runs) – tests `test_commit_ci_*` covering each scenario.  
+- The specific real‑world case a1b1da808 is exercised by `test_commit_ci_a1b1da808_pending_then_ok`, confirming pending detection followed by success.  
+Thus the test suite is non‑vacuous and hermetically validates the full specification.
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+VERDICT: pass
