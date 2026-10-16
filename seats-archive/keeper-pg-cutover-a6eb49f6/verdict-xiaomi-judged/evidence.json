@@ -1,0 +1,66 @@
+{
+ "requested_model": "mimo/mimo-v2.6-flash",
+ "served_model": "mimo-v2.6-flash",
+ "status": 200,
+ "finish_reason": "stop",
+ "verdict": "pass",
+ "test_gaming": "no",
+ "correlation_id": "98744747-0a04-46b6-8609-43f7334ceeef",
+ "response_header_names": [
+  "Content-Security-Policy",
+  "X-Frame-Options",
+  "X-Content-Type-Options",
+  "Referrer-Policy",
+  "Permissions-Policy",
+  "Strict-Transport-Security",
+  "access-control-allow-headers",
+  "access-control-allow-methods",
+  "access-control-allow-origin",
+  "vary",
+  "vary",
+  "x-omniroute-route-class",
+  "x-request-id",
+  "content-length",
+  "content-type",
+  "x-conversationid",
+  "x-correlation-id",
+  "x-omniroute-cache",
+  "x-omniroute-cache-hit",
+  "x-omniroute-compression",
+  "x-omniroute-decision",
+  "x-omniroute-latency-ms",
+  "x-omniroute-model",
+  "x-omniroute-provider",
+  "x-omniroute-request-id",
+  "x-omniroute-response-cost",
+  "x-omniroute-session-id",
+  "x-omniroute-tokens-in",
+  "x-omniroute-tokens-out",
+  "x-omniroute-version",
+  "Date",
+  "Connection"
+ ],
+ "session_tag": "review/keeper-pg-cutover",
+ "run_id": "20261016-165534-keeper-pg-cutover-996333",
+ "prompt_sha256": "0e6b77b29ed8a9c2ff72f1a96ac611d04f202abe244ec583992ca10bbc70011b",
+ "tokens": {
+  "prompt_tokens": 7789,
+  "completion_tokens": 4765,
+  "total_tokens": 12554,
+  "prompt_tokens_details": {
+   "cached_tokens": 0
+  },
+  "completion_tokens_details": {
+   "reasoning_tokens": 2854
+  }
+ },
+ "started": "2026-10-16T16:55:34Z",
+ "finished": "2026-10-16T16:57:14Z",
+ "test_gaming_original": "unsure",
+ "adjudication": {
+  "by": "server-L1-routing (judge, D-1442)",
+  "ruling": "judge-countable, TG n/a for live-record review (no source diff; run1 said no)",
+  "original_seat_dir": "verdict-xiaomi",
+  "original_review_sha256": "8e29a83d4fa8b5b616fd882ad8a8928bec27833078ddac588fc1ad54f8cada53"
+ }
+}

@@ -1,0 +1,2 @@
+user,tables,SELECT,INSERT,UPDATE,DELETE,TRUNC|TRIG|REF: ('keeper_rt', 20, 20, 20, 20, 20, 0)
+max seq 6339
