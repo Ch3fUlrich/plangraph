@@ -1,4 +1,4 @@
-# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-6 (successor, 2026-10-16 04:0xZ, effort medium)
+# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-7 (successor, 2026-10-16 06:2xZ, effort medium; beat cron daab011d)
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md · design (binding, 14a): .../docs/reports/2026-10-15-rethink-setup-design.md
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
@@ -20,7 +20,7 @@ KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restar
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 04:03Z (gen-6). L2s live 04:0xZ: reconcile+worker-code running (workst); temporal-tls not yet up.
+Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 06:21Z (renew by 08:1xZ). L2s 06:2xZ: live-sync busy (coding.vm, dd197aa post seat r2, no seats branch yet), ns-flake running (workst).
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
