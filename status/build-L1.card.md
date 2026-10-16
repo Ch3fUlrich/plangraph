@@ -20,19 +20,16 @@ worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/ve
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
 Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 04:03Z (gen-6). L2s live 04:0xZ: reconcile+worker-code running (workst); temporal-tls not yet up.
-L2s: projector told to stand down (DONE). Retired: keeper-pg, backup, review-code, planner-kit (sessions still listed idle).
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
 - `ops/qseat.py OUT [--adjudication ADJ] part.json...` builds a seat dir (review.txt + evidence.json) from qodercli out.json parts;
   multi-part seats with refuted fix findings pass only with the adjudication file. Evidence kind = `commit+ci` (Plan-Item trailer sha on main).
-
 D-1380: local-CI fallback in briefs/l2-rules-common.md. D-1393 CI speed: nothing for build-L1. Infra: PG+Temporal -> cloud.vm (D-1386/1388).
 ## FOR ROUTER (active)
 - Done/applied by router 03:4x-04:0xZ: L2-DONE x6 (stopped), INBOX evidence, PG-DEPLOY criteria (D-1375), b05 (ATTEMPT-EVENT refused, dropped).
 - Pending: L2-LAUNCH build-L2-temporal-tls (asked); reconcile + worker-proj routed to workst-L1-autoos; L2-LAUNCH build-L2-deepinfra after priv-writers merges.
 - Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph on workst runner; D-1380 local fallback.
-
 D-1390: L2-LAUNCH = "sonnet medium"; build-L1 effort medium at next recycle; plangraph CI label -> [self-hosted, fleet-ci] by fixes-L2-cipool (covers CI-RUNS-ON-WORKST label part).
 
 ## FOR OPERATOR
