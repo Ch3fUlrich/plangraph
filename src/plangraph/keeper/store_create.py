@@ -336,14 +336,21 @@ class CreateMixin:
         # ``estimate_h`` edit that does not say where the number came from
         # attributes it to the editing principal and records the auto-fill.
         auto_src = False
-        if "estimate_h" in edit_fields and "estimate_src" not in edit_fields:
+        effective_h = edit_fields.get("estimate_h", item.get("estimate_h"))
+        if "estimate_h" in edit_fields and effective_h is None:
+            # Clearing the estimate clears its source; a source cannot outlive it.
+            if edit_fields.get("estimate_src") is not None:
+                raise Refused("validation", "estimate_src needs an estimate_h")
+            edit_fields["estimate_src"] = None
+        elif "estimate_h" in edit_fields and "estimate_src" not in edit_fields:
             edit_fields["estimate_src"] = principal.name
             auto_src = True
-        if "estimate_src" in edit_fields:
+        if edit_fields.get("estimate_src") is not None or (
+                "estimate_src" in edit_fields and effective_h is not None):
             src = edit_fields["estimate_src"]
             if not isinstance(src, str) or not src.strip():
                 raise Refused("validation", "estimate_src must be a non-empty string")
-            if "estimate_h" not in edit_fields and item.get("estimate_h") is None:
+            if effective_h is None:
                 raise Refused("validation", "estimate_src needs an estimate_h")
         check_model_fields(edit_fields, item["kind"], key)
         if "review_tier" in edit_fields:

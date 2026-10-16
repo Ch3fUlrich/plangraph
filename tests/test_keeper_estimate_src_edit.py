@@ -141,6 +141,26 @@ def test_estimate_src_without_an_estimate_h_is_refused(w):
     assert verify_integrity(w.conn) == []
 
 
+def test_clearing_estimate_h_clears_the_source_and_is_not_auto_filled(w):
+    router = w.p("router")
+    w.store.edit_definition(router, "demo:DEF", {"estimate_h": None})
+    row = w.conn.execute(
+        "SELECT estimate_h, estimate_src FROM items WHERE key='demo:DEF'").fetchone()
+    assert row["estimate_h"] is None and row["estimate_src"] is None
+    assert "estimate_src_auto" not in _payloads(w, "demo:DEF")[-1]
+    assert verify_integrity(w.conn) == []
+
+
+def test_a_source_cannot_be_set_while_the_estimate_is_being_cleared(w):
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p("router"), "demo:A",
+                                {"estimate_h": None, "estimate_src": "plan"})
+    assert exc.value.code == "validation"
+    row = w.conn.execute(
+        "SELECT estimate_h FROM items WHERE key='demo:A'").fetchone()
+    assert row["estimate_h"] is not None          # nothing was written
+
+
 @pytest.mark.parametrize("bad", ["", "   ", None, 5, True, ["plan"], "x" * 65])
 def test_blank_non_string_and_oversize_sources_are_refused(w, bad):
     before = _events(w, "demo:A")
