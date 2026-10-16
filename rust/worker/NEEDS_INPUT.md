@@ -9,7 +9,12 @@ A card can stop and ask a human instead of failing. Nothing here touches keeper 
    A killed run (stall, timeout) is never a question.
 2. **Normalising.** A default only counts with a `deadline_s` and no `risk_tags`
    (`Question::normalized`). The keeper is sent the normalised question, so a
-   risk-tagged question is stored without a default.
+   risk-tagged question is stored without a default. Explicitly: a default of `""`
+   (or only blanks) is "no default"; `deadline_s: 0` is "no deadline" (so the
+   default cannot be taken and the card waits to the cap). Question text, default
+   and every answer are untrusted: each is cut to 4000 characters and ends in
+   `[... truncated]` when it was longer (`question::cap_text`), before it is
+   stored or put into a prompt.
 3. **Ask.** Activity `ask_question` calls `POST /v1/ask_question` (deadline = now + `deadline_s`).
    A 4xx parks the card with alarm `question not recorded`; other failures retry.
 4. **Wait.** The workflow waits in workflow time on: signal `answer`
