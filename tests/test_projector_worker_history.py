@@ -126,6 +126,16 @@ def attempts(world, key=KEY):
             for r in rows(world, "attempts", "n") if r["key"] == key]
 
 
+@pytest.mark.parametrize("name", ["needs_input_answered", "needs_input_timeout"])
+def test_needs_input_fixtures_raise_no_unknown_shape_alarm(world, projector, name):
+    p = project(name, workflow_id=f"card:{KEY}")
+    assert p.shape_issues == ()
+    projector.apply_run(p, run_ord=0)
+    n = world.conn.execute(
+        "SELECT COUNT(*) FROM projector_alarms WHERE kind='unknown_shape'").fetchone()[0]
+    assert n == 0
+
+
 @pytest.mark.parametrize("name", ["happy", "check_fails", "needs_input_answered",
                                   "needs_input_timeout"])
 def test_apply_writes_attempt_rows(world, projector, name):

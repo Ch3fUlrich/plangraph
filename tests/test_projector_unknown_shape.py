@@ -119,6 +119,8 @@ def test_every_worker_activity_is_a_known_type():
     from plangraph.projector.models import KNOWN_ACTIVITY_TYPES
     src = (ROOT / "rust/worker/src/activities.rs").read_text()
     names = re.findall(r"#\[activity\]\s+pub async fn (\w+)", src)
+    # Never pass vacuously: a regex that stopped matching must fail loudly.
+    assert len(names) >= 1, "parsed no #[activity] fn names from activities.rs"
     assert {"ask_question", "record_question_timeout", "janitor"} <= set(names), names
     for name in names:
         assert name == "attempt" or f"CardActivities::{name}" in KNOWN_ACTIVITY_TYPES, name
