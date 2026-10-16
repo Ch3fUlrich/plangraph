@@ -15,7 +15,7 @@ KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restar
 | Item | State | Next |
 |---|---|---|
 | PROJECTOR-LIVE-NAMESPACE-FLAKE (D-1433 p2) | claimed; L2 forwarded D-1434 (workst) | brief briefs/l2-live-namespace-flake.md |
-| KEEPER-LIVE-SYNC (p2 HIGH) | SYNC-READY T=1b923e5 doc d8d1bb0 (counts equal, rollback = backup restore after 1st design-3 write); seats were fix + self-adjudicated -> re-seat ordered | brief briefs/l2-keeper-live-sync.md; L2-LAUNCH asked (coding.vm); SYNC-READY -> backup -> GO <sha> restart; rollback f3bac63+backup |
+| KEEPER-LIVE-SYNC (p2 HIGH) | SYNC-READY doc 83b283a (7 seat rounds); r7 fix/fix judge-REFUTED live-sync-seats/adjudication.md, dry-run rc0 both; L2 told stop | GO 1b923e5 asked 06:4xZ -> run doc §4 runbook myself; abort = wal/shm delete + backup + f3bac63; then verdicts+evidence |
 | PROJECTOR-ALARMS-READER (p3) | open | after LIVE-SYNC |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
