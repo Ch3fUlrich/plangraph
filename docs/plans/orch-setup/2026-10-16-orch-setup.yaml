@@ -1,0 +1,478 @@
+# plangraph-L1-orch-setup 2026-10-16: orchestration-setup track (design docs/plans/2026-10-16-orchestration-setup.md)
+# + router order 7 UI items. Principal router (cross-project deps/edits). Judge: routing-00; load: workst-L1-autoos.
+batch: 2026-10-16-orch-setup
+principal: router
+source: ../2026-10-16-orchestration-setup.md
+source_sha256: 22d00ac155d982dbf005d47f36b5da7c692ed3cc5b0ec26713677637dc245f39
+ops:
+- op: create
+  item:
+    id: SU-DOCS
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Plan base (rethink design + operator rounds, verbatim) and the orchestration-setup design in docs/plans
+    description: 'Operator order 2026-10-16: docs/plans is the base of the plan graph; never lose the goal. Section 1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: both base files byte-verified (body sha256 1958911c.. / ff41ee5c..); design merged to main via PR
+    depends_on: []
+- op: create
+  item:
+    id: SU-CORE
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'plangraph Rust binary core: env loader, setup manifest, merge engine, setup apply/check/--dry-run, exit codes'
+    description: 'Crate rust/plangraph-cli, binary plangraph; idempotency contract of section 4. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'contract tests green on Linux + Windows CI: unparsable target refused, 2nd apply all skipped, check reports drift, backup only on change, atomic write + lock; files <= 400 lines'
+    depends_on:
+    - plangraph:SU-DOCS
+- op: create
+  item:
+    id: SU-ENV
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'One env file: .env.example, plangraph env check, stdlib loader for the Python keeper CLI/MCP/tools'
+    description: '~/.config/plangraph/plangraph.env, override PLANGRAPH_ENV_FILE (S6). Section 5. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: all keys of section 5 documented with defaults; precedence test (env > file > default); inline-secret refusal test; keeper suite green
+    depends_on:
+    - plangraph:SU-CORE
+- op: create
+  item:
+    id: SU-LEASE-CFG
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: high
+    title: Keeper applies default_lease / lease_warn_s / review_overdue_s from keeper.json
+    description: 'Today parsed in config.py but the Store keeps its constants (S11). Section 6. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'test: a keeper.json default_lease changes a new claim''s lease; suite green (SQLite + Postgres jobs); 2 non-Claude seats'
+    depends_on:
+    - plangraph:SU-DOCS
+- op: create
+  item:
+    id: SU-HOOK-FLEET
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Rust fleet hooks: plangraph hook report (Stop) + hook inject (PostToolUse, UserPromptSubmit), 1:1 port of AutoOS fleet_report.py/fleet_inject.py'
+    description: 'Behaviour per AutoOS docs/fleet-status-hook.md (inbox format, dedupe, append + nofollow, redaction, untrusted framing, caps, cursor, at-least-once). Python stays reference (S1). Sections
+      3, 6. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: the 15 cases of AutoOS tests/test_fleet_hook.py ported and green; no-op p95 < 10 ms over 200 runs on Windows and Linux (numbers in the run record); Windows reparse-point refusal test
+    depends_on:
+    - plangraph:SU-CORE
+- op: create
+  item:
+    id: SU-HOOKS-WIRE
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: high
+    title: plangraph setup merges the fleet hook entries into ~/.claude/settings.json
+    description: 'Merge rule of section 4 (S4). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: fixture settings with foreign hooks unchanged outside our entries; superseded Python entry replaced in place; 2nd run skipped; check reports drift; backup only on change
+    depends_on:
+    - plangraph:SU-HOOK-FLEET
+- op: create
+  item:
+    id: SU-ADR0003A
+    project: autoos
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'ADR 0003a: the plangraph setup component writes hook entries; fleet-status-hook doc points to plangraph'
+    description: 'AutoOS itself still writes nothing to settings.json (S4). Public repo: no site strings. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: ADR 0003a merged; docs/fleet-status-hook.md names plangraph as the hook home and the Python hooks as reference; docs link check green
+    depends_on:
+    - plangraph:SU-HOOKS-WIRE
+- op: create
+  item:
+    id: SU-LAUNCH
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'plangraph launch: pre-assigned session id, launch record before start, FLEET_SESSION_NAME, interactive or --bg'
+    description: 'S8. Section 6. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: record fields equal routing fleet-launch's plus env; interactive and --bg on Windows and WSL; workstation start-*.ps1 become one-line calls; a ctx-watchdog fixture reads the record
+    depends_on:
+    - plangraph:SU-CORE
+- op: create
+  item:
+    id: SU-FLEET-LAUNCH-WRAP
+    project: routing
+    kind: lane
+    track: ORCH-SETUP
+    owner: routing-00
+    review_tier: standard
+    title: bin/fleet-launch delegates to plangraph launch (same CLI, same record)
+    description: 'Last change routing needs from the setup track (S8). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: same CLI and record; dry-run output test; ctx-watchdog unchanged
+    depends_on:
+    - plangraph:SU-LAUNCH
+- op: create
+  item:
+    id: SU-RUN-TOKENS
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: high
+    title: Launcher mints run-bound tokens for child sessions (keeper mint_run_token with the parent's token)
+    description: 'S9. Section 6. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: child whoami = its run principal, scoped to its run; token file 0600, never printed, revoked at run end and expiring with the lease; 2 non-Claude seats
+    depends_on:
+    - plangraph:SU-LAUNCH
+- op: create
+  item:
+    id: SU-MCP-RS
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: high
+    title: Rust plangraph mcp stdio server, 1:1 with the Python keeper MCP (tools forwarded to the keeper HTTP API)
+    description: 'S16: no Python on client machines; later wake features (inbox long-poll, channel push) land here. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'contract test: same tool list, schemas, results and error codes as src/plangraph/keeper/mcp.py against a test keeper; no Python needed on the client; 2 seats'
+    depends_on:
+    - plangraph:SU-CORE
+    - plangraph:SU-ENV
+- op: create
+  item:
+    id: SU-MCP
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: high
+    title: User-scope plangraph MCP entry without a token; values from the env file
+    description: 'Supersedes autoos:AO-PG-MCP-WIRE (S9). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: claude mcp add-json idempotent (2nd run skipped via claude mcp get); a launched session's whoami ok; setup check reports drift
+    depends_on:
+    - plangraph:SU-MCP-RS
+    - plangraph:SU-LAUNCH
+- op: create
+  item:
+    id: SU-TRAILER
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Auto-fix commit-msg hook (Plan-Item into the final trailer block) + plangraph trailers check <range>
+    description: 'Measured trap: Plan-Item outside the last paragraph is not parsed by git or the keeper (S10). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'fixture: AutoOS ba90f77a message comes out shaped like 05a376d3; idempotent; malformed key refused; trailers check fails a --no-verify fixture commit'
+    depends_on:
+    - plangraph:SU-CORE
+- op: create
+  item:
+    id: SU-REPO
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: plangraph setup repo <path> + plangraph lint claude-md
+    description: 'Verified: a non-import CLAUDE.md hides AGENTS.md (S7). Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: lint passes only on a CLAUDE.md that is exactly @AGENTS.md (or absent with AGENTS.md present); chained core.hooksPath test; CLAUDE.md with rule text is refused with a hint
+    depends_on:
+    - plangraph:SU-TRAILER
+- op: create
+  item:
+    id: SU-AGENTSMD-PG
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'plangraph: rules in AGENTS.md, CLAUDE.md = @AGENTS.md'
+    description: 'S7. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: lint green in CI; rule diff reviewed, no rule lost
+    depends_on:
+    - plangraph:SU-REPO
+- op: create
+  item:
+    id: SU-AGENTSMD-AO
+    project: autoos
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'AutoOS: rules in AGENTS.md, CLAUDE.md = @AGENTS.md'
+    description: 'S7. The orientation table and 3 rules move into AGENTS.md. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: lint green in CI; rule diff reviewed, no rule lost
+    depends_on:
+    - plangraph:SU-REPO
+- op: create
+  item:
+    id: SU-AGENTSMD-SRV
+    project: server
+    kind: lane
+    track: ORCH-SETUP
+    owner: server-L1-main
+    review_tier: standard
+    title: 'Server: rules in AGENTS.md, CLAUDE.md = @AGENTS.md'
+    description: 'S7. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: lint green in CI; rule diff reviewed, no rule lost
+    depends_on:
+    - plangraph:SU-REPO
+- op: create
+  item:
+    id: SU-SKILLS
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'plangraph setup skills: per-client skill dirs from the manifest, link_skill_dirs rules'
+    description: 'Logic moves to plangraph (S12); source = PLANGRAPH_SKILLS_SRC. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: rule tests absent/ours/dangling/foreign; junctions on Windows, symlinks on Linux; 2nd run skipped
+    depends_on:
+    - plangraph:SU-CORE
+- op: create
+  item:
+    id: SU-HARNESS-CFG
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Harness client configs wired to OmniRoute (opencode provider block -> OMNIROUTE_URL)
+    description: 'Router order 5: plangraph wires OmniRoute; the routing target stays keeper-side. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: opencode config merge test; drift check; no key value written (key by file path)
+    depends_on:
+    - plangraph:SU-ENV
+    - plangraph:RT-P1-WORKER
+- op: create
+  item:
+    id: SU-RELEASE
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Tagged release: Linux + Windows x86_64 binaries + SHA256SUMS on the public repo'
+    description: 'S3. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: a test tag publishes both binaries; SHA256SUMS verify
+    depends_on:
+    - plangraph:SU-CORE
+    - plangraph:SPLIT-PUBLISH
+- op: create
+  item:
+    id: SU-CATALOG
+    project: autoos
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: AutoOS catalog component plangraph-setup (pinned tag + sha256)
+    description: 'S3, S4. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'Windows + Linux: installs, 2nd run skipped, detection = plangraph setup check; no site strings'
+    depends_on:
+    - plangraph:SU-RELEASE
+    - autoos:SU-ADR0003A
+- op: create
+  item:
+    id: SU-SKILLS-CALLER
+    project: autoos
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Install-AutoOSAgentSkills and install_agent_skill_links call plangraph setup skills
+    description: 'S12. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: existing skill-link tests (run-tests.ps1 + linux) green through the binary
+    depends_on:
+    - plangraph:SU-SKILLS
+    - autoos:SU-CATALOG
+- op: create
+  item:
+    id: SU-FRESH-CHECK
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Fresh-environment check of the whole setup
+    description: 'Section 9. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'clean HOME on Linux and Windows: apply twice (2nd all skipped), check 0 drift, a launched parent/child pair delivers a DONE, whoami ok, trailer fixed'
+    depends_on:
+    - plangraph:SU-DOCS
+    - plangraph:SU-CORE
+    - plangraph:SU-ENV
+    - plangraph:SU-LEASE-CFG
+    - plangraph:SU-HOOK-FLEET
+    - plangraph:SU-HOOKS-WIRE
+    - plangraph:SU-LAUNCH
+    - plangraph:SU-RUN-TOKENS
+    - plangraph:SU-MCP-RS
+    - plangraph:SU-MCP
+    - plangraph:SU-TRAILER
+    - plangraph:SU-REPO
+    - plangraph:SU-AGENTSMD-PG
+    - plangraph:SU-SKILLS
+    - plangraph:SU-RELEASE
+    - autoos:SU-ADR0003A
+    - routing:SU-FLEET-LAUNCH-WRAP
+    - autoos:SU-AGENTSMD-AO
+    - server:SU-AGENTSMD-SRV
+    - autoos:SU-CATALOG
+    - autoos:SU-SKILLS-CALLER
+- op: create
+  item:
+    id: PH-ORCH-SETUP
+    project: plangraph
+    kind: gate
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Phase ORCH-SETUP done: mechanical setup of the orchestration system'
+    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: all deps done
+    depends_on:
+    - plangraph:SU-FRESH-CHECK
+- op: create
+  item:
+    id: SU-HOOK-BASHGUARD
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Rust bash-guard hook, 1:1 port of AutoOS bash_guard.py
+    description: 'S5. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: ported tests green; no-op p95 < 10 ms; wired by setup
+    depends_on:
+    - plangraph:PH-ORCH-SETUP
+- op: create
+  item:
+    id: SU-HOOK-CTXGUARD
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Rust context-guard hook, 1:1 port of AutoOS context_guard.py
+    description: 'S5. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: ported tests green; no-op p95 < 10 ms; wired by setup
+    depends_on:
+    - plangraph:PH-ORCH-SETUP
+- op: create
+  item:
+    id: SU-GUARDS-CALLER
+    project: autoos
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: OpenCode bash-guard plugin calls the plangraph binary
+    description: 'S5. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: plugin tests green
+    depends_on:
+    - plangraph:SU-HOOK-BASHGUARD
+- op: create
+  item:
+    id: PH-ORCH-GUARDS
+    project: plangraph
+    kind: gate
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Phase ORCH-GUARDS done: guard hooks in Rust'
+    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: all deps done
+    depends_on:
+    - plangraph:SU-HOOK-BASHGUARD
+    - plangraph:SU-HOOK-CTXGUARD
+    - autoos:SU-GUARDS-CALLER
+- op: create
+  item:
+    id: RT-P3-ASK-PUSH
+    project: plangraph
+    kind: lane
+    track: RETHINK
+    owner: build-L1
+    review_tier: high
+    title: Web push with interactive questions (Claude Code question shape), answer routed to the asking session
+    description: 'Router order 7a. Section 8. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'phone drill: a question with options is answered and the asking Claude Code session receives it via the plangraph MCP server (or a worker gets the Temporal signal); 2 non-Claude seats'
+    depends_on:
+    - plangraph:RT-P3-PHONE
+    - plangraph:PG-INBOX
+- op: create
+  item:
+    id: RT-P3-PLAN-MODE
+    project: plangraph
+    kind: lane
+    track: RETHINK
+    owner: build-L1
+    review_tier: standard
+    title: 'Planning mode through the UI: plan changes proposed as graph diffs and answered there'
+    description: 'Router order 7b. Section 8. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: a proposed change approved in the UI lands as attributed events and shows in the graph; every task update reflected live
+    depends_on:
+    - plangraph:RT-P3-ASK-PUSH
+    - plangraph:RT-P2-DECISIONS
+- op: create
+  item:
+    id: RT-P3-HISTORY
+    project: plangraph
+    kind: lane
+    track: RETHINK
+    owner: build-L1
+    review_tier: standard
+    title: 'History tab: graph at any past point, diff of two points, go-back opens a correction proposal'
+    description: 'Router order 7c, S14. Section 8. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: render at a past seq equals a rebuilt snapshot (test); diff view; go-back opens a plan-mode proposal; DONE never rewritten
+    depends_on:
+    - plangraph:RT-P3-TABS
+    - plangraph:RT-P3-PLAN-MODE
+- op: create
+  item:
+    id: SU-DOCKER
+    project: plangraph
+    kind: lane
+    track: ORCH-SETUP
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Docker setup using the same env file (LAST item)
+    description: 'S13: after the whole rethink. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: compose up from the same env file (host networking); setup check --docker 0 drift; fresh-setup CI green in Docker
+    depends_on:
+    - routing:PH-RETHINK
+    - plangraph:PH-ORCH-SETUP
+    - plangraph:PH-ORCH-GUARDS
+- op: edit
+  key: autoos:RT-P4-INSTALLER
+  fields:
+    depends_on:
+    - plangraph:RT-P4-SPAWNER
+    - plangraph:PH-ORCH-SETUP
+    - autoos:SU-CATALOG
+    - plangraph:SU-HARNESS-CFG
+- op: edit
+  key: routing:RT-P3
+  fields:
+    depends_on:
+    - plangraph:RT-P3-PHONE
+    - plangraph:RT-P3-SVELTE
+    - plangraph:RT-P3-TABS
+    - routing:RT-P2
+    - plangraph:RT-P3-ASK-PUSH
+    - plangraph:RT-P3-PLAN-MODE
+    - plangraph:RT-P3-HISTORY
+- op: cancel
+  key: autoos:AO-PG-MCP-WIRE
+  reason: superseded by plangraph:SU-MCP (orchestration setup, 2026-10-16)
