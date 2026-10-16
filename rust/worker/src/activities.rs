@@ -11,6 +11,7 @@ use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
 use crate::keeper::{Alarm, AttemptReport, Claim, Fence, Keeper};
 use crate::mergelock::{self, MergeOutcome};
+use crate::question::Question;
 use pg_worker_core::budget;
 use pg_worker_core::check;
 use pg_worker_core::config::Config;
@@ -46,6 +47,17 @@ pub struct CardInput {
     pub legs: Vec<LegSpec>,
     pub workroot: String,
     pub main_branch: String,
+    /// Longest the card waits for an answer to a question, in seconds. Unset =
+    /// the configured wait cap (24 h). Exists so a test need not wait a day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_wait_cap_s: Option<u64>,
+}
+
+/// Ask the keeper to store an agent question for a card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AskInput {
+    pub card: String,
+    pub question: Question,
 }
 
 /// Result of the `card` workflow.
@@ -172,6 +184,23 @@ impl CardActivities {
 
 /// The process-local fallback when heartbeats or cancellation cannot be spelled
 /// into an `ActivityError` directly: stringify and wrap.
+/// A keeper 4xx is a refusal to log and report as `None`; any other failure is
+/// an error the activity retry policy handles.
+fn settle_refusal<T>(
+    res: Result<T, crate::keeper::KeeperError>,
+    verb: &str,
+) -> Result<Option<T>, ActivityError> {
+    use crate::keeper::KeeperError;
+    match res {
+        Ok(v) => Ok(Some(v)),
+        Err(KeeperError::Status(code)) if (400..500).contains(&code) => {
+            eprintln!("keeper refused {verb}: status {code}");
+            Ok(None)
+        }
+        Err(e) => Err(activity_error(e)),
+    }
+}
+
 fn activity_error(e: impl std::fmt::Display) -> ActivityError {
     anyhow::anyhow!(e.to_string()).into()
 }
@@ -543,6 +572,40 @@ impl CardActivities {
             .map_err(activity_error)
     }
 
+    /// Store the agent's question. `Some(id)` on success, `None` when the
+    /// keeper refused it (a 4xx: retrying cannot help, the workflow parks);
+    /// a transport or 5xx failure is an activity error and is retried.
+    #[activity]
+    pub async fn ask_question(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: AskInput,
+    ) -> Result<Option<i64>, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let res =
+            tokio::task::spawn_blocking(move || keeper.ask_question(&input.card, &input.question))
+                .await
+                .map_err(activity_error)?;
+        settle_refusal(res, "ask_question")
+    }
+
+    /// Record `question_timeout` for a question whose default was taken.
+    /// `true` when recorded; `false` when the keeper refused (for example the
+    /// worker token lacks the router or system role): the refusal is logged and
+    /// the workflow raises an alarm but still continues with the default.
+    #[activity]
+    pub async fn record_question_timeout(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        question_id: i64,
+    ) -> Result<bool, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let res = tokio::task::spawn_blocking(move || keeper.record_question_timeout(question_id))
+            .await
+            .map_err(activity_error)?;
+        Ok(settle_refusal(res, "record_question_timeout")?.is_some())
+    }
+
     /// Sweep dead attempts and report how many were removed.
     #[activity]
     pub async fn janitor(
@@ -622,6 +685,7 @@ mod tests {
             }],
             workroot: "/w".to_string(),
             main_branch: "main".to_string(),
+            question_wait_cap_s: None,
         }
     }
 

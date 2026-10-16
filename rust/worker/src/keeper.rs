@@ -11,6 +11,8 @@
 //! | POST   | `/v1/park`     | `ParkPacket`             | 204                |
 //! | POST   | `/v1/complete` | `{"card", "merged_sha"}` | 204                |
 //! | POST   | `/v1/alarms`   | `Alarm`                  | 204                |
+//! | POST   | `/v1/ask_question` | `{"key","text","default_answer","deadline","risk_tags"}` | 200 `{"id",..}` |
+//! | POST   | `/v1/answer_question` | `{"question_id","source":"question_timeout"}` | 200 |
 //! | POST   | `/v1/locks/<repo>/acquire` | `{"owner", "ttl_s"}` | 200 `Fence`    |
 //! | POST   | `/v1/locks/<repo>/release` | `Fence`              | 204            |
 //!
@@ -18,6 +20,7 @@
 //!
 //! Any other status is reported as [`KeeperError::Status`].
 
+use crate::question::Question;
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
 use serde::{Deserialize, Serialize};
@@ -86,6 +89,12 @@ pub trait Keeper: Send + Sync {
     -> Result<Fence, KeeperError>;
     /// Give the lock back. A stale token is refused.
     fn release_merge_lock(&self, repo: &str, fence: &Fence) -> Result<(), KeeperError>;
+    /// Record the agent's question for card `key`; returns the question id. The
+    /// question's `deadline_s` counts from now.
+    fn ask_question(&self, key: &str, q: &Question) -> Result<i64, KeeperError>;
+    /// Record that the question's deadline passed and its stored default was
+    /// taken (`source: question_timeout`). Needs a router or system token.
+    fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError>;
 }
 
 /// Percent-encode `s` so it is one URL path segment (unreserved bytes pass).
@@ -120,6 +129,23 @@ impl HttpKeeper {
 
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
+    }
+
+    /// POST a JSON body whose accepted success code is 200 with a JSON reply.
+    fn post_json(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+    ) -> Result<serde_json::Value, KeeperError> {
+        let url = self.url(path);
+        match self.agent.post(&url).send_json(body) {
+            Ok(resp) if resp.status() == 200 => resp
+                .into_json()
+                .map_err(|e| KeeperError::Decode(e.to_string())),
+            Ok(resp) => Err(KeeperError::Status(resp.status())),
+            Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
+            Err(e) => Err(KeeperError::Http(e.to_string())),
+        }
     }
 
     /// POST a JSON body whose only accepted success code is 204.
@@ -194,6 +220,31 @@ impl Keeper for HttpKeeper {
         let path = format!("/v1/locks/{}/release", encode_segment(repo));
         self.post204(&path, fence)
     }
+
+    fn ask_question(&self, key: &str, q: &Question) -> Result<i64, KeeperError> {
+        let deadline = q.deadline_s.map(|s| {
+            crate::attempt::iso_utc(std::time::SystemTime::now() + Duration::from_secs(s))
+        });
+        let payload = serde_json::json!({
+            "key": key,
+            "text": q.text,
+            "default_answer": q.default,
+            "deadline": deadline,
+            "risk_tags": q.risk_tags,
+        });
+        let v = self.post_json("/v1/ask_question", &payload)?;
+        v.get("id")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| KeeperError::Decode("ask_question reply has no integer id".into()))
+    }
+
+    fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError> {
+        let payload = serde_json::json!({
+            "question_id": question_id,
+            "source": "question_timeout",
+        });
+        self.post_json("/v1/answer_question", &payload).map(|_| ())
+    }
 }
 
 /// In-memory [`Keeper`] for tests: claims come from a queue the test fills, and
@@ -216,6 +267,10 @@ struct StubState {
     held: Option<Fence>,
     lock_calls: Vec<String>,
     lock_unavailable: bool,
+    questions: Vec<(String, Question)>,
+    question_timeouts: Vec<i64>,
+    /// When set, `record_question_timeout` is refused like a 403.
+    timeout_refused: bool,
 }
 
 impl StubKeeper {
@@ -240,6 +295,22 @@ impl StubKeeper {
     /// True while a fence is outstanding.
     pub fn merge_lock_held(&self) -> bool {
         self.lock().held.is_some()
+    }
+
+    /// Questions asked so far as `(key, question)`; ids are 1-based positions.
+    pub fn questions(&self) -> Vec<(String, Question)> {
+        self.lock().questions.clone()
+    }
+
+    /// Ids passed to `record_question_timeout`, in order (refused calls included).
+    pub fn question_timeouts(&self) -> Vec<i64> {
+        self.lock().question_timeouts.clone()
+    }
+
+    /// Make `record_question_timeout` fail with a 403, as a keeper would for a
+    /// worker token without the router or system role.
+    pub fn set_timeout_refused(&self, refused: bool) {
+        self.lock().timeout_refused = refused;
     }
 
     pub fn push_claim(&self, c: Claim) {
@@ -329,6 +400,22 @@ impl Keeper for StubKeeper {
             }
             // Stale (expired or re-granted) or never held: refused like a 409.
             _ => Err(KeeperError::Status(409)),
+        }
+    }
+
+    fn ask_question(&self, key: &str, q: &Question) -> Result<i64, KeeperError> {
+        let mut s = self.lock();
+        s.questions.push((key.to_string(), q.clone()));
+        Ok(s.questions.len() as i64)
+    }
+
+    fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError> {
+        let mut s = self.lock();
+        s.question_timeouts.push(question_id);
+        if s.timeout_refused {
+            Err(KeeperError::Status(403))
+        } else {
+            Ok(())
         }
     }
 }
@@ -654,5 +741,66 @@ mod tests {
             KeeperError::Status(500)
         );
         server.join().unwrap();
+    }
+
+    fn question() -> Question {
+        Question {
+            text: "which db?".into(),
+            default: Some("sqlite".into()),
+            deadline_s: Some(60),
+            risk_tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn http_ask_question_posts_the_inbox_shape_and_reads_the_id() {
+        let (base, server) = serve_once(200, "OK", r#"{"id":7,"key":"c-1","state":"open"}"#);
+        let id = HttpKeeper::new(&base)
+            .ask_question("c-1", &question())
+            .unwrap();
+        assert_eq!(id, 7);
+        let got = server.join().unwrap();
+        assert_eq!(
+            (got.method.as_str(), got.path.as_str()),
+            ("POST", "/v1/ask_question")
+        );
+        let body: serde_json::Value = serde_json::from_str(&got.body).unwrap();
+        assert_eq!(body["key"], "c-1");
+        assert_eq!(body["text"], "which db?");
+        assert_eq!(body["default_answer"], "sqlite");
+        assert!(body["deadline"].as_str().unwrap().ends_with('Z'));
+        assert_eq!(body["risk_tags"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn http_record_question_timeout_names_the_source_and_surfaces_a_refusal() {
+        let (base, server) = serve_once(200, "OK", r#"{"question_id":7,"state":"timeout"}"#);
+        HttpKeeper::new(&base).record_question_timeout(7).unwrap();
+        let got = server.join().unwrap();
+        assert_eq!(got.path, "/v1/answer_question");
+        let body: serde_json::Value = serde_json::from_str(&got.body).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"question_id": 7, "source": "question_timeout"})
+        );
+
+        let (base, server) = serve_once(403, "Forbidden", r#"{"error":"forbidden"}"#);
+        assert_eq!(
+            HttpKeeper::new(&base).record_question_timeout(7),
+            Err(KeeperError::Status(403))
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn stub_records_questions_and_timeouts() {
+        let k = StubKeeper::default();
+        assert_eq!(k.ask_question("c-1", &question()).unwrap(), 1);
+        assert_eq!(k.ask_question("c-1", &question()).unwrap(), 2);
+        k.record_question_timeout(2).unwrap();
+        k.set_timeout_refused(true);
+        assert_eq!(k.record_question_timeout(1), Err(KeeperError::Status(403)));
+        assert_eq!(k.questions().len(), 2);
+        assert_eq!(k.question_timeouts(), vec![2, 1]);
     }
 }

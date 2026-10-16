@@ -6,5 +6,6 @@ pub mod buildid;
 pub mod harness;
 pub mod keeper;
 pub mod mergelock;
+pub mod question;
 pub mod tls;
 pub mod workflow;

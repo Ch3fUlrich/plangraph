@@ -7,16 +7,19 @@
 //! an `ok` result or asks the budget for the next move: retry, re-route, wait,
 //! promote, upgrade the context class, quarantine or park.
 
+use crate::activities::AskInput;
 use crate::activities::{
     CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, JanitorInput, MergeInput,
     MergeResult, ProbeInput, ProbeResult, Tick,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
+use crate::question::{self, OnTimer, Question};
 use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
@@ -43,6 +46,35 @@ const MERGE_RETRY_CAP: u32 = 20;
 /// Alarm reason when the keeper merge lock stayed unavailable.
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 
+/// Alarm reason when a question stayed unanswered until the wait cap.
+const QUESTION_PARK_REASON: &str = "question unanswered";
+
+/// Alarm reason when the keeper would not store the agent's question.
+const QUESTION_REFUSED_REASON: &str = "question not recorded";
+
+/// Alarm reason when the default was taken but the keeper refused to record it.
+const QUESTION_TIMEOUT_REFUSED_REASON: &str = "question_timeout not recorded";
+
+/// The `answer` signal, exactly as the inbox sends it
+/// (`src/plangraph/inbox/temporal_signal.py`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerSignal {
+    pub question_id: i64,
+    #[serde(default)]
+    pub key: String,
+    pub text: String,
+    #[serde(default)]
+    pub source: String,
+}
+
+/// How a question ended.
+enum QuestionStep {
+    /// The text the next attempt gets in its prompt.
+    Answer(String),
+    /// The card is over (parked or cancelled) and the janitor has run.
+    Finished(CardOutput),
+}
+
 /// What the merge step produced.
 #[derive(Debug)]
 enum MergeStep {
@@ -64,6 +96,19 @@ pub struct Card {
     cancel_requested: bool,
     /// Token handed to `attempt`; the `cancel` signal fires it.
     op: Option<WorkflowCancellationToken>,
+    /// Every `answer` signal received, in arrival order.
+    answers: Vec<AnswerSignal>,
+}
+
+impl Card {
+    /// The human answer to question `id`, if one arrived. A `question_timeout`
+    /// signal is not an answer: the workflow takes its own default.
+    fn answer_text(&self, id: i64) -> Option<String> {
+        self.answers
+            .iter()
+            .find(|a| a.question_id == id && a.source != "question_timeout")
+            .map(|a| a.text.clone())
+    }
 }
 
 #[workflow_methods]
@@ -93,6 +138,8 @@ impl Card {
         let mut context = ContextClass::K128;
         let mut limited: Vec<String> = Vec::new();
         let mut leg: LegSpec = input.legs[0].clone();
+        // Answers to the agent's questions; each rides in the next prompt.
+        let mut answers: Vec<String> = Vec::new();
 
         loop {
             // A cancel that landed between attempts must not start another one.
@@ -134,6 +181,7 @@ impl Card {
                 leg: leg.clone(),
                 workroot: input.workroot.clone(),
                 class: context_class_name(context).to_string(),
+                answers: answers.clone(),
             };
 
             let result: AttemptResult = match ctx
@@ -187,6 +235,7 @@ impl Card {
                         tokens_out: None,
                         cost: None,
                         log_ref: None,
+                        question: None,
                     }
                 }
             };
@@ -220,6 +269,21 @@ impl Card {
             };
             ctx.execute_activity(CardActivities::report, report, activity_options(&cfg))
                 .await?;
+
+            // A question is not a failure: it takes no retry budget, so the
+            // attempt stays out of the history. The next attempt reruns the
+            // same leg with the answer in its prompt.
+            if result.exit_class == ExitClass::NeedsInput
+                && let Some(q) = &result.question
+            {
+                match question_step(ctx, &cfg, &input, &base_sha, leg.tier, q, n).await? {
+                    QuestionStep::Answer(text) => {
+                        answers.push(text);
+                        continue;
+                    }
+                    QuestionStep::Finished(out) => return Ok(out),
+                }
+            }
             history.push(to_budget_attempt(&result, &leg));
 
             let mut probed = false;
@@ -487,6 +551,12 @@ impl Card {
         }
     }
 
+    /// The inbox answer to a question the card asked.
+    #[signal]
+    pub fn answer(&mut self, _ctx: &mut SyncWorkflowContext<Self>, a: AnswerSignal) {
+        self.answers.push(a);
+    }
+
     #[signal]
     pub fn cancel(&mut self, _ctx: &mut SyncWorkflowContext<Self>, reason: String) {
         self.cancel_requested = true;
@@ -563,6 +633,119 @@ async fn wait_for(ctx: &WorkflowContext<Card>, d: Duration) -> WorkflowResult<bo
         _ = ctx.timer(d) => false,
     };
     Ok(cancelled)
+}
+
+/// Ask the keeper `q`, then wait for the answer signal, a cancel, or the timer.
+///
+/// Waiting is durable workflow time, so a replay never sleeps. The timer is the
+/// question deadline when a default may be taken, else the wait cap.
+async fn question_step(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    base_sha: &str,
+    tier: Tier,
+    q: &Question,
+    n: u32,
+) -> WorkflowResult<QuestionStep> {
+    let card = &input.claim.card;
+    let q = q.normalized();
+    let cap = input
+        .question_wait_cap_s
+        .map_or(cfg.wait_cap, Duration::from_secs);
+    let plan = question::plan_wait(&q, cap);
+
+    let asked: Option<i64> = ctx
+        .execute_activity(
+            CardActivities::ask_question,
+            AskInput {
+                card: card.clone(),
+                question: q.clone(),
+            },
+            activity_options(cfg),
+        )
+        .await?;
+    let Some(qid) = asked else {
+        return park_question(
+            ctx,
+            cfg,
+            input,
+            base_sha,
+            tier,
+            &q,
+            QUESTION_REFUSED_REASON,
+            n,
+        )
+        .await;
+    };
+
+    enum Woke {
+        Answer,
+        Cancel,
+        Timer,
+    }
+    let woke = temporalio_sdk::workflows::select! {
+        r = ctx.wait_condition(move |s: &Card| s.answer_text(qid).is_some()) => { r?; Woke::Answer }
+        r = ctx.wait_condition(|s: &Card| s.cancel_requested) => { r?; Woke::Cancel }
+        _ = ctx.timer(plan.wait) => Woke::Timer,
+    };
+    match woke {
+        Woke::Answer => {
+            let text = ctx
+                .state(|s| s.answer_text(qid))
+                .expect("the wait ended on an answer");
+            Ok(QuestionStep::Answer(text))
+        }
+        Woke::Cancel => {
+            run_janitor(ctx, cfg, input, base_sha).await?;
+            Ok(QuestionStep::Finished(cancelled(n)))
+        }
+        Woke::Timer => match plan.on_timer {
+            OnTimer::UseDefault(text) => {
+                let recorded: bool = ctx
+                    .execute_activity(
+                        CardActivities::record_question_timeout,
+                        qid,
+                        activity_options(cfg),
+                    )
+                    .await?;
+                if !recorded {
+                    // The default is still taken: the question window is over.
+                    ctx.execute_activity(
+                        CardActivities::alarm,
+                        Alarm {
+                            card: card.clone(),
+                            reason: QUESTION_TIMEOUT_REFUSED_REASON.to_string(),
+                        },
+                        activity_options(cfg),
+                    )
+                    .await?;
+                }
+                Ok(QuestionStep::Answer(text))
+            }
+            OnTimer::Park => {
+                park_question(ctx, cfg, input, base_sha, tier, &q, QUESTION_PARK_REASON, n).await
+            }
+        },
+    }
+}
+
+/// End a card whose question cannot be answered: sweep, park and alarm.
+#[allow(clippy::too_many_arguments)]
+async fn park_question(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    base_sha: &str,
+    tier: Tier,
+    q: &Question,
+    reason: &str,
+    n: u32,
+) -> WorkflowResult<QuestionStep> {
+    let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &q.text);
+    run_janitor(ctx, cfg, input, base_sha).await?;
+    park_and_alarm(ctx, cfg, &packet, reason.to_string()).await?;
+    Ok(QuestionStep::Finished(parked(n)))
 }
 
 /// Merge `branch` into main, mapping the outcome to a value the run loop can act on.
@@ -783,6 +966,7 @@ mod tests {
             legs,
             workroot: root.path().to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
+            question_wait_cap_s: None,
         };
         (root, input)
     }

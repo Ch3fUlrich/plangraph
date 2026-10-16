@@ -21,7 +21,7 @@ use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QU
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
-use pg_worker::workflow::Card;
+use pg_worker::workflow::{AnswerSignal, Card};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::Patterns;
 use tempfile::TempDir;
@@ -63,6 +63,7 @@ impl Harness for ShellHarness {
         cmd.arg("-c")
             .arg(&self.script)
             .env("PG_MODEL", run.model)
+            .env("PG_PROMPT", run.prompt)
             .current_dir(run.workdir);
         cmd
     }
@@ -83,6 +84,8 @@ struct Env {
     worker: std::cell::RefCell<Option<tokio::task::JoinHandle<()>>>,
     /// A built worker not yet polling, for tests that signal before any worker runs.
     held: std::cell::RefCell<Option<Worker>>,
+    /// Question wait cap handed to the next card, in seconds; unset = 24 h.
+    question_cap_s: std::cell::Cell<Option<u64>>,
     _runtime: Runtime,
 }
 
@@ -172,6 +175,7 @@ impl Env {
             task_queue,
             worker: std::cell::RefCell::new(worker),
             held: std::cell::RefCell::new(held),
+            question_cap_s: std::cell::Cell::new(None),
             _runtime: runtime,
         }
     }
@@ -212,6 +216,7 @@ impl Env {
             legs,
             workroot: self.workroot.to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
+            question_wait_cap_s: self.question_cap_s.get(),
         };
         let wf_id = workflow_id(id);
         self.client
@@ -223,6 +228,11 @@ impl Env {
             .await
             .expect("start card workflow");
         self.client.get_workflow_handle::<Card>(wf_id.as_str())
+    }
+
+    /// Cap how long the next card waits for an answer, so a test never sleeps 24 h.
+    fn set_question_cap(&self, secs: u64) {
+        self.question_cap_s.set(Some(secs));
     }
 
     fn stop(&self) {
@@ -570,6 +580,180 @@ async fn usage_limit_reroutes_to_non_claude_leg() {
         );
         let sha = out.merged_sha.clone().expect("a merged card has a sha");
         assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        env.stop();
+    })
+    .await;
+}
+
+/// Wait until the stub keeper holds `count` questions; returns the newest id
+/// (the stub numbers questions from 1).
+async fn wait_for_questions(env: &Env, count: usize) -> i64 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while env.keeper.questions().len() < count {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the card never asked its question"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    count as i64
+}
+
+/// The agent asks once, then finishes only when its prompt carries `needle`.
+fn ask_then_work(packet: &str, needle: &str) -> String {
+    format!(
+        r#"case "$PG_PROMPT" in *"{needle}"*) echo ok > out.txt;; *) echo 'PG_QUESTION: {packet}';; esac"#
+    )
+}
+
+/// RT-P1 inbox: a question parks nothing. The card asks, waits durably, takes
+/// the inbox `answer` signal, and the next attempt (no retry budget spent)
+/// carries the answer in its prompt and merges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_answer_signal_resumes() {
+    in_local(async {
+        let script = ask_then_work(r#"{"text":"which db?"}"#, "use sqlite");
+        let Some(env) = env_or_skip("needs-input-answer", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-answer", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-answer-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let qid = wait_for_questions(&env, 1).await;
+        // The shape the inbox sends (src/plangraph/inbox/temporal_signal.py).
+        handle
+            .signal(
+                Card::answer,
+                AnswerSignal {
+                    question_id: qid,
+                    key: "demo:A".to_string(),
+                    text: "use sqlite".to_string(),
+                    source: "answer".to_string(),
+                },
+                WorkflowSignalOptions::default(),
+            )
+            .await
+            .expect("send answer signal");
+
+        let out = finish("needs_input_answered", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(
+            attempt_outcomes(&handle).await,
+            vec![
+                ("leg-1".to_string(), "needs_input".to_string()),
+                ("leg-1".to_string(), "ok".to_string()),
+            ]
+        );
+        assert_eq!(env.keeper.questions().len(), 1);
+        assert!(env.keeper.question_timeouts().is_empty());
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        env.stop();
+    })
+    .await;
+}
+
+/// No answer before the deadline and a default on offer: the workflow timer
+/// records `question_timeout` and the card continues with the default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_default_after_deadline() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":2,"risk_tags":[]}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-timeout", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-timeout", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-timeout-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_timeout", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(env.keeper.question_timeouts(), vec![1]);
+        let asked = env.keeper.questions();
+        assert_eq!(asked[0].1.default.as_deref(), Some("go with sqlite"));
+        assert_eq!(asked[0].1.deadline_s, Some(2));
+        assert!(env.keeper.alarms().is_empty(), "{:?}", env.keeper.alarms());
+        env.stop();
+    })
+    .await;
+}
+
+/// A keeper that refuses to record the timeout (worker token without the
+/// router or system role) is alarmed, and the card still takes the default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_default_continues_when_the_timeout_is_refused() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":1}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-refused", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_timeout_refused(true);
+        let claim = env.claim("e2e-refused", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-refused-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_timeout_refused", &id, &handle).await;
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(env.keeper.question_timeouts(), vec![1]);
+        let alarms = env.keeper.alarms();
+        assert!(
+            alarms
+                .iter()
+                .any(|a| a.reason == "question_timeout not recorded"),
+            "{alarms:?}"
+        );
+        env.stop();
+    })
+    .await;
+}
+
+/// A risk-tagged question has no default even if the agent offered one: the
+/// card waits for an answer or cancel, and parks with an alarm at the (here
+/// injected) wait cap. The keeper never sees a timeout.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_risk_tagged_never_defaults() {
+    in_local(async {
+        let script = r#"echo 'PG_QUESTION: {"text":"spend money?","default":"yes","deadline_s":1,"risk_tags":["money"]}'"#;
+        let Some(env) = env_or_skip("needs-input-risk", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.set_question_cap(4);
+        let claim = env.claim("e2e-risk", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-risk-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_risk_tagged", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert!(env.keeper.question_timeouts().is_empty());
+        let asked = env.keeper.questions();
+        assert_eq!(asked.len(), 1);
+        assert_eq!(
+            asked[0].1.default, None,
+            "the keeper must not be sent a default"
+        );
+        assert_eq!(asked[0].1.risk_tags, vec!["money".to_string()]);
+        assert!(
+            env.keeper
+                .alarms()
+                .iter()
+                .any(|a| a.reason == "question unanswered"),
+            "{:?}",
+            env.keeper.alarms()
+        );
+        assert_eq!(env.keeper.parked().len(), 1);
         env.stop();
     })
     .await;
