@@ -1,5 +1,7 @@
 # L2 brief: build-L2-governor — plangraph:RT-P1-GOVERNOR (HIGH: keeper schema; parent build-L1; TTL 6 h)
 Rules: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-rules-common.md (binding, incl. D-1380, PR-head trailer).
+D-1533 (operator order, binding): model-family agnostic — Claude is one leg; opencode server coding.vm :4096 is the fallback when Claude is rate limited. No hard Claude dependency in worker legs, seats or keeper clients; leg selection falls back to non-Claude on Claude rate limit (test it).
+Governor: burn/throttle must cover non-Claude providers too and a Claude rate limit -> route new starts to non-Claude legs, not block.
 Item claimed by build-L1 (epoch 1; build-L1 heartbeats the lease). Repo plangraph, worktree from origin/main (e70eb566),
 branch lane/rt-p1-governor, cwd /home/s/code/plangraph-worktrees/governor. Draft PR; head trailer `Plan-Item: plangraph:RT-P1-GOVERNOR`.
 Done (keeper): daily job writes section-9 metrics into the keeper; governor blocks new planner/expert starts when Claude burn > 1/7 per

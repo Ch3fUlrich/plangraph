@@ -1,5 +1,6 @@
 # L2 brief: build-L2-rtp1-predeploy — RT-P1 WORKER, PROJECTOR, INBOX, REVIEW up to "only live Temporal missing" (parent build-L1; TTL 6 h)
 Rules: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-rules-common.md (binding, incl. D-1380, PR-head trailer).
+D-1533 (operator order, binding): model-family agnostic — Claude is one leg; opencode server coding.vm :4096 is the fallback when Claude is rate limited. No hard Claude dependency in worker legs, seats or keeper clients; leg selection falls back to non-Claude on Claude rate limit (test it).
 Host: WORKSTATION (Rust/Temporal builds; one CARGO_TARGET_DIR, cargo clean after). Repo plangraph from origin/main e70eb566.
 Why: server:RT-P1-TEMPORAL-CHECK (live Temporal on cloud.vm) is blocked on operator certs until >= 02:30Z. Close every gap that does
 NOT need that live cluster, so the four items only need the live run afterwards. Items stay unclaimed (deps open); build-L1 claims later.
