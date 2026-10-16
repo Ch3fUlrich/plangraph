@@ -23,7 +23,7 @@ permissions:
 
 jobs:
   rust:
-    runs-on: [self-hosted, workst]
+    runs-on: [self-hosted, fleet-ci]
     defaults:
       run:
         working-directory: rust
