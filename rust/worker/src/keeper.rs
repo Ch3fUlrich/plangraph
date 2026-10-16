@@ -114,6 +114,8 @@ fn encode_segment(s: &str) -> String {
 pub struct HttpKeeper {
     base: String,
     agent: ureq::Agent,
+    /// Bearer token the keeper requires on every verb; `None` sends none.
+    token: Option<String>,
 }
 
 impl HttpKeeper {
@@ -124,7 +126,27 @@ impl HttpKeeper {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(10))
             .build();
-        HttpKeeper { base, agent }
+        HttpKeeper {
+            base,
+            agent,
+            token: None,
+        }
+    }
+
+    /// Send `Authorization: Bearer <token>` on every request. An empty token
+    /// counts as none, so an unset `PG_KEEPER_TOKEN=` never sends a blank header.
+    pub fn with_token(mut self, token: &str) -> Self {
+        self.token = Some(token.trim().to_string()).filter(|t| !t.is_empty());
+        self
+    }
+
+    /// A POST request to `url`, carrying the bearer token when one is set.
+    fn post(&self, url: &str) -> ureq::Request {
+        let req = self.agent.post(url);
+        match &self.token {
+            Some(t) => req.set("Authorization", &format!("Bearer {t}")),
+            None => req,
+        }
     }
 
     fn url(&self, path: &str) -> String {
@@ -138,7 +160,7 @@ impl HttpKeeper {
         body: &impl Serialize,
     ) -> Result<serde_json::Value, KeeperError> {
         let url = self.url(path);
-        match self.agent.post(&url).send_json(body) {
+        match self.post(&url).send_json(body) {
             Ok(resp) if resp.status() == 200 => resp
                 .into_json()
                 .map_err(|e| KeeperError::Decode(e.to_string())),
@@ -151,7 +173,7 @@ impl HttpKeeper {
     /// POST a JSON body whose only accepted success code is 204.
     fn post204(&self, path: &str, body: &impl Serialize) -> Result<(), KeeperError> {
         let url = self.url(path);
-        match self.agent.post(&url).send_json(body) {
+        match self.post(&url).send_json(body) {
             Ok(resp) if resp.status() == 204 => Ok(()),
             Ok(resp) => Err(KeeperError::Status(resp.status())),
             Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
@@ -164,7 +186,7 @@ impl Keeper for HttpKeeper {
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError> {
         let url = self.url("/v1/claim");
         let payload = serde_json::json!({ "worker": worker });
-        match self.agent.post(&url).send_json(payload) {
+        match self.post(&url).send_json(payload) {
             Ok(resp) => match resp.status() {
                 200 => {
                     let claim: Claim = resp
@@ -206,7 +228,7 @@ impl Keeper for HttpKeeper {
     ) -> Result<Fence, KeeperError> {
         let url = self.url(&format!("/v1/locks/{}/acquire", encode_segment(repo)));
         let payload = serde_json::json!({ "owner": owner, "ttl_s": ttl_s });
-        match self.agent.post(&url).send_json(payload) {
+        match self.post(&url).send_json(payload) {
             Ok(resp) if resp.status() == 200 => resp
                 .into_json()
                 .map_err(|e| KeeperError::Decode(e.to_string())),
@@ -499,6 +521,7 @@ mod tests {
 
     /// A request as the one-shot test server observed it.
     struct Captured {
+        head: String,
         method: String,
         path: String,
         body: String,
@@ -564,6 +587,7 @@ mod tests {
             stream.read_exact(&mut body).expect("read request body");
         }
         Captured {
+            head,
             method,
             path,
             body: String::from_utf8_lossy(&body).to_string(),
@@ -586,6 +610,30 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&captured.body).unwrap(),
             serde_json::json!({ "worker": "w-1" })
         );
+    }
+
+    #[test]
+    fn http_token_is_sent_as_a_bearer_header_only_when_set() {
+        let (base, server) = serve_once(204, "No Content", "");
+        HttpKeeper::new(&base)
+            .with_token(" s3cret \n")
+            .report_attempt(&report())
+            .unwrap();
+        let captured = server.join().expect("server thread");
+        assert!(
+            captured.head.contains("authorization: Bearer s3cret\r\n")
+                || captured.head.contains("Authorization: Bearer s3cret\r\n"),
+            "{}",
+            captured.head
+        );
+
+        let (base, server) = serve_once(204, "No Content", "");
+        HttpKeeper::new(&base)
+            .with_token("  ")
+            .report_attempt(&report())
+            .unwrap();
+        let captured = server.join().expect("server thread");
+        assert!(!captured.head.to_lowercase().contains("authorization"));
     }
 
     #[test]

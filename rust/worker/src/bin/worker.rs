@@ -2,7 +2,7 @@
 //!
 //! Wiring is env-driven so the same binary runs against a local stub or the
 //! real keeper without a rebuild: `PG_TEMPORAL_ADDR`, `PG_NAMESPACE`,
-//! `PG_KEEPER_URL`, `PG_HARNESS_BIN`. Everything else has a safe default, so a
+//! `PG_KEEPER_URL`, `PG_KEEPER_TOKEN`, `PG_HARNESS_BIN`. Everything else has a safe default, so a
 //! bare `cargo run` against a local Temporal reaches a `StubKeeper` and the
 //! `opencode` harness. Worker deployment versioning is opt-in via
 //! [`pg_worker::buildid::from_env`], which stays off unless a valid build id is
@@ -75,7 +75,10 @@ async fn main() -> anyhow::Result<()> {
     let namespace = env_or("PG_NAMESPACE", "default");
 
     let keeper: Arc<dyn Keeper> = match std::env::var("PG_KEEPER_URL") {
-        Ok(url) if !url.is_empty() => Arc::new(HttpKeeper::new(&url)),
+        Ok(url) if !url.is_empty() => {
+            // The keeper authenticates every verb; this is the worker role's token.
+            Arc::new(HttpKeeper::new(&url).with_token(&env_or("PG_KEEPER_TOKEN", "")))
+        }
         _ => Arc::new(StubKeeper::default()),
     };
     let harnesses = build_registry();
