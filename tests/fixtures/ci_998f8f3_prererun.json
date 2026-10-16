@@ -1,0 +1,174 @@
+{
+ "_note": "reconstructed pre-rerun check-runs for 998f8f3 (CI-PYTEST-SPEED); 'workflow' = adapter-added field from actions/runs; ids/suites real, first-attempt conclusions per run attempts",
+ "sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+ "check_runs": [
+  {
+   "id": 116916026956,
+   "name": "pytest",
+   "status": "completed",
+   "conclusion": "cancelled",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105351488221
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38875149323/job/116916026956",
+   "workflow": {
+    "event": "workflow_dispatch",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38875149323
+   }
+  },
+  {
+   "id": 116916025339,
+   "name": "pytest-postgres",
+   "status": "completed",
+   "conclusion": "cancelled",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105351488221
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38875149323/job/116916025339",
+   "workflow": {
+    "event": "workflow_dispatch",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38875149323
+   }
+  },
+  {
+   "id": 116919131161,
+   "name": "pytest",
+   "status": "completed",
+   "conclusion": "cancelled",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105355583034
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38876665137/job/116919131161",
+   "workflow": {
+    "event": "pull_request",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38876665137
+   }
+  },
+  {
+   "id": 116919130781,
+   "name": "pytest-postgres",
+   "status": "completed",
+   "conclusion": "cancelled",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105355583034
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38876665137/job/116919130781",
+   "workflow": {
+    "event": "pull_request",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38876665137
+   }
+  },
+  {
+   "id": 116923418150,
+   "name": "pytest",
+   "status": "completed",
+   "conclusion": "success",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105362026458
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38879016538/job/116923418150",
+   "workflow": {
+    "event": "workflow_dispatch",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38879016538
+   }
+  },
+  {
+   "id": 116923416880,
+   "name": "pytest-postgres",
+   "status": "completed",
+   "conclusion": "failure",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105362026458
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38879016538/job/116923416880",
+   "workflow": {
+    "event": "workflow_dispatch",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38879016538
+   }
+  },
+  {
+   "id": 116910998247,
+   "name": "pytest",
+   "status": "completed",
+   "conclusion": "success",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105370467644
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38882090233/job/116910998247",
+   "workflow": {
+    "event": "workflow_dispatch",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38882090233
+   }
+  },
+  {
+   "id": 116910998687,
+   "name": "pytest-postgres",
+   "status": "completed",
+   "conclusion": "success",
+   "head_sha": "998f8f394b33cece65ee5bf52253fcbc6ecae560",
+   "started_at": "2026-10-16T09:00:00Z",
+   "app": {
+    "slug": "github-actions"
+   },
+   "check_suite": {
+    "id": 105370467644
+   },
+   "details_url": "https://github.com/Ch3fUlrich/plangraph/actions/runs/38882090233/job/116910998687",
+   "workflow": {
+    "event": "workflow_dispatch",
+    "workflow_id": 379033856,
+    "name": "tests",
+    "run_id": 38882090233
+   }
+  }
+ ]
+}
