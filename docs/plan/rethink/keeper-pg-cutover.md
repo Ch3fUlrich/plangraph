@@ -50,7 +50,12 @@ Freeze fingerprint (done at the end of section 2, after the unit is stopped and 
 chmod 0400 $LIVE/keeper.db
 sha256sum $LIVE/keeper.db | tee $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256
 ```
-The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK` (the file records the absolute path, so the cwd does not matter). A mismatch means something wrote to the old file: do NOT roll back to it by hash alone; restore from the backup copy `$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db` only if `(cd $LIVE/backups/pg-cutover-<sha>-<UTC> && sha256sum -c SHA256SUMS)` prints OK, else stop and report to the router.
+The recorded hash goes into the GO report and the lane card. Recheck at 48 h (and before any rollback): `sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256` -> `OK` (the file records the absolute path, so the cwd does not matter). A mismatch means something wrote to the old file: do NOT roll back to it by hash alone; restore from the backup copy `$LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db` only if `(cd $LIVE/backups/pg-cutover-<sha>-<UTC> && sha256sum -c SHA256SUMS)` prints OK, else stop and report to the router. Restore commands (only after the router names the cause; the PG keeper stays stopped, unit stopped):
+```
+B=$LIVE/backups/pg-cutover-<sha>-<UTC>
+(cd $B && sha256sum -c SHA256SUMS) && install -m 0400 $B/keeper.db $LIVE/keeper.db.restored && mv -f $LIVE/keeper.db.restored $LIVE/keeper.db && rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal   # replaces the suspect file; a stale WAL of the suspect file must not survive
+sha256sum $LIVE/keeper.db     # equals the line in $B/SHA256SUMS; then continue with the section 7 rollback block from the chmod line
+```
 
 ## 4. Copy (T0+, after freeze and backup)
 Config for the copy = a copy of `$KJ` with `"backend":"postgres","pg_schema":"keeper"` added, saved 0600 as `$LIVE/keeper-pg.json` (no dsn key; `db` unchanged). Export the MIGRATOR dsn from `<PG_MIGRATOR_DSN_FILE>` into `PG_DSN` in that shell only (never echo, never in argv).
