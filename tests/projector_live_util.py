@@ -71,10 +71,11 @@ def _free_ports(count: int) -> list[int]:
 
 
 class DevServer:
-    def __init__(self, binary: str, workdir: Path) -> None:
+    def __init__(self, binary: str, workdir: Path, *, http_api: bool = False) -> None:
         self.binary = binary
         self.workdir = Path(workdir)
-        self.port, self.ui_port, self.metrics_port = _free_ports(3)
+        self.port, self.ui_port, self.metrics_port, http_port = _free_ports(4)
+        self.http_port = http_port if http_api else None    # Temporal HTTP API (signals over HTTP)
         self.address = f"127.0.0.1:{self.port}"
         self.log = self.workdir / "temporal.log"
         self.proc: subprocess.Popen | None = None
@@ -84,6 +85,8 @@ class DevServer:
                "--port", str(self.port), "--ui-port", str(self.ui_port),
                "--metrics-port", str(self.metrics_port),
                "--db-filename", str(self.workdir / "temporal.db")]
+        if self.http_port is not None:
+            cmd += ["--http-port", str(self.http_port)]
         with open(self.log, "wb") as out:
             self.proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
                                          stdin=subprocess.DEVNULL, start_new_session=True)

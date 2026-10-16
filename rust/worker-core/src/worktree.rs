@@ -13,10 +13,30 @@ pub struct AttemptId {
     pub n: u32,
 }
 
+/// A card id as a git ref component. The keeper names items `project:id`, and
+/// `:` (like space, `~`, `^`, `?`, `*`, `[`, `\`) is not allowed in a ref, so
+/// every other byte class becomes `_`; `..` is broken up too. Idempotent, so a
+/// branch name parsed back yields the same id.
+pub fn ref_safe(card: &str) -> String {
+    let mapped: String = card
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    mapped.replace("..", "._")
+}
+
 impl AttemptId {
+    /// The card id is stored ref-safe (see [`ref_safe`]) so the branch and the
+    /// worktree directory derived from it are always valid.
     pub fn new(card: impl Into<String>, n: u32) -> Self {
         AttemptId {
-            card: card.into(),
+            card: ref_safe(&card.into()),
             n,
         }
     }
@@ -114,6 +134,15 @@ pub fn list(repo: &Path) -> Result<Vec<AttemptWorktree>, GitError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keeper_style_card_ids_make_valid_branches() {
+        let id = super::AttemptId::new("demo:E2E-1", 2);
+        assert_eq!(id.branch(), "attempt/demo_E2E-1/2");
+        assert_eq!(super::AttemptId::parse_branch(&id.branch()), Some(id));
+        assert_eq!(super::ref_safe("a b~c^d..e"), "a_b_c_d._e");
+        assert_eq!(super::ref_safe("plain-1.x"), "plain-1.x");
+    }
+
     use super::*;
     use crate::testutil::{commit_all, repo, write};
 

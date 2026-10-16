@@ -220,7 +220,11 @@ impl Card {
                         check_hash: String::new(),
                         check_tail: String::new(),
                         context_overflow: false,
-                        branch: format!("attempt/{}/{n}", input.claim.card),
+                        branch: pg_worker_core::worktree::AttemptId::new(
+                            input.claim.card.as_str(),
+                            n,
+                        )
+                        .branch(),
                         head: String::new(),
                         output_tail: String::new(),
                         // The projector records a missing field as absent; a

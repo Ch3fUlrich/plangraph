@@ -111,3 +111,14 @@ def test_alarm_is_per_run_and_activity_and_survives_reconcile(world, projector, 
     (tmp_path / "empty").mkdir()
     reconcile(world.store, FileSource(tmp_path / "empty"), projector)
     assert len(alarms(world)) == 2                             # a reconcile pass never clears them
+
+
+def test_every_worker_activity_is_a_known_type():
+    """Drift guard: each ``#[activity]`` fn of the Rust worker (the question ones too) is known."""
+    import re
+    from plangraph.projector.models import KNOWN_ACTIVITY_TYPES
+    src = (ROOT / "rust/worker/src/activities.rs").read_text()
+    names = re.findall(r"#\[activity\]\s+pub async fn (\w+)", src)
+    assert {"ask_question", "record_question_timeout", "janitor"} <= set(names), names
+    for name in names:
+        assert name == "attempt" or f"CardActivities::{name}" in KNOWN_ACTIVITY_TYPES, name
