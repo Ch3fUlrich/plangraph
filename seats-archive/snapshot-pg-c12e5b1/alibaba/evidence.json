@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/.claude/jobs/d5ef51da/tmp/snapq/out.json",
+      "sha256": "460f8fcb44c0862b108fcaae37c880e9fbdadd8788b5e746247debfff80606b1",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "d7150343-fc8e-446e-896f-12ff045905d9",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - the sig/body gap is a pre-existing property of the unchanged atomic `snapshot_io.write_snapshot` (temp+rename, signature first); a single writer only ever produces new\u2011sig/old\u2011body, which verification rejects and the reader retries, so no consumer accepts a mismatched/torn snapshot, and the tolerating test is newly authored rather than loosening an existing strict assert."
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "f8c4ffe638c25932783030ea1780c3a9b6608dd19fd36eae864e482b66b60eab"
+}
