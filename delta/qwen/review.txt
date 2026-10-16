@@ -1,0 +1,98 @@
+=== part /home/s/code/plangraph-worktrees/.sessions/pg-prep/qwen13.json
+# V1 WAL data loss
+
+**Checkpoint and delete logic in section 3 is correct.** The compound gate:
+
+```
+{ [ ! -s WAL ] || python3 -c "...wal_checkpoint(TRUNCATE)...raise SystemExit(r[0])"; } \
+  && [ ! -s WAL ] && echo OK || { echo FAIL; false; }
+```
+
+Under `bash -eo pipefail`, `false` as the last command of the `||` branch returns 1 for the whole and-or list; since the list's exit status IS the status of the last executed command, errexit fires and the script halts before the rm or the chmod. The unit is already stopped (section 2) so no writer can race the TRUNCATE checkpoint. The re-test `[ ! -s WAL ]` after the checkpoint is the gate before `rm -f`: only a missing or 0-byte WAL reaches the rm (a 0-byte WAL has no committed frames). No non-empty WAL is ever deleted.
+
+**Section 2 backup covers all committed frames.** `s.backup(d)` uses SQLite's online backup API with source opened `mode=ro` — the API folds WAL content into the destination file regardless of checkpoint state. This happens before the section 3 fingerprint.
+
+**sha256 covers a complete database.** After TRUNCATE, all WAL frames reside in `keeper.db`; WAL is 0. `sha256sum $LIVE/keeper.db` after the chmod captures the entire committed dataset. Evidence: file `keeper-pg-cutover.md` section 3, lines: `chmod 0400` → `sha256sum`.
+
+**Section 7 rollback WAL guard:** `[ ! -s WAL ] || { echo ...; false; }` — same errexit reasoning; non-empty WAL halts the script before any rm or chmod. Correct.
+
+**No defect found.**
+
+---
+
+# V2 sha256 freeze + 48 h recheck
+
+**Recorded:** `sha256sum $LIVE/keeper.db | tee .../keeper.db.frozen.sha256` (section 3). Also the backup gets its own `SHA256SUMS` (section 2).
+
+**Rechecked:** (a) at 48 h end-of-window (section 7 preconditions list `sha256sum -c OK`); (b) before any rollback (section 7 first line); (c) section 3 explicitly states "Recheck at 48 h (and before any rollback)."
+
+**On mismatch:** operator must NOT roll back to the live file by hash alone; restore from backup only if `(cd $B && sha256sum -c SHA256SUMS)` prints OK, else stop and report. This is "restore only from a verified backup" — correct.
+
+**Gap check:** The frozen hash uses the absolute path (`$LIVE/keeper.db` expands to `/home/...`), so cwd-independence of `sha256sum -c` is guaranteed. No gap found.
+
+---
+
+# V3 rollback exactness
+
+**Command sequence in section 7 (exact path):**
+
+1. `sha256sum -c` — file-integrity gate ✓
+2. `[ "$(psql ...)" = "<boundary>" ]` — PG-writes gate ✓
+3. `systemctl --user stop plangraph-keeper` — stops PG keeper (unit name unchanged; PG comes from the now-present drop-in env) ✓
+4. `systemctl --user stop ...timer ...path` — stops timers ✓
+5. `rm .../pg-backend.conf` — removes env injection ✓
+6. `systemctl --user daemon-reload` — unit reverts to sqlite ✓
+7. `[ ! -s WAL ] || false` — WAL guard ✓
+8. `[ ! -s WAL ] && rm -f ...shm ...wal` — safe WAL cleanup ✓
+9. `chmod 0600 $LIVE/keeper.db` — restores write perm only after guard ✓
+10. `systemctl --user start plangraph-keeper` — old sqlite unit ✓
+11. `unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA` — CLI reverts to sqlite config ✓
+12. `pg --config $KJ admin verify; whoami; ready` — clean-shell verify ✓
+13. `systemctl --user start ...timers` — normal operation resumes ✓
+
+**Boundary correctness:** Section 6.4 records `max(seq)` AFTER the keeper start and read-only verify gates, BEFORE timers/replay. The rollback's `[ "$(psql max(seq))" = "<boundary>" ]` checks whether PG received any writes since the boundary. Equal → exact rollback valid; not equal → must use AFTER-writes path. Correctly bounded.
+
+**No defect found.** All steps present, in correct order, with proper guards.
+
+---
+
+# V4 delete-or-archive decision at 48 h
+
+Section 7 end-of-window states: "explicit **delete-or-archive decision**, never automatic." Preconditions listed: `sha256sum -c` OK, second `admin verify` rc0, no incident, PG backup of same day restore-tested. Router must issue a separate GO naming the file sha256 and the choice. Section 8 step 4 matches. Until the decision, file stays 0400 and rollback stays valid. No cron/timer/automatic path exists. **Complete and correct.**
+
+---
+
+# V5 digest script (rowhash.py)
+
+**Schema from env:** `os.environ["PG_SCHEMA"]` passed via `set_config('search_path', %s, false)` — a parameterized query in psycopg3. No SQL injection through the env value (psycopg binds it as a text literal). ✓
+
+**DSN from env only:** `os.environ["PG_DSN"]` in `psycopg.connect()`, never in argv. ✓
+
+**Primary-key assertion:** The pre-check loop `for t in TABLES: if not any(r[5] for r in s.execute(...))` validates all 19 tables before any comparison runs. The old `or ["rowid"]` fallback and the PG-side `ORDER BY rowid` special case are removed; PG-side queries now always include `ORDER BY <pk>` matching sqlite. ✓
+
+**Ordering:** PK assertion loop first, digest loop second — fail-fast before any read. ✓
+
+**Table/column names in SQL f-strings:** They come from `TABLES` (hardcoded tuple) and `PRAGMA table_info` of the controlled sqlite backup. Not attacker input. ✓
+
+**No bug found.**
+
+---
+
+# V6 Secrets hygiene and command correctness of changed lines
+
+- DSN: exported from file, never echoed, never in argv, never in config files (`keeper-pg.json` has no dsn key). ✓
+- Section 7 note: `psql "$PG_DSN"` visibility caveat documented with libpq-env mitigation. ✓
+- systemd drop-in: `EnvironmentFile=` for runtime DSN, not inline. ✓
+- Token: header file mode 0600, used via `-H @<file>`, never in argv or history. ✓
+- rowhash: DSN and schema strictly via env; the doc's command template has no secret values. ✓
+- `chmod` permissions: backup dir 700, files within 600, frozen db 400, config 600. ✓
+- All commands syntactically valid; `install -m 0400` → `mv -f` is atomic within same filesystem; `shred -u`/`rm` correctly paired with GO naming both hashes. ✓
+
+**No defect found.**
+
+---
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

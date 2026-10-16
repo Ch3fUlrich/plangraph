@@ -1,0 +1,65 @@
+**V1 WAL data loss**  
+File `docs/plan/rethink/keeper-pg-cutover.md` section 3 (Freeze fingerprint) – the guard block  
+
+```
+{ [ ! -s $LIVE/keeper.db-wal ] || python3 -c "import sqlite3;c=sqlite3.connect('$LIVE/keeper.db');r=c.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone();c.close();raise SystemExit(r[0])"; } \
+  && [ ! -s $LIVE/keeper.db-wal ] && echo WAL-EMPTY-OR-MISSING || { echo "checkpoint failed …"; false; }
+[ ! -s $LIVE/keeper.db-wal ] && rm -f $LIVE/keeper.db-shm $LIVE/keeper.db-wal
+```  
+
+The logic checks the WAL, runs a TRUNCATE checkpoint (verifying the busy flag `r[0]`), aborts on any error, re‑tests that the WAL file is empty and deletes it only when it is zero‑byte or missing. The subsequent `sha256sum $LIVE/keeper.db` therefore hashes a fully checkpointed database. No defect found.
+
+**V2 sha256 freeze + 48 h recheck**  
+File `docs/plan/rethink/keeper-pg-cutover.md` section 3 creates `keeper.db.frozen.sha256` (hash of the live DB) and section 7 re‑checks it with  
+
+```
+sha256sum -c $LIVE/backups/pg-cutover-<sha>-<UTC>/keeper.db.frozen.sha256
+```  
+
+On mismatch the runbook explicitly *does not* roll back by hash alone; it restores from the backup copy only after verifying that `(cd $B && sha256sum -c SHA256SUMS)` succeeds. The hash is stored in the backup directory and rechecked both at 48 h and before any rollback. No gap identified.
+
+**V3 rollback exactness**  
+File `docs/plan/rethink/keeper-pg-cutover.md` section 7 (Rollback) lists the exact command sequence:
+
+1. Verify frozen hash.  
+2. Compare PG max `seq` with the recorded loss‑boundary sequence.  
+3. Stop the PG keeper and related timers.  
+4. Remove the `pg-backend.conf` drop‑in (or restore the pre‑pg backup).  
+5. `systemctl --user daemon-reload`.  
+6. WAL guard – abort if `$LIVE/keeper.db-wal` is non‑empty.  
+7. Delete empty WAL/SHM, `chmod 0600 $LIVE/keeper.db`.  
+8. Restart the original SQLite keeper.  
+9. Unset PG‑related env vars, verify with `pg --config $KJ …`, restart timers.  
+
+The boundary check is performed *before* any timer or replay starts (section 6 step 4). All required guards are present; the rollback path matches the “exact” case. No defect found.
+
+**V4 delete‑or‑archive decision at 48 h**  
+File `docs/plan/rethink/keeper-pg-cutover.md` section 7 (End of window) states explicitly:
+
+*“explicit **delete-or-archive decision**, never automatic. Preconditions: `sha256sum -c` OK, a second `pg admin verify` on PG rc0, no incident, PG backup of the same day restore‑tested.”*  
+
+The decision is manual, conditional on the listed pre‑conditions, and the runbook makes clear that the file remains `chmod 0400` until the router records the final action. No defect found.
+
+**V5 digest script**  
+File `src/plangraph/keeper/copy_to_pg.py` function `run` – uses only `opts.get("dsn")` or `os.environ.get("PG_DSN")` for the target DSN; never prints it.  
+File `docs/plan/rethink/keeper-pg-cutover.rowhash.py` function `__main__` – obtains `PG_DSN` and `PG_SCHEMA` exclusively from environment and binds them via `psycopg` parameterization (`select set_config('search_path', %s, false)`).  
+
+Primary‑key assertion is performed for every table:
+
+```python
+if not any(r[5] for r in s.execute(f"PRAGMA table_info({t})")):
+    sys.exit(f"{t}: no primary key; digest refused")
+```  
+
+No SQL‑injection vector, no unsafe string interpolation for identifiers (table names come from the trusted `TABLES` constant). No defect found.
+
+**V6 secrets hygiene & command correctness**  
+Diff 1 adds the note “(export `PG_DSN` … never echo, never in argv)” and changes the copy step to use `--config $LIVE/keeper-pg.json` (which holds no DSN) together with `--src $B`.  
+Row‑hash script now requires `PG_SCHEMA` via env and removes the fallback to `rowid`.  
+All commands that could expose secrets (DSN, tokens) are either written to files with mode 0600, passed via environment, or stored in drop‑in files that systemd reads, never echoed. No accidental leakage or malformed command observed.
+
+---
+
+TEST-GAMING: no - searched source files (`copy_to_pg.py`, `keeper-pg-cutover.rowhash.py`, runbook markdown) for test‑specific overrides, pytest‑related checks, or guards that are only satisfied in a test environment: 0 hits
+
+VERDICT: pass
