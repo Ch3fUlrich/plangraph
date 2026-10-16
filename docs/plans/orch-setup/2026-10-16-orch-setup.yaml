@@ -3,7 +3,7 @@
 batch: 2026-10-16-orch-setup
 principal: router
 source: ../2026-10-16-orchestration-setup.md
-source_sha256: d52bf1f52ce636795bcdc943b3abf57c368703581e9190dc641dd623c5259ea3
+source_sha256: 2723fb244f1d12397b1e1b00276ae91bd26553b01dd6b3323eab1ad71318efcb
 ops:
 - op: create
   item:
@@ -17,6 +17,8 @@ ops:
     description: 'Operator order 2026-10-16: docs/plans is the base of the plan graph; never lose the goal. Section 1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
     done_criteria: both base files byte-verified (body sha256 1958911c.. / ff41ee5c..); design merged to main via PR
     depends_on: []
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-CORE
@@ -30,6 +32,8 @@ ops:
     done_criteria: 'contract tests green on Linux + Windows CI: unparsable target refused, 2nd apply all skipped, check reports drift, backup only on change, atomic write + lock; files <= 400 lines'
     depends_on:
     - plangraph:SU-DOCS
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-ENV
@@ -43,6 +47,8 @@ ops:
     done_criteria: all keys of section 5 documented with defaults; precedence test (env > file > default); inline-secret refusal test; keeper suite green
     depends_on:
     - plangraph:SU-CORE
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-LEASE-CFG
@@ -57,6 +63,8 @@ ops:
     depends_on:
     - plangraph:SU-DOCS
     - plangraph:RT-P1-KEEPER-PG
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-HOOK-FLEET
@@ -71,6 +79,8 @@ ops:
     done_criteria: the 15 cases of AutoOS tests/test_fleet_hook.py ported and green; no-op p95 < 10 ms over 200 runs on Windows and Linux (numbers in the run record); Windows reparse-point refusal test
     depends_on:
     - plangraph:SU-CORE
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-HOOKS-WIRE
@@ -84,6 +94,8 @@ ops:
     done_criteria: fixture settings with foreign hooks unchanged outside our entries; superseded Python entry replaced in place; 2nd run skipped; check reports drift; backup only on change
     depends_on:
     - plangraph:SU-HOOK-FLEET
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-ADR0003A
@@ -97,6 +109,8 @@ ops:
     done_criteria: ADR 0003a merged; docs/fleet-status-hook.md names plangraph as the hook home and the Python hooks as reference; docs link check green
     depends_on:
     - plangraph:SU-HOOKS-WIRE
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-LAUNCH
@@ -110,6 +124,8 @@ ops:
     done_criteria: record fields equal routing fleet-launch's plus env; interactive and --bg on Windows and WSL; workstation start-*.ps1 become one-line calls; a ctx-watchdog fixture reads the record
     depends_on:
     - plangraph:SU-CORE
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-FLEET-LAUNCH-WRAP
@@ -123,6 +139,8 @@ ops:
     done_criteria: same CLI and record; dry-run output test; ctx-watchdog unchanged
     depends_on:
     - plangraph:SU-LAUNCH
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-RUN-TOKENS
@@ -136,6 +154,8 @@ ops:
     done_criteria: child whoami = its run principal, scoped to its run; token file 0600, never printed, revoked at run end and expiring with the lease; 2 non-Claude seats
     depends_on:
     - plangraph:SU-LAUNCH
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-MCP-RS
@@ -150,6 +170,8 @@ ops:
     depends_on:
     - plangraph:SU-CORE
     - plangraph:SU-ENV
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-MCP
@@ -164,6 +186,8 @@ ops:
     depends_on:
     - plangraph:SU-MCP-RS
     - plangraph:SU-LAUNCH
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-TRAILER
@@ -177,6 +201,8 @@ ops:
     done_criteria: 'fixture: AutoOS ba90f77a message comes out shaped like 05a376d3; idempotent; malformed key refused; trailers check fails a --no-verify fixture commit'
     depends_on:
     - plangraph:SU-CORE
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-REPO
@@ -190,6 +216,8 @@ ops:
     done_criteria: lint passes only on a CLAUDE.md that is exactly @AGENTS.md (or absent with AGENTS.md present); chained core.hooksPath test; CLAUDE.md with rule text is refused with a hint
     depends_on:
     - plangraph:SU-TRAILER
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-AGENTSMD-PG
@@ -203,6 +231,8 @@ ops:
     done_criteria: lint green in CI; rule diff reviewed, no rule lost
     depends_on:
     - plangraph:SU-REPO
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-AGENTSMD-AO
@@ -216,6 +246,8 @@ ops:
     done_criteria: lint green in CI; rule diff reviewed, no rule lost
     depends_on:
     - plangraph:SU-REPO
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-AGENTSMD-SRV
@@ -229,6 +261,8 @@ ops:
     done_criteria: lint green in CI; rule diff reviewed, no rule lost
     depends_on:
     - plangraph:SU-REPO
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-SKILLS
@@ -242,6 +276,8 @@ ops:
     done_criteria: rule tests absent/ours/dangling/foreign; junctions on Windows, symlinks on Linux; 2nd run skipped
     depends_on:
     - plangraph:SU-CORE
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-HARNESS-CFG
@@ -256,6 +292,8 @@ ops:
     depends_on:
     - plangraph:SU-ENV
     - plangraph:RT-P1-WORKER
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-RELEASE
@@ -270,6 +308,8 @@ ops:
     depends_on:
     - plangraph:SU-CORE
     - plangraph:SPLIT-PUBLISH
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-CATALOG
@@ -284,6 +324,8 @@ ops:
     depends_on:
     - plangraph:SU-RELEASE
     - autoos:SU-ADR0003A
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-SKILLS-CALLER
@@ -298,6 +340,8 @@ ops:
     depends_on:
     - plangraph:SU-SKILLS
     - autoos:SU-CATALOG
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-FRESH-CHECK
@@ -331,6 +375,9 @@ ops:
     - server:SU-AGENTSMD-SRV
     - autoos:SU-CATALOG
     - autoos:SU-SKILLS-CALLER
+    evidence_kinds:
+    - commit+ci
+    - run-record
 - op: create
   item:
     id: PH-ORCH-SETUP
@@ -344,6 +391,8 @@ ops:
     done_criteria: all deps done
     depends_on:
     - plangraph:SU-FRESH-CHECK
+    evidence_kinds:
+    - any
 - op: create
   item:
     id: SU-HOOK-BASHGUARD
@@ -357,6 +406,8 @@ ops:
     done_criteria: ported tests green; no-op p95 < 10 ms; wired by setup
     depends_on:
     - plangraph:PH-ORCH-SETUP
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-HOOK-CTXGUARD
@@ -370,6 +421,8 @@ ops:
     done_criteria: ported tests green (incl. first_ts and `ready <handoff> --card <card>`); no-op p95 < 10 ms; wired by `plangraph setup apply` on every host OS (Linux, Windows)
     depends_on:
     - plangraph:PH-ORCH-SETUP
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: SU-GUARDS-CALLER
@@ -383,6 +436,8 @@ ops:
     done_criteria: plugin tests green
     depends_on:
     - plangraph:SU-HOOK-BASHGUARD
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: PH-ORCH-GUARDS
@@ -398,6 +453,8 @@ ops:
     - plangraph:SU-HOOK-BASHGUARD
     - plangraph:SU-HOOK-CTXGUARD
     - autoos:SU-GUARDS-CALLER
+    evidence_kinds:
+    - any
 - op: create
   item:
     id: Q-API-PUSH
@@ -413,6 +470,9 @@ ops:
     depends_on:
     - plangraph:RT-P3-PHONE
     - plangraph:PG-INBOX
+    evidence_kinds:
+    - commit+ci
+    - run-record
 - op: create
   item:
     id: RT-P3-PLAN-MODE
@@ -427,6 +487,8 @@ ops:
     depends_on:
     - plangraph:Q-API-PUSH
     - plangraph:RT-P2-DECISIONS
+    evidence_kinds:
+    - commit+ci
 - op: create
   item:
     id: RT-P3-HISTORY
@@ -441,6 +503,188 @@ ops:
     depends_on:
     - plangraph:RT-P3-TABS
     - plangraph:RT-P3-PLAN-MODE
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: HOST-SAMPLES-API
+    project: plangraph
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Keeper host-sample store: ingest with per-host token, server-side staleness, rollups and retention'
+    description: 'Router order D-1514 item 1; S20. Section 12.1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: ingest + read API tests on Postgres; server-clock received_at, seq gaps; stale after 3 / down after 10 missed samples; range partitions; raw 14 d, 1-min 90 d, 1-h 2 y rollups run by the
+      keeper loop (no cron); token scoped to ingest; migration as owner role
+    depends_on:
+    - plangraph:SU-DOCS
+    - plangraph:RT-P1-KEEPER-PG
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: HOST-AGENT
+    project: plangraph
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'plangraph host-agent user service: samples CPU, memory, GPU, disk and agent processes, pushes every 60 s'
+    description: 'D-1514 item 1; S20; no cron (D-1377). Section 12.1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'samples from Linux, Windows and WSL2 (own node with its memory cap) reach a test keeper; GPU via NVML with nvidia-smi fallback; payload test: no paths, args, env or prompts; setup installs
+      the user service (systemd --user + linger, Windows logon start), 2nd run skipped, check reports drift; < 1 % CPU'
+    depends_on:
+    - plangraph:SU-CORE
+    - plangraph:SU-ENV
+    - plangraph:HOST-SAMPLES-API
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: AGENT-SESSION-SIGNALS
+    project: plangraph
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: Live agent sessions and context use per host (Claude Code, opencode, qoder, agy) in the host sample
+    description: 'D-1514 item 1. Section 12.1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'Claude context (last usage: input + cache_read + cache_creation) within 2 % of a live statusline value; window size table overridden by statusline/ctx-guard; opencode via server API
+      or read-only store; session names from launch records; numbers only'
+    depends_on:
+    - plangraph:HOST-AGENT
+    - plangraph:SU-LAUNCH
+    evidence_kinds:
+    - commit+ci
+    - run-record
+- op: create
+  item:
+    id: GATEWAY-AVAILABILITY-SIGNALS
+    project: plangraph
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Provider/model availability from OmniRoute: 429s, Retry-After, cooldown and spend-cap state'
+    description: 'D-1514 item 1. Section 12.1. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: an injected 429 / cooldown shows in the keeper within 2 samples; spend-cap reset time parsed; read from the OmniRoute state, no second breaker, no paid probe calls
+    depends_on:
+    - plangraph:HOST-AGENT
+    evidence_kinds:
+    - commit+ci
+    - run-record
+- op: create
+  item:
+    id: PLACEMENT-RULES
+    project: plangraph
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: high
+    title: 'Placement rules: one typed schema, audited keeper edits, per-host env overrides with documented precedence'
+    description: 'D-1514 item 3; S21. Section 12.3. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: setup/placement-rules.schema.toml drives loader, validation and UI form; env keys PG_RULE_<NAME>_<UNIT> derived; precedence test process env > env file > keeper > default; override allow-list;
+      invalid key falls back + reported; audit events with rollback as forward event; overrides reported per sample; last-known-good cache
+    depends_on:
+    - plangraph:SU-ENV
+    - plangraph:HOST-SAMPLES-API
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: PLACEMENT-ENGINE
+    project: plangraph
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: high
+    title: 'Placement API: filters, scores, SlotLease grants and OverflowQueue'
+    description: 'D-1514 item 2; S22. Section 12.2, 12.4. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'rules of section 12.2; replay tests on recorded samples: no double-booking between samples (granted-unstarted counted), hysteresis, queue + 1800 s timeout with reason, lease TTL expiry,
+      forged/reused/absent lease refused, ProviderCooldown fleet-wide; decision reasons recorded; 2 non-Claude seats'
+    depends_on:
+    - plangraph:PLACEMENT-RULES
+    - plangraph:AGENT-SESSION-SIGNALS
+    - plangraph:GATEWAY-AVAILABILITY-SIGNALS
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: SPAWN-USES-PLACEMENT
+    project: autoos
+    kind: lane
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: autoos-agent spawn places every run through the plangraph placement API and holds a SlotLease
+    description: 'D-1514 item 2; S22, S23. Section 12.4. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'CLI + MCP spawn hold a lease; local admission only as offline fallback with last-known-good rules (test); folded done-criteria pass: fan-out beyond budget queued (T2-BUDGET), workstation
+      80 GB budget + below-normal priority (WS-4), forged/reused/absent token refused (AO-SLOT-GRANT-TOKEN), opencode and Claude lanes counted once (AO-ADMISSION-OC-SHARED)'
+    depends_on:
+    - plangraph:PLACEMENT-ENGINE
+    - plangraph:SU-MCP
+    - plangraph:SU-LAUNCH
+    evidence_kinds:
+    - commit+ci
+    - run-record
+- op: create
+  item:
+    id: UI-FLEET-TAB
+    project: plangraph
+    kind: lane
+    track: RETHINK
+    owner: build-L1
+    review_tier: standard
+    title: 'Web UI Fleet tab: hosts, live sessions, provider availability, placement decisions and the rule editor'
+    description: 'D-1514 items 1 + 3. Section 12. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: per host latest + 24 h trend with stale/down; sessions with context %; provider state; last decisions with reasons; rule edit validated by the schema and audited; effective value, layer
+      and per-host overrides shown; browser test
+    depends_on:
+    - plangraph:RT-P3-SVELTE
+    - plangraph:HOST-SAMPLES-API
+    - plangraph:PLACEMENT-RULES
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: WORKER-USES-PLACEMENT
+    project: plangraph
+    kind: lane
+    track: RETHINK
+    owner: build-L1
+    review_tier: standard
+    title: Rust worker and governor place attempts through the placement API
+    description: 'D-1514 item 2. Section 12.4. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: 'a Temporal attempt holds a SlotLease; contract test: same decision as the AutoOS caller on a fixed fixture'
+    depends_on:
+    - plangraph:PLACEMENT-ENGINE
+    - plangraph:RT-P1-WORKER
+    - plangraph:RT-P1-GOVERNOR
+    evidence_kinds:
+    - commit+ci
+- op: create
+  item:
+    id: PH-FLEET-CAPACITY
+    project: plangraph
+    kind: gate
+    track: FLEET-CAPACITY
+    owner: workst-L1-autoos
+    review_tier: standard
+    title: 'Phase FLEET-CAPACITY done: host signals, placement rules and API, AutoOS caller, UI tab'
+    description: 'Gate. Design: plangraph docs/plans/2026-10-16-orchestration-setup.md.'
+    done_criteria: all deps done
+    depends_on:
+    - plangraph:HOST-SAMPLES-API
+    - plangraph:HOST-AGENT
+    - plangraph:AGENT-SESSION-SIGNALS
+    - plangraph:GATEWAY-AVAILABILITY-SIGNALS
+    - plangraph:PLACEMENT-RULES
+    - plangraph:PLACEMENT-ENGINE
+    - autoos:SPAWN-USES-PLACEMENT
+    - plangraph:UI-FLEET-TAB
+    evidence_kinds:
+    - any
 - op: create
   item:
     id: SU-DOCKER
@@ -456,6 +700,92 @@ ops:
     - routing:PH-RETHINK
     - plangraph:PH-ORCH-SETUP
     - plangraph:PH-ORCH-GUARDS
+    evidence_kinds:
+    - commit+ci
+- op: edit
+  key: autoos:PH-AO-FLEET
+  fields:
+    depends_on:
+    - autoos:AO-APIDOCS
+    - autoos:AO-APPLY-CLUSTER-013
+    - autoos:AO-AUTO-FANOUT
+    - autoos:AO-AUTOOS5-REBUILD-DRIFT
+    - autoos:AO-DENYLEGS
+    - autoos:AO-FREE-PRIVACY-CLASS
+    - autoos:AO-GROK
+    - autoos:AO-HOSTMIRROR
+    - autoos:AO-L2-PRODTEST
+    - autoos:AO-LAGUNA-SEAT-CAP
+    - autoos:AO-OCRUNTIME
+    - autoos:AO-OPENCODE-JAIL
+    - autoos:AO-PREPUSH-HOOK-GITENV
+    - autoos:AO-PREPUSH-HOOK-GITENV-2
+    - autoos:AO-QODER-ROUTE
+    - autoos:AO-READY-CAP-EXCEPTION
+    - autoos:AO-READY-MULTI-BRIEF
+    - autoos:AO-RESEARCH-GLM-CODING-PLAN
+    - autoos:AO-RETIRE-AGENT-SKILLS-CLONE
+    - autoos:AO-RUNNER-NO-SUBAGENTS
+    - autoos:AO-SANDBOX-DNS
+    - autoos:AO-SKILLRULES
+    - autoos:AO-SPAWN-KEY-PRESET
+    - autoos:AO-SPAWN-PATCH-ID
+    - autoos:AO-SPLIT1
+    - autoos:AO-SYNC-PARTIAL-PULL-RESTORE
+    - autoos:AO-WSCONFIG
+    - autoos:RS-GEMINI-PARAMS
+    - autoos:SPAWN-USES-PLACEMENT
+- op: edit
+  key: autoos:T2-CUTRUN
+  fields:
+    depends_on:
+    - autoos:SPAWN-USES-PLACEMENT
+- op: cancel
+  key: autoos:T2-BUDGET
+  reason: folded into autoos:SPAWN-USES-PLACEMENT + plangraph:PLACEMENT-ENGINE (operator 2026-10-16, D-1514)
+- op: edit
+  key: autoos:WS-6
+  fields:
+    depends_on:
+    - autoos:WS-1
+    - autoos:WS-2
+    - autoos:WS-3
+    - autoos:SPAWN-USES-PLACEMENT
+    - autoos:WS-5
+- op: edit
+  key: autoos:PH-WS-SHIFT
+  fields:
+    depends_on:
+    - autoos:WS-1
+    - autoos:WS-2
+    - autoos:WS-3
+    - autoos:SPAWN-USES-PLACEMENT
+    - autoos:WS-5
+    - autoos:WS-6
+- op: cancel
+  key: autoos:WS-4
+  reason: folded into rule WorkstationUsableGuard, autoos:SPAWN-USES-PLACEMENT (operator 2026-10-16, D-1514)
+- op: edit
+  key: routing:LESSONS-ENFORCE
+  fields:
+    depends_on:
+    - autoos:SPAWN-USES-PLACEMENT
+    - autoos:AO-SPAWN-FENCE-PRERUN
+    - plangraph:PG-L1-CREATE-WITH-EDGE
+    - plangraph:PG-LE-APPLY-QUEUE
+    - plangraph:PG-LE-DEPS-OPS
+    - plangraph:PG-LE-DROW-LINT
+    - plangraph:PG-LE-GUARD-KEY
+    - plangraph:PG-LE-MDSYNC-PIN-RETRY
+    - plangraph:PG-LE-PRIORITY-EDIT
+    - server:PROX-LIVE-GO-IN-REPO
+    - server:PROX-LIVE-GO-WRAPPER
+- op: cancel
+  key: autoos:AO-SLOT-GRANT-TOKEN
+  reason: folded into rule SlotLease, autoos:SPAWN-USES-PLACEMENT (operator 2026-10-16, D-1514)
+- op: cancel
+  key: autoos:AO-ADMISSION-OC-SHARED
+  reason: 'folded into autoos:SPAWN-USES-PLACEMENT: counts come from host-agent samples (operator 2026-10-16, D-1514)'
 - op: edit
   key: autoos:RT-P4-INSTALLER
   fields:
@@ -475,6 +805,7 @@ ops:
     - plangraph:Q-API-PUSH
     - plangraph:RT-P3-PLAN-MODE
     - plangraph:RT-P3-HISTORY
+    - plangraph:UI-FLEET-TAB
 - op: edit
   key: plangraph:PH-M2C-API
   fields:

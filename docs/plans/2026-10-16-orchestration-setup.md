@@ -36,6 +36,10 @@ stopped the supervising session. Neither changes this design.
 | S17 | Lane models: writer **gemini-3.8-flash via agy**; seats **qwen3.8-flash (qodercli)** + **opencode/muse-spark-1.3-free**; a rate-limited leg falls back to mimo-v2.6-flash, then deepseek. Seat family != writer family always. agy gets code only, never plan data | AskUserQuestion |
 | S18 | Public repo CI on **GitHub-hosted** Linux + Windows runners (tests + release builds); the workstation runner stays for private repos | AskUserQuestion |
 | S19 | Item rulings (operator decided instead of the router): `plangraph:API-PUSH` and the draft RT-P3-ASK-PUSH fold into one new item **`plangraph:Q-API-PUSH`** (the clearer name); `autoos:T2-SKILL` is cancelled as a duplicate of `plangraph:RT-P4-SKILLS-REWRITE`; `autoos:AO-CTX-RECYCLE-ALLHOSTS` folds into `plangraph:SU-HOOK-CTXGUARD` + `SU-LAUNCH`; `plangraph:CI-RUNS-ON-WORKST` is re-scoped to the private repos. Dependents are re-pointed in the same batch | AskUserQuestion |
+| S20 | Fleet capacity (router order D-1514): each host runs **`plangraph host-agent`** (a user service, set up by `plangraph setup`; no cron) that pushes one sample a minute to the keeper | AskUserQuestion |
+| S21 | Placement rules: the **keeper is the truth** (edited in the UI as audited events). The env file may override an allow-listed subset for its own host only. Precedence: process env > env file > keeper > schema default. Overrides need no reason or expiry, but are reported with every sample and flagged in the UI | AskUserQuestion |
+| S22 | **One placement API** in the keeper. autoos-agent spawn calls it now, the Rust worker/governor after RT-P1-WORKER. `autoos:T2-BUDGET`, `WS-4`, `AO-SLOT-GRANT-TOKEN` and `AO-ADMISSION-OC-SHARED` fold into it. Rules have CamelCase check names (section 12) | AskUserQuestion |
+| S23 | The workstation takes workers within its own caps at below-normal priority. There is no user-idle gate | AskUserQuestion |
 
 Verified facts (this round): Claude Code 2.1.301 on Windows, `claude -p`, three temp repos: AGENTS.md alone -> loaded; CLAUDE.md =
 `@AGENTS.md` -> loaded; CLAUDE.md with other text -> AGENTS.md NOT loaded. So a non-import CLAUDE.md silently hides AGENTS.md;
@@ -155,6 +159,8 @@ Secrets never sit in it: tokens are file paths (`*_FILE` keys). `env check` refu
 | `PLANGRAPH_UI_URL` | `http://127.0.0.1:5173` | push links, launcher hints |
 | `FLEET_STATE_DIR` / `FLEET_LAUNCH_DIR` | `~/.local/state/fleet` / `~/.local/state/routing/launch` | hooks, launcher (old paths kept for compatibility) |
 | `PLANGRAPH_SKILLS_SRC` | AutoOS `.agents/skills` until RT-P4-SPAWNER, then `plangraph/skills` | `setup skills` |
+| `PG_HOST_ID` / `PG_HOST_TOKEN_FILE` / `PG_HOST_SAMPLE_S` | unset / unset / `60` | host-agent (section 12.1) |
+| `PG_RULE_<NAME>_<UNIT>` | from `setup/placement-rules.schema.toml` | per-host placement overrides, allow-listed keys only (section 12.3) |
 
 The same file works for Docker: the default compose uses host networking (as `deploy/keeper-proxy` already does), so the
 localhost URLs stay valid unchanged.
@@ -315,6 +321,7 @@ Operator rulings (S19), applied in the same batch:
 
 Write sets are disjoint per lane (one module per subcommand under `rust/plangraph-cli/src/`). Lanes B-E can run in parallel
 after A; F and the Python half of SU-ENV wait for the keeper's Postgres cutover. RT-P3 UI items are briefed by build-L1 with P3.
+Lanes J (fleet signals) and K (placement) are in section 12.
 
 ## 11. Differences from the base and open points
 
@@ -354,3 +361,134 @@ after A; F and the Python half of SU-ENV wait for the keeper's Postgres cutover.
    - the backup stamp format;
    - the exact key regex (taken from the keeper);
    - whether `--bg` takes `--session-id` (test first).
+
+## 12. Fleet capacity and placement (router order D-1514, S20-S23)
+
+Goal: every fleet host reports its resources and availability regularly. The keeper stores the samples with timestamps and the
+web UI shows them. One placement API turns the samples plus the rules into a host choice and a slot for every spawn. Rules are
+editable in the UI and in the env file, with one truth and a documented precedence. Research basis: four research passes on
+2026-10-16 (Kubernetes scheduler filter/score + Reserve, Nomad spread/constraint, Slurm pending, Envoy/LiteLLM breakers,
+Consul/Unleash/LaunchDarkly config layering and audit, Claude Code statusline/hooks docs, opencode server API).
+
+### 12.1 Signals (`plangraph host-agent`)
+
+- **Process.** A long-running loop in the same binary, installed by `plangraph setup apply` as a user service (systemd
+  `--user` with linger on Linux, a logon-start service on Windows). No cron (D-1377). It runs unprivileged and is outbound-only.
+  It pushes to the keeper every `PG_HOST_SAMPLE_S` (default 60 s), with a 5-10 s internal sampling and mean + max per window.
+- **Identity.** `PG_HOST_ID` (env file) plus a per-host token file `PG_HOST_TOKEN_FILE`, scoped to sample ingest only.
+  Provisioned outside setup, like root tokens (11.5). Host names exist only in the env files and in keeper data, never in
+  public code (S2).
+- **Metrics:**
+  - CPU utilisation (not load average).
+  - Memory: Linux `MemAvailable`, Windows Available Bytes. Swap-in rate, not swap used.
+  - Disk free on the constraining mount; on Windows the C: drive that holds the WSL VHDX.
+  - GPU via NVML (`nvml-wrapper`), falling back to `nvidia-smi --query-gpu=... --format=csv,noheader,nounits`: utilisation,
+    `memory.free`, `memory.total`.
+  - **WSL2 is its own node**, reporting its own memory cap (`.wslconfig` `memory=`), because the VM's `free` misleads.
+  - Live agent processes per name: claude, opencode, qodercli, agy. Node-based CLIs are matched on the command line, but only
+    the count leaves the host.
+- **Sessions and context use** (AGENT-SESSION-SIGNALS):
+  - The session list comes from the launch records (SU-LAUNCH) plus live processes.
+  - Claude Code context = the last assistant usage in the transcript (`input + cache_read + cache_creation` tokens), read
+    read-only. The transcript path comes from the launch record or hook input.
+  - The window size comes from a per-model table, overridden by the statusline `context_window_size` or the ctx-guard state
+    when present.
+  - opencode: its server API (`/session`, `/session/:id/message`) when `opencode serve` runs, otherwise a read-only read of
+    its local store, with a version check.
+  - qoder/agy: count and age only, until a usage source is found (builder spike).
+- **Gateway availability** (GATEWAY-AVAILABILITY-SIGNALS):
+  - Per provider/model: request and 429 counts, `Retry-After` when exposed, cooldown/breaker state and spend-cap state with
+    its reset time.
+  - Read from OmniRoute's own state on the host that runs the gateway. No second breaker, and no paid LLM call per probe.
+- **Payload rule.** Numbers, names of the four CLIs, session names and model ids only. No paths, arguments, env, prompts or
+  transcript text (test).
+- **Keeper side** (HOST-SAMPLES-API):
+  - Server clock `received_at`, plus `seq` and `agent_started_at` to show restarts and gaps.
+  - A host is `stale` after 3 missed samples and `down` after 10 (rule HostFresh).
+  - Storage: Postgres range partitions. Raw rows kept 14 days, 1-minute rollups 90 days, 1-hour rollups 2 years. Retention
+    and rollups run in the keeper's own loop, not a cron.
+  - Schema changes by migration as the owner role; the runtime role `keeper_rt` has no DDL.
+
+### 12.2 Rules (names, kinds, what they replace)
+
+One check per name (Kubernetes plugin style). Filters are hard; scores rank the hosts that pass.
+
+| Rule | Kind | Meaning | Replaces / source |
+|---|---|---|---|
+| HostFresh | filter | the host has a sample newer than 3 intervals | new |
+| HostWorkerCap | filter | live + granted workers < cap (default 6) | AO-ADMISSION cap 6, T2-BUDGET |
+| HostMemoryFloor | filter | `MemAvailable` minus the estimates of granted-but-unstarted jobs >= floor + job estimate | AO-ADMISSION floor, T2-BUDGET, D-081/D-1485 (values confirmed by routing) |
+| HostGpuFit | filter | the job needs a GPU and the host has VRAM free >= the job's need | new |
+| ProviderConcurrencyCap | filter | in-flight runs per provider/model < cap | OVH-GUARD style caps |
+| ProviderCooldown | filter | the provider is not cooling down (429 `Retry-After`, breaker open, spend cap until reset), fleet-wide | new; no per-host penalty |
+| WorkstationUsableGuard | filter | workstation worker RAM budget (WS-4: 80 GB) and its own caps; workers at below-normal priority; no idle gate (S23) | WS-4 |
+| HostLoadScore | score | lower smoothed CPU/memory pressure ranks higher | new |
+| HostPreferenceScore | score | the fallback order per job class (writer, seat, heavy, GPU) | new |
+| SlotLease | grant | a check-then-grant lease with a TTL and heartbeat renewal, expiring on crash. The spawner refuses a run without a valid, unused lease | AO-SLOT-GRANT-TOKEN, replaces the bare flock |
+| OverflowQueue | queue | when no host passes, the job queues FIFO within priority; it fails with a reason after `OverflowQueueTimeout` (default 1800 s) | T2-BUDGET "queued, not refused" |
+
+- **Hysteresis.** A host flips to full below the low threshold and back to free above the high one, and only after 2
+  consecutive samples. Placement uses an EWMA (half-life about 5 min).
+- **Explainability.** Every decision is recorded with each host's failed filter or score (UI and API).
+
+### 12.3 Rule configuration (S21)
+
+- **One typed schema**, `setup/placement-rules.schema.toml`: name, type, unit, range, default, `host_overridable`. It drives
+  the UI form, the keeper validation and the env loader. There is no second list.
+- **Env keys are derived mechanically**: `PG_RULE_<SNAKE_NAME>_<UNIT>`, with the units `_COUNT`, `_MIB`, `_PCT`, `_S` and
+  `_ENABLED`. Examples: `PG_RULE_HOST_WORKER_CAP_COUNT=6`, `PG_RULE_HOST_MEMORY_FLOOR_MIB=6144`,
+  `PG_RULE_OVERFLOW_QUEUE_TIMEOUT_S=1800`. `plangraph env check` knows them from the schema.
+- **Precedence**: process env > env file > keeper > schema default. Only `host_overridable` keys may be set per host. An
+  invalid or non-overridable key is skipped for that key only, and reported; the agent still starts. Only an unparsable file
+  refuses.
+- **Keeper edits** (UI or API) are attributed, append-only events (who, when, why, before/after, version). A rollback is a new
+  forward event. Every host reports its overrides with each sample, and the UI shows the effective value, its layer and each
+  host's overrides.
+- **Propagation.** Hosts poll the rule version every 60 s with jitter and keep an on-disk last-known-good copy. A keeper outage
+  never blocks a spawn: the last-known-good rules apply, else the schema defaults, flagged `unmanaged`.
+
+### 12.4 Placement API and callers (S22)
+
+- `POST /placement` takes a job class, an estimate and an optional GPU need. It returns a host plus a SlotLease, or `queued`
+  with a position, or `failed` with reasons. Renew and release endpoints go with the lease.
+- **Caller 1, now:** autoos-agent spawn (CLI and MCP) calls it before starting a run (`autoos:SPAWN-USES-PLACEMENT`). The
+  local admission (cap 6, `MemAvailable` floor, flock) stays only as the offline fallback, with the last-known-good rules.
+- **Caller 2, later:** the Rust worker and governor acquire a SlotLease per attempt (WORKER-USES-PLACEMENT). A contract
+  test shows that both callers get the same decision on a fixed fixture.
+
+### 12.5 Items (track FLEET-CAPACITY; same batch)
+
+| Key | Title | Deps | Done (check) |
+|---|---|---|---|
+| plangraph:HOST-SAMPLES-API | Keeper host-sample store: ingest with per-host token, staleness, rollups, retention | SU-DOCS, RT-P1-KEEPER-PG | ingest + read API tests on Postgres; stale/down states; partition + rollup + retention test; token scoped to ingest |
+| plangraph:HOST-AGENT | `plangraph host-agent` user service: CPU, memory, GPU, disk, agent processes | SU-CORE, SU-ENV, HOST-SAMPLES-API | Linux, Windows and WSL2 (own node) samples in a test keeper; NVML + fallback; payload test (no paths/args/env); setup installs it, 2nd run skipped, check drift; < 1 % CPU |
+| plangraph:AGENT-SESSION-SIGNALS | Live sessions + context use per host | HOST-AGENT, SU-LAUNCH | Claude context within 2 % of a live statusline value; opencode via API or read-only store; session names from launch records; numbers only |
+| plangraph:GATEWAY-AVAILABILITY-SIGNALS | Provider/model availability from OmniRoute | HOST-AGENT | an injected 429 / cooldown shows in the keeper within 2 samples; spend-cap reset time parsed; no paid probe calls |
+| plangraph:PLACEMENT-RULES | Rule schema, audited keeper edits, per-host env overrides, precedence (HIGH) | SU-ENV, HOST-SAMPLES-API | schema drives loader + validation; precedence test (4 layers); override allow-list; invalid-key fallback; audit + rollback events; last-known-good cache |
+| plangraph:PLACEMENT-ENGINE | Placement API: filters, scores, SlotLease, OverflowQueue (HIGH) | PLACEMENT-RULES, AGENT-SESSION-SIGNALS, GATEWAY-AVAILABILITY-SIGNALS | replay tests on recorded samples: no double-booking between samples; hysteresis; queue + timeout; lease expiry; forged/reused/absent lease refused; decision reasons recorded; 2 non-Claude seats |
+| autoos:SPAWN-USES-PLACEMENT | autoos-agent spawn places through the API | plangraph:PLACEMENT-ENGINE, plangraph:SU-MCP, plangraph:SU-LAUNCH | CLI + MCP spawn hold a lease; offline fallback test; the done-criteria of T2-BUDGET, WS-4, AO-SLOT-GRANT-TOKEN and AO-ADMISSION-OC-SHARED pass |
+| plangraph:UI-FLEET-TAB | Web UI Fleet tab: hosts, sessions, providers, decisions, rule editor | RT-P3-SVELTE, HOST-SAMPLES-API, PLACEMENT-RULES | per host latest + 24 h trend, stale/down; context %; provider state; last decisions with reasons; rule edit validated + audited, layer and overrides shown; browser test |
+| plangraph:WORKER-USES-PLACEMENT | Rust worker/governor place attempts through the API | PLACEMENT-ENGINE, RT-P1-WORKER, RT-P1-GOVERNOR | an attempt holds a lease; contract test: same decision as the AutoOS caller |
+| plangraph:PH-FLEET-CAPACITY | gate: fleet capacity done | the items above except WORKER-USES-PLACEMENT | all deps done |
+
+Owners: build-L1 for UI-FLEET-TAB and WORKER-USES-PLACEMENT (RETHINK track), workst-L1-autoos for the rest.
+`routing:RT-P3` gains UI-FLEET-TAB. WORKER-USES-PLACEMENT stays outside the gate, like SU-HARNESS-CFG (11.8).
+
+Folds (S22). Each old item is cancelled and its dependents re-pointed to `autoos:SPAWN-USES-PLACEMENT`:
+- `autoos:T2-BUDGET` (dependent `autoos:T2-CUTRUN`);
+- `autoos:WS-4` (dependents `autoos:WS-6`, `autoos:PH-WS-SHIFT`);
+- `autoos:AO-SLOT-GRANT-TOKEN` (dependents `autoos:PH-AO-FLEET`, `routing:LESSONS-ENFORCE`);
+- `autoos:AO-ADMISSION-OC-SHARED` (dependent `autoos:PH-AO-FLEET`).
+
+### 12.6 Lanes
+
+| Lane | Items | Starts after |
+|---|---|---|
+| J fleet signals | HOST-SAMPLES-API, HOST-AGENT, AGENT-SESSION-SIGNALS, GATEWAY-AVAILABILITY-SIGNALS | A (SU-CORE, SU-ENV); SESSION after C's SU-LAUNCH |
+| K placement | PLACEMENT-RULES, PLACEMENT-ENGINE, autoos:SPAWN-USES-PLACEMENT | J's HOST-SAMPLES-API; SPAWN after C's SU-MCP |
+
+Left to the builder:
+- the qoder/agy usage source;
+- the OmniRoute endpoint used for cooldown state (spike first);
+- the EWMA constants;
+- the per-model context window table format.
