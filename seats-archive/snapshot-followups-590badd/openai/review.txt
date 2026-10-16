@@ -1,0 +1,72 @@
+**V1 snapshot_io.read_snapshot / snapshot_serve.envelope**  
+*Evidence*  
+- `src/plangraph/keeper/snapshot_io.py:read_snapshot` – after a failed signature verification the code now does  
+  ```python
+  if _retry:
+      time.sleep(RETRY_PAUSE_S)   # ← 0.05 s pause before the single retry
+      return read_snapshot(path, pubkey, _retry=False)
+  ```  
+- `src/plangraph/keeper/snapshot_serve.py:envelope` – the retry loop now sleeps before the second attempt:  
+  ```python
+  for attempt in range(2):
+      if attempt:
+          time.sleep(snapshot_io.RETRY_PAUSE_S)
+  ```  
+
+*Answer* – A 50 ms pause is introduced before the single retry in both readers. The retry path still raises `SignError` on the second failure, so a fail‑closed verification is **not** turned into an accept. No lock is held while sleeping, so the lock‑holding thread is not blocked.
+
+---
+
+**V2 daemon.run startup rebuild under server.lock**  
+*Evidence*  
+- `src/plangraph/keeper/daemon.py:run` – the snapshot rebuild is now wrapped:  
+  ```python
+  try:
+      with server.lock:
+          api.write_snapshot(server, server.system)
+  except Exception as exc:
+      print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
+  ```  
+
+*Answer* – The lock is acquired only for the short `write_snapshot` call; the reaper thread runs concurrently but does not need the lock while the daemon holds it. Consequently there is no dead‑lock or ordering hazard, and the `try/except` guarantees exception safety (the lock is released by the context manager).
+
+---
+
+**V3 SnapshotWriter _counters, alarm, logging**  
+*Evidence*  
+- Constant and state fields:  
+  ```python
+  ALARM_AFTER = 3
+  ...
+  self.failures = 0
+  self.alarm = False
+  ```  
+- Failure handling:  
+  ```python
+  def _failed(self, exc):
+      self.failures += 1
+      _log(f"snapshot build failed ({type(exc).__name__}), {self.failures} consecutive; ..."
+      if self.failures == ALARM_AFTER:
+          self.alarm = True
+          _log(f"ALARM snapshot writer failed {ALARM_AFTER} consecutive builds: ...")
+  ```  
+- Success handling:  
+  ```python
+  def _succeeded(self):
+      if self.failures:
+          _log(f"snapshot build recovered after {self.failures} failed attempts")
+      self.failures, self.alarm = 0, False
+  ```  
+
+*Answer* – The `failures` and `alarm` counters are mutated only by the writer thread itself, so there is no race with other threads. An alarm line is emitted exactly once when the failure count reaches `ALARM_AFTER`; it is cleared on the first successful build. Log messages contain only the exception type and generic context—no hidden data. The retry/back‑off behaviour is unchanged (the 50 ms pause is handled elsewhere).
+
+---
+
+**V4 tests (new test_keeper_snapshot_writer.py and test_m2b_signed_snapshot)**  
+*Answer* – The added tests explicitly exercise the new pause and the failure‑alarm logic (e.g., they stub `snapshot_sign.verify` to fail once, then succeed, and assert that a second read occurs after the pause). Therefore they pin the intended behaviour; the suite would fail if the retry or alarm mechanisms were removed or became no‑ops.
+
+---
+
+TEST-GAMING: no - searched src/ for test‑only conditionals, environment checks, special __eq__/__hash__ overrides and for test/ files for any guards that depend on pytest or PYTEST_CURRENT_TEST: 0 hits
+
+VERDICT: pass

@@ -1,0 +1,48 @@
+=== part /home/s/.claude/jobs/d5ef51da/tmp/fu-qwen.json
+V1: snapshot_io.read_snapshot / snapshot_serve.envelope
+
+The 50ms pause before the single retry is sound. In `read_snapshot`, the sleep sits between the failed `verify()` call and the recursive retry with `_retry=False`. Verification logic is untouched: if the second attempt also fails, `SignError` is raised. No accept path is created.
+
+In `snapshot_serve.envelope`, the same pattern: `for attempt in range(2)` adds `time.sleep(snapshot_io.RETRY_PAUSE_S)` only on the second iteration, before re-reading. The existing raise on exhausted attempts is unchanged.
+
+No lock-holding thread is blocked: `read_snapshot` is a pure file-read function called by consumers (snapshot_pull, external tooling); `envelope` runs in the serve process. Neither acquires `server.lock`. The 50ms sleep is on the caller's own thread in an I/O-wait context, not on the daemon's critical path.
+
+Verdict on V1: no finding.
+
+V2: daemon.run startup rebuild under server.lock
+
+The new `with server.lock:` correctly serialises the startup rebuild with the already-running reaper. Deadlock analysis: `write_snapshot` (i.e. `snapshot_io.write_snapshot`) performs atomic file I/O and graph serialization; its design contract (documented in SnapshotWriter._write_locked calling convention) is "caller holds server.lock", so it must not re-acquire the lock internally. No circular dependency exists because the main thread acquires the lock, does the work, and releases; the reaper thread simply blocks on the same lock until the main thread exits the `with` block.
+
+Exception safety: `try/except Exception` wraps the entire `with` block. If `write_snapshot` raises, Python's context-manager protocol releases the lock before the except handler runs. The startup continues normally.
+
+Ordering: anchorer.record fires before start_reaper, which fires before the snapshot rebuild. No resource is held across the lock acquisition that could cause priority inversion. The stop event and subsequent server loop run after this block, unaffected.
+
+Verdict on V2: no finding.
+
+V3: SnapshotWriter._failed / _succeeded / _write_locked / flush
+
+Counters race: `self.failures` and `self.alarm` are mutated in `_failed`/`_succeeded`, which are called OUTSIDE `self._cond` inside `_write_locked`. In the normal operating path, only the writer thread calls `_write_locked`, so mutations are single-threaded. `flush()` now calls `self._succeeded()` inside its `with self._cond:` block, so a shutdown-flush and a running `run()` tick could theoretically race on the counters. In practice flush is invoked after the thread has stopped (or as the last action); CPython GIL makes int reads/writes atomic. Not a bug in the merged model but worth noting: no lock protects the counters, relying on the thread model.
+
+Alarm once per streak: `if self.failures == ALARM_AFTER` (equality, not `>=`) guarantees exactly one ALARM line per failure streak of length >= 3. `_succeeded` resets both `failures` and `alarm`, clearing the field for the next streak. Correct.
+
+No secret in log lines: `_failed` logs `type(exc).__name__` only. The docstring explicitly states "exception type only: messages can carry paths". The ALARM message is a fixed string. No user data, paths, keys, or serialized secrets leak.
+
+No behaviour change to retry/backoff: `_write_locked` still returns `False` on exception, `True` on success — the existing wait/backoff loop in `run()` is untouched. The only additions are logging and counter updates that do not influence control flow.
+
+Minor note on `flush()`: `_succeeded()` is added to the success path but no corresponding `_failed()` in the except path. A flush failure will not increment `self.failures` or trigger ALARM. This is arguably intentional (daemon is shutting down, no retry) but creates an asymmetry where a preceding streak of in-run failures could be cleared by a successful flush without a recovery log line (since `_succeeded` only logs if `self.failures > 0`, and the failures count was incremented by the run thread — so it would actually log recovery). This is cosmetic, not a correctness issue.
+
+Verdict on V3: no blocking finding; one architectural note about flush/run counter overlap.
+
+V4: tests
+
+The diff header states "Material (diff vs main, src only)". No test file contents are provided. I cannot assess mutation-kill coverage, vacuous-pass risk, or whether the 50ms delay itself is pinned (vs. merely the retry logic being tested without timing assertions). Specifically:
+
+- Whether `test_keeper_snapshot_writer.py` asserts alarm fires exactly once (not twice or zero times), and that no exception `str(exc)` appears in captured stderr, cannot be verified from the provided material.
+- Whether `test_m2b_signed_snapshot`'s retry test mocks `time.sleep` to prove the pause exists (or merely proves a second read succeeds, which would pass without the sleep), cannot be determined.
+
+V4 assessment is incomplete pending test source.
+
+TEST-GAMING: no - searched src/ for test-only branches and env checks: 0 hits
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass
