@@ -119,6 +119,7 @@ impl Card {
                 n,
                 leg: leg.clone(),
                 workroot: input.workroot.clone(),
+                class: context_class_name(context).to_string(),
             };
 
             let result: AttemptResult = match ctx
@@ -160,6 +161,18 @@ impl Card {
                         branch: format!("attempt/{}/{n}", input.claim.card),
                         head: String::new(),
                         output_tail: String::new(),
+                        // The projector records a missing field as absent; a
+                        // synthetic attempt has no provider metadata of its own.
+                        harness: None,
+                        model: None,
+                        combo: None,
+                        class: None,
+                        started_at: None,
+                        ended_at: None,
+                        tokens_in: None,
+                        tokens_out: None,
+                        cost: None,
+                        log_ref: None,
                     }
                 }
             };
@@ -219,11 +232,7 @@ impl Card {
                             )
                             .await?;
                             run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                            return Ok(CardOutput {
-                                outcome: "merged".to_string(),
-                                merged_sha: Some(sha),
-                                attempts: n,
-                            });
+                            return Ok(finish("merged", Some(sha), n));
                         }
                         MergeStep::Moved(main_head) => {
                             // Main moved: rebase onto the new head and let the policy
@@ -389,11 +398,7 @@ impl Card {
                             exit_name(packet.exit_class).to_string(),
                         )
                         .await?;
-                        return Ok(CardOutput {
-                            outcome: "quarantined".to_string(),
-                            merged_sha: None,
-                            attempts: n,
-                        });
+                        return Ok(finish("quarantined", None, n));
                     }
                     Action::ToPlanner => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
@@ -405,11 +410,7 @@ impl Card {
                             exit_name(packet.exit_class).to_string(),
                         )
                         .await?;
-                        return Ok(CardOutput {
-                            outcome: "planner".to_string(),
-                            merged_sha: None,
-                            attempts: n,
-                        });
+                        return Ok(finish("planner", None, n));
                     }
                     Action::Park { packet } => {
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
@@ -420,7 +421,7 @@ impl Card {
                             exit_name(packet.exit_class).to_string(),
                         )
                         .await?;
-                        return Ok(parked(n));
+                        return Ok(finish("parked", None, n));
                     }
                 }
             }
@@ -436,22 +437,36 @@ impl Card {
     }
 }
 
-/// A terminal outcome with no merged sha, for the park family.
-fn parked(attempts: u32) -> CardOutput {
+/// The terminal outcome for a finished card, named for the projector.
+///
+/// docs/projector.md contract v1 gives the workflow result only
+/// `done | parked | failed`; the keeper's finer word rides along in `detail`.
+/// `cancelled` maps to `parked` because the projector never sets `cancelled` -
+/// that word belongs to the keeper `cancel` verb, not to a workflow result.
+pub fn finish(detail: &str, merged_sha: Option<String>, attempts: u32) -> CardOutput {
+    let outcome = match detail {
+        "merged" => "done",
+        "parked" | "planner" | "cancelled" => "parked",
+        "quarantined" => "failed",
+        // An unknown detail is not evidence of success, so it fails closed.
+        _ => "failed",
+    };
     CardOutput {
-        outcome: "parked".to_string(),
-        merged_sha: None,
+        outcome: outcome.to_string(),
+        detail: detail.to_string(),
+        merged_sha,
         attempts,
     }
 }
 
+/// A terminal outcome with no merged sha, for the park family.
+fn parked(attempts: u32) -> CardOutput {
+    finish("parked", None, attempts)
+}
+
 /// A terminal outcome for a signal-cancelled card.
 fn cancelled(attempts: u32) -> CardOutput {
-    CardOutput {
-        outcome: "cancelled".to_string(),
-        merged_sha: None,
-        attempts,
-    }
+    finish("cancelled", None, attempts)
 }
 
 /// The options every auxiliary activity gets: bounded retries for idempotent
@@ -624,6 +639,16 @@ fn packet_from_last(card: &str, history: &[Attempt], check_tail: &str) -> ParkPa
     packet_for(card, last.tier, last.exit_class, check_tail)
 }
 
+/// Stable context-class name, matching the JSON wire form of `ContextClass`
+/// and the `class` field the projector reads.
+fn context_class_name(c: ContextClass) -> &'static str {
+    match c {
+        ContextClass::K128 => "128k",
+        ContextClass::K256 => "256k",
+        ContextClass::M1 => "1m",
+    }
+}
+
 /// Stable snake_case name, matching the JSON wire form of `ExitClass`.
 fn exit_name(class: ExitClass) -> &'static str {
     match class {
@@ -765,5 +790,41 @@ mod tests {
         // A detached token never observes the workflow's cancellation, so the
         // sweep still runs to completion after a native cancel.
         assert!(!token.is_cancelled());
+    }
+
+    #[test]
+    fn finish_maps_every_detail_to_a_projector_outcome() {
+        // docs/projector.md contract v1: the workflow result is done | parked | failed.
+        let cases = [
+            ("merged", "done"),
+            ("parked", "parked"),
+            ("planner", "parked"),
+            ("cancelled", "parked"),
+            ("quarantined", "failed"),
+            ("something_else", "failed"),
+        ];
+        for (detail, outcome) in cases {
+            let out = finish(detail, None, 3);
+            assert_eq!(out.detail, detail, "detail is carried verbatim");
+            assert_eq!(out.outcome, outcome, "detail {detail}");
+            assert_eq!(out.merged_sha, None);
+            assert_eq!(out.attempts, 3);
+        }
+    }
+
+    #[test]
+    fn finish_keeps_the_merged_sha() {
+        let out = finish("merged", Some("sha".to_string()), 7);
+        assert_eq!(out.outcome, "done");
+        assert_eq!(out.detail, "merged");
+        assert_eq!(out.merged_sha.as_deref(), Some("sha"));
+        assert_eq!(out.attempts, 7);
+    }
+
+    #[test]
+    fn context_class_names_match_the_projector_wire_form() {
+        assert_eq!(context_class_name(ContextClass::K128), "128k");
+        assert_eq!(context_class_name(ContextClass::K256), "256k");
+        assert_eq!(context_class_name(ContextClass::M1), "1m");
     }
 }

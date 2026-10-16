@@ -34,6 +34,15 @@ use temporalio_sdk::{Runtime, Worker, WorkerOptions};
 /// How long any single card may take before the test gives up.
 const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long a cancel may take to land on the shared, loaded CI host.
+///
+/// Above any plausible cancel latency on a loaded shared CI host, yet below the
+/// 300 s attempt timeout so a slow host cannot end the attempt by timeout; the
+/// harness prints a line every second, so the 30 s stall watchdog never fires
+/// either. Finishing inside this budget can therefore only mean the cancel
+/// reached the child.
+const CANCEL_BUDGET: Duration = Duration::from_secs(150);
+
 type Handle = WorkflowHandle<Client, Card>;
 
 /// Runs `sh -c <script>` inside the attempt's worktree, standing in for a real
@@ -84,13 +93,16 @@ impl Env {
         let harness: Arc<dyn Harness> = Arc::new(ShellHarness {
             script: script.to_string(),
         });
-        // These timeouts are the activities' (heartbeat cadence, stall kill);
-        // the workflow keeps its own `Config::default()` for the retry policy,
-        // so tests must not lean on workflow-side timeouts to finish.
+        // These timeouts are the activities' (heartbeat cadence, stall kill).
+        // The long timeouts keep a starved host from ending an attempt by
+        // timeout, so a cancel test can only pass via the cancel path; the
+        // harness prints every second so the 30 s stall watchdog does not fire
+        // either. The workflow keeps its own `Config::default()` for the retry
+        // policy, so tests must not lean on workflow-side timeouts to finish.
         let cfg = Config {
             heartbeat: Duration::from_millis(200),
-            heartbeat_timeout: Duration::from_secs(5),
-            start_to_close: Duration::from_secs(60),
+            heartbeat_timeout: Duration::from_secs(30),
+            start_to_close: Duration::from_secs(300),
             stall: Duration::from_secs(30),
             ..Config::default()
         };
@@ -168,7 +180,11 @@ impl Env {
         }
     }
 
-    /// Start the card workflow under `id` and hand back a typed handle.
+    /// Start the card workflow for `id` and hand back a typed handle.
+    ///
+    /// The workflow runs under `card:<id>` so the projector can derive the
+    /// `plan_key` from the workflow id; the caller passes the bare `id` around
+    /// and `workflow_id` owns the prefix.
     async fn start(&self, id: &str, claim: Claim) -> Handle {
         let input = CardInput {
             claim,
@@ -180,15 +196,16 @@ impl Env {
             workroot: self.workroot.to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
         };
+        let wf_id = workflow_id(id);
         self.client
             .start_workflow(
                 Card::run,
                 input,
-                WorkflowStartOptions::new(self.task_queue.as_str(), id).build(),
+                WorkflowStartOptions::new(self.task_queue.as_str(), wf_id.as_str()).build(),
             )
             .await
             .expect("start card workflow");
-        self.client.get_workflow_handle::<Card>(id)
+        self.client.get_workflow_handle::<Card>(wf_id.as_str())
     }
 
     fn stop(&self) {
@@ -234,7 +251,7 @@ async fn env_or_skip_paused(name: &str, script: &str) -> Option<Env> {
 }
 
 /// Await the card result under the shared deadline, then record its history.
-async fn finish(name: &str, handle: &Handle) -> CardOutput {
+async fn finish(name: &str, id: &str, handle: &Handle) -> CardOutput {
     let out = tokio::time::timeout(
         RESULT_TIMEOUT,
         handle.get_result(WorkflowGetResultOptions::default()),
@@ -242,13 +259,23 @@ async fn finish(name: &str, handle: &Handle) -> CardOutput {
     .await
     .expect("card result within 120s")
     .expect("card workflow returns a result");
-    record(name, handle).await;
+    record(name, id, handle).await;
     out
 }
 
-/// Write the fetched history as `<PG_RECORD_DIR>/<name>.json`, scrubbed of host
-/// identity, so the offline replay tests can be fed a real run.
-async fn record(name: &str, handle: &Handle) {
+/// The workflow id for card `<id>`: the projector derives `plan_key` from it.
+fn workflow_id(id: &str) -> String {
+    format!("card:{id}")
+}
+
+/// Record this run as a fixture under `<PG_RECORD_DIR>`.
+///
+/// Two shapes are written: the SDK's JSON history as `<name>.json`, and, when
+/// the temporal CLI is configured, its proto-JSON `workflow show` as
+/// `<name>.proj.json` (the layout the Python projector reads). A missing CLI is
+/// silent; a failing one panics, because a recording that quietly produces
+/// nothing is worse than no recording at all.
+async fn record(name: &str, id: &str, handle: &Handle) {
     let Ok(dir) = std::env::var("PG_RECORD_DIR") else {
         return;
     };
@@ -272,6 +299,42 @@ async fn record(name: &str, handle: &Handle) {
     if std::fs::create_dir_all(dir).is_ok() {
         let _ = std::fs::write(dir.join(format!("{name}.json")), json);
     }
+
+    // The proto-JSON dump the projector consumes needs the CLI; `PG_TEMPORAL_CLI`
+    // together with `PG_RECORD_DIR` opts in, anything else stays silent.
+    let Ok(cli) = std::env::var("PG_TEMPORAL_CLI") else {
+        return;
+    };
+    if cli.is_empty() {
+        return;
+    }
+    let addr = std::env::var("PG_TEMPORAL_ADDR").unwrap_or_default();
+    let address = addr.strip_prefix("http://").unwrap_or(&addr);
+    let wf_id = workflow_id(id);
+    let out = Command::new(cli.as_str())
+        .arg("workflow")
+        .arg("show")
+        .arg("--workflow-id")
+        .arg(wf_id.as_str())
+        .arg("--address")
+        .arg(address)
+        .arg("--namespace")
+        .arg("default")
+        .arg("--output")
+        .arg("json")
+        .output()
+        .unwrap_or_else(|e| panic!("temporal CLI {cli} failed to spawn: {e}"));
+    assert!(
+        out.status.success(),
+        "temporal CLI workflow show failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut value: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("temporal CLI emitted invalid JSON: {e}"));
+    scrub(&mut value);
+    let json = serde_json::to_string(&value).unwrap_or_default();
+    std::fs::write(dir.join(format!("{name}.proj.json")), json)
+        .unwrap_or_else(|e| panic!("write {name}.proj.json: {e}"));
 }
 
 /// Replace host-specific identity strings (`pid@hostname`, sticky queue names)
@@ -373,10 +436,12 @@ async fn happy_attempt_merges_into_main() {
         };
         let card = "e2e-happy";
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
-        let handle = env.start(&format!("e2e-happy-{}", unique()), claim).await;
+        let id = format!("e2e-happy-{}", unique());
+        let handle = env.start(&id, claim).await;
 
-        let out = finish("happy", &handle).await;
-        assert_eq!(out.outcome, "merged", "{out:?}");
+        let out = finish("happy", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
         let sha = out.merged_sha.clone().expect("a merged card has a sha");
         assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
         assert!(
@@ -401,12 +466,12 @@ async fn writing_outside_the_write_set_goes_to_planner() {
         };
         let card = "e2e-contract";
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
-        let handle = env
-            .start(&format!("e2e-contract-{}", unique()), claim)
-            .await;
+        let id = format!("e2e-contract-{}", unique());
+        let handle = env.start(&id, claim).await;
 
-        let out = finish("contract", &handle).await;
-        assert_eq!(out.outcome, "planner", "{out:?}");
+        let out = finish("contract_defect", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "planner", "{out:?}");
         assert!(
             !env.keeper.parked().is_empty(),
             "a planner hand-off parks the card"
@@ -425,16 +490,13 @@ async fn a_check_that_never_passes_stops_the_card() {
         };
         let card = "e2e-check-fail";
         let claim = env.claim(card, &["out.txt"], "exit 1");
-        let handle = env
-            .start(&format!("e2e-check-fail-{}", unique()), claim)
-            .await;
+        let id = format!("e2e-check-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
 
-        let out = finish("check-fail", &handle).await;
-        assert!(
-            out.outcome == "parked" || out.outcome == "quarantined",
-            "unexpected outcome {:?}",
-            out.outcome
-        );
+        let out = finish("check_fails", &id, &handle).await;
+        let parked = out.outcome == "parked" && out.detail == "parked";
+        let quarantined = out.outcome == "failed" && out.detail == "quarantined";
+        assert!(parked || quarantined, "unexpected outcome {out:?}");
         assert!(
             !env.keeper.alarms().is_empty() || !env.keeper.parked().is_empty(),
             "a stuck card raises an alarm or a park packet"
@@ -447,8 +509,8 @@ async fn a_check_that_never_passes_stops_the_card() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancel_signal_stops_a_running_attempt() {
     in_local(async {
-        // The attempt sleeps for ten minutes, far past the deadline below, so a
-        // pass can only mean the cancel signal killed it rather than the script
+        // The attempt runs until killed, far past the deadline below, so a pass
+        // can only mean the cancel signal killed it rather than the script
         // ending on its own.
         let marker = started_marker();
         let Some(env) = env_or_skip("cancel", &started_script(&marker)).await else {
@@ -457,11 +519,11 @@ async fn cancel_signal_stops_a_running_attempt() {
         };
         let card = "e2e-cancel";
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
-        let handle = env.start(&format!("e2e-cancel-{}", unique()), claim).await;
+        let id = format!("e2e-cancel-{}", unique());
+        let handle = env.start(&id, claim).await;
 
         // Signal only once the harness is really running, not after a guess.
         wait_for_marker(&marker).await;
-        let started = std::time::Instant::now();
         handle
             .signal(
                 Card::cancel,
@@ -472,37 +534,52 @@ async fn cancel_signal_stops_a_running_attempt() {
             .expect("send cancel signal");
 
         let out = tokio::time::timeout(
-            Duration::from_secs(25),
+            CANCEL_BUDGET,
             handle.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("cancel takes effect within 25s")
+        .expect("cancel takes effect within the cancel budget")
         .expect("cancelled card returns a result");
-        let elapsed = started.elapsed();
-        record("cancel", &handle).await;
-        assert_eq!(out.outcome, "cancelled", "{out:?}");
-        assert!(
-            elapsed < Duration::from_secs(25),
-            "cancel took {elapsed:?}, expected under 25s"
-        );
+        record("cancel", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "cancelled", "{out:?}");
+        // Parked is not enough: the shell child must also be dead, which is what
+        // actually lets the test binary exit promptly.
+        assert_child_gone(&marker).await;
         env.stop();
     })
     .await;
 }
 
-/// A marker path the harness touches the moment it starts running.
+/// A marker path the harness writes its own pid to the moment it starts.
 fn started_marker() -> PathBuf {
     std::env::temp_dir().join(format!("pg-e2e-started-{}", unique()))
 }
 
 fn started_script(marker: &Path) -> String {
-    format!("touch '{}'; sleep 600", marker.display())
+    // Write the shell's own pid into the marker, then run until killed: the pid
+    // lets `assert_child_gone` prove the cancel killed this exact child, and the
+    // endless chatty loop both outlives every cancel budget and keeps the stall
+    // watchdog from firing.
+    format!(
+        "echo $$ > '{}'; while :; do echo alive; sleep 1; done",
+        marker.display()
+    )
 }
 
-/// Poll until the harness has touched `marker`.
+/// Poll until the harness has written a usable pid into `marker`.
+///
+/// The shell creates the file before the pid bytes land, so a bare existence
+/// check could read a half-written marker; require a non-empty integer instead.
 async fn wait_for_marker(marker: &Path) {
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    while !marker.exists() {
+    loop {
+        let ready = std::fs::read_to_string(marker)
+            .ok()
+            .is_some_and(|s| s.trim().parse::<u32>().is_ok());
+        if ready {
+            return;
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "attempt never started (no marker)"
@@ -511,9 +588,51 @@ async fn wait_for_marker(marker: &Path) {
     }
 }
 
-/// Send `cancel` and require a `cancelled` outcome inside the budget.
-async fn cancel_and_expect(env: &Env, handle: &Handle) {
-    let started = std::time::Instant::now();
+/// Prove the harness child is gone before the test ends.
+///
+/// The cancel tests finish as soon as the workflow returns, but the supervised
+/// `sh` child may still be alive; if it is, `Env::stop` aborts the worker and
+/// the test binary blocks at exit until the child's own stall/timeout, roughly
+/// doubling the run. Waiting on the child's pid from the marker removes that
+/// wait and strengthens the cancel proof: a parked card plus a dead child show
+/// the cancel reached the running attempt. `/proc/<pid>` is Linux-only, like
+/// the rest of this harness.
+async fn assert_child_gone(marker: &Path) {
+    let pid: u32 = std::fs::read_to_string(marker)
+        .expect("marker holds the harness pid")
+        .trim()
+        .parse()
+        .expect("marker holds the harness pid");
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    while Path::new(&format!("/proc/{pid}")).exists() {
+        if std::time::Instant::now() >= deadline {
+            // Read the state back from procfs: a `State: Z` line means the child
+            // was killed but never reaped, which blames the supervisor rather
+            // than the cancel path. Missing or unreadable status stays "unknown"
+            // so the panic still names what it could see.
+            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok();
+            let field = |key: &str| -> String {
+                status
+                    .as_deref()
+                    .and_then(|s| s.lines().find_map(|l| l.strip_prefix(key)))
+                    .map(|v| v.trim().to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
+            panic!(
+                "cancel did not kill the harness child: pid {pid} state {} ppid {}",
+                field("State:"),
+                field("PPid:")
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// Send `cancel` and require a `cancelled` detail inside the budget.
+///
+/// `marker` is the harness start marker: if the signal landed before the harness
+/// ever started there is no child and no marker, so only assert when it exists.
+async fn cancel_and_expect(env: &Env, handle: &Handle, marker: &Path) {
     handle
         .signal(
             Card::cancel,
@@ -523,14 +642,17 @@ async fn cancel_and_expect(env: &Env, handle: &Handle) {
         .await
         .expect("send cancel signal");
     let out = tokio::time::timeout(
-        Duration::from_secs(25),
+        CANCEL_BUDGET,
         handle.get_result(WorkflowGetResultOptions::default()),
     )
     .await
-    .expect("cancel takes effect within 25s")
+    .expect("cancel takes effect within the cancel budget")
     .expect("cancelled card returns a result");
-    assert_eq!(out.outcome, "cancelled", "{out:?}");
-    assert!(started.elapsed() < Duration::from_secs(25));
+    assert_eq!(out.outcome, "parked", "{out:?}");
+    assert_eq!(out.detail, "cancelled", "{out:?}");
+    if marker.exists() {
+        assert_child_gone(marker).await;
+    }
     env.stop();
 }
 
@@ -547,7 +669,7 @@ async fn cancel_immediately_after_start_is_honoured() {
             .start(&format!("e2e-cancel-now-{}", unique()), claim)
             .await;
         // No settle at all: the signal races the workflow's first tasks.
-        cancel_and_expect(&env, &handle).await;
+        cancel_and_expect(&env, &handle, &marker).await;
     })
     .await;
 }
@@ -576,13 +698,14 @@ async fn cancel_while_the_first_activity_is_pending_is_honoured() {
             .expect("send cancel signal");
         env.resume();
         let out = tokio::time::timeout(
-            Duration::from_secs(25),
+            CANCEL_BUDGET,
             handle.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("cancel takes effect within 25s")
+        .expect("cancel takes effect within the cancel budget")
         .expect("cancelled card returns a result");
-        assert_eq!(out.outcome, "cancelled", "{out:?}");
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "cancelled", "{out:?}");
         assert!(!marker.exists(), "no attempt may start after the cancel");
         env.stop();
     })

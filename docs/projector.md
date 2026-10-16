@@ -16,6 +16,33 @@ Language: Python (`temporalio` SDK, optional import; the keeper never imports it
   `started_at`, `ended_at` (ISO 8601), `tokens_in`, `tokens_out`, `cost`, `log_ref`.
 * Workflow result (JSON object): `outcome` in `done | parked | failed`.
 
+### Rust worker conformance (rust/worker)
+
+* The contract stays v1; the WORKER maps, the projector is unchanged. Why: the worker's internal outcomes (`merged`, `parked`,
+  `quarantined`, `planner`, `cancelled`) are richer than the projector's `done | parked | failed`; mapping in one pure function
+  (`workflow::finish` in `rust/worker/src/workflow.rs`) is the smallest change and keeps the projector free of worker
+  vocabulary. Map: `merged` -> `done`; `parked` -> `parked`; `planner` -> `parked`; `cancelled` -> `parked` (the projector
+  never sets `cancelled`, that is the keeper verb); `quarantined` -> `failed`. The specific word travels in the extra result
+  field `detail` (ignored by the projector).
+* Activity type name is exactly `attempt` (activity name override; the other activities are
+  `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor`). `attempt` is scheduled with `maximum_attempts=1`.
+* Attempt result carries `exit_class` (always one of `EXIT_CLASSES`; worker `ExitClass` serialises to the same snake_case
+  names) plus `harness` (harness name), `model` (leg model), `combo` (leg id), `class` (context window class `128k|256k|1m`),
+  `started_at`/`ended_at` (ISO 8601 UTC, millisecond, `Z`). `tokens_in`/`tokens_out`/`cost`/`log_ref` are omitted until the
+  harness reports them (the projector treats absent as NULL).
+* Plan key: the starter sets memo `plan_key`, or uses workflow id `card:<key>` (the worker's e2e uses the id form).
+* A signal-cancelled attempt: the workflow returns `parked` right after the cancel request, so the cancelled activity may not
+  close inside the history and then yields no AttemptRec (see Refinements).
+* Fixtures and the CI test: `rust/worker/tests/fixtures/projector/*.json` are `temporal workflow show --output json` captures
+  of the real e2e runs (the Rust SDK's own history JSON, `tests/fixtures/*.json`, is a different layout used only for replay).
+  Re-record with `PG_TEMPORAL_ADDR=... PG_RECORD_DIR=<dir> PG_TEMPORAL_CLI=<path to temporal> cargo test --test e2e` in
+  `rust/worker`, the e2e records `<name>.json` (SDK layout, replay fixture, copy to `rust/worker/tests/fixtures/<name>.json`)
+  and `<name>.proj.json` (proto-JSON, copy to `rust/worker/tests/fixtures/projector/<name>.json`) with names `happy`,
+  `contract_defect`, `check_fails`, `cancel` (1:1 with the fixture files); the checks are
+  `tests/test_projector_worker_history.py`. The `check_fails` run may end `parked` or `failed` (quarantined) depending on
+  the budget, so after re-recording update the exact expectations in `tests/test_projector_worker_history.py` (`EXPECTED`)
+  to the new capture.
+
 ## History -> records (`history.py`, pure, no temporalio import, input = proto-JSON history dict)
 
 Input shape: `{"events": [{"eventId": "5", "eventTime": "...", "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",

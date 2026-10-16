@@ -46,8 +46,14 @@ pub struct CardInput {
 /// Result of the `card` workflow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CardOutput {
-    /// `merged` | `parked` | `quarantined` | `planner` | `cancelled`.
+    /// Projector-contract value: `done` | `parked` | `failed`. The projector
+    /// reads only this field, so it must never carry a worker-specific word.
     pub outcome: String,
+    /// The worker's specific word: `merged` | `parked` | `quarantined` |
+    /// `planner` | `cancelled`. Kept separate so the projector, which reads only
+    /// `outcome`, is not exposed to the finer-grained vocabulary.
+    #[serde(default)]
+    pub detail: String,
     pub merged_sha: Option<String>,
     pub attempts: u32,
 }
@@ -235,7 +241,11 @@ impl CardActivities {
     /// Run one attempt. The blocking work runs on a worker thread while this
     /// side heartbeats; a cancel flips a flag the attempt polls, and the task is
     /// awaited to completion so its child processes are reaped, never orphaned.
-    #[activity]
+    ///
+    /// The name override pins the Temporal activity type to `attempt`: the
+    /// Python projector matches that exact string, and the SDK default
+    /// (`CardActivities::attempt`) would not do.
+    #[activity(name = "attempt")]
     pub async fn attempt(
         self: Arc<Self>,
         ctx: ActivityContext,
@@ -484,7 +494,8 @@ mod tests {
     fn serde_round_trip_of_wire_types() {
         round_trip(&card_input());
         round_trip(&CardOutput {
-            outcome: "merged".to_string(),
+            outcome: "done".to_string(),
+            detail: "merged".to_string(),
             merged_sha: Some("sha".to_string()),
             attempts: 2,
         });
@@ -522,6 +533,18 @@ mod tests {
             check_cmd: "true".to_string(),
             base_sha: "b".to_string(),
         });
+    }
+
+    /// An old producer's JSON predates `detail`; the missing field must default
+    /// to empty rather than fail the read, so rolling upgrades stay compatible.
+    #[test]
+    fn card_output_without_detail_deserializes() {
+        let old = r#"{"outcome":"done","merged_sha":"sha","attempts":1}"#;
+        let out: CardOutput = serde_json::from_str(old).unwrap();
+        assert_eq!(out.outcome, "done");
+        assert_eq!(out.detail, "");
+        assert_eq!(out.merged_sha.as_deref(), Some("sha"));
+        assert_eq!(out.attempts, 1);
     }
 
     #[test]
