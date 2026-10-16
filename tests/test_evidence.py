@@ -521,6 +521,54 @@ def test_ci_wf_group_without_completed_run_is_pending():
     assert "pending" in detail.lower()
 
 
+def test_ci_wf_newer_skipped_dispatch_does_not_mask_older_failure():
+    # Judge probe: workflow 7 dispatched twice, both completed, different
+    # suites, github-actions app. Run 100 ran pytest (job failed) and lint; the
+    # newer run 200 skipped pytest with a job-level `if:` and kept lint green.
+    # The skipped run must not win the wf group: the older real verdict still
+    # blocks, instead of the false green a newest-run-wins rule reported.
+    runs = [
+        _wf_run(100, sid=101, rid=11, conclusion="failure"),
+        _wf_run(100, sid=101, rid=12, conclusion="success", name="lint"),
+        _wf_run(200, sid=102, rid=21, conclusion="skipped"),
+        _wf_run(200, sid=102, rid=22, conclusion="success", name="lint"),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail is not None
+    assert "pytest" in detail
+    assert "failure" in detail
+    assert "pending" not in detail.lower()
+
+
+def test_ci_wf_group_all_completed_runs_skipped_is_only_skipped():
+    # When every completed run of a wf group is skipped/neutral there is no
+    # real verdict to prefer, so the newest of them wins and the standing
+    # "CI only skipped" rule applies unchanged.
+    runs = [
+        _wf_run(100, sid=111, rid=11, conclusion="skipped"),
+        _wf_run(200, sid=112, rid=21, conclusion="skipped"),
+    ]
+    assert ev._ci_conclusion(runs, SHA) == f"CI only skipped for {SHA}"
+
+
+def test_ci_wf_newer_neutral_dispatch_keeps_older_success_ok():
+    # A neutral verdict is not a real verdict either: the older success is the
+    # newest non-skipped/non-neutral run and still makes the group green.
+    runs = [
+        _wf_run(100, sid=121, rid=11, conclusion="success"),
+        _wf_run(200, sid=122, rid=21, conclusion="neutral"),
+    ]
+    assert ev._ci_conclusion(runs, SHA) is None
+    # ...and symmetrically a newer neutral never masks an older failure.
+    blocked = [
+        _wf_run(100, sid=123, rid=13, conclusion="failure"),
+        _wf_run(200, sid=124, rid=23, conclusion="neutral"),
+    ]
+    detail = ev._ci_conclusion(blocked, SHA)
+    assert detail is not None
+    assert "pytest=failure" in detail
+
+
 def test_ci_wf_ambiguous_name_disambiguates_with_workflow_id():
     runs = [
         _wf_run(9001, sid=11, rid=1, conclusion="failure", wf=7),

@@ -120,7 +120,7 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
 # --------------------------------------------------------------------------- #
 
 def _ci_conclusion(runs: Any, commit: str) -> str | None:
-    """Newest-run-per-group CI verdict: None means ok, else the fail detail. Plain groups are (suite, app, name); a workflow_dispatch run forms a ("wf", workflow_id, app, name) group across suites that a matching PR run joins; a 'workflow' dict lacking a positive workflow_id or run_id counts as no 'workflow' at all. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
+    """Newest-run-per-group CI verdict: None means ok, else the fail detail. Plain groups are (suite, app, name); a workflow_dispatch run forms a ("wf", workflow_id, app, name) group across suites that a matching PR run joins. Inside a wf group the best run is the NEWEST COMPLETED run whose conclusion (stripped, lowercased) is not skipped/neutral, so a job-level `if:` skipping the newest run cannot mask an older real verdict; only when every completed run there is skipped/neutral does the newest of them win (so 'CI only skipped' still applies). A 'workflow' dict lacking a positive workflow_id or run_id counts as no 'workflow' at all. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
 
     def _id_int(value: Any) -> int:
         # Same coercion as check-run ids: bool is not an id, digit strings rank as ints.
@@ -218,18 +218,39 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
             return False
         return not ("status" in run and str(run.get("status")).strip().lower() != "completed")
 
+    def _norm_conc(run: dict) -> str:
+        # Stripped, lowercased conclusion ('' when absent/blank).
+        conc_raw = run.get("conclusion")
+        return "" if conc_raw is None else str(conc_raw).strip().lower()
+
     pending_groups: list[tuple[str, Any, Any]] = []
     failure_groups: list[tuple[str, Any, Any, str]] = []
     seen: list[str] = []
     for gkey in sorted(groups, key=lambda k: (groups[k]["name"], str(groups[k]["sort"]), str(groups[k]["app"]))):
         g = groups[gkey]
         if g["wf"]:
-            # Only completed runs compete inside a wf group; a non-completed run
-            # ranked newer than the newest completed one (or none at all) is pending.
+            # Only completed runs compete inside a wf group, and among them the
+            # newest whose conclusion (stripped, lowercased) is NOT skipped or
+            # neutral wins: a job-level `if:` can skip the newest run while an
+            # older run holds the real verdict, which a plain newest-wins rule
+            # would report as a false green. Only when every completed run of
+            # the group is skipped/neutral is there no real verdict to prefer,
+            # so the newest of them wins and 'CI only skipped' still applies.
+            # A non-completed run ranked newer than the chosen best (or no
+            # completed run at all) keeps the group pending.
             best: tuple[Any, dict] | None = None
+            newest_completed: tuple[Any, dict] | None = None
             for rank, run in g["runs"]:
-                if _completed(run) and (best is None or rank > best[0]):
+                if not _completed(run):
+                    continue
+                if newest_completed is None or rank > newest_completed[0]:
+                    newest_completed = (rank, run)
+                if _norm_conc(run) in ("skipped", "neutral"):
+                    continue
+                if best is None or rank > best[0]:
                     best = (rank, run)
+            if best is None:
+                best = newest_completed
             if best is None or any(
                 rank > best[0] and not _completed(run) for rank, run in g["runs"]
             ):
