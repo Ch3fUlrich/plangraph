@@ -67,7 +67,8 @@ pg --config $LIVE/keeper-pg.json admin copy-to-pg --apply   --src $B     # rc0, 
 2. Add drop-in `~/.config/systemd/user/plangraph-keeper.service.d/pg-backend.conf`:
 ```
 [Service]
-EnvironmentFile=<PG_RUNTIME_DSN_FILE>   # exports PG_DSN (runtime role)
+# EnvironmentFile exports PG_DSN (runtime role); systemd allows comments only on their own line
+EnvironmentFile=<PG_RUNTIME_DSN_FILE>
 Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 ```
 (or `backend`/`pg_schema` keys in `$KJ`; `select_backend()` in `db.py` takes the explicit config value first, else `PG_KEEPER_BACKEND`.) `$KJ` stays the same file otherwise; keep a dated copy of it.
@@ -77,7 +78,7 @@ Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
 
 ## 7. 48 h window and rollback
 - During 48 h: old sqlite file untouched (chmod 0400), backup dir kept, PG backups running. After 48 h with no incident and a second `admin verify`: router GO to retire (delete nothing automatically; archive the file).
-- Rollback BEFORE any PG write that matters (nothing since switch except reads/heartbeats): `systemctl --user stop plangraph-keeper`; remove drop-in `pg-backend.conf` (or restore `plangraph-keeper.service.d.pre-pg`); `chmod 0600 $LIVE/keeper.db`; `rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm`; `daemon-reload`; `start`; `pg admin verify`, `whoami`, `ready` rc0; re-run md-sync/render timers. The sqlite file is the pre-freeze state, so this is exact.
+- Rollback BEFORE any PG write that matters (nothing since switch except reads/heartbeats): `systemctl --user stop plangraph-keeper`; remove drop-in `pg-backend.conf` (or restore `plangraph-keeper.service.d.pre-pg`); `chmod 0600 $LIVE/keeper.db`; `rm -f $LIVE/keeper.db-wal $LIVE/keeper.db-shm`; `daemon-reload`; `start`; then in a clean shell (`unset PG_DSN PG_KEEPER_BACKEND PG_SCHEMA`, so the CLI hits the sqlite config) `pg --config $KJ admin verify`, `whoami`, `ready` rc0; re-run md-sync/render timers. The sqlite file is the pre-freeze state, so this is exact.
 - Rollback AFTER PG took writes: the sqlite file does NOT contain them. Either accept the loss window (list writes since the switch from PG `select seq,type,key from keeper.events where seq>6254`), or re-import them by hand through the client verbs. Decide with the router before the GO; document the head seq at switch time as the loss boundary.
 - Abort in steps 4-5 needs only: scratch cleanup and un-freeze (start timers, `systemctl --user start plangraph-keeper` on the unchanged sqlite config).
 
