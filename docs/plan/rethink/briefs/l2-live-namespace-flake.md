@@ -1,5 +1,5 @@
 # L2 brief: build-L2-ns-flake — plangraph:PROJECTOR-LIVE-NAMESPACE-FLAKE (D-1433, prio 2, standard; parent build-L1)
-Rules: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-rules-common.md (binding, incl. D-1380, PR-head trailer). TTL 2 h.
+Rules: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-rules-common.md (binding, incl. D-1380, PR-head trailer). TTL 2 h. Never merge, no crons (D-1377 binds L2s).
 Symptom: tests/test_projector_live.py fails on CI attempt 1 with "Namespace default is not found" vs the live Temporal dev server,
 3x on 2026-10-16: test_ok_attempt (run 38849305837, sha 4e11857), test_heartbeat_timeout_is_lease_lost_and_item_failed (38855239133,
 1621385), test_ok_attempt + test_check_fail_then_ok (38856993443, 5f56487). Green on rerun; lanes never touched the file. CI now runs
