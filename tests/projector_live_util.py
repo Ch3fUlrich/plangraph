@@ -19,13 +19,16 @@ import threading
 import time
 from datetime import timedelta
 from pathlib import Path
+from uuid import uuid4
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import RetryPolicy
+from temporalio.service import RPCError
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
-from plangraph.projector.temporal_source import TemporalSource
+# _run: runs the coroutine on a fresh loop (or on a helper thread when one is already running)
+from plangraph.projector.temporal_source import TemporalSource, _run
 
 RECORDER_PATH = Path(__file__).with_name("projector_record.py")
 RESERVED_PORTS = {17233}             # another dev server runs there; never bind or stop it
@@ -86,23 +89,55 @@ class DevServer:
                                          stdin=subprocess.DEVNULL, start_new_session=True)
         source = TemporalSource(address=self.address)
         deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self.proc.poll() is not None:
-                break
-            if source.connect_check() and self._namespace_ready(source):
-                return
-            time.sleep(0.3)
+        try:
+            while time.monotonic() < deadline:
+                if self.proc.poll() is not None:
+                    break
+                if source.connect_check() and self._namespace_ready(source):
+                    return
+                time.sleep(0.3)
+        except BaseException:                      # a propagating error is a bug, not a flaky
+            self.stop()                            # server: fail fast with the real cause,
+            raise                                  # not after the 60 s deadline
         tail = self.log.read_text(errors="replace")[-1500:]
         self.stop()
         raise RuntimeError(f"temporal dev server did not become ready:\n{tail}")
 
     @staticmethod
     def _namespace_ready(source: TemporalSource) -> bool:
-        """The frontend answers before the ``default`` namespace exists: a listing proves it does."""
+        """True once every service holds the ``default`` namespace, not just the frontend.
+
+        The frontend answers ``list_workflows`` before history and matching have loaded the
+        namespace, so a listing alone only proves the gRPC frontend is up: on a slow CI host the
+        first ``start_workflow`` still dies with ``RPCError: Namespace default is not found``.
+        Start a throwaway workflow (matching + history accept it), terminate it, then describe it
+        (history reads it back).  ``RPCError`` means "not ready": ``start()`` retries every 0.3 s
+        until its own deadline.  Anything else (TLS, config, programming errors) propagates so
+        ``start()`` stops and raises the real cause instead of retrying silently for 60 s.
+        """
+
+        async def probe() -> None:
+            # A fresh client per poll costs one gRPC channel every 0.3 s, but ``temporalio.Client``
+            # has no ``close()``: dropping the client (and this loop) is what releases the channel.
+            client = await source._connect()
+            wid = f"readiness-probe-{uuid4().hex}"
+            handle = await client.start_workflow(
+                "ReadinessProbe", id=wid, task_queue="readiness-probe",
+                execution_timeout=timedelta(seconds=30))
+            try:
+                await handle.terminate("readiness probe")
+                await client.get_workflow_handle(wid).describe()   # history must serve reads, too
+            finally:                                # the throwaway probe dies even when describe
+                try:                                # raises (30 s execution_timeout is the backstop)
+                    await handle.terminate("readiness probe")
+                except RPCError:                    # never mask the original error
+                    pass
+
         try:
             source.list_workflows()
+            _run(probe)
             return True
-        except Exception:  # noqa: BLE001 - not ready yet
+        except RPCError:  # not ready yet (NamespaceNotFound/UNAVAILABLE/...); others propagate
             return False
 
     def stop(self) -> None:
