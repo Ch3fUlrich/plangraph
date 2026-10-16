@@ -296,11 +296,6 @@ fn version_matches(output: &str, want: &str) -> bool {
         .any(|t| t.trim_start_matches('v') == want)
 }
 
-/// True for "Text file busy" (ETXTBSY) from a spawn.
-fn is_text_busy(e: &std::io::Error) -> bool {
-    e.kind() == std::io::ErrorKind::ExecutableFileBusy || e.raw_os_error() == Some(26)
-}
-
 /// A throwaway private `HOME` for a `--version` probe, removed on drop.
 struct ProbeHome(PathBuf);
 
@@ -343,22 +338,11 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
             grace: std::time::Duration::from_secs(1),
             ..Opts::default()
         };
-        // A sibling thread forking while the binary was just written can make
-        // exec fail with ETXTBSY (os error 26); that clears in milliseconds.
-        let mut tries = 0;
-        let r = loop {
-            let mut cmd = Command::new(&bin);
-            cmd.arg("--version").stdin(Stdio::null());
-            pg_worker_core::sandbox_env::confine_harness(&mut cmd, &home.0);
-            match pg_worker_core::stall::supervise(cmd, &opts) {
-                Err(e) if is_text_busy(&e) && tries < 5 => {
-                    tries += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                other => break other,
-            }
-        }
-        .map_err(|e| PinError::Unrunnable {
+        // `supervise` retries a spawn that hits ETXTBSY (see `stall`).
+        let mut cmd = Command::new(&bin);
+        cmd.arg("--version").stdin(Stdio::null());
+        pg_worker_core::sandbox_env::confine_harness(&mut cmd, &home.0);
+        let r = pg_worker_core::stall::supervise(cmd, &opts).map_err(|e| PinError::Unrunnable {
             name: name.clone(),
             why: e.to_string(),
         })?;
@@ -722,21 +706,13 @@ mod tests {
 
     /// A fake CLI that answers `--version` with `out` and the given exit code.
     fn fake_bin(dir: &Path, name: &str, out: &str, code: i32) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        let p = dir.join(name);
-        // Write under a temp name, flush and close, then rename into place, so
-        // no open write fd on the final path can meet a concurrent fork+exec.
-        let tmp = dir.join(format!(".{name}.tmp"));
-        {
-            use std::io::Write;
-            let mut f = std::fs::File::create(&tmp).unwrap();
-            f.write_all(format!("#!/bin/sh\necho '{out}'\nexit {code}\n").as_bytes())
-                .unwrap();
-            f.sync_all().unwrap();
-        }
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::fs::rename(&tmp, &p).unwrap();
-        p.to_string_lossy().into_owned()
+        crate::testutil::write_script(
+            dir,
+            name,
+            &format!("#!/bin/sh\necho '{out}'\nexit {code}\n"),
+        )
+        .to_string_lossy()
+        .into_owned()
     }
 
     fn registry_with(bin: String) -> HarnessRegistry {
@@ -760,17 +736,14 @@ mod tests {
 
     #[test]
     fn version_probe_child_sees_no_worker_secrets() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         // The fake CLI prints its environment; the pin matches on a token that
         // is present only if PG_/TEMPORAL_ variables are absent.
-        let p = d.path().join("envdump");
-        std::fs::write(
-            &p,
+        let p = crate::testutil::write_script(
+            d.path(),
+            "envdump",
             "#!/bin/sh\nif env | grep -q '^PG_PROBE_SENTINEL=\\|^TEMPORAL_PROBE_SENTINEL='; then echo leaked; else echo clean-1.0; fi\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         // Unique names; no other test reads or sets them.
         unsafe { std::env::set_var("PG_PROBE_SENTINEL", "x") };
         unsafe { std::env::set_var("TEMPORAL_PROBE_SENTINEL", "x") };

@@ -9,3 +9,6 @@ pub mod mergelock;
 pub mod question;
 pub mod tls;
 pub mod workflow;
+
+#[cfg(test)]
+mod testutil;
