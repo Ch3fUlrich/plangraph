@@ -138,3 +138,22 @@ def test_non_ascii_signature_is_invalid_not_a_crash(keys, tmp_path, capsys):
     with pytest.raises(snapshot_sign.SignError):
         snapshot_io.read_snapshot(path, str(pub))
     assert cli_admin._cmd_verify_snapshot(Namespace(snapshot=str(path), pubkey=str(pub)), None) == 1
+
+
+def test_read_snapshot_retry_pauses_so_a_rewrite_in_the_gap_can_finish(keys, tmp_path, monkeypatch):
+    """The sig/body gap (new sig, old body) closes within microseconds, but a loaded reader can
+    be descheduled between its two reads: the single retry waits RETRY_PAUSE_S first."""
+    priv, pub = keys
+    path = tmp_path / "plan.snapshot.json"
+    old, new = b'{"v": 1}', b'{"v": 2}'
+    path.write_bytes(old)
+    snapshot_sign.sig_path(path).write_text(snapshot_sign.sign(new, priv))   # sig ahead of body
+    pauses = []
+
+    def finish_the_rewrite(seconds):
+        pauses.append(seconds)
+        path.write_bytes(new)                                               # the writer's 2nd replace
+
+    monkeypatch.setattr(snapshot_io.time, "sleep", finish_the_rewrite)
+    assert snapshot_io.read_snapshot(path, pub) == {"v": 2}
+    assert pauses == [snapshot_io.RETRY_PAUSE_S] and 0 < pauses[0] <= 0.1

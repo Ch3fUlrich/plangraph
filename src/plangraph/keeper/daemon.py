@@ -67,7 +67,8 @@ def run(cfg, *, host=None, port=None, ready=None):
             server.anchorer.record(conn, "start")
         server.start_reaper()
         try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
-            api.write_snapshot(server, server.system)
+            with server.lock:      # the reaper is already running: same lock as every other build
+                api.write_snapshot(server, server.system)
         except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
             print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
         stop = threading.Event()

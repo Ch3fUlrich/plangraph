@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from . import snapshot_sign
@@ -11,6 +12,12 @@ from . import snapshot_sign
 __all__ = ["write_snapshot", "read_snapshot", "SignError"]
 
 SignError = snapshot_sign.SignError
+
+#: The writer replaces the signature, then the body: between the two a reader sees (new sig, old
+#: body).  The gap is microseconds, but a loaded reader can be descheduled across it, so the one
+#: retry first waits this long.  Closing the gap for real needs a combined sig+body file, which
+#: breaks snapshot_serve/snapshot_pull and every other reader of the two files (format change).
+RETRY_PAUSE_S = 0.05
 
 
 def write_snapshot(server, principal) -> None:
@@ -61,6 +68,7 @@ def read_snapshot(path, pubkey=None, *, _retry=True) -> dict:
             signature = ""          # garbage .sig = invalid, never a crash
         if not snapshot_sign.verify(body, signature, pubkey):
             if _retry:
+                time.sleep(RETRY_PAUSE_S)
                 return read_snapshot(path, pubkey, _retry=False)
             raise snapshot_sign.SignError(f"snapshot signature invalid or missing: {path}")
     return json.loads(body.decode("utf-8"))
