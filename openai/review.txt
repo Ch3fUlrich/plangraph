@@ -1,0 +1,43 @@
+**V1 – Ack storage**  
+*src/plangraph/inbox/routes.py:_ack* – the key for the audit row is only set when `alarm_id` is an `int` and not a `bool`; the function then calls `store._run(..., key, fn)`.  
+*src/plangraph/inbox/routes.py:_alarms* – the SQL selects rows where **no** `audit_log` entry exists with `action='ack_alarm'`, `ok = 1` and `key = 'alarm:' || CAST(id AS TEXT)`.  
+Result: a refused/failed ack (audit row with `ok = 0`) never satisfies the `NOT EXISTS` clause, so the alarm stays visible. No other code creates an `ack_alarm` audit row, preventing forgery.
+
+**V2 – Authorization**  
+*src/plangraph/inbox/routes.py:_ack* – explicitly checks `principal.role` and raises `Refused("forbidden", …)` unless it is `"router"` or `"system"`.  
+*src/plangraph/inbox/routes.py:read* – the `"alarms"` verb does **not** check role, permitting any authenticated principal.  
+*src/plangraph/inbox/routes.py:_ack* – validates `alarm_id` with `isinstance(aid, int) and not isinstance(aid, bool)`; any bool, string or other type raises `Refused("validation", …)`.  
+Thus no role‑bypass, token‑run, or non‑int ID can succeed.
+
+**V3 – Listing behaviour**  
+*src/plangraph/inbox/routes.py:_ALARMS* – `cleared_at IS NULL` removes cleared alarms.  
+*src/plangraph/inbox/routes.py:_alarms* – `NOT EXISTS (…) ok = 1 …` removes already acknowledged alarms.  
+*src/plangraph/inbox/routes.py:_alarms* – catches any DB‑error (`_UNREADABLE`) and returns `{"alarms": [], "error": "alarms unreadable: …"}`; normal empty result (no alarms) is returned without an error field, which is the expected “no alarms” case.  
+Re‑raised alarms have a new `id`, therefore they are selected anew.
+
+**V4 – SQL portability**  
+*src/plangraph/inbox/routes.py:_ALARMS* uses string concatenation `|| CAST(projector_alarms.id AS TEXT)` – works in SQLite and PostgreSQL.  
+`NOT EXISTS (…)` is standard SQL.  
+All parameterised queries use `?` placeholders (the project’s DB‑abstraction translates them for both back‑ends). No schema migrations or DDL changes are introduced.
+
+**V5 – `form.py` page**  
+*src/plangraph/inbox/form.py* – DOM elements are created with `el(tag, cls, text)` where `text` is assigned via `textContent` (no `innerHTML`).  
+Error handling: `st.className = "err"` and `msg(...,"err")` display a banner on failure.  
+Token handling: the token is read from the input, stored in the outer `token` variable, and sent in request headers via `hdr(true)` / `hdr(false)`.  
+All script is contained in the page; no inline event handlers or unsafe string interpolation, keeping CSP compatibility.
+
+**V6 – Tests coverage**  
+*tests/test_inbox_alarms.py* exercises every new path:
+- listing open alarms, age calculation, role‑access (`test_every_authenticated_principal_may_read_the_alarms`)
+- acknowledgement flow, idempotency, role restriction, validation, bad state, unknown alarm (`test_ack_*` suite)
+- audit row verification for success and refusal (`test_a_refused_ack_is_audited_but_keeps_the_alarm_listed`)
+- re‑raise handling (`test_a_re_raised_alarm_lists_again_once_its_new_id_is_open`)
+- unreadable table error handling (`test_a_broken_alarms_query_is_reported_never_hidden`)
+- page contains the new routes (`test_page_renders_the_alarm_routes`)
+
+Without the diff, all these tests would fail (missing endpoints, wrong behaviours), confirming they validate each claim.
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched src/ and tests/ for test‑only branches, env‑checks, __eq__/__hash__ overrides or pytest‑specific conditions: 0 hits
+
+VERDICT: pass
