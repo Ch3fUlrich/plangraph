@@ -82,23 +82,39 @@ class CIAdapter:
         if not valid_commit_ref(sha):
             raise ValueError("check-runs requires a full lowercase commit sha")
         owner, repo = self._validated_slug(self._slug(repo_slug_or_path))
-        path = "repos/{}/{}/commits/{}/check-runs".format(
+        base = "repos/{}/{}/commits/{}/check-runs".format(
             quote(owner, safe=""), quote(repo, safe=""), quote(sha, safe="")
         )
-        proc = subprocess.run(
-            [self._gh, "api", path],
-            capture_output=True,
-            text=True,
-            timeout=self._timeout,
-            check=False,
-        )
-        if proc.returncode != 0:
-            raise RuntimeError(f"gh api exited {proc.returncode} for {owner}/{repo}")
-        data = json.loads(proc.stdout)
-        runs = data.get("check_runs") if isinstance(data, dict) else None
-        if not isinstance(runs, list):
-            return []
-        return [r for r in runs if isinstance(r, dict)]
+        collected: list[dict] = []
+        total: int | None = None
+        for page in range(1, 11):
+            path = f"{base}?per_page=100&page={page}"
+            proc = subprocess.run(
+                [self._gh, "api", path],
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+                check=False,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(f"gh api exited {proc.returncode} for {owner}/{repo}")
+            data = json.loads(proc.stdout)
+            page_runs = data.get("check_runs") if isinstance(data, dict) else None
+            if not isinstance(page_runs, list):
+                page_runs = []
+            collected.extend([r for r in page_runs if isinstance(r, dict)])
+            raw_total = data.get("total_count") if isinstance(data, dict) else None
+            if isinstance(raw_total, int) and not isinstance(raw_total, bool):
+                total = raw_total
+                if len(collected) >= total:
+                    break
+            if len(page_runs) < 100:
+                break
+        if total is not None and total > len(collected):
+            raise RuntimeError(
+                f"check-runs truncated for {owner}/{repo}: expected {total}, got {len(collected)}"
+            )
+        return collected
 
     # -- helpers ------------------------------------------------------------
     @staticmethod
