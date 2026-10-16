@@ -15,6 +15,7 @@ worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/ve
 |---|---|---|
 | RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
 | PROJECTOR-RECONCILE-SCHED | claimed (b05) | brief briefs/l2-projector-reconcile-sched.md; branch pushed @66d87fe; L2 on WORKSTATION via workst-L1-autoos (coding.vm MemAvail 3.1 GB; local worktree reconcile-sched unused) |
+| RT-P1-TEMPORAL-SPIKE-TLS (prio 1) | claimed 04:2xZ | gates server:RT-P1-TEMPORAL-CHECK; brief briefs/l2-temporal-tls.md (spike + rust/worker mTLS, D-935 scope); L2-LAUNCH on workstation asked |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
@@ -30,8 +31,10 @@ D-1380 03:34Z: interim local-CI fallback rule added to briefs/l2-rules-common.md
 
 ## FOR ROUTER (active)
 - Done/applied by router 03:4x-04:0xZ: L2-DONE x6 (stopped), INBOX evidence, PG-DEPLOY criteria (D-1375), b05 (ATTEMPT-EVENT refused, dropped).
-- Pending: L2-LAUNCH build-L2-reconcile + build-L2-worker-proj (asked); L2-LAUNCH build-L2-deepinfra after priv-writers merges.
+- Pending: L2-LAUNCH build-L2-temporal-tls (asked); reconcile + worker-proj routed to workst-L1-autoos; L2-LAUNCH build-L2-deepinfra after priv-writers merges.
 - Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph on workst runner; D-1380 local fallback.
+
+Infra: PG + Temporal move to cloud.vm (D-1386); cloud.vm starting (D-1388).
 
 ## FOR OPERATOR
 - Fix GitHub billing, or confirm workstation-only CI is final. Worker-code writers used paid deepseek via omniroute.
