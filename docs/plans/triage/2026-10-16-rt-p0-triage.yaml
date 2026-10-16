@@ -1,0 +1,625 @@
+# routing:RT-P0-TRIAGE 2026-10-16 (plangraph-L1-plan2). Apply AFTER the orch-setup batch (lane/orch-setup-plan e976bcaf)
+# and after operator approval. Principal router. Built on snapshot 20:34Z + the orch-setup batch.
+batch: 2026-10-16-rt-p0-triage
+principal: router
+source: 2026-10-16-rt-p0-triage.md
+source_sha256: 7b10f85be411bf9e636177cacffdcb1e0071dfcb579bce51d2eb8c5d150561f3
+ops:
+- op: edit
+  key: autoos:AO-400LOC
+  fields:
+    depends_on: []
+- op: edit
+  key: autoos:AO-SKILLS
+  fields:
+    depends_on: []
+- op: edit
+  key: autoos:PH-AO-FLEET
+  fields:
+    depends_on:
+    - autoos:AO-APIDOCS
+    - autoos:AO-APPLY-CLUSTER-013
+    - autoos:AO-AUTO-FANOUT
+    - autoos:AO-AUTOOS5-REBUILD-DRIFT
+    - autoos:AO-DENYLEGS
+    - autoos:AO-FREE-PRIVACY-CLASS
+    - autoos:AO-GROK
+    - autoos:AO-HOSTMIRROR
+    - autoos:AO-LAGUNA-SEAT-CAP
+    - autoos:AO-OCRUNTIME
+    - autoos:AO-OPENCODE-JAIL
+    - autoos:AO-PREPUSH-HOOK-GITENV
+    - autoos:AO-PREPUSH-HOOK-GITENV-2
+    - autoos:AO-QODER-ROUTE
+    - autoos:AO-READY-CAP-EXCEPTION
+    - autoos:AO-READY-MULTI-BRIEF
+    - autoos:AO-RESEARCH-GLM-CODING-PLAN
+    - autoos:AO-RETIRE-AGENT-SKILLS-CLONE
+    - autoos:AO-SANDBOX-DNS
+    - autoos:AO-SKILLRULES
+    - autoos:AO-SPAWN-KEY-PRESET
+    - autoos:AO-SPAWN-PATCH-ID
+    - autoos:AO-SPLIT1
+    - autoos:AO-SYNC-PARTIAL-PULL-RESTORE
+    - autoos:AO-WSCONFIG
+    - autoos:RS-GEMINI-PARAMS
+    - autoos:SPAWN-USES-PLACEMENT
+- op: edit
+  key: autoos:PH-MCP-ONE
+  fields:
+    depends_on:
+    - autoos:AO-MCP-CWD-INDEPENDENT
+    - autoos:MCP-REMOTE
+    - autoos:MCP-SEAT-EVIDENCE
+    - autoos:SKILL2MCP
+    - autoos:T2-MCPLIFE
+    - autoos:T2-ONEPATH
+- op: edit
+  key: autoos:PH-ROUTESETUP
+  fields:
+    depends_on:
+    - autoos:RS-AA-SCORES
+    - autoos:RS-CHANGELOG-GATE
+    - autoos:RS-FUTURE-MODELS
+    - autoos:RS-GEMINI-PARAMS
+    - autoos:RS-GEMINI38-LEGS
+    - autoos:RS-LEDGER-WIRING
+    - autoos:RS-META-KEY
+    - autoos:RS-MODELS-DOC
+    - autoos:RS-NESTED-COMBOS
+    - autoos:RS-NOTIFY-L1S
+    - autoos:RS-NSCALE
+    - autoos:RS-OC-KEY-GLM
+    - autoos:RS-OPENCODE-MODELS
+    - autoos:RS-PLAN-ROWS
+    - autoos:RS-RENAME-CI
+    - autoos:RS-SPAWN-TEMPLATES
+- op: edit
+  key: autoos:PH-WS-SHIFT
+  fields:
+    depends_on:
+    - autoos:WS-1
+    - autoos:WS-3
+    - autoos:SPAWN-USES-PLACEMENT
+    - autoos:WS-6
+- op: edit
+  key: autoos:T4-FENCE
+  fields:
+    depends_on:
+    - autoos:T2-CANARY
+    - routing:GATE-P0
+- op: edit
+  key: autoos:T4-ZEN
+  fields:
+    depends_on: []
+- op: edit
+  key: autoos:T5-CERT
+  fields:
+    depends_on:
+    - routing:GATE-P1
+- op: edit
+  key: autoos:WS-6
+  fields:
+    depends_on:
+    - autoos:WS-1
+    - autoos:WS-3
+    - autoos:SPAWN-USES-PLACEMENT
+- op: edit
+  key: plangraph:PG-L2-SMALLFIX-RULE
+  fields:
+    depends_on:
+    - autoos:AO-RULE-D1272
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    depends_on:
+    - plangraph:GRAPH-UI
+    - plangraph:PG-OMNIGRAPH-UI
+    - plangraph:PG-PROJECT-PRIORITY
+    - plangraph:PG-UI-TABICON
+    - plangraph:PROGRESS-PANEL
+    - plangraph:QA-GATE
+    - plangraph:QA-IMPORT
+    - plangraph:QA-UI
+    - plangraph:QA-VERBS
+    - plangraph:RENDER-NEWUI-DETECT
+    - plangraph:UI-ACTIVITY-DATA
+    - plangraph:UI-ACTIVITY-PAGE
+    - plangraph:UI-CREATED-AT
+    - plangraph:UI-DECISION-TEXT
+    - plangraph:UI-HASH-STATE
+    - plangraph:UI-MORE-NODE-EXPAND
+    - plangraph:UI-NODE-BUDGET
+    - plangraph:UI-OVERVIEW-FIX
+    - plangraph:UI-QA-COUNTS
+    - plangraph:UI-REVIEW-W3
+    - plangraph:UI-SHELL
+    - plangraph:UI-TABLE
+    - plangraph:UI-TESTS-TABLE-QA
+    - plangraph:UI-WRITES
+- op: edit
+  key: plangraph:PH-QA-FLOW
+  fields:
+    depends_on:
+    - plangraph:PG-ANSWER-EDGE-LIVE
+    - plangraph:PG-ANSWER-UI
+    - plangraph:PG-AUDIT-META
+    - plangraph:PG-DEC-ATTRIBUTION
+    - plangraph:PG-DEC-EDIT-NOTICE
+    - plangraph:PG-ESTIMATE-SRC-EDIT
+    - plangraph:PG-INBOX
+    - plangraph:PG-QUESTIONS-CHOICES
+    - plangraph:PG-UI-BRIEF
+- op: edit
+  key: routing:GATE-P1
+  fields:
+    depends_on:
+    - autoos:T1-COMBO3
+    - autoos:T1-CTX
+    - autoos:T2-ONEPATH
+    - autoos:T2-RECORD
+    - autoos:T3-CIGREEN
+    - autoos:T3-CIMAIN
+    - autoos:T4-FENCE
+- op: edit
+  key: routing:GATE-P2
+  fields:
+    depends_on:
+    - autoos:AO-REGISTRY-COMBO-LEGS
+    - autoos:T1-LITELLM
+    - autoos:T1-PEER
+    - autoos:T1-PROV
+    - autoos:T5-BRANCHES
+    - autoos:T5-CLONE
+    - autoos:T5-FINISH
+    - autoos:T5-GRAPH
+    - autoos:T5-GROK-L2
+    - autoos:T5-HANDOFF
+    - autoos:T5-KEYS
+    - autoos:T5-PROVIDERS
+    - autoos:T5-SKILLS
+    - autoos:T5-SYNC
+    - server:T6-HA
+    - server:T6-PHONE
+    - server:T6-PILOT
+- op: edit
+  key: routing:GATE-P3
+  fields:
+    depends_on:
+    - autoos:T5-CERT
+    - autoos:T7-GRAPH-A
+    - autoos:T7-GRAPH-USE
+    - routing:T7-GRAPH-R
+    - server:T6-HEAL
+- op: edit
+  key: routing:GOAL
+  fields:
+    depends_on:
+    - autoos:OP-MANAGE-KEY
+    - autoos:OP-WS-RELAUNCH
+    - autoos:PH-MCP-ONE
+    - autoos:PH-OPS-20261002
+    - autoos:PH-WS-SHIFT
+    - autoos:SEC-ISOSEC
+    - autoos:T1-CREDIT
+    - autoos:T1-MM
+    - autoos:T1-NOISE
+    - autoos:T1-UPGRADE
+    - autoos:T1-WEBTOOLS
+    - autoos:T1-ZEN
+    - autoos:T2-COMPACT
+    - autoos:T2-ISOLATE
+    - autoos:T2-LEAN
+    - autoos:T2-MCPLIFE
+    - autoos:T2-RECORD-GAPS
+    - autoos:T2-RESEARCHCARD
+    - autoos:T3-CLEAN
+    - autoos:T3-PRINCIPLES
+    - autoos:T3-SCRUB
+    - autoos:T3-SPLIT
+    - autoos:T3-WIN
+    - great-wiki:GOAL-GW
+    - invest:PH-INVEST
+    - plangraph:PG-M4
+    - routing:GATE-P3
+    - routing:LESSONS-ENFORCE
+    - routing:PH-AUDIT-1002
+    - routing:PH-EBN-1003
+    - routing:PH-FLEET-1003
+    - routing:PH-GEN-1003
+    - routing:PH-OPERATOR
+    - routing:PH-OPPLAN-1012
+    - routing:PH-SERVER-1003
+    - routing:SETUP-IMPROVEMENT-PLAN
+    - server:GOAL
+    - server:GW-FOLLOWUP
+    - server:GW-MCP-ROLLOUT
+    - server:OP-DOCKHAND-REVOKE
+    - server:OP-FRITZ-V6
+    - server:SEC-EDGE-GW-INVEST
+    - server:SEC-MINIO
+    - server:SEC-OIDC
+    - server:SEC-SESSION-SECRETS
+    - server:SEC-TIER-A
+    - server:T6-DETECT
+    - server:T6-FIX
+    - server:T6-GRAPHMOVE-CUTOVER
+    - server:T6-INFRA
+    - server:T6-IPV6
+    - server:T6-LEDGER
+    - server:T6-MEDIA
+    - server:T6-PHONE
+    - server:T6-SECRETS
+    - server:T6-UPDATES-IMPL
+    - workst-gen:PH-GEN-SERVER
+    - workstation:OP-GROK-STEPS
+- op: edit
+  key: routing:PH-AUDIT-1002
+  fields:
+    depends_on:
+    - autoos:ACK-PROBE-BUDGET
+    - autoos:AIPRO-LIMITS
+    - autoos:AUTOOS-UI-PROFILES
+    - autoos:BAZAARLINK-AUTODISABLE
+    - autoos:CHEAPEST-PROVIDER
+    - autoos:DEVIN-BRIDGE
+    - autoos:GEMINI38
+    - autoos:GROK-UPSTREAM-PR
+    - autoos:JULES-CLOUDAGENT
+    - autoos:MEMGUARD
+    - autoos:OR-FREE-GUARD
+    - autoos:PROV-WIRE-FREE
+    - autoos:TIER-CONTRACT
+    - autoos:ZCODE-GLM-BURN
+    - routing:OS-70B
+    - routing:Q-ACK-PROBE-BUDGET
+    - routing:Q-CHEAPEST-PROVIDER
+    - routing:Q-OWUI-CODE-EXEC
+    - routing:Q-OWUI-VIDEO-GEN
+    - routing:Q-TIER-CONTRACT
+    - routing:REFERRAL-DOCS
+    - server:OMNIROUTE-AUTHELIA-API
+    - server:OWUI-EXTRAS
+    - server:SVC-ACCOUNTS
+- op: edit
+  key: routing:PH-FLEET-1003
+  fields:
+    depends_on:
+    - autoos:AO-ADMISSION
+    - autoos:AO-ADMISSION-2
+    - autoos:AO-ADMISSION-2-HERMETIC
+    - autoos:AO-PRICE-GAP
+    - autoos:AO-PRICE-GPTOSS120B
+    - autoos:AO-PROBE-397B-TOOLS
+    - autoos:AO-REPORT-SCHEMA
+    - autoos:AO-SPAWN-FANOUT
+    - autoos:AO-TERSE
+    - autoos:AO-WRITER-FAMILY
+    - autoos:AO-WS-OVH-PROBE
+    - autoos:BASHGUARD-ORCH-HARDEN
+    - autoos:COMBO-REFRESH
+    - autoos:COMBO-REFRESH-A4
+    - autoos:COST-GATE-ACTIVATE
+    - autoos:COST-GATE-CULTURE-FIX
+    - autoos:COST-GUARD
+    - autoos:D655-LEG-PROBE
+    - autoos:FAMILY-TRACK
+    - autoos:FLEET-HOOKS
+    - autoos:LAUNCHER-CPU-GATE
+    - autoos:LEAN-MCP
+    - autoos:MCP-STDIN
+    - autoos:O4-BASHGUARD-PLUGIN
+    - autoos:OC-HEARTBEAT
+    - autoos:OC-PILOT
+    - autoos:OC-RENDER-KEYS
+    - autoos:OC-START-BACKOFF
+    - autoos:OMNI-AUTOOS3-U2
+    - autoos:OVH-GUARD
+    - autoos:OVH-PRICE-ROWS
+    - autoos:OVH-TEXT
+    - autoos:OVHCODER-DROP
+    - autoos:PH-AO-FLEET
+    - autoos:PH-ROUTESETUP
+    - autoos:PROBE-LEDGER-ATOMIC
+    - autoos:PUBLIC-IDS-SCRUB
+    - autoos:PUSHGATE-TIGHTEN
+    - autoos:ROUTE-FRESH
+    - autoos:RUNNER-SCALE-20
+    - autoos:SPAWN-LONGPATH
+    - autoos:SPAWNER-F0-CWD
+    - autoos:U12
+    - autoos:U13
+    - autoos:WIN-PROMPT
+    - autoos:WIN-PROMPT-LINTFIX
+    - autoos:ZCODE-CLIENT-LANE-Z
+- op: edit
+  key: routing:PH-OPENWORK-1013
+  fields:
+    depends_on:
+    - routing:OW-CLAIMS-VERIFY
+    - routing:OW-COMMS-MEASURE
+- op: edit
+  key: routing:PH-OPPLAN-1012
+  fields:
+    depends_on:
+    - autoos:AO-BZL-TARGET-TIMEOUT
+    - autoos:AO-COMBO-FREE-FIRST
+    - autoos:AO-GW-HEAVY-INFLIGHT
+    - autoos:AO-JULES-PIPELINE
+    - autoos:AO-MIMO-WIRING
+    - autoos:AO-OVH404-COOLDOWN-SCOPE
+    - autoos:AO-QODER-ROUTE
+    - autoos:AO-VERDICT-PLAIN
+    - autoos:AO-WATCHER-BREAKER
+    - plangraph:PG-DEC-COUNT
+    - plangraph:PG-L2-SMALLFIX-RULE
+    - plangraph:PG-NEEDS-YOU
+    - plangraph:PG-PUBLIC-READY
+    - plangraph:PG-QUESTION-CARDS
+    - routing:CTX-WATCHDOG-FRESH
+    - routing:HAIKU-PROPAGATE
+    - routing:JULES-PR-TRIAGE
+    - routing:PH-OPENWORK-1013
+    - routing:TEST-HARNESS-PROPOSAL
+- op: edit
+  key: routing:ROUTE-PG-SSOT
+  fields:
+    depends_on:
+    - plangraph:SU-MCP
+    - plangraph:PG-PROXY-ACCESS
+    - plangraph:PG-REMOTE
+    - plangraph:PG-WIN-MCP
+- op: edit
+  key: routing:ROUTE-SKILLS
+  fields:
+    depends_on:
+    - autoos:AO-SKILLS
+- op: edit
+  key: routing:RT-P1
+  fields:
+    depends_on:
+    - autoos:CI-LOCAL-FALLBACK
+    - autoos:CI-RUNS-ON-POOL
+    - autoos:CI-SMART-SELECT
+    - autoos:CI-SPEED-WORKST
+    - autoos:CI-WORKST-RUNNER
+    - autoos:FLEET-STATUS-HOOK
+    - autoos:RT-P1-CLASS-COMBOS
+    - plangraph:CI-PARALLEL
+    - plangraph:CI-PG-CONTRACT-TIMEOUT
+    - plangraph:CI-PYTEST-SPEED
+    - plangraph:CI-RUNS-ON-WORKST
+    - plangraph:KEEPER-CI-CONCLUSIONS
+    - plangraph:KEEPER-CI-NEWEST-WINS
+    - plangraph:KEEPER-LIVE-SYNC
+    - plangraph:KEEPER-SNAPSHOT-FOLLOWUPS
+    - plangraph:PROJECTOR-ALARMS-READER
+    - plangraph:PROJECTOR-LIVE-NAMESPACE-FLAKE
+    - plangraph:RT-P1-CONTRACT
+    - plangraph:RT-P1-E2E
+    - plangraph:RT-P1-GOVERNOR
+    - plangraph:RT-P1-INBOX
+    - plangraph:RT-P1-KEEPER-PG
+    - plangraph:RT-P1-PLANNER-KIT
+    - plangraph:RT-P1-PROJECTOR
+    - plangraph:RT-P1-REVIEW
+    - plangraph:RT-P1-WORKER
+    - routing:RT-P0
+    - server:CI-VM-GH-RUNNER
+    - server:PG-DRILL-TEMPORAL-VIS
+    - server:RT-P1-PG-DEPLOY
+    - server:RT-P1-PG-DRILL-POSTCUT
+    - server:RT-P1-TEMPORAL-CHECK
+    - routing:OS-208
+- op: edit
+  key: routing:SETUP-IMPROVEMENT-PLAN
+  fields:
+    depends_on:
+    - autoos:AO-APPLY-GO-REF
+    - autoos:AO-CENTRAL-APPLY
+    - autoos:AO-DEADROWS
+    - autoos:AO-DENYLEGS
+    - autoos:AO-HAIKU-EXPLORE
+    - autoos:AO-HAIKU-GW
+    - autoos:AO-PROBE-D657
+    - autoos:AO-SERENA-NOMEM
+    - autoos:AO-VERTEX-BIGTURN
+    - autoos:AO-VIDEO-GATE
+    - autoos:AO-WRITER-GUARDS
+    - routing:HAIKU-PROPAGATE
+    - routing:PH-RETHINK
+    - routing:ROUTE-400LOC
+    - routing:ROUTE-CHANGELOG-DOCS
+    - routing:ROUTE-CLEF
+    - routing:ROUTE-COMBO-PROPOSAL
+    - routing:ROUTE-PG-SSOT
+    - routing:ROUTE-SKILLS
+    - routing:ROUTE-WRITER-OPS
+- op: cancel
+  key: autoos:AO-AUTOFIX
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P1-REVIEW. Fix-task on failure/review is replaced by design 4.5 retry budget + park and 4.7 verdict fix cards in the phase.'
+- op: cancel
+  key: autoos:AO-L2-PRODTEST
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 2. Test of the interactive L2 phase layer; L2 sessions are replaced by Temporal card workflows (D9, section 2 "What disappears").'
+- op: cancel
+  key: autoos:AO-L2-SKILL
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P4-SKILLS-REWRITE. L2 skill/layers text is replaced by the 150-line index plus role cards (RT-P4-SKILLS-REWRITE); L2 layer gone (D9).'
+- op: cancel
+  key: autoos:AO-L2-SMALLFIX-RULE
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P4-SKILLS-REWRITE. Prose rule about L2 small fixes; L2 layer dies (D9) and prose rules become code or are deleted in RT-P4-SKILLS-REWRITE.'
+- op: cancel
+  key: autoos:AO-LENS-REVIEW
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P1-REVIEW. Stacked review lenses by risk tier are replaced by phase-level risk-scaled review (D15, design 4.7, RT-P1-REVIEW).'
+- op: cancel
+  key: autoos:AO-RUNNER-NO-SUBAGENTS
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by autoos:RT-P4-DELETIONS. Guard for the PowerShell handoff runner config; that runner stack is deleted (design section 10, RT-P4-DELETIONS).'
+- op: cancel
+  key: autoos:AO-WORKST-RUNNER-POOL
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P1-WORKER. Pool of workstation runner sessions for L2 dispatch is replaced by the Rust worker in WSL2 plus placement (D11, D22, S23).'
+- op: cancel
+  key: autoos:G-KEEPER
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 2. Session keeper relaunching dead L1/L2 from handoffs is replaced by Temporal leases/retries; persistent sessions and recycle cycles
+    disappear.'
+- op: cancel
+  key: autoos:O1-OPENCODE-SESSIONS
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 10. One long-lived opencode L1 session per project is a persistent L1; replaced by state + Temporal (D9); opencode L0/L1 lanes are deleted.'
+- op: cancel
+  key: autoos:O2-FLEET-BUS-MCP
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 6. Cross-host session bus; replaced by hub-and-spoke via keeper + engine, status is state, no peer messaging (sections 2, 6).'
+- op: cancel
+  key: autoos:O3-GKEEPER-OPENCODE
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 10. Session-keeper adapter for opencode L1 sessions; the sessions and G-KEEPER are removed (D9, section 10).'
+- op: cancel
+  key: autoos:O5-LEAN-MCP-PILOT
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 10. Pilot runs on an opencode L1 project session (O1) that is removed; worker MCP surface is covered by design 8 and SU-HARNESS-CFG.'
+- op: cancel
+  key: autoos:O6-ROUTING-ON-OPENCODE
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 2. Persistent routing-00 on OpenCode; the persistent router disappears (D9, section 2 "What disappears").'
+- op: cancel
+  key: autoos:ORCH-L2-LAUNCHER
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / section 2. Host launcher for L2 phase orchestrators; L2 sessions are replaced by Temporal card workflows and plangraph launch for attended sessions.'
+- op: cancel
+  key: autoos:ORCH-REVIEW-TIERS
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P1-REVIEW. Risk-tier reviewer count is replaced by card risk tags plus phase review level (D15, design 4.3/4.7, RT-P1-REVIEW, RT-P1-PLANNER-KIT).'
+- op: cancel
+  key: autoos:ORCH-V4-DOCS
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P4-SKILLS-REWRITE. Docs for the L0-L3 hierarchy and skill levels are obsolete after D9; skills and docs are rewritten in RT-P4-SKILLS-REWRITE.'
+- op: cancel
+  key: autoos:QODER-FREE-LEG
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D25; plangraph:RT-P2-QODER. Decision to use qoder qwen-3.8-flash as free leg already taken in D25 (section 5); adapter A/B is RT-P2-QODER.'
+- op: cancel
+  key: autoos:RS-CLEF-PILOT
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D18; plangraph:RT-P5-JEV. L0 classification pilot: no persistent L0 (D9); rules decide, Jev runs in shadow (D18, RT-P5-JEV).'
+- op: cancel
+  key: autoos:RS-L2-RESEARCHER-1M
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by autoos:RT-P1-CLASS-COMBOS. Role-named l2-researcher/lookup-128k combos replaced by window-class combos *-128k/*-256k/*-1m (section 5); no persistent L2.'
+- op: cancel
+  key: autoos:RS-L3-REDESIGN
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by autoos:RT-P1-CLASS-COMBOS. L3 redesign split by context is exactly the window-class combo design (section 5); layer model dropped (D9).'
+- op: cancel
+  key: autoos:RS-LIT-TABLE
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9; research R1-R5/W1-W7. Literature table on multi-level orchestration; architecture A (no persistent levels) decided with its own research (design sections
+    0, 1).'
+- op: cancel
+  key: autoos:RS-LIVE-SYNC
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by autoos:RT-P0-OR-DRIFT; plangraph:SU-HARNESS-CFG. Combos.json vs live drift check duplicates RT-P0-OR-DRIFT; opencode user config writing is SU-HARNESS-CFG.'
+- op: cancel
+  key: autoos:RS-PHASE-GATES
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9; autoos:RT-P4-DELETIONS. Moving L2/L3 then L1 onto OpenCode: opencode L0/L1 orchestrator lanes are deleted (section 10), no persistent L1/L2.'
+- op: cancel
+  key: autoos:RS-SPAWNER-MCP
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9; design section 4 (keeper-side routing). Spawn routing by l1/l2/l3 layer ids: layers vanish, routing is keeper code and worker executes the assigned
+    target.'
+- op: cancel
+  key: autoos:SKILL-TERSE-PEER
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 6; plangraph:RT-P4-SKILLS-REWRITE. Terse-peer messaging rules for the old skill: communication rules are rewritten in design section 6, skill
+    rewritten in RT-P4.'
+- op: cancel
+  key: autoos:T1-COMBO-LAYERS
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by autoos:RT-P1-CLASS-COMBOS. Combos grouped by L0-L2 sticky / L3 rotating layer replaced by window-class combos with sticky session per attempt (section 5).'
+- op: cancel
+  key: autoos:T1-JEV
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D18; plangraph:RT-P5-JEV. Jev routing-card experiment: design runs free Jev in shadow, logs outcomes, adopt/reject decision in RT-P5-JEV.'
+- op: cancel
+  key: autoos:T2-CUTRUN
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 4.5 (usage_limit/outage, durable timers). Cut-run detection and fresh-agent finish is Temporal retry, durable timers and exit classes; its
+    budget dep is covered.'
+- op: cancel
+  key: autoos:T2-RULES
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P4-SKILLS-REWRITE. Skill-rule evaluation mechanical->code is the P4 skills rewrite scope (design section 11 P4, orch-setup 7a).'
+- op: cancel
+  key: autoos:T2-TASKSESSION
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9; design section 8. Long-lived orchestrators contradict D9; one card per fresh worker session is already the design (sections 4, 8).'
+- op: cancel
+  key: autoos:T2-WATCH
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 4.5 (Temporal heartbeats, leases). Heartbeat/watchdog and relaunch replaced by Temporal activity heartbeats and lease_lost retries; heartbeat
+    crons disappear (section 2).'
+- op: cancel
+  key: autoos:T2-XMSG
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 6; plangraph:Q-API-PUSH. Cross-host messaging replaced: status is state, hub-and-spoke via keeper, questions via Inbox, delivery via plangraph
+    MCP.'
+- op: cancel
+  key: autoos:T4-HOST
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 2 (what disappears), section 10 deletions; Temporal. Host systemd heartbeat/auto-resume of orchestrators: persistent orchestrators, heartbeat
+    crons and fleet-revive units are removed.'
+- op: cancel
+  key: autoos:T4-MSG
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 6. Inter-agent order/ack/reply messaging replaced by state, keeper events and Inbox; no worker-to-worker talk.'
+- op: cancel
+  key: autoos:T7-CONSOLE
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 7, D16; plangraph:RT-P3-SVELTE, plangraph:UI-FLEET-TAB. Separate fleet console replaced by the one SvelteKit plangraph page with tabs; fleet
+    view is UI-FLEET-TAB.'
+- op: cancel
+  key: autoos:T7-CONSOLE-MSG
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 6, 7; plangraph:RT-P3-TABS. Console messaging pages: messaging dropped, console replaced by plangraph tabs; a secret-audit page would be
+    a new tab item.'
+- op: cancel
+  key: autoos:WORKST-L0-FAILOVER
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9; design section 2. Persistent workstation L0 failover: no persistent L0, Temporal owns execution and workers pull; nothing to fail over.'
+- op: cancel
+  key: autoos:WS-2
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design section 4 (card + Temporal activity), D11. Taildrop run-request contract and receipt-by-sha replaced by cards, worker activities on the workstation,
+    and events.'
+- op: cancel
+  key: autoos:WS-5
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by D9, D5. New L2 sessions on the workstation via workst-L1: no persistent L1/L2 sessions in the target (D9).'
+- op: cancel
+  key: plangraph:PG-ARCHIVE-OPKIND-LOW
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P4-LEDGER-CUTOVER. LOW defect in the md_sync_archive view; md-sync code and markdown ledgers are archived/deleted by RT-P4-LEDGER-CUTOVER (design
+    sec 10, P4).'
+- op: cancel
+  key: plangraph:PG-MERGE-ROUTING-PLAN
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by routing:RT-P4 (RT-P4-ROUTER-CODE, RT-P4-LEDGER-CUTOVER, RT-P4-ARCHIVE). Plan-only routing-into-plangraph migration is superseded by design sec 10 and the
+    P4 items, which already plan the move.'
+- op: cancel
+  key: plangraph:QA-ROUTER
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:PG-INBOX; design sec 2, sec 6. Router heartbeat forwarding to owner L1 and D-row mirroring: router, L1s and heartbeat crons disappear; delivery
+    is PG-INBOX/RT-P1-INBOX.'
+- op: cancel
+  key: plangraph:RUST-PORT
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by plangraph:RT-P3-SVELTE, plangraph:RT-P6-RUST-KEEPER. Scope-less placeholder; web page goes to SvelteKit (D24) and keeper to Rust in P6 (D12), both already
+    planned.'
+- op: cancel
+  key: routing:COORD-DIET-PILOT
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design s6 / RT-P4-SKILLS-REWRITE. Design s6 replaces messaging: status is state, only question/decision/done/alarm; the pilot measures a relay model that
+    disappears.'
+- op: cancel
+  key: routing:DECISION-MODELS-RESEARCH
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D18 / routing:RT-P5-JEV. Question already decided: rules decide, free Jev shadow evaluated in RT-P5-JEV; routing is keeper-side code (s2, s4.3).'
+- op: cancel
+  key: routing:OW-OPENWORK-VS-OPENHANDS
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D16 / D17 / routing:RT-P5-OPENHANDS. Overview UI is the SvelteKit page (D16); OpenHands kept as harness with A/B in RT-P5-OPENHANDS (D17); Claude-limit
+    fallback moot (D2).'
+- op: cancel
+  key: routing:PG-IMPROVE-PROPOSAL-1013
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D-1285 / routing:RT-P0-TRIAGE. Plan-graph improvement proposal for autoos/routing/opencode is superseded wholesale by the approved rethink design
+    and this triage.'
+- op: cancel
+  key: routing:ROUTE-CLEF-SHADOW
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / D18 / routing:RT-P5-JEV. Shadow pre-processor targets past L0 router messages; persistent L0 is removed (D9) and shadow decision models are
+    RT-P5-JEV (D18).'
+- op: cancel
+  key: routing:ROUTE-DEPTH-RESEARCH
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design s1/s13, research R1-R5, W1-W7, D9. Orchestration depth and stacked lenses already researched and decided: state+code, no persistent layers.'
+- op: cancel
+  key: routing:ROUTE-JEV-TRIAL
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D18 / routing:RT-P5-JEV. Decision-model layer and jev trial are replaced by rules deciding with free Jev in shadow, evaluated in RT-P5-JEV.'
+- op: cancel
+  key: routing:ROUTE-L2-LAYER
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D9 / s10 deletions. Enforcing L1->L2->L3 layers is superseded: no persistent L0/L1/L2 sessions; opencode orchestrator lanes deleted.'
+- op: cancel
+  key: routing:ROUTE-PG-PRODTEST
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design s9 / routing:RT-P0-BASELINE / RT-P2-M1. Prodtest measures live L1s with task_key; replaced by baseline metrics job and M1 measurement on the new
+    pipeline.'
+- op: cancel
+  key: routing:SKILLS-HOME-PROPOSAL
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D13 / s10 / routing:RT-P4-SKILLS-REWRITE. Skills home is decided: plangraph/skills; unattended-orchestration rewritten in RT-P4-SKILLS-REWRITE, spawner
+    moves in RT-P4-SPAWNER.'
+- op: cancel
+  key: routing:T4-CERT
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design s11 RT-P1-E2E / routing:RT-P2-M1. 12 h certification of router+L1+L3 inside opencode is superseded: no persistent router/L1; E2E and M1 targets replace
+    it.'
+- op: cancel
+  key: routing:T4-SWITCH
+  reason: 'RT-P0-TRIAGE 2026-10-16: superseded by design D2 / s4.5 / s9 governor. Claude-limit takeover by an opencode fleet is moot: Claude is planner+judge only; usage_limit re-route/timers and the governor
+    handle limits.'
