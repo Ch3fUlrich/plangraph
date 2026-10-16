@@ -1,7 +1,7 @@
 # build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-7 (successor, 2026-10-16 06:2xZ, effort medium; beat cron daab011d)
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md · design (binding, 14a): .../docs/reports/2026-10-15-rethink-setup-design.md
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
-Rules: cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
+Rules: D-1442 judge only HIGH (keeper engine/live, schema, auth), standard = self-approve on seats. Cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
 ## Main = 1b923e5 · keeper live 1b923e5 (live-1b923e5 worktree via drop-in; worktree-proposal f3bac63 = 24 h rollback) (CI on workst runner)
 DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
@@ -14,7 +14,7 @@ PROJECTOR-LIVE-NAMESPACE-FLAKE (PR #25 ae5b749, head bfa0fd9, seat ns-flake-seat
 ## Open
 | Item | State | Next |
 |---|---|---|
-| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | PR #26 merged afc2a4e (docs, no CI); evidence decision D-1438 ok, commit+ci unverified blocks submit -> BLOCKED to routing 06:5xZ (drop/waive); then submit + 2 verdicts live-sync-seats/final; keep f3bac63 to 10-17 06:42Z |
+| KEEPER-LIVE-SYNC (p2 HIGH) | LIVE 1b923e5 06:42Z (GO D-1437), counts equal, verify ok; drop-in live-sync-1b923e5.conf -> .claude/worktrees/live-1b923e5; backup backups/live-sync-1b923e5-20261016T064214Z sha 3056e43a; DONE sent | commit+ci needs main+trailer+CI: 83b283a pre-#25 flaked x2; new c2fe0eb (lane/keeper-live-sync-result, doc §6 live result) dispatch 38866739035 -> merge -> evidence -> submit; verdicts wait judge server-L1-routing on adjudication (D-1442) |
 | PROJECTOR-ALARMS-READER (p3) | claimed 06:5xZ (lease 08:52Z); brief briefs/l2-projector-alarms-reader.md 25bead7 | L2 build-L2-alarms-reader 8d58f6a0 launched (coding.vm) -> MERGE-READY -> judge |
 | CI-PYTEST-SPEED (proposed) | workst data 07:0xZ: pytest 721 s, 20->40% stall = live-Temporal tests serialized by loadgroup; pytest-postgres FAILED single (run id asked) | needs router item; lane: --durations=30, session-scoped dev server, no cancel-in-progress on dispatch |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
