@@ -120,7 +120,7 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
 # --------------------------------------------------------------------------- #
 
 def _ci_conclusion(runs: Any, commit: str) -> str | None:
-    """Newest-run-per-group CI verdict: None means ok, else the fail detail. Plain groups are (suite, app, name); a workflow_dispatch run forms a ("wf", workflow_id, app, name) group across suites that a matching PR run joins. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
+    """Newest-run-per-group CI verdict: None means ok, else the fail detail. Plain groups are (suite, app, name); a workflow_dispatch run forms a ("wf", workflow_id, app, name) group across suites that a matching PR run joins; a 'workflow' dict without a positive workflow_id counts as no 'workflow' at all. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
 
     def _id_int(value: Any) -> int:
         # Same coercion as check-run ids: bool is not an id, digit strings rank as ints.
@@ -160,16 +160,23 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
         started = run.get("started_at")
         started_str = str(started) if started is not None else ""
         wf = run.get("workflow")
+        wf_id = _id_int(wf.get("workflow_id")) if isinstance(wf, dict) else 0
+        # A 'workflow' dict only counts with a real positive workflow_id (bool
+        # is not an id; digit strings rank as ints). Anything else -- missing,
+        # None, bool, junk -- is handled exactly like a missing key, so junk ids
+        # cannot merge unrelated runs into one ("wf", 0, ...) group where an
+        # unrelated success would mask a failure.
+        in_wf = wf_id > 0
         event: str | None = None
-        wf_id = wf_rid = 0
-        in_wf = isinstance(wf, dict)
+        wf_rid = 0
         if in_wf:
             raw_event = wf.get("event")
             event = str(raw_event) if raw_event is not None else None
-            wf_id = _id_int(wf.get("workflow_id"))
             wf_rid = _id_int(wf.get("run_id"))
             if event == "workflow_dispatch":
                 dispatch_keys.add((wf_id, app, name))
+        else:
+            wf_id = 0
         parsed.append({"name": name, "suite": suite, "app": app, "run": run,
                        "event": event, "wf_id": wf_id, "in_wf": in_wf,
                        "key": (rid_int, started_str), "wf_rid": wf_rid})

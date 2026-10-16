@@ -532,6 +532,35 @@ def test_ci_wf_ambiguous_name_disambiguates_with_workflow_id():
     assert "pytest (workflow 99)=failure" in detail
 
 
+def test_ci_wf_missing_workflow_id_stays_plain_suite_groups():
+    # A workflow dict with no usable workflow_id must behave exactly like a
+    # missing 'workflow' key: the suites stay separate plain groups, so the
+    # older failure still blocks although a newer green run sits next to it
+    # (a shared ("wf", 0, ...) group would let that green mask the failure).
+    failed = _wf_run(9001, sid=81, rid=1, conclusion="failure")
+    green = _wf_run(9002, sid=82, rid=2, conclusion="success", wf=None)
+    failed["workflow"].pop("workflow_id")
+    assert ev._ci_conclusion([failed, green], SHA) == f"CI is not green for {SHA} (pytest=failure)"
+    # Reversed verdicts split the same way: the newer failure in its own suite
+    # blocks on its own, never folded into the other suite's run.
+    older_green = _wf_run(9001, sid=83, rid=3, conclusion="success", wf=None)
+    newer_failed = _wf_run(9002, sid=84, rid=4, conclusion="failure", wf=None)
+    assert ev._ci_conclusion([older_green, newer_failed], SHA) == f"CI is not green for {SHA} (pytest=failure)"
+
+
+def test_ci_wf_bool_workflow_id_is_not_grouped():
+    # bool is not an id (same coercion as check-run ids): workflow_id=True must
+    # not forge a ("wf", 0, ...) group, so both suites stay plain groups and
+    # both failures are named instead of one hiding behind the other.
+    runs = [
+        _wf_run(9001, sid=91, rid=1, conclusion="failure", wf=True),
+        _wf_run(9002, sid=92, rid=2, conclusion="failure", wf=True),
+    ]
+    detail = ev._ci_conclusion(runs, SHA)
+    assert detail == (f"CI is not green for {SHA} "
+                      "(pytest (suite 91)=failure, pytest (suite 92)=failure)")
+
+
 def test_ci_conclusion_runs_without_workflow_key_unchanged():
     runs = [
         {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "failure"},
