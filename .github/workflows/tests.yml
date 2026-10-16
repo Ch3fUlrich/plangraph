@@ -18,7 +18,7 @@ on:
 # CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
 # but never a workflow_dispatch run (timing measurements must finish).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
