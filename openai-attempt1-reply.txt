@@ -1,0 +1,35 @@
+**V1 Fail‑open**  
+*File: rust/worker/src/tls.rs function tls_from_vars* – Returns `Ok(None)` only when **all** of `CERT`, `KEY`, and `CA` are unset; any partial set yields an `Err`.  
+*File: rust/worker/src/tls.rs function require_https* – Errors if TLS options are present but the address does not start with `https://`.  
+→ No environment combination silently falls back to plaintext or unauthenticated TLS.
+
+**V2 Secret handling**  
+*File: rust/worker/src/tls.rs function read_pem* – Errors are formatted as `"{var}: cannot read {path}: {e}"` and never include file contents.  
+The only places where the PEM bytes are used are passed directly to `ClientTlsOptions::builder()`; there is no `println!`, `log!`, `debug!`, or `Debug`/`Display` of the bytes.  
+→ Private key or cert data never leak to logs, panics or error messages.
+
+**V3 Server verification**  
+*File: rust/worker/src/tls.rs function tls_from_vars* – Builds `TlsOptions` with `maybe_server_root_ca_cert(Some(read_pem(CA,…)))` and optional `maybe_domain(server_name)`.  
+The Temporal SDK (`temporalio_client::TlsOptions`) uses the provided root CA for verification; no insecure “accept any cert” flag is set.  
+→ Server certificate is verified against the supplied CA and optional domain; system roots are not used when a CA is supplied.
+
+**V4 Error paths**  
+*File: rust/worker/src/tls.rs* – All error conditions are returned as `Result::Err` with descriptive strings; there are no `unwrap!` or `expect!` on user‑controlled values.  
+*File: rust/spikes/temporal-spike/src/bin/driver.rs* and *worker.rs* – Errors are propagated via `map_err(|e| anyhow::anyhow!(e))?`, not panicked.  
+Whitespace is trimmed (`v.trim()`) and empty strings are treated as unset.  
+Reading a non‑PEM file succeeds (bytes are read) but TLS handshake will later reject it; no panic occurs in the loader.  
+
+**V5 Wiring**  
+*File: rust/spikes/temporal-spike/src/bin/driver.rs* – Calls `tls_from_env()`, `require_https()`, and `maybe_tls_options(tls)`.  
+*File: rust/spikes/temporal-spike/src/bin/worker.rs* – Same pattern.  
+*File: rust/worker/src/bin/worker.rs* – Same pattern.  
+All three binaries use the helper; there is no other `Connection::connect(...)` invocation that bypasses TLS handling.  
+
+**V6 Test quality**  
+*File: rust/worker/src/tls.rs module tests* – Unit tests cover: no vars → plain, empty values → plain, full set → TLS options built, partial sets → error, server‑name‑alone → error, missing file → error (checks error contains variable and path, not secret).  
+*File: rust/tls-handshake-check.sh* – Executes an OpenSSL mTLS server and verifies: (1) client cert is presented and verified with correct CA, (2) handshake fails with wrong CA, (3) handshake fails with mismatched server name, (4) `https://` required when TLS vars are set.  
+The tests directly assert the refusal rules; they are not vacuous and would fail if the logic were bypassed.  
+
+---  
+TEST-GAMING: no - searched tests/ and src/ for test‑only branches and env checks: 0 hits  
+VERDICT: pass
