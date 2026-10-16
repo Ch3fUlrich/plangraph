@@ -1,0 +1,46 @@
+=== part seats-archive/planner-kit-9bf0a319/out.json
+## V1: readiness.check_card / service.gate_card — pack_tokens vs leg_max_request, PackTooBig, repeat gate
+
+**PASS**
+
+- `readiness.py:check_card`: New `pack_tokens` parameter checked with `pack_tokens > leg_max_request` (strict `>`), same boundary semantics as the existing `est > leg_max_request` check. Emits `leg_request_too_big` with message `"pack {pack_tokens} > {leg_max_request}"`. Guarded by `isinstance(pack_tokens, int)` and `leg_max_request is not None`, so it's inert when either is absent.
+- `service.py:gate_card`: Builds the pack using the route's window class budget. Catches `PackTooBig` separately (stores error, `pack_tokens` stays `None` so `check_card` won't double-fire), catches `(ValueError, OSError)` as best-effort (skip silently). Appends a separate `Finding("leg_request_too_big", "pack too big: …")` post-check_card when PackTooBig occurred. These two paths are mutually exclusive by construction.
+- Idempotent repeat gate: confirmed in `test_planner_service.py:test_pack_over_first_leg_max_needs_input` — second call returns the same `question_id`, state stays `needs_input`, and only one open-question row exists.
+
+## V2: shadow.py — never alters Route, never raises, off by default, failures swallowed, no card text in log
+
+**PASS**
+
+- `route_with_shadow` always calls `route_card` first, and the returned tuple is `(rules, id)` — `rules` is the original unmodified `Route`. All early-exit paths (`not enabled`, `answerer is None`, `path is None`) return `rules, None`.
+- Off by default: `enabled()` reads `""` when env var is missing; `""` is not in `_ON`.
+- Answerer exception caught by bare `except Exception`, stored as `shadow_error`, never propagates. `_append` catches `(OSError, ValueError, TypeError)` and returns `False`.
+- Deep copies (`copy.deepcopy`) passed to the answerer; verified by `test_answerer_mutation_does_not_leak_to_the_caller`.
+- `_SECRET_FIELDS = {"heldout_check", "check_cmd", "write_set"}` recursively scrubbed by `_scrub`. The `rules` portion of the row only contains window_class, leg ids, review_seats, reasons — no card text. `test_heldout_check_and_card_text_never_reach_the_log` asserts that marker strings are absent from the serialized log file.
+
+## V3: tests — no live model calls, hermetic, meaningful assertions
+
+**PASS**
+
+- All test answerers are plain functions; no network, no model, no store (except `keeper_util.World` in service tests which is an in-memory fake).
+- Boundary values are precise: `pack_tokens=5000` equals `leg_max_request=5000` → ready (strict `>`); `5001` → not ready. Exact message assertions (`"pack 5001 > 5000"`).
+- `TINY_LEG` with `max_request_tokens=3000` is a test-only routing constant, not a production code branch.
+- Shadow tests exercise flag on/off, log path resolution, deep-copy isolation, write-failure swallowing (blocked path is a directory), tolerant JSONL reader, and full summarize pipeline.
+- No `skip`, `xfail`, or unconditional `assert True`.
+
+## V4: skill/docs — card schema consistent with card.py, no hosts/home paths/secrets, example valid
+
+**PASS**
+
+- `SKILL.md` section 4 card table lists all fields that `readiness.py` / `card.py` validate: outcome, read_set, write_set, exports, forbid_paths, smoke_checks, check_cmd, heldout_check, window_class, risk_tags, estimate_tokens. Constraints match: relative paths only, `<=3` write_set entries, explicit risk_tags, non-negative integer estimate.
+- Example batch: all paths are relative, no `~` or `..` or drive letters; no hosts or secrets; `write_set` ≤ 3 entries per card; `window_class` values are from the valid set (`128k`, `256k`); `risk_tags` is `[]` or `[money]`; `estimate_tokens` positive integers.
+- `PLANNER-KIT.md` gate-code row updated to "estimate or context pack" — matches the code's two-path behavior.
+- Section renumbering in SKILL.md is internally consistent (all cross-references updated).
+- `task-contract.md` card mapping is a 1:1 translation of the brief fields; no new or conflicting fields introduced.
+
+---
+
+TEST-GAMING: no — searched test files for production-only branches masked by fixtures, skip/xfail markers, and unconditional assertions: 0 hits
+
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

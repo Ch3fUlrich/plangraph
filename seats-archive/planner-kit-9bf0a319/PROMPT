@@ -1,0 +1,939 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+Review a diff for plangraph planner kit (Python). Vectors:
+V1 readiness.check_card/service.gate_card: pack_tokens vs leg_max_request; PackTooBig handling; repeat gate idempotent question reuse.
+V2 shadow.py: shadow must never alter returned Route or raise; off by default; failures swallowed; no card text (heldout_check, check_cmd, write_set) in the log.
+V3 tests: no live model calls, hermetic, assertions meaningful.
+V4 skill/docs: card schema consistent with card.py, no hosts/home paths/secrets, example valid.
+Give per-vector PASS/FAIL with file:function for each finding, then final verdict line "VERDICT: PASS" or "VERDICT: FAIL".
+
+=== DIFF ===
+diff --git a/docs/PLANNER-KIT.md b/docs/PLANNER-KIT.md
+index 18689507..742038ad 100644
+--- a/docs/PLANNER-KIT.md
++++ b/docs/PLANNER-KIT.md
+@@ -16,6 +16,7 @@ a keeper `Store` (`put_card`, `get_card`, `set_state`, `ask_question`).
+ | `routing.py` | `route_card` (window class + leg plan), `next_after_failure` (retry/rotate/promote/park) |
+ | `context_pack.py` | `build_pack`, `pack_budget`: write set then read set under a token budget |
+ | `service.py` | `gate_card`, `route_for_card`, `pack_for_card`, `import_batch`, `running_write_sets` |
++| `shadow.py` | `route_with_shadow` (optional audit-only shadow answerer, D18), `record_outcome`, `read_rows`, `summarize` |
+ 
+ ## Card YAML
+ 
+@@ -54,7 +55,7 @@ Paths must be relative and without `..`.
+ | `read_missing` | a `read_set` entry does not exist under the repo root |
+ | `write_overlap` | write set overlaps one of a running card in the same project |
+ | `estimate_missing` / `estimate_too_big` | no estimate / estimate above 0.55 x window |
+-| `leg_request_too_big` | estimate above the first leg's `max_request_tokens` |
++| `leg_request_too_big` | estimate or context pack above the first leg's `max_request_tokens` |
+ | `no_risk_tags` | `risk_tags` is null (direct `check_card` calls only, see below) |
+ | `no_window_class` | window class unset |
+ | `bad_path` | absolute, `~`, drive or `..` path |
+@@ -100,6 +101,19 @@ then `# FILE <path> (write)` blocks, then `(read)` blocks, each in a fenced bloc
+ read files over budget or size are skipped. Entries beyond the 50-file expansion cap are
+ listed in `skipped` as `(path, "entry_cap")`. Binary write files are skipped.
+ 
++## Shadow hook
++
++`shadow.py` (D18): `route_with_shadow(card, answerer=..., log_path=..., **route_kw)` routes with
++`route_card` first and always returns that route unchanged - the shadow answer is audited, never
++the decision. Off unless `PLANGRAPH_PLANNER_SHADOW` is `1/true/yes/on`; the JSONL log path is
++`log_path` or `PLANGRAPH_PLANNER_SHADOW_LOG`. Each call appends one `decision` row (card_key,
++rules, shadow answer, `shadow_error`, `agree` on the first leg id) and `record_outcome(decision_id,
++outcome)` appends an `outcome` row joined by id; `read_rows`/`summarize` read them back, skipping
++bad lines. Answerer exceptions are recorded and ignored, log-write errors swallowed; the answerer
++gets a deep copy of the card and route, and `heldout_check`/`check_cmd`/`write_set` never reach
++the log. The answerer is injected (fake in tests), so the kit still makes no model calls and no
++store or schema change.
++
+ ## Tests
+ 
+ ```
+@@ -111,6 +125,5 @@ also runs in the Postgres CI job.
+ 
+ ## Not here
+ 
+-- The Jev shadow hook (running the gate beside the existing planner).
+ - The planning-skill rewrite that emits cards.
+ - The live worker that claims `ready` items, spawns a leg and records attempts.
+diff --git a/skills/plangraph-planning/SKILL.md b/skills/plangraph-planning/SKILL.md
+index 6fc1377f..016af99d 100644
+--- a/skills/plangraph-planning/SKILL.md
++++ b/skills/plangraph-planning/SKILL.md
+@@ -1,16 +1,18 @@
+ ---
+ name: plangraph-planning
+-description: Use when planning and executing multi-step work with layered agents (project, phase, task). Defines the three layers, which model/effort each runs at, how planning and work phases spawn research, implementer and reviewer agents, the one-agent-per-task rule, the task-size contract, failure handling and report schemas, all mirrored as items in the plangraph plan graph.
++description: Use when planning and executing multi-step work with layered agents (project, phase, task). Defines the three layers, which model/effort each runs at, how planning and work phases spawn research, implementer and reviewer agents, the one-agent-per-task rule, the task-size contract, failure handling and report schemas, all mirrored as items in the plangraph plan graph; emits execution cards (readiness-gated, routed) for every task in that batch.
+ ---
+ 
+ # plangraph-planning
+ 
+-A planning-and-delivery method for work that is too big for one agent. Every unit of work is an
+-**item in the plan graph** (project, phase, task), so the human sees the same hierarchy the
+-agents run. Companion skills: `coding-principles` (how code is written), `unattended-orchestration`
+-(how layers are launched, relaunched and watched), `swarm-orchestration` (roles, wave caps, model
+-tiers). **This skill does not restate their numbers**: thresholds, tiers and caps live in
+-`swarm-orchestration`'s config; this file only says how the layers fit together.
++A planning-and-delivery method for work too big for one agent. Every unit of work is an **item in
++the plan graph** (project, phase, task) and every task item carries an execution **card** the
++keeper gates and routes, so the human sees the same hierarchy the agents run. Companion skills:
++`coding-principles` (how code is written), `unattended-orchestration` (how layers are launched,
++relaunched and watched), `swarm-orchestration` (roles, wave caps, model tiers). **This skill does
++not restate their numbers**: thresholds, tiers and caps live in `swarm-orchestration`'s config;
++gate codes, leg order and the context pack live in `docs/PLANNER-KIT.md`; this file only says how
++the layers fit together.
+ 
+ ## 1. The hierarchy (expandable and collapsible in the page)
+ 
+@@ -27,7 +29,7 @@ Layer 1  PROJECT        one agent, Opus 5.5, medium effort
+                         2. refinement           (phase agent tightens task contracts)
+                         3. implementers         (cheap but capable; independent tasks in parallel)
+                         4. reviewers x1-3       (very cheap; other family than the implementer)
+-                        5. fix-tasks            (a new implementer per failure, section 5)
++                        5. fix-tasks            (a new implementer per failure, section 8)
+ ```
+ 
+ Mapping to `unattended-orchestration` levels: Layer 1 is the coordinator/orchestrator role for the
+@@ -41,8 +43,8 @@ Two plan-graph item kinds per layer: a **phase item** (kind `planning` or `work`
+ 
+ - Every task item is owned by **exactly one agent** for its whole life. No second agent edits that
+   task's files; no agent works on two tasks at once.
+-- Planned file scopes must be **disjoint**. If two tasks would touch the same file, merge them
+-  into one task (consolidation, not locking).
++- Planned file scopes are **disjoint** (enforced on cards as `write_set` overlap). If two tasks
++  would touch the same file, merge them into one task (consolidation, not locking).
+ - Implementers work in their own worktree/branch; the phase agent merges. No repo-wide git
+   operations while agents run (`git reset --hard`, `clean`, `stash`, `gc`, `worktree prune`).
+ - The spawner provides the toolchain in the brief: lint, test and format commands, the coding
+@@ -65,7 +67,73 @@ Too small (a one-line change, a rename): fold into a neighbouring task with the
+ Too big (touches many modules, "and then also..."): split on module, interface or test boundary.
+ See `references/task-contract.md` for the brief template.
+ 
+-## 4. Phases in detail
++## 4. Cards
++
++Every task item gets a card **in the same batch** as the item that creates it; a task without a
++card is not ready for work. Cards are validated by `plangraph.planner.card` (unknown fields, wrong
++values and bad paths are refused, all problems at once), so write them exactly:
++
++| Field | Content | Why |
++|---|---|---|
++| `outcome` | one sentence, one outcome (required) | the objective travels with the card |
++| `read_set` | files read, kept minimal | feeds the context pack; smaller is cheaper |
++| `write_set` | files edited, <=3 plus their tests | disjoint across tasks = one agent, one task |
++| `exports` | signatures/names the task must honour | interfaces are copied, not discovered |
++| `forbid_paths` | paths nobody may touch | scope stays mechanical |
++| `smoke_checks` | quick commands run before the check | cheap early signal |
++| `check_cmd` | one command, pass = exit 0 | mechanical acceptance, same as section 3 |
++| `heldout_check` | hidden verification, never shown to the implementer | acceptance cannot be overfit |
++| `window_class` | `128k` \| `256k` \| `1m` \| null | router picks the window; null = smallest that fits |
++| `risk_tags` | auth, secrets, money, migration, public-contract, live-step | set explicitly: `[]` = reviewed, none |
++| `estimate_tokens` | non-negative integer | honest estimate; the gate rejects missing/too big |
++
++Card rules: **relative paths only**, no `..`, no absolute or drive paths; no secrets, hosts, home
++paths or token-like strings anywhere in a card. The section 3 contract maps onto card fields:
++Scope -> at most 3 entries in `write_set`, Acceptance -> one `check_cmd`.
++
++### Batch example (loads with `plangraph.planner.service.import_batch` / `card.load_cards_yaml`)
++
++```yaml
++project: demo
++cards:                      # form 1: top-level mapping, key = project:id or bare id
++  api-validate:
++    outcome: validate request payloads before the handler runs
++    read_set: [src/api/handlers.py, src/api/schemas.py]
++    write_set: [src/api/validate.py, tests/test_validate.py]
++    exports: [validate_payload]
++    forbid_paths: [src/store/]
++    smoke_checks: [python3 -m compileall src/api]
++    check_cmd: python3 -m pytest -q tests/test_validate.py
++    heldout_check: python3 -m pytest -q tests/test_validate_heldout.py
++    window_class: 128k
++    risk_tags: []
++    estimate_tokens: 40000
++  store-retry:
++    outcome: retry timed-out store writes once, then fail loudly
++    read_set: [src/store/writes.py]
++    write_set: [src/store/retry.py, tests/test_retry.py]
++    check_cmd: python3 -m pytest -q tests/test_retry.py
++    heldout_check: python3 -m pytest -q tests/test_retry_heldout.py
++    window_class: 256k
++    risk_tags: [money]
++    estimate_tokens: 90000
++ops:
++  - op: create
++    item:
++      id: cli-docs                  # bare id -> project:cli-docs
++      title: document the new command
++      card:                         # form 2: inline on the item (shown once)
++        outcome: document validate_payload in the command reference
++        read_set: [docs/commands.md]
++        write_set: [docs/commands.md]
++        check_cmd: python3 -m pytest -q tests/test_docs.py
++        heldout_check: python3 -m pytest -q tests/test_docs_heldout.py
++        window_class: 128k
++        risk_tags: []
++        estimate_tokens: 20000
++```
++
++## 5. Phases in detail
+ 
+ **Planning phase (Layer 2, high effort).**
+ 1. Pose the questions; spawn 3-10 research agents (default 3-5; max 10 by R-orch-30), varying
+@@ -74,36 +142,57 @@ See `references/task-contract.md` for the brief template.
+ 2. Merge into one plan with phases, tasks, edges and risks.
+ 3. Three reviewers with different lenses (correctness/feasibility, risk/security,
+    simplicity/cost), at least one from a different model family than the planner.
+-4. Refine; record what was accepted and rejected. Output: an approved plan in the plan graph, delivered ONLY as a
+-   plan-graph batch (`data/updates/<date>-<name>.yaml`, create/edit/priority ops, applied by the plangraph L1 after a
+-   router OK). Prose plans are input; the batch is the output, and heartbeats take their next task from `pg ready`
+-   (DECISIONS 5.10, D-953).
++4. Refine; record what was accepted and rejected. Output: an approved plan in the plan graph,
++   delivered ONLY as a plan-graph batch (`data/updates/<date>-<name>.yaml`, create/edit/priority
++   ops, applied by the plangraph L1 after a router OK) carrying **tasks + cards** — every task
++   item's card in that same batch (section 4). Prose plans are input; the batch is the output, and
++   heartbeats take their next task from `pg ready` (DECISIONS 5.10, D-953). Cards the readiness
++   gate refuses come back through the planner queue as questions (section 6) and are re-emitted
++   with the next batch.
+ 
+ **Work phase (Layer 2, high effort).**
+ 1. Optional: 1-2 detail researchers for facts the plan lacks.
+-2. Refine task contracts against section 3.
++2. Refine task contracts against section 3; keep each card in sync with its contract.
+ 3. Spawn implementers: independent tasks in parallel, dependent ones in order.
+ 4. Spawn 1-3 reviewers per task or batch, very cheap models, **a different family from the
+    implementer**.
+-5. Any failure creates a fix-task (section 5). The phase ends when every task is done and
+-   reviewed; the phase agent sends a digest upward (section 6).
++5. Any failure creates a fix-task (section 8). The phase ends when every task is done and
++   reviewed; the phase agent sends a digest upward (section 9).
+ 
+ **Project (Layer 1, medium effort).** Holds the intent, decides *when* a planning phase is needed
+ (operator-driven), reads only digests, never raw agent output, and asks the operator through the
+ single operator channel.
+ 
+-## 5. Failure handling
++## 6. Readiness
++
++The planner does **not** hand-pick models or approve its own cards. The **keeper** runs the
++readiness gate over every stored card: ready items go to `pg ready`; not-ready items go to
++`needs_input` with one open question (all findings listed) back through the planner queue, which
++is where the planner revises the card. The planner's job is only to write cards that pass —
++mechanical `check_cmd`, honest estimate, disjoint `write_set`, explicit risk tags. Gate codes,
++re-run semantics and question reuse: `docs/PLANNER-KIT.md` ("Gate codes"), never copied here.
++
++## 7. Routing
++
++Routing is the keeper's job too: it derives the window class (the card's own, else the smallest
++class holding the estimate) and an ordered D25 leg plan for each ready card; risk tags drop
++training legs and set review seats, and failures rotate/retry/promote/park inside the router. The
++planner only supplies an honest `window_class` and `estimate_tokens`. Leg order, retry policy and
++the context pack layout: `docs/PLANNER-KIT.md`, never copied here.
++
++## 8. Failure handling
+ 
+ - An implementer or reviewer failure **creates a new fix-task**, linked to the failed one by an
+   edge `fixes -> <task>`; a new agent with fresh context gets the failure summary only.
+ - Maximum **2 fix-tasks** per original task. After the second failure the phase agent re-plans
+-  the task (split/merge/rewrite the contract); if that fails it escalates to Layer 1.
++  the task (split/merge/rewrite the contract, then a new card); if that fails it escalates to
++  Layer 1.
+ - Every failure is a visible item, so repeated failures point at the pipeline (bad contract, bad
+   tooling, wrong model tier) and not at "an unlucky agent". Count them per phase and report them.
+ - Terminal/tool errors (build, lint, test, environment) are recorded as an **error record**
+-  attached to the task (section 6), never pasted into the done summary.
++  attached to the task (section 9), never pasted into the done summary.
+ 
+-## 6. Reporting (schema'd; no transcripts upward)
++## 9. Reporting (schema'd; no transcripts upward)
+ 
+ Four artifacts, all JSON, defined in `references/schemas.md`:
+ 
+@@ -117,18 +206,20 @@ Four artifacts, all JSON, defined in `references/schemas.md`:
+ 
+ Each layer reads only the artifacts from the layer directly below it.
+ 
+-## 7. Model-family diversity
++## 10. Model-family diversity
+ 
+ Native Claude Code subagents are all Claude, so they give lens and tier diversity but not family
+ diversity. For genuine cross-family research and review use `herdr-orchestration` or the AutoOS
+ fleet routes; where only Claude is available, state that in the review record rather than
+ claiming cross-family coverage.
+ 
+-## 8. Checklist
++## 11. Checklist
+ 
+ - [ ] Intent written at Layer 1; planning phase(s) scheduled by the operator
+ - [ ] Research 3-10, mixed families; plan reviewed by 3 lenses; refinement recorded
+ - [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
++- [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
+ - [ ] One agent per task; implementers parallel only when independent
++- [ ] Readiness and routing left to the keeper; refused cards answered from the planner queue
+ - [ ] Reviewers cheap and cross-family; failures become fix-tasks (max 2) then escalate
+ - [ ] Done reports, error records and the phase digest filed; plan-graph states updated
+diff --git a/skills/plangraph-planning/references/task-contract.md b/skills/plangraph-planning/references/task-contract.md
+index 76ab8ac1..69083202 100644
+--- a/skills/plangraph-planning/references/task-contract.md
++++ b/skills/plangraph-planning/references/task-contract.md
+@@ -24,3 +24,11 @@ error record, and "failure summary only; you have no memory of the previous atte
+ 
+ Splitting heuristics: split on module, interface, test or migration boundary; merge tasks that
+ touch the same file; fold trivial edits into a neighbour with the same scope.
++
++## Card mapping
++
++Each brief becomes the card emitted in the same batch: `Objective:` -> `outcome`, `Allowed files:`
++-> `write_set` (the rest of the repo goes to `read_set`, plus `forbid_paths`), `Acceptance:` ->
++`check_cmd` (one command, exit 0), `Interfaces:` -> `exports`, `Forbidden:` -> `forbid_paths`,
++`Toolchain:` -> `smoke_checks`. The planner adds `heldout_check` (hidden from the implementer),
++`window_class`, explicit `risk_tags` (`[]` = reviewed, none) and an honest `estimate_tokens`.
+diff --git a/src/plangraph/planner/readiness.py b/src/plangraph/planner/readiness.py
+index 348d87ba..bfadece0 100644
+--- a/src/plangraph/planner/readiness.py
++++ b/src/plangraph/planner/readiness.py
+@@ -289,6 +289,7 @@ def _read_exists(entry: str, repo_root: Path) -> bool:
+ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
+                running_write_sets: Mapping[str, Sequence[str]] = _EMPTY,
+                leg_max_request: int | None = None,
++               pack_tokens: int | None = None,
+                dry_run: Callable[[str, Path], tuple[bool, str]] = default_dry_run,
+                require_heldout: bool = False) -> Verdict:
+     """Gate one card; every failing rule adds a ``Finding`` (order as documented)."""
+@@ -345,6 +346,10 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
+         if leg_max_request is not None and est > leg_max_request:
+             add("leg_request_too_big", f"{est} > {leg_max_request}")
+ 
++    if leg_max_request is not None and isinstance(pack_tokens, int) \
++            and pack_tokens > leg_max_request:
++        add("leg_request_too_big", f"pack {pack_tokens} > {leg_max_request}")
++
+     if require_heldout:
+         held = card.get("heldout_check")
+         if not isinstance(held, str) or not held.strip():
+diff --git a/src/plangraph/planner/service.py b/src/plangraph/planner/service.py
+index 0b9b4551..9a9550b7 100644
+--- a/src/plangraph/planner/service.py
++++ b/src/plangraph/planner/service.py
+@@ -100,9 +100,12 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
+               require_heldout: bool = False) -> GateResult:
+     """Gate the stored card of ``key`` and move its item to ``ready`` or ``needs_input``.
+ 
+-    A route failure adds a ``no_route`` finding.  Only items in ``GATEABLE_STATES`` are
+-    touched.  Not ready: ``needs_input`` plus one open question without default (the
+-    planner queue); an identical open question is reused, so a repeat call writes nothing.
++    A route failure adds a ``no_route`` finding.  A context pack above the first leg's
++    ``max_request_tokens`` adds ``leg_request_too_big`` (built best effort: a pack that
++    cannot be built at all is skipped, a ``PackTooBig`` is reported).  Only items in
++    ``GATEABLE_STATES`` are touched.  Not ready: ``needs_input`` plus one open question
++    without default (the planner queue); an identical open question is reused, so a
++    repeat call writes nothing.
+     """
+     card = store.get_card(principal, key)
+     project = key.split(":", 1)[0]
+@@ -114,16 +117,33 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
+     except ValueError as exc:  # RouteError is a ValueError
+         route_error = str(exc)
+     leg_max = route.first_leg.max_request_tokens if route is not None else None
++    pack_tokens: int | None = None
++    pack_error: str | None = None
++    if route is not None:
++        try:
++            pack_tokens = context_pack.build_pack(
++                card, repo_root=Path(repo_root), key=key,
++                budget_tokens=context_pack.pack_budget(route.window_class)).tokens
++        except context_pack.PackTooBig as exc:
++            pack_tokens = None
++            pack_error = str(exc)
++        except (ValueError, OSError):
++            pack_tokens = None  # best effort: no pack, no pack finding
+     kw: dict[str, Any] = {}
+     if dry_run is not None:
+         kw["dry_run"] = dry_run
+     verdict = readiness.check_card(
+         card, key=key, repo_root=Path(repo_root),
+         running_write_sets=running_write_sets(store, project, exclude=key),
+-        leg_max_request=leg_max, require_heldout=require_heldout, **kw)
++        leg_max_request=leg_max, pack_tokens=pack_tokens,
++        require_heldout=require_heldout, **kw)
+     if route_error is not None:
+         verdict = readiness.Verdict(
+             key, verdict.findings + (readiness.Finding("no_route", route_error),))
++    if pack_error is not None:
++        verdict = readiness.Verdict(
++            key, verdict.findings + (
++                readiness.Finding("leg_request_too_big", f"pack too big: {pack_error}"),))
+ 
+     state = _item_state(store, key)
+     if state not in GATEABLE_STATES:
+diff --git a/src/plangraph/planner/shadow.py b/src/plangraph/planner/shadow.py
+new file mode 100644
+index 00000000..23c2af0f
+--- /dev/null
++++ b/src/plangraph/planner/shadow.py
+@@ -0,0 +1,182 @@
++"""Jev shadow hook (design D18): an audit-only shadow answerer beside the rules router.
++
++``route_with_shadow`` always routes with :func:`plangraph.planner.routing.route_card`
++first and returns *that* route unchanged: the shadow answer is an observation for the
++audit log, never a decision.  The hook is off unless ``PLANGRAPH_PLANNER_SHADOW`` reads
++``1``/``true``/``yes``/``on``; it needs both an ``answerer`` and a log path (argument or
++``PLANGRAPH_PLANNER_SHADOW_LOG``).  Each run appends one JSONL ``decision`` row (rules,
++shadow answer, shadow error, first-leg agreement) and ``record_outcome`` later appends
++the attempt outcome for the same id; ``read_rows`` / ``summarize`` read them back.
++
++Failures are ignored by design: an answerer exception becomes ``shadow_error``, a log
++write failure (``OSError``) is swallowed, and nothing about the returned route changes.
++Only ``card_key`` and rule/shadow/outcome fields are logged - never card text such as
++``heldout_check``, ``check_cmd`` or ``write_set``.  Stdlib only: no network, no store or
++schema change.
++"""
++from __future__ import annotations
++
++import copy
++import json
++import os
++import uuid
++from collections.abc import Callable, Mapping
++from datetime import datetime, timezone
++
++from .routing import Route, route_card
++
++__all__ = ["ENV_FLAG", "ENV_LOG", "Answerer", "enabled", "route_with_shadow",
++           "record_outcome", "read_rows", "summarize"]
++
++#: Master switch: the shadow hook runs only when this reads ``1/true/yes/on``.
++ENV_FLAG = "PLANGRAPH_PLANNER_SHADOW"
++#: Default audit-log path when ``log_path`` is not passed.
++ENV_LOG = "PLANGRAPH_PLANNER_SHADOW_LOG"
++
++#: Values that turn the hook on (case-insensitive); anything else is off.
++_ON = frozenset({"1", "true", "yes", "on"})
++
++#: Card fields that must never reach the log (redaction).
++_SECRET_FIELDS = frozenset({"heldout_check", "check_cmd", "write_set"})
++
++#: ``answerer(card, rules_route)`` returns a JSON-able mapping (e.g. the legs it would pick).
++Answerer = Callable[[Mapping, Route], Mapping]
++
++
++def _env(env: Mapping | None) -> Mapping:
++    return os.environ if env is None else env
++
++
++def enabled(env: Mapping | None = None) -> bool:
++    """True only for ``PLANGRAPH_PLANNER_SHADOW`` in ``1/true/yes/on``; default off."""
++    raw = _env(env).get(ENV_FLAG, "")
++    return str(raw).strip().lower() in _ON
++
++
++def _log_path(log_path, env: Mapping | None) -> str | None:
++    path = log_path if log_path is not None else _env(env).get(ENV_LOG)
++    if path is None:
++        return None
++    text = str(path).strip()
++    return text or None
++
++
++def _now() -> str:
++    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
++
++
++def _append(path: str, row: Mapping) -> bool:
++    """Append one JSON line; log failures are swallowed, never raised."""
++    try:
++        line = json.dumps(row, default=repr)
++        with open(path, "a", encoding="utf-8") as fh:
++            fh.write(line + "\n")
++    except (OSError, ValueError, TypeError):
++        return False
++    return True
++
++
++def _scrub(value):
++    """Drop the redacted card fields (recursively) from a shadow answer."""
++    if isinstance(value, Mapping):
++        return {k: _scrub(v) for k, v in value.items() if k not in _SECRET_FIELDS}
++    if isinstance(value, list):
++        return [_scrub(v) for v in value]
++    return value
++
++
++def _first_leg_id(answer) -> str | None:
++    """First leg id of a shadow answer (list of ids, or of ``{"id": ...}`` maps)."""
++    if not isinstance(answer, Mapping):
++        return None
++    legs = answer.get("legs")
++    if not legs or isinstance(legs, (str, bytes)):
++        return None
++    first = legs[0]
++    if isinstance(first, Mapping):
++        first = first.get("id")
++    return None if first is None else str(first)
++
++
++def route_with_shadow(card: Mapping, *, answerer: Answerer | None = None,
++                      log_path=None, env: Mapping | None = None,
++                      **route_kw) -> tuple[Route, str | None]:
++    """Route ``card`` with the rules and audit a shadow answer beside it.
++
++    The rules route from ``route_card`` (its exceptions propagate unchanged) is always
++    computed first and always returned unmodified; the returned id names the audit row
++    (``None`` when the hook is off or no log path resolves).  The answerer sees a deep
++    copy of the card and route, and its failure is recorded and ignored.
++    """
++    rules = route_card(card, **route_kw)
++    if not enabled(env) or answerer is None:
++        return rules, None
++    path = _log_path(log_path, env)
++    if path is None:
++        return rules, None
++
++    decision_id = uuid.uuid4().hex
++    shadow = None
++    shadow_error = None
++    try:
++        shadow = answerer(copy.deepcopy(card), copy.deepcopy(rules))
++    except Exception as exc:  # a broken shadow must never break routing
++        shadow_error = f"{type(exc).__name__}: {str(exc)[:200]}"
++    answer = _scrub(shadow) if shadow is not None else None
++    first = _first_leg_id(answer)
++    agree = None if first is None else first == rules.legs[0].id
++    row = {"v": 1, "event": "decision", "id": decision_id, "ts": _now(),
++           "card_key": card.get("key"),
++           "rules": {"window_class": rules.window_class,
++                     "legs": [leg.id for leg in rules.legs],
++                     "review_seats": rules.review_seats,
++                     "reasons": list(rules.reasons)},
++           "shadow": answer, "shadow_error": shadow_error, "agree": agree}
++    _append(path, row)
++    return rules, decision_id
++
++
++def record_outcome(decision_id, outcome: Mapping, *, log_path=None,
++                   env: Mapping | None = None) -> bool:
++    """Append the attempt ``outcome`` for ``decision_id``; False when it did not land."""
++    if decision_id is None or not enabled(env):
++        return False
++    path = _log_path(log_path, env)
++    if path is None:
++        return False
++    row = {"v": 1, "event": "outcome", "id": decision_id, "ts": _now(),
++           "outcome": dict(outcome)}
++    return _append(path, row)
++
++
++def read_rows(log_path) -> list[dict]:
++    """Read the JSONL audit log, skipping blank, malformed or non-object lines."""
++    rows: list[dict] = []
++    try:
++        with open(log_path, encoding="utf-8") as fh:
++            for line in fh:
++                line = line.strip()
++                if not line:
++                    continue
++                try:
++                    row = json.loads(line)
++                except ValueError:
++                    continue
++                if isinstance(row, dict):
++                    rows.append(row)
++    except OSError:
++        return []
++    return rows
++
++
++def summarize(rows) -> dict:
++    """Counts over the audit rows, outcomes joined to decisions by id."""
++    decisions = [r for r in rows if isinstance(r, dict) and r.get("event") == "decision"]
++    ids = {r.get("id") for r in decisions}
++    outcomes = sum(1 for r in rows if isinstance(r, dict)
++                   and r.get("event") == "outcome" and r.get("id") in ids)
++    agree = sum(1 for r in decisions if r.get("agree") is True)
++    disagree = sum(1 for r in decisions if r.get("agree") is False)
++    errors = sum(1 for r in decisions if r.get("shadow_error"))
++    return {"decisions": len(decisions), "outcomes": outcomes, "agree": agree,
++            "disagree": disagree, "shadow_errors": errors}
+diff --git a/tests/test_planner_readiness.py b/tests/test_planner_readiness.py
+index 69090770..25fd0928 100644
+--- a/tests/test_planner_readiness.py
++++ b/tests/test_planner_readiness.py
+@@ -252,6 +252,28 @@ def test_leg_request_too_big(tmp_path):
+     assert both.codes() == ["estimate_too_big", "leg_request_too_big"]
+ 
+ 
++def test_pack_tokens_vs_leg_max(tmp_path):
++    card = good_card(estimate_tokens=1000)
++    assert gate(tmp_path, card, leg_max_request=5000, pack_tokens=4999).ready
++    assert gate(tmp_path, card, leg_max_request=5000, pack_tokens=5000).ready
++    over = gate(tmp_path, card, leg_max_request=5000, pack_tokens=5001)
++    assert over.codes() == ["leg_request_too_big"]
++    assert "pack" in over.findings[0].message
++    assert over.findings[0].message == "pack 5001 > 5000"
++
++
++def test_pack_tokens_ignored_without_leg_max(tmp_path):
++    assert gate(tmp_path, good_card(), pack_tokens=10**9).ready
++    assert gate(tmp_path, good_card(), pack_tokens=10**9).codes() == []
++
++
++def test_estimate_and_pack_both_over_share_one_code(tmp_path):
++    card = good_card(estimate_tokens=5000)
++    v = gate(tmp_path, card, leg_max_request=4999, pack_tokens=6000)
++    assert v.codes() == ["leg_request_too_big"]
++    assert [f.message for f in v.findings] == ["5000 > 4999", "pack 6000 > 4999"]
++
++
+ def test_require_heldout(tmp_path):
+     assert gate(tmp_path, good_card()).ready
+     assert gate(tmp_path, good_card(), require_heldout=True).codes() == ["no_heldout"]
+diff --git a/tests/test_planner_service.py b/tests/test_planner_service.py
+index 75b311ef..9176bfbf 100644
+--- a/tests/test_planner_service.py
++++ b/tests/test_planner_service.py
+@@ -7,7 +7,12 @@ import pytest
+ 
+ from keeper_util import World, seed
+ from plangraph.planner import service
+-from plangraph.planner.legs import DEFAULT_LEGS
++from plangraph.planner.legs import DEFAULT_LEGS, Leg
++
++#: One tiny leg: small enough that a padded write file pushes the pack over it.
++TINY_LEG = Leg(id="tiny-free", tier="free", harness="opencode", model="tiny-model",
++               family="tiny", windows=("128k",), max_request_tokens=3000,
++               trains_on_data=False)
+ 
+ 
+ @pytest.fixture
+@@ -130,6 +135,41 @@ def test_estimate_too_big_for_class(w, repo):
+     assert result.state == "needs_input"
+ 
+ 
++def test_pack_over_first_leg_max_needs_input(w, repo):
++    (key,) = seed(w, [("A", [])])
++    put(w, key, estimate_tokens=1000)
++    (repo / "src" / "a.py").write_text(
++        "WRITE_MARKER = 1\n" + "# padding\n" * 3000, encoding="utf-8")
++    result = gate(w, repo, key, legs=(TINY_LEG,))
++    assert result.state == "needs_input" and not result.ready
++    assert result.verdict.codes() == ["leg_request_too_big"]
++    assert any(f.code == "leg_request_too_big" and "pack " in f.message
++               for f in result.verdict.findings)
++    assert state_of(w, key) == "needs_input"
++    rows = open_questions(w, key)
++    assert len(rows) == 1 and rows[0][2] is None
++    assert "leg_request_too_big" in rows[0][1] and "pack" in rows[0][1]
++    assert result.question_id == rows[0][0]
++    again = gate(w, repo, key, legs=(TINY_LEG,))
++    assert again.question_id == result.question_id and again.state == "needs_input"
++    assert len(open_questions(w, key)) == 1
++
++
++def test_pack_too_big_reports_pack_finding(w, repo):
++    (key,) = seed(w, [("A", [])])
++    pads = [f"src/pad{i}.py" for i in range(4)]
++    for name in pads:
++        (repo / name).write_text("x" * 90000, encoding="utf-8")
++    put(w, key, estimate_tokens=1000, write_set=pads)
++    result = gate(w, repo, key, legs=(TINY_LEG,))
++    assert result.state == "needs_input"
++    assert result.verdict.codes() == ["leg_request_too_big"]
++    assert any(f.message.startswith("pack too big: ") for f in result.verdict.findings)
++    rows = open_questions(w, key)
++    assert len(rows) == 1 and "leg_request_too_big" in rows[0][1]
++    assert "pack too big" in rows[0][1]
++
++
+ def test_all_legs_unavailable_gives_no_route(w, repo):
+     (key,) = seed(w, [("A", [])])
+     put(w, key)
+diff --git a/tests/test_planner_shadow.py b/tests/test_planner_shadow.py
+new file mode 100644
+index 00000000..4030be15
+--- /dev/null
++++ b/tests/test_planner_shadow.py
+@@ -0,0 +1,274 @@
++"""Planner shadow hook (D18): audit-only shadow answerer, never the decision (hermetic).
++
++Every answerer here is a plain fake function: no model calls, no network, no store.
++"""
++from __future__ import annotations
++
++import copy
++
++import pytest
++
++from plangraph.planner import routing
++from plangraph.planner.shadow import (ENV_FLAG, ENV_LOG, enabled, read_rows,
++                                      record_outcome, route_with_shadow, summarize)
++
++
++def card(**kw):
++    base = {"outcome": "do it", "estimate_tokens": 40000, "risk_tags": [],
++            "window_class": None}
++    base.update(kw)
++    return base
++
++
++def agree_answer(card_, route):
++    return {"legs": [route.legs[0].id], "window_class": route.window_class}
++
++
++def disagree_answer(card_, route):
++    return {"legs": ["never-a-real-leg"], "window_class": "1m"}
++
++
++def rules_of(card_):
++    return routing.route_card(card_)
++
++
++# --- flag --------------------------------------------------------------------------
++
++@pytest.mark.parametrize("value", ["1", "true", "TRUE", "Yes", "on", " On "])
++def test_enabled_accepts_only_the_on_values(value):
++    assert enabled({ENV_FLAG: value}) is True
++
++
++@pytest.mark.parametrize("value", ["", "0", "off", "no", "maybe", None])
++def test_enabled_default_off(value):
++    assert enabled({ENV_FLAG: value} if value is not None else {}) is False
++
++
++def test_enabled_reads_os_environ_by_default(monkeypatch):
++    monkeypatch.delenv(ENV_FLAG, raising=False)
++    assert enabled() is False
++    monkeypatch.setenv(ENV_FLAG, "1")
++    assert enabled() is True
++
++
++# --- routing stays the rules' decision ---------------------------------------------
++
++def test_off_by_default_writes_nothing_and_returns_the_rules_route(tmp_path, monkeypatch):
++    monkeypatch.delenv(ENV_FLAG, raising=False)
++    monkeypatch.delenv(ENV_LOG, raising=False)
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=agree_answer, log_path=str(log))
++    assert did is None
++    assert got == rules_of(c)
++    assert not log.exists()
++
++
++def test_enabled_without_answerer_writes_nothing(tmp_path, monkeypatch):
++    monkeypatch.delenv(ENV_LOG, raising=False)
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A")
++    got, did = route_with_shadow(c, env={ENV_FLAG: "1"}, log_path=str(log))
++    assert did is None
++    assert got == rules_of(c)
++    assert not log.exists()
++
++
++def test_enabled_with_no_resolved_log_path_writes_nothing(tmp_path, monkeypatch):
++    monkeypatch.delenv(ENV_LOG, raising=False)
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=agree_answer, env={ENV_FLAG: "1"})
++    assert (got, did) == (rules_of(c), None)
++    assert list(tmp_path.iterdir()) == []
++
++
++def test_shadow_disagreeing_never_alters_the_returned_route(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=disagree_answer, log_path=str(log),
++                                 env={ENV_FLAG: "1"})
++    assert got == rules_of(c)
++    row = read_rows(str(log))[0]
++    assert row["id"] == did
++    assert row["agree"] is False
++    assert row["shadow"]["legs"] == ["never-a-real-leg"]
++
++
++# --- the audit row -----------------------------------------------------------------
++
++def test_env_on_and_fake_answerer_write_one_decision_row(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=agree_answer, log_path=str(log),
++                                 env={ENV_FLAG: "ON"})
++    rules = rules_of(c)
++    assert did is not None and len(did) == 32
++    assert got == rules
++    rows = read_rows(str(log))
++    assert len(rows) == 1
++    row = rows[0]
++    assert row["v"] == 1
++    assert row["event"] == "decision"
++    assert row["id"] == did
++    assert row["card_key"] == "A"
++    assert row["ts"].endswith("Z")
++    assert row["rules"] == {"window_class": rules.window_class,
++                            "legs": [leg.id for leg in rules.legs],
++                            "review_seats": rules.review_seats,
++                            "reasons": list(rules.reasons)}
++    assert row["shadow"] == {"legs": [rules.legs[0].id],
++                             "window_class": rules.window_class}
++    assert row["shadow_error"] is None
++    assert row["agree"] is True
++
++
++def test_flag_and_log_path_resolve_from_the_environment(tmp_path, monkeypatch):
++    log = tmp_path / "shadow.jsonl"
++    monkeypatch.setenv(ENV_FLAG, "yes")
++    monkeypatch.setenv(ENV_LOG, str(log))
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=agree_answer)
++    assert got == rules_of(c)
++    rows = read_rows(str(log))
++    assert [r["event"] for r in rows] == ["decision"]
++    assert rows[0]["id"] == did
++
++
++def test_answerer_failure_is_logged_and_ignored(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A")
++    rules = rules_of(c)
++
++    def boom(card_, route):
++        raise RuntimeError("kaboom " + "x" * 900)
++
++    got, did = route_with_shadow(c, answerer=boom, log_path=str(log),
++                                 env={ENV_FLAG: "1"})
++    assert got == rules
++    rows = read_rows(str(log))
++    assert len(rows) == 1
++    row = rows[0]
++    assert row["id"] == did
++    assert row["shadow"] is None
++    assert row["agree"] is None
++    assert row["shadow_error"].startswith("RuntimeError: kaboom")
++    assert row["shadow_error"] == "RuntimeError: " + ("kaboom " + "x" * 900)[:200]
++
++
++def test_answerer_mutation_does_not_leak_to_the_caller(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A", risk_tags=[])
++    before = copy.deepcopy(c)
++    seen = []
++
++    def mutate(card_, route):
++        card_["outcome"] = "clobbered"
++        card_["risk_tags"].append("money")
++        card_["heldout_check"] = "leaked"
++        seen.append(card_)
++        return {"legs": [route.legs[0].id]}
++
++    route_with_shadow(c, answerer=mutate, log_path=str(log), env={ENV_FLAG: "1"})
++    assert c == before
++    assert seen and seen[0] is not c
++    # the leaked field the answerer wrote into its copy is redacted from the row
++    assert "leaked" not in log.read_text()
++
++
++def test_unwritable_log_path_is_swallowed(tmp_path):
++    blocked = tmp_path / "as-dir"
++    blocked.mkdir()
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=agree_answer, log_path=str(blocked),
++                                 env={ENV_FLAG: "1"})
++    assert got == rules_of(c)
++    assert did is not None
++    assert record_outcome(did, {"exit_class": "ok"}, log_path=str(blocked),
++                          env={ENV_FLAG: "1"}) is False
++
++
++# --- outcomes and summary ----------------------------------------------------------
++
++def test_record_outcome_appends_outcome_joined_by_summarize(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A")
++    got, did = route_with_shadow(c, answerer=agree_answer, log_path=str(log),
++                                 env={ENV_FLAG: "1"})
++    written = record_outcome(did, {"exit_class": "ok", "leg": got.legs[0].id},
++                             log_path=str(log), env={ENV_FLAG: "1"})
++    assert written is True
++    rows = read_rows(str(log))
++    assert [r["event"] for r in rows] == ["decision", "outcome"]
++    out = rows[1]
++    assert out["v"] == 1
++    assert out["id"] == did
++    assert out["ts"].endswith("Z")
++    assert out["outcome"] == {"exit_class": "ok", "leg": got.legs[0].id}
++    assert summarize(rows) == {"decisions": 1, "outcomes": 1, "agree": 1,
++                               "disagree": 0, "shadow_errors": 0}
++
++
++def test_record_outcome_false_when_disabled_or_id_missing(tmp_path, monkeypatch):
++    monkeypatch.delenv(ENV_FLAG, raising=False)
++    monkeypatch.delenv(ENV_LOG, raising=False)
++    log = tmp_path / "shadow.jsonl"
++    assert record_outcome("deadbeef", {"exit_class": "ok"},
++                          log_path=str(log)) is False
++    assert record_outcome(None, {"exit_class": "ok"}, log_path=str(log),
++                          env={ENV_FLAG: "1"}) is False
++    assert record_outcome("deadbeef", {"exit_class": "ok"},
++                          env={ENV_FLAG: "1"}) is False
++    assert not log.exists()
++
++
++def test_summarize_joins_counts_across_rows(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    for answerer in (agree_answer, disagree_answer):
++        _, did = route_with_shadow(card(key="A"), answerer=answerer,
++                                   log_path=str(log), env={ENV_FLAG: "1"})
++        assert record_outcome(did, {"exit_class": "ok"}, log_path=str(log),
++                              env={ENV_FLAG: "1"}) is True
++
++    def boom(card_, route):
++        raise ValueError("nope")
++
++    route_with_shadow(card(key="A"), answerer=boom, log_path=str(log),
++                      env={ENV_FLAG: "1"})
++    rows = read_rows(str(log))
++    assert len(rows) == 5
++    assert summarize(rows) == {"decisions": 3, "outcomes": 2, "agree": 1,
++                               "disagree": 1, "shadow_errors": 1}
++
++
++# --- redaction and the tolerant reader --------------------------------------------
++
++def test_heldout_check_and_card_text_never_reach_the_log(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    c = card(key="A", heldout_check="HELDOUT-MARKER expect 42",
++             check_cmd="pytest -q tests/test_a.py", write_set=["src/a.py"])
++
++    def echo_card(card_, route):
++        return {"legs": [route.legs[0].id], "echo": dict(card_)}
++
++    route_with_shadow(c, answerer=echo_card, log_path=str(log), env={ENV_FLAG: "1"})
++    text = log.read_text()
++    assert text.strip()
++    for secret in ("HELDOUT-MARKER", "heldout_check", "check_cmd", "write_set",
++                   "pytest -q", "src/a.py"):
++        assert secret not in text
++    row = read_rows(str(log))[0]
++    assert row["card_key"] == "A"
++    shadow = row["shadow"]
++    assert shadow["legs"] == [rules_of(c).legs[0].id]
++    assert shadow["echo"]["outcome"] == "do it"
++    for secret in ("heldout_check", "check_cmd", "write_set"):
++        assert secret not in shadow["echo"]
++
++
++def test_read_rows_skips_bad_lines_and_missing_files(tmp_path):
++    log = tmp_path / "shadow.jsonl"
++    log.write_text('{"v": 1, "event": "decision"}\n\nnot json at all\n'
++                   '"just a string"\n[1, 2]\n{"v": 2, "event": "outcome"}\n')
++    rows = read_rows(str(log))
++    assert [r["v"] for r in rows] == [1, 2]
++    assert read_rows(tmp_path / "missing.jsonl") == []
+
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)
