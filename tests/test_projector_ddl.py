@@ -184,9 +184,10 @@ def pg_versions(raw):
 @needs_pg
 def test_pg_migrations_apply_to_v3(pg):
     raw, name, db_pg = pg
-    assert db_pg.migrate(raw, name) == [1, 2, 3]
+    everything = list(range(1, schema_pg.LATEST + 1))
+    assert db_pg.migrate(raw, name) == everything
     assert TABLES <= pg_tables(raw, name)
-    assert pg_versions(raw) == [1, 2, 3]
+    assert pg_versions(raw) == everything
     assert db_pg.migrate(raw, name) == []
 
 
@@ -198,9 +199,9 @@ def test_pg_upgrade_from_v2_adds_the_projector_tables(pg, monkeypatch):
     assert db_pg.migrate(raw, name) == [1, 2]
     assert not TABLES & pg_tables(raw, name)
     monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
-    assert db_pg.migrate(raw, name) == [3]
+    assert db_pg.migrate(raw, name) == list(range(3, schema_pg.LATEST + 1))
     assert TABLES <= pg_tables(raw, name)
-    assert pg_versions(raw) == [1, 2, 3]
+    assert pg_versions(raw) == list(range(1, schema_pg.LATEST + 1))
 
 
 @needs_pg
