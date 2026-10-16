@@ -39,7 +39,7 @@ _PATH_EXT = re.compile(r"\.[0-9A-Za-z]{1,5}\Z")
 _ENCLOSERS = "\"'`()[]{}<>"
 _NEAR = 120
 #: the text fields a create/edit/import carries (``description`` is its own column).
-GUARDED_FIELDS = ("title", "note", "done_criteria", "description")
+GUARDED_FIELDS = ("title", "note", "done_criteria", "description", "estimate_src")
 
 
 def _path_like(text, start, end):

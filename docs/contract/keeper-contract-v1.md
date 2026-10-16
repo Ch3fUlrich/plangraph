@@ -126,7 +126,8 @@ ones are `null` when unset): `key`, `project`, `id`, `title`, `description`,
 `kind`, `track`, `owner`, `state`, `priority` (int, higher first), `epoch`,
 `round`, `claimed_by`, `delegate`, `lease_until`, `reviewer`, `depends_on`
 (keys), `done_criteria`, `evidence_kinds`, `operator` (bool), `review_tier`,
-`review_waiver`, `estimate_h`, `host`, `wait`, `note`, `corrects`, `fixes`,
+`review_waiver`, `estimate_h`, `estimate_src`, `host`, `wait`, `note`,
+`corrects`, `fixes`,
 plus derived `created_at`, `done_at`, `reviewed`, `merged`.
 
 * `kind`: `lane`, `gate`, `goal`, `question`, `decision`, `operator_task`.

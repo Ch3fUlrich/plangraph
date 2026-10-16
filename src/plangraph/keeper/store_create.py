@@ -30,7 +30,8 @@ from .store_tiers import (
 )
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
-             "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "done_criteria", "evidence_kinds",
+             "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
+             "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
@@ -54,12 +55,19 @@ def _defined_payload(fields):
     """``item_defined`` payload: the changed field names plus the new tier value.
 
     The fold replays this to reconstruct ``review_tier``; it needs the value,
-    not just the name, so ``verify_integrity`` can agree with the table.
+    not just the name, so ``verify_integrity`` can agree with the table.  The
+    estimate pair rides along for the same reason: an event must say what the
+    edit actually stored.  ``fold`` ignores names it does not compare
+    (``estimate_h``/``estimate_src`` are definition columns, not cached ones),
+    so carrying them keeps the event honest without touching the replay.
     """
     payload = {"fields": sorted(fields)}
     if "review_tier" in fields:
         payload["review_tier"] = fields["review_tier"]
     for name in SMALL_FIELDS:
+        if name in fields:
+            payload[name] = fields[name]
+    for name in ("estimate_h", "estimate_src"):
         if name in fields:
             payload[name] = fields[name]
     return payload
@@ -322,7 +330,28 @@ class CreateMixin:
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
         edit_fields = dict(rest)
-        self._check_text(edit_fields, key)
+        self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
+        # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
+        # audit-meta ``default`` marker keeps flagging the item forever.  An
+        # ``estimate_h`` edit that does not say where the number came from
+        # attributes it to the editing principal and records the auto-fill.
+        auto_src = False
+        effective_h = edit_fields.get("estimate_h", item.get("estimate_h"))
+        if "estimate_h" in edit_fields and effective_h is None:
+            # Clearing the estimate clears its source; a source cannot outlive it.
+            if edit_fields.get("estimate_src") is not None:
+                raise Refused("validation", "estimate_src needs an estimate_h")
+            edit_fields["estimate_src"] = None
+        elif "estimate_h" in edit_fields and "estimate_src" not in edit_fields:
+            edit_fields["estimate_src"] = principal.name
+            auto_src = True
+        if edit_fields.get("estimate_src") is not None or (
+                "estimate_src" in edit_fields and effective_h is not None):
+            src = edit_fields["estimate_src"]
+            if not isinstance(src, str) or not src.strip():
+                raise Refused("validation", "estimate_src must be a non-empty string")
+            if effective_h is None:
+                raise Refused("validation", "estimate_src needs an estimate_h")
         check_model_fields(edit_fields, item["kind"], key)
         if "review_tier" in edit_fields:
             validated_review_tier(edit_fields["review_tier"])
@@ -429,6 +458,10 @@ class CreateMixin:
                         "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
                         (key, dep))
             payload = _defined_payload(edit_fields)
+            if auto_src:
+                # The event says the source was written by this edit, not asked
+                # for by the caller (``fold`` ignores the extra key).
+                payload["estimate_src_auto"] = True
             if tier_edit:
                 # D-434 marker: the state the router re-tiered through; the
                 # fold reads it to replay the round bump that voids verdicts.
