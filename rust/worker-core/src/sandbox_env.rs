@@ -73,11 +73,21 @@ fn confine_with(cmd: &mut Command, home: &Path, pass: fn(&str) -> bool) {
 /// next to the worktree rather than in it so it never shows up as an
 /// untracked change in the attempt's diff.
 pub fn home_for(dir: &Path) -> PathBuf {
+    home_with_suffix(dir, ".home")
+}
+
+/// The private `HOME` of the card check child of slot `dir`: `<dir>.home-check`.
+/// Never the harness HOME: a harness may persist a login there.
+pub fn check_home_for(dir: &Path) -> PathBuf {
+    home_with_suffix(dir, ".home-check")
+}
+
+fn home_with_suffix(dir: &Path, suffix: &str) -> PathBuf {
     let mut name = dir
         .file_name()
         .map(|n| n.to_os_string())
         .unwrap_or_else(|| OsString::from("attempt"));
-    name.push(".home");
+    name.push(suffix);
     dir.with_file_name(name)
 }
 
@@ -90,7 +100,15 @@ pub struct HomeGuard {
 
 impl HomeGuard {
     pub fn for_dir(dir: &Path) -> std::io::Result<HomeGuard> {
-        let path = home_for(dir);
+        Self::at(home_for(dir))
+    }
+
+    /// The check child gets its own HOME (see [`check_home_for`]).
+    pub fn for_check(dir: &Path) -> std::io::Result<HomeGuard> {
+        Self::at(check_home_for(dir))
+    }
+
+    fn at(path: PathBuf) -> std::io::Result<HomeGuard> {
         let owned = !path.exists();
         std::fs::create_dir_all(&path)?;
         Ok(HomeGuard { path, owned })
@@ -218,5 +236,20 @@ mod tests {
             assert!(g.path().is_dir());
         }
         assert!(!home_for(&dir).exists());
+    }
+
+    #[test]
+    fn check_home_is_separate_from_the_harness_home() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("c1-1");
+        let h = HomeGuard::for_dir(&dir).unwrap();
+        std::fs::write(h.path().join("login-token"), "secret").unwrap();
+        let c = HomeGuard::for_check(&dir).unwrap();
+        assert_ne!(h.path(), c.path());
+        assert_eq!(c.path(), root.path().join("c1-1.home-check"));
+        assert!(!c.path().join("login-token").exists());
+        drop(c);
+        assert!(!check_home_for(&dir).exists());
+        assert!(h.path().join("login-token").exists());
     }
 }
