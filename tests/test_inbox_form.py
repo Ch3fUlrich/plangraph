@@ -12,6 +12,7 @@ def test_page_is_self_contained_and_safe():
         assert banned not in PAGE, banned
     assert not re.search(r"\bon\w+\s*=", PAGE)
     assert not re.search(r"\bsrc\s*=", PAGE)
+    assert "b.msg" in PAGE
     assert "/v1/questions" in PAGE
     assert "/v1/answer_question" in PAGE
     assert 'type="password"' in PAGE

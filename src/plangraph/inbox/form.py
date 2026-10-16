@@ -39,7 +39,7 @@ function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=c
 function msg(t,cls){var m=$("msg");m.className=cls||"mut";m.textContent=t}
 function hdr(json){var h={Authorization:"Bearer "+token};if(json)h["Content-Type"]="application/json";return h}
 function errText(r,b){
-  var m=b&&(b.error||b.detail||b.message);
+  var m=b&&(b.msg||b.error);
   if(r.status===403)m="this token may not answer; use the router token";
   return "error: "+(m||("HTTP "+r.status));
 }
