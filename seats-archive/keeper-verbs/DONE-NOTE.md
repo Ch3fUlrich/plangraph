@@ -5,3 +5,4 @@ Commit author/Co-Authored-By on L2 commits = harness default (Claude), NOT the w
 - #41 PG-FOLD-UNKNOWN-TYPE 1ca20d60: mimo runs 20261016-212037-pg-fold-unknown-type-wri-c83f50 + 20261016-212937-alias-under-test-389ae4. Claude: 0 lines.
 No no_free_leg_available fallback. Seats qwen3.8-flash/qodercli (alibaba) + gpt-oss (openai) countable (both != writer xiaomi). From now on: trailer line 'Writer: <model> <run id>'.
 Live order: deploy FOLD (#41) first or inside the 5-verb batch; batch packet = roll forward only after first new event type.
+- #42 PG-ESTIMATE-SRC-EDIT 7fa80529: mimo run 20261016-213742-pg-estimate-src-edit-wri-f8cb49 (tool-using opencode on coding.vm, started before D-437 switch). Co-Authored-By Claude = harness default. Judge FIX round pending.
