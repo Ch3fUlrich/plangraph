@@ -179,7 +179,7 @@ def test_server_start_stop_loop_is_clean(w, tmp_path):
     cfg = make_cfg(tmp_path, w)
     for _ in range(20):
         server = api.make_server(w.store, cfg, port=0)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         thread.start()
         server.shutdown()
         server.server_close()

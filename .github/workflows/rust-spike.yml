@@ -3,34 +3,33 @@ name: rust-spike
 # Offline tests of the Temporal SDK spike (history replay; no server needed).
 
 on:
-  push:
+  pull_request:
     branches: [main]
     paths:
       - "rust/spikes/**"
       - ".github/workflows/rust-spike.yml"
-  pull_request:
-    paths:
-      - "rust/spikes/**"
-      - ".github/workflows/rust-spike.yml"
+      - "!**/*.md"
+      - "!docs/**"
+      - "!CHANGELOG*"
+  workflow_dispatch:
 
-# D-1338: lane branches run CI via their PR only; a newer push cancels the older run.
+# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   temporal-spike:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc (needed by the Temporal protos build script)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
-      - name: Rust toolchain
-        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Install protoc and build tools (protoc is needed by the Temporal protos build script)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler build-essential pkg-config
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/cache@v4
         with:
           path: rust/spikes/temporal-spike/target

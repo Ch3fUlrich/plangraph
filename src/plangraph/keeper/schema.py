@@ -12,9 +12,24 @@ moves a row *onto* a locked key is as forbidden as one that moves it off.
 from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
-           "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL"]
+           "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
+           "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
+
+#: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
+#: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
+STATES = ("open", "ready", "claimed", "in_review", "done", "cancelled", "running",
+          "needs_input", "waiting", "failed", "parked")
+
+#: design 4.5: how an attempt ended.
+EXIT_CLASSES = ("ok", "check_fail", "flaky_check", "usage_limit", "outage",
+                "lease_lost", "worker_crash", "stall", "timeout", "rebase_conflict",
+                "merge_refused", "probe_fail", "contract_defect", "needs_input",
+                "cancelled")
+
+WINDOW_CLASSES = ("128k", "256k", "1m")
+RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-step")
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
 
@@ -25,6 +40,7 @@ EVENT_TYPES = (
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "kind_set",
+    "state_set",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -84,6 +100,111 @@ BEGIN SELECT RAISE(ABORT, 'outbox_seen is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS trg_outbox_seen_append_only_delete
 BEFORE DELETE ON outbox_seen
 BEGIN SELECT RAISE(ABORT, 'outbox_seen is append-only'); END;
+"""
+
+def _in(values):
+    return ",".join(f"'{v}'" for v in values)
+
+
+#: design 3 (W2): cards, attempts, decisions, questions/answers, budget.  Only
+#: TEXT/INTEGER/REAL columns and portable SQL (``schema_pg`` Migration 2 is the
+#: logical twin).  List-valued columns hold canonical JSON text.  ``attempts``,
+#: ``decisions`` and ``answers`` are append-only.  ``IF NOT EXISTS`` so
+#: ``db._upgrade`` can install it at open on a v9 database.
+DESIGN3_DDL = f"""
+CREATE TABLE IF NOT EXISTS cards (
+    key             TEXT PRIMARY KEY REFERENCES items(key),
+    outcome         TEXT NOT NULL,
+    read_set        TEXT NOT NULL DEFAULT '[]',
+    write_set       TEXT NOT NULL DEFAULT '[]',
+    exports         TEXT NOT NULL DEFAULT '[]',
+    forbid_paths    TEXT NOT NULL DEFAULT '[]',
+    check_cmd       TEXT,
+    smoke_checks    TEXT NOT NULL DEFAULT '[]',
+    heldout_check   TEXT,
+    window_class    TEXT CHECK (window_class IN ({_in(WINDOW_CLASSES)})),
+    risk_tags       TEXT NOT NULL DEFAULT '[]',
+    estimate_tokens INTEGER,
+    updated_at      TEXT
+);
+
+CREATE TABLE IF NOT EXISTS attempts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    key          TEXT NOT NULL REFERENCES items(key),
+    n            INTEGER NOT NULL,
+    harness      TEXT,
+    model        TEXT,
+    combo        TEXT,
+    class        TEXT,
+    started_at   TEXT,
+    ended_at     TEXT,
+    exit_class   TEXT NOT NULL CHECK (exit_class IN ({_in(EXIT_CLASSES)})),
+    tokens_in    INTEGER,
+    tokens_out   INTEGER,
+    cost         REAL,
+    run_id       TEXT,
+    workflow_id  TEXT,
+    log_ref      TEXT,
+    UNIQUE (key, n)
+);
+CREATE INDEX IF NOT EXISTS idx_attempts_key ON attempts(key);
+CREATE TRIGGER IF NOT EXISTS trg_attempts_append_only_update
+BEFORE UPDATE ON attempts
+BEGIN SELECT RAISE(ABORT, 'attempts are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_attempts_append_only_delete
+BEFORE DELETE ON attempts
+BEGIN SELECT RAISE(ABORT, 'attempts are append-only'); END;
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id      TEXT PRIMARY KEY,
+    ts      TEXT NOT NULL,
+    actor   TEXT,
+    kind    TEXT NOT NULL CHECK (kind IN ('operator','judge')),
+    text    TEXT NOT NULL,
+    closes  TEXT NOT NULL DEFAULT '[]',
+    waives  TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TRIGGER IF NOT EXISTS trg_decisions_append_only_update
+BEFORE UPDATE ON decisions
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_decisions_append_only_delete
+BEFORE DELETE ON decisions
+BEGIN SELECT RAISE(ABORT, 'decisions are append-only'); END;
+
+CREATE TABLE IF NOT EXISTS questions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    key            TEXT NOT NULL REFERENCES items(key),
+    text           TEXT NOT NULL,
+    default_answer TEXT,
+    deadline       TEXT,
+    risk_tags      TEXT NOT NULL DEFAULT '[]',
+    state          TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','answered','timeout')),
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_questions_key ON questions(key);
+
+CREATE TABLE IF NOT EXISTS answers (
+    question_id INTEGER PRIMARY KEY REFERENCES questions(id),
+    ts          TEXT NOT NULL,
+    actor       TEXT,
+    text        TEXT NOT NULL,
+    source      TEXT NOT NULL CHECK (source IN ('answer','question_timeout'))
+);
+CREATE TRIGGER IF NOT EXISTS trg_answers_append_only_update
+BEFORE UPDATE ON answers
+BEGIN SELECT RAISE(ABORT, 'answers are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_answers_append_only_delete
+BEFORE DELETE ON answers
+BEGIN SELECT RAISE(ABORT, 'answers are append-only'); END;
+
+CREATE TABLE IF NOT EXISTS budget (
+    provider TEXT NOT NULL,
+    day      TEXT NOT NULL,
+    tokens   INTEGER NOT NULL DEFAULT 0,
+    cost     REAL NOT NULL DEFAULT 0,
+    meter    REAL,
+    PRIMARY KEY (provider, day)
+);
 """
 
 TABLES = """
@@ -316,4 +437,4 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
+SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + DESIGN3_DDL

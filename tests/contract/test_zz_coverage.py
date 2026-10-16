@@ -12,6 +12,12 @@ from contract_harness import CALLED
 
 
 def test_every_route_in_the_contract_was_called(request, kp):
+    # Under xdist without loadgroup the contract files are split across
+    # workers, so process-global CALLED is incomplete; skip instead of failing.
+    _dist = request.config.getoption("dist", None)
+    _loadgroup = request.config.getoption("loadgroup", False)
+    if hasattr(request.config, "workerinput") and _dist != "loadgroup" and not _loadgroup:
+        pytest.skip("contract coverage needs --dist loadgroup under xdist")
     here = Path(__file__).parent
     wanted = {p.name for p in here.glob("test_*.py")}
     ran = {Path(str(item.fspath)).name for item in request.session.items}

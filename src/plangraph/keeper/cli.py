@@ -192,6 +192,8 @@ def _add_admin(sub):
     init = commands.add_parser("init", help="create the DB schema")
     init.add_argument("--router", help="also create a router principal")
 
+    commands.add_parser("migrate", help="apply pending schema migrations (Postgres) / upgrade (SQLite)")
+
     add = commands.add_parser("add-principal")
     add.add_argument("name")
     add.add_argument("--role", required=True)
@@ -202,6 +204,14 @@ def _add_admin(sub):
     revoke.add_argument("name")
 
     commands.add_parser("verify", help="verify the hash chain and cache")
+
+    copy = commands.add_parser("copy-to-pg", help="W3: copy a SQLite keeper snapshot into an empty Postgres keeper")
+    mode = copy.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", dest="dry_run", action="store_true",
+                      help="read the source only: counts, chain head, chain check")
+    mode.add_argument("--apply", action="store_true",
+                      help="copy in one transaction, verify, else roll back")
+    copy.add_argument("--src", default=None, help="SQLite keeper file (default: the configured db)")
 
     imp = commands.add_parser("import")
     imp.add_argument("dir")

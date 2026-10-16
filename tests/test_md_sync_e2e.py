@@ -277,6 +277,7 @@ def test_half_failing_apply_leaves_db_unchanged(world, srv, token, site, tmp_pat
 
 
 def test_answers_changed_between_read_and_apply_is_refused(world, srv, token, site, monkeypatch):
+    monkeypatch.setattr(md_sync, "SLEEP", lambda _s: None)
     real = md_sync.write_batch
 
     def tamper(*a, **k):

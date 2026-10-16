@@ -4,39 +4,39 @@ name: rust-worker
 # protoc is required because the Temporal protos build script needs it.
 
 on:
-  push:
+  pull_request:
     branches: [main]
     paths:
       - "rust/worker/**"
       - "rust/worker-core/**"
       - ".github/workflows/rust-worker.yml"
-  pull_request:
-    paths:
-      - "rust/worker/**"
-      - "rust/worker-core/**"
-      - ".github/workflows/rust-worker.yml"
+      - "!**/*.md"
+      - "!docs/**"
+      - "!CHANGELOG*"
+  workflow_dispatch:
 
 # D-1338: lane branches run CI via their PR only; a newer push cancels the older run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   worker:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 45
     defaults:
       run:
         working-directory: rust/worker
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc (needed by the Temporal protos build script)
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - name: Toolchain
-        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Install protoc and build tools (protoc is needed by the Temporal protos build script)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler build-essential pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: actions/cache@v4
         with:
           path: |

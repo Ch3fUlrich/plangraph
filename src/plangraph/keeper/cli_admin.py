@@ -35,7 +35,7 @@ def _config(args):
 
 
 def _open(cfg, *, create=False):
-    return kdb.open_db(cfg.db, create=create)
+    return kdb.open_db(cfg.db, create=create, **cfg.db_options)
 
 
 def _cmd_prune_backups(args) -> int:
@@ -80,6 +80,14 @@ def _cmd_init(args, cfg) -> int:
     return 0
 
 
+def _cmd_migrate(args, cfg) -> int:
+    """Bring the schema to the current version (Postgres runs the pending migrations)."""
+    postgres = kdb.select_backend(cfg.db_options.get("backend")) == "postgres"
+    _open(cfg, create=postgres).close()      # SQLite upgrades on every open; Postgres migrates here
+    print("schema up to date")
+    return 0
+
+
 def _cmd_add_principal(args, cfg) -> int:
     projects = [p for p in (args.projects or "").split(",") if p]
     conn = _open(cfg)
@@ -116,6 +124,12 @@ def _cmd_verify(args, cfg) -> int:
         return 2
     print("chain and cache integrity ok")
     return 0
+
+
+def _cmd_copy_to_pg(args, cfg) -> int:
+    """W3: SQLite snapshot -> empty Postgres keeper (``--dry-run`` reads the source only)."""
+    from . import copy_to_pg
+    return copy_to_pg.run(cfg, src=args.src, apply=args.apply)
 
 
 def _cmd_import(args, cfg) -> int:
@@ -208,9 +222,11 @@ _COMMANDS = {
     "verify-snapshot": _cmd_verify_snapshot,
     "verify-anchor": _cmd_verify_anchor,
     "init": _cmd_init,
+    "migrate": _cmd_migrate,
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,
     "verify": _cmd_verify,
+    "copy-to-pg": _cmd_copy_to_pg,
     "import": _cmd_import,
     "export": _cmd_export,
 }

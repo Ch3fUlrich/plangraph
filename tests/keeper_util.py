@@ -58,9 +58,10 @@ class FakeVerifier:
 class World:
     """A seeded keeper DB with principals, a store and fake verifiers."""
 
-    def __init__(self, tmp_path, *, create=True):
+    def __init__(self, tmp_path, *, create=True, backend=None, dsn=None):
         self.path = Path(tmp_path) / "keeper.db"
-        self.conn = kdb.open_db(self.path, create=create)
+        # backend=None follows PG_KEEPER_BACKEND, so the same tests run on Postgres in CI.
+        self.conn = kdb.open_db(self.path, create=create, backend=backend, dsn=dsn)
         self.clock = Clock()
         self.verifiers = {
             "decision": FakeVerifier(),
