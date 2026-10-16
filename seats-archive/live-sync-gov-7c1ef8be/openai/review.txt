@@ -1,0 +1,62 @@
+**V1 grant completeness**  
+*File:* docs/plan/rethink/live-sync-3fd91bd6.md (section “Grants finding”)  
+*Evidence:*  
+
+- “ALTER DEFAULT PRIVILEGES `FOR ROLE keeper IN SCHEMA keeper` already grant `keeper_rt` SELECT,INSERT,UPDATE,**DELETE** on every new table (rehearsal: `metrics` had `DELETE,INSERT,SELECT,UPDATE` right after `migrate`, before any GRANT).”  
+- “Sequences: `metrics` has none … default privileges also give `keeper_rt` SELECT,USAGE on future sequences. No sequence grant needed.”  
+- Rehearsal log shows pre‑grant privileges on `metrics` include `SELECT,INSERT,UPDATE` and the explicit `GRANT SELECT, INSERT, UPDATE ON keeper.metrics TO keeper_rt` succeeds and is idempotent (grants already exist).  
+
+**Conclusion:** The runtime role `keeper_rt` can perform all SELECT/INSERT/UPDATE required for the upsert, no sequence is needed, and the explicit GRANT is correct and harmless if run again.
+
+---
+
+**V2 rollback validity**  
+*File:* src/plangraph/keeper/db_pg.py (`open_pg`)  
+*Function:* `open_pg` (lines showing the version check)  
+*Evidence:*  
+
+```python
+have = _installed(raw)
+...
+if have < schema_pg.LATEST:
+    raise RuntimeError(...run pg admin migrate)
+```
+
+- The check only raises when the *installed* version is **lower** than the code’s `LATEST`.  
+- With schema at migration 4 and old code (`b3d71096`) compiled with `LATEST = 3`, `have (4) < LATEST (3)` is false → no error, old daemon starts.  
+
+*Rehearsal log* (section “ROLLBACK PROOF”) shows the old daemon running on the migrated schema, performing reads/writes without failure.  
+
+**Conclusion:** Removing the drop‑in and restarting the old code is safe; the old daemon tolerates a newer schema and no state mismatch occurs.
+
+---
+
+**V3 migration ordering**  
+*File:* src/plangraph/keeper/db_pg.py (`migrate`)  
+*Function:* `migrate` (transaction & advisory lock)  
+*Evidence:*  
+
+- The migration runs inside `BEGIN … COMMIT` with `pg_advisory_xact_lock` ensuring atomicity.  
+- The runbook order (stop → dump → migrate → grant → drop‑in → start → verify) matches the required sequence: schema dump before any change, migration while keeper stopped, grant after schema is up‑to‑date, drop‑in applied before restart.  
+- Drop‑in naming `live-sync-z5-3fd91bd6.conf` is documented to sort after `z4` and before `zz-pg-backend.conf`, preserving correct precedence of systemd overrides.  
+
+**Conclusion:** The ordering is correct, migration is atomic, and drop‑in naming respects the intended load order.
+
+---
+
+**V4 secrets hygiene**  
+*File:* docs/plan/rethink/live-sync-3fd91bd6.md (steps 1‑10)  
+*Evidence:*  
+
+- All commands that need the DSN use `--env‑file ~/.config/plangraph/pg-keeper.dsn` or `pg-keeper-migrate.dsn`; the DSN value is never echoed or logged.  
+- The runbook explicitly states “Owner DSN file is read by name only; never print it.”  
+- Rehearsal log contains no raw DSN strings or token contents; only placeholders like `<router-tok>` are shown.  
+
+**Conclusion:** No DSN, password, or token is printed to stdout/stderr; environment files are referenced by name only, maintaining secret hygiene.
+
+---
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched src/ and docs/ for test‑specific conditionals, pytest/environment checks, __eq__/__hash__ overrides, and guard modifications: 0 hits
+
+VERDICT: pass

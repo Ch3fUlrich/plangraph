@@ -1,0 +1,344 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+You review a LIVE-SYNC RUNBOOK PACKET for a Postgres-backed task keeper (live b3d71096 -> T 3fd91bd6, adds PG migration 4 table `metrics`). Roles: `keeper` owns schema keeper (runs migrations); `keeper_rt` is the runtime role (DML only). Nothing was run live; a rehearsal on a restored copy is logged.
+Vectors (answer each under its own heading with file:function or doc-step evidence):
+V1 grant completeness: after the runbook, can the runtime role `keeper_rt` do everything the new verbs need on `metrics` (SELECT, INSERT, UPDATE for the ON CONFLICT upsert), including sequence privileges if metrics has any column that needs one? Is the explicit GRANT correct and idempotent?
+V2 rollback validity: is "remove drop-in + restart old code b3d71096 on schema 4" actually safe given open_pg/_installed code and the rehearsal log? Any case where the old code breaks (event types, columns, version check)?
+V3 migration ordering: is the runbook order (stop, dump, migrate as owner, grant, drop-in, start, verify) correct and safe? Is migrate atomic (single transaction, advisory lock)? Does the drop-in naming sort correctly relative to the existing z4 and zz-pg-backend drop-ins?
+V4 secrets hygiene: do any commands or the log print/embed DSN contents, tokens or passwords; are env files handled by name only?
+
+=== PACKET docs/plan/rethink/live-sync-3fd91bd6.md
+# KEEPER-LIVE-SYNC-5: live keeper b3d71096 -> origin/main T=3fd91bd6 (RT-P1-GOVERNOR, PG migration 4)
+
+Plan-Item: plangraph:RT-P1-GOVERNOR. Docs only; nothing here was run against the live keeper or the live schema.
+Judge conditions (server-L1-routing ACCEPT, DONE-NOTE governor-8c9b0616): (1) `pg admin migrate` as owner `keeper`; (2) `GRANT SELECT, INSERT, UPDATE ON keeper.metrics TO keeper_rt`; (3) rehearse on a restored copy, prove `set_metrics` as `keeper_rt` before the switch. All three are in the packet; (3) is done: `live-sync-3fd91bd6.rehearsal-log.txt`.
+Live now: b3d71096, Postgres schema `keeper` (owner `keeper`, runtime `keeper_rt` DML only, D-1500), drop-ins `live-sync-z4-b3d71096.conf` + `zz-pg-backend.conf`, DSN files `~/.config/plangraph/pg-keeper.dsn` (runtime) and `pg-keeper-migrate.dsn` (owner), each holding `PG_DSN=`.
+
+## 1. Review b3d71096..3fd91bd6 (keeper runtime)
+- **Migration 4 "governor: metrics"** (`schema_pg.MIGRATIONS`, `LATEST` 3 -> 4; SQLite `SCHEMA_VERSION` 10 -> 11, not used by the Postgres keeper): one `CREATE TABLE metrics(day, metric, value DOUBLE PRECISION, source, computed_at, PRIMARY KEY(day,metric))`. Additive: no ALTER, no sequence, no trigger, no data touched. `copy_to_pg.TABLES` gains `metrics` (irrelevant to the live PG).
+- **New verbs**: read `GET /v1/metrics?day=&since=&metric=` (any authenticated role); write `POST /v1/set_metrics` (roles `router`, `system`; others 403) and `POST /v1/governor_override` (`router`, `l1`, `system`, `spawner`; one `audit_log` row, no table). Both through new `ROLE_CHECKED_VERBS` (role checked in the store, `api_routes.py`). No new role, no new event type (`schema.EVENT_TYPES` unchanged), so `set_metrics` writes only `metrics` + an audit row, no event.
+- **Config keys / env**: none new in the keeper (no `config.py` change). Governor job env (`PG_URL`, `PG_TOKEN_FILE`, `PLANGRAPH_CLAUDE_PROJECTS_DIR`, `PLANGRAPH_WEEKLY_CAP_WEIGHTED`, `PLANGRAPH_PROVIDER_QUOTA`) is client-side; its timer is a separate operator step (`docs/governor.md`), not part of this sync.
+- **Other changes** (client/planner side, no keeper effect): `src/plangraph/governor/*`, `planner/{shadow,start,readiness,service}.py`, docs, SKILL.md.
+- **Grants finding**: ALTER DEFAULT PRIVILEGES `FOR ROLE keeper IN SCHEMA keeper` already grant `keeper_rt` SELECT,INSERT,UPDATE,**DELETE** on every new table (rehearsal: `metrics` had `DELETE,INSERT,SELECT,UPDATE` right after `migrate`, before any GRANT). So condition (2) is satisfied by default privileges; the explicit GRANT below is idempotent and kept for the record. DELETE is the same on every table (append-only ones are guarded by triggers); `metrics` has no trigger, so `keeper_rt` can delete metric rows. Optional hardening, not required: `REVOKE DELETE ON keeper.metrics FROM keeper_rt;` (rehearsal not run with it; the daemon never deletes metrics).
+- **Sequences**: `metrics` has none (PK is `(day,metric)`); default privileges also give `keeper_rt` SELECT,USAGE on future sequences. No sequence grant needed.
+- **Rollback property (proved in rehearsal)**: `open_pg` refuses only when `have < LATEST`; b3d71096 has LATEST 3 and the schema is at 4, so it starts, serves, verifies and writes. T adds no event type and no column to existing tables, so no state-mismatch like the 1b923e5 `state_set` case. Rollback = drop-in removal + restart; no dump restore needed (dump kept as insurance).
+
+## 2. Live runbook (build-L1, after routing GO; every command exact)
+Variables: `W=~/code/plangraph/.claude/worktrees`, `D=~/.local/share/plangraph`, `TS=$(date -u +%Y%m%dT%H%M%SZ)`, `B=$D/backups/live-sync-3fd91bd6-$TS`. Owner DSN file is read by name only; never print it.
+
+1. **Worktree for T** (no keeper impact):
+   `git -C ~/code/plangraph fetch origin && git -C ~/code/plangraph worktree add --detach $W/live-3fd91bd6 3fd91bd6` and `git -C $W/live-3fd91bd6 log -1 --format=%H` = `3fd91bd6e1ad4d715933ea68452c2247d75016f3`.
+2. **Pre-checks** (read-only): `systemctl --user show plangraph-keeper -p MainPID -p NRestarts -p ActiveState`; `$D/venv-pg/bin/python -c "import psycopg"`; free disk for `$B`.
+   Record counts file `$B/counts.pre`: `docker run --rm --network host --env-file ~/.config/plangraph/pg-keeper.dsn postgres:17-alpine sh -c 'psql "$PG_DSN" -Atc "select count(*) from keeper.events union all select count(*) from keeper.items union all select count(*) from keeper.evidence union all select count(*) from keeper.edges union all select count(*) from keeper.audit_log"'` (host has no pg_dump/psql; the dump client must be >= server 17.x).
+3. **Stop** (short outage; gives an exact dump and no writes between dump and migrate): `systemctl --user stop plangraph-keeper` then `systemctl --user is-active plangraph-keeper` = `inactive`.
+4. **Backup** (condition: dump of schema keeper as owner to backups/, sha256):
+   `mkdir -p $B && chmod 700 $B && docker run --rm --network host --env-file ~/.config/plangraph/pg-keeper-migrate.dsn -v $B:/b postgres:17-alpine sh -c 'pg_dump -d "$PG_DSN" -n keeper -Fc -f /b/keeper-schema.dump'` then `sha256sum $B/keeper-schema.dump | tee $B/keeper-schema.dump.sha256`; also `cp ~/.local/share/plangraph/keeper-pg.json $B/` and the unit dir copy `cp -a ~/.config/systemd/user/plangraph-keeper.service.d $B/service.d`.
+5. **Migrate as owner (condition 1)**:
+   `set -a; . ~/.config/plangraph/pg-keeper-migrate.dsn; set +a; PYTHONPATH=$W/live-3fd91bd6/src PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper $D/venv-pg/bin/python -m plangraph.keeper.cli --config $D/keeper-pg.json admin migrate` expect `schema up to date`; then `... admin verify` (same env) expect `chain and cache integrity ok`. Unset the exported `PG_DSN` afterwards (`unset PG_DSN`).
+6. **GRANT (condition 2)** as owner: `docker run --rm --network host --env-file ~/.config/plangraph/pg-keeper-migrate.dsn postgres:17-alpine sh -c 'psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE ON keeper.metrics TO keeper_rt" -Atc "select grantee,privilege_type from information_schema.table_privileges where table_schema=\$\$keeper\$\$ and table_name=\$\$metrics\$\$ and grantee=\$\$keeper_rt\$\$ order by 2"'` expect `GRANT` and at least SELECT, INSERT, UPDATE for `keeper_rt`.
+7. **Drop-in** `~/.config/systemd/user/plangraph-keeper.service.d/live-sync-z5-3fd91bd6.conf` (sorts after `z4`, before `zz-pg-backend.conf`, which keeps `ExecStart`/DSN):
+   ```
+   # LIVE-SYNC-5 GO <decision id>: live tree -> 3fd91bd6 (RT-P1-GOVERNOR, PG migration 4). Overrides live-sync-z4-b3d71096.conf.
+   # Rollback: remove this file, daemon-reload, restart (= b3d71096; schema 4 is compatible, proven in rehearsal).
+   [Service]
+   WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-3fd91bd6
+   Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-3fd91bd6/src
+   ```
+   `systemctl --user daemon-reload`.
+8. **Start**: `systemctl --user start plangraph-keeper`; `systemctl --user show plangraph-keeper -p MainPID -p NRestarts -p ActiveState`.
+   **Env check**: `tr '\0' '\n' </proc/$(systemctl --user show plangraph-keeper -p MainPID --value)/environ | grep -E '^(PYTHONPATH|PG_KEEPER_BACKEND|PG_SCHEMA)='` must show PYTHONPATH `.../live-3fd91bd6/src` (not `live-b3d71096`), backend postgres, schema keeper. (Do not print the `PG_DSN` line.)
+9. **Verify gates** (runtime role, `set -a; . ~/.config/plangraph/pg-keeper.dsn; set +a` in the same subshell, env as step 5 with T's `PYTHONPATH`):
+   - `... admin verify` = `chain and cache integrity ok`; `... admin verify-snapshot` = `snapshot signature ok`.
+   - `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat ~/.config/plangraph/router.token)" http://127.0.0.1:8787/v1/snapshot` = 200 (the same GET with no token = 401 is not required).
+   - **set_metrics as keeper_rt** (live write of one probe row; role-allowed token = router): `curl -s -X POST -H "Authorization: Bearer $(cat ~/.config/plangraph/router.token)" -H 'content-type: application/json' -d '{"day":"2026-10-16","items":[{"metric":"live_sync.probe","value":1,"source":"live-sync-z5"}]}' http://127.0.0.1:8787/v1/set_metrics` = `{"day": "2026-10-16", "count": 1}`; then `GET /v1/metrics?day=2026-10-16&metric=live_sync.probe` returns that row. A worker token on the same POST = 403.
+   - **Counts equal**: rerun the step-2 count query; events/items/evidence/edges equal `counts.pre` (audit_log legitimately grows by the audit rows of the reads/writes above); `metrics` = 1 row.
+   - Existing checks as for z4/zz: whoami, ready, percent rc0; `/v1/alarms` 200; md-sync and render timers still active.
+10. **Rollback** (any gate fails, restart loop, or `NRestarts` > 0):
+    `rm ~/.config/systemd/user/plangraph-keeper.service.d/live-sync-z5-3fd91bd6.conf && systemctl --user daemon-reload && systemctl --user restart plangraph-keeper`, then repeat `admin verify` with `PYTHONPATH=$W/live-b3d71096/src` and the env check (PYTHONPATH back to `live-b3d71096`). The metrics table and grant stay (additive; proven harmless to b3d71096: rehearsal steps 7/7b/8). Only if the schema itself is damaged (migration partly applied is impossible: migrate runs in one transaction) restore `$B/keeper-schema.dump` with `pg_restore` as owner into an empty schema, with the keeper stopped, and send a data-loss note (every write since the dump).
+
+## 3. Rehearsal summary (log: `live-sync-3fd91bd6.rehearsal-log.txt`)
+Throwaway `postgres:17-alpine` container (`--memory 1g`, loopback random port, removed at end; PG17 because the live server is 17.11, the brief said 16). Roles `keeper`, `keeper_rt` recreated; restored a read-only `pg_dump -n keeper` (via the runtime role, includes default privileges): 6595 events, schema at migration 3. Then with T code: `admin verify` before migrate refuses (`keeper schema is at migration 3, code needs 4`); `admin migrate` rc0, verify ok, migration 4 recorded; GRANT rc0; daemon under `keeper_rt` on a scratch port: `/v1/snapshot` 200, `set_metrics` as router 200 (2 rows), `GET /v1/metrics` returns them, worker 403, `governor_override` 200, `admin verify` + `verify-snapshot` ok, DDL as `keeper_rt` denied; events/items/evidence/edges counts unchanged by the migration. Rollback proof: b3d71096 daemon on the migrated schema starts, whoami/snapshot/percent 200, `set_metrics` 404 (route absent), old `admin verify` + `verify-snapshot` ok, old-code write (`add-principal`) rc0, then T `admin verify` ok again.
+
+=== REHEARSAL LOG
+# rehearsal 2026-10-16T19:48:36Z T=3fd91bd6 vs live b3d71096; PG17.11-alpine container ls3fd-pg17 --memory 1g 127.0.0.1:random port, trust auth; restore of pg_dump -n keeper (read-only via runtime role) sha256 75e5ca200aea914f..., roles keeper+keeper_rt recreated
+# PG deviation: brief said PG16; live server is 17.11 so rehearsal uses postgres:17-alpine
+# pre-state (live copy)
+$ psql: schema_migrations / default ACL / metrics?
+1
+2
+3
+keeper|S|{keeper_rt=rU/keeper}
+keeper|r|{keeper_rt=arwd/keeper}
+
+events=6595
+# setup: two scratch principals (router, worker) added to the copy as owner; tokens in 0600 scratch files
+# step 1: admin verify (T code, owner, before migrate; expect pending-migration refusal or ok)
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper@127.0.0.1:<pgport>/keeper admin verify
+admin: keeper schema is at migration 3, code needs 4: run pg admin migrate
+rc=2
+# step 2: backup of the copy (rehearsal analogue of live pg_dump)
+pg_dump rc=0 sha256=577e8b9abd9510e5
+# step 3: migrate as owner keeper
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper@127.0.0.1:<pgport>/keeper admin migrate
+schema up to date
+rc=0
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper@127.0.0.1:<pgport>/keeper admin verify
+chain and cache integrity ok
+rc=0
+1|baseline: sqlite schema v9
+2|design 3: cards, attempts, decisions, questions, answers, budget
+3|projector: applied, watermark, alarms
+4|governor: metrics
+# grants on metrics BEFORE explicit GRANT
+keeper|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+keeper_rt|DELETE,INSERT,SELECT,UPDATE
+keeper
+# (fix) scratch principals reh-router(router), reh-worker(worker) added to the T-migrated copy as owner
+# step 4: explicit GRANT (judge condition 2) as owner; default privileges had already given keeper_rt DML (+DELETE)
+$ psql -U keeper: GRANT SELECT, INSERT, UPDATE ON keeper.metrics TO keeper_rt
+GRANT
+rc=0
+keeper|DELETE,INSERT,REFERENCES,SELECT,TRIGGER,TRUNCATE,UPDATE
+keeper_rt|DELETE,INSERT,SELECT,UPDATE
+# keeper tables where keeper_rt lacks SELECT/INSERT/UPDATE (expect none):
+# sequences owned by/dependent on metrics (expect 0; PK (day,metric), no serial):
+0
+# counts after migrate
+events=6595 items=1802 audit_log=53400 metrics=0
+# counts before daemon (post-migrate+grant): aliases=12 audit_findings=36 edges=2645 events=6595 evidence=1104 items=1802 metrics=0 principals=26
+# step 5: daemon with T code as keeper_rt (runtime role, no DDL) on 127.0.0.1:18797
+$ env PYTHONPATH=<T>/src PG_DSN=<keeper_rt> PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper python -m plangraph.keeper.daemon --config scratch/keeper.json &
+# MainPID environ PYTHONPATH check (analogue of systemd): PYTHONPATH=<T 3fd91bd6 tree>/src
+$ curl http://127.0.0.1:18797/v1/health
+http=200
+{"status": "ok"}
+$ curl -H Authorization: Bearer <router-tok> http://127.0.0.1:18797/v1/snapshot
+http=200
+{"generated": "2026-10-16T19:49:12Z", "head": "2eefbe454e0f8f916405eb709b8cca78395d7b4f3c868 ...(truncated)
+$ curl -H Authorization: Bearer <router-tok> http://127.0.0.1:18797/v1/whoami
+http=200
+{"name": "reh-router", "role": "router", "projects": ["plangraph"], "family": null}
+$ curl -X POST -H Authorization: Bearer <router-tok> -H content-type: application/json -d {"day":"2026-10-15","items":[{"metric":"rehearsal.m1","value":1.5,"source":"rehearsal"},{"metric":"rehearsal.m2","value":2}]} http://127.0.0.1:18797/v1/set_metrics
+http=200
+{"day": "2026-10-15", "count": 2}
+$ curl -H Authorization: Bearer <router-tok> http://127.0.0.1:18797/v1/metrics?day=2026-10-15
+http=200
+{"rows": [{"day": "2026-10-15", "metric": "rehearsal.m1", "value": 1.5, "source": "rehearsal", "computed_at": "2026-10-16T19:49:12Z"}, {"day": "2026-10-15", "metric": "rehearsal.m2", "value": 2.0, "source": "", "computed_at": "2026-10-16T19:49:12Z"}]}
+$ curl -X POST -H Authorization: Bearer <worker-tok> -H content-type: application/json -d {"day":"2026-10-15","items":[{"metric":"x","value":1}]} http://127.0.0.1:18797/v1/set_metrics
+http=403
+{"error": "forbidden", "msg": "role 'worker' may not do this"}
+$ curl -X POST -H Authorization: Bearer <router-tok> -H content-type: application/json -d {"start_kind":"planner","initiator":"operator","reason":"rehearsal"} http://127.0.0.1:18797/v1/governor_override
+http=200
+{"logged": true}
+# step 6: verify gates (daemon up, keeper_rt)
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify-snapshot
+snapshot signature ok
+rc=0
+# metrics rows in PG: 2  as keeper_rt DML-only proof: set_metrics http=200 above wrote them
+# counts after: aliases=12 audit_findings=36 edges=2645 events=6595 evidence=1104 items=1802 metrics=2 principals=26
+# DDL denied for keeper_rt (runtime is DML only):
+ERROR:  permission denied for schema keeper
+LINE 1: CREATE TABLE keeper.zz(x int)
+                     ^
+# daemon stopped (T)
+# step 7: ROLLBACK PROOF: b3d71096 code (live worktree, PYTHONPATH only) as keeper_rt on schema at migration 4 (T wrote 2 metrics rows)
+$ env PYTHONPATH=<live-b3d71096>/src PG_DSN=<keeper_rt> ... python -m plangraph.keeper.daemon --config scratch/keeper.json &
+# old daemon alive: yes  PYTHONPATH=PYTHONPATH=<OLD b3d71096 tree>/src
+$ curl http://127.0.0.1:18797/v1/health
+http=200
+{"status": "ok"}
+$ curl -H Authorization: Bearer <router-tok> http://127.0.0.1:18797/v1/whoami
+http=200
+{"name": "reh-router", "role": "router", "projects": ["plangraph"], "family": null}
+$ curl -H Authorization: Bearer <router-tok> http://127.0.0.1:18797/v1/snapshot
+http=200
+{"generated": "2026-10-16T19:49:27Z", "head": "2eefbe454e0f8f916405eb709b8cca78395d7b4f3c868 ...(truncated)
+$ curl -H Authorization: Bearer <router-tok> http://127.0.0.1:18797/v1/percent
+http=200
+33.905847211424366
+$ curl -X POST -H Authorization: Bearer <router-tok> -H content-type: application/json -d {} http://127.0.0.1:18797/v1/reap
+http=403
+{"error": "forbidden", "msg": "role 'router' may not do this"}
+$ curl -X POST -H Authorization: Bearer <router-tok> -H content-type: application/json -d {"day":"2026-10-15","items":[{"metric":"x","value":1}]} http://127.0.0.1:18797/v1/set_metrics
+http=404
+{"error": "not_found", "msg": "no route POST /set_metrics"}
+$ pgc <OLD b3d71096 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <OLD b3d71096 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify-snapshot
+snapshot signature ok
+rc=0
+# old daemon stopped. log tail:
+# step 8: re-roll forward check: T verify after old-code writes
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify
+chain and cache integrity ok
+rc=0
+# step 7b: old-code WRITE on schema 4 (admin add-principal via b3d71096 as keeper_rt), then verify with old and T code
+$ pgc <b3d71096> <keeper_rt> admin add-principal --role worker --projects plangraph reh-old-write
+rc=0
+$ pgc <OLD b3d71096 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <T 3fd91bd6 tree>/src postgresql://keeper_rt@127.0.0.1:<pgport>/keeper admin verify
+chain and cache integrity ok
+rc=0
+# T-added event types in schema.EVENT_TYPES: none (git diff b3d71096..3fd91bd6 -- schema.py touches METRICS_DDL/SCHEMA_VERSION only)
+# teardown
+ls3fd-pg17
+docker rm rc=0
+0
+
+=== CODE src/plangraph/keeper/schema_pg.py (migration 4 + MIGRATIONS)
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('answers are append-only');
+"""
+
+#: Logical twin of ``schema.METRICS_DDL`` (SQLite schema v11).
+_V4 = """
+CREATE TABLE metrics (
+    day         TEXT COLLATE "C" NOT NULL,
+    metric      TEXT COLLATE "C" NOT NULL,
+    value       DOUBLE PRECISION NOT NULL,
+    source      TEXT COLLATE "C" NOT NULL DEFAULT '',
+    computed_at TEXT COLLATE "C" NOT NULL,
+    PRIMARY KEY (day, metric)
+);
+"""
+
+MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
+              Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
+              Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
+              Migration(4, "governor: metrics", _V4))
+LATEST = MIGRATIONS[-1].version
+
+_TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)
+_COLUMN = re.compile(r"^    (\w+)\s+\S")
+_NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
+
+
+
+=== CODE src/plangraph/keeper/db_pg.py migrate/_installed/open_pg
+def migrate(raw, schema: str) -> list:
+    """Create the schema and apply pending migrations under an advisory lock; returns versions run."""
+    check_schema(schema)
+    ran = []
+    raw.execute("BEGIN")
+    try:
+        raw.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))", (_MIGRATE_LOCK, schema))
+        raw.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        raw.execute(f'SET search_path TO "{schema}"')
+        raw.execute(schema_pg.BOOTSTRAP)
+        have = {row[0] for row in raw.execute("SELECT version FROM schema_migrations")}
+        for step in schema_pg.MIGRATIONS:
+            if step.version in have:
+                continue
+            raw.execute(step.sql)
+            raw.execute("INSERT INTO schema_migrations(version,name,applied_at)"
+                        " VALUES(%s,%s,to_char(now() AT TIME ZONE 'UTC',"
+                        "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'))", (step.version, step.name))
+            ran.append(step.version)
+        raw.execute("COMMIT")
+    except BaseException:
+        raw.execute("ROLLBACK")
+        raise
+    return ran
+
+
+def _installed(raw) -> int:
+    """Latest applied migration, or 0 when this schema holds no keeper."""
+    row = raw.execute("SELECT to_regclass('schema_migrations') IS NOT NULL,"
+                      " to_regclass('items') IS NOT NULL").fetchone()
+    if not (row[0] and row[1]):
+        return 0
+    return raw.execute("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").fetchone()[0]
+
+
+def open_pg(path, *, create=False, busy_timeout=5000, dsn=None, schema=None) -> PgConnection:
+    """Open the keeper schema; ``create=True`` also migrates (admin/init only)."""
+    name = check_schema(schema or derive_schema(path))
+    raw = _connect(dsn, busy_timeout)
+    try:
+        if create:
+            migrate(raw, name)
+        else:
+            raw.execute(f'SET search_path TO "{name}"')
+            have = _installed(raw)
+            if have == 0:
+                raise RuntimeError(f"{path} is not a keeper database (postgres schema missing); "
+                                   "create it with open_db(..., create=True) / pg admin init")
+            if have < schema_pg.LATEST:
+                raise RuntimeError(f"keeper schema is at migration {have}, code needs "
+                                   f"{schema_pg.LATEST}: run pg admin migrate")
+    except BaseException:
+        raw.close()
+        raise
+    return PgConnection(raw, name)
+
+
+=== CODE store_metrics.py set_metrics upsert + role
+
+    def set_metrics(self, principal, day, items):
+        return self._run(principal, "set_metrics", None,
+                         lambda now: self._set_metrics(principal, day, items, now))
+
+    def _set_metrics(self, principal, day, items, now):
+        self._require_role(principal, "router", "system")
+        _day(day)
+        if not isinstance(items, list) or not 1 <= len(items) <= _METRICS_MAX_ITEMS:
+            raise Refused("validation",
+                          f"items must be a list of 1..{_METRICS_MAX_ITEMS} metrics")
+        prepared = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise Refused("validation", "each metric must be an object")
+            prepared.append((_metric_name(item.get("metric")),
+                             _metric_value(item.get("value")),
+                             _source(item.get("source"))))
+        # validation above has already refused the bad ones; nothing is written
+        # until every item has cleared, so a mixed batch leaves the table alone.
+        stamp = self._iso(now)
+        with self._write():
+            for name, value, source in prepared:
+                self.conn.execute(
+                    "INSERT INTO metrics(day,metric,value,source,computed_at)"
+                    " VALUES(?,?,?,?,?)"
+                    " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
+                    "source=excluded.source,computed_at=excluded.computed_at",
+                    (day, name, value, source, stamp))
+        return {"day": day, "count": len(prepared)}
+
+    def get_metrics(self, principal, day=None, since=None, metric=None):
+        return self._run(principal, "get_metrics", None,
+                         lambda now: self._get_metrics(day, since, metric))
+
+    def _get_metrics(self, day, since, metric):
+        clauses, params = [], []
+        if day is not None:
+            clauses.append("day=?")
+            params.append(_day(day))
+        if since is not None:
+
+=== CODE api_routes.py ROLE_CHECKED_VERBS
+                "apply_ops": _apply_ops,
+                "record_run": _record_run}
+
+
+#: Write verbs whose store method checks the role itself and admits more than the
+#: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
+ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "governor_override": _governor_override}
+
+=== DIFF b3d71096..3fd91bd6 schema.py EVENT_TYPES touch check
+8:            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)
+
+Your reply MUST end with exactly these two lines (and nothing after them): first a line starting TEST-GAMING: no - ... : 0 hits, then the line VERDICT: pass (or VERDICT: fix - ...).
