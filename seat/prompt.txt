@@ -1,0 +1,165 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+Review of HIGH-treated change plangraph:KEEPER-SNAPSHOT-FOLLOWUPS head 590badd (Python keeper; snapshot writer thread already merged). Vectors, answer each with file:function evidence:
+V1 snapshot_io.read_snapshot / snapshot_serve.envelope: is a 50 ms pause before the single retry sound? Any path that now blocks the lock-holding thread, or turns a fail-closed verify into accept?
+V2 daemon.run startup rebuild under server.lock: deadlock or ordering risk with Reaper/anchorer/outage, exception safety.
+V3 SnapshotWriter._failed/_succeeded/_write_locked/flush: counters race (mutated under server.lock only?), alarm once per streak, no secret in log lines, no behaviour change to retry/backoff.
+V4 tests: test_keeper_snapshot_writer.py new tests and test_m2b_signed_snapshot retry test - do they pin the behaviour (mutation-kill) or can they pass vacuously?
+Material (diff vs main, src only):
+diff --git a/src/plangraph/keeper/daemon.py b/src/plangraph/keeper/daemon.py
+index 55df4b9..1169d74 100644
+--- a/src/plangraph/keeper/daemon.py
++++ b/src/plangraph/keeper/daemon.py
+@@ -67,7 +67,8 @@ def run(cfg, *, host=None, port=None, ready=None):
+             server.anchorer.record(conn, "start")
+         server.start_reaper()
+         try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
+-            api.write_snapshot(server, server.system)
++            with server.lock:      # the reaper is already running: same lock as every other build
++                api.write_snapshot(server, server.system)
+         except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
+             print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
+         stop = threading.Event()
+diff --git a/src/plangraph/keeper/snapshot_io.py b/src/plangraph/keeper/snapshot_io.py
+index 04351cb..3fe3629 100644
+--- a/src/plangraph/keeper/snapshot_io.py
++++ b/src/plangraph/keeper/snapshot_io.py
+@@ -4,6 +4,7 @@ from __future__ import annotations
+ import json
+ import os
+ import tempfile
++import time
+ from pathlib import Path
+ 
+ from . import snapshot_sign
+@@ -12,6 +13,12 @@ __all__ = ["write_snapshot", "read_snapshot", "SignError"]
+ 
+ SignError = snapshot_sign.SignError
+ 
++#: The writer replaces the signature, then the body: between the two a reader sees (new sig, old
++#: body).  The gap is microseconds, but a loaded reader can be descheduled across it, so the one
++#: retry first waits this long.  Closing the gap for real needs a combined sig+body file, which
++#: breaks snapshot_serve/snapshot_pull and every other reader of the two files (format change).
++RETRY_PAUSE_S = 0.05
++
+ 
+ def write_snapshot(server, principal) -> None:
+     """Rewrite ``plan.snapshot.json`` atomically (temp file then rename)."""
+@@ -61,6 +68,7 @@ def read_snapshot(path, pubkey=None, *, _retry=True) -> dict:
+             signature = ""          # garbage .sig = invalid, never a crash
+         if not snapshot_sign.verify(body, signature, pubkey):
+             if _retry:
++                time.sleep(RETRY_PAUSE_S)
+                 return read_snapshot(path, pubkey, _retry=False)
+             raise snapshot_sign.SignError(f"snapshot signature invalid or missing: {path}")
+     return json.loads(body.decode("utf-8"))
+diff --git a/src/plangraph/keeper/snapshot_serve.py b/src/plangraph/keeper/snapshot_serve.py
+index 48ee588..a8db548 100644
+--- a/src/plangraph/keeper/snapshot_serve.py
++++ b/src/plangraph/keeper/snapshot_serve.py
+@@ -15,8 +15,9 @@ import base64
+ import json
+ import os
+ import sys
++import time
+ 
+-from . import config as config_mod, snapshot_sign
++from . import config as config_mod, snapshot_io, snapshot_sign
+ 
+ __all__ = ["FORMAT", "MAX_BYTES", "envelope", "main"]
+ 
+@@ -39,7 +40,9 @@ def envelope(cfg) -> bytes:
+     if not pubkey or not getattr(cfg, "signing_key", None):
+         raise snapshot_sign.SignError("snapshot signing is not configured; nothing is served")
+     path = cfg.snapshot
+-    for _ in range(2):   # the keeper writes .sig then the snapshot: a racing read retries once
++    for attempt in range(2):   # the keeper writes .sig then the snapshot: a racing read retries once
++        if attempt:
++            time.sleep(snapshot_io.RETRY_PAUSE_S)
+         body = _read(path)
+         try:
+             sig = _read(snapshot_sign.sig_path(path)).decode("ascii").strip()
+diff --git a/src/plangraph/keeper/snapshot_writer.py b/src/plangraph/keeper/snapshot_writer.py
+index 8ac4a8c..1f106bc 100644
+--- a/src/plangraph/keeper/snapshot_writer.py
++++ b/src/plangraph/keeper/snapshot_writer.py
+@@ -15,12 +15,20 @@ database.  Rewrites stay atomic (temp file + rename; signature first, see snapsh
+ """
+ from __future__ import annotations
+ 
++import sys
+ import threading
+ import time
+ 
+ from .snapshot_io import write_snapshot
+ 
+-__all__ = ["SnapshotWriter"]
++__all__ = ["SnapshotWriter", "ALARM_AFTER"]
++
++#: Consecutive failed builds before an ALARM line (a single failure retries quietly-ish: one line).
++ALARM_AFTER = 3
++
++
++def _log(message):
++    print(f"keeper: {message}", file=sys.stderr, flush=True)
+ 
+ 
+ class SnapshotWriter(threading.Thread):
+@@ -35,6 +43,8 @@ class SnapshotWriter(threading.Thread):
+         self._first = None         # monotonic time of the oldest unwritten mark
+         self._last = None          # monotonic time of the newest mark
+         self._halt = False
++        self.failures = 0          # consecutive failed builds (resets on success)
++        self.alarm = False         # up once failures reach ALARM_AFTER, until a build succeeds
+ 
+     def mark(self):
+         """A change was committed (caller holds ``server.lock``): schedule a rebuild."""
+@@ -53,8 +63,10 @@ class SnapshotWriter(threading.Thread):
+                 gen = self._gen
+             try:
+                 write_snapshot(self.server, self.server.system)
+-            except Exception:      # noqa: BLE001 - a committed write stays committed; retry later
++            except Exception as exc:   # noqa: BLE001 - a committed write stays committed; retry later
++                self._failed(exc)
+                 return False
++            self._succeeded()
+         with self._cond:
+             if gen >= self._written:
+                 self._written = gen
+@@ -64,6 +76,21 @@ class SnapshotWriter(threading.Thread):
+                 self._first = self._last = time.monotonic()
+         return True
+ 
++    def _failed(self, exc):
++        """Log one line per failed build (exception type only: messages can carry paths)."""
++        self.failures += 1
++        _log(f"snapshot build failed ({type(exc).__name__}), "
++             f"{self.failures} consecutive; plan.snapshot.json is stale, retrying")
++        if self.failures == ALARM_AFTER:
++            self.alarm = True
++            _log(f"ALARM snapshot writer failed {ALARM_AFTER} consecutive builds: "
++                 "plan.snapshot.json lags the database; check disk space, permissions, signing key")
++
++    def _succeeded(self):
++        if self.failures:
++            _log(f"snapshot build recovered after {self.failures} failed attempts")
++        self.failures, self.alarm = 0, False
++
+     def run(self):
+         while True:
+             with self._cond:
+@@ -88,6 +115,7 @@ class SnapshotWriter(threading.Thread):
+             if not pending:
+                 return
+             write_snapshot(self.server, self.server.system)
++            self._succeeded()
+         with self._cond:
+             self._written = max(self._written, gen)
+             if self._written == self._gen:
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)
