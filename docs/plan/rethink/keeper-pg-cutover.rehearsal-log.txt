@@ -85,7 +85,7 @@ $ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json
 chain and cache integrity ok
 rc=0
 
-$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-snapshot --snapshot $SCRATCH/src/plan.snapshot.json --pubkey /home/s/.config/plangraph/snapshot-signing.pub
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-snapshot --snapshot $SCRATCH/src/plan.snapshot.json --pubkey ~/.config/plangraph/snapshot-signing.pub
 snapshot NOT verified: the 'cryptography' package is required for snapshot signing
 rc=1
 
@@ -98,7 +98,7 @@ schema up to date
 rc=0
 
 # note: first verify-snapshot failed on scratch venv missing cryptography (env, not a defect); rerun after pip install cryptography
-$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-snapshot --snapshot $SCRATCH/src/plan.snapshot.json --pubkey /home/s/.config/plangraph/snapshot-signing.pub
+$ $SCRATCH/venv/bin/python -m plangraph.keeper.cli --config $SCRATCH/keeper.json admin verify-snapshot --snapshot $SCRATCH/src/plan.snapshot.json --pubkey ~/.config/plangraph/snapshot-signing.pub
 snapshot signature ok
 rc=0
 
@@ -119,7 +119,7 @@ autoos:AO-TASKKEY | Spawner task_key: fetch item, refuse unless claimed by calle
 autoos:RS-GEMINI-PARAMS | Gemini: thinking_level instead of thinking_budget; drop temperature/top_p/top_k | est 4h | unblocks 2 | prio 6
 autoos:BASHGUARD-ORCH-HARDEN | bash-guard orchestrator mode: normalise paths, allowlist commands, fail closed | est 4h | unblocks 1 | prio 6
 autoos:AO-CHANGELOG-DOCS | check-changelog-docs + .docs-map | est 3h | unblocks 2 | prio 5
-great-wiki:GW-MCP-AGENT-SKILLS-REF | great-wiki .mcp.json: drop doc-string references to /home/s/code/agent-skills (clone retirement) | est 0.5h | unblocks 1 | prio 5
+great-wiki:GW-MCP-AGENT-SKILLS-REF | great-wiki .mcp.json: drop doc-string references to ~/code/agent-skills (clone retirement) | est 0.5h | unblocks 1 | prio 5
 autoos:RS-RENAME-CI | CI verdict after the layer rename + faik push | est 1h | unblocks 1 | prio 5
 workst-ebn:EBN-DON011187-TRANSFER | OP: DON011187 data transfer | est 1h | unblocks 1 | prio 5
 rc=0
