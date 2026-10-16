@@ -4,8 +4,11 @@
 //! The worker process holds credentials (`PG_*`, `TEMPORAL_*`, keeper and TLS
 //! settings, provider keys). A coding agent or a check script running in an
 //! attempt worktree must not inherit them, so [`confine`] clears the child's
-//! environment and re-adds only what [`PASS`] and [`PASS_PREFIXES`] name, plus a
-//! private per-attempt `HOME` so tools cannot read the operator's dotfiles.
+//! environment and re-adds only an allowlist, plus a private per-attempt `HOME`
+//! so tools cannot read the operator's dotfiles. The harness ([`confine_harness`])
+//! also gets [`PASS_PREFIXES`] (its own `OPENCODE_*` / `CLAUDE_CODE_*` settings
+//! and credentials); the card's check command ([`confine_check`]) gets [`PASS`]
+//! only, so an agent credential never reaches code the attempt wrote.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -18,27 +21,45 @@ use std::process::Command;
 /// `HOME` private, a Rust check could not find its toolchain without them.
 pub const PASS: &[&str] = &["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"];
 
-/// Name prefixes copied from the worker's environment: the agent CLIs' own
-/// settings (`OPENCODE_*`, `CLAUDE_CODE_*`). Provider keys (`ANTHROPIC_*`,
+/// Name prefixes copied from the worker's environment to the HARNESS only: the
+/// agent CLIs' own settings and credentials (`OPENCODE_*`, `CLAUDE_CODE_*`).
+/// Provider keys (`ANTHROPIC_*`,
 /// `OPENAI_*`, ...) and the worker's own `PG_*` / `TEMPORAL_*` never match.
 pub const PASS_PREFIXES: &[&str] = &["OPENCODE_", "CLAUDE_CODE_"];
 
-/// True when `name` may reach a child from the worker's environment.
+/// True when `name` may reach the harness from the worker's environment.
 pub fn is_passed(name: &str) -> bool {
     PASS.contains(&name) || PASS_PREFIXES.iter().any(|p| name.starts_with(p))
 }
 
-/// Replace `cmd`'s environment with the allowlist, a private `HOME`, and the
-/// variables the caller set on `cmd` explicitly (those are the harness's own by
+/// True when `name` may reach a check child: [`PASS`] only, no prefixes.
+pub fn is_passed_check(name: &str) -> bool {
+    PASS.contains(&name)
+}
+
+/// Confine a harness child (and its `--version` probe): [`PASS`] +
+/// [`PASS_PREFIXES`], a private `HOME`, and what the caller set on `cmd`.
+pub fn confine_harness(cmd: &mut Command, home: &Path) {
+    confine_with(cmd, home, is_passed);
+}
+
+/// Confine a card check child: [`PASS`] only, a private `HOME`, and what the
+/// caller set on `cmd`. Agent credentials never reach it.
+pub fn confine_check(cmd: &mut Command, home: &Path) {
+    confine_with(cmd, home, is_passed_check);
+}
+
+/// Replace `cmd`'s environment with the names `pass` accepts, a private `HOME`,
+/// and the variables the caller set on `cmd` explicitly (the caller's own by
 /// construction, for example `OPENCODE_DISABLE_AUTOUPDATE` or a test's marker).
-pub fn confine(cmd: &mut Command, home: &Path) {
+fn confine_with(cmd: &mut Command, home: &Path, pass: fn(&str) -> bool) {
     let explicit: Vec<(OsString, OsString)> = cmd
         .get_envs()
         .filter_map(|(k, v)| v.map(|v| (k.to_os_string(), v.to_os_string())))
         .collect();
     cmd.env_clear();
     for (k, v) in std::env::vars_os() {
-        if k.to_str().is_some_and(is_passed) {
+        if k.to_str().is_some_and(pass) {
             cmd.env(k, v);
         }
     }
@@ -94,6 +115,14 @@ mod tests {
 
     /// Run `env` through `confine` and return the child's variables.
     fn child_env(prep: impl FnOnce(&mut Command), home: &Path) -> Vec<String> {
+        child_env_with(confine_harness, prep, home)
+    }
+
+    fn child_env_with(
+        confine: fn(&mut Command, &Path),
+        prep: impl FnOnce(&mut Command),
+        home: &Path,
+    ) -> Vec<String> {
         let mut c = Command::new("env");
         prep(&mut c);
         confine(&mut c, home);
@@ -152,6 +181,28 @@ mod tests {
                 "unexpected {name} in child env"
             );
         }
+    }
+
+    #[test]
+    fn oauth_token_reaches_the_harness_but_not_the_check_child() {
+        let home = tempfile::tempdir().unwrap();
+        // Unique to this test; no other test reads or sets these.
+        std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", "sentinel-oauth");
+        std::env::set_var("OPENCODE_SENTINEL_CRED", "sentinel-oc");
+        let h = child_env_with(confine_harness, |_| {}, home.path());
+        assert!(
+            h.contains(&"CLAUDE_CODE_OAUTH_TOKEN=sentinel-oauth".to_string()),
+            "{h:?}"
+        );
+        assert!(h.contains(&"OPENCODE_SENTINEL_CRED=sentinel-oc".to_string()));
+        let c = child_env_with(confine_check, |_| {}, home.path());
+        assert!(
+            !c.iter().any(|l| l.contains("sentinel-")
+                || l.starts_with("CLAUDE_CODE_")
+                || l.starts_with("OPENCODE_")),
+            "agent credential leaked into the check child: {c:?}"
+        );
+        assert!(c.iter().any(|l| l.starts_with("PATH=")));
     }
 
     #[test]
