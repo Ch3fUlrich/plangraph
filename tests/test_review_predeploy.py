@@ -81,12 +81,12 @@ def test_split_groups_by_module_and_maps_files():
     diff = (_diff("rust/worker/a.rs") + _diff("docs/x.md") +
             _diff("rust/worker/b.rs") + _diff("rust/keeper/c.rs"))
     parts = split.split_diff_by_module(diff, 10_000)
-    assert [p.module for p in parts] == ["docs", "rust/keeper", "rust/worker"]
+    assert [p.module for p in parts] == ["rust/worker", "docs", "rust/keeper"]  # first seen
     assert [p.index for p in parts] == [1, 2, 3]
     mapping = split.file_part_map(parts)
-    assert mapping == {"docs/x.md": 1, "rust/keeper/c.rs": 2,
-                       "rust/worker/a.rs": 3, "rust/worker/b.rs": 3}
-    assert "part 3 [rust/worker]: rust/worker/a.rs, rust/worker/b.rs" in \
+    assert mapping == {"docs/x.md": 2, "rust/keeper/c.rs": 3,
+                       "rust/worker/a.rs": 1, "rust/worker/b.rs": 1}
+    assert "part 1 [rust/worker]: rust/worker/a.rs, rust/worker/b.rs" in \
         split.render_part_map(parts)
 
 
@@ -149,7 +149,7 @@ def test_plan_halt_one_inbox_no_default():
     assert got["fix_cards"] == [] and got["pass"] is False
     assert len(got["inbox"]) == 1
     item = got["inbox"][0]
-    assert item["default"] is None and item["risk_tags"] == ["auth"]
+    assert item["default_answer"] is None and item["risk_tags"] == ["auth"]
     assert "P3" in item["text"] and "scope" in item["text"]
 
 
@@ -338,10 +338,10 @@ def fake_bin(tmp_path, body):
 
 def test_opencode_argv_attach_only_with_url():
     base = opencode.argv("P", "prov/model")
-    assert base == ["opencode", "run", "-m", "prov/model", "P"]
+    assert base == ["opencode", "run", "-m", "prov/model", "--", "P"]
     url = "http://127.0.0.1:4096"
     assert opencode.argv("P", "prov/model", url) == [
-        "opencode", "run", "-m", "prov/model", "--attach", url, "P"]
+        "opencode", "run", "-m", "prov/model", "--attach", url, "--", "P"]
 
 
 def test_opencode_run_passes_env_url_and_returns_stdout(tmp_path):
@@ -350,7 +350,7 @@ def test_opencode_run_passes_env_url_and_returns_stdout(tmp_path):
     env = {opencode.SERVER_ENV_VAR: "http://127.0.0.1:4096"}
     res = opencode.run("hello", model="p/m", binary=exe, env=env)
     assert res.finish_reason == "stop" and res.error is None
-    assert "ARGS: run -m p/m --attach http://127.0.0.1:4096 hello" in res.text
+    assert "ARGS: run -m p/m --attach http://127.0.0.1:4096 -- hello" in res.text
     assert verdict.parse_verdict(res.text) == "pass"
 
 

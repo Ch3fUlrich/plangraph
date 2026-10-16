@@ -24,6 +24,7 @@ from typing import Any, Callable
 __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT",
+    "RATE_LIMIT_PATTERN",
     "QoderResult",
     "argv",
     "parse_output",
@@ -35,11 +36,15 @@ __all__ = [
 
 DEFAULT_MODEL = "Qwen3.8-Flash"
 DEFAULT_TIMEOUT = 900
-_RATE_LIMIT = re.compile(r"rate[ _-]?limit|\b429\b", re.I)
+# A bare "429" is a port or a count; only a rate-limit phrase or an HTTP/status 429 counts.
+RATE_LIMIT_PATTERN = (r"rate[ _-]?limit|too many requests"
+                      r"|\bhttp[/ _-]*(?:status[ :=]*)?429\b|\bstatus(?: code)?[ :=]+429\b"
+                      r"|\b429[ :-]+too many")
+_RATE_LIMIT = re.compile(RATE_LIMIT_PATTERN, re.I)
 
 
 def is_rate_limited(text: str | None) -> bool:
-    """True when stderr text mentions a rate limit or HTTP 429."""
+    """True when stderr text names a rate limit or an HTTP/status 429 (not a bare 429)."""
     return bool(_RATE_LIMIT.search(text or ""))
 
 

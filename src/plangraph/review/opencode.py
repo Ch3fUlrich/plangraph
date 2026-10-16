@@ -2,7 +2,7 @@
 
 Command shape (argv list, no shell)::
 
-    opencode run -m <model> [--attach <server-url>] <prompt>
+    opencode run -m <model> [--attach <server-url>] -- <prompt>
 
 ``--attach`` is added only when ``PLANGRAPH_OPENCODE_SERVER_URL`` is set;
 there is no default host. Runs in a fresh empty temp dir. This is the
@@ -21,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+from .qoder import RATE_LIMIT_PATTERN
+
 __all__ = ["SERVER_ENV_VAR", "DEFAULT_MODEL", "DEFAULT_TIMEOUT",
            "OpencodeResult", "argv", "is_rate_limited", "run",
            "write_seat_dir"]
@@ -28,7 +30,7 @@ __all__ = ["SERVER_ENV_VAR", "DEFAULT_MODEL", "DEFAULT_TIMEOUT",
 SERVER_ENV_VAR = "PLANGRAPH_OPENCODE_SERVER_URL"
 DEFAULT_MODEL = "opencode/deepseek-v3"
 DEFAULT_TIMEOUT = 900
-_RATE_LIMIT = re.compile(r"rate[ _-]?limit|\b429\b|usage limit", re.I)
+_RATE_LIMIT = re.compile(RATE_LIMIT_PATTERN + r"|usage limit", re.I)
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -38,7 +40,7 @@ def _utc_now() -> str:
 
 
 def is_rate_limited(text: str | None) -> bool:
-    """True when text mentions a rate limit or HTTP 429."""
+    """True when text names a rate limit or an HTTP/status 429 (not a bare 429)."""
     return bool(_RATE_LIMIT.search(text or ""))
 
 
@@ -48,7 +50,7 @@ def argv(prompt: str, model: str = DEFAULT_MODEL, server_url: str | None = None,
     cmd = [binary, "run", "-m", model]
     if server_url:
         cmd += ["--attach", server_url]
-    return cmd + [prompt]
+    return cmd + ["--", prompt]  # the prompt is never parsed as a flag
 
 
 @dataclass
@@ -106,7 +108,8 @@ def run(prompt: str, *, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEO
     err = err.decode("utf-8", "replace") if isinstance(err, bytes) else err
     out, err = _ANSI.sub("", out), _ANSI.sub("", err)
     rc = getattr(done, "returncode", None)
-    limited = is_rate_limited(err) or (rc not in (0, None) and is_rate_limited(out))
+    failed_rc = rc not in (0, None)  # a 429 in the output of a clean exit is just text
+    limited = failed_rc and (is_rate_limited(err) or is_rate_limited(out))
     if limited:
         res = failed("error", "rate limit", rc, err[:200])
         res.rate_limited = True
