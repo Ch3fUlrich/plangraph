@@ -34,6 +34,14 @@ use temporalio_sdk::{Runtime, Worker, WorkerOptions};
 /// How long any single card may take before the test gives up.
 const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long a cancel may take to land on the shared, loaded CI host.
+///
+/// Above any plausible cancel latency on a loaded shared CI host, yet below the
+/// 60 s attempt timeout; the harness prints a line every second, so the 30 s
+/// stall watchdog never fires. Finishing inside this budget can therefore only
+/// mean the cancel reached the child.
+const CANCEL_BUDGET: Duration = Duration::from_secs(45);
+
 type Handle = WorkflowHandle<Client, Card>;
 
 /// Runs `sh -c <script>` inside the attempt's worktree, standing in for a real
@@ -497,8 +505,8 @@ async fn a_check_that_never_passes_stops_the_card() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancel_signal_stops_a_running_attempt() {
     in_local(async {
-        // The attempt sleeps for ten minutes, far past the deadline below, so a
-        // pass can only mean the cancel signal killed it rather than the script
+        // The attempt runs until killed, far past the deadline below, so a pass
+        // can only mean the cancel signal killed it rather than the script
         // ending on its own.
         let marker = started_marker();
         let Some(env) = env_or_skip("cancel", &started_script(&marker)).await else {
@@ -512,7 +520,6 @@ async fn cancel_signal_stops_a_running_attempt() {
 
         // Signal only once the harness is really running, not after a guess.
         wait_for_marker(&marker).await;
-        let started = std::time::Instant::now();
         handle
             .signal(
                 Card::cancel,
@@ -523,38 +530,52 @@ async fn cancel_signal_stops_a_running_attempt() {
             .expect("send cancel signal");
 
         let out = tokio::time::timeout(
-            Duration::from_secs(25),
+            CANCEL_BUDGET,
             handle.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("cancel takes effect within 25s")
+        .expect("cancel takes effect within the cancel budget")
         .expect("cancelled card returns a result");
-        let elapsed = started.elapsed();
         record("cancel", &id, &handle).await;
         assert_eq!(out.outcome, "parked", "{out:?}");
         assert_eq!(out.detail, "cancelled", "{out:?}");
-        assert!(
-            elapsed < Duration::from_secs(25),
-            "cancel took {elapsed:?}, expected under 25s"
-        );
+        // Parked is not enough: the shell child must also be dead, which is what
+        // actually lets the test binary exit promptly.
+        assert_child_gone(&marker).await;
         env.stop();
     })
     .await;
 }
 
-/// A marker path the harness touches the moment it starts running.
+/// A marker path the harness writes its own pid to the moment it starts.
 fn started_marker() -> PathBuf {
     std::env::temp_dir().join(format!("pg-e2e-started-{}", unique()))
 }
 
 fn started_script(marker: &Path) -> String {
-    format!("touch '{}'; sleep 600", marker.display())
+    // Write the shell's own pid into the marker, then run until killed: the pid
+    // lets `assert_child_gone` prove the cancel killed this exact child, and the
+    // endless chatty loop both outlives every cancel budget and keeps the stall
+    // watchdog from firing.
+    format!(
+        "echo $$ > '{}'; while :; do echo alive; sleep 1; done",
+        marker.display()
+    )
 }
 
-/// Poll until the harness has touched `marker`.
+/// Poll until the harness has written a usable pid into `marker`.
+///
+/// The shell creates the file before the pid bytes land, so a bare existence
+/// check could read a half-written marker; require a non-empty integer instead.
 async fn wait_for_marker(marker: &Path) {
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
-    while !marker.exists() {
+    loop {
+        let ready = std::fs::read_to_string(marker)
+            .ok()
+            .is_some_and(|s| s.trim().parse::<u32>().is_ok());
+        if ready {
+            return;
+        }
         assert!(
             std::time::Instant::now() < deadline,
             "attempt never started (no marker)"
@@ -563,9 +584,36 @@ async fn wait_for_marker(marker: &Path) {
     }
 }
 
+/// Prove the harness child is gone before the test ends.
+///
+/// The cancel tests finish as soon as the workflow returns, but the supervised
+/// `sh` child may still be alive; if it is, `Env::stop` aborts the worker and
+/// the test binary blocks at exit until the child's own stall/timeout, roughly
+/// doubling the run. Waiting on the child's pid from the marker removes that
+/// wait and strengthens the cancel proof: a parked card plus a dead child show
+/// the cancel reached the running attempt. `/proc/<pid>` is Linux-only, like
+/// the rest of this harness.
+async fn assert_child_gone(marker: &Path) {
+    let pid: u32 = std::fs::read_to_string(marker)
+        .expect("marker holds the harness pid")
+        .trim()
+        .parse()
+        .expect("marker holds the harness pid");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while Path::new(&format!("/proc/{pid}")).exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "cancel did not kill the harness child"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 /// Send `cancel` and require a `cancelled` detail inside the budget.
-async fn cancel_and_expect(env: &Env, handle: &Handle) {
-    let started = std::time::Instant::now();
+///
+/// `marker` is the harness start marker: if the signal landed before the harness
+/// ever started there is no child and no marker, so only assert when it exists.
+async fn cancel_and_expect(env: &Env, handle: &Handle, marker: &Path) {
     handle
         .signal(
             Card::cancel,
@@ -575,15 +623,17 @@ async fn cancel_and_expect(env: &Env, handle: &Handle) {
         .await
         .expect("send cancel signal");
     let out = tokio::time::timeout(
-        Duration::from_secs(25),
+        CANCEL_BUDGET,
         handle.get_result(WorkflowGetResultOptions::default()),
     )
     .await
-    .expect("cancel takes effect within 25s")
+    .expect("cancel takes effect within the cancel budget")
     .expect("cancelled card returns a result");
     assert_eq!(out.outcome, "parked", "{out:?}");
     assert_eq!(out.detail, "cancelled", "{out:?}");
-    assert!(started.elapsed() < Duration::from_secs(25));
+    if marker.exists() {
+        assert_child_gone(marker).await;
+    }
     env.stop();
 }
 
@@ -600,7 +650,7 @@ async fn cancel_immediately_after_start_is_honoured() {
             .start(&format!("e2e-cancel-now-{}", unique()), claim)
             .await;
         // No settle at all: the signal races the workflow's first tasks.
-        cancel_and_expect(&env, &handle).await;
+        cancel_and_expect(&env, &handle, &marker).await;
     })
     .await;
 }
@@ -629,11 +679,11 @@ async fn cancel_while_the_first_activity_is_pending_is_honoured() {
             .expect("send cancel signal");
         env.resume();
         let out = tokio::time::timeout(
-            Duration::from_secs(25),
+            CANCEL_BUDGET,
             handle.get_result(WorkflowGetResultOptions::default()),
         )
         .await
-        .expect("cancel takes effect within 25s")
+        .expect("cancel takes effect within the cancel budget")
         .expect("cancelled card returns a result");
         assert_eq!(out.outcome, "parked", "{out:?}");
         assert_eq!(out.detail, "cancelled", "{out:?}");
