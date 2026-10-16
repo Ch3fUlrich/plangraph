@@ -6,7 +6,8 @@ import json
 from typing import Any, Optional
 
 from plangraph.projector.models import (
-    ATTEMPT_ACTIVITY_TYPES, EXIT_CLASSES, AttemptRec, RunProjection, StateRec)
+    ATTEMPT_ACTIVITY_TYPES, EXIT_CLASSES, KNOWN_ACTIVITY_TYPES, AttemptRec, RunProjection,
+    ShapeIssue, StateRec)
 
 __all__ = ["project_history", "decode_payload"]
 
@@ -130,6 +131,7 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
     open_acts: set[int] = set()
     attempts: list[AttemptRec] = []
     states: list[StateRec] = []
+    issues: list[ShapeIssue] = []
     status, outcome, next_run_id = "running", None, None
 
     def emit(event_id: int, state: str, reason: Optional[str]) -> None:
@@ -140,7 +142,11 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
     for eid, name, ev in events:
         attrs = _attrs(ev, name)
         if name == "ACTIVITY_TASK_SCHEDULED":
-            if _dict(attrs.get("activityType")).get("name") in ATTEMPT_ACTIVITY_TYPES:
+            atype = _dict(attrs.get("activityType")).get("name")
+            if atype not in KNOWN_ACTIVITY_TYPES:
+                issues.append(ShapeIssue(workflow_id, run_id, str(attrs.get("activityId", "")),
+                                         f"unknown activity type {atype!r}"))
+            if atype in ATTEMPT_ACTIVITY_TYPES:
                 acts[eid] = {"activity_id": str(attrs.get("activityId", "")), "attempt": 1,
                              "started_at": None}
                 open_acts.add(eid)
@@ -156,7 +162,20 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
                 continue
             open_acts.discard(sched)
             act = acts[sched]
-            result = _dict(_first_payload(attrs.get("result")))
+            raw = _first_payload(attrs.get("result"))
+            result = _dict(raw)
+            if name == "ACTIVITY_TASK_COMPLETED":
+                has_payload = bool(_dict(attrs.get("result")).get("payloads"))
+                if has_payload and not isinstance(raw, dict):
+                    problem = "unparsable attempt result"
+                elif not has_payload:
+                    # Only a void result is "missing"; a JSON object without exit_class keeps the
+                    # documented default (``ok``, fixture 13_second_attempt_started).
+                    problem = "attempt result lacks exit_class"
+                else:
+                    problem = None
+                if problem:
+                    issues.append(ShapeIssue(workflow_id, run_id, act["activity_id"], problem))
             exit_class = _exit_class(name, attrs, result)
             if plan_key is not None:
                 attempts.append(AttemptRec(
@@ -190,4 +209,5 @@ def project_history(history: dict, *, workflow_id: str, run_id: str) -> RunProje
 
     attempts.sort(key=lambda a: a.scheduled_event_id)
     return RunProjection(workflow_id, run_id, plan_key, status, _str(events[0][2].get("eventTime")),
-                         events[-1][0], tuple(attempts), tuple(states), outcome, next_run_id)
+                         events[-1][0], tuple(attempts), tuple(states), outcome, next_run_id,
+                         tuple(issues))
