@@ -20,7 +20,7 @@ KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restar
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 06:21Z (renew by 08:1xZ). L2s 06:2xZ: live-sync busy (coding.vm, dd197aa post seat r2, no seats branch yet), ns-flake running (workst).
+Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 06:21Z (renew by 08:1xZ). Beat 06:31Z: live-sync seat round-4 fcc0ab9 (no SYNC-READY yet), ns-flake lane/live-namespace-flake 4102844 running.
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
