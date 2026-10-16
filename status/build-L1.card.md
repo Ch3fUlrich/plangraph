@@ -1,52 +1,38 @@
-# build-L1 card — rethink P1 (D-1285, batch D-1303)
+# build-L1 card — rethink P1 (D-1285, batch D-1303) · gen-5 (successor, 2026-10-16 03:2xZ)
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md · design (binding, 14a): .../docs/reports/2026-10-15-rethink-setup-design.md
-Branch build-L1 = control branch (card, operator rounds, batches, handoff); never merged to main. Code = lane worktrees from origin/main.
+Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
+Rules: D-1377 no crons; D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
-## P1 execution order (tracks run in parallel; max 3 Sonnet writers)
-A infra (live, via routing GO): A1 server:RT-P1-PG-DEPLOY (server-L1-main) -> A2 server:RT-P1-TEMPORAL-CHECK live part (RAM coding.vm else cloud.vm, WSL2 reach, UI link) -> decision row
-B keeper:  B1 RT-P1-CONTRACT (freeze current API, black-box suite) -> B2 RT-P1-KEEPER-PG (port, new tables/states, blue-green; HIGH) -> B3 RT-P1-PLANNER-KIT | RT-P1-GOVERNOR (needs RT-P0-BASELINE)
-C rust:    C1 RT-P1-TEMPORAL-SPIKE (local dev server) + C2 RT-P1-WORKER-CORE (engine-free) -> C3 RT-P1-WORKER (Temporal + keeper glue, merge lock; HIGH) -> C4 RT-P1-REVIEW
-D events:  after B2+A2: RT-P1-PROJECTOR (HIGH) -> RT-P1-INBOX
-E gateway: after autoos:RT-P0-OR-DRIFT: autoos:RT-P1-CLASS-COMBOS (live apply under GO)
-Exit:      RT-P1-E2E (free leg card end-to-end + Inbox question resumes run)
-Start now: B1, C1, C2 (batch 2026-10-15-build-l1-b01 reorders deps; pending routing/fixes-L1)
+## Main = 7ec2bb5 (CI on workst runner since #17 5188310)
+DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
+RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ).
 
-## State
-- 2026-10-15 start. Ready for build-L1 in keeper: none (all gate on PG-DEPLOY). Need: build-L1 token, batch b01 applied, PG-DEPLOY GO.
-- 2026-10-15 D-1305: b01 accepted (fixes-L1 applies), token via fixes-L1, PG-DEPLOY asked of server-L1-main (plan first). SPIKE on coding.vm ok (-j4, stop dev server idle).
-- Writers running (Sonnet, isolated worktrees): lane/rt-p1-contract, lane/rt-p1-temporal-spike, lane/rt-p1-worker-core. Claim on token arrival.
-- Build rule (D-1319 disk): one CARGO_TARGET_DIR, cargo clean after; Temporal SDK builds (5 GB target) on the workstation via workst-L1-autoos. D-1317: tool-less seats on coding.vm ok (max 4 fleet).
-- WORKER-CORE: seat ovh/gpt-oss-120b PASS, janitor fix ea684b9b, PR #1. SPIKE: all demos pass (SDK 1.1.0), adopt-with-workarounds; FINDINGS pending.
-- 2026-10-15 16:05 gen-2 (8f5ea8): CONTRACT done (main 7e5a61e3, live via GO D-1331, keeper ci block on). seat_verdict merged (PR #4, e56d2d9a). WORKER-CORE commit+ci✓; ovh r5 = fix (3 HIGH) -> writer lane/rt-p1-worker-core-r2 triaging. xiaomi seats time out; 2nd family = ovh qwen3.8-27b (D-1329) but no reviewer-alibaba token yet.
-- 16:15 gen-2 recycle: handoff #2. CI triggers fixed (D-1338, main ab3d0817). KEEPER-PG-CODE claimed, W1 writer running. WORKER-CORE r2 PR #6 green, awaiting 1 recordable seat (qwen).
-- 20:0x gen-4 (5fadc0): beat 17,47 (fleet rule). PR #8 seat gpt-oss 5/5 pass (keeper-pg-seats/w12-ffc1bba), await ffc1bba push+CI -> merge. CI-PARALLEL PR #11 e91a415 CI ✓ (run 38796191893, 2557 passed 113 s), seat pass; L2 backup stopped at cap. #11 conflicts #8 (tests.yml, conftest.py) -> merge #8 first, then rebase #11 (add xdist to pytest-postgres). mimo: no OmniRoute cap; review-call.py fix routed (operator GO).
-- D-1364: messages only BLOCKED/DONE+sha/GO/incident/launch; L2s no beat; my beat 17,47 only while polling CI/lease.
-- 20:2x: PR #8 merged main 1779d2d. W3 go (keeper-pg). REBASE-11 go (backup). Claimed PROJECTOR/PLANNER-KIT/INBOX-CODE (lease 21:50Z), briefs e33eb87, worktrees from 1779d2d, L2-LAUNCH x3 asked of routing. Watch: migration-number collisions across lanes at merge.
-- 20:5x D-1374 router paused until ~04:10Z: no messages to routing; decisions D-935 default + log here.
-- AO-DEEPINFRA-REMOVE: fixes-L1 OFFLOAD to build-L1 L2 (fixes-L1 merges; order maingreen -> ordrift -> priv-writers -> reviewcall-mimo -> deepinfra). Brief 87720f8. Writer leg 1 = omniroute/mimo-v2.6-flash (all L2s told).
+## Open
+| Item | State | Next |
+|---|---|---|
+| RT-P1-WORKER-CODE (HIGH) | claimed; PR #13 bff8725 CI ✓ workst | GO sent 03:3xZ to build-L2-worker-code: qwen delta seat on 37d4a2b..22922ec -> MERGE-READY; L1 spot-check, merge, evidence, 2 verdicts (openai seat worker-code-seats/openai-37d4a2b) |
+| RT-P1-INBOX-CODE | claimed; PR #18 0596fec CI red (billing, pre-#17) | GO sent: merge main 7ec2bb5 (Migration 4), push -> workst CI -> MERGE-READY |
+| CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d); claim+evidence once workst-L1-autoos closes CI-WORKST-RUNNER |
+| AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
+| server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
+Leases: heartbeat claimed items each beat (`ops/pg.sh heartbeat plangraph:<KEY>`); last 03:2xZ.
+L2s: projector told to stand down (DONE). Retired: keeper-pg, backup, review-code, planner-kit (sessions still listed idle).
 
-## FOR ROUTER
-- L2-LAUNCH build-L2-deepinfra /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-deepinfra-remove.md /home/s/code/AutoOS-worktrees/deepinfra-remove (worktree to create from AutoOS origin/main AFTER priv-writers merges; build-L1 creates it). Sonnet, coding.vm (check MemAvailable >= 1 GB + headroom).
-- EDIT server:RT-P1-PG-DEPLOY done_criteria (D-1375, B2 off-host backup optional): replace "nightly off-host backup + restore drill" with "nightly backup (VM/NFS backup covers off-host; B2/OS-191b optional, non-gating) + restore drill". It gates plangraph:RT-P1-KEEPER-PG, server:RT-P1-TEMPORAL-CHECK, routing:RT-P1. Checked all plangraph/RT items: no other B2 dep (M2B-OFFHOST = keeper hosting, not backup).
-- 20:17 beat: 7 leases hb ok. #12 98d6f8e CI ✓✓ (verdict-parity fix pending). #11 e91a415 (rebase pending keeper-pg). AutoOS main b33e0fb39, priv-writers not merged -> deepinfra L2 waits. All 6 L2s alive. MemAvail 4.7 GB. mimo 402-via-OpenRouter trace running (Sonnet subagent).
-- 20:2x mimo 402 root cause: opencode.jsonc:746 bare modelID "mimo-v2.6-flash"; live OmniRoute lacks repo combo (combos.json:300-305) -> auto-resolve -> openrouter/xiaomi/mimo-v2.6-flash 402. Fix asked of fixes-L1 (modelID mimo/mimo-v2.6-flash + apply combos). L2s: skip mimo leg until MIMO-FIXED.
-- FOR ROUTER: if fixes-L1 lacks an OmniRoute GO: live apply of mimo-v2.6-flash/pro combos (configuration/omniroute/apply.sh).
+## Tools
+- Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
+- `ops/qseat.py OUT [--adjudication ADJ] part.json...` builds a seat dir (review.txt + evidence.json) from qodercli out.json parts;
+  multi-part seats with refuted fix findings pass only with the adjudication file. Evidence kind = `commit+ci` (Plan-Item trailer sha on main).
 
-## FOR OPERATOR (operator away until ~04:4xZ; no interactive questions; defaults taken are logged here)
-- INCIDENT ~21:2xZ: GitHub Actions refuses all jobs on plangraph ("recent account payments have failed or your spending limit needs to be increased", Billing & plans). Every PR CI is blocked until billing is fixed or the workstation runner (CI-RUNS-ON-WORKST, after autoos:CI-WORKST-RUNNER) exists. Default taken: no merges without CI; PR #13 fix 22922ec waits (local WSL gate green, qwen delta seat running).
-- D-935 default 21:0xZ: keeper-pg L2 hit cap (232k); router paused so no recycle -> build-L1 runs its 2 leftover closed tasks (#11 conftest fix, final HIGH seats) as in-session Sonnet subagents (spawner admission 4354<4608 MB refuses L3). Reversible; recorded as Sonnet fallback.
-- 20:5x MIMO-FIXED: live combos mimo-v2.6-flash/pro -> mimo provider (fixes-L1, evidence /home/s/seat-evidence/mimo-combos-d1375/, smoke ids uuid_hex = mimo, before gen-* = OpenRouter). L2s told. opencode.jsonc mimo/ prefix lands with ordrift merge.
-- 21:0x PR #14 (W3 copy-to-pg) merged main 3495f09 (CI 38801537015 both ✓). keeper-pg L2 stopped at cap; handoff SUPERSEDED. Subagents: #11 fix (contract @loadgroup nodeid), final HIGH seats gpt-oss+qwen -> keeper-pg-seats/final-221e9b2/.
-- 20:47 beat: 7 leases ok. #13 37d4a2b CI 4/4 ✓, openai seat running (subagent). #12 98d6f8e awaiting parity fix (mergeable UNKNOWN). #11 033016bf main merged, CI pytest ✓ pg running. keeper-pg successor f59247 auto-relaunched -> told to stand down. projector idle -> nudged. MemAvail 4.5 GB.
-- 21:0x PR #11 merged main 2a7733e (CI 38804468942 ✓✓; conftest @-suffix fix + main merge; seat gpt-oss e91a415 pass, delta spot-checked). CI-PARALLEL done-ready (evidence pending). keeper-pg final seats: gpt-oss 6/6 valid (P6 fix refuted), qwen 5/6 valid (P1,P4 fix refuted), P5 rerun running. Follow-up (non-blocking): PG CI job selects files by grep heuristic (tests.yml:76-77) -> explicit list later. worker-code qwen r2 seat verified (Taildrop sha ok, SHA256SUMS ok): pass/fix-minor(accepted)/pass.
-- 21:1x gen-4 at ctx cap: handoff #4 written. FOR ROUTER: RECYCLE build-L1 (handoff docs/build-L1-handoff.md). Open subagent runs at recycle: qwen P5 rerun (keeper-pg final seats -> final-221e9b2/adjudication.md), openai seat PR #13 (-> worker-code-seats/openai-37d4a2b/adjudication.md); successor reads those files.
-- 21:2x keeper-pg final seats COMPLETE: qwen P5 valid pass on 3rd rerun (2 prior invalid-format; note seat-shopping caveat in verdict), MEDIUM refuted (db.py:130-140). Both families 6/6 valid, all findings refuted -> successor: evidence + submit + 2 verdicts for RT-P1-KEEPER-PG-CODE.
-- 21:3x PR #12 REVIEW-CODE merged main 85cfd5a (f8fa78b CI ✓✓, verdict.py = seat_verdict parity test, seat qwen1 pass). Successor: evidence + submit + verdict; L2-DONE build-L2-review-code once router back.
-- 21:4x PR #13 openai seat: 3/3 pass (1 HIGH refuted), judge-confirmed V11 defect: cancel not reaching harness child (attempt.rs:87/123) + LOW janitor skip on native cancel (workflow.rs:113-116,151-152). Sent fix to build-L2-worker-code; expect MERGE-READY new sha + qwen delta seat; successor spot-checks fix then merges. Seat dir worker-code-seats/openai-37d4a2b/.
-- 21:5x PR #15 PLANNER-KIT-CODE merged main 27f5604 (d01c678 CI ✓✓; qwen r3 pass A+B, seat copied durable /home/s/code/plangraph-worktrees/planner-kit-seats/qwen-d01c678; writers Sonnet: spawner floor refused). Successor: evidence/submit/verdict; L2-DONE build-L2-planner-kit.
-- 21:17 beat: 7 leases hb. gen-4 over cap, awaiting recycle (FOR ROUTER).
-- 21:2x PR #13 fix 22922ec pushed (cancel via supervise_with_cancel, janitor on native cancel, 600 s cancel e2e); GitHub Actions billing refusal blocks CI -> waits. FOR ROUTER: incident GH Actions billing (all repos?) + CI-RUNS-ON-WORKST priority.
-- 21:47 beat: leases hb; waiting (GH billing, projector, inbox, #13 delta seat); gen-4 over cap awaiting recycle.
-- 02:5x OPERATOR: CI must run on the workstation (correction: I wrongly let PRs wait on GH billing). Asked workst-L1-autoos for RUNNER-READY <labels>; successor: switch tests.yml/rust.yml/rust-worker.yml runs-on to those labels (CI-RUNS-ON-WORKST, small PR, verify job runs on workst), then re-run #13 22922ec.
-- 03:0x workst-L1-autoos: BLOCKED CI-WORKST-RUNNER pending operator yes in ITS chat (runner registration = repo integration + persistent service running PR code); it asked the operator; RUNNER-READY <labels> follows.
-- 03:1x RUNNER-READY self-hosted,Linux,X64,workst (ephemeral, 1 slot, docker socket mounted, services ok, not reboot-persistent). Sonnet subagent switching all workflows to runs-on [self-hosted, workst] on lane/ci-runs-on-workst (draft PR). After green+merge: #13 rebase/re-run on workst.
+## FOR ROUTER (paused until ~04:10Z)
+- L2-DONE build-L2-projector, build-L2-review-code, build-L2-planner-kit, build-L2-keeper-pg (retire sessions).
+- New items (projector follow-ups, from L2 DONE): (1) keeper event type for attempts (schema.py), (2) Rust Card workflow must follow
+  projector contract v1 docs/projector.md (fold into RT-P1-WORKER / E2E), (3) scheduler for nightly `python -m plangraph.projector reconcile`.
+- L2-LAUNCH build-L2-deepinfra after priv-writers merges. Edit server:RT-P1-PG-DEPLOY criteria: B2 off-host optional (D-1375).
+- Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph now on workst runner.
+
+## FOR OPERATOR
+- Fix GitHub billing, or confirm workstation-only CI is final. Worker-code writers used paid deepseek via omniroute.
+- D-935 defaults (gen-5): KEEPER-PG verdicts recorded as per-family aggregates of 6-7 part seats; fix findings (gpt-oss g6, qwen q1/q4)
+  judge-REFUTED in keeper-pg-seats/final-221e9b2/adjudication.md, so the aggregate says pass and references that file. Qwen served model is
+  request-side only (qodercli reports 'qfmodel'). REVIEW-CODE writer family unknown ("free-writer" co-author) -> passed as unknown-free-writer.
+- Spawner admission floor 4608 MB refuses L3 on coding.vm -> Sonnet subagent fallback (projector: 8 closed tasks).
