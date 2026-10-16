@@ -14,6 +14,9 @@ KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restar
 ## Open
 | Item | State | Next |
 |---|---|---|
+| PROJECTOR-LIVE-NAMESPACE-FLAKE (D-1433 p2) | claimed 06:0xZ | brief briefs/l2-live-namespace-flake.md; L2-LAUNCH build-L2-ns-flake asked (workst) |
+| KEEPER-LIVE-SYNC (p2 HIGH) | open; decision CATCH UP (sent routing) | claim + brief L2 after flake L2 up; GO restart; rollback f3bac63+backup |
+| PROJECTOR-ALARMS-READER (p3) | open | after LIVE-SYNC |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
@@ -29,7 +32,6 @@ Leases: `ops/pg.sh heartbeat plangraph:<KEY>` each wait; last 04:03Z (gen-6). L2
 - Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph on workst runner; D-1380 local fallback.
 D-1380 local-CI fallback (l2-rules-common). D-1390: L2-LAUNCH "sonnet medium"; plangraph CI label -> [self-hosted, fleet-ci] by fixes-L2-cipool (covers CI-RUNS-ON-WORKST label part).
 
-Flake item spec briefs/item-projector-live-namespace-flake.json -> server-L1-routing to create (my define: unreachable_goal).
 ## FOR OPERATOR
 - Fix GitHub billing, or confirm workstation-only CI is final. Worker-code writers used paid deepseek via omniroute.
 - D-935 defaults (gen-5): KEEPER-PG verdicts recorded as per-family aggregates of 6-7 part seats; fix findings (gpt-oss g6, qwen q1/q4)
