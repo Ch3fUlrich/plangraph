@@ -24,3 +24,11 @@ error record, and "failure summary only; you have no memory of the previous atte
 
 Splitting heuristics: split on module, interface, test or migration boundary; merge tasks that
 touch the same file; fold trivial edits into a neighbour with the same scope.
+
+## Card mapping
+
+Each brief becomes the card emitted in the same batch: `Objective:` -> `outcome`, `Allowed files:`
+-> `write_set` (the rest of the repo goes to `read_set`, plus `forbid_paths`), `Acceptance:` ->
+`check_cmd` (one command, exit 0), `Interfaces:` -> `exports`, `Forbidden:` -> `forbid_paths`,
+`Toolchain:` -> `smoke_checks`. The planner adds `heldout_check` (hidden from the implementer),
+`window_class`, explicit `risk_tags` (`[]` = reviewed, none) and an honest `estimate_tokens`.
