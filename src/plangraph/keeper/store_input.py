@@ -15,8 +15,11 @@ from .item_fields import (MODEL_FIELDS, check_choices, check_host, check_kg_refs
 from .note_fold import DESCRIPTION_CAP, NOTE_CAP
 
 # Request-shape caps.  A field named in the refusal lets the caller fix it.
+# ``estimate_src`` is the audit-meta provenance marker (PG-ESTIMATE-SRC-EDIT):
+# a short label naming where the number came from, never a credential.
 _TEXT_CAPS = {"title": 200, "note": NOTE_CAP, "done_criteria": 600,
-              "description": DESCRIPTION_CAP, "owner": 100, "track": 100}
+              "description": DESCRIPTION_CAP, "owner": 100, "track": 100,
+              "estimate_src": 64}
 _MAX_DEPS = 200
 
 
