@@ -120,8 +120,11 @@ epoch 1 and `claimed_by = owner`). `done`/`cancelled` are `400`. [Created].
 ### `POST /v1/edit_definition`
 Router or l1 of the project. `{key, fields:{...}}`; editable: `title,
 description, host, wait, layer, role, agent_id, phase_kind, fixes, choices,
-kg_refs, estimate_h, done_criteria, evidence_kinds, depends_on, track, owner,
-note, review_tier`, and `priority` (router only). `200 {key}` [KeyOnly]
+kg_refs, estimate_h, estimate_src, done_criteria, evidence_kinds, depends_on,
+track, owner, note, review_tier`, and `priority` (router only). `estimate_src`
+must be a non-empty string (≤ 64 chars) and needs a non-null `estimate_h`; an
+`estimate_h` edit without `estimate_src` stores the editing principal's name
+there. `200 {key}` [KeyOnly]
 (`{key, priority}` when only `priority` was sent). Only `open` items are
 editable (`400 bad_state`); the router may change `review_tier`/`evidence_kinds`
 of a `claimed`/`in_review` item (this voids earlier verdicts). Lowering a tier
