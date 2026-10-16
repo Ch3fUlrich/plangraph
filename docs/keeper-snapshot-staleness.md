@@ -18,3 +18,24 @@ write and leaves no stale file. Replace is atomic (temp + rename; signature firs
 
 Audit: the snapshot rebuild's `audit_log` row is now written by the `system` principal once per
 rebuild, not by the writing principal once per write.
+
+## Bench (tools/bench_keeper_snapshot.py; local postgres:16, 127.0.0.1, 60 sequential writes/size)
+
+Before (main e790e34 + set-based off): PG write p50 95/353/871/1710 ms and SQLite 10/22/59/108 ms at 100/400/1000/2000 items; PG GET snapshot 83/332/870/1661 ms.
+
+After:
+
+| backend | items | write p50 ms | write p95 ms | write max ms | GET snapshot p50 ms | snapshot bytes |
+|---|---|---|---|---|---|---|
+| sqlite | 100 | 4 | 5 | 15 | 6 | 130412 |
+| sqlite | 400 | 5 | 11 | 15 | 14 | 518776 |
+| sqlite | 1000 | 4 | 6 | 12 | 48 | 1296579 |
+| sqlite | 2000 | 5 | 6 | 6 | 63 | 2597919 |
+| backend | items | write p50 ms | write p95 ms | write max ms | GET snapshot p50 ms | snapshot bytes |
+|---|---|---|---|---|---|---|
+| postgres | 100 | 8 | 16 | 28 | 9 | 130412 |
+| postgres | 400 | 8 | 10 | 11 | 18 | 518776 |
+| postgres | 1000 | 8 | 11 | 14 | 39 | 1296579 |
+| postgres | 2000 | 10 | 16 | 16 | 83 | 2597919 |
+
+Not shown: a write that lands while a rebuild holds the server lock waits up to one build (~ the GET snapshot time at that size, once per max_delay window under a steady stream); sequential runs of ~1 s rarely hit it, so p95/max understate that tail.

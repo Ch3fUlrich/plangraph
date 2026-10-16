@@ -90,7 +90,7 @@ def run(backend, n, writes, reads, extra=None):
     server.shutdown()
     server.server_close()
     conn.close()
-    return {"n": n, "w_p50": statistics.median(lat), "w_p95": _pct(lat, 0.95),
+    return {"n": n, "w_p50": statistics.median(lat), "w_p95": _pct(lat, 0.95), "w_max": max(lat),
             "r_p50": statistics.median(rd), "bytes": (tmp / "plan.snapshot.json").stat().st_size}
 
 
@@ -98,14 +98,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--backend", choices=("sqlite", "postgres"), required=True)
     ap.add_argument("--sizes", default="100,400,1000,2000")
-    ap.add_argument("--writes", type=int, default=30)
+    ap.add_argument("--writes", type=int, default=60)
     ap.add_argument("--reads", type=int, default=5)
     args = ap.parse_args(argv)
-    print(f"| backend | items | write p50 ms | write p95 ms | GET snapshot p50 ms | snapshot bytes |")
-    print("|---|---|---|---|---|---|")
+    print(f"| backend | items | write p50 ms | write p95 ms | write max ms | GET snapshot p50 ms | snapshot bytes |")
+    print("|---|---|---|---|---|---|---|")
     for n in (int(s) for s in args.sizes.split(",")):
         r = run(args.backend, n, args.writes, args.reads)
-        print(f"| {args.backend} | {r['n']} | {r['w_p50']:.0f} | {r['w_p95']:.0f} | "
+        print(f"| {args.backend} | {r['n']} | {r['w_p50']:.0f} | {r['w_p95']:.0f} | {r['w_max']:.0f} | "
               f"{r['r_p50']:.0f} | {r['bytes']} |", flush=True)
 
 
