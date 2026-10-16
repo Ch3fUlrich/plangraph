@@ -1,0 +1,32 @@
+V1 ΓÇô FalseΓÇægreen / hiddenΓÇæred edge cases  
+FileΓÇ»src/plangraph/keeper/evidence.pyΓÇ»functionΓÇ»_ci_conclusion  
+* The grouping key is now a 3ΓÇætupleΓÇ»(suite,ΓÇ»app,ΓÇ»name). Suite and app are included only when they are hashable strings/ids; otherwise they stayΓÇ»None, so runs lacking a suite or app are still grouped together by name only.  
+* MissingΓÇ»check_suiteΓÇ»orΓÇ»appΓÇ»fields fall back toΓÇ»suite=NoneΓÇ»orΓÇ»app=None, preventing a ΓÇ£KeyErrorΓÇ¥ and ensuring those runs are still considered; they cannot hide a failure from a run that does have suite/app because the key differs when suite/app is present.  
+* UnhashableΓÇ»idΓÇ»orΓÇ»slugΓÇ»values are ignored (try/except TypeError) ΓÇô such runs are grouped underΓÇ»NoneΓÇ»for that component, again keeping them separate from normal runs.  
+* The ΓÇ£newestΓÇ¥ selection uses a composite keyΓÇ»(rid_int,ΓÇ»started_str)ΓÇ»so ties are broken byΓÇ»started_at; a run with largerΓÇ»idΓÇ»but sameΓÇ»started_atΓÇ»still wins because the tuple comparison ordersΓÇ»ridΓÇ»first.  
+* Legacy runs withoutΓÇ»statusΓÇ»but with a nonΓÇæemptyΓÇ»conclusionΓÇ»are still treated as completed (the original ΓÇ£legacy fakesΓÇ¥ logic preserved).  
+* Because failures are collected perΓÇægroup and displayed with suite or app disambiguation when the same name appears multiple times, a failure in any suite/app will surface; only a later success in the *same* suite/app can supersede it. Thus no run shape can make a red/inΓÇæprogress hide behind a newer green from a different suite/app.
+
+V2 ΓÇô Pagination correctness  
+FileΓÇ»src/plangraph/keeper/evidence_ci.pyΓÇ»methodΓÇ»CIAdapter.check_runs  
+* Loop iterates pagesΓÇ»1ΓÇ»throughΓÇ»10ΓÇ»(maxΓÇ»10ΓÇ»pages) withΓÇ»per_page=100.  
+* After each request it parsesΓÇ»data.get("check_runs")ΓÇ»as a list (empty list if missing) and extendsΓÇ»collectedΓÇ»with only dict items.  
+* If the response contains a numericΓÇ»total_countΓÇ»(and it is an int, not a bool) the loop breaks whenΓÇ»len(collected)ΓÇ»ΓëÑΓÇ»total. This correctly stops after the last needed page.  
+* If a page returns fewer thanΓÇ»100ΓÇ»runs, the loop also breaks ΓÇô handling the common ΓÇ£last page < per_pageΓÇ¥ case.  
+* After the loop, ifΓÇ»totalΓÇ»was reported andΓÇ»totalΓÇ»>ΓÇ»len(collected)ΓÇ»the code raisesΓÇ»RuntimeErrorΓÇ»with a clear ΓÇ£checkΓÇæruns truncatedΓÇ¥ message ΓÇô this guards against the GitHub API silently truncating results beyond the 10ΓÇæpage cap.  
+* The path construction uses the base URL plus the query string, and the tests assert that the generated command contains ΓÇ£per_page=100ΓÇ¥ and ΓÇ£page=1ΓÇ¥ (and later pages). The command prefix is correctly split intoΓÇ»["gh","api",<path>]ΓÇ»as verified byΓÇ»tests/test_evidence_hardening.py:test_ci_adapter_builds_path_from_validated_components.  
+
+V3 ΓÇô Test coverage of new logic  
+FileΓÇ»tests/test_evidence.py  
+* **test_commit_ci_same_name_different_suites_both_evaluated** verifies that two runs with the same name but differentΓÇ»check_suiteΓÇ»ids are both considered; the failure from suiteΓÇ»100ΓÇ»makes the overall result negative and the name appears in the detail.  
+* **test_commit_ci_same_suite_rerun_supersedes** ensures that within the same suite a later run (higher id) overrides an earlier failure, yielding a passing result.  
+* **test_commit_ci_suite_grouped_a1b1da808_pending_then_ok** reproduces the realΓÇæworld scenario where a skipped ΓÇ£Windows suiteΓÇ¥ and an inΓÇæprogress shardΓÇ»bΓÇ»cause a pending verdict; once the pending run completes successfully, the verdict turns green.  
+* **test_commit_ci_legacy_runs_without_suite_group_by_name** checks the fallback path for runs lackingΓÇ»check_suite/appΓÇ»ΓÇô they are grouped by name only, and the newest runΓÇÖs conclusion decides the outcome, matching the legacy behavior.  
+* **test_ci_conclusion_all_non_dict_fails_closed** confirms that a completely nonΓÇælist or nonΓÇædict input now returns a closedΓÇæfail message (ΓÇ£no CI checkΓÇæruns found ΓÇªΓÇ¥), as required after the fix.  
+* **test_ci_adapter_paginates_two_pages** (inΓÇ»tests/test_evidence_hardening.py) validates that pagination over two pages collects all 105 runs and that both page URLs contain the correct query parameters.  
+* **test_ci_adapter_truncated_raises** ensures that whenΓÇ»total_countΓÇ»exceeds the collected runs after the 10ΓÇæpage limit, aΓÇ»RuntimeErrorΓÇ»with ΓÇ£checkΓÇæruns truncatedΓÇ¥ is raised.  
+
+All new edgeΓÇæcases introduced by the grouping and pagination changes are covered by the above tests, and the existing test suite passes.
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+VERDICT: pass
