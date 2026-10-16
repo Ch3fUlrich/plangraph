@@ -25,6 +25,8 @@ pub enum MergeError {
     Git(#[from] GitError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("confinement check failed: {0}")]
+    Confine(String),
     #[error("timed out waiting for the merge lock")]
     LockTimeout,
 }
@@ -123,7 +125,23 @@ pub fn merge_attempt(
     check_rev(attempt_branch)?;
     check_rev(base_sha)?;
 
-    let _lock = MergeLock::acquire(repo, lock_timeout)?;
+    let lock = MergeLock::acquire(repo, lock_timeout)?;
+    merge_locked(&lock, repo, main_branch, attempt_branch, base_sha)
+}
+
+/// The merge body for a caller that already holds the file lock (the `&MergeLock`
+/// is the proof). Lets `do_merge` do its rebase, confinement and check steps
+/// under the same lock hold instead of releasing between them.
+pub fn merge_locked(
+    _lock: &MergeLock,
+    repo: &Path,
+    main_branch: &str,
+    attempt_branch: &str,
+    base_sha: &str,
+) -> Result<MergeOutcome, MergeError> {
+    check_rev(main_branch)?;
+    check_rev(attempt_branch)?;
+    check_rev(base_sha)?;
 
     let main_ref = format!("refs/heads/{main_branch}");
     let head = git(repo, &["rev-parse", &main_ref])?;
@@ -166,6 +184,48 @@ pub fn merge_attempt(
     })();
 
     result
+}
+
+/// Fencing file name, inside the repository's common git dir.
+const FENCE_NAME: &str = "pg-merge.fence";
+
+/// Admit a fencing token under the held lock: refused (false) when a higher
+/// token was already admitted, otherwise recorded as the new high-water mark.
+/// A holder whose keeper lock expired and was re-granted carries a smaller
+/// token than the new holder, so its late merge cannot land.
+pub fn admit_fence(_lock: &MergeLock, repo: &Path, token: u64) -> Result<bool, MergeError> {
+    let path = git_common_dir(repo)?.join(FENCE_NAME);
+    let seen = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| t.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    if token < seen {
+        return Ok(false);
+    }
+    std::fs::write(&path, token.to_string())?;
+    Ok(true)
+}
+
+/// Rebase the branch checked out in `worktree` onto `onto`. A conflict is
+/// aborted (leaving the worktree as it was) and reported as `false`.
+pub fn rebase_onto(worktree: &Path, onto: &str) -> Result<bool, MergeError> {
+    check_rev(onto)?;
+    let rebased = git(
+        worktree,
+        &[
+            "-c",
+            "user.name=pg-worker",
+            "-c",
+            "user.email=worker@localhost",
+            "rebase",
+            onto,
+        ],
+    );
+    if rebased.is_err() {
+        let _ = git(worktree, &["rebase", "--abort"]);
+        return Ok(false);
+    }
+    Ok(true)
 }
 
 /// Map a merge outcome to the exit class the orchestrator records.
@@ -369,6 +429,88 @@ mod tests {
             .count();
         assert_eq!((merged, moved), (1, 1), "{outs:?}");
         assert_ne!(git(r.path(), &["rev-parse", "refs/heads/main"]), base);
+    }
+
+    #[test]
+    fn fence_admits_equal_or_higher_and_refuses_stale() {
+        let (r, _base) = repo();
+        let lock = MergeLock::acquire(r.path(), Duration::from_secs(5)).unwrap();
+        assert!(admit_fence(&lock, r.path(), 3).unwrap());
+        assert!(admit_fence(&lock, r.path(), 3).unwrap());
+        assert!(admit_fence(&lock, r.path(), 5).unwrap());
+        assert!(!admit_fence(&lock, r.path(), 4).unwrap());
+    }
+
+    #[test]
+    fn rebase_onto_moves_the_branch_and_aborts_conflicts() {
+        let (r, base) = repo();
+        let p = r.path();
+        let root = tempfile::tempdir().unwrap();
+        let wt = root.path().join("wt");
+        let wt_s = wt.to_string_lossy().into_owned();
+        git(
+            p,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "attempt/x/1",
+                "--",
+                wt_s.as_str(),
+                &base,
+            ],
+        );
+        write(&wt, "x.txt", "x");
+        commit_all(&wt, "attempt");
+        write(p, "y.txt", "y");
+        let moved = commit_all(p, "advance");
+        assert!(rebase_onto(&wt, &moved).unwrap());
+        assert_eq!(git(&wt, &["rev-parse", "HEAD~1"]), moved);
+
+        // Now a genuinely conflicting change on main.
+        git(
+            p,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "attempt/z/1",
+                "--",
+                root.path().join("wz").to_str().unwrap(),
+                &moved,
+            ],
+        );
+        let wz = root.path().join("wz");
+        write(
+            &wz,
+            "README.md",
+            "attempt side
+",
+        );
+        let before = commit_all(&wz, "attempt z");
+        write(
+            p,
+            "README.md",
+            "main side
+",
+        );
+        let moved2 = commit_all(p, "main edit");
+        assert!(!rebase_onto(&wz, &moved2).unwrap());
+        // aborted: branch untouched, no rebase in progress
+        assert_eq!(git(&wz, &["rev-parse", "HEAD"]), before);
+        assert!(git(&wz, &["status", "--porcelain"]).is_empty());
+    }
+
+    #[test]
+    fn merge_locked_runs_under_a_held_lock() {
+        let (r, base) = repo();
+        let p = r.path();
+        let head = attempt_branch(p, "attempt/x/1", "x.txt", "x", &base);
+        let lock = MergeLock::acquire(p, Duration::from_secs(5)).unwrap();
+        let out = merge_locked(&lock, p, "main", "attempt/x/1", &base).unwrap();
+        assert_eq!(out, MergeOutcome::Merged { sha: head });
     }
 
     /// A `post-checkout` hook that fails makes `git worktree add` exit non-zero

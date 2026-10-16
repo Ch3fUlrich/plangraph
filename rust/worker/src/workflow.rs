@@ -8,8 +8,8 @@
 //! promote, upgrade the context class, quarantine or park.
 
 use crate::activities::{
-    CardActivities, CardInput, CardOutput, DoneInput, JanitorInput, MergeInput, MergeResult,
-    ProbeInput, ProbeResult, Tick,
+    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, JanitorInput, MergeInput,
+    MergeResult, ProbeInput, ProbeResult, Tick,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
@@ -34,6 +34,15 @@ const PROBE_FAIL_PARK_REASON: &str = "probe fail cap reached";
 /// Consecutive `probe_fail` attempts tolerated before parking (R2 carry-over).
 const PROBE_FAIL_CAP: usize = 5;
 
+/// Durable pause before asking again when the keeper would not grant the merge lock.
+const MERGE_RETRY_WAIT: Duration = Duration::from_secs(15);
+
+/// Merge-lock retries before the card parks.
+const MERGE_RETRY_CAP: u32 = 20;
+
+/// Alarm reason when the keeper merge lock stayed unavailable.
+const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
+
 /// What the merge step produced.
 #[derive(Debug)]
 enum MergeStep {
@@ -41,6 +50,11 @@ enum MergeStep {
     Merged(String),
     /// Main moved or the attempt would not fast-forward; the value is the new base.
     Moved(String),
+    /// The merge itself said no (post-rebase check, confinement, stale fence);
+    /// the class goes to the policy, the text is the check tail.
+    Failed(ExitClass, String),
+    /// The keeper would not grant the merge lock; nothing was merged.
+    RetryLater,
 }
 
 #[workflow]
@@ -194,7 +208,7 @@ impl Card {
             // (worker crash, rebase conflict, probe failure) that have none of their own.
             let diff_hash = result.diff_hash.clone();
             let check_hash = result.check_hash.clone();
-            let check_tail = result.check_tail.clone();
+            let mut check_tail = result.check_tail.clone();
 
             let report = AttemptReport {
                 card: input.claim.card.clone(),
@@ -209,6 +223,7 @@ impl Card {
             history.push(to_budget_attempt(&result, &leg));
 
             let mut probed = false;
+            let mut merge_retries: u32 = 0;
             let mut branch_to_merge: Option<String> = if result.exit_class == ExitClass::Ok {
                 Some(result.branch.clone())
             } else {
@@ -220,7 +235,7 @@ impl Card {
             loop {
                 // Step 4: merge an `ok` (or probed already-done) attempt now.
                 if let Some(branch) = branch_to_merge.take() {
-                    match merge_step(ctx, &cfg, &input, &base_sha, &branch).await? {
+                    match merge_step(ctx, &cfg, &input, &base_sha, &branch, n).await? {
                         MergeStep::Merged(sha) => {
                             ctx.execute_activity(
                                 CardActivities::complete,
@@ -234,9 +249,53 @@ impl Card {
                             run_janitor(ctx, &cfg, &input, &base_sha).await?;
                             return Ok(finish("merged", Some(sha), n));
                         }
+                        MergeStep::RetryLater => {
+                            merge_retries += 1;
+                            if merge_retries > MERGE_RETRY_CAP {
+                                let packet = packet_for(
+                                    &input.claim.card,
+                                    leg.tier,
+                                    ExitClass::MergeRefused,
+                                    MERGE_LOCK_PARK_REASON,
+                                );
+                                run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                park_and_alarm(
+                                    ctx,
+                                    &cfg,
+                                    &packet,
+                                    MERGE_LOCK_PARK_REASON.to_string(),
+                                )
+                                .await?;
+                                return Ok(parked(n));
+                            }
+                            if wait_for(ctx, MERGE_RETRY_WAIT).await? {
+                                run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                return Ok(cancelled(n));
+                            }
+                            branch_to_merge = Some(branch);
+                            continue;
+                        }
+                        MergeStep::Failed(class, tail) => {
+                            // The branch was judged under the lock; probing it again
+                            // would only find the same commits and loop back here.
+                            probed = true;
+                            check_tail = tail;
+                            history.push(Attempt {
+                                exit_class: class,
+                                leg: leg.id.clone(),
+                                tier: leg.tier,
+                                diff_hash: diff_hash.clone(),
+                                check_hash: check_hash.clone(),
+                                context_overflow: false,
+                            });
+                        }
                         MergeStep::Moved(main_head) => {
-                            // Main moved: rebase onto the new head and let the policy
-                            // retry from a fresh worktree.
+                            // The worker already tried to rebase this attempt onto the
+                            // moved main and could not (or had no worktree to try in).
+                            // Take the new head as the base and let the policy retry
+                            // from a fresh worktree; probing the branch again would
+                            // only re-merge the same commits and count the conflict twice.
+                            probed = true;
                             base_sha = main_head;
                             history.push(Attempt {
                                 exit_class: ExitClass::RebaseConflict,
@@ -513,6 +572,7 @@ async fn merge_step(
     input: &CardInput,
     base_sha: &str,
     branch: &str,
+    n: u32,
 ) -> WorkflowResult<MergeStep> {
     let r: MergeResult = ctx
         .execute_activity(
@@ -522,14 +582,24 @@ async fn merge_step(
                 main_branch: input.main_branch.clone(),
                 branch: branch.to_string(),
                 base_sha: base_sha.to_string(),
+                fence_token: None,
+                worktree: format!("{}/{}-{n}", input.workroot, input.claim.card),
+                check_cmd: Some(input.claim.check_cmd.clone()),
+                confine: Some(ConfineSpec {
+                    allow: input.claim.allow.clone(),
+                    forbid: input.claim.forbid.clone(),
+                }),
             },
             once_options(cfg),
         )
         .await?;
-    Ok(if r.outcome == "merged" {
-        MergeStep::Merged(r.sha.unwrap_or(r.main_head))
-    } else {
-        MergeStep::Moved(r.main_head)
+    Ok(match r.outcome.as_str() {
+        "merged" => MergeStep::Merged(r.sha.unwrap_or(r.main_head)),
+        "retry_later" => MergeStep::RetryLater,
+        "check_fail" => MergeStep::Failed(ExitClass::CheckFail, r.detail),
+        "contract_defect" => MergeStep::Failed(ExitClass::ContractDefect, r.detail),
+        "merge_refused" => MergeStep::Failed(ExitClass::MergeRefused, r.detail),
+        _ => MergeStep::Moved(r.main_head),
     })
 }
 

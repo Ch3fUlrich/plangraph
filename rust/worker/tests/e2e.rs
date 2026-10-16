@@ -575,6 +575,90 @@ async fn usage_limit_reroutes_to_non_claude_leg() {
     .await;
 }
 
+/// Shell preamble that finds the shared repo from inside an attempt worktree
+/// (the common git dir is absolute there) and lands a commit on `main` while
+/// the attempt is still running, so the merge sees a moved base.
+const MOVE_MAIN: &str = r#"R=$(dirname "$(git rev-parse --git-common-dir)")
+if [ ! -f "$R/moved.txt" ]; then
+  echo m > "$R/moved.txt"
+  git -C "$R" add moved.txt
+  git -C "$R" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m moved
+fi
+"#;
+
+/// Main advances (a different file) between the attempt's base and its merge:
+/// the worker rebases the attempt onto the new main, re-runs the check once and
+/// fast-forwards, all in the same attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_base_moved_rebases_and_merges() {
+    in_local(async {
+        let script = format!("{MOVE_MAIN}echo ok > out.txt");
+        let Some(env) = env_or_skip("base-moved", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-base-moved";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-base-moved-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("base_moved_rebase", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        // One attempt: the move was absorbed by the rebase, not a new attempt.
+        assert_eq!(attempt_outcomes(&handle).await.len(), 1);
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        // Both the moved commit and the attempt's file are on main.
+        assert_eq!(git(&env.repo, &["show", "main:moved.txt"]), "m");
+        assert_eq!(git(&env.repo, &["show", "main:out.txt"]), "ok");
+        assert_eq!(git(&env.repo, &["rev-parse", "main~1"]).len(), 40);
+        // The keeper merge lock was taken and returned.
+        assert!(!env.keeper.merge_lock_held());
+        assert_eq!(env.keeper.lock_calls().len(), 2);
+        env.stop();
+    })
+    .await;
+}
+
+/// Main edits the very line the attempt edits: the rebase conflicts, nothing is
+/// merged from that attempt, and the card requeues a fresh attempt on the new
+/// base, which then merges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_rebase_conflict_requeues() {
+    in_local(async {
+        let script = r#"R=$(dirname "$(git rev-parse --git-common-dir)")
+if ! grep -q '^m$' "$R/seed.txt"; then
+  echo m > "$R/seed.txt"
+  git -C "$R" add seed.txt
+  git -C "$R" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m moved
+fi
+echo attempt > seed.txt"#;
+        let Some(env) = env_or_skip("rebase-conflict", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-rebase-conflict";
+        let claim = env.claim(card, &["seed.txt"], "test -f seed.txt");
+        let id = format!("e2e-rebase-conflict-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("rebase_conflict_requeue", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(
+            attempt_outcomes(&handle).await.len(),
+            2,
+            "a conflicting rebase requeues one more attempt"
+        );
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        assert_eq!(git(&env.repo, &["show", "main:seed.txt"]), "attempt");
+        env.stop();
+    })
+    .await;
+}
+
 /// A leg naming a harness this worker never registered is the plan's fault:
 /// the card goes back to the planner instead of crashing or retrying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

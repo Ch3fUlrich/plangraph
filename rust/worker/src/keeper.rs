@@ -11,6 +11,10 @@
 //! | POST   | `/v1/park`     | `ParkPacket`             | 204                |
 //! | POST   | `/v1/complete` | `{"card", "merged_sha"}` | 204                |
 //! | POST   | `/v1/alarms`   | `Alarm`                  | 204                |
+//! | POST   | `/v1/locks/<repo>/acquire` | `{"owner", "ttl_s"}` | 200 `Fence`    |
+//! | POST   | `/v1/locks/<repo>/release` | `Fence`              | 204            |
+//!
+//! `<repo>` is percent-encoded as one path segment.
 //!
 //! Any other status is reported as [`KeeperError::Status`].
 
@@ -50,6 +54,15 @@ pub struct Alarm {
     pub reason: String,
 }
 
+/// Fencing token of a keeper-held merge lock. The token only ever grows, so a
+/// holder whose lock expired and was re-granted presents a token the repo side
+/// can tell is stale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fence {
+    pub token: u64,
+    pub owner: String,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum KeeperError {
     #[error("keeper request failed: {0}")]
@@ -68,6 +81,24 @@ pub trait Keeper: Send + Sync {
     fn park(&self, p: &ParkPacket) -> Result<(), KeeperError>;
     fn complete(&self, card: &str, merged_sha: &str) -> Result<(), KeeperError>;
     fn alarm(&self, a: &Alarm) -> Result<(), KeeperError>;
+    /// Take the cross-worker merge lock for `repo`, valid for `ttl_s` seconds.
+    fn acquire_merge_lock(&self, repo: &str, owner: &str, ttl_s: u64)
+    -> Result<Fence, KeeperError>;
+    /// Give the lock back. A stale token is refused.
+    fn release_merge_lock(&self, repo: &str, fence: &Fence) -> Result<(), KeeperError>;
+}
+
+/// Percent-encode `s` so it is one URL path segment (unreserved bytes pass).
+fn encode_segment(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Blocking HTTP implementation of [`Keeper`] over ureq.
@@ -140,6 +171,29 @@ impl Keeper for HttpKeeper {
     fn alarm(&self, a: &Alarm) -> Result<(), KeeperError> {
         self.post204("/v1/alarms", a)
     }
+
+    fn acquire_merge_lock(
+        &self,
+        repo: &str,
+        owner: &str,
+        ttl_s: u64,
+    ) -> Result<Fence, KeeperError> {
+        let url = self.url(&format!("/v1/locks/{}/acquire", encode_segment(repo)));
+        let payload = serde_json::json!({ "owner": owner, "ttl_s": ttl_s });
+        match self.agent.post(&url).send_json(payload) {
+            Ok(resp) if resp.status() == 200 => resp
+                .into_json()
+                .map_err(|e| KeeperError::Decode(e.to_string())),
+            Ok(resp) => Err(KeeperError::Status(resp.status())),
+            Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
+            Err(e) => Err(KeeperError::Http(e.to_string())),
+        }
+    }
+
+    fn release_merge_lock(&self, repo: &str, fence: &Fence) -> Result<(), KeeperError> {
+        let path = format!("/v1/locks/{}/release", encode_segment(repo));
+        self.post204(&path, fence)
+    }
 }
 
 /// In-memory [`Keeper`] for tests: claims come from a queue the test fills, and
@@ -156,9 +210,38 @@ struct StubState {
     parked: Vec<ParkPacket>,
     completed: Vec<(String, String)>,
     alarms: Vec<Alarm>,
+    /// Highest token handed out; the next acquire returns `last_token + 1`.
+    last_token: u64,
+    /// The fence currently held, if any.
+    held: Option<Fence>,
+    lock_calls: Vec<String>,
+    lock_unavailable: bool,
 }
 
 impl StubKeeper {
+    /// Make every `acquire_merge_lock` fail, as an unreachable keeper would.
+    pub fn set_lock_unavailable(&self, down: bool) {
+        self.lock().lock_unavailable = down;
+    }
+
+    /// Simulate the held lock expiring and being re-granted elsewhere: the
+    /// current token goes stale and the next one is already spoken for.
+    pub fn expire_merge_lock(&self) {
+        let mut s = self.lock();
+        s.held = None;
+        s.last_token += 1;
+    }
+
+    /// Lock calls in order, as `acquire:<repo>:<token>` / `release:<repo>:<token>`.
+    pub fn lock_calls(&self) -> Vec<String> {
+        self.lock().lock_calls.clone()
+    }
+
+    /// True while a fence is outstanding.
+    pub fn merge_lock_held(&self) -> bool {
+        self.lock().held.is_some()
+    }
+
     pub fn push_claim(&self, c: Claim) {
         self.lock().queue.push(c);
     }
@@ -214,6 +297,39 @@ impl Keeper for StubKeeper {
     fn alarm(&self, a: &Alarm) -> Result<(), KeeperError> {
         self.lock().alarms.push(a.clone());
         Ok(())
+    }
+
+    fn acquire_merge_lock(
+        &self,
+        repo: &str,
+        owner: &str,
+        _ttl_s: u64,
+    ) -> Result<Fence, KeeperError> {
+        let mut s = self.lock();
+        if s.lock_unavailable {
+            return Err(KeeperError::Http("keeper unavailable".into()));
+        }
+        s.last_token += 1;
+        let fence = Fence {
+            token: s.last_token,
+            owner: owner.to_string(),
+        };
+        s.held = Some(fence.clone());
+        s.lock_calls.push(format!("acquire:{repo}:{}", fence.token));
+        Ok(fence)
+    }
+
+    fn release_merge_lock(&self, repo: &str, fence: &Fence) -> Result<(), KeeperError> {
+        let mut s = self.lock();
+        s.lock_calls.push(format!("release:{repo}:{}", fence.token));
+        match &s.held {
+            Some(h) if h == fence => {
+                s.held = None;
+                Ok(())
+            }
+            // Stale (expired or re-granted) or never held: refused like a 409.
+            _ => Err(KeeperError::Status(409)),
+        }
     }
 }
 
@@ -439,5 +555,104 @@ mod tests {
         let (base, server) = serve_once(204, "No Content", "");
         HttpKeeper::new(&base).alarm(&alarm()).unwrap();
         assert_eq!(server.join().unwrap().path, "/v1/alarms");
+    }
+
+    #[test]
+    fn stub_lock_bumps_tokens_and_rejects_stale_release() {
+        let k = StubKeeper::default();
+        let a = k.acquire_merge_lock("org/repo", "w-1", 60).unwrap();
+        let b = k.acquire_merge_lock("org/repo", "w-2", 60).unwrap();
+        assert!(b.token > a.token);
+        // `a` was superseded by `b`: releasing it is refused.
+        assert_eq!(
+            k.release_merge_lock("org/repo", &a).unwrap_err(),
+            KeeperError::Status(409)
+        );
+        k.release_merge_lock("org/repo", &b).unwrap();
+        assert!(!k.merge_lock_held());
+        k.set_lock_unavailable(true);
+        assert!(matches!(
+            k.acquire_merge_lock("org/repo", "w-1", 60),
+            Err(KeeperError::Http(_))
+        ));
+        assert_eq!(
+            k.lock_calls(),
+            vec![
+                "acquire:org/repo:1".to_string(),
+                "acquire:org/repo:2".to_string(),
+                "release:org/repo:1".to_string(),
+                "release:org/repo:2".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn http_acquire_posts_and_decodes_the_fence() {
+        let fence = Fence {
+            token: 7,
+            owner: "w-1".into(),
+        };
+        let (base, server) = serve_once(200, "OK", &serde_json::to_string(&fence).unwrap());
+        let got = HttpKeeper::new(&base)
+            .acquire_merge_lock("org/repo", "w-1", 90)
+            .unwrap();
+        assert_eq!(got, fence);
+        let captured = server.join().unwrap();
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/locks/org%2Frepo/acquire");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&captured.body).unwrap(),
+            serde_json::json!({ "owner": "w-1", "ttl_s": 90 })
+        );
+    }
+
+    #[test]
+    fn http_release_posts_the_fence() {
+        let fence = Fence {
+            token: 7,
+            owner: "w-1".into(),
+        };
+        let (base, server) = serve_once(204, "No Content", "");
+        HttpKeeper::new(&base)
+            .release_merge_lock("org/repo", &fence)
+            .unwrap();
+        let captured = server.join().unwrap();
+        assert_eq!(captured.path, "/v1/locks/org%2Frepo/release");
+        assert_eq!(
+            serde_json::from_str::<Fence>(&captured.body).unwrap(),
+            fence
+        );
+    }
+
+    #[test]
+    fn http_lock_errors_map_like_the_other_verbs() {
+        let (base, server) = serve_once(409, "Conflict", "");
+        assert_eq!(
+            HttpKeeper::new(&base)
+                .acquire_merge_lock("r", "w", 1)
+                .unwrap_err(),
+            KeeperError::Status(409)
+        );
+        server.join().unwrap();
+
+        let (base, server) = serve_once(200, "OK", "not json");
+        assert!(matches!(
+            HttpKeeper::new(&base).acquire_merge_lock("r", "w", 1),
+            Err(KeeperError::Decode(_))
+        ));
+        server.join().unwrap();
+
+        let (base, server) = serve_once(500, "Internal Server Error", "");
+        let f = Fence {
+            token: 1,
+            owner: "w".into(),
+        };
+        assert_eq!(
+            HttpKeeper::new(&base)
+                .release_merge_lock("r", &f)
+                .unwrap_err(),
+            KeeperError::Status(500)
+        );
+        server.join().unwrap();
     }
 }
