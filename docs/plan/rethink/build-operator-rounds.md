@@ -36,3 +36,4 @@
 
 ## 2026-10-16 ~02:5xZ operator verbatim
 - "I said ci should happen on the workstation"
+- ~03:3xZ: "Why only one job at a  time? There is plenty of headroom on the server. Increase the speed. Additionally only run the ci be or the merge into the main branch to speedup the process" -> workst-L1-autoos asked to scale runner slots (~4); CI switch lane: triggers pull_request->main only + concurrency cancel-in-progress.
