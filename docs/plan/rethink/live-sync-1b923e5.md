@@ -56,3 +56,9 @@ Both VERDICT: fix. Adjudicated against code/log:
 - not covered (carry as live risk): append-only triggers on attempts/decisions/answers/aliases/outbox_seen never written by a verb here; /inbox other methods (only GET tested; `api.py` routes /inbox only under GET); Temporal path and Postgres backend.
 
 (see seats/ dir on branch lane/keeper-live-sync-seats results below)
+
+## 6. Live result (GO D-1437, 2026-10-16 06:42Z)
+Live keeper f3bac63 -> 1b923e5 via unit drop-in `plangraph-keeper.service.d/live-sync-1b923e5.conf` (worktree `.claude/worktrees/live-1b923e5`); worktree-proposal kept at f3bac63 for 24 h as rollback.
+Backup `backups/live-sync-1b923e5-20261016T064214Z`, keeper.db sha256 3056e43a207816bf8dd54d3ddccb16bdebd08d00b6dcaf319acabc813c91af16.
+Counts before = after: aliases 12, audit_findings 34, audit_log 50844, edges 2557, events 6227, evidence 1053, items 1732, outbox_seen 0, principals 24, run_tokens 0; new design-3 tables all 0.
+admin verify ok, verify-snapshot ok, /v1/show 200, router whoami rc 0, /inbox 200, NRestarts 0. Verified by routing D-1438.
