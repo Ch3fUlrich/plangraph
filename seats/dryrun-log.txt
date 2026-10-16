@@ -87,3 +87,6 @@ chain and cache integrity ok
 chain and cache integrity ok
 1 problem(s)
 {'key': 'plangraph:LIVESYNC-DRY', 'code': 'cache_mismatch', 'field': 'state', 'expected': 'open', 'got': 'parked'}
+# second dry run (post-seat), T code on fresh copy
+ask_question rc=200 | questions rc=200 | answer_question rc=200 | resignal_question rc=200 (signal disabled)
+set_state parked->open changed | admin verify ok
