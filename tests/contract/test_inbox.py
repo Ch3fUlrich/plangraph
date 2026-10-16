@@ -222,4 +222,6 @@ def test_inbox_page_is_a_static_form_under_a_tight_csp(kp):
     assert headers.get("content-type", "").startswith("text/html")
     csp = headers.get("content-security-policy", "")
     assert "default-src 'none'" in csp and "connect-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert headers.get("x-frame-options") == "DENY"
     assert "/v1/answer_question" in resp.text

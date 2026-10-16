@@ -33,8 +33,9 @@ _SELECT = ("SELECT q.id, q.key, q.text, q.default_answer, q.deadline, q.risk_tag
 #: Headers for ``GET /inbox``: a static page that may only call its own origin.
 PAGE_HEADERS = (
     ("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline';"
-     " script-src 'unsafe-inline'; connect-src 'self'"),
-    ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"))
+     " script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'"),
+    ("Cache-Control", "no-store"), ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"))
 
 
 def page() -> bytes:

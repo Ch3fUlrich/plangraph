@@ -47,7 +47,8 @@ stored answer and returns `{"question_id", "signal": {...}}`. Audited as
 ## `GET /inbox`
 
 Static, unauthenticated HTML form (not under `/v1`). Served with
-`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'`,
+`Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'`,
+`X-Frame-Options: DENY`,
 `Cache-Control: no-store` and `X-Content-Type-Options: nosniff`. It carries no
 data; the page calls the routes above with a token the user pastes in.
 
