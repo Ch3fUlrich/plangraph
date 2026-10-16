@@ -1,0 +1,593 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+TASK: review a live-sync packet that moves a production plan-keeper (Python daemon on Postgres schema 'keeper', owner role keeper, runtime role keeper_rt with DML only) from build 3fd91bd6 to 102e4885, plus the rehearsal evidence. Claim under test: code-deploy only, no schema/PG migration, no grant change.
+
+VECTORS (answer each under its own heading V1..V4 with file:function evidence):
+V1 no-migration claim: does the diff 3fd91bd6..102e4885 contain any schema/DDL/migration/config-key/role change that the packet misses? (schema_pg.py, db_pg.py, config.py are shown as UNCHANGED by the diffstat; check the SQL statements list and the events.type column.)
+V2 rollback window validity: is "rollback to 3fd91bd6 is valid only while no item_reopened event exists" correct and complete? Could any OTHER new write path (create under, add_dep/remove_dep, estimate_src edit, fold unknown-type) produce state the old build mis-folds? Is the check query right? Does the runbook order (dump, drop-in, restart, gates, rollback) hold together?
+V3 grant completeness for keeper_rt: every table written by new code paths (reopen, create under, deps ops, estimate_src edit) - is keeper_rt's DML sufficient per the packet and the rehearsal (all new writes ran as keeper_rt)? Any sequence/trigger/permission gap?
+V4 secrets hygiene: do the packet, rehearsal log or commands print or commit DSNs, tokens, home paths, hosts or credential-shaped strings? Does any command put a secret on a command line or in a log? (Token files are referenced by name only.)
+
+=== PACKET docs/plan/rethink/live-sync-102e4885.md
+# KEEPER-LIVE-SYNC-6: live keeper 3fd91bd6 -> origin/main T=102e4885 (keeper verbs #39-#44, D-1542)
+
+Plan-Item: plangraph:PG-ROUTER-REOPEN. Docs only; nothing here was run against the live keeper or the live schema (the rehearsal used a throwaway container; the only live contact was one read-only `pg_dump -n keeper` as the runtime role).
+Batch: #39 PG-ROUTER-REOPEN (`reopen` verb, new event type `item_reopened`), #40 PG-L1-CREATE-WITH-EDGE (`under` on create), #41 PG-FOLD-UNKNOWN-TYPE (`unknown_event_type` problem in `admin verify`), #42 PG-ESTIMATE-SRC-EDIT (`estimate_src` in edit_definition), #43 PG-LE-DEPS-OPS (`add_dep`/`remove_dep` in apply_ops), #44 PG-LE-GUARD-KEY (credential guard names item key, masks the match, guards `estimate_src`).
+Live now: 3fd91bd6 on Postgres schema `keeper` (LIVE-SYNC-5; record `seats-archive/live-sync-gov-7c1ef8be/LIVE-RECORD.md`), drop-ins `live-sync-z5-3fd91bd6.conf` + `zz-pg-backend.conf` in `~/.config/systemd/user/plangraph-keeper.service.d/`, DSN files `~/.config/plangraph/pg-keeper.dsn` (runtime) and `pg-keeper-migrate.dsn` (owner), each holding `PG_DSN=`; names only, never print contents. The unit runs `--config ~/.local/share/plangraph/keeper.json`.
+
+## 1. Review 3fd91bd6..102e4885 (verified, not assumed)
+**Claim: code-deploy only. Verified true.**
+- `git diff --stat 3fd91bd6 102e4885 -- src/plangraph/keeper/schema_pg.py src/plangraph/keeper/db_pg.py src/plangraph/keeper/config.py` is empty: no migration (`schema_pg.LATEST` stays 4), no DDL, no new table or column, no new config key, no role or grant change. `copy_to_pg`/SQLite `SCHEMA_VERSION` untouched. No new env var.
+- `events.type` is plain `TEXT` (`schema_pg.py` events table) with no CHECK: `item_reopened` inserts without DDL. Only `schema.EVENT_TYPES` (python tuple) gains `item_reopened`.
+- New SQL in the batch is DML on existing tables only: `UPDATE items` (reopen), `INSERT INTO edges` (create `under`, add_dep), item/event/audit/token rows. `keeper_rt` already holds DML on all of them (default privileges `FOR ROLE keeper IN SCHEMA keeper`). Proved by running every new write as `keeper_rt` in the rehearsal (section 3): zero permission errors. No grant step.
+- MCP tool list: +1 `reopen` (`mcp.py`; route `POST /v1/reopen`, router only). Contract docs updated (`docs/contract/keeper-contract-v1*`). CLI: +`reopen` (`cli.py`). No tool removed or renamed.
+- Roles: `reopen` router only (l1 -> 403, proven). `under` router or L1-of-the-project (store_create). `add_dep`/`remove_dep` router only via apply_ops (worker -> 403, proven).
+- **One-way property (the reason for the roll-forward rule):** `item_reopened` is a new event type. 3fd91bd6's fold does not know it: its `admin verify` reports 4 `cache_mismatch` problems on the reopened item (state, epoch, round, lease_until; proven in rehearsal B) while its daemon still starts and serves reads. So rollback to 3fd91bd6 is valid only while NO `item_reopened` event exists. The other five verbs write only event types 3fd91bd6 already knows (`item_defined`, `item_created`, edge ops through `item_defined`), proven in rehearsal A: after T wrote them, 3fd91bd6 verifies clean and serves/writes.
+- FOLD (#41) ships in this batch: from 102e4885 on, an event type the build does not know shows up as `unknown_event_type type=<t> seq=<n>` in `admin verify` instead of silently dropping out of the cache.
+
+## 2. Live runbook (build-L1, after routing GO D-825 on the merged packet; every command exact)
+Router/judge conditions: packet MERGED ON MAIN before GO; pre-GO dump sha256 below; ROLL FORWARD ONLY after the first `item_reopened`.
+Variables: `W=~/code/plangraph/.claude/worktrees`, `D=~/.local/share/plangraph`, `TS=$(date -u +%Y%m%dT%H%M%SZ)`, `B=$D/backups/live-sync-102e4885-$TS`, `T=$W/live-102e4885`, `OLD=$W/live-3fd91bd6`. `PGENV='PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper'`.
+
+1. **Worktree for T** (no keeper impact): `git -C ~/code/plangraph fetch origin && git -C ~/code/plangraph worktree add --detach $T 102e48850039116e74a016715af9e47c34a1249a` and check `git -C $T log -1 --format=%h` = `102e4885`.
+2. **Pre-checks** (read-only): `systemctl --user show plangraph-keeper -p MainPID -p NRestarts -p ActiveState`; `$D/venv-pg/bin/python -c "import psycopg"`; `df -h $D` (>= 1 GB free).
+   Counts file `$B/counts.pre` (needs `mkdir -p $B && chmod 700 $B` first): `docker run --rm --network host --env-file ~/.config/plangraph/pg-keeper.dsn postgres:17-alpine sh -c 'psql "$PG_DSN" -Atc "select count(*) from keeper.events union all select count(*) from keeper.items union all select count(*) from keeper.evidence union all select count(*) from keeper.edges"' > $B/counts.pre`.
+   **Reopen-window check** (must print `0` now and before any rollback decision): `docker run --rm --network host --env-file ~/.config/plangraph/pg-keeper.dsn postgres:17-alpine sh -c 'psql "$PG_DSN" -Atc "select count(*) from keeper.events where type=\$\$item_reopened\$\$"'`.
+3. **Backup (pre-GO dump, read-write-free, no stop needed: no schema change)**: `docker run --rm --network host --env-file ~/.config/plangraph/pg-keeper-migrate.dsn -v $B:/b postgres:17-alpine sh -c 'pg_dump -d "$PG_DSN" -n keeper -Fc -f /b/keeper-schema.dump'`; `sha256sum $B/keeper-schema.dump | tee $B/keeper-schema.dump.sha256`; `cp $D/keeper.json $B/` and `cp -a ~/.config/systemd/user/plangraph-keeper.service.d $B/service.d`. (Rehearsal dump of the live schema, 7006 events, sha256 `8ae1e40381e374348eccb73abd0c00d56e6011f0877d8ea59306aaa7635ce6ae`, was taken read-only as the runtime role on 2026-10-16; the live GO dump is a fresh one with its own sha256 in `$B`.)
+4. **Migration check (expected no-op, owner)**: `set -a; . ~/.config/plangraph/pg-keeper-migrate.dsn; set +a; env PYTHONPATH=$T/src $PGENV $D/venv-pg/bin/python -m plangraph.keeper.cli --config $D/keeper.json admin migrate` = `schema up to date`; then `... admin verify` (same env) = `chain and cache integrity ok`; `unset PG_DSN`. If `migrate` prints anything else, STOP: the no-migration claim is false; do not continue.
+5. **Drop-in** `~/.config/systemd/user/plangraph-keeper.service.d/live-sync-z6-102e4885.conf` (sorts after `z5`, before `zz-pg-backend.conf`, which keeps ExecStart and DSN):
+   ```
+   # LIVE-SYNC-6 GO <decision id>: live tree -> 102e4885 (keeper verbs #39-#44). Overrides live-sync-z5-3fd91bd6.conf.
+   # Rollback to 3fd91bd6 ONLY while no item_reopened event exists (see packet check query); after that roll forward.
+   [Service]
+   WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-102e4885
+   Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-102e4885/src
+   ```
+   `systemctl --user daemon-reload`.
+6. **Restart**: `systemctl --user restart plangraph-keeper`; `systemctl --user show plangraph-keeper -p MainPID -p NRestarts -p ActiveState` (active, NRestarts 0).
+   **Env check**: `tr '\0' '\n' </proc/$(systemctl --user show plangraph-keeper -p MainPID --value)/environ | grep -E '^(PYTHONPATH|PG_KEEPER_BACKEND|PG_SCHEMA)='` must show PYTHONPATH `.../live-102e4885/src` (not `live-3fd91bd6`), backend postgres, schema keeper. Never print the `PG_DSN` line.
+7. **Verify gates** (runtime role: `set -a; . ~/.config/plangraph/pg-keeper.dsn; set +a` in the same subshell; `env PYTHONPATH=$T/src $PGENV $D/venv-pg/bin/python -m plangraph.keeper.cli --config $D/keeper.json ...`):
+   - `admin verify` = `chain and cache integrity ok`; `admin verify-snapshot` = `snapshot signature ok`.
+   - `curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $(cat ~/.config/plangraph/router.token)" http://127.0.0.1:8787/v1/snapshot` = 200.
+   - **Reopen-free smoke (reads only, scratch-safe)**: `GET /v1/whoami` = 200 with role router; `GET /v1/ready` = 200; `GET /v1/show?key=plangraph:PG-ROUTER-REOPEN` = 200 (same bearer header). No `POST` in this packet's smoke: the new write verbs (`reopen`, `under`, `add_dep`) are proven in rehearsal and must not write to the live plan as a test. Route-exists probe that cannot mutate (a non-router principal is refused before any write): `curl -s -o /dev/null -w '%{http_code}\n' -X POST -H "Authorization: Bearer $(cat ~/.config/plangraph/build-L1.token)" -H 'content-type: application/json' -d '{}' http://127.0.0.1:8787/v1/reopen` = `403` (route known, role refused; 3fd91bd6 answers 404).
+   - **Counts equal**: rerun the step-2 count query to `$B/counts.post`; `diff $B/counts.pre $B/counts.post` empty (no writes in between except normal traffic: if live traffic wrote, expect only growth, never shrinkage; events must be >= pre).
+   - **Reopen-window check** still `0` (nothing reopened by the smoke).
+   - `GET /v1/alarms` 200; md-sync and render timers still active (`systemctl --user is-active <timer>`); whoami/ready/percent CLI rc0.
+8. **Rollback** (any gate fails or restart loop; valid ONLY if the reopen-window check prints `0`):
+   `rm ~/.config/systemd/user/plangraph-keeper.service.d/live-sync-z6-102e4885.conf && systemctl --user daemon-reload && systemctl --user restart plangraph-keeper`, then repeat the env check (PYTHONPATH back to `live-3fd91bd6`) and `admin verify` with `PYTHONPATH=$OLD/src`. No dump restore is needed (schema untouched; dump kept as insurance). Writes made by T in between (`under` edges, dep ops, estimate_src edits) are normal events/rows that 3fd91bd6 reads fine (rehearsal A).
+   **After the first `item_reopened` event exists (check query > 0): ROLL FORWARD ONLY.** Do not restart onto 3fd91bd6 (its `admin verify` fails with `cache_mismatch` on every reopened item and it cannot fold the event). Fix forward on a new commit/drop-in. Dump restore (`pg_restore` as owner into an empty schema, keeper stopped) loses every write since the dump and needs an explicit data-loss decision.
+
+## 3. Rehearsal summary (log: `live-sync-102e4885.rehearsal-log.txt`)
+Throwaway `postgres:17-alpine` container (`--memory 1g`, loopback random port, one container, removed at end, MemAvailable ~10 GB). Roles `keeper` (owner, non-superuser) and `keeper_rt` recreated; restored a read-only `pg_dump -n keeper` of the live schema: 7006 events, 1808 items, migration 4, 0 `item_reopened`. Then:
+- T code on the owner DSN: `admin verify` ok and `admin migrate` = `schema up to date` (no migration pending; the claim holds).
+- T daemon as `keeper_rt` on a scratch config/port/token: `/v1/health` 200, `/v1/snapshot` 200; PYTHONPATH of the daemon process = T's tree. Exercised as `keeper_rt`: create with `under` (3 lanes attached + 1 single), `add_dep`/`remove_dep` (worker 403), `edit_definition` with `estimate_h`+`estimate_src`, credential-shaped `estimate_src` refused with `rehs:B: estimate_src looks like it contains a credential at chars 6-22 (us*** (len 16))` (key and field named, no value echo), l1 claim + decision evidence + submit -> `in_review`, `reopen` (l1 403; router 200: `claimed`, epoch 2), old-epoch submit 409 `epoch_stale`. `admin verify` + `verify-snapshot` ok afterwards. Original 1808 items untouched; new events by type: `claimed`, `evidence_added`, `item_created`, `item_defined`, `item_reopened`, `submitted`.
+- Rollback window (A): a second fresh restore, T wrote all new verbs except `reopen`, then 3fd91bd6 took over: `admin verify` ok, `verify-snapshot` ok, daemon health/whoami/snapshot 200, `POST /v1/reopen` 404, an old-code write (`set_priority`) 200, `admin verify` ok under old and T code.
+- Roll-forward-only (B): on the copy containing the `item_reopened` event, 3fd91bd6 `admin verify` = rc2 `4 problem(s)` (`cache_mismatch` state/epoch/round/lease_until on the reopened item); its daemon starts and reads (the reopened item shows `claimed`, epoch 2) but is not consistent; T `admin verify` ok again.
+
+=== DIFFSTAT 3fd91bd6..102e4885 (src)
+ src/plangraph/keeper/api_routes.py       |   9 +-
+ src/plangraph/keeper/cli.py              |   6 ++
+ src/plangraph/keeper/cli_admin.py        |  15 +++-
+ src/plangraph/keeper/cli_verbs.py        |   7 ++
+ src/plangraph/keeper/credential_guard.py |  43 ++++++---
+ src/plangraph/keeper/events.py           |  55 ++++++++++--
+ src/plangraph/keeper/item_fields.py      |  13 +--
+ src/plangraph/keeper/item_fixes.py       |   9 +-
+ src/plangraph/keeper/mcp.py              |   4 +
+ src/plangraph/keeper/schema.py           |   4 +-
+ src/plangraph/keeper/store.py            |   3 +-
+ src/plangraph/keeper/store_answer.py     |   2 +-
+ src/plangraph/keeper/store_cards.py      |  30 ++++---
+ src/plangraph/keeper/store_create.py     | 145 ++++++++++++++++++++++++++++---
+ src/plangraph/keeper/store_input.py      |  29 +++++--
+ src/plangraph/keeper/store_ops.py        |  48 +++++++++-
+ src/plangraph/keeper/store_reopen.py     |  81 +++++++++++++++++
+ src/plangraph/keeper/store_support.py    |   2 +-
+ src/plangraph/keeper/store_tokens.py     |   2 +-
+ src/plangraph/keeper/token_fold.py       |   2 +-
+ 20 files changed, 444 insertions(+), 65 deletions(-)
+
+=== SQL/DDL statements ADDED in src (grep of the diff)
++                # UPDATE both proves the row is the one we read and touches its
++                    "UPDATE items SET updated_at=? WHERE key=? AND state=?"
++                    "INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
++                "UPDATE items SET state='claimed', epoch=epoch+1, round=0,"
+
+=== DIFF schema.py events.py mcp.py cli_admin.py store_reopen.py
+diff --git a/src/plangraph/keeper/cli_admin.py b/src/plangraph/keeper/cli_admin.py
+index 7122ac57..bb900c52 100644
+--- a/src/plangraph/keeper/cli_admin.py
++++ b/src/plangraph/keeper/cli_admin.py
+@@ -110,6 +110,19 @@ def _cmd_revoke(args, cfg) -> int:
+     return 0
+ 
+ 
++def _problem_line(problem) -> str:
++    """One line per integrity problem; unknown types name the type and seq.
++
++    Every other problem keeps its plain dict repr (the contract greps the
++    codes out of it), but an ``unknown_event_type`` carries no expected/got
++    pair, so it reads as a sentence instead.
++    """
++    if problem.get("code") == "unknown_event_type":
++        return (f"{problem.get('key') or '-'} unknown_event_type"
++                f" type={problem.get('got')} seq={problem.get('seq')}")
++    return str(problem)
++
++
+ def _cmd_verify(args, cfg) -> int:
+     conn = _open(cfg)
+     try:
+@@ -118,7 +131,7 @@ def _cmd_verify(args, cfg) -> int:
+     finally:
+         conn.close()
+     for problem in problems:
+-        print(problem)
++        print(_problem_line(problem))
+     if problems:
+         print(f"{len(problems)} problem(s)", file=sys.stderr)
+         return 2
+diff --git a/src/plangraph/keeper/events.py b/src/plangraph/keeper/events.py
+index 125e9fd8..42e5be5e 100644
+--- a/src/plangraph/keeper/events.py
++++ b/src/plangraph/keeper/events.py
+@@ -4,7 +4,9 @@ Each event's hash is ``sha256(prev_hash + canonical_json(event))`` where the
+ canonical event is the ordered dict of ``ts, actor, role, model, key, type,
+ payload`` (``prev_hash`` and ``hash`` are deliberately excluded).  The genesis
+ event has an empty ``prev_hash``.  ``fold`` replays events into the cached item
+-state; ``verify_integrity`` proves the cache equals that replay.
++state; ``verify_integrity`` proves the cache equals that replay.  An event type
++this build does not know (a newer keeper wrote it) never reaches the cache: it
++is reported as ``unknown_event_type`` with its ``seq``.
+ """
+ from __future__ import annotations
+ 
+@@ -15,6 +17,9 @@ from collections import Counter
+ from .token_fold import verify_tokens
+ 
+ from .item_fields import SMALL_FIELDS
++# PG-FOLD-UNKNOWN-TYPE: schema imports nothing back, so no cycle -- ``events``
++# may name the authoritative list of types this build knows how to replay.
++from .schema import EVENT_TYPES
+ 
+ __all__ = ["canonical", "event_hash", "append_event", "read_events", "fold",
+            "verify_chain", "verify_integrity", "FIELDS"]
+@@ -125,7 +130,7 @@ def _fold_run(item, payload):
+              for s in seats if isinstance(s, dict)])
+ 
+ 
+-def fold(events):
++def fold(events, unknown=None):
+     """Replay *events* (oldest first) into ``key -> cached state``.
+ 
+     Every field ``verify_integrity`` compares is reconstructed here, including
+@@ -133,15 +138,32 @@ def fold(events):
+     lifecycle columns a raw writer might tamper with.  Events that the store
+     does not emit yet (``heartbeat``) are still handled, so the fold is the
+     contract the store must meet.
++
++    PG-FOLD-UNKNOWN-TYPE: a ``kind`` outside :data:`EVENT_TYPES` was written by
++    a newer keeper; this build cannot replay it, so it must not silently
++    disappear (the cache would drift, or an old rebuild would undo the event).
++    Such an event never touches item state -- it is only recorded in the
++    optional *unknown* list as ``{"seq", "type", "key"}``.  Types that are in
++    ``EVENT_TYPES`` but have no branch here (``review_verdict``,
++    ``token_minted``, ``outage_recorded``) are known no-ops: they are replayed
++    by ``token_fold``/the store and are never reported as unknown.  *events*
++    and the return value are unchanged from the single-argument signature.
+     """
+     state = {}
+     for event in events:
++        kind = event["type"]
++        if kind not in EVENT_TYPES:
++            # Unknown type: side channel only, before any state is touched --
++            # including for a keyless event or a key this fold has not seen.
++            if unknown is not None:
++                unknown.append({"seq": event["seq"], "type": kind,
++                                "key": event.get("key")})
++            continue
+         key = event.get("key")
+         if key is None:
+             continue
+         payload = event.get("payload") or {}
+         item = state.setdefault(key, _new_state())
+-        kind = event["type"]
+         if kind == "item_created":
+             item["state"] = "open"
+             item["epoch"] = 0
+@@ -204,6 +226,19 @@ def fold(events):
+             item["state"] = "claimed"
+             item["reviewer"] = None
+             item["lease_until"] = payload.get("lease_until")
++        elif kind == "item_reopened":   # PG-REOPEN: back to the claimant, fresh epoch
++            # The store opens a new work epoch (+1, round 0, reviewer and
++            # waiver cleared, fresh lease) and keeps the holder; replay exactly
++            # the columns it wrote so ``verify_integrity`` agrees.  The
++            # delegate of the claim is intentionally left alone: the reopen
++            # changes who holds the work only as far as the epoch.
++            item["state"] = "claimed"
++            item["epoch"] = payload["epoch"]
++            item["claimed_by"] = payload["claimed_by"]
++            item["reviewer"] = None
++            item["round"] = 0
++            item["review_waiver"] = None
++            item["lease_until"] = payload["lease_until"]
+         elif kind == "review_passed":
+             item["state"] = "done"
+             item["reviewer"] = event.get("actor")
+@@ -289,10 +324,16 @@ def verify_integrity(conn):
+     tolerance described below, and the recomputed per-key evidence counts
+     (total and verified).
+ 
+-    Returns a list of ``{key, code, field, expected, got}`` problems.
++    Returns a list of ``{key, code, field, expected, got}`` problems.  One
++    extra problem per event whose ``type`` is not in ``EVENT_TYPES`` is
++    appended (PG-FOLD-UNKNOWN-TYPE): ``{key (None for a keyless event), code
++    "unknown_event_type", field "type", expected None, got kind, seq}`` --
++    a type a newer keeper wrote, which this build cannot replay, so the cache
++    must not be trusted silently.
+     """
+     all_events = read_events(conn)
+-    folded = fold(all_events)
++    unknown = []
++    folded = fold(all_events, unknown=unknown)
+     cached = {row["key"]: row for row in conn.execute(
+         "SELECT key,state,epoch,round,claimed_by,delegate,lease_until,reviewer,"
+         "review_waiver,review_tier,description,host,wait,layer,role,agent_id,"
+@@ -307,6 +348,10 @@ def verify_integrity(conn):
+         shapes.setdefault(row["key"], []).append(
+             (row["epoch"], row["kind"], bool(row["verified"])))
+     problems = []
++    for entry in unknown:   # PG-FOLD-UNKNOWN-TYPE: one problem per replay-blind event
++        problems.append({"key": entry["key"], "code": "unknown_event_type",
++                         "field": "type", "expected": None,
++                         "got": entry["type"], "seq": entry["seq"]})
+     for key, expected in folded.items():
+         row = cached.get(key)
+         if row is None:
+diff --git a/src/plangraph/keeper/mcp.py b/src/plangraph/keeper/mcp.py
+index 8348b97d..35445a12 100644
+--- a/src/plangraph/keeper/mcp.py
++++ b/src/plangraph/keeper/mcp.py
+@@ -69,6 +69,9 @@ TOOLS = (
+     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
+           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
+           ("key", "decision_id")),
++    _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
++          {"key": {"type": "string"}, "decision_id": {"type": "string"},
++           "reason": {"type": "string"}}, ("key", "decision_id", "reason")),
+     _tool("set_kind", "Router: turn an open lane into a question or operator_task (waits on the operator).",
+           {"key": {"type": "string"},
+            "kind": {"type": "string", "enum": ["question", "operator_task"]}},
+@@ -131,6 +134,7 @@ _ROUTES = {
+     "waive_second_family": ("POST", "waive_second_family"),
+     "close_on_decision": ("POST", "close_on_decision"),
+     "withdraw_review": ("POST", "withdraw_review"),
++    "reopen": ("POST", "reopen"),
+     "set_kind": ("POST", "set_kind"),
+     "answer": ("POST", "answer"),
+     "set_legacy_state": ("POST", "set_legacy_state"),
+diff --git a/src/plangraph/keeper/schema.py b/src/plangraph/keeper/schema.py
+index afd97b73..1434726c 100644
+--- a/src/plangraph/keeper/schema.py
++++ b/src/plangraph/keeper/schema.py
+@@ -39,8 +39,8 @@ EVENT_TYPES = (
+     "review_verdict", "review_passed", "closed_on_decision", "cancelled",
+     "priority_set", "heartbeat",
+     "waiver_set", "legacy_state_set", "run_recorded", "answered",
+-    "token_minted", "outage_recorded", "review_withdrawn", "kind_set",
+-    "state_set",
++    "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
++    "kind_set", "state_set",
+ )
+ 
+ #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
+diff --git a/src/plangraph/keeper/store_reopen.py b/src/plangraph/keeper/store_reopen.py
+new file mode 100644
+index 00000000..69b5e225
+--- /dev/null
++++ b/src/plangraph/keeper/store_reopen.py
+@@ -0,0 +1,81 @@
++"""PG-REOPEN: the router takes an ``in_review`` item back to its claimant at a fresh epoch.
++
++``reopen(principal, key, reason, decision_id)`` moves ``in_review -> claimed``
++and opens a **new work epoch** (+1, ``round`` reset, ``reviewer`` and
++``review_waiver`` cleared, fresh default lease) with one hash-chained
++``item_reopened`` event.  The verdicts, the rounds and the evidence that were
++accumulated under the old epoch belong to work that is being redone, so
++everything the new epoch relies on must be attached again: a submit or a close
++still pointing at the superseded epoch fails closed afterwards.  It never
++closes an item and never passes or fails a review.
++
++Guards: router principal only; a non-empty reason of at most 500 characters; a
++``D-NNN`` decision id that is recorded in the decisions file (no ``Closes:``
++naming is required -- unlike ``withdraw_review``, the reason states why the
++work is being redone); and the item must be ``in_review``.
++"""
++from __future__ import annotations
++
++import re
++
++from .errors import Refused
++
++__all__ = ["ReopenMixin"]
++
++_REASON_MAX = 500
++
++
++class ReopenMixin:
++    """Router-only ``reopen``."""
++
++    def reopen(self, principal, key, reason, decision_id):
++        return self._run(principal, "reopen", key,
++                         lambda now: self._reopen(principal, key, reason,
++                                                  decision_id, now))
++
++    def _reopen(self, principal, key, reason, decision_id, now):
++        self._require_role(principal, "router")
++        if not isinstance(reason, str) or not reason.strip():
++            raise Refused("validation", "reason must be a non-empty string")
++        if len(reason) > _REASON_MAX:
++            raise Refused("validation",
++                          f"reason must be at most {_REASON_MAX} characters")
++        if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
++            raise Refused("validation", "decision_id must look like D-NNN")
++        item = self._get_or_refuse(key)
++        # State first: a finished or idle item is a bad_state, whatever its
++        # lock status, so the caller learns what it must do instead.
++        if item["state"] != "in_review":
++            raise Refused("bad_state", f"{key} is {item['state']}, not in_review")
++        self._assert_unlocked(item)
++        decisions = self._decisions_adapter(item, now)
++        try:
++            recorded = decisions.has(decision_id)
++        except Exception:  # noqa: BLE001 - an unreadable decisions file fails closed
++            recorded = False
++        if not recorded:
++            raise Refused("evidence_unverified",
++                          f"decision {decision_id} is not in the decisions file")
++        lease = self._iso(now + self.default_lease)
++        with self._write():
++            fresh = self._get_or_refuse(key)
++            self._assert_unlocked(fresh)
++            if fresh["state"] != "in_review" or fresh["epoch"] != item["epoch"]:
++                raise Refused("conflict", f"{key} changed under the transaction")
++            new_epoch = fresh["epoch"] + 1
++            claimed_by = fresh["claimed_by"]
++            self._append(principal, key, "item_reopened",
++                         {"reason": reason, "decision_id": decision_id,
++                          "claimed_by": claimed_by, "epoch": new_epoch,
++                          "lease_until": lease}, now)
++            # Mirror the ``claimed`` event's column set on the epoch move
++            # (round/waiver/reviewer cleared, holder kept), guarded on the
++            # state and epoch read above so a lost race refuses.
++            cursor = self.conn.execute(
++                "UPDATE items SET state='claimed', epoch=epoch+1, round=0,"
++                " reviewer=NULL, review_waiver=NULL, lease_until=?, updated_at=?"
++                " WHERE key=? AND state='in_review' AND epoch=?",
++                (lease, self._iso(now), key, item["epoch"]))
++            self._race_guard(cursor, key, "in_review", item["epoch"])
++        return {"key": key, "state": "claimed", "epoch": new_epoch,
++                "claimed_by": claimed_by, "lease_until": lease}
+
+=== schema_pg.py/db_pg.py/config.py diff (empty = unchanged):
+=== end (empty above)
+
+=== REHEARSAL LOG docs/plan/rethink/live-sync-102e4885.rehearsal-log.txt
+# rehearsal 2026-10-16 T=102e4885 vs live 3fd91bd6; postgres:17-alpine container ls102e-pg17 --memory 1g, 127.0.0.1 random port, trust auth, one container, removed at end
+# data: read-only pg_dump -n keeper of the live schema via the runtime role (7006 events, schema migration 4, 0 item_reopened), restored into roles keeper (owner, non-super) + keeper_rt (runtime)
+# commands that name a path: <T tree> = worktree at 102e4885, <old tree> = live-3fd91bd6 worktree; scratch config, scratch tokens 0600, scratch snapshot key; no live keeper/schema/port touched
+# note: first scratch run s2 had a driver error (my fixture created lanes before the goal: unreachable_goal); no state was written; fixture reordered, s3 is the run of record
+
+## s1: container, live dump, restore
+MemAvailable:   10227872 kB
+run rc=0
+dump rc=0
+-rw-r--r-- 1 root root 1363068 Oct 16 22:43 live.dump
+8ae1e40381e37434
+CREATE ROLE
+CREATE ROLE
+CREATE DATABASE
+roles rc=0
+restore rc=0
+7006
+4
+0
+
+## s2: T admin verify/migrate (no migration pending), principals, daemon health
+# T=102e4885
+# step 1: T admin verify + migrate as owner on the restored live copy (claim: no migration pending)
+$ pgc <T tree>/src postgresql://keeper@<pg> admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <T tree>/src postgresql://keeper@<pg> admin migrate
+schema up to date
+rc=0
+schema_version|4
+item_reopened_events|0
+$ pgc <T tree>/src postgresql://keeper@<pg> admin snapshot-keygen --private <scratch>/scratch/sign.key --public <scratch>/scratch/sign.pub
+key pair written: private <scratch>/scratch/sign.key (0600), public <scratch>/scratch/sign.pub
+rc=0
+add-principal reh-router role=router rc=0
+add-principal reh-l1 role=l1 rc=0
+add-principal reh-worker role=worker rc=0
+# counts before (after principals; principals/audit not counted)
+events|7006 items|1808 evidence|1137 edges|2649 
+# daemon (T) as keeper_rt on 127.0.0.1:<port>
+# daemon environ: PYTHONPATH=<T tree>/src
+health http=200
+snapshot http=200
+
+## s3: T daemon as keeper_rt: new verbs + gates
+# counts before (after principals; principals/audit not counted)
+events|7006 items|1808 evidence|1137 edges|2649 
+# daemon (T) as keeper_rt on 127.0.0.1:<port>
+# daemon environ: PYTHONPATH=<T tree>/src
+health http=200
+snapshot http=200
+# setup: goal + lanes as router
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "G", "title": "t G", "kind": "goal", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["any"], "operator": false}]}
+http=200
+{"created": ["rehs:G"], "warnings": ["description missing: brief will be empty"]}
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "A", "title": "t A", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:A", "rehs:B", "rehs:C"], "attached": [{"key": "rehs:A", "under": "rehs:G"}, {"key": "rehs:B", "under": "rehs:G"}, {"key": "rehs:C", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#40) create-with-edge: under=rehs:G
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "N", "title": "t N", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:N"], "attached": [{"key": "rehs:N", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#43) deps ops: add_dep / remove_dep via apply_ops
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "remove_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=403
+{"error": "forbidden", "msg": "role 'worker' may not do this"}
+# (#42) estimate_src edit
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_h": 5, "estimate_src": "plan"}}
+http=200
+{"key": "rehs:B"}
+# (#44) guard key: credential-shaped estimate_src refused, message names key + field, no value echo
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_src": "login user/secret12345"}}
+http=400
+{"error": "validation", "msg": "rehs:B: estimate_src looks like it contains a credential at chars 6-22 (us*** (len 16)) ; remove it"}
+# (#39) reopen: l1 claims A, evidence, submit -> in_review; router reopens
+$ POST /v1/claim {"key": "rehs:A"}
+http=200
+{"key": "rehs:A", "epoch": 1, "lease_until": "2026-10-17T00:45:18Z"}
+$ POST /v1/add_evidence {"key": "rehs:A", "epoch": 1, "kind": "decision", "ref": {"id": "D-900"}}
+http=200
+{"key": "rehs:A", "kind": "decision", "verified": true, "detail": "decision D-900 is recorded", "ref": {"id": "D-900"}}
+$ POST /v1/submit {"key": "rehs:A", "epoch": 1}
+http=200
+{"key": "rehs:A", "epoch": 1, "round": 1, "state": "in_review"}
+$ POST /v1/reopen {"key": "rehs:A", "decision_id": "D-900", "reason": "rehearsal"}
+http=403
+{"error": "forbidden", "msg": "role 'l1' may not do this"}
+$ POST /v1/reopen {"key": "rehs:A", "decision_id": "D-900", "reason": "rehearsal reopen"}
+http=200
+{"key": "rehs:A", "state": "claimed", "epoch": 2, "claimed_by": "reh-l1", "lease_until": "2026-10-17T00:45:18Z"}
+$ POST /v1/submit {"key": "rehs:A", "epoch": 1}
+http=409
+{"error": "epoch_stale", "msg": "epoch 1 != current 2"}
+DRIVER OK
+driver rc=0
+$ pgc <T tree>/src postgresql://keeper_rt@<pg> admin verify
+chain and cache integrity ok
+rc=0
+$ pgc <T tree>/src postgresql://keeper_rt@<pg> admin verify-snapshot
+snapshot signature ok
+rc=0
+# new events by type:
+claimed|1 evidence_added|1 item_created|5 item_defined|7 item_reopened|1 submitted|1 
+# counts after
+events|7022 items|1813 evidence|1138 edges|2653 
+# original items untouched: 1808 
+daemon stopped
+
+## s4: rollback window (A) and roll-forward-only (B)
+# old tree: 3fd91bd6  T: 102e4885
+# A. rollback window: fresh restore of live dump into db keeper2
+CREATE DATABASE
+# T daemon on keeper2, all new verbs except reopen
+# setup: goal + lanes as router
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "G", "title": "t G", "kind": "goal", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["any"], "operator": false}]}
+http=200
+{"created": ["rehs:G"], "warnings": ["description missing: brief will be empty"]}
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "A", "title": "t A", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:A", "rehs:B", "rehs:C"], "attached": [{"key": "rehs:A", "under": "rehs:G"}, {"key": "rehs:B", "under": "rehs:G"}, {"key": "rehs:C", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#40) create-with-edge: under=rehs:G
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "N", "title": "t N", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["decision"], "operator": false, "under"
+http=200
+{"created": ["rehs:N"], "attached": [{"key": "rehs:N", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+# (#43) deps ops: add_dep / remove_dep via apply_ops
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "remove_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=200
+{"applied": 1, "results": [{"key": "rehs:A"}]}
+$ POST /v1/apply_ops {"ops": [{"op": "add_dep", "key": "rehs:A", "dep": "rehs:B"}]}
+http=403
+{"error": "forbidden", "msg": "role 'worker' may not do this"}
+# (#42) estimate_src edit
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_h": 5, "estimate_src": "plan"}}
+http=200
+{"key": "rehs:B"}
+# (#44) guard key: credential-shaped estimate_src refused, message names key + field, no value echo
+$ POST /v1/edit_definition {"key": "rehs:B", "fields": {"estimate_src": "login user/secret12345"}}
+http=400
+{"error": "validation", "msg": "rehs:B: estimate_src looks like it contains a credential at chars 6-22 (us*** (len 16)) ; remove it"}
+# (#39) reopen: l1 claims A, evidence, submit -> in_review; router reopens
+$ POST /v1/claim {"key": "rehs:A"}
+http=200
+{"key": "rehs:A", "epoch": 1, "lease_until": "2026-10-17T00:45:58Z"}
+$ POST /v1/add_evidence {"key": "rehs:A", "epoch": 1, "kind": "decision", "ref": {"id": "D-900"}}
+http=200
+{"key": "rehs:A", "kind": "decision", "verified": true, "detail": "decision D-900 is recorded", "ref": {"id": "D-900"}}
+$ POST /v1/submit {"key": "rehs:A", "epoch": 1}
+http=200
+{"key": "rehs:A", "epoch": 1, "round": 1, "state": "in_review"}
+DRIVER OK (no reopen: rollback-window copy)
+item_reopened_events|0
+events|7021
+# rollback to 3fd91bd6 on keeper2 (valid: no item_reopened)
+$ pgc[OLD] keeper2 admin verify
+chain and cache integrity ok
+rc=0
+$ pgc[OLD] keeper2 admin verify-snapshot
+snapshot signature ok
+rc=0
+# old daemon environ: PYTHONPATH=<old tree>/src
+old health http=200
+old whoami http=200
+old snapshot http=200
+old reopen route (absent expected 404) http=404
+old write (set_priority) http=200
+$ pgc[OLD] keeper2 admin verify
+chain and cache integrity ok
+rc=0
+$ pgc[T] keeper2 admin verify
+chain and cache integrity ok
+rc=0
+# B. roll-forward-only: db keeper (has item_reopened from s3 run): 3fd91bd6 verify
+item_reopened_events|1
+$ pgc[OLD] keeper admin verify
+4 problem(s)
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'state', 'expected': 'in_review', 'got': 'claimed'}
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'epoch', 'expected': 1, 'got': 2}
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'round', 'expected': 1, 'got': 0}
+{'key': 'rehs:A', 'code': 'cache_mismatch', 'field': 'lease_until', 'expected': None, 'got': '2026-10-17T00:45:18Z'}
+rc=2
+$ pgc[OLD] keeper admin verify-snapshot
+snapshot signature ok
+rc=0
+# old daemon on the reopened db: start + snapshot + whoami + claimed item read
+old health http=200
+rehs:A | t A
+state claimed | kind lane | track T0 | prio 0 | epoch 2
+claimed_by reh-l1 | delegate - | lease 2026-10-17T00:45:18Z | reviewer -
+deps -
+unblocks rehs:G
+evidence decision✓
+done c
+reviews - http=200
+old snapshot http=200
+# old daemon log tail (reopened db):
+# T verify on reopened db still ok:
+$ pgc[T] keeper admin verify
+chain and cache integrity ok
+rc=0
+
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)

@@ -1,0 +1,102 @@
+=== part seat-qwen/part1.json
+## V1: No-migration claim — VERIFIED CORRECT
+
+The diffstat explicitly shows `schema_pg.py`, `db_pg.py`, and `config.py` unchanged (empty diff). The added SQL in the diffstat is three statements, all DML on existing tables:
+
+- `UPDATE items SET updated_at=? WHERE key=? AND state=?` (store_reopen.py and store_cards.py)
+- `INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')` (store_create.py, store_ops.py)
+- `UPDATE items SET state='claimed', epoch=epoch+1, round=0, reviewer=NULL, review_waiver=NULL, lease_until=?, updated_at=? WHERE key=? AND state='in_review' AND epoch=?` (store_reopen.py:60-63)
+
+No `CREATE TABLE`, `ALTER TABLE`, `DROP`, `GRANT`, `REVOKE`, or `CREATE ROLE` anywhere in the diff.
+
+`events.type` is plain `TEXT` with no CHECK constraint (schema_pg.py events table definition, confirmed by the packet's explicit statement and by rehearsal: `item_reopened` inserted successfully with zero DDL). The only change is `schema.EVENT_TYPES` — a Python tuple — gaining the string `"item_reopened"` (schema.py diff, line 42). This is a runtime constant for fold logic, not a schema object.
+
+`schema_pg.LATEST` stays 4 (rehearsal s1: `schema_version|4` after restore). `admin migrate` on the restored live copy returns `schema up to date` (rehearsal s2). No new config key: the credential guard (#44) operates on existing config fields; `estimate_src` is an existing column already in the items table (item_fields.py diff adds it to the editable-fields set, not to the table definition). No new environment variable. No SQLite schema version change.
+
+**Conclusion**: No schema/DDL/migration/config-key/role change is missed. The claim is true.
+
+---
+
+## V2: Rollback window validity — CORRECT AND COMPLETE
+
+**Is "no item_reopened event" the sole constraint?** Yes. The other new write paths produce only event types 3fd91bd6 already knows:
+
+- `create` with `under` (#40): emits `item_created` + `item_defined` (edge attachment is recorded through the existing definition event pattern). Rehearsal A confirms 3fd91bd6 folds these cleanly.
+- `add_dep`/`remove_dep` (#43): edge operations through `item_defined`. Rehearsal A confirms.
+- `estimate_src` edit (#42): `item_defined` event with payload containing the field change. 3fd91bd6 already folds `item_defined` edits. Rehearsal A confirms.
+- Fold unknown-type (#41): read-side only (`verify_integrity` output formatting). Writes nothing. No event produced.
+- `reopen` (#39): emits `item_reopened` — the one type 3fd91bd6 cannot fold, producing exactly the 4 `cache_mismatch` problems shown in rehearsal B.
+
+**Is the check query right?**
+
+```sql
+select count(*) from keeper.events where type=$$item_reopened$$
+```
+
+`$$...$$` is PostgreSQL dollar-quoting — syntactically valid and equivalent to `type = 'item_reopened'`. It avoids nested-quote escaping issues in the shell layer (`\$\$` produces literal `$$`). The column `type` is the indexed event type TEXT column. Correct.
+
+**Does the runbook order hold together?**
+
+1. Worktree prep (no live impact)
+2. Pre-checks + counts baseline + reopen-window check (must be 0)
+3. Pre-GO dump (insurance, no stop — schema is unchanged)
+4. Migration no-op check (owner, BEFORE restart — catches any surprise)
+5. Drop-in (file placement; no restart yet)
+6. Restart + env check
+7. Verify gates including counts-diff and reopen-window re-check
+8. Rollback only if gates fail AND reopen-window is still 0
+
+The critical ordering property: step 4 (migrate check) runs before step 6 (restart), so if the schema unexpectedly needed migration the old keeper is still running and no data loss occurs. The dump is taken at step 3 before any code change. The gates at step 7 are the last moment to roll back safely. Normal traffic between dump and restart is covered because rollback doesn't restore the dump — it restarts the old code, which reads all rows including those written between steps.
+
+**One observation**: the packet says "no writes in between except normal traffic: if live traffic wrote, expect only growth, never shrinkage; events must be >= pre." This is correct for the append-only event model. Items could gain new ones but never lose them.
+
+---
+
+## V3: Grant completeness for keeper_rt — SUFFICIENT
+
+**All tables written by new code paths:**
+
+| Operation | Tables written | New or existing? |
+|---|---|---|
+| `reopen` (store_reopen.py) | `items` (UPDATE), `events` (INSERT via `_append`), `audit` (INSERT via `_run`), possibly `tokens` | all existing |
+| `create` with `under` (store_create.py) | `items` (INSERT), `edges` (INSERT), `events` (INSERT), `audit` (INSERT) | all existing |
+| `add_dep`/`remove_dep` (store_ops.py) | `edges` (INSERT/DELETE), `events` (INSERT), `audit` (INSERT) | all existing |
+| `estimate_src` edit (store_input.py) | `items` (UPDATE), `events` (INSERT), `audit` (INSERT) | all existing |
+
+No new tables are created (schema_pg.py unchanged). The default privileges `FOR ROLE keeper IN SCHEMA keeper` grant INSERT/UPDATE/DELETE/SELECT to `keeper_rt` on all present and future tables in the schema. Since all written tables already existed, the grant covers them.
+
+**Rehearsal proof**: Section s3 ran every new write as `keeper_rt` (the daemon environ shows `PYTHONPATH=<T tree>/src`, and the post-s3 verify was `pgc <T tree>/src postgresql://keeper_rt@<pg> admin verify` returning rc=0). Item counts grew (1808 → 1813), edges grew (2649 → 2653), events grew (7006 → 7022). Zero permission errors. The `verify` command itself uses the `keeper_rt` DSN, proving read access to all written data.
+
+**Sequence gap?**: No sequences are referenced in the SQL diffs. The rehearsal created items (5 new `item_created` events, items count +5) without error, meaning any existing ID generation (if sequence-based) already has USAGE/SELECT granted to `keeper_rt` from the initial LIVE-SYNC-5 setup.
+
+**Trigger gap?**: No `CREATE TRIGGER` appears in the diff. No triggers are mentioned in the rehearsal. Existing triggers (if any, e.g. audit-log) fire as the table owner `keeper` within the transaction context and do not require additional grants for `keeper_rt`.
+
+**Conclusion**: `keeper_rt` DML is sufficient. No grant step needed.
+
+---
+
+## V4: Secrets hygiene — CLEAN
+
+**DSNs**: Referenced by file path name only (`~/.config/plangraph/pg-keeper.dsn`, `pg-keeper-migrate.dsn`). The packet explicitly states "names only, never print contents." The env-check grep in step 6 uses `grep -E '^(PYTHONPATH|PG_KEEPER_BACKEND|PG_SCHEMA)='` — deliberately excludes `PG_DSN`.
+
+**Rehearsal log**: Connection strings appear as `postgresql://keeper@<pg>` and `postgresql://keeper_rt@<pg>` — the `<pg>` placeholder hides host and port. HTTP commands show `http=200` summaries, not full curl invocations with expanded headers.
+
+**Token files**: `router.token` and `build-L1.token` are referenced by path name. Step 7 uses `$(cat ~/.config/plangraph/router.token)` — this momentarily places the token value in the curl process's `/proc/<pid>/cmdline` (visible to same-user and root for the process's lifetime, typically milliseconds for a localhost request). This is standard for local bearer auth, unavoidable without a curl feature that reads a header from a file, and no log file captures the expansion. Not a persistent secret leak.
+
+**Credential guard test data**: The rehearsal uses `"login user/secret12345"` as a synthetic test value. The guard output shows `us*** (len 16)` — first 2 chars and length only, no full value. This is a test fixture, not a real credential.
+
+**Home paths**: The packet uses `~` notation throughout. No absolute `/home/<user>/...` paths appear. The `W` and `D` variables use `~/` expansion.
+
+**Dump hash**: `8ae1e40381e37434...` is a SHA-256 of a dump file — not sensitive.
+
+**No commands put secrets in logs or committed artifacts**: The packet is docs-only ("nothing here was run against the live keeper"). The rehearsal log is scrubbed. No DSN contents, no token values, no passwords appear anywhere.
+
+**Minor note**: `--env-file ~/.config/plangraph/pg-keeper.dsn` in the docker commands loads the file as environment variables inside the container — the file path is visible but its content is never echoed or captured in the output redirect.
+
+---
+
+TEST-GAMING: no test-only branches, mock conditionals, or gaming logic found; all code changes implement real guards and operations verified by independent rehearsal execution
+
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

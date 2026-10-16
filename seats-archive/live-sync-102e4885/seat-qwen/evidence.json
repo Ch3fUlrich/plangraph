@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "seat-qwen/part1.json",
+      "sha256": "6b04f007090a50a057c3c45486ae0484db414cc7a89bf25f8dab9c3c0f706a93",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "03fbc665-ebab-4dab-a3fb-a263e54dc3b6",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no test-only branches, mock conditionals, or gaming logic found; all code changes implement real guards and operations verified by independent rehearsal execution"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "d276a66a9f804f637ed66b185057fed2395819f413a35e087eed2111f33c0b9f"
+}

@@ -1,0 +1,50 @@
+**V1 – no‑migration claim**  
+*Evidence*  
+- `git diff --stat 3fd91bd6 102e4885 -- src/plangraph/keeper/schema_pg.py src/plangraph/keeper/db_pg.py src/plangraph/keeper/config.py` is empty – the three files that control schema version, migrations and config keys are unchanged.  
+- The only SQL fragments added (see “SQL/DDL statements ADDED” list) are `UPDATE items …` and `INSERT INTO edges …`, i.e. plain DML. No `CREATE TABLE`, `ALTER TABLE`, `DROP …` or `CHECK` constraints are introduced.  
+- `events.type` column definition in `schema_pg.py` remains `TEXT` without a CHECK; the new event type `item_reopened` is added only to the Python constant `EVENT_TYPES` in `schema.py`, not to the database schema.  
+
+**Conclusion:** The diff contains no schema/DDL/migration/config‑key/role changes that the packet omits.  
+
+---
+
+**V2 – rollback window validity**  
+*Evidence*  
+- New event type `item_reopened` is the only type unknown to build 3fd91bd6 (see `src/plangraph/keeper/schema.py` where it is added to `EVENT_TYPES`). The fold function in `src/plangraph/keeper/events.py` skips any event whose `type` is not in `EVENT_TYPES` and records it in an `unknown` list, later reported as an `unknown_event_type` problem.  
+- The packet’s “reopen‑window check” query  
+  ```sql
+  SELECT count(*) FROM keeper.events WHERE type='item_reopened';
+  ```  
+  exactly matches the condition used by the verifier to flag unknown types, so it reliably detects the presence of any event that would break the old build.  
+- All other new verbs (`under` on create, `add_dep`/`remove_dep`, `estimate_src` edit) write only known event types (`item_created`, `item_defined`, edge rows) that the old code can fold without issue; this is demonstrated in rehearsal A where 3fd91bd6 verified clean after those writes.  
+- The run‑book order (pre‑dump → migration‑check → drop‑in → restart → gates → optional rollback) respects the window: a rollback is only attempted **before** any `item_reopened` appears, matching the safety condition.  
+
+**Conclusion:** The “no item_reopened” window is complete; no other new write path can cause the old build to mis‑fold, and the check query is correct and correctly integrated in the run‑book.  
+
+---
+
+**V3 – grant completeness for `keeper_rt`**  
+*Evidence*  
+- The packet states that default privileges “FOR ROLE keeper IN SCHEMA keeper” give DML rights to the runtime role; these privileges are unchanged by the diff.  
+- All new write operations are performed in the rehearsal as `keeper_rt` (see rehearsal log sections under **s3** and **s4**, e.g. “daemon (T) as keeper_rt …”, followed by successful `POST /v1/create_items`, `POST /v1/apply_ops`, `POST /v1/edit_definition`, `POST /v1/reopen` with no “permission denied” errors).  
+- The tables touched by the new paths are `items`, `edges`, `events`, `evidence` – all already covered by the existing DML grant to `keeper_rt`. No new tables or columns were introduced (see V1).  
+
+**Conclusion:** `keeper_rt` has sufficient DML privileges for every table written by the new code paths; the rehearsal proves there is no permission gap.  
+
+---
+
+**V4 – secrets hygiene**  
+*Evidence*  
+- All commands that access the database use `--env‑file ~/.config/plangraph/pg-keeper.dsn` (owner) or `pg-keeper.dsn` (runtime). The DSN values are never echoed, printed, or logged; the only references are file names.  
+- The rehearsal log contains no lines that display a connection string, password, token value, or hostname. All logged output shows HTTP status codes, JSON bodies, or count numbers, never credential strings.  
+- Token‑related operations refer to token files by path only (e.g., `router.token`, `scratch/sign.key`) and never print their contents.  
+- No command line includes a secret as an argument; Docker runs pass the DSN via environment variable inside the container, which is not exposed in the logs.  
+
+**Conclusion:** The packet and rehearsal do not expose DSNs, tokens, or other credential‑shaped strings on the command line or in logs.  
+
+---
+
+**STANDING QUESTION v2**  
+TEST-GAMING: no - searched src/ and docs/ for test‑specific conditionals, environment checks, or overridden magic methods that only unit‑test frameworks would trigger: 0 hits  
+
+VERDICT: pass
