@@ -1,0 +1,38 @@
+**V1 – keeper/schema.py:METRICS_DDL, keeper/db.py:_upgrade, keeper/schema_pg.py:_V4 + MIGRATIONS**  
+file:src/plangraph/keeper/schema.py:METRICS_DDL – defines `CREATE TABLE IF NOT EXISTS metrics (…)` with correct columns and primary key.  
+file:src/plangraph/keeper/db.py:_upgrade – calls `conn.executescript(METRICS_DDL)` after DESIGN3_DDL, making the upgrade idempotent for a v10 DB.  
+file:src/plangraph/keeper/schema_pg.py:_V4 – provides the PostgreSQL twin of the metrics table.  
+file:src/plangraph/keeper/copy_to_pg.py – includes `"metrics"` in `TABLES` in the correct order after `"budget"` matching SQLite schema.  
+**Result:** PASS  
+
+**V2 – keeper/store_metrics.py:_set_metrics / _get_metrics**  
+file:src/plangraph/keeper/store_metrics.py:_set_metrics – role gated to `router`/`system`; validates `day`, `metric` name, finite numeric `value`, and `source` length; enforces max 50 items; uses `?` placeholders and `ON CONFLICT` upsert; all inserts performed inside a single `with self._write():` block guaranteeing atomicity.  
+file:src/plangraph/keeper/store_metrics.py:_get_metrics – validates optional filters, limits rows to 1000, uses `?` placeholders, returns rows safely.  
+**Result:** PASS  
+
+**V3 – keeper/store_metrics.py:_log_governor_override and keeper/api_routes.py:ROLE_CHECKED_VERBS + keeper/api.py:_write**  
+file:src/plangraph/keeper/store_metrics.py:_log_governor_override – requires role `router`/`l1`/`system`/`spawner`; validates `start_kind`, `initiator`, non‑empty `reason` ≤500 chars, optional `provider` name; records an audit row via `self._audit` (no secret data).  
+file:src/plangraph/keeper/api_routes.py – maps `"governor_override"` into `ROLE_CHECKED_VERBS` so the store method’s role check runs before any body validation.  
+file:src/plangraph/keeper/api.py – all write verbs go through `self._run` → `self._write`, which enforces the run‑token gate (`run_gate`).  
+**Result:** PASS  
+
+**V4 – governor/policy.py:allow/_decide**  
+file:src/plangraph/governor/policy.py:_decide – never blocks `answer` or `operator` initiators; on missing data (`burn`/`quota_used`/`rate_limited` is `None`) returns an allowing decision (fail‑open).  
+Claude burn > 1/7 or Claude rate‑limited produces a deny; `allow` then attempts a fallback via `_pick_fallback`, which **excludes Claude** (`p == CLAUDE` returns False) and skips any provider that is rate‑limited or over quota.  
+`worker_leg` path checks rate limit and quota, denying only when appropriate.  
+`allow` applies an `override` only to a prior deny, flips `allow` to True, marks `override=True`, and invokes `on_override` once (exceptions are caught).  
+Both `on_fallback` and `on_override` are wrapped in `try/except` so callbacks cannot block the start.  
+**Result:** PASS  
+
+**V5 – governor/cli.py, governor/keeper_source.py, governor/metrics.py:iter_usage, planner/start.py:guard_start**  
+file:src/plangraph/governor/cli.py – prints only JSON with `day`, `items`, and `posted` flag; never leaks tokens, paths, or secrets.  Returns `EXIT_USAGE` (64) for bad inputs, `2` for refused, `3` for unreachable, otherwise `0`/`1` as per decision.  
+file:src/plangraph/governor/keeper_source.py – all keeper read errors are caught and result in `None` (fail‑open); no exceptions escape to the caller.  
+file:src/plangraph/governor/metrics.py – `iter_usage` safely skips malformed files, returns a list of usage records; `daily_metrics` builds rows that are upserted idempotently via `set_metrics`.  
+file:src/plangraph/planner/start.py – `guard_start` calls `policy.allow` with fallbacks; never references Claude directly, only through the policy’s burn check, so no hard Claude dependency.  
+**Result:** PASS  
+
+---
+
+TEST-GAMING: no - searched src/ and tests/ for test‑specific checks, environment switches, or special‑case constants that would only satisfy a test: 0 hits  
+
+VERDICT: pass

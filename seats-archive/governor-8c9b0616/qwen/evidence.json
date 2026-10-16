@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/code/plangraph-worktrees/governor-seats-8c9b0616/seat3.qwen.json",
+      "sha256": "1c883fec6c18318ab87058b98ba7cb79f021617d1228d68cee9191a21f061034",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "ba692a89-e8c6-46db-bc81-5bd9fa729f74",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "4d2160761e3b16ec54d8c204b19bee6096dc9acb47e606c2ac39cb6c4b3ae7ad"
+}

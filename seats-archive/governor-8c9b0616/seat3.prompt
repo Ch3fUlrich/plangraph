@@ -1,0 +1,1420 @@
+You have NO tools and no repository access. The full material is inline below. Answer in plain text; never emit tool calls.
+
+Review the diff below (plangraph RT-P1-GOVERNOR, HIGH: keeper schema + migration + auth-adjacent verbs). Answer each vector V1..V5 under its own heading with file:function evidence; say PASS or a concrete defect (input -> wrong output).
+V1 keeper/schema.py:METRICS_DDL, keeper/db.py:_upgrade, keeper/schema_pg.py:_V4 + MIGRATIONS: SQLite/Postgres column parity, idempotent upgrade of a v10 database, no DDL that the keeper connection's authorizer would deny at upgrade, copy_to_pg table order.
+V2 keeper/store_metrics.py:_set_metrics / _get_metrics: role gating (router/system only to write), validation completeness (day, metric name, value finiteness/bool, source), atomicity of a mixed batch, SQL injection / portability (? placeholders, ON CONFLICT), row cap.
+V3 keeper/store_metrics.py:_log_governor_override and keeper/api_routes.py:ROLE_CHECKED_VERBS + keeper/api.py:_write: who may call it (role check precedes body validation), run-token gate (run_gate) still applies, audit row content (no secret), no way to forge or skip an audit row.
+V4 governor/policy.py:allow/_decide: never blocks answers, operator-initiated starts, or operator judges; fails open on missing data; Claude over 1/7 burn or rate limited -> fallback to a non-Claude leg (never Claude), exhausted/rate-limited fallbacks skipped; worker_leg quota; override flips only a deny and is logged once; callbacks cannot block.
+V5 governor/cli.py, governor/keeper_source.py, governor/metrics.py:iter_usage, planner/start.py:guard_start: no secret/token/path leakage in output, fail-open on keeper errors, exit codes, idempotent daily upsert, no Claude hard dependency (D-1533).
+Note: ROUTER_VERBS and ROLE_CHECKED_VERBS dispatch in api.py do NOT gate roles themselves; the store method checks the role first (see mint_run_token, set_kind). Tests changed: see stat at the end.
+=== DIFF (src + docs) ===
+diff --git a/docs/governor.md b/docs/governor.md
+new file mode 100644
+index 00000000..b9268cb3
+--- /dev/null
++++ b/docs/governor.md
+@@ -0,0 +1,87 @@
++# Budget governor (design section 9, D23)
++
++Daily metrics land in the keeper; a pure policy decides whether a new start may proceed.
++It works with any model family: Claude is one leg (D-1533). The governor never blocks
++answering questions, operator-started sessions, or a judge run the operator asked for.
++
++## Pieces
++
++| Piece | Where |
++|---|---|
++| Metric computation (transcripts, git) | `src/plangraph/governor/metrics.py` |
++| Policy `allow(start_kind, initiator, now, ...)` | `src/plangraph/governor/policy.py` |
++| Keeper reader/logger + CLI | `src/plangraph/governor/keeper_source.py`, `cli.py` |
++| Planner start path | `src/plangraph/planner/start.py` (`guard_start`) |
++| Keeper storage | table `metrics` (schema v11, PG migration 4), verbs `set_metrics`, `get_metrics`, `log_governor_override` |
++
++## Metrics
++
++Weighted tokens = `input + output + cache_write + 0.1 x cache_read`, deduplicated per message id
++(`requestId`); landed change = first-parent merge commit; burn index = `day weighted / (weekly cap / 7)`.
++Keeper table `metrics(day, metric, value, source, computed_at)`, one row per `(day, metric)`, upserted.
++
++| metric | source |
++|---|---|
++| `claude_weighted_tokens` | transcripts |
++| `claude_burn_index` | transcripts, needs a weekly cap |
++| `landed_changes`, `weighted_tokens_per_landed` | git, derived |
++| `provider_used.<provider>` | `--provider-usage` JSON `{provider: tokens}` |
++| `rate_limited.<provider>` | `--rate-limited a,b` (value 1.0 = limited) |
++
++Keeper access: `GET /v1/metrics?day=&since=&metric=` (any authenticated role); `POST /v1/set_metrics`
++(router or system); `POST /v1/governor_override` (router, l1, system, spawner). Both writes are audited;
++an override or fallback is one extra `audit_log` row with action `governor_override`.
++
++## Daily job
++
++```
++python -m plangraph.governor metrics daily --date 2026-10-15 \
++    --projects-dir "$PLANGRAPH_CLAUDE_PROJECTS_DIR" --repo . --weekly-cap "$PLANGRAPH_WEEKLY_CAP_WEIGHTED"
++```
++
++Idempotent: a re-run of the same date upserts the same rows. `--dry-run` prints without posting.
++Environment: `PG_URL`, `PG_TOKEN_FILE` (keeper client), `PLANGRAPH_CLAUDE_PROJECTS_DIR`,
++`PLANGRAPH_WEEKLY_CAP_WEIGHTED`, `PLANGRAPH_PROVIDER_QUOTA` (`provider=tokens,...`).
++Without a weekly cap no burn index is written and the governor fails open (`burn_unknown`).
++
++Timer unit (install is a separate, operator step; this repo installs nothing):
++
++```
++# plangraph-governor.service
++[Service]
++Type=oneshot
++EnvironmentFile=/etc/plangraph/governor.env
++ExecStart=/usr/bin/python3 -m plangraph.governor metrics daily
++# plangraph-governor.timer
++[Timer]
++OnCalendar=*-*-* 00:30:00 UTC
++Persistent=true
++[Install]
++WantedBy=timers.target
++```
++
++## Policy matrix
++
++`allow()` returns a `Decision(allow, reason, override, fallback, ...)`. Unknown data fails open.
++
++| start_kind | initiator | result |
++|---|---|---|
++| answer | any | allow `answer_always` |
++| any | operator | allow `operator_initiated` (includes an operator-requested judge) |
++| planner / expert / judge | agent | burn <= 1.0 and Claude not rate limited: allow; else fall back (below), else deny |
++| worker_leg | agent | provider quota (any provider, Claude or not): used >= limit denies; provider rate limited denies |
++
++Fallback (D-1533): when Claude is over 1/7 burn per day or rate limited, a new agent planner/expert/judge
++start picks the first usable non-Claude provider from `fallbacks` (not rate limited, within quota), returns
++`allow=True, fallback=<provider>`, and calls `on_fallback` (logged). Only when no fallback is usable is the start denied.
++`guard_start` in `planner/start.py` derives the fallback providers from the routing legs (`Leg.family`, `claude_family` False)
++and returns the matching `Leg`. An explicit `override` reason flips a remaining deny to allow and is logged once via `on_override`.
++
++`python -m plangraph.governor check planner agent --fallback qwen,muse` prints the decision as JSON (exit 0 allowed, 1 denied).
++
++## Follow-ups (not in this change)
++
++- **Spawner wiring (AutoOS):** call `python -m plangraph.governor check <kind> <initiator> ...` (or `planner.start.guard_start`)
++  before starting a planner/expert; honour `fallback` by routing to that leg. AutoOS is not edited here.
++- **RT-P1-WORKER interface:** the Rust worker picks a leg; before a leg it should `GET /v1/metrics?metric=provider_used.<p>` and
++  `rate_limited.<p>` (or call `check worker_leg agent --provider <p>`) and skip a denied provider. Left undocumented-in-code until that item.
+diff --git a/src/plangraph/governor/__init__.py b/src/plangraph/governor/__init__.py
+new file mode 100644
+index 00000000..8807decb
+--- /dev/null
++++ b/src/plangraph/governor/__init__.py
+@@ -0,0 +1 @@
++"""Budget governor: daily metrics and the start/throttle policy (design section 9)."""
+diff --git a/src/plangraph/governor/__main__.py b/src/plangraph/governor/__main__.py
+new file mode 100644
+index 00000000..5a60757b
+--- /dev/null
++++ b/src/plangraph/governor/__main__.py
+@@ -0,0 +1,11 @@
++"""Run the governor CLI as ``python -m plangraph.governor``."""
++from __future__ import annotations
++
++import sys
++
++from plangraph.governor import cli
++
++__all__ = []
++
++if __name__ == "__main__":
++    sys.exit(cli.main())
+diff --git a/src/plangraph/governor/cli.py b/src/plangraph/governor/cli.py
+new file mode 100644
+index 00000000..1170d0ff
+--- /dev/null
++++ b/src/plangraph/governor/cli.py
+@@ -0,0 +1,169 @@
++"""Command line front-end for keeper metrics upload and start checks."""
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import sys
++from datetime import date, datetime, timedelta, timezone
++
++from plangraph.keeper import cli_verbs
++from plangraph.governor import metrics, policy
++from plangraph.governor.keeper_source import KeeperSource, KeeperLog
++
++__all__ = ["main", "EXIT_USAGE"]
++
++EXIT_USAGE = 64
++ENV_PROJECTS = "PLANGRAPH_CLAUDE_PROJECTS_DIR"
++ENV_WEEKLY = "PLANGRAPH_WEEKLY_CAP_WEIGHTED"
++ENV_QUOTA = "PLANGRAPH_PROVIDER_QUOTA"
++
++
++def _cmd_daily(args, session) -> int:
++    """Compute and (unless dry-run) upload one day's metrics."""
++    try:
++        day = date.fromisoformat(args.date)
++    except ValueError:
++        print("bad --date", file=sys.stderr)
++        return EXIT_USAGE
++    projects_dir = args.projects_dir or os.environ.get(ENV_PROJECTS)
++    if not projects_dir:
++        print("projects dir is required", file=sys.stderr)
++        return EXIT_USAGE
++
++    weekly_cap = args.weekly_cap
++    if weekly_cap is None:
++        raw = os.environ.get(ENV_WEEKLY)
++        weekly_cap = float(raw) if raw else None
++
++    landed = {}
++    if args.repo:
++        landed = metrics.landed_by_day(
++            args.repo, day.isoformat(),
++            until=(day + timedelta(days=1)).isoformat(), ref=args.ref)
++
++    try:
++        records = metrics.iter_usage(projects_dir)
++    except OSError as exc:
++        print(f"cannot read projects dir: {exc}", file=sys.stderr)
++        return EXIT_USAGE
++
++    items = list(metrics.daily_metrics(
++        day.isoformat(), records, landed, weekly_cap))
++
++    if args.provider_usage:
++        try:
++            with open(args.provider_usage, encoding="utf-8") as fh:
++                usage = json.load(fh)
++            for provider, tokens in usage.items():
++                items.append({"metric": f"provider_used.{provider}",
++                              "value": tokens, "source": "provider-usage"})
++        except (OSError, ValueError) as exc:
++            print(f"bad provider-usage file: {exc}", file=sys.stderr)
++            return EXIT_USAGE
++
++    if args.rate_limited:
++        for provider in (p.strip() for p in args.rate_limited.split(",")):
++            if provider:
++                items.append({"metric": f"rate_limited.{provider}",
++                              "value": 1.0, "source": "operator"})
++
++    posted = False
++    if not args.dry_run:
++        try:
++            session.call("POST", "set_metrics",
++                         body={"day": day.isoformat(), "items": items})
++            posted = True
++        except cli_verbs.Unreachable:
++            return 3
++        except cli_verbs.RefusedCli as exc:
++            print(f"refused: {exc}", file=sys.stderr)
++            return 2
++
++    print(json.dumps({"day": day.isoformat(), "items": items,
++                      "posted": posted}))
++    return 0
++
++
++def _cmd_check(args, session) -> int:
++    """Run one start check and print the verdict."""
++    try:
++        now = datetime.fromisoformat(args.now) if args.now \
++            else datetime.now(timezone.utc)
++    except ValueError:
++        print("bad --now", file=sys.stderr)
++        return EXIT_USAGE
++
++    quota_text = args.quota if args.quota is not None \
++        else os.environ.get(ENV_QUOTA)
++    try:
++        quotas = policy.parse_quota(quota_text)
++    except (ValueError, TypeError):
++        print("bad --quota", file=sys.stderr)
++        return EXIT_USAGE
++
++    fallbacks = [f.strip() for f in (args.fallback or "").split(",")
++                 if f.strip()]
++
++    source = KeeperSource(session)
++    log = KeeperLog(session)
++    try:
++        decision = policy.allow(
++            args.start_kind, args.initiator, now,
++            source=source, quotas=quotas, provider=args.provider,
++            override=args.override, on_override=log,
++            fallbacks=fallbacks, on_fallback=log)
++    except (ValueError, TypeError):
++        print("bad start_kind/initiator/quota", file=sys.stderr)
++        return EXIT_USAGE
++
++    print(json.dumps({"allow": decision.allow, "reason": decision.reason,
++                      "override": decision.override,
++                      "fallback": decision.fallback,
++                      "provider": decision.provider,
++                      "burn": decision.burn}))
++    return 0 if decision.allow else 1
++
++
++def _build_parser() -> argparse.ArgumentParser:
++    """Construct the argparse tree."""
++    parser = argparse.ArgumentParser(prog="plangraph-governor")
++    sub = parser.add_subparsers(dest="command", required=True)
++
++    metrics_p = sub.add_parser("metrics")
++    metrics_sub = metrics_p.add_subparsers(dest="metrics_command",
++                                           required=True)
++    daily = metrics_sub.add_parser("daily")
++    today = datetime.now(timezone.utc).date()
++    daily.add_argument("--date",
++                       default=(today - timedelta(days=1)).isoformat())
++    daily.add_argument("--projects-dir", default=None)
++    daily.add_argument("--repo", default=None)
++    daily.add_argument("--ref", default="HEAD")
++    daily.add_argument("--weekly-cap", type=float, default=None)
++    daily.add_argument("--provider-usage", default=None)
++    daily.add_argument("--rate-limited", default=None)
++    daily.add_argument("--dry-run", action="store_true")
++
++    check = sub.add_parser("check")
++    check.add_argument("start_kind")
++    check.add_argument("initiator")
++    check.add_argument("--provider", default=None)
++    check.add_argument("--fallback", default=None)
++    check.add_argument("--quota", default=None)
++    check.add_argument("--override", default=None)
++    check.add_argument("--now", default=None)
++    return parser
++
++
++def main(argv=None, session=None) -> int:
++    """Entry point; ``session`` is injectable for tests."""
++    parser = _build_parser()
++    args = parser.parse_args(argv)
++    if session is None:
++        session = cli_verbs.Session()
++    if args.command == "metrics" and args.metrics_command == "daily":
++        return _cmd_daily(args, session)
++    if args.command == "check":
++        return _cmd_check(args, session)
++    return EXIT_USAGE
+diff --git a/src/plangraph/governor/keeper_source.py b/src/plangraph/governor/keeper_source.py
+new file mode 100644
+index 00000000..d93e95db
+--- /dev/null
++++ b/src/plangraph/governor/keeper_source.py
+@@ -0,0 +1,97 @@
++"""Fail-open policy.Source and override logger backed by the keeper."""
++from __future__ import annotations
++
++from datetime import datetime, timezone
++
++__all__ = ["KeeperSource", "KeeperLog", "BURN_METRIC", "_burn_name",
++           "_quota_name", "_rate_name"]
++
++BURN_METRIC = "claude_burn_index"
++
++
++def _burn_name() -> str:
++    """Metric name for the daily burn index."""
++    return BURN_METRIC
++
++
++def _quota_name(provider: str) -> str:
++    """Metric name for a provider's used tokens."""
++    return f"provider_used.{provider}"
++
++
++def _rate_name(provider: str) -> str:
++    """Metric name for a provider's rate-limit flag."""
++    return f"rate_limited.{provider}"
++
++
++class KeeperSource:
++    """Read-only metrics source; every read fails open to ``None``."""
++
++    def __init__(self, session, today=None):
++        self.session = session
++        self._today = today or (
++            lambda: datetime.now(timezone.utc).date().isoformat())
++        self._cache: dict[tuple[str, str], list] = {}
++
++    def _rows(self, metric: str, day: str) -> list | None:
++        """Return cached ``rows`` for (metric, day) or ``None`` on any error."""
++        key = (metric, day)
++        if key in self._cache:
++            return self._cache[key]
++        try:
++            data = self.session.call("GET", "metrics",
++                                     params={"day": day, "metric": metric})
++            rows = data.get("rows")
++            if not isinstance(rows, list):
++                rows = None
++        except Exception:
++            rows = None
++        self._cache[key] = rows
++        return rows
++
++    def _first_value(self, metric: str, day: str) -> float | None:
++        """Numeric value of the first row, else ``None``."""
++        rows = self._rows(metric, day)
++        if not rows:
++            return None
++        try:
++            return float(rows[0]["value"])
++        except (KeyError, TypeError, ValueError):
++            return None
++
++    def burn(self, day: str) -> float | None:
++        """Return the burn index for ``day`` or ``None``."""
++        return self._first_value(_burn_name(), day)
++
++    def quota_used(self, provider: str, day: str) -> float | None:
++        """Return tokens used by ``provider`` for ``day`` or ``None``."""
++        return self._first_value(_quota_name(provider), day)
++
++    def rate_limited(self, provider: str) -> bool | None:
++        """True if rate-limited today, False if a zero row exists, None else."""
++        value = self._first_value(_rate_name(provider), self._today())
++        if value is None:
++            return None
++        return value >= 1.0
++
++
++class KeeperLog:
++    """Log an override/fallback to the keeper; never raise."""
++
++    def __init__(self, session):
++        self.session = session
++
++    def __call__(self, decision) -> None:
++        """POST a governor_override for ``decision``; swallow all errors."""
++        provider = decision.provider if isinstance(decision.provider, str) \
++            else None
++        body = {
++            "start_kind": decision.start_kind,
++            "initiator": decision.initiator,
++            "reason": decision.reason[:500],
++            "provider": provider,
++        }
++        try:
++            self.session.call("POST", "governor_override", body=body)
++        except Exception:
++            pass
+diff --git a/src/plangraph/governor/metrics.py b/src/plangraph/governor/metrics.py
+new file mode 100644
+index 00000000..0542aabe
+--- /dev/null
++++ b/src/plangraph/governor/metrics.py
+@@ -0,0 +1,213 @@
++"""Pure computation of daily Claude usage metrics.
++
++Ported from the reference usage sampler. All configuration is passed through
++function arguments; no environment variables or home-relative paths are read.
++"""
++
++from __future__ import annotations
++
++import datetime as dt
++import glob
++import json
++import os
++import subprocess
++
++__all__ = [
++    "parse_ts",
++    "iter_usage",
++    "weighted",
++    "daily_weighted",
++    "landed_by_day",
++    "burn_index",
++    "daily_metrics",
++]
++
++
++def _as_int(v) -> int:
++    """Best-effort int coercion used while reading token fields."""
++    try:
++        return int(v or 0)
++    except (TypeError, ValueError):
++        return 0
++
++
++def parse_ts(s) -> dt.datetime | None:
++    """Parse an ISO timestamp into a UTC-aware datetime; ``Z`` and naive ok."""
++    try:
++        if not isinstance(s, str):
++            return None
++        s2 = s.strip()
++        if s2.endswith("Z"):
++            s2 = s2[:-1] + "+00:00"
++        d = dt.datetime.fromisoformat(s2)
++        if d.tzinfo is None:
++            d = d.replace(tzinfo=dt.timezone.utc)
++        return d.astimezone(dt.timezone.utc)
++    except Exception:
++        return None
++
++
++def iter_usage(projects_dir) -> list[dict]:
++    """Collect per-assistant-message usage records from JSONL transcripts.
++
++    Globs ``<projects_dir>/*/*.jsonl`` and ``<projects_dir>/*/*/subagents/*.jsonl``.
++    Only lines with ``type == "assistant"`` and a ``message.usage`` dict count.
++    Duplicates keyed on ``(message.id or uuid, requestId)`` are reduced to the
++    record with the highest total tokens. Malformed lines and files are skipped.
++    """
++    patterns = [
++        os.path.join(projects_dir, "*", "*.jsonl"),
++        os.path.join(projects_dir, "*", "*", "subagents", "*.jsonl"),
++    ]
++    best: dict[tuple, dict] = {}
++    totals: dict[tuple, int] = {}
++    for pattern in patterns:
++        for path in glob.iglob(pattern):
++            rel = os.path.relpath(path, projects_dir).replace(os.sep, "/")
++            parts = rel.split("/")
++            subagent = "/subagents/" in rel
++            if subagent:
++                session = parts[1] if len(parts) > 1 else os.path.splitext(os.path.basename(path))[0]
++            else:
++                session = os.path.splitext(parts[1])[0] if len(parts) > 1 else os.path.splitext(os.path.basename(path))[0]
++            try:
++                with open(path, "r", encoding="utf-8", errors="replace") as f:
++                    for line in f:
++                        if '"usage"' not in line or '"assistant"' not in line:
++                            continue
++                        try:
++                            d = json.loads(line)
++                        except Exception:
++                            continue
++                        if not isinstance(d, dict):
++                            continue
++                        if d.get("type") != "assistant":
++                            continue
++                        msg = d.get("message")
++                        if not isinstance(msg, dict):
++                            msg = {}
++                        usage = msg.get("usage")
++                        if not isinstance(usage, dict):
++                            continue
++                        ts = parse_ts(d.get("timestamp") or msg.get("timestamp"))
++                        if ts is None:
++                            continue
++                        input_tokens = _as_int(usage.get("input_tokens"))
++                        output_tokens = _as_int(usage.get("output_tokens"))
++                        cache_read = _as_int(usage.get("cache_read_input_tokens"))
++                        cache_write = _as_int(usage.get("cache_creation_input_tokens"))
++                        total = input_tokens + output_tokens + cache_read + cache_write
++                        key = (msg.get("id") or d.get("uuid"), d.get("requestId"))
++                        model = d.get("model") or msg.get("model") or ""
++                        rec = {
++                            "ts": ts,
++                            "session": session,
++                            "model": model,
++                            "input": input_tokens,
++                            "output": output_tokens,
++                            "cache_read": cache_read,
++                            "cache_write": cache_write,
++                        }
++                        if key not in best or total > totals[key]:
++                            best[key] = rec
++                            totals[key] = total
++            except Exception:
++                continue
++    return list(best.values())
++
++
++def weighted(rec: dict) -> float:
++    """Weighted token cost: cache reads count as one tenth."""
++    return float(rec["input"] + rec["output"] + rec["cache_write"] + 0.1 * rec["cache_read"])
++
++
++def daily_weighted(records: list[dict]) -> dict[str, float]:
++    """Sum weighted tokens grouped by UTC calendar day ``YYYY-MM-DD``."""
++    days: dict[str, float] = {}
++    for rec in records:
++        ts = rec.get("ts")
++        if not isinstance(ts, dt.datetime):
++            continue
++        day = ts.astimezone(dt.timezone.utc).strftime("%Y-%m-%d")
++        days[day] = days.get(day, 0.0) + weighted(rec)
++    return days
++
++
++def _default_runner(argv: list[str]) -> str:
++    """Run a git command and return stdout; raise on non-zero exit."""
++    return subprocess.run(argv, check=True, text=True, capture_output=True).stdout
++
++
++def landed_by_day(
++    repo_dir,
++    since: str,
++    until: str | None = None,
++    ref: str = "HEAD",
++    runner=None,
++) -> dict[str, int]:
++    """Count first-parent merge commits per UTC day from a git log.
++
++    ``since``/``until`` are ISO date strings. ``runner`` is injectable for
++    tests and takes the argv list, returning stdout. Empty dict on git failure.
++    """
++    if runner is None:
++        runner = _default_runner
++    argv = [
++        "git",
++        "-C",
++        str(repo_dir),
++        "log",
++        "--first-parent",
++        "--merges",
++        "--since=" + str(since),
++    ]
++    if until is not None:
++        argv.append("--until=" + str(until))
++    argv += ["--format=%cI", str(ref)]
++    try:
++        out = runner(argv)
++    except (OSError, subprocess.CalledProcessError):
++        return {}
++    counts: dict[str, int] = {}
++    for line in out.splitlines():
++        ts = parse_ts(line.strip())
++        if ts is None:
++            continue
++        day = ts.astimezone(dt.timezone.utc).strftime("%Y-%m-%d")
++        counts[day] = counts.get(day, 0) + 1
++    return counts
++
++
++def burn_index(day_weighted: float, weekly_cap: float | None) -> float | None:
++    """Burn ratio versus an even weekly allowance; None when cap is unusable."""
++    if weekly_cap is None or weekly_cap <= 0:
++        return None
++    return day_weighted / (weekly_cap / 7)
++
++
++def daily_metrics(
++    day: str,
++    records: list[dict],
++    landed: dict[str, int],
++    weekly_cap: float | None,
++) -> list[dict]:
++    """Build the metric rows for one UTC day."""
++    day_total = daily_weighted(records).get(day, 0.0)
++    landed_count = int(landed.get(day, 0))
++
++    rows: list[dict] = [
++        {"metric": "claude_weighted_tokens", "value": round(float(day_total), 3), "source": "transcripts"},
++    ]
++    burn = burn_index(day_total, weekly_cap)
++    if burn is not None:
++        rows.append({"metric": "claude_burn_index", "value": round(burn, 3), "source": "transcripts"})
++    rows.append({"metric": "landed_changes", "value": round(float(landed_count), 3), "source": "git"})
++    if landed_count > 0:
++        rows.append(
++            {
++                "metric": "weighted_tokens_per_landed",
++                "value": round(day_total / landed_count, 3),
++                "source": "derived",
++            }
++        )
++    return rows
+diff --git a/src/plangraph/governor/policy.py b/src/plangraph/governor/policy.py
+new file mode 100644
+index 00000000..f9c51833
+--- /dev/null
++++ b/src/plangraph/governor/policy.py
+@@ -0,0 +1,277 @@
++"""Budget governor: decide whether a run may start based on burn and quota.
++
++Pure and hermetic: every decision comes from the injected ``Source`` and the
++caller-supplied clock. Unknown data fails OPEN (allow) so the governor never
++strands a run on a data gap. It NEVER blocks answering questions, an
++operator-initiated session, or an operator-requested judge. ``None`` is used as
++the "no override" sentinel; a blank/whitespace override string is ignored.
++
++Operator D-1533: orchestration works with any model family, Claude is only one
++leg. When a Claude-only gate (burn/rate-limit) would block an agent planner,
++expert or judge, the governor first tries the caller-supplied ``fallbacks`` for a
++usable non-Claude leg and logs the substitution; only if none is usable does the
++deny stand (so overrides can still apply on top of it).
++"""
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass, field, replace
++from datetime import datetime, timezone
++from typing import Protocol
++
++__all__ = [
++    "START_KINDS",
++    "INITIATORS",
++    "BURN_LIMIT",
++    "CLAUDE",
++    "Decision",
++    "Source",
++    "StaticSource",
++    "parse_quota",
++    "allow",
++]
++
++START_KINDS = ("planner", "expert", "judge", "answer", "worker_leg")
++INITIATORS = ("operator", "agent")
++BURN_LIMIT = 1.0  # burn is weighted-tokens / (weekly-cap / 7); 1.0 is the gate.
++CLAUDE = "claude"  # the single leg the burn gate guards; fallbacks avoid it.
++
++# planner / expert / judge share the burn gate; these are the kinds that may fall
++# back to another leg. Worker legs are chosen by the router and never fall back.
++_FALLBACK_KINDS = ("planner", "expert", "judge")
++
++
++@dataclass(frozen=True)
++class Decision:
++    """Immutable verdict for one start request.
++
++    Trailing fields carry defaults so the documented field order is valid.
++    """
++
++    allow: bool
++    reason: str
++    override: bool = False
++    start_kind: str = ""
++    initiator: str = ""
++    provider: str | None = None
++    burn: float | None = None
++    fallback: str | None = None
++
++    def as_tuple(self) -> tuple[bool, str]:
++        """Return ``(allow, reason)`` only."""
++        return (self.allow, self.reason)
++
++
++class Source(Protocol):
++    """Day is a UTC ``YYYY-MM-DD`` string."""
++
++    def burn(self, day: str) -> float | None: ...
++
++    def quota_used(self, provider: str, day: str) -> float | None: ...
++
++    def rate_limited(self, provider: str) -> bool | None: ...
++
++
++@dataclass(frozen=True)
++class StaticSource:
++    """In-memory ``Source`` for tests and the CLI.
++
++    ``rate_limited`` is the set of currently throttled providers; it is the
++    optional surface the governor reads back for the burn/fallback logic.
++    """
++
++    burn_by_day: Mapping[str, float | None] = field(default_factory=dict)
++    used: Mapping[tuple[str, str], float | None] = field(default_factory=dict)
++    rate_limited: frozenset = frozenset()
++
++    def burn(self, day: str) -> float | None:
++        return self.burn_by_day.get(day)
++
++    def quota_used(self, provider: str, day: str) -> float | None:
++        return self.used.get((provider, day))
++
++
++def parse_quota(text: str | None) -> dict[str, float]:
++    """Parse ``"a=100,b=2.5e6"`` to ``{"a": 100.0, "b": 2500000.0}``.
++
++    Empty/None input yields ``{}``; a malformed pair or a negative value raises.
++    """
++    if text is None or not text.strip():
++        return {}
++    result: dict[str, float] = {}
++    for pair in text.split(","):
++        key, sep, value = pair.partition("=")
++        if not sep:
++            raise ValueError(f"malformed quota pair: {pair!r}")
++        key = key.strip()
++        value = value.strip()
++        if not key:
++            raise ValueError(f"malformed quota pair: {pair!r}")
++        try:
++            number = float(value)
++        except ValueError:
++            raise ValueError(f"malformed quota value: {pair!r}") from None
++        if number < 0:
++            raise ValueError(f"negative quota: {pair!r}")
++        result[key] = number
++    return result
++
++
++def _utc_day(now: datetime) -> str:
++    """Normalize an aware or naive datetime to its UTC calendar day (naive = UTC)."""
++    if now.tzinfo is None:
++        return now.date().isoformat()
++    return now.astimezone(timezone.utc).date().isoformat()
++
++
++def _rate_limited(source: Source, provider: str) -> bool | None:
++    """Whether ``provider`` is throttled: True only for a definite signal.
++
++    Protocol sources expose a callable ``rate_limited``; ``StaticSource`` instead
++    carries the throttled providers as a frozenset, so the same accessor works for
++    either without forcing a method onto the in-memory source.
++    """
++    attr = getattr(source, "rate_limited", None)
++    if attr is None:
++        return None
++    if callable(attr):
++        return attr(provider)
++    return provider in attr
++
++
++def _usable_fallback(p: str, day: str, source: Source, quotas: Mapping[str, float] | None) -> bool:
++    """A non-Claude fallback leg is usable when not throttled and within quota."""
++    if p == CLAUDE:
++        return False
++    if _rate_limited(source, p) is True:
++        return False
++    limit = (quotas or {}).get(p)
++    if limit is None:
++        return True
++    used = source.quota_used(p, day)
++    return used is None or used < limit
++
++
++def _pick_fallback(
++    fallbacks: Sequence[str], day: str, source: Source, quotas: Mapping[str, float] | None
++) -> str | None:
++    """First provider in ``fallbacks`` that is a usable non-Claude leg, else None."""
++    for p in fallbacks:
++        if _usable_fallback(p, day, source, quotas):
++            return p
++    return None
++
++
++def _decide(
++    start_kind: str,
++    initiator: str,
++    now: datetime,
++    source: Source,
++    quotas: Mapping[str, float] | None,
++    provider: str | None,
++) -> Decision:
++    """Produce the base verdict (never a fallback, never an override)."""
++    if start_kind not in START_KINDS:
++        raise ValueError(f"unknown start_kind: {start_kind!r}")
++    if initiator not in INITIATORS:
++        raise ValueError(f"unknown initiator: {initiator!r}")
++
++    day = _utc_day(now)
++    ctx = {"start_kind": start_kind, "initiator": initiator, "provider": provider}
++
++    # Operator-initiated is never blocked, for any kind.
++    if initiator == "operator":
++        return Decision(allow=True, reason="operator_initiated", burn=None, **ctx)
++    # Answering is never blocked, for any initiator.
++    if start_kind == "answer":
++        return Decision(allow=True, reason="answer_always", burn=None, **ctx)
++
++    # Remaining paths are agent-initiated.
++    if start_kind == "worker_leg":
++        if provider is None:
++            raise ValueError("provider is required for worker_leg")
++        if _rate_limited(source, provider) is True:
++            reason = f"provider_rate_limited (provider={provider})"
++            return Decision(allow=False, reason=reason, burn=None, **ctx)
++        limit = (quotas or {}).get(provider)
++        if limit is None:
++            return Decision(allow=True, reason="no_quota_configured", burn=None, **ctx)
++        used = source.quota_used(provider, day)
++        if used is None:
++            return Decision(allow=True, reason="quota_unknown", burn=None, **ctx)
++        if used >= limit:
++            reason = f"provider_quota_exhausted (used={used:.2f},limit={limit:.2f})"
++            return Decision(allow=False, reason=reason, burn=None, **ctx)
++        return Decision(allow=True, reason="quota_ok", burn=None, **ctx)
++
++    # planner / expert / judge share the Claude burn gate; judge is not privileged.
++    # A block here is a Claude-only limitation, so allow() retries it on a fallback.
++    burn = source.burn(day)
++    blocked: str | None = None
++    if burn is not None and burn > BURN_LIMIT:
++        blocked = f"claude_burn_over_1_7 (burn={burn:.2f})"
++    elif _rate_limited(source, CLAUDE) is True:
++        blocked = "claude_rate_limited"
++    if blocked is not None:
++        return Decision(allow=False, reason=blocked, burn=burn, **ctx)
++    if burn is None:
++        return Decision(allow=True, reason="burn_unknown", burn=None, **ctx)
++    return Decision(allow=True, reason="burn_ok", burn=burn, **ctx)
++
++
++def allow(
++    start_kind: str,
++    initiator: str,
++    now: datetime,
++    *,
++    source: Source,
++    quotas: Mapping[str, float] | None = None,
++    provider: str | None = None,
++    override: str | None = None,
++    on_override=None,
++    fallbacks: Sequence[str] = (),
++    on_fallback=None,
++) -> Decision:
++    """Return a ``Decision`` for whether ``start_kind`` may start right now.
++
++    ``now`` may be timezone-aware or naive (treated as UTC). A blocked agent
++    planner/expert/judge first tries the non-Claude ``fallbacks`` (logging once via
++    ``on_fallback``); if none is usable the deny stands. ``override`` is a non-empty
++    reason that flips a (fallback-less) deny into an allow (logged once via
++    ``on_override``); an allow base ignores it.
++    """
++    base = _decide(start_kind, initiator, now, source, quotas, provider)
++
++    if (
++        not base.allow
++        and base.initiator == "agent"
++        and base.start_kind in _FALLBACK_KINDS
++    ):
++        leg = _pick_fallback(fallbacks, _utc_day(now), source, quotas)
++        if leg is not None:
++            d = Decision(
++                allow=True,
++                reason=f"fallback: {leg} ({base.reason})",
++                start_kind=base.start_kind,
++                initiator=base.initiator,
++                provider=leg,
++                burn=base.burn,
++                fallback=leg,
++            )
++            if on_fallback is not None:
++                try:
++                    on_fallback(d)  # a logging failure must never block the start.
++                except Exception:
++                    pass
++            return d
++
++    text = override.strip() if override else ""
++    if base.allow or not text:
++        return base
++    final = replace(base, allow=True, reason=f"override: {text}", override=True)
++    if on_override is not None:
++        try:
++            on_override(final)  # exceptions must never block the start itself.
++        except Exception:
++            pass
++    return final
+diff --git a/src/plangraph/keeper/api.py b/src/plangraph/keeper/api.py
+index da759d3e..62429d45 100644
+--- a/src/plangraph/keeper/api.py
++++ b/src/plangraph/keeper/api.py
+@@ -45,7 +45,8 @@ __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
+ 
+ MAX_BODY = 1024 * 1024  # 1 MiB
+ from .api_routes import READ_VERBS as _READ_VERBS, STATUS as _STATUS
+-from .api_routes import READ_CALLS, ROUTER_VERBS, TEXT_DEFAULT as _TEXT_DEFAULT
++from .api_routes import (READ_CALLS, ROLE_CHECKED_VERBS, ROUTER_VERBS,
++                         TEXT_DEFAULT as _TEXT_DEFAULT)
+ from .api_routes import WRITE_VERBS as _WRITE_VERBS
+ 
+ 
+@@ -265,6 +266,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
+             data = store.audit_meta(principal, project=project,
+                                     stale_days=self._one(query, "stale_days"))
+             return (audit_meta.render(data), True) if as_text else (data, False)
++        if name == "metrics":
++            return (store.get_metrics(principal, day=self._one(query, "day"),
++                                      since=self._one(query, "since"),
++                                      metric=self._one(query, "metric")), False)
+         if name in READ_CALLS:
+             data = READ_CALLS[name](store, principal, project)
+             text = getattr(fmt, name + "_text")
+@@ -326,6 +331,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
+                                              self._need(body, "decision_id"))
+         if name in ROUTER_VERBS:
+             return ROUTER_VERBS[name](store, principal, body, self._need)
++        if name in ROLE_CHECKED_VERBS:
++            return ROLE_CHECKED_VERBS[name](store, principal, body, self._need)
+         if name == "reap":
+             return store.reap(principal)
+         raise Refused("not_found", f"no write verb {name!r}")
+diff --git a/src/plangraph/keeper/api_routes.py b/src/plangraph/keeper/api_routes.py
+index d3509f48..e7955c4b 100644
+--- a/src/plangraph/keeper/api_routes.py
++++ b/src/plangraph/keeper/api_routes.py
+@@ -11,18 +11,18 @@ from ..inbox import routes as _inbox
+ from .errors import Refused
+ 
+ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
+-           "ROUTER_VERBS", "READ_CALLS"]
++           "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS"]
+ 
+ READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
+               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
+-              "answers", "progress", "changelog", "audit-meta"}
++              "answers", "progress", "changelog", "audit-meta", "metrics"}
+ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
+                "set_priority", "claim", "delegate", "heartbeat", "release",
+                "add_evidence", "add_evidence_router", "submit", "verdict",
+                "cancel", "reap", "waive_second_family", "close_on_decision",
+                "set_legacy_state", "apply_ops", "migrate_descriptions",
+                "rehome", "record_run", "answer", "mint_run_token", "replay",
+-               "withdraw_review", "set_kind"}
++               "withdraw_review", "set_kind", "set_metrics", "governor_override"}
+ READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
+ WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
+ TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
+@@ -105,6 +105,16 @@ def _mint_run_token(store, principal, body, need):
+                                 need(body, "role"), need(body, "run_id"))
+ 
+ 
++def _set_metrics(store, principal, body, need):
++    return store.set_metrics(principal, body.get("day"), body.get("items"))   # role first (403)
++
++
++def _governor_override(store, principal, body, need):
++    return store.log_governor_override(principal, body.get("start_kind"),
++                                       body.get("initiator"), body.get("reason"),
++                                       body.get("provider"))   # role first (403)
++
++
+ def _replay(store, principal, body, need):
+     return store.replay(principal, body.get("entries"))   # M2B-OUTBOX: principal checked first (403)
+ 
+@@ -120,3 +130,9 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
+                 "set_legacy_state": _set_legacy_state,
+                 "apply_ops": _apply_ops,
+                 "record_run": _record_run}
++
++
++#: Write verbs whose store method checks the role itself and admits more than the
++#: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
++ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
++                      "governor_override": _governor_override}
+diff --git a/src/plangraph/keeper/copy_to_pg.py b/src/plangraph/keeper/copy_to_pg.py
+index 84df3368..be32faf0 100644
+--- a/src/plangraph/keeper/copy_to_pg.py
++++ b/src/plangraph/keeper/copy_to_pg.py
+@@ -22,7 +22,7 @@ __all__ = ["run", "TABLES", "CopyError"]
+ #: then the projector tables (migration 3; no foreign keys into the tables above).
+ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
+           "outbox_seen", "audit_log", "audit_findings",
+-          "cards", "attempts", "decisions", "questions", "answers", "budget",
++          "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
+           "projector_applied", "projector_watermark", "projector_alarms")
+ _BATCH = 500
+ 
+diff --git a/src/plangraph/keeper/db.py b/src/plangraph/keeper/db.py
+index 7aa4b962..e9dda04a 100644
+--- a/src/plangraph/keeper/db.py
++++ b/src/plangraph/keeper/db.py
+@@ -18,7 +18,8 @@ from pathlib import Path
+ 
+ from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
+ from .errors import KeeperLocked
+-from .schema import ALIASES_DDL, DESIGN3_DDL, OUTBOX_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS
++from .schema import (ALIASES_DDL, DESIGN3_DDL, METRICS_DDL, OUTBOX_DDL,
++                     RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
+ 
+ __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
+ 
+@@ -138,6 +139,7 @@ def _upgrade(conn):
+     conn.executescript(RUN_TOKENS_DDL)
+     conn.executescript(OUTBOX_DDL)
+     conn.executescript(DESIGN3_DDL)
++    conn.executescript(METRICS_DDL)
+     conn.executescript(PROJECTOR_SQLITE)
+     _upgrade_lock_triggers(conn)
+ 
+diff --git a/src/plangraph/keeper/schema.py b/src/plangraph/keeper/schema.py
+index 44106307..afd97b73 100644
+--- a/src/plangraph/keeper/schema.py
++++ b/src/plangraph/keeper/schema.py
+@@ -13,9 +13,9 @@ from __future__ import annotations
+ 
+ __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
+            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
+-           "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
++           "METRICS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
+ 
+-SCHEMA_VERSION = 10
++SCHEMA_VERSION = 11
+ 
+ #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
+ #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
+@@ -207,6 +207,20 @@ CREATE TABLE IF NOT EXISTS budget (
+ );
+ """
+ 
++#: keeper metrics (schema v11): daily numeric readings keyed by ``(day, metric)``,
++#: upserted per pair.  Portable TEXT/REAL columns only (``schema_pg`` Migration 4 is
++#: the logical twin).  ``IF NOT EXISTS`` so ``db._upgrade`` installs it on a v10 database.
++METRICS_DDL = """
++CREATE TABLE IF NOT EXISTS metrics (
++    day         TEXT NOT NULL,
++    metric      TEXT NOT NULL,
++    value       REAL NOT NULL,
++    source      TEXT NOT NULL DEFAULT '',
++    computed_at TEXT NOT NULL,
++    PRIMARY KEY (day, metric)
++);
++"""
++
+ TABLES = """
+ CREATE TABLE principals (
+     name         TEXT PRIMARY KEY,
+@@ -437,4 +451,5 @@ CREATE INDEX idx_edges_dst ON edges(dst);
+ CREATE INDEX idx_audit_log_key ON audit_log(key);
+ """
+ 
+-SCHEMA = TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + DESIGN3_DDL
++SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
++          + DESIGN3_DDL + METRICS_DDL)
+diff --git a/src/plangraph/keeper/schema_pg.py b/src/plangraph/keeper/schema_pg.py
+index 3c53d075..8416c2cd 100644
+--- a/src/plangraph/keeper/schema_pg.py
++++ b/src/plangraph/keeper/schema_pg.py
+@@ -395,9 +395,22 @@ CREATE TRIGGER trg_answers_append_only_truncate BEFORE TRUNCATE ON answers
+     FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('answers are append-only');
+ """
+ 
++#: Logical twin of ``schema.METRICS_DDL`` (SQLite schema v11).
++_V4 = """
++CREATE TABLE metrics (
++    day         TEXT COLLATE "C" NOT NULL,
++    metric      TEXT COLLATE "C" NOT NULL,
++    value       DOUBLE PRECISION NOT NULL,
++    source      TEXT COLLATE "C" NOT NULL DEFAULT '',
++    computed_at TEXT COLLATE "C" NOT NULL,
++    PRIMARY KEY (day, metric)
++);
++"""
++
+ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
+               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
+-              Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG))
++              Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
++              Migration(4, "governor: metrics", _V4))
+ LATEST = MIGRATIONS[-1].version
+ 
+ _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)
+diff --git a/src/plangraph/keeper/store.py b/src/plangraph/keeper/store.py
+index 023c3433..2251dc06 100644
+--- a/src/plangraph/keeper/store.py
++++ b/src/plangraph/keeper/store.py
+@@ -28,6 +28,7 @@ from .store_close import CloseMixin
+ from .store_create import CreateMixin
+ from .store_legacy import LegacyMixin
+ from .store_input import InputMixin
++from .store_metrics import MetricsMixin
+ from .store_names import NamesMixin
+ from .store_needs import NeedsMixin
+ from .store_outbox import OutboxMixin
+@@ -67,7 +68,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
+             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
+             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
+             TokensMixin, OutboxMixin, WithdrawMixin, KindMixin,
+-            ChangelogMixin, AuditMetaMixin, CardsMixin):
++            ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin):
+     """State machine, locking and audit over one keeper connection."""
+ 
+     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
+diff --git a/src/plangraph/keeper/store_metrics.py b/src/plangraph/keeper/store_metrics.py
+new file mode 100644
+index 00000000..8d2945d9
+--- /dev/null
++++ b/src/plangraph/keeper/store_metrics.py
+@@ -0,0 +1,135 @@
++"""Keeper metrics (schema v11): a daily ``(day, metric) -> value`` store plus the
++governor-override audit verb.  All three verbs run through ``Store._run`` so each
++is audited; the SQL is portable (``?`` placeholders, ``ON CONFLICT`` upsert) and
++the writes sit inside ``Store._write()`` like ``store_cards._set_budget``.
++"""
++from __future__ import annotations
++
++import math
++import re
++from datetime import date
++
++from .errors import Refused
++
++#: metric and provider names share the budget ``[A-Za-z0-9._:-]{1,64}`` alphabet.
++_NAME_RE = re.compile(r"[A-Za-z0-9._:-]{1,64}")
++_METRICS_MAX_ITEMS = 50
++_METRICS_MAX_ROWS = 1000
++
++_START_KINDS = frozenset(("planner", "expert", "judge", "answer", "worker_leg"))
++_INITIATORS = frozenset(("operator", "agent"))
++
++
++def _day(value):
++    try:
++        if not isinstance(value, str) or date.fromisoformat(value).isoformat() != value:
++            raise ValueError(value)
++    except ValueError:
++        raise Refused("validation", "day must be YYYY-MM-DD") from None
++    return value
++
++
++def _metric_name(value):
++    if not isinstance(value, str) or not _NAME_RE.fullmatch(value):
++        raise Refused("validation", "metric must match [A-Za-z0-9._:-]{1,64}")
++    return value
++
++
++def _metric_value(value):
++    if (isinstance(value, bool) or not isinstance(value, (int, float))
++            or not math.isfinite(value)):
++        raise Refused("validation", "value must be a finite number")
++    return float(value)
++
++
++def _source(value):
++    if value is None:
++        return ""
++    if not isinstance(value, str) or len(value) > 64:
++        raise Refused("validation", "source must be a string of at most 64 characters")
++    return value
++
++
++class MetricsMixin:
++    """The metrics verbs for :class:`plangraph.keeper.store.Store`."""
++
++    def set_metrics(self, principal, day, items):
++        return self._run(principal, "set_metrics", None,
++                         lambda now: self._set_metrics(principal, day, items, now))
++
++    def _set_metrics(self, principal, day, items, now):
++        self._require_role(principal, "router", "system")
++        _day(day)
++        if not isinstance(items, list) or not 1 <= len(items) <= _METRICS_MAX_ITEMS:
++            raise Refused("validation",
++                          f"items must be a list of 1..{_METRICS_MAX_ITEMS} metrics")
++        prepared = []
++        for item in items:
++            if not isinstance(item, dict):
++                raise Refused("validation", "each metric must be an object")
++            prepared.append((_metric_name(item.get("metric")),
++                             _metric_value(item.get("value")),
++                             _source(item.get("source"))))
++        # validation above has already refused the bad ones; nothing is written
++        # until every item has cleared, so a mixed batch leaves the table alone.
++        stamp = self._iso(now)
++        with self._write():
++            for name, value, source in prepared:
++                self.conn.execute(
++                    "INSERT INTO metrics(day,metric,value,source,computed_at)"
++                    " VALUES(?,?,?,?,?)"
++                    " ON CONFLICT(day,metric) DO UPDATE SET value=excluded.value,"
++                    "source=excluded.source,computed_at=excluded.computed_at",
++                    (day, name, value, source, stamp))
++        return {"day": day, "count": len(prepared)}
++
++    def get_metrics(self, principal, day=None, since=None, metric=None):
++        return self._run(principal, "get_metrics", None,
++                         lambda now: self._get_metrics(day, since, metric))
++
++    def _get_metrics(self, day, since, metric):
++        clauses, params = [], []
++        if day is not None:
++            clauses.append("day=?")
++            params.append(_day(day))
++        if since is not None:
++            clauses.append("day>=?")
++            params.append(_day(since))
++        if metric is not None:
++            clauses.append("metric=?")
++            params.append(_metric_name(metric))
++        sql = ("SELECT day,metric,value,source,computed_at FROM metrics")
++        if clauses:
++            sql += " WHERE " + " AND ".join(clauses)
++        sql += " ORDER BY day,metric LIMIT " + str(_METRICS_MAX_ROWS)
++        rows = [{"day": r["day"], "metric": r["metric"], "value": r["value"],
++                 "source": r["source"], "computed_at": r["computed_at"]}
++                for r in self.conn.execute(sql, tuple(params))]
++        return {"rows": rows}
++
++    def log_governor_override(self, principal, start_kind, initiator, reason,
++                              provider=None):
++        return self._run(principal, "log_governor_override", None,
++                         lambda now: self._log_governor_override(
++                             principal, start_kind, initiator, reason, provider, now))
++
++    def _log_governor_override(self, principal, start_kind, initiator, reason,
++                               provider, now):
++        self._require_role(principal, "router", "l1", "system", "spawner")
++        if start_kind not in _START_KINDS:
++            raise Refused("validation",
++                          "start_kind must be one of planner, expert, judge, "
++                          "answer, worker_leg")
++        if initiator not in _INITIATORS:
++            raise Refused("validation", "initiator must be operator or agent")
++        if (not isinstance(reason, str) or not reason.strip()
++                or len(reason) > 500):
++            raise Refused("validation",
++                          "reason must be a non-empty string of at most 500 characters")
++        if provider is not None and (not isinstance(provider, str)
++                                     or not _NAME_RE.fullmatch(provider)):
++            raise Refused("validation", "provider must match [A-Za-z0-9._:-]{1,64}")
++        # no new table, no event: the override is recorded as one audit row.
++        msg = f"{start_kind}/{initiator}/{provider or '-'}: {reason}"[:500]
++        self._audit(principal, "governor_override", None, True, "", msg, now)
++        return {"logged": True}
+diff --git a/src/plangraph/planner/__init__.py b/src/plangraph/planner/__init__.py
+index bbedc0a8..ef5b1d05 100644
+--- a/src/plangraph/planner/__init__.py
++++ b/src/plangraph/planner/__init__.py
+@@ -4,7 +4,7 @@ The public names of every module are re-exported here; see ``docs/PLANNER-KIT.md
+ """
+ from __future__ import annotations
+ 
+-from . import card, context_pack, legs, readiness, routing, service
++from . import card, context_pack, legs, readiness, routing, service, start
+ from .card import (Card, CardError, apply_cards, cards_from_batch, load_cards_yaml,
+                    parse_card, strip_cards)
+ from .context_pack import (CHARS_PER_TOKEN, Pack, PackFile, PackTooBig, build_pack,
+@@ -17,9 +17,10 @@ from .routing import (Route, RouteError, effective_estimate, next_after_failure,
+                       pick_window_class, route_card)
+ from .service import (GATEABLE_STATES, GateResult, gate_card, import_batch,
+                       pack_for_card, route_for_card, running_write_sets)
++from .start import StartGate, fallback_providers, guard_start
+ 
+ __all__ = [
+-    "card", "context_pack", "legs", "readiness", "routing", "service",
++    "card", "context_pack", "legs", "readiness", "routing", "service", "start",
+     "Card", "CardError", "apply_cards", "cards_from_batch", "load_cards_yaml",
+     "parse_card", "strip_cards",
+     "CHARS_PER_TOKEN", "Pack", "PackFile", "PackTooBig", "build_pack",
+@@ -31,4 +32,5 @@ __all__ = [
+     "pick_window_class", "route_card",
+     "GATEABLE_STATES", "GateResult", "gate_card", "import_batch", "pack_for_card",
+     "route_for_card", "running_write_sets",
++    "StartGate", "fallback_providers", "guard_start",
+ ]
+diff --git a/src/plangraph/planner/start.py b/src/plangraph/planner/start.py
+new file mode 100644
+index 00000000..a756079b
+--- /dev/null
++++ b/src/plangraph/planner/start.py
+@@ -0,0 +1,98 @@
++"""Wire the budget governor into the planner start path (operator D-1533).
++
++Orchestration is model-family agnostic; Claude is just one leg. When Claude
++is over burn or rate limited, an agent planner/expert/judge start falls back
++to a non-Claude leg (signalled to the caller via ``on_fallback``) instead of
++only being blocked. This module owns no I/O and never imports the keeper.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import datetime
++from typing import Mapping, Sequence
++
++from plangraph.governor import policy
++
++from .legs import DEFAULT_LEGS, Leg
++
++__all__ = ["StartGate", "fallback_providers", "guard_start"]
++
++
++@dataclass(frozen=True)
++class StartGate:
++    """A governor verdict paired with the concrete leg to run on."""
++
++    decision: policy.Decision
++    leg: Leg | None
++
++    @property
++    def allowed(self) -> bool:
++        """True when the start is permitted, by any route."""
++        return self.decision.allow
++
++    @property
++    def fallback(self) -> str | None:
++        """The non-Claude family chosen when the primary was blocked."""
++        return self.decision.fallback
++
++
++def fallback_providers(legs: Sequence[Leg]) -> tuple[str, ...]:
++    """Return unique non-Claude leg families in ``legs`` order.
++
++    The governor's provider key is a leg ``family``, so only ``claude_family``
++    legs are dropped; duplicates collapse to their first occurrence.
++    """
++    seen: set[str] = set()
++    out: list[str] = []
++    for leg in legs:
++        if leg.claude_family:
++            continue
++        if leg.family in seen:
++            continue
++        seen.add(leg.family)
++        out.append(leg.family)
++    return tuple(out)
++
++
++def _leg_for_fallback(legs: Sequence[Leg], fallback: str) -> Leg | None:
++    """First non-Claude leg whose family matches ``fallback`` (else None)."""
++    for leg in legs:
++        if not leg.claude_family and leg.family == fallback:
++            return leg
++    return None
++
++
++def guard_start(
++    start_kind: str,
++    initiator: str,
++    now: datetime,
++    *,
++    source: policy.Source,
++    quotas: Mapping[str, float] | None = None,
++    legs: Sequence[Leg] = DEFAULT_LEGS,
++    provider: str | None = None,
++    override: str | None = None,
++    on_override=None,
++    on_fallback=None,
++) -> StartGate:
++    """Gate a start, falling back to a non-Claude leg when Claude is blocked.
++
++    Never raises on a deny: the caller reads ``.allowed``. When a fallback is
++    chosen, ``.leg`` is the matching non-Claude leg; otherwise ``.leg`` is
++    None and the caller keeps its normal routing.
++    """
++    decision = policy.allow(
++        start_kind,
++        initiator,
++        now,
++        source=source,
++        quotas=quotas,
++        provider=provider,
++        override=override,
++        on_override=on_override,
++        fallbacks=fallback_providers(legs),
++        on_fallback=on_fallback,
++    )
++    leg = _leg_for_fallback(legs, decision.fallback) if decision.fallback else None
++    return StartGate(decision=decision, leg=leg)
+
+=== tests stat ===
+ tests/test_governor_cli.py           | 182 ++++++++++++++++++
+ tests/test_governor_metrics.py       | 228 ++++++++++++++++++++++
+ tests/test_governor_policy.py        | 355 +++++++++++++++++++++++++++++++++++
+ tests/test_keeper_metrics.py         | 310 ++++++++++++++++++++++++++++++
+ tests/test_keeper_metrics_upgrade.py |  43 +++++
+ tests/test_keeper_pg_copy.py         |   2 +-
+ tests/test_keeper_pg_parity.py       |   6 +-
+ tests/test_keeper_pg_unit.py         |  10 +
+ tests/test_keeper_schema_upgrade.py  |   4 +-
+ tests/test_planner_start.py          | 169 +++++++++++++++++
+ tests/test_projector_ddl.py          |   6 +-
+ 11 files changed, 1308 insertions(+), 7 deletions(-)
+
+=== END OF MATERIAL. FINAL REMINDER ON ANSWER SHAPE
+1. Answer each vector V1..Vn under its own heading with file:function evidence.
+2. Then answer the standing question below as ONE plain line starting at column 0, no bold, no trailing period. For "no" the line MUST end with the literal text ": 0 hits" (the parser rejects any other ending), e.g.
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+3. The very last line is plain, no bold:
+VERDICT: pass
+(or VERDICT: fix - <findings by severity> / VERDICT: halt - <why>)
