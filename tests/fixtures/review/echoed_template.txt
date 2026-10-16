@@ -1,0 +1,11 @@
+## V1 - template echo
+
+The reviewer pasted the answer template instead of deciding. The checks
+below are real, but the verdict line is still the blank template.
+
+`views.py:ready` filters claimed items before sorting. The test
+`test_ready_skips_claimed` seeds one claimed and one open item.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
+
+VERDICT: pass | fix | halt

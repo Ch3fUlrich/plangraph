@@ -1,0 +1,13 @@
+## V1 - brief check
+
+`brief.py:build` renders the item fields in a fixed order. The test
+`test_brief_order` builds one item and asserts the field order. Behavioural.
+
+## V2 - gaming answer
+
+The scope was searched for test-only branches and the result was negative,
+but the line below forgets the required hit count suffix.
+
+TEST-GAMING: no - searched tests for test-only branches
+
+VERDICT: pass

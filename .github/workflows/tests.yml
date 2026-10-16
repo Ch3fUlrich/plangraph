@@ -1,32 +1,44 @@
 name: tests
 
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "tools/**"
+      - "vendor/**"
+      - "requirements-ci.txt"
+      - ".github/workflows/tests.yml"
+      - "!**/*.md"
+      - "!docs/**"
+      - "!CHANGELOG*"
+  workflow_dispatch:
 
-# D-1338: lane branches run CI via their PR only; a newer push cancels the older run.
+# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: System Python venv (setup-python's toolcache build lacks libpython on this runner image)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv python3-pip python3-dev build-essential
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
       - name: Install test deps
-        run: python -m pip install --quiet pytest pyyaml "cryptography>=41.0.7" temporalio
+        run: python -m pip install --quiet -r requirements-ci.txt
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
@@ -41,10 +53,10 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - name: pytest
-        run: python -m pytest -q tests
+        run: python -m pytest -q -n auto --dist loadgroup tests
 
   pytest-postgres:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, workst]
     timeout-minutes: 40
     services:
       postgres:
@@ -53,7 +65,7 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: keeper
         ports:
-          - 5432:5432
+          - 5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
@@ -61,14 +73,32 @@ jobs:
           --health-retries 10
     env:
       PG_KEEPER_BACKEND: postgres
-      PG_DSN: postgresql://postgres@127.0.0.1:5432/keeper
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: System Python venv (setup-python's toolcache build lacks libpython on this runner image)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq python3-venv python3-pip python3-dev build-essential
+          python3 -m venv "$RUNNER_TEMP/venv"
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      - name: Resolve Postgres service host
+        env:
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+        # Self-hosted runner: the job runs in a container and the service is a sibling
+        # container on the host Docker, published on a random host port; 127.0.0.1 is the
+        # runner container itself, so probe the host aliases instead.
+        run: |
+          for h in 127.0.0.1 host.docker.internal "$(ip route | awk '/default/{print $3; exit}')"; do
+            [ -n "$h" ] || continue
+            if timeout 3 bash -c "exec 3<>/dev/tcp/$h/$PG_PORT" 2>/dev/null; then
+              echo "postgres reachable at $h:$PG_PORT"
+              echo "PG_DSN=postgresql://postgres@$h:$PG_PORT/keeper" >> "$GITHUB_ENV"
+              exit 0
+            fi
+          done
+          echo "no route to postgres service on port $PG_PORT" >&2
+          exit 1
       - name: Install test deps
-        run: python -m pip install --quiet pytest pyyaml "cryptography>=41.0.7" "psycopg[binary]" temporalio
+        run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
       - name: Install Temporal CLI 1.9.1
         run: |
           dir=$(mktemp -d)
@@ -88,5 +118,5 @@ jobs:
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
-          python -m pytest -q tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py \
-            tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES
+          python -m pytest -q -n auto --dist loadgroup tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+            tests/test_projector_ddl.py $FILES
