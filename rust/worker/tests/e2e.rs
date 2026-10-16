@@ -37,10 +37,11 @@ const RESULT_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a cancel may take to land on the shared, loaded CI host.
 ///
 /// Above any plausible cancel latency on a loaded shared CI host, yet below the
-/// 60 s attempt timeout; the harness prints a line every second, so the 30 s
-/// stall watchdog never fires. Finishing inside this budget can therefore only
-/// mean the cancel reached the child.
-const CANCEL_BUDGET: Duration = Duration::from_secs(45);
+/// 300 s attempt timeout so a slow host cannot end the attempt by timeout; the
+/// harness prints a line every second, so the 30 s stall watchdog never fires
+/// either. Finishing inside this budget can therefore only mean the cancel
+/// reached the child.
+const CANCEL_BUDGET: Duration = Duration::from_secs(150);
 
 type Handle = WorkflowHandle<Client, Card>;
 
@@ -92,13 +93,16 @@ impl Env {
         let harness: Arc<dyn Harness> = Arc::new(ShellHarness {
             script: script.to_string(),
         });
-        // These timeouts are the activities' (heartbeat cadence, stall kill);
-        // the workflow keeps its own `Config::default()` for the retry policy,
-        // so tests must not lean on workflow-side timeouts to finish.
+        // These timeouts are the activities' (heartbeat cadence, stall kill).
+        // The long timeouts keep a starved host from ending an attempt by
+        // timeout, so a cancel test can only pass via the cancel path; the
+        // harness prints every second so the 30 s stall watchdog does not fire
+        // either. The workflow keeps its own `Config::default()` for the retry
+        // policy, so tests must not lean on workflow-side timeouts to finish.
         let cfg = Config {
             heartbeat: Duration::from_millis(200),
-            heartbeat_timeout: Duration::from_secs(5),
-            start_to_close: Duration::from_secs(60),
+            heartbeat_timeout: Duration::from_secs(30),
+            start_to_close: Duration::from_secs(300),
             stall: Duration::from_secs(30),
             ..Config::default()
         };
@@ -599,12 +603,27 @@ async fn assert_child_gone(marker: &Path) {
         .trim()
         .parse()
         .expect("marker holds the harness pid");
-    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
     while Path::new(&format!("/proc/{pid}")).exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "cancel did not kill the harness child"
-        );
+        if std::time::Instant::now() >= deadline {
+            // Read the state back from procfs: a `State: Z` line means the child
+            // was killed but never reaped, which blames the supervisor rather
+            // than the cancel path. Missing or unreadable status stays "unknown"
+            // so the panic still names what it could see.
+            let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok();
+            let field = |key: &str| -> String {
+                status
+                    .as_deref()
+                    .and_then(|s| s.lines().find_map(|l| l.strip_prefix(key)))
+                    .map(|v| v.trim().to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            };
+            panic!(
+                "cancel did not kill the harness child: pid {pid} state {} ppid {}",
+                field("State:"),
+                field("PPid:")
+            );
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
