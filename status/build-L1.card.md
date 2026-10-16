@@ -13,8 +13,8 @@ worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/ve
 ## Open
 | Item | State | Next |
 |---|---|---|
-| RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2-LAUNCH build-L2-worker-proj on workstation asked 04:0xZ |
-| PROJECTOR-RECONCILE-SCHED | claimed (b05) | brief briefs/l2-projector-reconcile-sched.md; worktree reconcile-sched; L2-LAUNCH build-L2-reconcile asked |
+| RT-P1-WORKER-PROJ-V1 (HIGH) | claimed (b05) | brief briefs/l2-worker-proj-v1.md; L2 = reused build-L2-worker-code on workstation (routing 04:1xZ) |
+| PROJECTOR-RECONCILE-SCHED | claimed (b05) | brief briefs/l2-projector-reconcile-sched.md; branch pushed @66d87fe; L2 on WORKSTATION via workst-L1-autoos (coding.vm MemAvail 3.1 GB; local worktree reconcile-sched unused) |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |

@@ -1,4 +1,4 @@
-# L2 brief: build-L2-reconcile — plangraph:PROJECTOR-RECONCILE-SCHED (standard; coding.vm; parent build-L1)
+# L2 brief: build-L2-reconcile — plangraph:PROJECTOR-RECONCILE-SCHED (standard; WORKSTATION per routing 04:1xZ; parent build-L1)
 Rules: /home/s/code/plangraph-worktrees/build-L1/docs/plan/rethink/briefs/l2-rules-common.md (binding, incl. D-1380, PR-head trailer). TTL 2 h.
 Done means (keeper item): a systemd service + timer in deploy/systemd/ runs `python -m plangraph.projector reconcile` nightly on the
 keeper host (no agent cron, D-1377); install/enable docs next to the existing units; a reconcile mismatch raises a row in
