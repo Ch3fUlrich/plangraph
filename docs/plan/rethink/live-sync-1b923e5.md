@@ -31,5 +31,21 @@ Not exercised: submit/evidence/verdict/waive/withdraw/close/legacy/rehome/delega
 - `git archive f3bac63 src` -> old tree; `admin verify` with OLD code on T-migrated copy: ok; OLD daemon starts and serves (whoami/ready/percent/alerts/snapshot/digest rc=0, `/inbox` 404 as expected); OLD `define` works; verify ok.
 - Extra tables are ignored by old code. **But** once T writes a design-3 event (`set_state` -> `state_set`, item state `parked`), OLD `admin verify` reports `cache_mismatch field=state expected=open got=parked`. Therefore: rollback via code swap is safe only while T has written no design-3 state/cards/attempts/questions. After that, **rollback = stop keeper, restore the pre-restart backup db (and json), start f3bac63.** Take that backup before restart (sqlite .backup, not cp, WAL).
 
-## 4. Seats
+## 4. Restart runbook for build-L1 (after router GO; not executed here)
+1. Check out T (1b923e5) to a tree; edit the unit's WorkingDirectory/PYTHONPATH only (keep a copy of the unit).
+2. `systemctl --user stop plangraph-keeper` first: the daemon holds the flock `keeper.db.lock`; `.backup` of a stopped db also folds WAL. Then
+   `sqlite3.Connection.backup` keeper.db -> dated 0600 file (a `.backup` call is WAL-safe; a plain cp needs -wal/-shm too), copy keeper.json and plan.snapshot.json(+.sig) beside it.
+3. Start the unit (the migration runs in `open_db`, single-writer under the lock, so no concurrent-migration race; do NOT run `pg admin migrate` against the live db while the daemon runs).
+4. Verify: `pg admin verify` = chain and cache integrity ok; `pg admin verify-snapshot` ok after the first write; whoami/ready/percent rc=0; table counts (10 originals) equal the pre-restart counts; `GET /inbox` 200.
+5. Abort = any verify failure, daemon exit/restart loop, original-table count change: stop, restore the step-2 backup (db + json + snapshot), repoint the unit at f3bac63, start, verify.
+6. Outbox is client side (`PG_OUTBOX`/`pg replay` on writer hosts) and untouched; clients queued during the stop replay after start.
+
+## 5. Seats (gpt-oss-120b + Qwen3.8-Flash, tool-less, on doc@bfdfa6d; raw: seats/gptoss/review.txt, seats/qwen.txt)
+Both VERDICT: fix. Adjudicated against code/log:
+- accepted, now in doc: runbook order stop->backup->swap->start->verify with abort criteria (sec 4); data-loss window on rollback = every write since T's first start (events, claims, evidence) is lost on backup restore, so keep the T-run window short and verify immediately; outbox: restore can re-deliver client-queued entries (replay is token-gated and idempotent by outbox_seen, cleared on `pg replay`) - treat as acceptable.
+- rejected/clarified: gpt-oss cited non-existent files (src/lock_keeper.py, src/pg/admin.py, src/daemon.py); no code claims taken from it. "Concurrency race on migrate": migration runs inside `daemon.run` after the exclusive flock; `busy_timeout` default 5000 ms (db.py `_DEFAULT_BUSY_MS`).
+- trigger idempotency: `migrate` ran 3x on an already-migrated copy (steps 2, 5, copyB), all "schema up to date", no OperationalError. DESIGN3_DDL triggers are `CREATE TRIGGER IF NOT EXISTS`.
+- log items read as failures, all explained: `changelog` rc=2 in run 1 = missing `--since` arg (rc=0 with it); `verify-snapshot` rc=1 before first write = copy config pointed at a fresh scratch snapshot path (live has its signed snapshot; the daemon rewrites it after each write); `sync pull` is the reader-host verb (needs a `pull` object in a reader config), not a keeper verb.
+- not covered (carry as live risk): append-only triggers on attempts/decisions/answers never written by a verb here; /inbox other methods (only GET tested; `api.py` routes /inbox only under GET); Temporal path and Postgres backend.
+
 (see seats/ dir on branch lane/keeper-live-sync-seats results below)

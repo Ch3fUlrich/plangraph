@@ -1,0 +1,51 @@
+V1 – Migration safety  
+File: src/lock_keeper.py function open_db → calls db._upgrade  
+Evidence: “Migration = idempotent `db._upgrade` on every non‑create `open_db` (CREATE … IF NOT EXISTS, DML‑free). New tables … All empty after migrate. No existing table altered; no ALTER on existing columns.”  
+Assessment: The CREATE‑IF‑NOT‑EXISTS style is safe under WAL when the writer obtains a brief RESERVED lock, but the doc does **not** guarantee that the upgrade runs before any other concurrent writer can start a transaction. Without an explicit exclusive lock or a busy‑timeout setting, a live daemon plus CLI tools could race, causing SQLITE_BUSY or a partially‑applied migration if a writer crashes mid‑operation. Backup via `sqlite3.Connection.backup` is performed only in the dry‑run; production rollback relies on a pre‑restart backup but does not mention copying the ‑wal/‑shm files. **Conclusion:** migration is likely safe for a quiescent system but lacks explicit concurrency safeguards; risk of lock contention or incomplete WAL backup exists.
+
+---
+
+V2 – Rollback claim  
+File: src/pg/admin.py function verify (used in rollback rehearsal)  
+Evidence: “once T writes a design‑3 event … OLD `admin verify` reports `cache_mismatch … expected=open got=parked`. Therefore: rollback via code swap is safe only while T has written no design‑3 … After that, **rollback = stop keeper, restore the pre‑restart backup db (and json), start f3bac63**.”  
+Assessment: The claim correctly identifies that schema‑incompatible data break the old code, but it omits several essential steps:  
+* verification of the snapshot signature and hash‑chain anchors after restore (the doc only checks signature after the first write);  
+* handling of the outbox (pending events may be lost or re‑processed);  
+* ensuring the WAL files are restored together with the .db file;  
+* pausing any background threads (e.g., backup_prune) before the restore. **Conclusion:** rollback description is incomplete; missing integrity‑chain and outbox considerations.
+
+---
+
+V3 – Dry‑run coverage gaps  
+File: src/daemon.py function run (live daemon) – not exercised for backup_prune thread  
+Evidence: “Not exercised: submit/evidence/verdict/waive/withdraw/close/legacy/rehome/delegate/token … Postgres backend, Temporal signal, backup_prune thread.”  
+Additional uncovered areas:  
+* **Postgres backend** – lazy imports are not triggered, so connection‑string errors, psycopg2 missing, or migration differences are untested.  
+* **Temporal integration** – env vars are set but no signal is sent; failures in the Temporal client are not observed.  
+* **Concurrency** – no simultaneous writers, no WAL checkpoint, no lock‑timeout handling.  
+* **Outbox processing** – `replay` runs with “no outbox” meaning pending outbound events are never exercised.  
+* **Snapshot/anchor verification** – `admin verify-anchor` reports “anchors not configured”, but the behaviour when anchors are present is not tested. **Conclusion:** critical runtime paths remain untested; a live restart could expose failures in those areas.
+
+---
+
+V4 – Secrets / hygiene  
+File: dry‑run log – contains only file paths and generic “signing_key/snapshot_pubkey by path (read‑only)”.  
+Evidence: No literal private keys, passwords, or DSN values appear in the log or doc; only filesystem locations such as `/home/s/code/plangraph-worktrees/.sessions/live-sync`.  
+Assessment: No sensitive credentials are leaked. The only exposure is internal directory structure and the fact that a signing key file is read, but its contents are not printed. **Conclusion:** hygiene acceptable; no secret leakage detected.
+
+---
+
+V5 – Restart procedure gaps for the operator  
+File: doc section “# Rollback rehearsal” and “# 1. Review f3bac63..T”  
+Evidence: “Take that backup before restart (sqlite .backup, not cp, WAL).” but no detailed step list.  
+Missing elements:  
+* **Ordering** – explicit stop‑daemon → backup → code checkout → start‑daemon sequence not enumerated.  
+* **Verification after restart** – only a handful of read verbs are run; no health‑check of outbox, no log tail, no snapshot‑anchor re‑validation.  
+* **Abort criteria** – no definition of what constitutes a failure (e.g., non‑zero exit, HTTP 5xx, verification mismatch) and no automated rollback trigger.  
+* **Backup completeness** – does not state that `-wal`/`-shm` must be copied, nor that the JSON config must be version‑matched. **Conclusion:** operator guide is under‑specified; additional steps and failure handling are required.
+
+---
+
+TEST-GAMING: no - searched all source files for pytest/unittest guards, special __eq__/__hash__ overrides, environment checks for PYTEST_CURRENT_TEST or test‑only flags: 0 hits
+
+VERDICT: fix - migration lacks concurrency locks, rollback omits outbox and WAL handling, dry‑run misses critical paths, restart steps insufficient.
