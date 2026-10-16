@@ -154,7 +154,7 @@ fn run_attempt_inner(
     let id = AttemptId::new(claim.card.clone(), inp.n);
     let branch = id.branch();
     let repo = Path::new(&claim.repo);
-    let dest = Path::new(&inp.workroot).join(format!("{}-{}", claim.card, inp.n));
+    let dest = Path::new(&inp.workroot).join(id.dir_name());
 
     // A retry or a promotion always starts from a fresh tree; an old one is
     // never reused.

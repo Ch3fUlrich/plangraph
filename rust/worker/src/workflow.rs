@@ -18,6 +18,7 @@ use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use pg_worker_core::worktree::AttemptId;
 use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{
@@ -582,7 +583,11 @@ async fn merge_step(
                 main_branch: input.main_branch.clone(),
                 branch: branch.to_string(),
                 base_sha: base_sha.to_string(),
-                worktree: format!("{}/{}-{n}", input.workroot, input.claim.card),
+                worktree: format!(
+                    "{}/{}",
+                    input.workroot,
+                    AttemptId::new(input.claim.card.clone(), n).dir_name()
+                ),
                 check_cmd: Some(input.claim.check_cmd.clone()),
                 confine: Some(ConfineSpec {
                     allow: input.claim.allow.clone(),

@@ -237,7 +237,7 @@ pub(crate) fn map_merge(o: MergeOutcome, main_head: String) -> MergeResult {
 /// base is reported as `error`, never as `nothing`.
 pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
     let id = AttemptId::new(input.card.clone(), input.n);
-    let dir = Path::new(&input.workroot).join(format!("{}-{}", input.card, input.n));
+    let dir = Path::new(&input.workroot).join(id.dir_name());
     let outcome = probe::probe(
         &dir,
         &input.base_sha,
