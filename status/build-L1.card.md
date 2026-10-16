@@ -17,11 +17,12 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
 | CI-PYTEST-SPEED (p2, D-1457) | MERGE-READY 998f8f3 PR #30 (median 97.7 s; 721 = contention); my gpt-oss seat PASS pytest-speed-seats/openai | MERGED #30 e790e34 (gate 38882090233 green). Evidence ✗: verifier = newest run per check SUITE, each dispatch = own suite -> sequential `rerun --failed` of 38875149323/38876665137/38879016538 (bg) | all green -> re-add evidence 998f8f3 -> submit -> verdict -> DONE |
 | RT-P1-KEEPER-PG-PREP (p1 HIGH, D-1468) | MERGE-READY 9cb4b14 PR #29 (CI 38880799883 green); judge asked then HOLD: D-1476 R1(a) needs 3 runbook adds (sha256 freeze, rollback cmds, delete/archive) | new sha -> judge -> merge; L2 waits for runners after #30 gate |
-| CI-PG-CONTRACT-TIMEOUT (p2, D-1472) | claimed (lease 10:55Z); brief a5781e2; given to build-L2-pytest-speed (workst) as follow-on | D-1474: L2 reproduces locally on PG16, no load runs, max 1 pg run/lane; no skip/xfail/bump w/o cause | seats + judge -> merge |
+| CI-PG-CONTRACT-TIMEOUT (p2) | root cause = api.py:168 _snapshot per write (D-1477); instrumentation 3d4f2e8 GO standard (L2 pytest-speed) | merge instr; item closes after KEEPER-SNAPSHOT-PG |
+| KEEPER-SNAPSHOT-PG (p1 HIGH, D-1477) | claimed epoch 1 (lease 12:04Z); brief 8dd562b; L2-LAUNCH build-L2-snapshot-pg asked (coding.vm) | gates RT-P1-KEEPER-PG; MERGE-READY -> judge |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: all 3 renewed 09:14Z. L2 live: pytest-speed (workst).
+Leases: 3 renewed 09:45Z; SNAPSHOT-PG to 12:04Z. L2 live: pytest-speed (workst).
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
@@ -29,7 +30,6 @@ Leases: all 3 renewed 09:14Z. L2 live: pytest-speed (workst).
   multi-part seats with refuted fix findings pass only with the adjudication file. Evidence kind = `commit+ci` (Plan-Item trailer sha on main).
 ## FOR ROUTER (active)
 - Done/applied by router 03:4x-04:0xZ: L2-DONE x6 (stopped), INBOX evidence, PG-DEPLOY criteria (D-1375), b05 (ATTEMPT-EVENT refused, dropped).
-- Pending: L2-LAUNCH build-L2-temporal-tls (asked); reconcile + worker-proj routed to workst-L1-autoos; L2-LAUNCH build-L2-deepinfra after priv-writers merges.
 D-1380 local-CI fallback (l2-rules-common). D-1390: L2-LAUNCH "sonnet medium"; plangraph CI label -> [self-hosted, fleet-ci] by fixes-L2-cipool (covers CI-RUNS-ON-WORKST label part).
 
 ## FOR OPERATOR
