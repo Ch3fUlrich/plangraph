@@ -27,6 +27,47 @@ pub fn cap_text(s: &str) -> String {
     }
 }
 
+/// The keeper's own risk tags (`RISK_TAGS` in the keeper schema). All of them
+/// block a default.
+const KNOWN_RISK_TAGS: [&str; 6] = [
+    "auth",
+    "secrets",
+    "money",
+    "migration",
+    "public-contract",
+    "live-step",
+];
+
+/// Substrings that make any (even unknown) tag spelling sensitive.
+const SENSITIVE_SUBSTRINGS: [&str; 5] = ["auth", "secret", "money", "live", "public-release"];
+
+/// One tag in canonical form: trimmed, lowercase, runs of whitespace or
+/// underscores turned into a single hyphen (`"Live step"` == `"live_step"` ==
+/// `"live-step"`). `None` for a tag that is empty after that.
+pub fn canonical_risk_tag(tag: &str) -> Option<String> {
+    let mut out = String::new();
+    for c in tag.trim().to_lowercase().chars() {
+        let c = if c.is_whitespace() || c == '_' {
+            '-'
+        } else {
+            c
+        };
+        if c == '-' && out.ends_with('-') {
+            continue;
+        }
+        out.push(c);
+    }
+    let out = out.trim_matches('-').to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// True for a canonical tag that must never get a default answer: one of the
+/// keeper's known tags, or any spelling containing a sensitive substring.
+pub fn is_sensitive_risk_tag(canonical: &str) -> bool {
+    KNOWN_RISK_TAGS.contains(&canonical)
+        || SENSITIVE_SUBSTRINGS.iter().any(|s| canonical.contains(s))
+}
+
 /// What the agent asks, with the optional fallback if nobody answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Question {
@@ -43,17 +84,26 @@ impl Question {
     /// The question as the keeper will store it. Text and default are capped
     /// ([`cap_text`]). An empty (or blank) default means "no default" and a
     /// `deadline_s` of 0 means "no deadline". A default only survives when it
-    /// can be used: it needs a deadline, and a risk-tagged question never has
-    /// one (fail closed on any tag; the keeper refuses the sensitive ones).
+    /// can be used: it needs a deadline and no sensitive risk tag (fail closed:
+    /// a known keeper tag, or any spelling containing auth, secret, money, live
+    /// or public-release, after canonicalisation). Tags are sent canonical.
     pub fn normalized(&self) -> Question {
         let deadline_s = self.deadline_s.filter(|s| *s > 0);
         let default = self.default.as_deref().filter(|d| !d.trim().is_empty());
-        let usable = deadline_s.is_some() && self.risk_tags.is_empty();
+        // Canonical tags first, so a spelling variant cannot dodge the check.
+        let mut risk_tags: Vec<String> = Vec::new();
+        for t in self.risk_tags.iter().filter_map(|t| canonical_risk_tag(t)) {
+            if !risk_tags.contains(&t) {
+                risk_tags.push(t);
+            }
+        }
+        let sensitive = risk_tags.iter().any(|t| is_sensitive_risk_tag(t));
+        let usable = deadline_s.is_some() && !sensitive;
         Question {
             text: cap_text(&self.text),
             default: if usable { default.map(cap_text) } else { None },
             deadline_s,
-            risk_tags: self.risk_tags.clone(),
+            risk_tags,
         }
     }
 }
@@ -155,6 +205,35 @@ mod tests {
             deadline_s,
             risk_tags: tags.iter().map(|t| t.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn risk_tags_are_canonicalised_before_the_default_decision() {
+        assert_eq!(canonical_risk_tag("  Live Step "), Some("live-step".into()));
+        assert_eq!(canonical_risk_tag("live__step"), Some("live-step".into()));
+        assert_eq!(canonical_risk_tag(" _ "), None);
+        for tag in [
+            "live step",
+            "LIVE_STEP",
+            "Live-Step",
+            "secrets",
+            "API Secret",
+            "auth",
+            "oauth_flow",
+            "moneyflow",
+            "go live",
+            "Public Release",
+            "public_release",
+            "migration",
+            "public contract",
+        ] {
+            let n = q(Some("x"), Some(5), &[tag]).normalized();
+            assert_eq!(n.default, None, "{tag} must block the default");
+        }
+        // A benign unknown tag does not block, and is sent canonical and unique.
+        let n = q(Some("x"), Some(5), &[" Docs Only ", "docs_only", " "]).normalized();
+        assert_eq!(n.default.as_deref(), Some("x"));
+        assert_eq!(n.risk_tags, vec!["docs-only".to_string()]);
     }
 
     #[test]

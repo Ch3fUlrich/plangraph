@@ -915,6 +915,42 @@ async fn needs_input_default_survives_keeper_and_alarm_outage() {
     .await;
 }
 
+/// The `record_question_timeout` call dying outright (not a keeper error: the
+/// client panics) must not fail the card either: alarm best-effort, continue
+/// with the default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_default_continues_when_the_timeout_call_dies() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":1}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-timeout-dies", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_timeout_panics(true);
+        let claim = env.claim("e2e-dies", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-dies-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_timeout_dies", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert!(!env.keeper.question_timeouts().is_empty());
+        assert!(
+            env.keeper
+                .alarms()
+                .iter()
+                .any(|a| a.reason == "question_timeout not recorded"),
+            "{:?}",
+            env.keeper.alarms()
+        );
+        env.stop();
+    })
+    .await;
+}
+
 /// A keeper outage on `ask_question` (5xx, after every retry) parks the card
 /// with an alarm instead of failing the workflow.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -805,13 +805,23 @@ async fn question_step(
         }
         Woke::Timer => match plan.on_timer {
             OnTimer::UseDefault(text) => {
-                let recorded: bool = ctx
+                // Best effort: an activity error or timeout (after its retries)
+                // counts as "not recorded". No `?` on this path: the window is
+                // over and the card continues with the default regardless.
+                let recorded: bool = match ctx
                     .execute_activity(
                         CardActivities::record_question_timeout,
                         qid,
                         activity_options(cfg),
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("record_question_timeout activity failed: {e}");
+                        false
+                    }
+                };
                 if !recorded {
                     // The default is still taken: the question window is over.
                     raise_alarm(

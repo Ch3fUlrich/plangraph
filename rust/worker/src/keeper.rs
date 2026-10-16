@@ -274,6 +274,9 @@ struct StubState {
     /// When set, `record_question_timeout` fails with this status (a 5xx here
     /// is a transient outage); checked before `timeout_refused`.
     timeout_status: Option<u16>,
+    /// When set, `record_question_timeout` panics (a keeper client that dies
+    /// instead of returning an error), so the activity itself fails.
+    timeout_panics: bool,
     /// When set, `alarm` fails with a 500 (the alarm is not recorded).
     alarm_down: bool,
     /// When set, `ask_question` fails with this status every time.
@@ -323,6 +326,12 @@ impl StubKeeper {
     /// Make `record_question_timeout` fail with `status` every time.
     pub fn set_timeout_status(&self, status: Option<u16>) {
         self.lock().timeout_status = status;
+    }
+
+    /// Make `record_question_timeout` panic every time (the activity errors
+    /// instead of returning "not recorded").
+    pub fn set_timeout_panics(&self, panics: bool) {
+        self.lock().timeout_panics = panics;
     }
 
     /// Make `ask_question` fail with `status` every time (a 5xx is an outage).
@@ -441,6 +450,10 @@ impl Keeper for StubKeeper {
     fn record_question_timeout(&self, question_id: i64) -> Result<(), KeeperError> {
         let mut s = self.lock();
         s.question_timeouts.push(question_id);
+        if s.timeout_panics {
+            drop(s); // never poison the stub for the other callers
+            panic!("stub keeper: record_question_timeout died");
+        }
         if let Some(code) = s.timeout_status {
             Err(KeeperError::Status(code))
         } else if s.timeout_refused {

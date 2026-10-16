@@ -713,12 +713,21 @@ impl CardActivities {
                 keeper.record_question_timeout(question_id)
             })
         })
-        .await
-        .map_err(activity_error)?;
-        if let Err(e) = &res {
-            eprintln!("record_question_timeout not recorded: {e}");
+        .await;
+        // A keeper error and a dead blocking task are the same thing here:
+        // not recorded. Never an activity error (that would be retried and then
+        // fail the card).
+        match res {
+            Ok(Ok(())) => Ok(true),
+            Ok(Err(e)) => {
+                eprintln!("record_question_timeout not recorded: {e}");
+                Ok(false)
+            }
+            Err(e) => {
+                eprintln!("record_question_timeout task failed: {e}");
+                Ok(false)
+            }
         }
-        Ok(res.is_ok())
     }
 
     /// Sweep dead attempts and report how many were removed.
