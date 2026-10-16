@@ -35,10 +35,12 @@ def test_http_mint_and_use(d):
                   {"key": "demo:A", "epoch": epoch})[0] == 200
     snap = d.server.config.snapshot
     import os
+    d.server.flush_snapshot()                         # the debounced file exists before it is removed
     os.unlink(snap)
     assert d.http("runw", "POST", "/v1/add_evidence",
                   {"key": "demo:A", "epoch": epoch, "kind": "decision",
                    "ref": {"id": "D-1"}})[0] == 200
+    d.server.flush_snapshot()
     assert os.path.exists(snap)                      # snapshot still refreshed
     assert d.http("runw", "POST", "/v1/submit",
                   {"key": "demo:A", "epoch": epoch})[0] == 200

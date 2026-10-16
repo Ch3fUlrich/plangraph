@@ -66,6 +66,10 @@ def run(cfg, *, host=None, port=None, ready=None):
         if server.anchorer is not None:
             server.anchorer.record(conn, "start")
         server.start_reaper()
+        try:   # KEEPER-SNAPSHOT-PG: a crash may have skipped the debounced rewrite; re-derive it
+            api.write_snapshot(server, server.system)
+        except Exception as exc:  # noqa: BLE001 - never block startup on the derived file
+            print(f"keeper: startup snapshot failed: {type(exc).__name__}", file=sys.stderr)
         stop = threading.Event()
         _install_signals(stop)
         thread = threading.Thread(target=server.serve_forever, daemon=True,

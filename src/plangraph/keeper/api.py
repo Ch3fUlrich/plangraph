@@ -16,9 +16,10 @@ Routes (contract):
 * Refusals are 4xx ``{"error": code, "msg": …}``; unexpected failures are a 500
   with no internals.  Bodies over 1 MiB are rejected with 413.
 
-After every committed write the server rewrites ``plan.snapshot.json``
-atomically (temp file + ``os.replace``) and a background reaper thread calls
-``Store.reap`` every 60 s.
+After committed writes the server rewrites ``plan.snapshot.json`` atomically (temp
+file + ``os.replace``): synchronously, or with ``snapshot_debounce_s > 0`` off the
+request path with bounded staleness (``snapshot_writer``).  A background reaper
+thread calls ``Store.reap`` every 60 s.
 """
 from __future__ import annotations
 
@@ -34,6 +35,7 @@ from pathlib import Path
 from .. import inbox, views
 from . import outage
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
+from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
 from .errors import Refused
@@ -166,6 +168,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
             remaining -= len(chunk)
 
     def _snapshot(self, principal):
+        writer = self.server.snapshot_writer
+        if writer is not None:     # debounced: rebuilt off the request path (snapshot_writer)
+            writer.mark()
+            return
         try:
             write_snapshot(self.server, principal)
         except Exception:  # a committed write stays committed
@@ -384,6 +390,12 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
+        self.snapshot_writer = None
+        debounce = float(getattr(config, "snapshot_debounce_s", 0) or 0)
+        if debounce > 0:         # KEEPER-SNAPSHOT-PG: 0 = rewrite synchronously after each write
+            self.snapshot_writer = SnapshotWriter(
+                self, debounce, getattr(config, "snapshot_max_delay_s", 2.0))
+            self.snapshot_writer.start()
         super().__init__(address, KeeperHandler)
 
     def start_reaper(self):
@@ -397,8 +409,17 @@ class KeeperHTTPServer(ThreadingHTTPServer):
             self.reaper.stop()
             self.reaper = None
 
+    def flush_snapshot(self):
+        """Bring ``plan.snapshot.json`` level with the database (no-op when synchronous)."""
+        if self.snapshot_writer is not None:
+            self.snapshot_writer.flush()
+
     def server_close(self):
         self.stop_reaper()
+        writer, self.snapshot_writer = self.snapshot_writer, None
+        if writer is not None:
+            with suppress(Exception):     # shutdown never hangs on a snapshot error
+                writer.stop()
         super().server_close()
 
 

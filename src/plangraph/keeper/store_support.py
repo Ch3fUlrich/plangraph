@@ -133,16 +133,26 @@ class SupportMixin:
             out.append(item)
         return out
 
+    @staticmethod
+    def _evidence_record(row):
+        record = dict(row)
+        record["ref"] = _json_dict(record.get("ref"))
+        record["verified"] = bool(record["verified"])
+        return record
+
     def _evidence(self, key):
         rows = self.conn.execute(
             "SELECT id,key,epoch,kind,ref,verified,detail,at FROM evidence"
             " WHERE key=? ORDER BY id", (key,)).fetchall()
-        out = []
-        for row in rows:
-            record = dict(row)
-            record["ref"] = _json_dict(record.get("ref"))
-            record["verified"] = bool(record["verified"])
-            out.append(record)
+        return [self._evidence_record(row) for row in rows]
+
+    def _evidence_by_key(self):
+        """``key -> [record]`` for every item in one query (same rows as ``_evidence``)."""
+        out = {}
+        for row in self.conn.execute(
+                "SELECT id,key,epoch,kind,ref,verified,detail,at FROM evidence"
+                " ORDER BY id"):
+            out.setdefault(row["key"], []).append(self._evidence_record(row))
         return out
 
     def _verified_evidence_ids(self, item):

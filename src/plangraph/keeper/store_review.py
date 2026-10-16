@@ -84,16 +84,24 @@ class ReviewMixin:
         returns the item to ``claimed`` and the next ``submit`` bumps ``round``,
         so the earlier round's verdicts no longer match.
         """
-        epoch, round_no = int(item["epoch"]), int(item.get("round") or 0)
-        out = []
-        for row in self.conn.execute(
+        return self._current_round(item, [
+            json.loads(row["payload"] or "{}") for row in self.conn.execute(
                 "SELECT payload FROM events WHERE key=? AND type='review_verdict'"
-                " ORDER BY seq", (item["key"],)):
-            payload = json.loads(row["payload"] or "{}")
-            if (int(payload.get("epoch", -1)) == epoch
-                    and int(payload.get("round", -1)) == round_no):
-                out.append(payload)
+                " ORDER BY seq", (item["key"],))])
+
+    def _verdicts_by_key(self):
+        """``key -> [payload]`` of every ``review_verdict`` in one query (seq order)."""
+        out = {}
+        for row in self.conn.execute(
+                "SELECT key,payload FROM events WHERE type='review_verdict' ORDER BY seq"):
+            out.setdefault(row["key"], []).append(json.loads(row["payload"] or "{}"))
         return out
+
+    @staticmethod
+    def _current_round(item, payloads):
+        epoch, round_no = int(item["epoch"]), int(item.get("round") or 0)
+        return [p for p in payloads
+                if int(p.get("epoch", -1)) == epoch and int(p.get("round", -1)) == round_no]
 
     def _verdict(self, principal, key, ok, reason, now):
         self._require_role(principal, "reviewer")

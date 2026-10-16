@@ -197,10 +197,12 @@ class ReadMixin:
                 fixed.setdefault(item["fixes"], []).append(item["key"])
         created_ts, done_ts, reviewed_keys, merged_keys = self._snapshot_run_meta()
         answers = self.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
+        evidence = self._evidence_by_key()      # set-based: one query each, not one per item
+        verdicts = self._verdicts_by_key()
         out = []
         for item in items:
             reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
-                       for v in self._round_verdicts(item)]
+                       for v in self._current_round(item, verdicts.get(item["key"], []))]
             out.append({
                 "project": item["project"], "id": item["id"], "key": item["key"],
                 "title": item["title"], "description": item["description"],
@@ -226,7 +228,7 @@ class ReadMixin:
                 "review_waiver": item.get("review_waiver"), "reviews": reviews,
                 "evidence": [{"kind": r["kind"], "ref": r["ref"],
                               "verified": r["verified"], "at": r["at"]}
-                             for r in self._evidence(item["key"])],
+                             for r in evidence.get(item["key"], [])],
                 "updated_at": item["updated_at"],
                 "corrected_by": sorted(corrected.get(item["key"], [])),
                 "fixes": item.get("fixes"),
@@ -250,7 +252,7 @@ class ReadMixin:
                 "items": out,
                 "aliases": {a["old"]: a["new"] for a in self._aliases()},
                 "activity": self._activity(now),
-                "decision_text": self._decision_text(items, now),
+                "decision_text": self._decision_text(items, now, evidence),
                 "progress": progress(out)}   # PROGRESS-PANEL: the page's static panel
 
     def _activity(self, now):
@@ -285,13 +287,15 @@ class ReadMixin:
         except Exception:  # noqa: BLE001 - snapshot never raises
             return []
 
-    def _decision_text(self, items, now):
+    def _decision_text(self, items, now, evidence=None):
         """Map of decision id -> cell text for ids cited by item evidence."""
         try:
             wanted: list[str] = []
             seen: set[str] = set()
             for item in items:
-                for record in self._evidence(item["key"]):
+                records = (evidence.get(item["key"], []) if evidence is not None
+                           else self._evidence(item["key"]))
+                for record in records:
                     if record.get("kind") != "decision":
                         continue
                     ref = record.get("ref") or {}
