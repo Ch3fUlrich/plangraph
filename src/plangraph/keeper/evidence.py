@@ -120,14 +120,21 @@ def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float
 # --------------------------------------------------------------------------- #
 
 def _ci_conclusion(runs: Any, commit: str) -> str | None:
-    """Newest-run-per-name CI verdict: None means ok, else the fail detail."""
+    """Newest-run-per-name CI verdict: None means ok, else the fail detail. A run with no 'status' key and a non-empty conclusion counts as completed (legacy fakes)."""
     newest: dict[str, tuple[tuple[int, str], dict]] = {}
     for run in runs:
         if not isinstance(run, dict):
             continue
         name = str(run.get("name", "?"))
         rid = run.get("id")
-        rid_int = rid if isinstance(rid, int) and not isinstance(rid, bool) else 0
+        if isinstance(rid, bool):
+            rid_int = 0
+        elif isinstance(rid, int):
+            rid_int = rid
+        elif isinstance(rid, str) and rid.isdigit():
+            rid_int = int(rid)
+        else:
+            rid_int = 0
         started = run.get("started_at")
         started_str = str(started) if started is not None else ""
         key = (rid_int, started_str)

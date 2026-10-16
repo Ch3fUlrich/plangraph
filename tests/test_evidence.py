@@ -209,13 +209,73 @@ def test_commit_ci_newest_tie_break_started_at():
     assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs))).ok is True
 
 
+def test_commit_ci_newest_numeric_string_id_ranks_numerically():
+    runs = [
+        {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "success"},
+        {"name": "build", "id": "99", "head_sha": SHA, "conclusion": "failure"},
+    ]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "build=failure" in res.detail
+
+
 def test_commit_ci_newest_non_int_id_counts_as_zero():
     runs = [
-        {"name": "build", "id": "99", "started_at": "", "head_sha": SHA,
+        {"name": "build", "id": "abc", "started_at": "", "head_sha": SHA,
          "conclusion": "failure"},
         {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "success"},
     ]
     assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs))).ok is True
+    tie_runs = [
+        {"name": "build", "id": "abc", "started_at": "2026-01-01T00:00:01Z",
+         "head_sha": SHA, "conclusion": "failure"},
+        {"name": "build", "id": None, "started_at": "2026-01-01T00:00:02Z",
+         "head_sha": SHA, "conclusion": "success"},
+    ]
+    assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=tie_runs))).ok is True
+
+
+def test_commit_ci_stale_success_with_in_progress_status_is_pending():
+    runs = [{"name": "build", "id": 1, "head_sha": SHA, "status": "in_progress",
+             "conclusion": "success"}]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "pending" in res.detail.lower()
+
+
+def test_commit_ci_missing_name_groups_under_unknown():
+    runs = [{"id": 1, "head_sha": SHA, "conclusion": "failure"}]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "?=failure" in res.detail
+
+
+def test_commit_ci_completed_none_conclusion_is_pending():
+    runs = [{"name": "build", "id": 1, "head_sha": SHA, "status": "completed",
+             "conclusion": None}]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "pending" in res.detail.lower()
+
+
+def test_commit_ci_conclusion_whitespace_and_case_success_ok():
+    runs = [{"name": "build", "id": 1, "head_sha": SHA, "conclusion": " SUCCESS "}]
+    assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs))).ok is True
+
+
+def test_commit_ci_conclusion_mixed_case_failure_fails():
+    runs = [{"name": "build", "id": 1, "head_sha": SHA, "conclusion": "Failure"}]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "Failure" in res.detail
+
+
+def test_commit_ci_unknown_conclusion_weird_fails_naming_it():
+    runs = [{"name": "lint", "id": 1, "head_sha": SHA, "conclusion": "weird"}]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "weird" in res.detail
+    assert "lint" in res.detail
 
 
 @pytest.mark.parametrize("conclusion", [
