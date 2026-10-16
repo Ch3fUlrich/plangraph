@@ -15,7 +15,7 @@ PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats 
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
-| KEEPER-CI-NEWEST-WINS (p2 HIGH, D-1479) | claimed epoch 1 (lease 12:25Z); brief e82499e; L2 build-L2-ci-newest-wins 29c2f028 coding.vm, lane/keeper-ci-newest-wins from 27c95c3 | MERGE-READY -> judge -> merge -> D-915 restart |
+| KEEPER-CI-NEWEST-WINS (p2 HIGH, D-1479/D-1489) | PR #34 de6d7aa judge CHANGE: skipped must not mask failure (D-1489a; PR+dispatch join D-1489b); L2 29c2f028 fixing; judge now 8e5297a3 gen-14 | MERGE-READY -> judge -> merge -> D-915 restart |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
