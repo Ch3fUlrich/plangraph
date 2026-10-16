@@ -2,7 +2,7 @@
 
 A leg that times out, answers HTTP 429/5xx, is rate limited, or returns an
 incomplete reply is marked down and the seat retries on the next family
-unlike the writer's, at most once per known leg. No leg is required.
+unlike the writer's, at most once per known leg and prompt part. No leg is required.
 """
 from __future__ import annotations
 
@@ -45,7 +45,8 @@ class SeatOutcome:
     verdict: verdict.Verdict
     pass_allowed: bool
     error: str | None
-    tried: list[str] = field(default_factory=list)  # legs tried for this seat
+    tried: list[str] = field(default_factory=list)  # legs tried for this part
+    part: int = 0  # 0-based prompt part
 
 
 def _failed_verdict(text: str, finish: str | None,
@@ -87,73 +88,67 @@ def _retriable(result, leg: family.Leg) -> bool:
     return not (getattr(result, "text", "") or "").strip()
 
 
-def _run_leg(leg: family.Leg, prompts: list[str], spec: SeatSpec,
-             calls: dict) -> tuple[list[SeatOutcome], bool]:
-    """Run one leg over every part; return outcomes and a retry flag."""
-    multi = len(prompts) > 1
-    outcomes: list[SeatOutcome] = []
-    retry = False
-    for i, text in enumerate(prompts):
-        name = "%s-p%d" % (leg.name, i + 1) if multi else leg.name
-        out = Path(spec.out_root) / name
-        try:
-            if leg.kind == "gateway":
-                result = calls["gateway"](leg.model, text, title=spec.title)
-            elif leg.kind == "qoder":
-                result = calls["qoder"](text, model=leg.model)
-            elif leg.kind == "opencode":
-                result = calls["opencode"](text, model=leg.model)
-            else:
-                raise ValueError("unknown leg kind %r" % (leg.kind,))
-        except gateway.MissingKey:
-            raise
-        except Exception as exc:  # noqa: BLE001 - failed leg collects
-            err = "%s: %s" % (type(exc).__name__, exc) if str(exc) else type(exc).__name__
-            _write_minimal(out, leg, i, "error", err)
-            judged = verdict.judge("", "error", material=text)
-            outcomes.append(SeatOutcome(leg=leg.name, family=leg.family,
-                                        dir=out, verdict=_failed_verdict("", "error", judged),
-                                        pass_allowed=False, error=err))
-            retry = True
-            continue
-        body = getattr(result, "text", "") or ""
-        finish = getattr(result, "finish_reason", None)
-        judged = verdict.judge(body, finish, material=text)
-        failed = finish in _BAD_FINISH
-        error: str | None = None
-        if leg.kind == "gateway" and getattr(result, "status", None) != 200:
-            failed = True
-            error = getattr(result, "error", None) or "status %r" % (
-                getattr(result, "status", None),)
-        if _retriable(result, leg):
-            retry = True
-        if failed:
-            error = error or getattr(result, "error", None) or "finish_reason %r" % (finish,)
-            judged = _failed_verdict(body, finish, judged)
-            pass_allowed = False
-        else:
-            pass_allowed = judged.pass_allowed
-        extra = judged.to_evidence()
-        extra.update({"leg": leg.name, "family": leg.family, "part": i})
+def _run_part(leg: family.Leg, i: int, text: str, multi: bool, spec: SeatSpec,
+              calls: dict) -> tuple[SeatOutcome, bool]:
+    """Run one prompt part on one leg; return its outcome and a retry flag."""
+    name = "%s-p%d" % (leg.name, i + 1) if multi else leg.name
+    out = Path(spec.out_root) / name
+    try:
         if leg.kind == "gateway":
-            gateway.write_seat_dir(out, result, extra=extra)
+            result = calls["gateway"](leg.model, text, title=spec.title)
         elif leg.kind == "qoder":
-            qoder.write_seat_dir(out, result, extra=extra)
+            result = calls["qoder"](text, model=leg.model)
+        elif leg.kind == "opencode":
+            result = calls["opencode"](text, model=leg.model)
         else:
-            opencode.write_seat_dir(out, result, extra=extra)
-        outcomes.append(SeatOutcome(leg=leg.name, family=leg.family,
-                                    dir=out, verdict=judged,
-                                    pass_allowed=pass_allowed, error=error))
-    return outcomes, retry
+            raise ValueError("unknown leg kind %r" % (leg.kind,))
+    except gateway.MissingKey:
+        raise
+    except Exception as exc:  # noqa: BLE001 - failed leg collects
+        err = "%s: %s" % (type(exc).__name__, exc) if str(exc) else type(exc).__name__
+        _write_minimal(out, leg, i, "error", err)
+        judged = verdict.judge("", "error", material=text)
+        return SeatOutcome(leg=leg.name, family=leg.family, dir=out,
+                           verdict=_failed_verdict("", "error", judged),
+                           pass_allowed=False, error=err, part=i), True
+    body = getattr(result, "text", "") or ""
+    finish = getattr(result, "finish_reason", None)
+    judged = verdict.judge(body, finish, material=text)
+    failed = finish in _BAD_FINISH
+    error: str | None = None
+    if leg.kind == "gateway" and getattr(result, "status", None) != 200:
+        failed = True
+        error = getattr(result, "error", None) or "status %r" % (
+            getattr(result, "status", None),)
+    retry = _retriable(result, leg)
+    if failed:
+        error = error or getattr(result, "error", None) or "finish_reason %r" % (finish,)
+        judged = _failed_verdict(body, finish, judged)
+        pass_allowed = False
+    else:
+        pass_allowed = judged.pass_allowed
+    extra = judged.to_evidence()
+    extra.update({"leg": leg.name, "family": leg.family, "part": i})
+    if leg.kind == "gateway":
+        gateway.write_seat_dir(out, result, extra=extra)
+    elif leg.kind == "qoder":
+        qoder.write_seat_dir(out, result, extra=extra)
+    else:
+        opencode.write_seat_dir(out, result, extra=extra)
+    return SeatOutcome(leg=leg.name, family=leg.family, dir=out, verdict=judged,
+                       pass_allowed=pass_allowed, error=error, part=i), retry
 
 
 def run_seat(spec: SeatSpec, *, gateway_call=gateway.call,
              qoder_run=qoder.run, opencode_run=opencode.run) -> list[SeatOutcome]:
-    """Run each eligible leg over each prompt part; retry down legs.
+    """Run each eligible leg over each prompt part; retry down legs per part.
 
-    Each of `need` seats starts on its picked leg; when that leg is
-    retriable-failed its name goes into the down set and the seat moves to
-    the next family unlike the writer's. Every outcome carries `tried`.
+    Each of `need` seats starts on its picked leg. A part whose leg is
+    retriable-failed (timeout, 429/5xx, rate limit, incomplete reply) marks
+    that leg down and is retried on the next family unlike the writer's, for
+    that part only: parts that already completed are never re-run, and the
+    next part starts on the seat's own leg unless that leg is now down.
+    Every attempt is returned; `tried` lists the legs tried for that part.
     """
     first = family.pick_legs(spec.writer_family, need=spec.need,
                              down=spec.down, fleet_busy=spec.fleet_busy)
@@ -164,29 +159,37 @@ def run_seat(spec: SeatSpec, *, gateway_call=gateway.call,
     calls = {"gateway": gateway_call, "qoder": qoder_run,
              "opencode": opencode_run}
     down = set(spec.down)
-    reserved = {leg.name for leg in first}
+    claimed = [{leg.name} for leg in first]  # legs each seat holds; others stay off them
+    multi = len(prompts) > 1
     outcomes: list[SeatOutcome] = []
-    for seat_no, leg in enumerate(first):
-        tried: list[str] = []
-        seat_outcomes: list[SeatOutcome] = []
-        for _ in range(len(family.LEGS)):
-            tried.append(leg.name)
-            got, retry = _run_leg(leg, prompts, spec, calls)
-            seat_outcomes.extend(got)
-            if not retry:
-                break
-            down.add(leg.name)
-            blocked = down | {
-                name for name in reserved if name not in tried}
-            try:
-                leg = family.pick_legs(spec.writer_family, need=1,
-                                       down=frozenset(blocked))[0]
-            except family.NoEligibleLeg:
-                break
-            reserved.add(leg.name)
-        for item in seat_outcomes:
-            item.tried = list(tried)
-        outcomes.extend(seat_outcomes)
+    for seat_no, seat_leg in enumerate(first):
+        for i, text in enumerate(prompts):
+            leg, tried, attempts = seat_leg, [], []
+            if leg.name in down:  # went down on an earlier part: move on at once
+                blocked = down | {n for k, c in enumerate(claimed) if k != seat_no for n in c}
+                try:
+                    leg = family.pick_legs(spec.writer_family, need=1,
+                                           down=frozenset(blocked))[0]
+                except family.NoEligibleLeg:
+                    leg = seat_leg
+                claimed[seat_no].add(leg.name)
+            for _ in range(len(family.LEGS)):
+                tried.append(leg.name)
+                item, retry = _run_part(leg, i, text, multi, spec, calls)
+                attempts.append(item)
+                if not retry:
+                    break
+                down.add(leg.name)
+                blocked = down | {n for k, c in enumerate(claimed) if k != seat_no for n in c}
+                try:
+                    leg = family.pick_legs(spec.writer_family, need=1,
+                                           down=frozenset(blocked))[0]
+                except family.NoEligibleLeg:
+                    break
+                claimed[seat_no].add(leg.name)
+            for item in attempts:
+                item.tried = list(tried)
+            outcomes.extend(attempts)
     return outcomes
 
 

@@ -1,9 +1,9 @@
 """Turn a judged review verdict into planned actions (pure, stdlib only).
 
 No keeper or inbox writes happen here: the caller posts the fix cards and
-the inbox payloads. The inbox payload follows the field names of
-``plangraph.inbox.routes`` ``ask_question`` (key, text, default_answer,
-deadline, risk_tags) and never carries a default answer.
+the inbox payloads. A halt payload is exactly the body ``plangraph.inbox.routes._ask``
+reads, ``{key, text, default_answer, deadline, risk_tags}``, with
+``default_answer`` and ``deadline`` always ``None`` (never a default answer).
 """
 from __future__ import annotations
 
@@ -39,11 +39,12 @@ def _finding(item: Any, phase: str, n: int) -> dict:
     return {"title": title, "finding": text, "files": files}
 
 
-def plan_actions(verdict: Any, phase: str) -> dict:
+def plan_actions(verdict: Any, phase: str, key: str | None = None) -> dict:
     """Plan {fix_cards, inbox, pass} for a verdict at a phase.
 
     fix: one fix card per finding (one generic card when none are listed);
-    halt: one inbox question, no default; pass: nothing to do. A verdict
+    halt: one inbox question for plan *key* (the caller's card key), no default;
+    pass: nothing to do. A verdict
     with no usable word plans nothing and does not pass.
     """
     word = _word(verdict)
@@ -66,9 +67,11 @@ def plan_actions(verdict: Any, phase: str) -> dict:
     elif word == "halt":
         tags = [str(t) for t in (_get(verdict, "risk_tags") or ["review-halt"])]
         plan["inbox"].append({
+            "key": key,
             "text": "Phase %s review halted: %s" % (
                 phase, reason or "reviewer halted without a reason"),
+            "default_answer": None,
+            "deadline": None,
             "risk_tags": tags,
-            "default": None,
         })
     return plan
