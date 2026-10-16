@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
 
     let runtime = Runtime::from_current_tokio(Default::default())?;
     let tls = pg_worker::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?;
+    pg_worker::tls::require_https(&addr, &tls).map_err(|e| anyhow::anyhow!(e))?;
     let conn = Connection::connect(
         ConnectionOptions::new(Url::from_str(&addr)?)
             .maybe_tls_options(tls)

@@ -1,22 +1,34 @@
-# Handshake check: throwaway CA + openssl mTLS server (no gRPC), spike driver must present a verified client cert.
+#!/usr/bin/env bash
+# Handshake check: throwaway CA + openssl mTLS server (no gRPC). Asserts that the spike driver
+# presents a client cert the server verifies, and that a wrong CA or a wrong server name is refused.
+# Build first: cargo build --bins in rust/spikes/temporal-spike. Needs openssl; Linux/WSL.
 set -u
-T=$(mktemp -d); cd $T
-openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.crt -days 1 -subj "/CN=test-ca" 2>/dev/null
-for n in server client; do
- openssl req -newkey rsa:2048 -nodes -keyout $n.key -out $n.csr -subj "/CN=$n" 2>/dev/null
- printf "subjectAltName=DNS:temporal.test\nextendedKeyUsage=serverAuth,clientAuth\n" > $n.ext
- openssl x509 -req -in $n.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out $n.crt -days 1 -extfile $n.ext 2>/dev/null
-done
+T=$(mktemp -d); cd "$T"; S=
+trap '[ -n "$S" ] && kill $S 2>/dev/null; rm -rf "$T"' EXIT
+BIN=${CARGO_TARGET_DIR:-target}/debug/driver
+fail() { echo "FAIL: $*"; exit 1; }
+mkca() { openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.crt" -days 1 -subj "/CN=$1" 2>/dev/null; }
+mkleaf() { # name ca
+ openssl req -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.csr" -subj "/CN=$1" 2>/dev/null
+ printf "subjectAltName=DNS:temporal.test\nextendedKeyUsage=serverAuth,clientAuth\n" > "$1.ext"
+ openssl x509 -req -in "$1.csr" -CA "$2.crt" -CAkey "$2.key" -CAcreateserial -out "$1.crt" -days 1 -extfile "$1.ext" 2>/dev/null
+}
+mkca ca; mkca otherca; mkleaf server ca; mkleaf client ca
 openssl s_server -accept 17999 -cert server.crt -key server.key -CAfile ca.crt -Verify 1 -alpn h2 -quiet > srv.log 2>&1 &
 S=$!; sleep 1
-BIN=${CARGO_TARGET_DIR:-target}/debug/driver   # build first: cargo build --bins in rust/spikes/temporal-spike
-echo "--- with client cert"
-SPIKE_ADDR=https://127.0.0.1:17999 TEMPORAL_TLS_CERT=client.crt TEMPORAL_TLS_KEY=client.key TEMPORAL_TLS_CA=ca.crt TEMPORAL_TLS_SERVER_NAME=temporal.test timeout 20 $BIN 2>&1 | tail -3
-sleep 1; echo "--- server saw:"; grep -a -i "verif\|CN\|ALPN" srv.log | head
-kill $S 2>/dev/null
-openssl s_server -accept 17998 -cert server.crt -key server.key -CAfile ca.crt -Verify 1 -alpn h2 > srv2.log 2>&1 &
-S=$!; sleep 1
-echo "--- TLS without client cert (plain https, no env)"
-SPIKE_ADDR=https://127.0.0.1:17998 timeout 20 $BIN 2>&1 | tail -3
-kill $S 2>/dev/null; grep -a -i "verify return\|peer certificate\|error" srv2.log | head -5
-rm -rf $T
+run() { # ca server_name -> sets nothing; server log is reset each time
+ : > srv.log
+ SPIKE_ADDR=https://127.0.0.1:17999 TEMPORAL_TLS_CERT=client.crt TEMPORAL_TLS_KEY=client.key \
+  TEMPORAL_TLS_CA=$1 TEMPORAL_TLS_SERVER_NAME=$2 timeout 20 "$BIN" > out.log 2>&1
+ sleep 1
+}
+run ca.crt temporal.test
+grep -aq "depth=0 CN = client" srv.log || fail "server did not see the client cert (positive case)"
+echo "ok: client cert presented and verified"
+run otherca.crt temporal.test
+grep -aq "depth=0 CN = client" srv.log && fail "wrong CA: handshake was NOT refused"
+echo "ok: wrong CA refused"
+run ca.crt wrong.test
+grep -aq "depth=0 CN = client" srv.log && fail "wrong server name: handshake was NOT refused"
+echo "ok: wrong server name refused"
+echo "all handshake checks passed"

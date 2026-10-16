@@ -13,9 +13,11 @@ use temporalio_sdk::{Runtime, Worker, WorkerOptions};
 async fn main() -> anyhow::Result<()> {
     let addr = std::env::var("SPIKE_ADDR").unwrap_or_else(|_| "http://127.0.0.1:7233".into());
     let runtime = Runtime::from_current_tokio(Default::default())?;
+    let tls = temporal_spike::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?;
+    temporal_spike::tls::require_https(&addr, &tls).map_err(|e| anyhow::anyhow!(e))?;
     let conn = Connection::connect(
         ConnectionOptions::new(Url::from_str(&addr)?)
-            .maybe_tls_options(temporal_spike::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?)
+            .maybe_tls_options(tls)
             .build(),
     )
     .await?;

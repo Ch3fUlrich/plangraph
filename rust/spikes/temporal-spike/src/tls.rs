@@ -101,6 +101,20 @@ pub fn tls_from_vars(get: impl Fn(&str) -> Option<String>) -> Result<Option<TlsO
     ))
 }
 
+/// Refuse TLS settings combined with a non-`https` address.
+///
+/// With TLS variables set, an `http://` address would connect in plaintext and
+/// silently ignore the client certificate; fail at startup instead. The error
+/// names the variable only, never any file contents.
+pub fn require_https(addr: &str, tls: &Option<TlsOptions>) -> Result<(), String> {
+    if tls.is_some() && !addr.trim().to_ascii_lowercase().starts_with("https://") {
+        return Err(format!(
+            "{CERT} (mTLS) is set but the Temporal address `{addr}` is not an https:// URL;              refusing to connect without TLS"
+        ));
+    }
+    Ok(())
+}
+
 /// Read the PEM file `path` that `var` pointed at.
 ///
 /// The error names the variable and the path only - never the contents - so
@@ -210,7 +224,29 @@ mod tests {
         assert!(err.contains(CA), "{err}");
         assert!(err.contains(&missing), "{err}");
         // The error is about a path, never about file contents.
-        assert!(!err.contains("PRIVATE KEY"), "{err}");
-        assert!(!err.contains(KEY_PEM), "{err}");
+        // The key file was read successfully; its body must not leak.
+        assert!(!err.contains("SECRET-KEY-MARKER"), "{err}");
+    }
+
+    fn some_tls() -> Option<TlsOptions> {
+        Some(TlsOptions::builder().build())
+    }
+
+    #[test]
+    fn https_with_tls_is_accepted() {
+        assert!(require_https("https://temporal.internal:7234", &some_tls()).is_ok());
+        assert!(require_https("HTTPS://temporal.internal:7234", &some_tls()).is_ok());
+    }
+
+    #[test]
+    fn http_with_tls_is_refused() {
+        let err = require_https("http://127.0.0.1:7233", &some_tls()).unwrap_err();
+        assert!(err.contains(CERT), "{err}");
+        assert!(err.contains("https://"), "{err}");
+    }
+
+    #[test]
+    fn http_without_tls_stays_plain() {
+        assert!(require_https("http://127.0.0.1:7233", &None).is_ok());
     }
 }
