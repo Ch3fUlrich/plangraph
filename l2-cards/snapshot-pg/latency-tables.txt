@@ -1,0 +1,421 @@
+# per-run keeper latency tables (from CI logs)
+## run 38890010881
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/claim                       102      89     609      871        0
+POST /v1/heartbeat                    27      64     549      668        0
+POST /v1/apply_ops                    13      49     642      642        0
+POST /v1/create_items                168     113     299      555        0
+POST /v1/release                      11      68     424      424        0
+POST /v1/withdraw_review               8      51     411      411        0
+GET /v1/show                          92      72     196      373        0
+POST /v1/edit_definition              20      65     303      303        0
+GET /v1/snapshot                      50      83     249      302        0
+POST /v1/waive_second_family           9      66     300      300        0
+POST /v1/submit                       40      78     174      265        0
+POST /v1/answer                       10      62     246      246        0
+POST /v1/add_evidence                 41      92     168      242        0
+POST /v1/replay                        8      16     241      241        0
+POST /v1/cancel                       13      85     238      238        0
+GET /v1/ready                         19      90     227      227        0
+POST /v1/close_on_decision            11      67     209      209        0
+POST /v1/import_items                  6      50     200      200        0
+POST /v1/rehome                        6      27     198      198        0
+GET /v1/digest                         7      17     172      172        0
+POST /v1/mint_run_token               13      34     171      171        0
+POST /v1/verdict                      52      94     158      170        0
+GET /v1/needs_you                      4     166     170      170        0
+GET /v1/aliases                        4      24     150      150        0
+GET /v1/progress                       2      75     137      137        0
+ALL                                  995      70     244      871
+============================= slowest 30 durations =============================
+107.31s call     tests/test_keeper_activity.py::test_activity_cap
+12.77s setup    tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+12.65s setup    tests/test_projector_live.py::test_ok_attempt
+12.46s setup    tests/test_projector_live.py::test_check_fail_then_ok
+11.68s setup    tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
+11.00s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+10.07s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+9.76s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+9.40s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+9.37s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+9.14s setup    tests/test_keeper_http_events.py::test_lifecycle_to_done_moves_the_head_per_event_and_verifies
+9.03s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+## run 38890039044
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/claim                       102      81     353     1126        0
+POST /v1/heartbeat                    27      54     439      506        0
+POST /v1/create_items                168     115     261      447        0
+GET /v1/show                          92      71     180      377        0
+GET /v1/ready                         19      78     260      260        0
+POST /v1/replay                        8      14     254      254        0
+POST /v1/verdict                      52      94     195      243        0
+POST /v1/add_evidence                 41      95     204      226        0
+GET /v1/snapshot                      50      79     157      211        0
+GET /v1/health                        11      90     203      203        0
+POST /v1/release                      11      45     188      188        0
+POST /v1/edit_definition              20      56     176      176        0
+POST /v1/apply_ops                    13      16     173      173        0
+GET /v1/needs_you                      4      28     166      166        0
+POST /v1/record_run                   14      48     163      163        0
+GET /v1/digest                         7      16     158      158        0
+POST /v1/mint_run_token               13      47     157      157        0
+POST /v1/cancel                       13      60     155      155        0
+POST /v1/submit                       40      76     133      153        0
+POST /v1/withdraw_review               8      28     144      144        0
+GET /v1/changelog                      8      45     137      137        0
+POST /v1/set_priority                 22      42      72      135        0
+POST /v1/import_items                  6      32     133      133        0
+GET /v1/alerts                         4      52     130      130        0
+POST /v1/rehome                        6      18     125      125        0
+ALL                                  996      65     209     1126
+============================= slowest 30 durations =============================
+97.22s call     tests/test_keeper_activity.py::test_activity_cap
+27.91s call     tests/test_projector_live.py::test_ok_attempt
+26.13s setup    tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
+26.03s call     tests/test_projector_rebuild.py::test_fresh_keeper_rebuilt_twice_equals_the_first
+25.47s setup    tests/test_projector_live.py::test_check_fail_then_ok
+22.81s setup    tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+20.81s setup    tests/test_projector_live.py::test_ok_attempt
+19.65s setup    tests/test_projector_rebuild.py::test_rerun_changes_nothing
+18.66s setup    tests/test_projector_reconcile.py::test_reconcile_changes_no_keeper_state
+18.12s call     tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
+14.22s setup    tests/test_projector_worker_history.py::test_apply_writes_attempt_rows[happy]
+13.30s call     tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+## run 38890068397
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/claim                       102     147    1094     1585        0
+POST /v1/heartbeat                    27      85    1063     1213        0
+POST /v1/add_evidence                 41     183     369      668        0
+POST /v1/create_items                168     190     451      621        0
+GET /v1/snapshot                      50     128     271      614        0
+POST /v1/verdict                      52     134     398      597        0
+POST /v1/submit                       40     137     404      552        0
+POST /v1/release                      11      86     513      513        0
+POST /v1/withdraw_review               8      67     473      473        0
+POST /v1/close_on_decision            11      75     470      470        0
+GET /v1/show                          92     128     272      459        0
+POST /v1/answer_question              14      77     433      433        0
+POST /v1/apply_ops                    13      53     425      425        0
+POST /v1/record_run                   14     124     389      389        0
+POST /v1/ask_question                 29     138     335      378        0
+GET /v1/progress                       2     188     364      364        0
+GET /v1/digest                         7     143     360      360        0
+POST /v1/answer                       10      76     354      354        0
+POST /v1/cancel                       13     149     349      349        0
+GET /v1/needs_you                      4      72     345      345        0
+GET /v1/ready                         19     125     329      329        0
+POST /v1/edit_definition              20      79     322      322        0
+POST /v1/replay                        8      79     314      314        0
+POST /v1/waive_second_family           9      74     310      310        0
+GET /v1/health                        11     109     306      306        0
+ALL                                  996     115     416     1585
+============================= slowest 30 durations =============================
+162.96s call     tests/test_keeper_activity.py::test_activity_cap
+12.99s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+12.95s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+12.21s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+11.85s call     tests/test_keeper_family_waiver.py::test_random_walk_with_waivers_keeps_integrity
+11.83s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+11.07s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+11.06s setup    tests/test_projector_rebuild.py::test_the_unmapped_run_wrote_nothing
+10.87s setup    tests/test_projector_rebuild.py::test_counters_of_the_full_rebuild
+10.69s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+10.28s setup    tests/test_keeper_http_events.py::test_admin_verify_covers_the_whole_chain_after_many_writes
+10.11s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+## run 38890098091
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/verdict                      52     131    1538     4561        0
+POST /v1/claim                       102      94     570     4423        0
+POST /v1/submit                       40     115    1164     2843        0
+POST /v1/create_items                168     112     457     1709        0
+POST /v1/add_evidence                 41     134     832     1386        0
+GET /v1/show                          92      82     365     1001        0
+GET /v1/snapshot                      50     107     334      708        0
+POST /v1/heartbeat                    27      83     336      381        0
+POST /v1/release                      11      58     373      373        0
+POST /v1/add_evidence_router           7      68     339      339        0
+POST /v1/ask_question                 29      62     202      303        0
+GET /v1/ready                         19      91     303      303        0
+POST /v1/apply_ops                    13      26     273      273        0
+POST /v1/record_run                   14      46     265      265        0
+GET /v1/digest                         7      28     223      223        0
+POST /v1/delegate                      7      51     218      218        0
+POST /v1/cancel                       13      55     194      194        0
+POST /v1/set_kind                      7      27     187      187        0
+POST /v1/edit_definition              20      52     186      186        0
+POST /v1/mint_run_token               13      71     182      182        0
+GET /v1/changelog                      8      46     175      175        0
+GET /v1/critical_path                  2      91     175      175        0
+POST /v1/answer_question              14      39     156      156        0
+POST /v1/set_priority                 22      48     142      146        0
+POST /v1/replay                        8      10     145      145        0
+ALL                                  996      71     359     4561
+============================= slowest 30 durations =============================
+111.76s call     tests/test_keeper_activity.py::test_activity_cap
+24.97s call     tests/test_keeper_e2e.py::test_cli_snapshot_fallback_read_only
+14.57s call     tests/test_keeper_e2e.py::test_mcp_stdio_against_live_api
+14.40s setup    tests/test_keeper_credential_guard.py::test_pg_render_masks_and_counts_on_stderr
+12.85s setup    tests/test_keeper_credential_guard.py::test_import_path_refuses_too
+11.88s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+11.86s call     tests/contract/test_malformed_input.py::test_verdict_ok_must_be_a_json_boolean[1]@contract
+11.01s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+10.58s setup    tests/test_keeper_http_events.py::test_admin_verify_covers_the_whole_chain_after_many_writes
+10.50s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+10.25s call     tests/test_keeper_family_waiver.py::test_random_walk_with_waivers_keeps_integrity
+9.83s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+## run 38891666109
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/claim                       102      59     591      939        0
+POST /v1/heartbeat                    27      32     731      861        0
+POST /v1/create_items                168      84     170      346        0
+POST /v1/verdict                      52      62     144      202        0
+GET /v1/digest                         7      19     189      189        0
+GET /v1/show                          92      53     139      187        0
+POST /v1/mint_run_token               13      39     182      182        0
+POST /v1/close_on_decision            11      55     174      174        0
+POST /v1/rehome                        6      26     168      168        0
+POST /v1/add_evidence                 41      63     106      161        0
+GET /v1/snapshot                      50      58     130      161        0
+POST /v1/answer                       10      45     152      152        0
+POST /v1/edit_definition              20      31     148      148        0
+POST /v1/apply_ops                    13      24     144      144        0
+GET /v1/health                        11      54     139      139        0
+POST /v1/withdraw_review               8      37     138      138        0
+POST /v1/answer_question              14      31     131      131        0
+GET /v1/alerts                         4      52     118      118        0
+POST /v1/submit                       40      47     100      118        0
+POST /v1/cancel                       13      66     109      109        0
+POST /v1/replay                        8      12     107      107        0
+POST /v1/add_evidence_router           7      41     101      101        0
+GET /v1/aliases                        4      19      98       98        0
+POST /v1/import_items                  6      19      97       97        0
+GET /v1/ready                         19      54      92       92        0
+ALL                                  996      48     144      939
+============================= slowest 30 durations =============================
+69.28s call     tests/test_keeper_activity.py::test_activity_cap
+20.82s call     tests/test_projector_rebuild.py::test_two_halves_equal_the_full_rebuild
+11.00s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+10.98s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+10.83s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+8.80s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+8.75s setup    tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+8.61s call     tests/test_keeper_snapshot_setbased.py::test_snapshot_query_count_is_independent_of_item_count
+8.43s setup    tests/test_projector_live.py::test_check_fail_then_ok
+8.34s setup    tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
+7.39s setup    tests/test_keeper_http_events.py::test_lifecycle_to_done_moves_the_head_per_event_and_verifies
+7.38s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+## run 38891694310
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/heartbeat                    27      31     321      374        0
+POST /v1/claim                       102      56     219      350        0
+GET /v1/snapshot                      50      80     166      264        0
+POST /v1/create_items                168      83     162      250        0
+GET /v1/show                          92      48      81      201        0
+POST /v1/apply_ops                    13      13     187      187        0
+POST /v1/verdict                      52      67     148      186        0
+GET /v1/ready                         19      64     162      162        0
+POST /v1/add_evidence_router           7      29     161      161        0
+POST /v1/replay                        8      11     134      134        0
+GET /v1/health                        11      80     129      129        0
+POST /v1/submit                       40      55     100      127        0
+POST /v1/rehome                        6      21     125      125        0
+POST /v1/add_evidence                 41      66      97      122        0
+POST /v1/cancel                       13      32     121      121        0
+GET /v1/digest                         7      12     112      112        0
+GET /v1/alerts                         4      31     109      109        0
+POST /v1/set_priority                 22      37      98      105        0
+POST /v1/answer                       10      18     101      101        0
+POST /v1/edit_definition              20      35     100      100        0
+POST /v1/close_on_decision            11      37      94       94        0
+POST /v1/ask_question                 29      31      61       93        0
+GET /v1/whoami                        20      13      91       91        0
+POST /v1/record_run                   14      27      89       89        0
+GET /v1/aliases                        4      16      89       89        0
+ALL                                  996      47     135      374
+============================= slowest 30 durations =============================
+75.86s call     tests/test_keeper_activity.py::test_activity_cap
+26.26s setup    tests/test_projector_rebuild.py::test_counters_of_the_full_rebuild
+17.20s setup    tests/test_projector_rebuild.py::test_the_unmapped_run_wrote_nothing
+16.54s setup    tests/test_projector_rebuild.py::test_known_end_states
+14.07s setup    tests/test_projector_live.py::test_ok_attempt
+13.60s setup    tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+11.19s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+10.97s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+10.96s setup    tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
+10.72s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+10.61s call     tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
+10.52s setup    tests/test_projector_live.py::test_check_fail_then_ok
+## run 38891721519
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/verdict                      52      63     175      770        0
+POST /v1/claim                       102      51     304      507        0
+GET /v1/show                          92      46     116      274        0
+POST /v1/heartbeat                    27      38     235      274        0
+POST /v1/create_items                168      80     140      263        0
+POST /v1/answer                       10      21     246      246        0
+POST /v1/replay                        8      11     200      200        0
+GET /v1/snapshot                      50      62     181      199        0
+POST /v1/release                      11      38     181      181        0
+POST /v1/apply_ops                    13      14     161      161        0
+GET /v1/ready                         19      54     160      160        0
+POST /v1/submit                       40      44     125      158        0
+POST /v1/mint_run_token               13      46     143      143        0
+GET /v1/audit-meta                     6      15     136      136        0
+GET /v1/health                        12      41     130      130        0
+POST /v1/add_evidence                 41      59      99      122        0
+GET /v1/digest                         7      13     114      114        0
+POST /v1/rehome                        6      19     109      109        0
+POST /v1/cancel                       13      51     109      109        0
+GET /v1/needs_you                      4      53     104      104        0
+POST /v1/import_items                  6      35     102      102        0
+POST /v1/ask_question                 29      37      91       92        0
+POST /v1/set_priority                 22      28      64       82        0
+GET /v1/progress                       2      43      81       81        0
+POST /v1/edit_definition              20      28      80       80        0
+ALL                                  997      42     132      770
+============================= slowest 30 durations =============================
+71.18s call     tests/test_keeper_activity.py::test_activity_cap
+10.91s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+10.16s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+9.95s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+9.86s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+8.99s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+8.83s setup    tests/test_keeper_http_events.py::test_admin_verify_covers_the_whole_chain_after_many_writes
+8.82s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+8.81s setup    tests/test_keeper_http_events.py::test_lifecycle_to_done_moves_the_head_per_event_and_verifies
+5.86s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+4.41s call     tests/test_keeper_family_waiver.py::test_random_walk_with_waivers_keeps_integrity
+3.74s call     tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+## run 38892469791
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+GET /v1/show                          92      74     343     1673        0
+POST /v1/claim                       102      85     862     1441        0
+POST /v1/heartbeat                    27      56    1148     1334        0
+POST /v1/create_items                168     113     335      679        0
+POST /v1/add_evidence                 41      96     183      598        0
+POST /v1/verdict                      52      69     263      489        0
+POST /v1/withdraw_review               8      61     360      360        0
+POST /v1/submit                       40      81     212      346        0
+GET /v1/snapshot                      50      88     205      297        0
+GET /v1/ready                         19      76     297      297        0
+POST /v1/waive_second_family           9      69     293      293        0
+POST /v1/edit_definition              20      56     231      231        0
+POST /v1/apply_ops                    13      32     229      229        0
+POST /v1/ask_question                 29      68     105      220        0
+POST /v1/close_on_decision            11      59     215      215        0
+GET /v1/needs_you                      4      60     213      213        0
+POST /v1/answer                       10      54     203      203        0
+GET /v1/digest                         7      25     183      183        0
+POST /v1/delegate                      7      49     179      179        0
+GET /v1/answers                        3     109     178      178        0
+POST /v1/set_priority                 22      54     120      167        0
+POST /v1/cancel                       13      68     163      163        0
+GET /v1/audit-meta                     6      54     162      162        0
+GET /v1/changelog                      8      24     151      151        0
+GET /v1/health                        12      85     142      142        0
+ALL                                  997      70     270     1673
+============================= slowest 30 durations =============================
+102.59s call     tests/test_keeper_activity.py::test_activity_cap
+11.06s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+9.97s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+9.45s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+8.75s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+8.37s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+8.33s setup    tests/test_keeper_http_events.py::test_lifecycle_to_done_moves_the_head_per_event_and_verifies
+8.26s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+8.13s setup    tests/test_keeper_http_events.py::test_admin_verify_covers_the_whole_chain_after_many_writes
+8.09s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+5.76s call     tests/test_importer.py::test_export_one_file_per_track_within_budget
+4.70s call     tests/test_apply_batch_rehome.py::test_per_op_run_posts_the_single_rehome_route_with_the_same_result
+## run 38892497635
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/claim                       102      73     342     1120        0
+POST /v1/heartbeat                    27      76     674      755        0
+GET /v1/show                          92      71     222      400        0
+POST /v1/create_items                168      95     204      369        0
+POST /v1/rehome                        6      43     318      318        0
+POST /v1/apply_ops                    13      21     316      316        0
+GET /v1/snapshot                      50      87     233      284        0
+POST /v1/set_kind                      7      43     272      272        0
+GET /v1/health                        11      52     262      262        0
+POST /v1/cancel                       13      66     261      261        0
+GET /v1/digest                         7      22     233      233        0
+POST /v1/edit_definition              20      49     220      220        0
+POST /v1/set_priority                 22      45     163      204        0
+GET /v1/ready                         19      73     202      202        0
+POST /v1/verdict                      52      66     162      191        0
+POST /v1/replay                        8      11     184      184        0
+GET /v1/alerts                         4      42     176      176        0
+POST /v1/add_evidence                 41      74     113      162        0
+POST /v1/release                      11      48     160      160        0
+POST /v1/ask_question                 29      53      99      160        0
+POST /v1/set_legacy_state              7      82     157      157        0
+GET /v1/needs_you                      4      39     145      145        0
+POST /v1/withdraw_review               8      33     143      143        0
+POST /v1/answer                       10      39     139      139        0
+GET /v1/progress                       2      65     123      123        0
+ALL                                  996      61     188     1120
+============================= slowest 30 durations =============================
+86.91s call     tests/test_keeper_activity.py::test_activity_cap
+12.26s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+11.15s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+10.96s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+10.63s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+8.86s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+8.16s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+8.14s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+8.10s setup    tests/test_keeper_http_events.py::test_lifecycle_to_done_moves_the_head_per_event_and_verifies
+7.83s call     tests/test_keeper_pg_parity.py::test_triggers_refuse_tampering
+5.97s call     tests/test_keeper_snapshot_setbased.py::test_snapshot_query_count_is_independent_of_item_count
+4.87s setup    tests/test_projector_live.py::test_check_fail_then_ok
+## run 38892529004
+========================= keeper request latency (ms) ==========================
+route                                  n     p50     p95      max timeouts
+POST /v1/heartbeat                    27      29     220      255        0
+POST /v1/claim                       102      34     147      236        0
+POST /v1/submit                       40      32      66      109        0
+POST /v1/create_items                168      46      79      105        0
+POST /v1/apply_ops                    13       9      99       99        0
+GET /v1/digest                         7       9      96       96        0
+POST /v1/verdict                      52      36      75       96        0
+GET /v1/show                          92      30      49       75        0
+GET /v1/snapshot                      50      37      59       75        0
+POST /v1/set_priority                 22      21      36       71        0
+POST /v1/rehome                        6      11      71       71        0
+POST /v1/replay                        8       8      69       69        0
+GET /v1/progress                       2      35      64       64        0
+POST /v1/delegate                      7      22      63       63        0
+POST /v1/cancel                       13      39      63       63        0
+POST /v1/add_evidence                 41      39      51       61        0
+POST /v1/answer                       10      11      59       59        0
+POST /v1/edit_definition              20      18      58       58        0
+POST /v1/mint_run_token               13      19      56       56        0
+GET /v1/health                        11      11      55       55        0
+POST /v1/ask_question                 29      26      34       53        0
+POST /v1/withdraw_review               8       9      48       48        0
+POST /v1/release                      11      21      47       47        0
+POST /v1/import_items                  6      17      46       46        0
+GET /v1/ready                         19      36      45       45        0
+ALL                                  996      28      66      255
+============================= slowest 30 durations =============================
+39.54s call     tests/test_keeper_activity.py::test_activity_cap
+7.02s setup    tests/contract/test_snapshot_file.py::test_snapshot_file_follows_every_write_and_matches_the_http_body@contract
+6.41s setup    tests/test_keeper_snapshot_writer.py::test_sigkill_loses_no_committed_write_and_startup_rebuilds_the_file
+5.25s setup    tests/test_keeper_http_events.py::test_each_write_extends_the_chain_by_the_documented_rule
+5.15s setup    tests/test_keeper_http_events.py::test_lifecycle_to_done_moves_the_head_per_event_and_verifies
+5.00s setup    tests/test_keeper_http_events.py::test_reads_refusals_and_heartbeats_leave_the_head_alone
+4.97s setup    tests/test_keeper_snapshot_writer.py::test_sigterm_right_after_a_write_leaves_the_file_level_and_signed
+4.88s setup    tests/test_keeper_snapshot_writer.py::test_a_reader_never_sees_a_torn_or_unverifiable_snapshot
+3.90s setup    tests/contract/test_batch.py::test_happy_path_applies_atomically_and_reports_each_op@contract
+3.42s setup    tests/test_projector_live.py::test_check_fail_then_ok
+3.22s setup    tests/test_projector_live.py::test_heartbeat_timeout_is_lease_lost_and_item_failed
+3.11s setup    tests/test_projector_live.py::test_running_workflow_projected_mid_flight_then_released
