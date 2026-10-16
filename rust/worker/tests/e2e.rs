@@ -168,7 +168,11 @@ impl Env {
         }
     }
 
-    /// Start the card workflow under `id` and hand back a typed handle.
+    /// Start the card workflow for `id` and hand back a typed handle.
+    ///
+    /// The workflow runs under `card:<id>` so the projector can derive the
+    /// `plan_key` from the workflow id; the caller passes the bare `id` around
+    /// and `workflow_id` owns the prefix.
     async fn start(&self, id: &str, claim: Claim) -> Handle {
         let input = CardInput {
             claim,
@@ -180,15 +184,16 @@ impl Env {
             workroot: self.workroot.to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
         };
+        let wf_id = workflow_id(id);
         self.client
             .start_workflow(
                 Card::run,
                 input,
-                WorkflowStartOptions::new(self.task_queue.as_str(), id).build(),
+                WorkflowStartOptions::new(self.task_queue.as_str(), wf_id.as_str()).build(),
             )
             .await
             .expect("start card workflow");
-        self.client.get_workflow_handle::<Card>(id)
+        self.client.get_workflow_handle::<Card>(wf_id.as_str())
     }
 
     fn stop(&self) {
@@ -234,7 +239,7 @@ async fn env_or_skip_paused(name: &str, script: &str) -> Option<Env> {
 }
 
 /// Await the card result under the shared deadline, then record its history.
-async fn finish(name: &str, handle: &Handle) -> CardOutput {
+async fn finish(name: &str, id: &str, handle: &Handle) -> CardOutput {
     let out = tokio::time::timeout(
         RESULT_TIMEOUT,
         handle.get_result(WorkflowGetResultOptions::default()),
@@ -242,13 +247,23 @@ async fn finish(name: &str, handle: &Handle) -> CardOutput {
     .await
     .expect("card result within 120s")
     .expect("card workflow returns a result");
-    record(name, handle).await;
+    record(name, id, handle).await;
     out
 }
 
-/// Write the fetched history as `<PG_RECORD_DIR>/<name>.json`, scrubbed of host
-/// identity, so the offline replay tests can be fed a real run.
-async fn record(name: &str, handle: &Handle) {
+/// The workflow id for card `<id>`: the projector derives `plan_key` from it.
+fn workflow_id(id: &str) -> String {
+    format!("card:{id}")
+}
+
+/// Record this run as a fixture under `<PG_RECORD_DIR>`.
+///
+/// Two shapes are written: the SDK's JSON history as `<name>.json`, and, when
+/// the temporal CLI is configured, its proto-JSON `workflow show` as
+/// `<name>.proj.json` (the layout the Python projector reads). A missing CLI is
+/// silent; a failing one panics, because a recording that quietly produces
+/// nothing is worse than no recording at all.
+async fn record(name: &str, id: &str, handle: &Handle) {
     let Ok(dir) = std::env::var("PG_RECORD_DIR") else {
         return;
     };
@@ -272,6 +287,42 @@ async fn record(name: &str, handle: &Handle) {
     if std::fs::create_dir_all(dir).is_ok() {
         let _ = std::fs::write(dir.join(format!("{name}.json")), json);
     }
+
+    // The proto-JSON dump the projector consumes needs the CLI; `PG_TEMPORAL_CLI`
+    // together with `PG_RECORD_DIR` opts in, anything else stays silent.
+    let Ok(cli) = std::env::var("PG_TEMPORAL_CLI") else {
+        return;
+    };
+    if cli.is_empty() {
+        return;
+    }
+    let addr = std::env::var("PG_TEMPORAL_ADDR").unwrap_or_default();
+    let address = addr.strip_prefix("http://").unwrap_or(&addr);
+    let wf_id = workflow_id(id);
+    let out = Command::new(cli.as_str())
+        .arg("workflow")
+        .arg("show")
+        .arg("--workflow-id")
+        .arg(wf_id.as_str())
+        .arg("--address")
+        .arg(address)
+        .arg("--namespace")
+        .arg("default")
+        .arg("--output")
+        .arg("json")
+        .output()
+        .unwrap_or_else(|e| panic!("temporal CLI {cli} failed to spawn: {e}"));
+    assert!(
+        out.status.success(),
+        "temporal CLI workflow show failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut value: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|e| panic!("temporal CLI emitted invalid JSON: {e}"));
+    scrub(&mut value);
+    let json = serde_json::to_string(&value).unwrap_or_default();
+    std::fs::write(dir.join(format!("{name}.proj.json")), json)
+        .unwrap_or_else(|e| panic!("write {name}.proj.json: {e}"));
 }
 
 /// Replace host-specific identity strings (`pid@hostname`, sticky queue names)
@@ -373,10 +424,12 @@ async fn happy_attempt_merges_into_main() {
         };
         let card = "e2e-happy";
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
-        let handle = env.start(&format!("e2e-happy-{}", unique()), claim).await;
+        let id = format!("e2e-happy-{}", unique());
+        let handle = env.start(&id, claim).await;
 
-        let out = finish("happy", &handle).await;
-        assert_eq!(out.outcome, "merged", "{out:?}");
+        let out = finish("happy", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
         let sha = out.merged_sha.clone().expect("a merged card has a sha");
         assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
         assert!(
@@ -401,12 +454,12 @@ async fn writing_outside_the_write_set_goes_to_planner() {
         };
         let card = "e2e-contract";
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
-        let handle = env
-            .start(&format!("e2e-contract-{}", unique()), claim)
-            .await;
+        let id = format!("e2e-contract-{}", unique());
+        let handle = env.start(&id, claim).await;
 
-        let out = finish("contract", &handle).await;
-        assert_eq!(out.outcome, "planner", "{out:?}");
+        let out = finish("contract", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "planner", "{out:?}");
         assert!(
             !env.keeper.parked().is_empty(),
             "a planner hand-off parks the card"
@@ -425,16 +478,13 @@ async fn a_check_that_never_passes_stops_the_card() {
         };
         let card = "e2e-check-fail";
         let claim = env.claim(card, &["out.txt"], "exit 1");
-        let handle = env
-            .start(&format!("e2e-check-fail-{}", unique()), claim)
-            .await;
+        let id = format!("e2e-check-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
 
-        let out = finish("check-fail", &handle).await;
-        assert!(
-            out.outcome == "parked" || out.outcome == "quarantined",
-            "unexpected outcome {:?}",
-            out.outcome
-        );
+        let out = finish("check-fail", &id, &handle).await;
+        let parked = out.outcome == "parked" && out.detail == "parked";
+        let quarantined = out.outcome == "failed" && out.detail == "quarantined";
+        assert!(parked || quarantined, "unexpected outcome {out:?}");
         assert!(
             !env.keeper.alarms().is_empty() || !env.keeper.parked().is_empty(),
             "a stuck card raises an alarm or a park packet"
@@ -457,7 +507,8 @@ async fn cancel_signal_stops_a_running_attempt() {
         };
         let card = "e2e-cancel";
         let claim = env.claim(card, &["out.txt"], "test -f out.txt");
-        let handle = env.start(&format!("e2e-cancel-{}", unique()), claim).await;
+        let id = format!("e2e-cancel-{}", unique());
+        let handle = env.start(&id, claim).await;
 
         // Signal only once the harness is really running, not after a guess.
         wait_for_marker(&marker).await;
@@ -479,8 +530,9 @@ async fn cancel_signal_stops_a_running_attempt() {
         .expect("cancel takes effect within 25s")
         .expect("cancelled card returns a result");
         let elapsed = started.elapsed();
-        record("cancel", &handle).await;
-        assert_eq!(out.outcome, "cancelled", "{out:?}");
+        record("cancel", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "cancelled", "{out:?}");
         assert!(
             elapsed < Duration::from_secs(25),
             "cancel took {elapsed:?}, expected under 25s"
@@ -511,7 +563,7 @@ async fn wait_for_marker(marker: &Path) {
     }
 }
 
-/// Send `cancel` and require a `cancelled` outcome inside the budget.
+/// Send `cancel` and require a `cancelled` detail inside the budget.
 async fn cancel_and_expect(env: &Env, handle: &Handle) {
     let started = std::time::Instant::now();
     handle
@@ -529,7 +581,8 @@ async fn cancel_and_expect(env: &Env, handle: &Handle) {
     .await
     .expect("cancel takes effect within 25s")
     .expect("cancelled card returns a result");
-    assert_eq!(out.outcome, "cancelled", "{out:?}");
+    assert_eq!(out.outcome, "parked", "{out:?}");
+    assert_eq!(out.detail, "cancelled", "{out:?}");
     assert!(started.elapsed() < Duration::from_secs(25));
     env.stop();
 }
@@ -582,7 +635,8 @@ async fn cancel_while_the_first_activity_is_pending_is_honoured() {
         .await
         .expect("cancel takes effect within 25s")
         .expect("cancelled card returns a result");
-        assert_eq!(out.outcome, "cancelled", "{out:?}");
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "cancelled", "{out:?}");
         assert!(!marker.exists(), "no attempt may start after the cancel");
         env.stop();
     })

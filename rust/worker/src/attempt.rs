@@ -36,6 +36,9 @@ pub struct AttemptInput {
     pub leg: LegSpec,
     /// Directory holding the attempt worktrees.
     pub workroot: String,
+    /// Context window class text ("128k" | "256k" | "1m"); empty = unknown.
+    #[serde(default)]
+    pub class: String,
 }
 
 /// What one attempt produced.
@@ -49,6 +52,28 @@ pub struct AttemptResult {
     pub branch: String,
     pub head: String,
     pub output_tail: String,
+    /// The ten keys the Python projector reads (docs/projector.md). Each is
+    /// absent from the JSON when unknown, so an old reader stays compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_in: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_out: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub log_ref: Option<String>,
 }
 
 /// Everything that can go wrong running an attempt.
@@ -69,6 +94,32 @@ pub enum AttemptError {
 /// again while the harness runs, so a cancel tears the agent down instead of
 /// waiting for a stall or the 90-minute timeout.
 pub fn run_attempt(
+    h: &dyn Harness,
+    cfg: &Config,
+    patterns: &Patterns,
+    inp: &AttemptInput,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<AttemptResult, AttemptError> {
+    // Stamped in one place so every caller's result carries the projector
+    // keys, whether the attempt succeeded, was cancelled or was a defect.
+    let started = std::time::SystemTime::now();
+    let mut r = run_attempt_inner(h, cfg, patterns, inp, cancelled)?;
+    r.harness = Some(h.name().to_string());
+    r.model = Some(inp.leg.model.clone());
+    r.combo = Some(inp.leg.id.clone());
+    r.class = if inp.class.is_empty() {
+        None
+    } else {
+        Some(inp.class.clone())
+    };
+    r.started_at = Some(iso_utc(started));
+    r.ended_at = Some(iso_utc(std::time::SystemTime::now()));
+    Ok(r)
+}
+
+/// The attempt body: worktree, sandbox, harness, commit, confinement, check,
+/// classification. `run_attempt` wraps this to stamp the result metadata.
+fn run_attempt_inner(
     h: &dyn Harness,
     cfg: &Config,
     patterns: &Patterns,
@@ -197,6 +248,16 @@ pub fn run_attempt(
         branch,
         head,
         output_tail,
+        harness: None,
+        model: None,
+        combo: None,
+        class: None,
+        started_at: None,
+        ended_at: None,
+        tokens_in: None,
+        tokens_out: None,
+        cost: None,
+        log_ref: None,
     })
 }
 
@@ -210,6 +271,35 @@ pub fn to_budget_attempt(r: &AttemptResult, leg: &LegSpec) -> pg_worker_core::bu
         check_hash: r.check_hash.clone(),
         context_overflow: r.context_overflow,
     }
+}
+
+/// Format `t` as RFC 3339 UTC with millisecond precision, e.g.
+/// `2026-10-16T03:17:55.123Z`. Times before the epoch clamp to the epoch, so
+/// a skewed clock never yields a negative date.
+pub fn iso_utc(t: std::time::SystemTime) -> String {
+    let d = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = d.as_secs();
+    let millis = d.subsec_millis();
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    let (y, m, day) = civil_from_days(days);
+    let (hh, mm, ss) = (rem / 3600, (rem % 3600) / 60, rem % 60);
+    format!("{y:04}-{m:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}.{millis:03}Z")
+}
+
+/// Proleptic-Gregorian days-since-1970 to civil (year, month, day) by Howard
+/// Hinnant's `civil_from_days`; avoids a date dependency for one format.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32; // [1, 12]
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 /// `Some(paths)` when `dest` holds symlinks resolving outside it.
@@ -252,6 +342,16 @@ fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptRes
         branch: branch.to_string(),
         head: head.to_string(),
         output_tail,
+        harness: None,
+        model: None,
+        combo: None,
+        class: None,
+        started_at: None,
+        ended_at: None,
+        tokens_in: None,
+        tokens_out: None,
+        cost: None,
+        log_ref: None,
     }
 }
 
@@ -273,6 +373,16 @@ fn defect_result(
         branch: branch.to_string(),
         head: head.to_string(),
         output_tail,
+        harness: None,
+        model: None,
+        combo: None,
+        class: None,
+        started_at: None,
+        ended_at: None,
+        tokens_in: None,
+        tokens_out: None,
+        cost: None,
+        log_ref: None,
     })
 }
 
@@ -439,6 +549,7 @@ mod tests {
                 model: "some/model".to_string(),
             },
             workroot: workroot.to_string_lossy().into_owned(),
+            class: String::new(),
         }
     }
 
@@ -607,6 +718,16 @@ mod tests {
             branch: "attempt/c1/1".to_string(),
             head: "h".to_string(),
             output_tail: "o".to_string(),
+            harness: None,
+            model: None,
+            combo: None,
+            class: None,
+            started_at: None,
+            ended_at: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost: None,
+            log_ref: None,
         };
         let leg = LegSpec {
             id: "leg-9".to_string(),
@@ -620,5 +741,97 @@ mod tests {
         assert_eq!(b.diff_hash, "d");
         assert_eq!(b.check_hash, "c");
         assert!(b.context_overflow);
+    }
+
+    fn at(secs: u64, ms: u64) -> std::time::SystemTime {
+        std::time::UNIX_EPOCH + Duration::from_secs(secs) + Duration::from_millis(ms)
+    }
+
+    #[test]
+    fn iso_utc_formats_rfc3339_millis() {
+        assert_eq!(iso_utc(at(0, 0)), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_utc(at(1_000_000_000, 0)), "2001-09-09T01:46:40.000Z");
+        assert_eq!(iso_utc(at(1_500, 0)), "1970-01-01T00:25:00.000Z");
+        assert_eq!(iso_utc(at(0, 1_500)), "1970-01-01T00:00:01.500Z");
+    }
+
+    #[test]
+    fn iso_utc_handles_leap_days() {
+        assert_eq!(iso_utc(at(1_709_164_800, 0)), "2024-02-29T00:00:00.000Z");
+        assert_eq!(iso_utc(at(951_782_400, 0)), "2000-02-29T00:00:00.000Z");
+    }
+
+    #[test]
+    fn iso_utc_clamps_pre_epoch_to_epoch() {
+        let before = std::time::UNIX_EPOCH - Duration::from_secs(60);
+        assert_eq!(iso_utc(before), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn result_omits_none_metadata_and_reads_old_json() {
+        let r = AttemptResult {
+            exit_class: ExitClass::Ok,
+            diff_hash: "d".to_string(),
+            check_hash: "c".to_string(),
+            check_tail: "t".to_string(),
+            context_overflow: false,
+            branch: "b".to_string(),
+            head: "h".to_string(),
+            output_tail: "o".to_string(),
+            harness: None,
+            model: None,
+            combo: None,
+            class: None,
+            started_at: None,
+            ended_at: None,
+            tokens_in: None,
+            tokens_out: None,
+            cost: None,
+            log_ref: None,
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.len(), 8, "only the original eight keys serialize");
+        assert!(!obj.contains_key("harness"));
+        assert!(!obj.contains_key("log_ref"));
+
+        // A result written before the projector keys existed still loads.
+        let old = r#"{"exit_class":"ok","diff_hash":"d","check_hash":"c","check_tail":"t","context_overflow":false,"branch":"b","head":"h","output_tail":"o"}"#;
+        let back: AttemptResult = serde_json::from_str(old).unwrap();
+        assert_eq!(back.exit_class, ExitClass::Ok);
+        assert_eq!(back.harness, None);
+        assert_eq!(back.tokens_in, None);
+    }
+
+    #[test]
+    fn run_attempt_stamps_provider_metadata() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let mut inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        inp.class = "128k".to_string();
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.harness.as_deref(), Some("fake"));
+        assert_eq!(res.model.as_deref(), Some("some/model"));
+        assert_eq!(res.combo.as_deref(), Some("leg-1"));
+        assert_eq!(res.class.as_deref(), Some("128k"));
+        assert!(res.started_at.is_some());
+        assert!(res.ended_at.is_some());
+        assert_eq!(res.tokens_in, None);
+
+        // An empty class is unknown, not an empty string.
+        let mut unknown = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            2,
+            root.path(),
+        );
+        unknown.class = String::new();
+        let res2 = run_attempt(&h, &tiny(), &Patterns::default(), &unknown, &|| false).unwrap();
+        assert_eq!(res2.class, None);
     }
 }

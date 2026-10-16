@@ -89,7 +89,8 @@ impl CardDrifted {
             )
             .await?;
         Ok(CardOutput {
-            outcome: "merged".to_string(),
+            outcome: "done".to_string(),
+            detail: "merged".to_string(),
             merged_sha: None,
             attempts: 0,
         })
