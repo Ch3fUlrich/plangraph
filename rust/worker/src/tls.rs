@@ -129,7 +129,8 @@ mod tests {
     use std::collections::HashMap;
 
     const CERT_PEM: &str = "-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n";
-    const KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n";
+    const KEY_PEM: &str =
+        "-----BEGIN PRIVATE KEY-----\nSECRET-KEY-MARKER\n-----END PRIVATE KEY-----\n";
     const CA_PEM: &str = "-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----\n";
 
     /// Run `tls_from_vars` against a borrowed settings map.
@@ -223,7 +224,6 @@ mod tests {
         let err = run(&map).unwrap_err();
         assert!(err.contains(CA), "{err}");
         assert!(err.contains(&missing), "{err}");
-        // The error is about a path, never about file contents.
         // The key file was read successfully; its body must not leak.
         assert!(!err.contains("SECRET-KEY-MARKER"), "{err}");
     }
