@@ -1,0 +1,3 @@
+AutoOS: using hostname 'code' for omniroute key field (set AUTOOS_HOST_NAME or host_name in /home/s/.config/autoos/host.yml to override)
+api-keys.yml: 'omniroute' is deprecated, rename it to 'omniroute_code'
+review-call: mandatory standing question unanswered: no answer line (expected `TEST-GAMING: no - searched <where and what>: 0 hits` or `TEST-GAMING: yes - "<verbatim quote>"` or `TEST-GAMING: unsure - <what you could not check>`); evidence.json says test_gaming=missing

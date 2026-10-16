@@ -1,0 +1,48 @@
+## (a) Cutover gates — evidence and dating
+
+Every gate has evidence:
+
+| gate | evidence file(s) |
+|---|---|
+| freeze | `boundary.txt` (seq=6329, hash ac87778f…); `frozen-sqlite.txt` (`mode=400`, `sha256sum -c keeper.db.frozen.sha256` → OK, live `-wal`/`-shm` absent) |
+| backup | `frozen-sqlite.txt` (backup dir listing: `keeper.db` 0600, `SHA256SUMS` 0600, `(cd backup && sha256sum -c SHA256SUMS)` → `keeper.db: OK`); `FILE SHA256SUMS` (`dc7fb396… keeper.db`) |
+| copy dry-run | `copy-dryrun.txt` ("target untouched", "source chain ok", 64480 rows) |
+| copy apply | `copy-apply.txt` ("copied and verified", source=target on every table, total 64480) |
+| row counts | `counts.json` (per-table, sums to 64480) + `copy-apply.txt` |
+| row hashes | `rowhash.txt` (19 tables, `DIFFS 0`) |
+| verify on PG | `verify-pg.txt` ("chain and cache integrity ok") |
+| switch verify | `verify-switch.txt` ("chain and cache integrity ok") |
+| snapshot verify | `verify-snapshot.txt` ("snapshot signature ok", `rc=0`) |
+| runtime role privileges | `keeper-rt-privileges.txt` (role flags, DDL refusals, DML grants); rehearsal 2 PASS in `keeper-pg-cutover.execution.md`; `go-texts-and-hba.txt` (D-1505) |
+
+**Finding 1 — minor.** Post-switch gates are only *minute*-granularity dated: `frozen-sqlite.txt` shows `verify-switch.txt` and `loss-boundary.txt` at `Oct 16 16:43`, while the switch was at 16:43:16 (`keeper-pg-cutover.execution.md`); the ordering is asserted by `keeper-pg-cutover.execution.md` ("loss boundary recorded before any timer or replay") but not provable from file mtimes alone. `keeper-rt-privileges.txt` *is* independently post-switch (first post-boundary event 6330 at `16:43:40Z`, max seq 6339).
+
+**Finding 2 — minor.** `journal-switch.txt` is `-- No entries --`, so there is no journal-side corroboration of the switch; the switch rests on `keeper-pg-cutover.execution.md`, `unit-effective.txt` (`zz-pg-backend.conf` present, sorts last) and `verify-switch.txt`.
+
+**Finding 3 — minor.** `keeper-rt-privileges.txt` reports "tables … with S/I/U/D … [(20, 20, 0)]" — three numbers for four privileges, so UPDATE/DELETE grants are not crisply evidenced (INSERT path is, via events 6330+), and it counts 20 tables where `copy-apply.txt` enumerates 19.
+
+## (b) Rollback restorability
+
+**Finding 4 — pass (with minor).** Restorable: `frozen-sqlite.txt` shows the live file `-r-------- … keeper.db`, `mode=400`, sha check `OK` against `keeper.db.frozen.sha256` (`6e6e9609…`), backup dir intact (`SHA256SUMS` → `keeper.db: OK` = `dc7fb396…` in `FILE SHA256SUMS`), and `restore dry check … ok max seq 6329`. **Minor:** the live frozen file (`6e6e9609…`) and the backup copy (`dc7fb396…`) have *different* byte hashes; both verify against their own recorded sums and both are tied to logical head seq 6329, but no check shows the *live* file's internal max seq (the `ok max seq 6329` line covers only the backup copy), and the divergence is unexplained in the evidence (plausibly SQLite backup repackaging). **Minor:** `frozen-sqlite.txt` shows `keeper.db-shm` in the backup dir with `mtime 16:49`, i.e. the backup was opened after the switch (the restore dry check); harmless — `keeper.db` sha still OK and backup `-wal` is 0 bytes at 16:42.
+
+**Informational:** the exact-path rollback window (only while `max(seq)` on PG = 6329) has closed — `keeper-rt-privileges.txt` shows max seq 6339 with post-boundary writes; the after-writes path is documented in `keeper-pg-cutover.execution.md` ("list `seq > 6329` from PG and re-apply by hand").
+
+## (c) Lost or forked write between freeze and switch
+
+**No finding — pass.** `boundary.txt`, `copy-dryrun.txt`, `copy-apply.txt`, `pg-head.txt` and `loss-boundary.txt` all carry the same head (seq 6329 / hash ac87778f…); `keeper-rt-privileges.txt` shows `events with seq<=6329 count = 6329` (no gap/duplicate) and the **first** post-boundary event at `16:43:40Z`, i.e. *after* the 16:43:16 switch — nothing was written in the freeze→switch window; `frozen-sqlite.txt` shows no live `-wal`/`-shm`; `journal-switch.txt` is empty.
+
+## (d) Step 4 held
+
+**No finding — pass.** `keeper-pg-cutover.execution.md` timeline: "4 delete-or-archive sqlite | pending | not before 2026-10-18 16:43 | router GO"; `go-texts-and-hba.txt` (D-1506b): "Keep the sqlite file 0400 and the backup until I authorize step 4 … not before 48 h"; `frozen-sqlite.txt` confirms both the 0400 file and the backup directory still exist. No step-4 GO appears anywhere in the material.
+
+## (e) Least privilege
+
+**No finding — pass.** `keeper-rt-privileges.txt`: `pg_roles keeper_rt (super,createrole,createdb,inherit,bypassrls) = (False,False,False,False,False)`, `has_database_privilege … CREATE=False`, `has_schema_privilege keeper CREATE=False`, and four explicit DDL refusals (`create table` / `alter table` / `drop table` / `create schema` → `InsufficientPrivilege`). HBA rule is narrow per the given fact and `go-texts-and-hba.txt`: one /32 rule `host keeper keeper_rt 192.168.178.73/32 scram-sha-256`, `pg_hba_file_rules errors=0`, reload only, `keeper_rt rule=1`.
+
+**Finding 5 — minor.** `keeper-rt-privileges.txt` shows `ssl: [('192.168.178.73/32', False)]` — the `host` rule is scram but **non-TLS**, so session data crosses the LAN in cleartext (the password is protected, the payloads are not).
+
+**Summary:** 0 blockers, 0 majors, 6 minors (Findings 1, 2, 3, 4, 5 — Findings 1+2 grouped under (a), Finding 4 has two minor parts).
+
+TEST-GAMING: no - searched the execution record, GO/decisions text, effective systemd unit configuration, and every gate/verification file for pytest/unittest/PYTEST_CURRENT_TEST/sys.modules detection, test-input sniffing, test-only environment switches, or skipped/loosened assertions outside scope: 0 hits (no source or test files were supplied; `keeper-pg-cutover.execution.md` states the cutover left code tree b3d71096 unchanged and the workflow run was green)
+TEST-GAMING: no
+VERDICT: pass

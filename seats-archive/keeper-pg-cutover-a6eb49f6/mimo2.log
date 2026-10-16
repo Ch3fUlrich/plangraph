@@ -1,0 +1,7 @@
+AutoOS: using hostname 'code' for omniroute key field (set AUTOOS_HOST_NAME or host_name in /home/s/.config/autoos/host.yml to override)
+api-keys.yml: 'omniroute' is deprecated, rename it to 'omniroute_code'
+review.txt: /home/s/code/plangraph-worktrees/build-L1/seats-archive/keeper-pg-cutover-a6eb49f6/verdict-xiaomi/review.txt
+evidence.json: /home/s/code/plangraph-worktrees/build-L1/seats-archive/keeper-pg-cutover-a6eb49f6/verdict-xiaomi/evidence.json
+model: mimo-v2.6-flash
+VERDICT: pass
+TEST-GAMING: unsure

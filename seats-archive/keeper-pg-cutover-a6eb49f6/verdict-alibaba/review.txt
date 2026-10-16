@@ -1,0 +1,38 @@
+=== part qwen-out.json
+Review from the raw evidence only. Boundary = seq 6329 / hash `ac87778f…` (boundary.txt); switch 16:43:16Z (keeper-pg-cutover.execution.md).
+
+## (a) Gate evidence + post-switch dating
+All required gates have at least corroborated evidence:
+- freeze — boundary.txt + frozen-sqlite.txt (live keeper.db `-r-------- 0400`, `sha256sum -c` OK).
+- backup — frozen-sqlite.txt dir listing + SHA256SUMS.
+- copy dry-run / apply — copy-dryrun.txt / copy-apply.txt (source=apply head both `6329/ac87778f`).
+- row counts / row hashes — counts.json (sums to 64480, matches copy-apply total) + rowhash.txt (DIFFS 0).
+- verify-on-PG, switch-verify, snapshot-verify, runtime-privileges — see finding F3 for the first three.
+Post-switch artifacts (verify-switch.txt 16:43, loss-boundary.txt 16:43, keeper-rt-privileges.txt max seq 6339) all fall after the 16:42:30 freeze and the 16:43:16 switch. Ordering within the 16:43 minute can't be proven from minute-granularity `ls` mtimes, but the recorded loss boundary seq=6329 (execution.md) rules out any pre-switch write.
+
+## (b) Rollback restorability
+Restorable: live frozen keeper.db is 0400 and matches keeper.db.frozen.sha256 (`6e6e9609…`, verify OK); backup dir present (0700) with its own SHA256SUMS verifying, and the read-only restore dry-check reports `ok max seq 6329` (frozen-sqlite.txt). See F1 for the hash divergence between the two copies.
+
+## (c) Lost / forked write between freeze and switch
+None. The boundary hash `ac87778f…`/seq 6329 is identical across boundary.txt, copy-dryrun.txt, copy-apply.txt, pg-head.txt, loss-boundary.txt, rowhash.txt and the boundary row in keeper-rt-privileges.txt; journal-switch.txt is `-- No entries --`; and the first post-boundary events (6330…) start at 16:43:40Z, i.e. after the 16:43:16 switch (keeper-rt-privileges.txt). Loss boundary was recorded before timers/replay (execution.md).
+
+## (d) Step 4 (delete-or-archive) held
+Held, not executed. Timeline row reads `pending | not before 2026-10-18 16:43` (execution.md), consistent with the GO D-1506b "not before 48 h" (go-texts-and-hba.txt). Live keeper.db still present at 0400 and backup dir intact (frozen-sqlite.txt).
+
+## (e) Least privilege
+- keeper_rt cannot do DDL — confirmed: all pg_roles flags False, database CREATE/TEMP False, schema CREATE False, tables owned by `keeper`, member-of empty, and four live probes (create table / alter table / drop table / create schema) all `InsufficientPrivilege` (keeper-rt-privileges.txt). Runtime drop-in uses the keeper_rt DSN, not keeper (unit-effective.txt, zz-pg-backend.conf).
+- hba rule narrow — `host keeper keeper_rt 192.168.178.73/32 scram-sha-256`: single-host /32, specific db+user, scram; errors=0, reload-only (router answer / go-texts). Rule text could not be read by this seat (build-L1 has no superuser view; go-texts), so it rests on the prox/server-L1 statement + DSN/privilege corroboration.
+
+## Findings (severity)
+- **F1 (minor)** — Frozen live keeper.db sha256 `6e6e9609…` (keeper.db.frozen.sha256) differs from backup copy keeper.db `dc7fb396…` (SHA256SUMS), and execution.md lists both without reconciliation. Same size (8663040) and both verify against their own sums; backup restores to seq 6329 (frozen-sqlite.txt), so rollback content is intact — the byte divergence is header/metadata only, but should be explained.
+- **F2 (minor)** — Header cites "Record commit a6eb49f6", but a6eb49f6 appears in no evidence file and go-texts-and-hba.txt names e5898f70 as the (docs-only) record commit/head. Commit provenance is inconsistent / unverifiable from the tree.
+- **F3 (minor)** — verify-on-PG, switch-verify and snapshot-verify are evidenced only by file presence+size in frozen-sqlite.txt (verify-pg.txt / verify-switch.txt = 29 B; plan.snapshot.json.sig) and execution.md assertions; their verbatim contents were not supplied.
+- **F4 (minor)** — keeper-rt-privileges.txt reports table grants as `(20, 20, 0)`, which does not match prox's stated default `S/I/U/D`; read as no DELETE for keeper_rt. Harmless for the append/heartbeat DML actually exercised, but the grant interpretation is undocumented.
+- **F5 (minor/info)** — Backup keeper.db-shm (32768 B, mtime 16:49, post-switch) and 0-byte keeper.db-wal sit beside the backup db (frozen-sqlite.txt); keeper.db itself is unchanged. Harmless for restore but sidecars should be cleared. Live dir correctly has no wal/shm.
+
+No blockers: every gate is corroborated, rollback restores to the boundary, no lost/forked write, step 4 is held, and keeper_rt is DDL-less behind a narrow scram /32 rule. The five items are documentation/evidence-completeness gaps, not correctness defects.
+
+TEST-GAMING: no
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

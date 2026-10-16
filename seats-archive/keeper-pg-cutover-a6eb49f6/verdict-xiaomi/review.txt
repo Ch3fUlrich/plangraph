@@ -1,0 +1,52 @@
+## Review: plangraph keeper SQLite → PostgreSQL cutover (a6eb49f6 / e5898f70, tree b3d71096, boundary seq 6329 @ 16:43:16Z)
+
+### (a) Cutover gates — evidence and dating
+
+| Gate | Evidence file | Status |
+|---|---|---|
+| Freeze | `boundary.txt` (seq 6329, hash ac87778f…), `frozen-sqlite.txt` (mode 400, mtime 16:42:30, WAL absent) | present |
+| Backup | `frozen-sqlite.txt` (dir 0700, all files 16:42), SHA256SUMS verifies | present |
+| Copy dry-run | `copy-dryrun.txt` ("target untouched", source chain ok, total 64480) | present |
+| Copy apply | `copy-apply.txt` ("copied and verified", source=target per table, total 64480) | present |
+| Row counts | `counts.json` (sums to 64480, matches apply table) | present |
+| Row hashes | `rowhash.txt` — 19 tables, all `ok`, `DIFFS 0` | present |
+| Verify on PG (pre-switch) | `verify-pg.txt` ("chain and cache integrity ok"), `pg-head.txt` (seq 6329, same hash) | present |
+| Switch verify | `verify-switch.txt` ("chain and cache integrity ok"), `loss-boundary.txt` | present |
+| Snapshot verify | `verify-snapshot.txt` ("snapshot signature ok", rc=0) | present |
+| Runtime role privileges | `keeper-rt-privileges.txt`, `go-texts-and-hba.txt` (rehearsal 14:40Z PASS) | present |
+
+Dating: all step-1/2 gate artifacts carry directory mtime 16:42 (after freeze 16:42:30) in `frozen-sqlite.txt`; the post-switch gates `verify-switch.txt` and `loss-boundary.txt` are dated 16:43, after the 16:43:16 boundary; `keeper-rt-privileges.txt` shows the first post-boundary event at 16:43:40. `keeper-pg-cutover.execution.md` tables the GO/result times consistently (16:42:30–44, switch 16:43:16).
+
+**Finding A1 — minor:** The individual gate files (`counts.json`, `rowhash.txt`, `verify-pg.txt`, `verify-snapshot.txt`) contain no internal timestamps; their dating rests on directory mtimes in `frozen-sqlite.txt` plus the self-authored timeline in `keeper-pg-cutover.execution.md`. Corroborated, but not independently time-stamped.
+No blocker; all ten gate classes are evidenced and every post-switch gate postdates the boundary.
+
+### (b) Rollback restorability
+
+**Finding B1 — none (satisfied):** `frozen-sqlite.txt` confirms live `keeper.db` mode 400, size 8663040, mtime 16:42:30; `sha256sum -c keeper.db.frozen.sha256` → OK against `6e6e9609…` (`keeper.db.frozen.sha256`, also spot-checked in `go-texts-and-hba.txt` GO D-1506b); backup `SHA256SUMS` → `keeper.db: OK` against `dc7fb396…` (= `FILE SHA256SUMS`); restore dry check "ok max seq 6329"; no `-wal`/`-shm` beside the live file.
+
+**Finding B2 — minor:** In the backup dir (`frozen-sqlite.txt`), `keeper.db-shm` is dated **16:49** (32768 B) while `keeper.db` and `keeper.db-wal` remain 16:42 — i.e. something opened the backup DB after the switch (consistent with the restore dry check). The backup file's hash still verifies, but a post-switch reader touching the backup dir is worth noting; the frozen live file is untouched (sha256 OK, no shm).
+
+### (c) Lost or forked write between freeze and switch
+
+**Finding C1 — none (satisfied):** keeper stopped at freeze until step-3 GO (`go-texts-and-hba.txt` D-1506: "keeper STOPPED until the step-3 GO"); frozen file unchanged (mtime 16:42:30, hash OK, `frozen-sqlite.txt`); `journal-switch.txt` shows `-- No entries --` for the window; PG head at switch = 6329/ac87778f (`pg-head.txt`, `loss-boundary.txt`) and equals the freeze head (`boundary.txt`); `keeper-rt-privileges.txt` shows `events with seq<=6329 count = 6329` (no hole) and the first post-boundary row is seq 6330 at 16:43:40, i.e. after the 16:43:16 switch — no write in the gap, no fork.
+
+**Finding C2 — minor:** `journal-switch.txt` is an empty journal extract; its emptiness is ambiguous on its own (wrong query vs. no daemon). It is corroborated by the unchanged frozen file and the continuous seq chain, so this is a presentation gap only.
+
+### (d) Step 4 (delete-or-archive) status
+
+**Finding D1 — none (held):** `keeper-pg-cutover.execution.md` lists "4 delete-or-archive sqlite | pending | not before 2026-10-18 16:43 | router GO"; GO D-1506b (`go-texts-and-hba.txt`): "Keep the sqlite file 0400 and the backup until I authorize step 4 … not before 48 h". The file is still present at 0400 and the backup dir still exists (`frozen-sqlite.txt`). Not executed.
+
+### (e) Least privilege and hba narrowness
+
+**Finding E1 — none (satisfied):** `keeper-rt-privileges.txt` — role is not super/createrole/createdb/bypassrls, not a member of anything; database CREATE=False, schema keeper CREATE=False, public CREATE=False; four DDL probes (create table, alter table, drop table, create schema) all refused with `InsufficientPrivilege`. The hba rule (given fact, D-1505) is `host keeper keeper_rt 192.168.178.73/32 scram-sha-256` — single host /32, single user, single database, scram — narrow; `go-texts-and-hba.txt` corroborates errors=0, reload only, provenance b0f127b8 / sha256 9632c983, and the pre-fix rejection of the same client.
+
+**Finding E2 — minor:** The privilege probe line prints only three values for four privileges — `tables in keeper with S/I/U/D for keeper_rt (count of 19+): [(20, 20, 0)]` — so UPDATE/DELETE coverage is ambiguous in the record, and the table count is **20** whereas `counts.json`/`copy-apply.txt` enumerate **19** tables. DML worked in rehearsal (`go-texts-and-hba.txt`, heartbeat ok), so likely a reporting artifact, but the evidence line is incomplete.
+
+**Finding E3 — minor (informational):** The connection is `ssl False` — a plain `host` rule, not `hostssl`; password is scram-protected but session traffic on the LAN is unencrypted. Accepted as a LAN-only trade-off; noted for completeness.
+
+---
+
+**Summary:** no blockers, no majors; five minor findings (A1 timestamping, B2 backup shm at 16:49, C2 empty journal extract, E2 privilege-count reporting, E3 no TLS).
+
+TEST-GAMING: unsure - the material contains no production source code or diff (only evidence/gate files, systemd drop-ins, and the execution record), so the code tree b3d71096 could not be inspected for test-special-casing or out-of-scope test edits
+VERDICT: pass

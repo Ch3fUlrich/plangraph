@@ -1,0 +1,2 @@
+mimo rc=5
+qwen rc=0

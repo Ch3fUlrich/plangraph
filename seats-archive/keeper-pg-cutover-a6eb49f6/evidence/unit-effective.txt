@@ -46,7 +46,7 @@ Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-b3d71096/src
 # PG-SEMAPHORE-LIVE (D-906/D-917): read-only Semaphore access for semaphore-task evidence.
 # Rollback: remove this file, systemctl --user daemon-reload, restart; shred the token; prox deletes the user.
 [Service]
-Environment=PG_SEMAPHORE_URL=https://semaphore.ohje.ooguy.com
+Environment=PG_SEMAPHORE_URL=<redacted>
 Environment=PG_SEMAPHORE_TOKEN_FILE=%h/.config/plangraph/semaphore.token
 Environment=PG_SEMAPHORE_PROJECTS=1
 

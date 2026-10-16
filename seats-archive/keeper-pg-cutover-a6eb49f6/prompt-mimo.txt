@@ -1,0 +1,301 @@
+You are an independent review seat for a LIVE data migration: the plangraph keeper (task-graph server) was cut over from SQLite to PostgreSQL on 2026-10-16 (boundary seq 6329, switch 16:43:16Z). Record commit a6eb49f6 on main (head e5898f70), code tree b3d71096. Below are the RAW evidence files, verbatim. Judge only from them; cite file names for every claim.
+
+Additional fact (router answer to the pg_hba question, D-1505): prox deployed hba-lan.conf at Server repo b0f127b8d (merge of 2c8f3d063, tree c1c65ea1b), sha256 9632c983 = git, reload no restart, pg_hba_file_rules errors 0; the rule admitting the runtime role is `host keeper keeper_rt 192.168.178.73/32 scram-sha-256`.
+
+Questions:
+(a) Does every cutover gate (freeze, backup, copy dry-run/apply, row counts + row hashes, verify on PG, switch verify, snapshot verify, runtime role privileges) have evidence, and is every post-switch gate dated after the boundary?
+(b) Is rollback restorable: frozen SQLite file 0400 with matching sha256, plus the backup dir?
+(c) Is there any sign of a write between the freeze (seq 6329) and the switch, i.e. a lost or forked write?
+(d) Is step 4 (delete-or-archive the SQLite file and backup) still held (not executed)?
+(e) Least privilege: is the runtime role keeper_rt unable to do DDL, and is the hba rule narrow?
+List each finding with severity (blocker/major/minor). End with one line `VERDICT: pass|fix` (the standing TEST-GAMING question appended below is answered in its own required format).
+
+===== FILE SHA256SUMS =====
+dc7fb396b5fa9ae9569678d61029c5c8804c63ec347e27ec609ef8caa2fdeef1  keeper.db
+
+===== FILE boundary.txt =====
+BOUNDARY seq=6329 hash=ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0
+
+===== FILE copy-apply.txt =====
+copy-to-pg apply
+source events head: seq=6329 hash=ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0
+table            source    target
+events              6329      6329
+items               1743      1743
+evidence            1079      1079
+edges               2569      2569
+principals            24        24
+aliases               12        12
+run_tokens             0         0
+outbox_seen            0         0
+audit_log          52688     52688
+audit_findings        36        36
+cards                  0         0
+attempts               0         0
+decisions              0         0
+questions              0         0
+answers                0         0
+budget                 0         0
+projector_applied        0         0
+projector_watermark        0         0
+projector_alarms        0         0
+total              64480
+copied and verified
+
+===== FILE copy-dryrun.txt =====
+copy-to-pg dry-run (target untouched)
+source events head: seq=6329 hash=ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0
+table            source
+events              6329
+items               1743
+evidence            1079
+edges               2569
+principals            24
+aliases               12
+run_tokens             0
+outbox_seen            0
+audit_log          52688
+audit_findings        36
+cards                  0
+attempts               0
+decisions              0
+questions              0
+answers                0
+budget                 0
+projector_applied        0
+projector_watermark        0
+projector_alarms        0
+total              64480
+source chain ok
+
+===== FILE counts.json =====
+{"aliases": 12, "answers": 0, "attempts": 0, "audit_findings": 36, "audit_log": 52688, "budget": 0, "cards": 0, "decisions": 0, "edges": 2569, "events": 6329, "evidence": 1079, "items": 1743, "outbox_seen": 0, "principals": 24, "projector_alarms": 0, "projector_applied": 0, "projector_watermark": 0, "questions": 0, "run_tokens": 0}
+
+===== FILE frozen-sqlite.txt =====
+$ ls -la <backup dir>
+total 11752
+drwx------ 2 s s    4096 Oct 16 16:43 .
+drwxrwxr-x 7 s s    4096 Oct 16 16:42 ..
+-rw------- 1 s s      76 Oct 16 16:42 SHA256SUMS
+-rw-rw-r-- 1 s s      88 Oct 16 16:42 boundary.txt
+-rw-rw-r-- 1 s s     867 Oct 16 16:42 copy-apply.txt
+-rw-rw-r-- 1 s s     684 Oct 16 16:42 copy-dryrun.txt
+-rw------- 1 s s     334 Oct 16 16:42 counts.json
+-rw------- 1 s s 8663040 Oct 16 16:42 keeper.db
+-rw------- 1 s s   32768 Oct 16 16:49 keeper.db-shm
+-rw------- 1 s s       0 Oct 16 16:42 keeper.db-wal
+-rw-rw-r-- 1 s s     107 Oct 16 16:42 keeper.db.frozen.sha256
+-rw------- 1 s s    1579 Oct 16 16:42 keeper.json
+-rw-rw-r-- 1 s s      93 Oct 16 16:43 loss-boundary.txt
+-rw-rw-r-- 1 s s      87 Oct 16 16:42 pg-head.txt
+-rw------- 1 s s 3267868 Oct 16 16:42 plan.snapshot.json
+-rw------- 1 s s      88 Oct 16 16:42 plan.snapshot.json.sig
+-rw-rw-r-- 1 s s    1300 Oct 16 16:42 rowhash.txt
+-rw-rw-r-- 1 s s      29 Oct 16 16:42 verify-pg.txt
+-rw-rw-r-- 1 s s      29 Oct 16 16:43 verify-switch.txt
+
+$ ls -l / stat keeper.db (live dir)
+-r-------- 1 s s 8663040 Oct 16 16:42 /home/s/.local/share/plangraph/keeper.db
+mode=400 size=8663040 mtime=2026-10-16 16:42:30.512085418 +0000
+
+$ sha256sum -c keeper.db.frozen.sha256
+/home/s/.local/share/plangraph/keeper.db: OK
+$ (cd backup && sha256sum -c SHA256SUMS)
+keeper.db: OK
+$ ls -l keeper.db-wal keeper.db-shm (live dir)
+ls: cannot access '/home/s/.local/share/plangraph/keeper.db-wal': No such file or directory
+ls: cannot access '/home/s/.local/share/plangraph/keeper.db-shm': No such file or directory
+$ restore dry check: sqlite integrity of backup copy (ro)
+ok max seq 6329
+
+===== FILE go-texts-and-hba.txt =====
+== GO D-1506 (routing -> build-L1, verbatim) ==
+GO D-1506 plangraph:RT-P1-KEEPER-PG step 1+2 (freeze + backup + copy + verify, runbook 7f5a35a §2/4/5). Code: tree b3d71096 (live worktree). Target: PG17 192.168.178.159 db keeper, schema keeper, copy as keeper (pg-keeper-migrate.dsn). Preconditions verified: D-1505 hba live (prox: errors 0, keeper_rt + keeper connects ok); your rehearsal 14:40Z PASS incl. runtime under keeper_rt. Boundary: freeze at the current head (~6327), report the exact seq + hash + frozen sha256 + backup dir; sqlite chmod 0400; keeper STOPPED until the step-3 GO; abort path as stated (drop schema contents, start the old unit + timers unchanged). Send the step-3 request as soon as the gates pass; I answer it at once. I'm sending the pause notice to the L1s now.
+
+== GO D-1506b (routing -> build-L1, verbatim) ==
+GO D-1506b KEEPER-PG step 3 switch (runbook §6). Router spot-checked: frozen keeper.db 0400 with sha256 6e6e9609… = your report, backup dir pg-cutover-b3d71096-20261016T164230Z present (0700), keeper inactive. Boundary seq 6329 hash ac87778f…, tree b3d71096. Apply exactly: back up the unit dir (.pre-pg-<UTC>); drop-in zz-pg-backend.conf (EnvironmentFile pg-keeper.dsn = keeper_rt, PG_KEEPER_BACKEND=postgres, PG_SCHEMA=keeper, ExecStart = venv-pg python, same args); start; admin verify on PG; record the PG max seq before timers; whoami/ready/percent/alarms/snapshot; timers on. Any gate red -> rollback §7 (exact path while max(seq)=6329) and report. When it's green, report DONE with the loss-boundary seq + gate lines; I then send KEEPER WRITES OPEN to the fleet. Keep the sqlite file 0400 and the backup until I authorize step 4 (delete-or-archive), not before 48 h.
+
+== decisions-log line (routing docs/decisions-log.md) ==
+| D-1506 | plangraph | KEEPER-PG cutover: GO step 1+2 (freeze/backup/copy/verify) after D-1505 hba + rehearsal 14:40Z PASS (runtime under keeper_rt). DONE 16:42:30-44Z: boundary seq 6329 hash ac87778f ...
+(D-1506b is not a separate row in the log; it is the step-3 GO message above.)
+
+== pg_hba provenance for keeper_rt (build-L1 cannot read pg_hba_file_rules: keeper_rt and keeper are not superuser) ==
+server-L1-main -> build-L1 (verbatim): DONE D-1505 (prox): cloud.vm hba-lan.conf @b0f127b8 deployed (sha256 9632c983 = git), pg_reload_conf()=t, no restart, pg_hba_file_rules errors=0, keeper_rt rule=1. coding.vm: ~/.config/plangraph/pg-keeper.dsn → current_user keeper_rt; pg-keeper-migrate.dsn → keeper. You can rerun the keeper_rt runtime half of RT-P1-KEEPER-PG.
+prox-L1-main -> build-L1 (verbatim): D-1505 DONE: keeper_rt can now log in to cloud PG from coding.vm. hba errors=0, reload only. As s on coding.vm: ~/.config/plangraph/pg-keeper.dsn → select current_user = keeper_rt; pg-keeper-migrate.dsn → keeper (both 0600 s, one PG_DSN= line). keeper_rt: CONNECT on db keeper, USAGE on schema keeper (owner keeper), default privileges FOR ROLE keeper: S/I/U/D on tables, USAGE/SELECT on sequences; no CREATE. coding.vm has no psql; I tested via docker postgres:16-alpine --network host. You can rerun the keeper_rt runtime half.
+Before D-1505 (rehearsal 1, 14:11Z) keeper_rt was rejected: FATAL: pg_hba.conf rejects connection for host "192.168.178.73", user "keeper_rt", database "keeper", no encryption.
+Live connection facts now: see keeper-rt-privileges.txt (client addr 192.168.178.73/32, ssl False = plain `host` rule, scram). The judge's question (D-1500 2c8f3d063 ACCEPT only vs deployed b0f127b8; hand rule?) must be answered by server-L1-main / prox from pg_hba_file_rules on cloud.vm; build-L1 has no superuser view.
+
+== tests on the code tree ==
+Live tree b3d71096 = main at cutover; record commit e5898f70 (docs only) tests.yml workflow_dispatch run 38934446074 green (pytest).
+
+===== FILE journal-switch.txt =====
+-- No entries --
+
+===== FILE keeper-pg-cutover.execution.md =====
+# KEEPER-PG cutover: execution record (2026-10-16)
+
+Plan-Item: plangraph:RT-P1-KEEPER-PG. Runbook: `keeper-pg-cutover.md` (7f5a35a). Code tree b3d71096 (main), unchanged by the cutover.
+Target: the PG-DEPLOY cluster (server:RT-P1-PG-DEPLOY, D-1499), database `keeper`, schema `keeper`.
+Roles (D-1500, least privilege): `keeper` owns the schema (copy, migrations); `keeper_rt` is the runtime role (DML only, default privileges from `keeper`), LAN rule D-1505.
+DSN files by name only, mode 0600, outside git: `~/.config/plangraph/pg-keeper-migrate.dsn` (keeper), `~/.config/plangraph/pg-keeper.dsn` (keeper_rt).
+
+## Timeline (UTC)
+| step | GO | time | result |
+|---|---|---|---|
+| rehearsal 1 (precondition 6) | — | 14:11 | copy/verify/rowhash PASS; runtime FAIL: pg_hba had no keeper_rt rule -> D-1505 |
+| rehearsal 2 | — | 14:40 | PASS: 19 tables / 64189 rows, DIFFS 0; daemon under keeper_rt starts with no DDL, DML (heartbeat) ok, `/v1/alarms` `/inbox` `/v1/snapshot` 200; scratch schema dropped |
+| 1+2 freeze, backup, copy, verify | D-1506 | 16:42:30-16:42:44 | PASS (below) |
+| 3 switch | D-1506b | 16:43:16 | PASS (below) |
+| 4 delete-or-archive sqlite | pending | not before 2026-10-18 16:43 | router GO |
+
+## Step 1+2 gates
+- Boundary (sqlite head at freeze): seq 6329, hash `ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0`.
+- Frozen sqlite: WAL empty, chmod 0400, sha256 `6e6e96092361809f718feb690b61d534f09e79d880ded6ca956783412fbe36d5`.
+- Backup dir `backups/pg-cutover-b3d71096-20261016T164230Z` (keeper.db sha256 `dc7fb396...`, counts.json, keeper.json, snapshot + sig).
+- `admin copy-to-pg --apply`: "copied and verified"; source = target per table:
+
+| table | rows | | table | rows |
+|---|---|---|---|---|
+| events | 6329 | | audit_log | 52688 |
+| items | 1743 | | audit_findings | 36 |
+| evidence | 1079 | | principals / aliases | 24 / 12 |
+| edges | 2569 | | 11 other tables | 0 |
+
+  total 64480.
+- `admin verify` on PG: "chain and cache integrity ok". `admin verify-snapshot`: "snapshot signature ok". `rowhash.py` (all 19 tables, PK order): DIFFS 0. PG head seq 6329, same hash.
+
+## Step 3 switch
+- Unit dir backed up as `plangraph-keeper.service.d.pre-pg-20261016T164313Z`; drop-in `zz-pg-backend.conf` (sorts after `live-sync-*`):
+  `EnvironmentFile=` the keeper_rt DSN file, `PG_KEEPER_BACKEND=postgres`, `PG_SCHEMA=keeper`, `ExecStart=` a venv python (system-site + psycopg 3.3.6; system python3 has no psycopg) with the same daemon args.
+- After start: `admin verify` on PG ok; loss boundary recorded before any timer or replay: seq 6329 hash `ac87778f...` (= freeze head, no writes yet); whoami, ready, percent rc0; `/v1/alarms` 200, `/v1/snapshot` 200 (0.82 s); md-sync path/timer and render timer restarted.
+- Router verified (whoami/show/snapshot 200) and sent KEEPER WRITES OPEN.
+
+## Rollback (runbook section 7)
+Exact path only while `max(seq)` on PG = 6329; after the first write the after-writes path applies (D-1500: list `seq > 6329` from PG and re-apply by hand through the client verbs). The frozen file and the backup stay until the step-4 GO.
+
+## Lessons
+- A runtime role needs its own pg_hba line; the rehearsal caught it before the freeze (keep the runtime half in every rehearsal).
+- systemd drop-ins apply in lexical order: name an override so it sorts last and check the MainPID environment after start.
+
+===== FILE keeper-rt-privileges.txt =====
+current_user, session_user: [('keeper_rt', 'keeper_rt')]
+client addr / ssl: [('192.168.178.73/32', False)]
+pg_roles keeper_rt (super,createrole,createdb,inherit,bypassrls): [(False, False, False, False, False)]
+member of: []
+has_database_privilege keeper CONNECT/CREATE/TEMP: [(True, False, False)]
+has_schema_privilege keeper USAGE/CREATE: [(True, False)]
+has_schema_privilege public CREATE: [(False,)]
+tables in keeper with S/I/U/D for keeper_rt (count of 19+): [(20, 20, 0)]
+table owners in keeper: [('keeper',)]
+DDL refused as expected: create table keeper.ddl_probe(x int) -> InsufficientPrivilege permission denied for schema keeper
+DDL refused as expected: alter table keeper.events add column ddl_probe int -> InsufficientPrivilege must be owner of table events
+DDL refused as expected: drop table keeper.events -> InsufficientPrivilege must be owner of table events
+DDL refused as expected: create schema ddl_probe -> InsufficientPrivilege permission denied for database keeper
+PG events max seq now: [(6339,)]
+events with seq<=6329 count: [(6329,)]
+first events after boundary (seq,ts,type,key): [(6330, '2026-10-16T16:43:40Z', 'evidence_added', 'plangraph:RT-P1-KEEPER-PG'), (6331, '2026-10-16T16:43:50Z', 'claimed', 'autoos:CI-SMART-SELECT'), (6332, '2026-10-16T16:43:51Z', 'claimed', 'autoos:FLEET-STATUS-HOOK'), (6333, '2026-10-16T16:44:01Z', 'evidence_added', 'plangraph:RT-P1-KEEPER-PG'), (6334, '2026-10-16T16:48:03Z', 'item_created', 'routing:OS-207')]
+boundary row: [(6329, 'ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0')]
+
+===== FILE keeper.db.frozen.sha256 =====
+6e6e96092361809f718feb690b61d534f09e79d880ded6ca956783412fbe36d5  /home/s/.local/share/plangraph/keeper.db
+
+===== FILE loss-boundary.txt =====
+LOSS BOUNDARY seq=6329 hash=ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0
+
+===== FILE pg-head.txt =====
+PG head seq=6329 hash=ac87778fa37f1531be6c232f439b2589f0037eb0743a78144d79db2fe503ada0
+
+===== FILE rowhash.txt =====
+events               sqlite=2cb2d2b09fc78301 pg=2cb2d2b09fc78301 ok
+items                sqlite=ea9fce690a0c9a07 pg=ea9fce690a0c9a07 ok
+evidence             sqlite=b52d62e7c3319810 pg=b52d62e7c3319810 ok
+edges                sqlite=ff5997139f0328ee pg=ff5997139f0328ee ok
+principals           sqlite=76b62ce69aebf03e pg=76b62ce69aebf03e ok
+aliases              sqlite=86c184bc33665166 pg=86c184bc33665166 ok
+run_tokens           sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+outbox_seen          sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+audit_log            sqlite=e13b3908c6b23c20 pg=e13b3908c6b23c20 ok
+audit_findings       sqlite=baac6cf6dbb710a6 pg=baac6cf6dbb710a6 ok
+cards                sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+attempts             sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+decisions            sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+questions            sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+answers              sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+budget               sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+projector_applied    sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+projector_watermark  sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+projector_alarms     sqlite=e3b0c44298fc1c14 pg=e3b0c44298fc1c14 ok
+DIFFS 0
+
+===== FILE unit-effective.txt =====
+# /home/s/.config/systemd/user/plangraph-keeper.service
+[Unit]
+Description=plangraph keeper (persistent; replaces the transient systemd-run unit, 2026-10-09)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/proposal/src
+ExecStart=/usr/bin/python3 -m plangraph.keeper.daemon --config %h/.local/share/plangraph/keeper.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-1b923e5.conf
+# KEEPER-LIVE-SYNC GO D-1437 (2026-10-16): live tree -> 1b923e5 worktree; worktree-proposal stays at f3bac63 (rollback, 24 h).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-1b923e5-20261016T064214Z, start.
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-1b923e5
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-1b923e5/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-8165c22.conf
+# LIVE-SYNC-2 GO D-1463 (2026-10-16): live tree -> 8165c22 worktree (overrides live-sync-1b923e5.conf, sorts after it).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-8165c22-20261016T082054Z, start (= 1b923e5).
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-8165c22
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-8165c22/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-cd85d13.conf
+# LIVE-SYNC-3 GO D-1482 (2026-10-16): live tree -> cd85d13 worktree (KEEPER-SNAPSHOT-PG; overrides live-sync-8165c22.conf, sorts after it).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-cd85d13-20261016T105157Z, start (= 8165c22).
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-cd85d13
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-cd85d13/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/live-sync-z4-b3d71096.conf
+# LIVE-SYNC-4 GO D-1490 (2026-10-16): live tree -> b3d71096 worktree (27c95c3 followups + newest-wins verifier; no schema change; overrides live-sync-cd85d13.conf; z4 prefix so it sorts after it).
+# Rollback: remove this file, daemon-reload, stop, delete wal/shm, restore backups/live-sync-b3d71096-20261016T125712Z, start (= cd85d13).
+[Service]
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/live-b3d71096
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/live-b3d71096/src
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/semaphore.conf
+# PG-SEMAPHORE-LIVE (D-906/D-917): read-only Semaphore access for semaphore-task evidence.
+# Rollback: remove this file, systemctl --user daemon-reload, restart; shred the token; prox deletes the user.
+[Service]
+Environment=PG_SEMAPHORE_URL=<redacted>
+Environment=PG_SEMAPHORE_TOKEN_FILE=%h/.config/plangraph/semaphore.token
+Environment=PG_SEMAPHORE_PROJECTS=1
+
+# /home/s/.config/systemd/user/plangraph-keeper.service.d/zz-pg-backend.conf
+# KEEPER-PG step 3 switch (runbook 7f5a35a section 6). Rollback: rm this file, daemon-reload, runbook section 7.
+# zz prefix: must sort after live-sync-z4-b3d71096.conf
+[Service]
+EnvironmentFile=%h/.config/plangraph/pg-keeper.dsn
+Environment=PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper
+ExecStart=
+ExecStart=%h/.local/share/plangraph/venv-pg/bin/python -m plangraph.keeper.daemon --config %h/.local/share/plangraph/keeper.json
+
+===== FILE verify-pg.txt =====
+chain and cache integrity ok
+
+===== FILE verify-snapshot.txt =====
+$ pg admin verify-snapshot --snapshot <backup>/plan.snapshot.json
+snapshot signature ok
+rc=0
+
+===== FILE verify-switch.txt =====
+chain and cache integrity ok
