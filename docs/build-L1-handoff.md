@@ -30,7 +30,7 @@ Operator wants: report DONE for plangraph:RT-P1-E2E to routing at once when it l
 ## Next RT-P1 by plan order
 WORKER + PROJECTOR <- TEMPORAL-CHECK; INBOX <- PROJECTOR; REVIEW <- WORKER; GOVERNOR <- routing:RT-P0-BASELINE; CLASS-COMBOS <- autoos:RT-P0-OR-DRIFT
 (router assigns RT-P0 owners next gen); E2E <- all. Briefs exist: briefs/l2-worker-code.md, l2-projector-code.md (code parts done; write live-lane briefs).
-Other: Q-API-PUSH (ex RT-P3-ASK-PUSH, HIGH, owner build-L1; orch-setup-plan @6087fe20 awaits routing). CI-RUNS-ON-WORKST re-scoped (private repos only).
+Other: Q-API-PUSH (ex RT-P3-ASK-PUSH, HIGH, owner build-L1; orch-setup-plan @6087fe20 awaits routing). D-1514: + UI-FLEET-TAB, WORKER-USES-PLACEMENT (orch-setup-plan @026540cd, await routing); plan2 lane J adds keeper host_samples migration (no collision with mine). CI-RUNS-ON-WORKST re-scoped (private repos only).
 ROLLBACK-HOLD after 2026-10-17 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 + worktree-proposal f3bac63.
 ## Tools
 pg CLI: `ops/pg.sh <verb>` (ready/show/claim/heartbeat/evidence --kind commit+ci --commit SHA/submit). Verdict: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
