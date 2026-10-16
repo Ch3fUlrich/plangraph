@@ -5,12 +5,13 @@ Rules: D-1377 no crons; D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/la
 
 ## Main = 7ec2bb5 (CI on workst runner since #17 5188310)
 DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
-RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ).
+RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ),
+RT-P1-WORKER-CODE (PR #13 merged main 66d87fe, head dd954e7 CI attempt-1 green; early-cancel hole fixed; openai = gpt-oss delta seat
+worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/verdict-alibaba + adjudication-alibaba.md).
 
 ## Open
 | Item | State | Next |
 |---|---|---|
-| RT-P1-WORKER-CODE (HIGH) | claimed; PR #13 bff8725 HOLD | qwen delta seat pass (worker-code-seats/qwen-delta-22922ec, sha ok). HOLD 03:4xZ: rust-worker attempt 1 failed e2e cancel 25s timeout (job 116791673094) -> suspected early-cancel race (signal before attempt starts = V11 again). L2 to verify workflow.rs, add 0s/pending-cancel e2e, poll instead of 2s settle, attempt-1 green. Then merge + 2 verdicts (openai worker-code-seats/openai-37d4a2b) |
 | RT-P1-INBOX-CODE | claimed; PR #18 MERGED main b5f45c9 (CI 38845394565 ✓✓) | evidence REFUSED: head 1cb7acc (merge) has no Plan-Item trailer; trailer commits (68a9180) have no CI runs (pull_request-only CI). Router: add_evidence_router commit 68a9180 (or commit+ci on 1cb7acc). Then submit + verdict openai seat inbox-seats/r2-1cb7acc (writer anthropic). L2 stood down. |
 | CI-RUNS-ON-WORKST | open, blocked on autoos:CI-WORKST-RUNNER | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (fixes-L1, all repos) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (fixes-L1) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
@@ -27,7 +28,7 @@ D-1380 03:34Z: interim local-CI fallback rule added to briefs/l2-rules-common.md
 
 ## FOR ROUTER (router active again 03:3xZ)
 - INBOX evidence (see Open). lesson: L2 PR head (merge commit) must carry `Plan-Item: plangraph:<KEY>` since CI runs only on PR heads; add to l2-rules-common.md.
-- L2-DONE build-L2-inbox.
+- L2-DONE build-L2-inbox, build-L2-worker-code (workstation bridge session).
 - L2-DONE build-L2-projector, build-L2-review-code, build-L2-planner-kit, build-L2-keeper-pg (retire sessions).
 - New items (projector follow-ups, from L2 DONE): (1) keeper event type for attempts (schema.py), (2) Rust Card workflow must follow
   projector contract v1 docs/projector.md (fold into RT-P1-WORKER / E2E), (3) scheduler for nightly `python -m plangraph.projector reconcile`.
