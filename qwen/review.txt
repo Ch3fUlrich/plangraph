@@ -1,0 +1,51 @@
+=== part /home/s/.claude/jobs/29c2f028/tmp/qwen2.json
+## V1: evidence.py:_ci_conclusion — false-green
+
+**No finding.**
+
+After tracing all group-formation, ranking, and verdict-selection paths:
+
+- **wf_id 0/None**: `_id_int` returns 0; `in_wf = wf_id > 0 and wf_rid > 0` is False; run falls back to plain groups. Covered by `test_ci_wf_bool_workflow_id_is_not_grouped` and `test_ci_wf_missing_workflow_id_stays_plain_suite_groups`.
+
+- **missing run_id ranks 0**: Same guard — `wf_rid > 0` fails, treated as no workflow. Covered by `test_ci_wf_missing_run_id_stays_plain_suite_groups`.
+
+- **completed-but-older failure hidden by newer success**: Intended. The newest completed per group wins; a later dispatch rerun that goes green legitimately supersedes an earlier failure. Covered by `test_ci_wf_check_run_id_not_chronological_green_wins`.
+
+- **skipped-only**: `_completed` returns True (non-empty conclusion, status=completed); "skipped" is in the pass-through tuple; no failure emitted. Same as old behaviour.
+
+- **group-key collisions between plain and wf**: Plain gkey = `(int/None, str/None, str)`, wf gkey = `("wf", int, str/None, str)`. Different length; no tuple collision.
+
+- **in_wf runs with event="push" joining a dispatch group**: Code allows ANY `in_wf` event to join when dispatch key exists. This is a broader merge than just PR+dispatch but does NOT create a false green: the newest completed still wins by run_id ranking, and the adapter test explicitly includes a push-event backfill. No masking occurs because both runs are in the same logical workflow group.
+
+- **newest completed is "cancelled"**: `_completed` returns True for cancelled; then `norm="cancelled"` not in pass tuple → goes to failure_groups. Correct.
+
+- **non-completed run ranked newest**: Pending check (`any(rank > best[0] and not _completed(run))`) fires. Correct.
+
+## V2: evidence.py:_ci_conclusion — PR path regression
+
+**No finding.**
+
+For runs without a usable `workflow` key (or with `in_wf=False`):
+
+- Pass 1: `wf_id=0`, `wf_rid=0`, `in_wf=False`, `event=None`, never enters dispatch_keys.
+- Pass 2: `is_wf=False` (event != dispatch, in_wf False skips the second check). Falls to plain group `(suite, app, name)` with rank `(rid_int, started_str)`. Identical tuple structure and values to old code.
+- The "plain group picks newest" logic is the same `rank > best[0]` loop as before (the old code was a single-pass dict; the new code is an explicit loop, but the comparison is equivalent).
+- Output format: `suffix = f"suite {rec['suite']}"` (or None). Printed as `f"{n} ({suffix})"` which equals old `f"{n} (suite {s})"` for non-None suite, and old bare-name/app forms for None.
+- `test_ci_conclusion_runs_without_workflow_key_unchanged` asserts the same verdicts and detail strings.
+
+## V3: evidence_ci.py:check_runs / _page_all — API field honesty
+
+**No finding.**
+
+- **Fake vs real gh contract**: `_check()` fixture matches GitHub shape (id int, name str, status/conclusion str, app.check_suite nested dicts). `_fake_gh` returns `{"check_runs": [...]}`/`{"workflow_runs": [...]}` + `total_count` — correct per the gh api JSON shape.
+- **Pagination/refusal**: Shared `_page_all` caps at 10×100=1000. Breaks on short page OR collected>=total. Raises `RuntimeError` if total>collected after loop (truncation), with label-specific message. Both `test_ci_adapter_workflow_runs_truncated_is_refused` and old check-runs truncation tests pass.
+- **suite→workflow join**: Only positive int on both sides (`_pos_int` excludes bool and digit strings). `setdefault` first-wins (newest-first API order). Key written only when id, workflow_id, and str event all usable.
+- **Unmatched suites**: No backfill — confirmed by `test_ci_adapter_unmatched_suite_gets_no_workflow_key`.
+- **Injection via head_sha**: sha validated by `valid_commit_ref` (40 lowercase hex only) then `quote(sha, safe="")` before interpolation. No user text reaches the query.
+- **Second-call failure**: `runs_rc=2` → `_page_all` raises `RuntimeError`. Checked by `test_ci_adapter_gh_failure_on_second_call_raises`.
+- **No-actions path**: Confirmed single gh call by `test_ci_adapter_without_actions_runs_makes_exactly_one_gh_call`.
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

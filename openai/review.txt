@@ -1,0 +1,12 @@
+V1 evidence.py:_ci_conclusion — false‑green  
+  Scenario: two check‑runs with the same `name` and `app`, both lacking a usable `check_suite.id` (e.g. `check_suite` missing or `id` is `None`). The older run has `conclusion="failure"` and the newer run has `conclusion="success"`. Because both are grouped under the key `(None, app, name)`, the newer successful run overwrites the older failure, causing the verifier to report “green” even though a failure existed.  
+
+V2 evidence.py:_ci_conclusion — PR‑only path regression  
+  No finding – the handling of plain (suite, app, name) groups and the formatting of failure messages remain identical to the previous implementation; PR‑only suites continue to behave exactly as before.  
+
+V3 evidence_ci.py:check_runs/_page_all — API field honesty  
+  No finding – pagination, truncation detection, and error messages preserve the original contract; the function correctly refuses truncated results and raises with the expected “workflow‑runs truncated …” message.  
+
+TEST-GAMING: no - searched src/plangraph/keeper for test‑specific conditionals, pytest/environment checks, and special‑case code that would only be exercised by tests: 0 hits  
+
+VERDICT: pass
