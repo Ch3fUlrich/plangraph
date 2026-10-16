@@ -21,9 +21,12 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  CARGO_BUILD_JOBS: "8"   # cap per-job cargo parallelism: 4 concurrent jobs share one box (D-1393)
+
 jobs:
   rust:
-    runs-on: [self-hosted, workst]
+    runs-on: [self-hosted, fleet-ci]
     defaults:
       run:
         working-directory: rust

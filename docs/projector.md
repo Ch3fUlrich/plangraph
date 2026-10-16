@@ -138,7 +138,12 @@ or PATH; skipped when missing) and runs real workflows. Migration test: upgrade 
 
 * Exactly one projector process per keeper (`run` or a scheduled `run-once`). The ledger primary key makes a second process lose
   loudly (an integrity error or a `conflict` refusal) rather than corrupt rows; it is not a supported mode.
-* Nightly reconcile: schedule `python -m plangraph.projector reconcile` (cron on the keeper host or a Temporal schedule); the
-  Inbox reads open rows of `projector_alarms`. The projector never sets `done`/`cancelled`: closing a card stays a keeper verb.
+* Nightly reconcile runs as the systemd user timer `plangraph-projector-reconcile.timer` (03:30 local, up to 10 min random
+  delay, Persistent=true) which starts the oneshot `plangraph-projector-reconcile.service`; that runs
+  `python -m plangraph.projector --config <keeper.json> reconcile`. Units and install/enable steps: `deploy/systemd/`
+  (README.md there). No agent cron. The command exits 0 even when it raised alarms (a mismatch is an open row of
+  `projector_alarms`, `cleared_at IS NULL`, that the next pass clears when the condition is gone; read it with
+  `plangraph.projector.reconcile.open_alarms`); it exits 1 only on a runtime failure and 2 on bad config, which fails the
+  unit. The projector never sets `done`/`cancelled`: closing a card stays a keeper verb.
 * Attempts have no dedicated keeper event type; `state_set` events (written by `Store.set_state`) are the keeper events the
   projector produces, the attempt rows themselves are the append-only record of each attempt.
