@@ -6,6 +6,7 @@ on:
     paths:
       - "rust/**"
       - "!rust/spikes/**"
+      - "!rust/worker/**"
       - ".github/workflows/rust.yml"
       - "!**/*.md"
       - "!docs/**"
