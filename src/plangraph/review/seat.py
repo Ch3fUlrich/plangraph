@@ -141,6 +141,18 @@ def _run_part(leg: family.Leg, i: int, text: str, multi: bool, spec: SeatSpec,
                        pass_allowed=pass_allowed, error=error, part=i), retry
 
 
+def _skipped(leg: family.Leg, i: int, multi: bool, spec: SeatSpec, text: str) -> SeatOutcome:
+    """Incomplete outcome for a part whose seat leg is down and has no replacement."""
+    name = "%s-p%d" % (leg.name, i + 1) if multi else leg.name
+    out = Path(spec.out_root) / name
+    err = "leg %s is down and no eligible replacement" % leg.name
+    _write_minimal(out, leg, i, "error", err)
+    judged = verdict.judge("", "error", material=text)
+    return SeatOutcome(leg=leg.name, family=leg.family, dir=out,
+                       verdict=_failed_verdict("", "error", judged),
+                       pass_allowed=False, error=err, tried=[], part=i)
+
+
 def run_seat(spec: SeatSpec, *, gateway_call=gateway.call,
              qoder_run=qoder.run, opencode_run=opencode.run) -> list[SeatOutcome]:
     """Run each eligible leg over each prompt part; retry down legs per part.
@@ -173,7 +185,9 @@ def run_seat(spec: SeatSpec, *, gateway_call=gateway.call,
                     leg = family.pick_legs(spec.writer_family, need=1,
                                            down=frozenset(blocked))[0]
                 except family.NoEligibleLeg:
-                    leg = seat_leg
+                    # Never re-run a leg already marked down: this part fails (incomplete).
+                    outcomes.append(_skipped(seat_leg, i, multi, spec, text))
+                    continue
                 claimed[seat_no].add(leg.name)
             for _ in range(len(family.LEGS)):
                 tried.append(leg.name)
