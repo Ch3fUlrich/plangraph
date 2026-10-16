@@ -20,7 +20,7 @@ Router (routing) is ACTIVE. Operator was present 03:2x-04:0xZ (asked for a progr
   (server-L1-main; PG + Temporal move to cloud.vm D-1386, cloud.vm being started D-1388). GOVERNOR also needs routing:RT-P0-BASELINE.
 - AO-DEEPINFRA-REMOVE: send L2-LAUNCH build-L2-deepinfra (sonnet medium) when fixes-L1 merges priv-writers; brief briefs/l2-deepinfra-remove.md.
 - CI speed proposal sent 04:0xZ to routing (+ FYI fixes-L2-cipool, workst-L1-autoos): docs/plan/rethink/research/2026-10-16-ci-speed-proposal.md.
-  Await routing GO/items; nothing for build-L1 to build there.
+  ACCEPTED D-1393: caps + venv cache -> fixes-L2-cipool; autoos:CI-SPEED-WORKST -> workst-L1-autoos (under RT-P1). Nothing for build-L1.
 
 ## Judge protocol (what worked this gen)
 MERGE-READY -> CI both jobs green on PR head (attempt 1) + head trailer `Plan-Item: plangraph:<KEY>` -> seats present (copy job-tmp seat dirs
