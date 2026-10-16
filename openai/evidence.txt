@@ -1,0 +1,18 @@
+# evidence, lane rec4e11857-gptoss (names only; attributed by the UNIQUE sessionTag, not by time)
+call-log id:        1792123995982-d43411
+timestamp:          10/16/2026 04:14:09
+http status:        200
+provider:           ovhcloud
+requested model:    ovhcloud/gpt-oss-120b
+served model:       gpt-oss-120b  -> served == pinned: True
+combo:              null
+correlationId:      bdc9445b-f4bf-42c5-ab18-fd38df2e94f3
+sessionTag:         rec4e11857-gptoss/gpt-oss-120b/364589ecda5141659252d618f2de471d
+duration (log):     53106 ms
+tokens:             in 3430, out 3275
+finish_reason:      stop  (anything but stop = FAILED seat)
+temperature sent:   False
+attribution:        UNIQUE sessionTag match; AMBIGUOUS: False
+max_tokens:         90000
+prompt sha256:      fe7cd9d384b0a6efd274ea7f392006c000bef4b02a257ed81eeb86d4f9d62f96
+review sha256:      788867ec2f5faca71ac6d777c095d7f634a651c7ad4c41582016abff2f42f6e3
