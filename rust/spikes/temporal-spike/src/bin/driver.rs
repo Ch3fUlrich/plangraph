@@ -200,9 +200,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = std::env::var("SPIKE_ADDR").unwrap_or_else(|_| "http://127.0.0.1:7233".into());
     let conn = Connection::connect(
         ConnectionOptions::new(Url::from_str(&addr)?)
-            .maybe_tls_options(
-                temporal_spike::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?,
-            )
+            .maybe_tls_options(temporal_spike::tls::tls_from_env().map_err(|e| anyhow::anyhow!(e))?)
             .build(),
     )
     .await?;
