@@ -192,7 +192,7 @@ def daily_metrics(
     weekly_cap: float | None,
 ) -> list[dict]:
     """Build the metric rows for one UTC day."""
-    day_total = sum(weighted(r) for r in records if isinstance(r.get("ts"), dt.datetime))
+    day_total = daily_weighted(records).get(day, 0.0)
     landed_count = int(landed.get(day, 0))
 
     rows: list[dict] = [

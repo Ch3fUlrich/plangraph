@@ -212,3 +212,17 @@ def _has_master(repo):
         text=True,
     )
     return out.returncode == 0
+
+
+def test_daily_metrics_counts_only_the_requested_day():
+    import datetime as dt
+    def rec(day, n):
+        return {"ts": dt.datetime.fromisoformat(day + "T12:00:00+00:00"), "session": "s",
+                "model": "m", "input": n, "output": 0, "cache_read": 0, "cache_write": 0}
+    records = [rec("2024-07-31", 1000), rec("2024-08-01", 70), rec("2024-08-02", 5000)]
+    rows = {r["metric"]: r["value"] for r in
+            metrics.daily_metrics("2024-08-01", records, {"2024-08-01": 1}, 490.0)}
+    assert rows["claude_weighted_tokens"] == 70.0
+    assert rows["claude_burn_index"] == 1.0          # 70 / (490 / 7)
+    assert rows["weighted_tokens_per_landed"] == 70.0
+    assert metrics.daily_metrics("2024-08-03", records, {}, None)[0]["value"] == 0.0
