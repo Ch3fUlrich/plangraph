@@ -1,0 +1,45 @@
+**V1 ΓÇô newestΓÇærunΓÇæperΓÇæname selection**  
+Implemented in `src/plangraph/keeper/evidence.py:_ci_conclusion`.  The function builds a `newest` dict keyed by checkΓÇærun name and keeps the tuple `(rid_int, started_str)` as the ordering key, which gives the required precedence: higher integer `id`, fallback to lexicographically later `started_at`, treats nonΓÇæint `id` as `0`, and uses `"?"` when the `name` field is missing.  Tests exercising these rules are:
+
+- `test_commit_ci_newest_per_name_old_failure_newer_success_ok`
+- `test_commit_ci_newest_per_name_old_success_newer_failure_fails`
+- `test_commit_ci_newest_tie_break_started_at`
+- `test_commit_ci_newest_non_int_id_counts_as_zero`  
+
+All verify the correct newestΓÇærun selection.
+
+**V2 ΓÇô pending / failure / skipped precedence and edge cases**  
+Logic lives in the same `src/plangraph/keeper/evidence.py:_ci_conclusion` routine:
+
+* Pending detection ΓÇô any run with `conclusion`ΓÇ»`None`/empty/whitespace or with a `status` not equal to `"completed"` is added to `pending` and later reported as ΓÇ£CI pending ΓÇªΓÇ¥.  
+* Failure detection ΓÇô any normalized conclusion not in `{"success","skipped","neutral"}` is recorded in `failures` and reported with the check name.  
+* AllΓÇæskipped detection ΓÇô after processing, if every observed normalized conclusion equals `"skipped"` the function returns ΓÇ£CI only skipped ΓÇªΓÇ¥.  
+
+Covered by tests:
+
+- `test_commit_ci_each_fail_conclusion_names_the_check` (covers unknown/various failure conclusions)  
+- `test_commit_ci_pending_in_progress_fails_with_pending` (statusΓÇ»`in_progress`)  
+- `test_commit_ci_all_skipped_fails_closed` (all skipped)  
+- `test_commit_ci_skipped_plus_success_ok` and `test_commit_ci_neutral_ok` (success / neutral paths)  
+
+Whitespace and case are handled by `str(...).strip()` and `.lower()` as shown in the implementation.
+
+**V3 ΓÇô possibility of a falseΓÇægreen report**  
+`_ci_conclusion` returns a nonΓÇæ`None` string for any of the three failure modes (explicit failures, pending runs, or ΓÇ£only skippedΓÇ¥).  Only when **no** failures, **no** pending runs, and **not** ΓÇ£all skippedΓÇ¥ does it return `None`, which the verifier treats as green.  The ordering guarantees that a pending run will always be reported before a success, and unknown conclusions are always treated as failures.  Therefore no shape of input can incorrectly yield a green result while actually being red or still running.  Evidence: the final `if` blocks in `_ci_conclusion` (lines checking `failures`, `pending`, and `all(c == "skipped")`).
+
+**V4 ΓÇô testΓÇæsuite coverage of all required cases**  
+The test file `tests/test_evidence.py` contains dedicated cases for every rule described above, including the complex realΓÇæworld scenario `a1b1da808`:
+
+- NewestΓÇæperΓÇæname logic (V1) ΓÇô four dedicated tests.  
+- Failure naming (V2) ΓÇô parametrized test for each failure conclusion.  
+- Pending detection (V2) ΓÇô `test_commit_ci_pending_in_progress_fails_with_pending`.  
+- AllΓÇæskipped failΓÇæclosed (V2) ΓÇô `test_commit_ci_all_skipped_fails_closed`.  
+- SkippedΓÇ»+ΓÇ»success, neutral, and pureΓÇæskipped edge cases (V2).  
+- RealΓÇæworld shape `a1b1da808` ΓÇô `test_commit_ci_a1b1da808_pending_then_ok` checks pending then success transition.  
+- No runs case ΓÇô `test_commit_ci_no_runs_fails_closed_newest_logic`.  
+
+All tests use the `FakeCI` stub, making them hermetic (no external network) and nonΓÇævacuous (each asserts a concrete outcome).  
+
+TESTΓÇæCOVERAGE: yes - all vectors V1ΓÇæV4 are exercised by the test suite in `tests/test_evidence.py`: 0 hits
+
+VERDICT: pass

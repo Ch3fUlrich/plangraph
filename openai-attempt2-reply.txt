@@ -1,0 +1,39 @@
+**V1 – newest‑run‑per‑name selection**  
+- **src/plangraph/keeper/evidence.py:_ci_conclusion** – builds `newest` dict keyed by `(id, started_at)` and keeps the greatest key per `name`.  
+- **tests/test_evidence.py:test_commit_ci_newest_per_name_old_success_newer_failure_fails** – verifies that a newer failure overrides an older success.  
+- **tests/test_evidence.py:test_commit_ci_newest_tie_break_started_at** – exercises the tie‑break on `started_at` when `id`s are equal.  
+- **tests/test_evidence.py:test_commit_ci_newest_non_int_id_counts_as_zero** – checks that a non‑int `id` is treated as `0` and does not outrank an integer `id`.  
+- **src/plangraph/keeper/evidence.py:_ci_conclusion** – defaults missing `name` to `"?"` (`str(run.get("name", "?"))`). *No explicit test for a missing name*.
+
+**V2 – pending/failure/skipped precedence and fail‑closed edge cases**  
+- **src/plangraph/keeper/evidence.py:_ci_conclusion** –  
+  * pending detection: `conclusion` missing/empty or `status` not `"completed"` → added to `pending`.  
+  * failure detection: any normalized `conclusion` not in `("success","skipped","neutral")` → added to `failures`.  
+  * all‑skipped detection: after the loops, `if seen and all(c == "skipped" for c in seen)` → “only skipped”.  
+- **tests/test_evidence.py:test_commit_ci_each_fail_conclusion_names_the_check** – iterates over all failure‑type conclusions (including an unknown `"bogus"`).  
+- **tests/test_evidence.py:test_commit_ci_pending_in_progress_fails_with_pending** – `status="in_progress"` and `conclusion=None` yields a pending report.  
+- **tests/test_evidence.py:test_commit_ci_skipped_plus_success_ok** – mixed `skipped` and `success` passes.  
+- **tests/test_evidence.py:test_commit_ci_neutral_ok** – verifies that `"neutral"` is accepted.  
+- **tests/test_evidence.py:test_commit_ci_all_skipped_fails_closed** – checks the “only skipped” fail‑closed path.  
+- **Missing coverage**:  
+  * `status="completed"` with `conclusion=None` (treated as pending) – not exercised.  
+  * `conclusion` strings with leading/trailing whitespace or mixed case – logic trims/lowers but no test asserts it.  
+
+**V3 – can any shape make a red or still‑running CI report ok (false‑green)?**  
+- The implementation first collects *failures* before *pending*, and only returns `None` (green) when **no failures**, **no pending**, and **not all skipped**.  
+- Edge‑case shapes that could slip through:  
+  * A run missing the `"status"` field altogether but with a non‑`None` `conclusion` that is *not* `"success"`, `"skipped"` or `"neutral"` – it would be treated as a failure (because `norm` is checked).  
+  * A run with an integer `id` that overflows Python’s `int` range – still comparable, no impact.  
+- No combination of fields can produce a failing or pending CI that is mistakenly reported as green; the ordering of checks (`failures` → `pending` → `all‑skipped`) guarantees that any red or running state is reported.  
+
+**V4 – test suite coverage of the required cases**  
+- The suite covers: newest‑run selection (including tie‑break and non‑int id), all failure‑type conclusions, pending detection for `in_progress` with `None` conclusion, mixed `skipped`+`success`, pure `skipped` (fail‑closed), the complex real‑world shape `a1b1da808` (pending then success).  
+- Missing or only partially covered cases:  
+  * Run with missing `name` (defaults to `"?"`).  
+  * Run where `status="completed"` but `conclusion` is `None` (should be pending).  
+  * Conclusions containing extra whitespace or unusual capitalisation (e.g., `" Success "`).  
+  * Runs that omit the `"status"` key entirely – behaviour is exercised indirectly but not explicitly asserted.  
+
+**Tests: no - missing name handling, completed+null conclusion, whitespace/case trimming cases: 0 hits**  
+
+**VERDICT: fix - add missing edge‑case tests (missing name, completed with null conclusion, whitespace/case handling)**
