@@ -34,6 +34,7 @@ D-1380 03:34Z: interim local-CI fallback rule added to briefs/l2-rules-common.md
 - Pending: L2-LAUNCH build-L2-temporal-tls (asked); reconcile + worker-proj routed to workst-L1-autoos; L2-LAUNCH build-L2-deepinfra after priv-writers merges.
 - Incident: GitHub Actions billing refusal (GH-hosted runners); plangraph on workst runner; D-1380 local fallback.
 
+D-1390: L2-LAUNCH = "sonnet medium"; build-L1 effort medium at next recycle; plangraph CI label -> [self-hosted, fleet-ci] by fixes-L2-cipool (covers CI-RUNS-ON-WORKST label part).
 Infra: PG + Temporal move to cloud.vm (D-1386); cloud.vm starting (D-1388).
 
 ## FOR OPERATOR
