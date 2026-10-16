@@ -347,3 +347,67 @@ def test_commit_ci_a1b1da808_pending_then_ok():
 def test_commit_ci_no_runs_fails_closed_newest_logic():
     res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=[])))
     assert res.ok is False
+
+
+def test_commit_ci_same_name_different_suites_both_evaluated():
+    runs = [
+        {"name": "test", "id": 1, "head_sha": SHA,
+         "check_suite": {"id": 100}, "status": "completed", "conclusion": "failure"},
+        {"name": "test", "id": 2, "head_sha": SHA,
+         "check_suite": {"id": 200}, "status": "completed", "conclusion": "success"},
+    ]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs)))
+    assert res.ok is False
+    assert "test" in res.detail
+
+
+def test_commit_ci_same_suite_rerun_supersedes():
+    runs = [
+        {"name": "test", "id": 1, "head_sha": SHA,
+         "check_suite": {"id": 100}, "status": "completed", "conclusion": "failure"},
+        {"name": "test", "id": 2, "head_sha": SHA,
+         "check_suite": {"id": 100}, "status": "completed", "conclusion": "success"},
+    ]
+    assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs))).ok is True
+
+
+def test_commit_ci_suite_grouped_a1b1da808_pending_then_ok():
+    pending_runs = [
+        {"name": "Windows suite", "id": 1, "head_sha": SHA,
+         "check_suite": {"id": 10}, "status": "completed", "conclusion": "skipped"},
+        {"name": "Windows suite", "id": 2, "head_sha": SHA,
+         "check_suite": {"id": 11}, "status": "completed", "conclusion": "skipped"},
+        {"name": "shard a", "id": 3, "head_sha": SHA,
+         "check_suite": {"id": 10}, "status": "completed", "conclusion": "success"},
+        {"name": "shard b", "id": 10, "head_sha": SHA,
+         "check_suite": {"id": 10}, "status": "completed", "conclusion": "success"},
+        {"name": "shard b", "id": 11, "head_sha": SHA,
+         "check_suite": {"id": 11}, "status": "in_progress", "conclusion": None},
+    ]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=pending_runs)))
+    assert res.ok is False
+    assert "pending" in res.detail.lower()
+    ok_runs = pending_runs + [
+        {"name": "shard b", "id": 12, "head_sha": SHA,
+         "check_suite": {"id": 11}, "status": "completed", "conclusion": "success"},
+    ]
+    assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=ok_runs))).ok is True
+
+
+def test_commit_ci_legacy_runs_without_suite_group_by_name():
+    runs = [
+        {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "failure"},
+        {"name": "build", "id": 2, "head_sha": SHA, "conclusion": "success"},
+    ]
+    assert verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=runs))).ok is True
+    flipped = [
+        {"name": "build", "id": 1, "head_sha": SHA, "conclusion": "success"},
+        {"name": "build", "id": 2, "head_sha": SHA, "conclusion": "failure"},
+    ]
+    res = verify("commit+ci", {"commit": SHA}, make_ctx(ci=FakeCI(runs=flipped)))
+    assert res.ok is False
+    assert "build=failure" in res.detail
+
+
+def test_ci_conclusion_all_non_dict_fails_closed():
+    assert ev._ci_conclusion([None, 42, "x"], SHA) == f"no CI check-runs found for {SHA}"
