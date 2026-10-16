@@ -3,24 +3,24 @@ Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-b
 Branch build-L1 = control branch (never merged). Older log: `git log -p status/build-L1.card.md` (gen-1..4). Handoff: docs/build-L1-handoff.card.md.
 Rules: D-1442 judge only HIGH (keeper engine/live, schema, auth), standard = self-approve on seats. Cron beat ALLOWED by operator 2026-10-16 (overrides D-1377 for build-L1; 10-min beat 7-59/10); D-1364 msgs only BLOCKED/DONE/MERGE-READY/GO/incident/launch; D-935 defaults, logged below.
 
-## Main = 828e68e · keeper live 1b923e5 (live-1b923e5 worktree via drop-in; worktree-proposal f3bac63 = 24 h rollback) (CI on workst runner)
+## Main = 8165c22 · keeper live 1b923e5 (live-1b923e5 worktree via drop-in; worktree-proposal f3bac63 = 24 h rollback) (CI on workst runner)
 DONE in keeper (commit+ci evidence + seat verdicts): RT-P1-CONTRACT, CI-PARALLEL (openai), RT-P1-KEEPER-PG-CODE (openai+alibaba),
 RT-P1-REVIEW-CODE (alibaba), RT-P1-PLANNER-KIT-CODE (alibaba), RT-P1-PROJECTOR-CODE (openai+alibaba; PR #16 merged 7ec2bb5 03:3xZ),
 RT-P1-INBOX-CODE (PR #18 b5f45c9; router evidence commit 68a9180, kinds->[commit]; openai seat inbox-seats/r2-1cb7acc),
 RT-P1-WORKER-CODE (PR #13 merged main 66d87fe, head dd954e7 CI attempt-1 green; early-cancel hole fixed; openai = gpt-oss delta seat
 worker-code-seats/openai-delta-dd954e7, alibaba = aggregate worker-code-seats/verdict-alibaba + adjudication-alibaba.md),
-KEEPER-LIVE-SYNC (live 1b923e5 GO D-1437; PR #26/#27 828e68e; judge ACCEPT adjudication; risk: triggers/PG/Temporal unexercised), PROJECTOR-LIVE-NAMESPACE-FLAKE (PR #25 ae5b749, head bfa0fd9, seat ns-flake-seats openai; DONE sent), KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restarted 06:05Z, a1b1da8 ok), TEMPORAL-SPIKE-TLS (PR #22 bae9b82; tls-seats; gRPC round trip = TEMPORAL-CHECK manual), WORKER-PROJ-V1 (PR #20 69a47cd; worker-proj-seats), PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
+PROJECTOR-ALARMS-READER (PR #28 8165c22, head 77dadcb, judge ACCEPT HIGH, seats alarms-reader-seats; DONE sent), KEEPER-LIVE-SYNC (live 1b923e5 GO D-1437; PR #26/#27 828e68e; judge ACCEPT adjudication; risk: triggers/PG/Temporal unexercised), PROJECTOR-LIVE-NAMESPACE-FLAKE (PR #25 ae5b749, head bfa0fd9, seat ns-flake-seats openai; DONE sent), KEEPER-CI-CONCLUSIONS (PR #24 1b923e5, judge server-L1-routing GO, keeper restarted 06:05Z, a1b1da8 ok), TEMPORAL-SPIKE-TLS (PR #22 bae9b82; tls-seats; gRPC round trip = TEMPORAL-CHECK manual), WORKER-PROJ-V1 (PR #20 69a47cd; worker-proj-seats), PROJECTOR-RECONCILE-SCHED (PR #21 cf9fc7b, head 8a3995e; seats reconcile-seats; DONE sent 04:4xZ w/ inbox-alarm-reader follow-up).
 
 ## Open
 | Item | State | Next |
 |---|---|---|
 | ROLLBACK-HOLD | worktree-proposal f3bac63 + backups/live-sync-1b923e5-20261016T064214Z | after 2026-10-17 06:42Z: ask routing to retire drop-in naming / worktree-proposal |
-| PROJECTOR-ALARMS-READER (p3) | MERGE-READY HIGH 77dadcb PR #28 (scoped; CI 38872164889 workst green; gpt-oss+qwen PASS seats/alarms-reader-77dadcb, dry-run rc0) | judge server-L1-routing asked 08:2xZ -> merge --match-head-commit -> evidence -> 2 verdicts |
+| LIVE-SYNC-2 (proposed) | live 1b923e5 vs main 8165c22 (alarms reader, ns-flake test fix; no DDL) | needs router GO when wanted |
 | CI-PYTEST-SPEED (p2, D-1457) | claimed 07:5xZ (lease 09:56Z); brief briefs/l2-ci-pytest-speed.md a402661 | launch accepted, gated on workst Docker/H: window (runners offline 07:56Z, ETA 08:10Z; >09:00Z -> coding.vm by router) |
 | CI-RUNS-ON-WORKST | open; autoos:CI-WORKST-RUNNER evidence verified 06:1xZ, in_review | code merged (#17, trailer 813951d, label workst). D-1380: label switch to [self-hosted, fleet-ci] is autoos:CI-RUNS-ON-POOL (workst-L1-autoos since D-1455) after runners carry fleet-ci; switching now would strand CI. Claim+evidence once CI-WORKST-RUNNER closes |
 | AO-DEEPINFRA-REMOVE | waits priv-writers merge (now workst-L1-autoos, D-1455) | brief docs/plan/rethink/briefs/l2-deepinfra-remove.md |
 | server:RT-P1-PG-DEPLOY | open (server-L1-main) | gates KEEPER-PG/TEMPORAL-CHECK/RT-P1 |
-Leases: renewed 07:57Z (ALARMS-READER, CI-PYTEST-SPEED); renew by 09:4xZ. L2: alarms-reader busy (a4bf956+seats). fixes-L1 retired D-1455 -> workst-L1-autoos owns its work.
+Leases: CI-PYTEST-SPEED (renewed 07:57Z, lease 09:56Z; renew by 09:4xZ). L2s: alarms-reader done; pytest-speed not launched (workst gate).
 
 ## Tools
 - Verdicts: `python3 <(git show origin/main:tools/seat_verdict.py) --key K --seat-dir D --writer-family F --token-dir ~/.config/plangraph`.
