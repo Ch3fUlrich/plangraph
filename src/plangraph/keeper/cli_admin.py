@@ -110,6 +110,19 @@ def _cmd_revoke(args, cfg) -> int:
     return 0
 
 
+def _problem_line(problem) -> str:
+    """One line per integrity problem; unknown types name the type and seq.
+
+    Every other problem keeps its plain dict repr (the contract greps the
+    codes out of it), but an ``unknown_event_type`` carries no expected/got
+    pair, so it reads as a sentence instead.
+    """
+    if problem.get("code") == "unknown_event_type":
+        return (f"{problem.get('key') or '-'} unknown_event_type"
+                f" type={problem.get('got')} seq={problem.get('seq')}")
+    return str(problem)
+
+
 def _cmd_verify(args, cfg) -> int:
     conn = _open(cfg)
     try:
@@ -118,7 +131,7 @@ def _cmd_verify(args, cfg) -> int:
     finally:
         conn.close()
     for problem in problems:
-        print(problem)
+        print(_problem_line(problem))
     if problems:
         print(f"{len(problems)} problem(s)", file=sys.stderr)
         return 2
