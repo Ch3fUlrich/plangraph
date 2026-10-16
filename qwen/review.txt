@@ -1,0 +1,67 @@
+=== part /home/s/.claude/jobs/8d58f6a0/tmp/q1.json
+## V1 — Ack storage
+
+The ack is exclusively the `ok=1` audit row written by `Store._run` on successful completion of `_ack`'s inner `fn`. A refused ack (role check, validation, not_found, bad_state) causes `fn` to raise `Refused`, so `_run` writes `ok=0`. The listing SQL in `_ALARMS` filters `a.ok = 1`, so a refused row can never hide an alarm. `test_a_refused_ack_is_audited_but_keeps_the_alarm_listed` confirms this explicitly.
+
+No forging path exists: the only call site for `store._run(principal, "ack_alarm", …)` is `_ack` in `routes.py:_ack`. No other verb string reaches audit with `action='ack_alarm'`. SQL injection is not applicable because all parameters are bound (`?` placeholders) and the `||`/`CAST` concatenation is on the integer PK only.
+
+No issue.
+
+## V2 — Authz on write
+
+`routes.py:_ack` checks `principal.role not in ("router","system")` first inside `fn`. The key is computed before `_run` (mirroring `_resignal`), so a non-privileged principal with a valid int still gets an `ok=0` audit entry with key `alarm:<id>`—never `ok=1`. Boolean `True`/`False` are excluded by `not isinstance(aid, bool)` in the key expression and re-checked inside `fn`. Strings, floats, None, and lists yield `key=None` and hit `validation` inside `fn` (after the role check, which is correct ordering). Negative ints produce key `alarm:-1`, the query returns no row → `not_found`, `ok=0`. No bypass surface in the diff.
+
+No issue.
+
+## V3 — Authz on read (scoping)
+
+`_alarms` builds `allowed = None` for `_SEES_ALL` roles, else `set(principal.projects or [])`. Filtering applies in the list comprehension: `if allowed is None or _project(r["key"]) in allowed`.
+
+- **Empty projects**: `set([] or [])` → `set()` → nothing matches → zero leaks.
+- **Keyless alarm (empty key)**: `_project("")` → `""` → never in a named-projects set → invisible to non-SEES_ALL. Contract satisfied.
+- **Key without colon** (`"demo"`): `_project("demo")` → `"demo"` → matched against project list; correct.
+- **Odd key** (`"a:b:c"`): split on first `:` → `"a"`; consistent with questions path.
+- **Scoping after error path**: The `except _UNREADABLE` block returns `{"alarms": [], "error": …}` before the list comprehension runs—no rows exist, so no scoping gap.
+- **Run principals**: Handled by the external `run_gate` (stated in docstring); no code in the diff introduces a path that bypasses role checking.
+
+No issue.
+
+## V4 — Listing correctness
+
+- **Cleared**: SQL `WHERE cleared_at IS NULL`. Tested in `test_lists_open_alarms_with_key_kind_and_age`. ✓
+- **Already acked**: `NOT EXISTS(… ok=1 …)`. Tested in `test_ack_removes_the_alarm_and_is_idempotent`. ✓
+- **Re-raised (new id)**: Key is `alarm:<id>`, so a new id is unconstrained by the old ack. Tested in `test_a_re_raised_alarm_lists_again_once_its_new_id_is_open`. ✓
+- **Unreadable table**: `_UNREADABLE` tuple catches NO_TABLE, OPERATIONAL, PROGRAMMING, DENIED. Returns 200 with `error` field, never silent empty list. Tested in `test_a_broken_alarms_query_is_reported_never_hidden`. ✓
+
+No issue.
+
+## V5 — SQL portability / no schema change
+
+`_ALARMS` uses `||` (concatenation operator valid in both SQLite and PostgreSQL) and `CAST(id AS TEXT)` (ISO/IEC standard). `NOT EXISTS` is standard SQL. The `_ack` query uses `WHERE id=?` consistent with the rest of `routes.py` (e.g., `_stored_answer`). No DDL, no migration, no new table/column; the contract section explicitly states "schema is unchanged." ✓
+
+No issue.
+
+## V6 — form.py page
+
+- **XSS**: `alarmCard` and `loadAlarms` use `el(tag, cls, text)` which (following the existing `card` pattern) sets `textContent`. Error messages use `st.textContent = t`. No `innerHTML` in new code. ✓
+- **CSP compat**: Event handlers via `addEventListener`, no inline `onclick`. No new `<script>` elements; existing IIFE is unchanged. ✓
+- **Error banner**: `loadAlarms` calls `msg(…, "err")` on non-ok response or when `b.error` is present. ✓
+
+No issue.
+
+## V7 — Tests
+
+- **Foreign-project principal sees nothing**: `test_a_principal_without_the_alarm_project_sees_none` — `l1other` (projects `['other']`) receives `[]` for a `demo` alarm. ✓
+- **Non-router ack refused 403**: `test_ack_is_router_or_system_only` — `workerA`, `l1main`, `reviewer` all get `(403, "forbidden")`, alarm still listed. ✓
+- **Would fail without the change**: endpoints are new; without the diff, `/v1/alarms` and `/v1/ack_alarm` return `not_found` → assertions fail. ✓
+- Additional coverage: validation types, cleared/unknown alarm, idempotent ack, broken table, re-raise, keyless scoping, page route strings.
+
+No issue.
+
+---
+
+TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits
+
+VERDICT: pass
+TEST-GAMING: no - per-part lines above (refuted ones per adjudication): 0 hits
+VERDICT: pass

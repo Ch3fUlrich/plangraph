@@ -1,0 +1,23 @@
+V1 Ack storage  
+src/plangraph/inbox/routes.py:_ack – the function returns `{"alarm_id": aid, "acked": True}` and is passed to `store._run(principal, "ack_alarm", key, fn)`. `store._run` creates the audit row with `action='ack_alarm'`, `key='alarm:<id>'` and `ok=1` only when `fn` completes without raising. A Refused exception (forbidden, validation, not_found, bad_state) is caught by `_run` and written as an audit row with `ok=0`, preserving the alarm. No other code writes `ack_alarm` rows, so a failed ack cannot hide an alarm and no other path can forge a successful row.
+
+V2 Authz on write  
+src/plangraph/inbox/routes.py:_ack – first checks `principal.role not in ("router", "system")` and raises `Refused("forbidden", …)`. Then validates `alarm_id` type (`isinstance(aid, bool)` or not `int`) and raises `Refused("validation", …)`. Subsequent existence and cleared‑state checks raise `Refused("not_found")` or `Refused("bad_state")`. Thus only router or system may succeed; boolean, string, float, list, or negative IDs are rejected before any audit row with `ok=1` can be created.
+
+V3 Authz on read (scoping)  
+src/plangraph/inbox/routes.py:_alarms – computes `allowed = None` for roles in `_SEES_ALL` (`router`, `system`, `reader`) else `set(principal.projects or [])`. The list comprehension includes a row only if `allowed is None` or `_project(r["key"]) in allowed`. Key‑less alarms have `r["key"] == ""`; `_project("")` does not match any non‑empty project set, so they are visible only to the “sees‑all” roles. No later filtering occurs after the error‑path handling, and missing tables are caught before scoping is applied.
+
+V4 Listing correctness  
+src/plangraph/inbox/routes.py:_ALARMS – selects rows where `cleared_at IS NULL` and where no audit row with `action='ack_alarm'`, `ok=1`, `key='alarm:'||CAST(id AS TEXT)` exists (`NOT EXISTS`). The result is ordered by `id`. If the query raises any of `_UNREADABLE` exceptions (missing table, permission, etc.) the function returns `{"alarms": [], "error": "alarms unreadable: <ExcClass>"}`; otherwise it returns the list with computed `age_s`. Thus cleared alarms never appear, acknowledged alarms are excluded, re‑raised alarms (new id) appear, and errors are reported via an explicit `error` field.
+
+V5 SQL portability  
+src/plangraph/inbox/routes.py:_ALARMS – uses `|| CAST(projector_alarms.id AS TEXT)` for string concatenation, which works in both SQLite and PostgreSQL. The `NOT EXISTS (SELECT 1 FROM audit_log a WHERE a.action = 'ack_alarm' AND a.ok = 1 AND a.key = 'alarm:' || CAST(projector_alarms.id AS TEXT))` subquery is valid SQL for both back‑ends, and no schema changes or DDL statements are introduced.
+
+V6 Form page XSS safety & UI  
+src/plangraph/inbox/form.py:alarmCard – creates all DOM nodes via `document.createElement` and assigns data only to `textContent` (e.g., `c.appendChild(el("div","key",a.key))`). No `innerHTML` is used, preventing script injection. The page now contains `<h2>Alarms</h2><div id="alarms"></div>` and the `loadAlarms()` function displays errors through `msg()` (which writes to the `#msg` banner) rather than silently returning an empty list. All added elements respect the existing CSP header set elsewhere.
+
+V7 Tests coverage  
+tests/test_inbox_alarms.py – exercises reading (`GET /v1/alarms`) with project scoping, handling of cleared vs. open alarms, age calculation, error reporting on a dropped table, and acknowledgement (`POST /v1/ack_alarm`) including role restrictions, validation, idempotency, audit‑row creation, and re‑raising behavior. The tests would fail without the new routes, query, and page updates, confirming that the implementation satisfies the specification.
+
+TEST-GAMING: no - searched src/ and tests/ for test‑specific conditionals, environment checks, or overridden semantics: 0 hits
+VERDICT: pass

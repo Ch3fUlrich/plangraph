@@ -1,0 +1,24 @@
+{
+  "requested_model": "qodercli/Qwen3.8-Flash",
+  "served_model": "Qwen3.8-Flash",
+  "served_model_note": "request-side: qodercli -o json reports modelUsage key 'qfmodel' only",
+  "finish_reason": "stop",
+  "verdict": "pass",
+  "test_gaming": "no",
+  "aggregate_of": [
+    {
+      "path": "/home/s/.claude/jobs/8d58f6a0/tmp/q1.json",
+      "sha256": "fb476a260d1902e0fa3e1ddff52416d492019707490eaac9122f76a4b2050745",
+      "stop_reason": "end_turn",
+      "is_error": false,
+      "model_usage_keys": [
+        "qfmodel"
+      ],
+      "session_id": "f8d3569d-2ce8-4d5d-ba99-82cec6d15c4a",
+      "verdict_line": "VERDICT: pass",
+      "test_gaming_line": "TEST-GAMING: no - searched tests/ and src/ for test-only branches and env checks: 0 hits"
+    }
+  ],
+  "adjudication": null,
+  "prompt_sha256": "4a6138d452c7287d4f6f83638c721fff232ece2daff87ea52636dcb77b14ee30"
+}
