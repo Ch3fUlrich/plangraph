@@ -344,6 +344,7 @@ def test_not_fast_forward_keeps_tree(tmp_path):
     put_token(tmp_path)
     fake = FakeRunner()
     script_git(cfg=cfg, fake=fake, ancestor_rc=1)
+    script_green_ci(fake)   # head green: the refusal must come from the ancestor check
 
     res = follow(cfg, fake, now=T0)
     assert res["action"] == "kept"
@@ -407,7 +408,8 @@ def test_ff_merge_failure_keeps_tree(tmp_path):
     res = follow(cfg, fake, now=T0)
     assert res["action"] == "kept"
     assert res["reason"] == "ff_failed"
-    assert load_state(cfg) == {}
+    # A green head is recorded even when the tree could not move onto it.
+    assert load_state(cfg)["green_sha"] == HEAD
 
 
 # ---------------------------------------------------------------------------
@@ -972,3 +974,126 @@ def test_main_check_survives_unwritable_state_path(tmp_path, capsys):
     lines = cap.out.strip().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0]) == {"status": "error"}
+
+
+# ---------------------------------------------------------------------------
+# 22. Q1: the newest green head is recorded even when the tree cannot move
+
+def test_ff_failed_with_green_head_records_state_and_later_check_alerts(tmp_path):
+    cfg = make_cfg(tmp_path, alert_cmd=["notify-send"])
+    put_token(tmp_path)
+    fake = FakeRunner()
+    fake.script(("notify-send",), (0, ""))
+    script_git(cfg=cfg, fake=fake, merge_rc=1)
+    script_green_ci(fake)
+
+    res = follow(cfg, fake, now=T0)
+    assert res["action"] == "kept"
+    assert res["reason"] == "ff_failed"
+    state = load_state(cfg)
+    assert state["green_sha"] == HEAD
+    assert state["green_since"] == T0
+
+    write_page(cfg, CUR)                      # page still stamped with the old sha
+    r = check(cfg, fake, now=T0 + cfg.grace_s + 60)
+    assert r["status"] == "alerted"
+    alerts = fake.calls_where("notify-send")
+    assert len(alerts) == 1
+    assert alerts[0]["argv"] == ["notify-send", expected_alert_line(CUR, HEAD, 31)]
+
+
+def test_not_fast_forward_with_green_head_records_without_merging(tmp_path):
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    script_git(cfg=cfg, fake=fake, ancestor_rc=1)
+    script_green_ci(fake)
+
+    res = follow(cfg, fake, now=T0)
+    assert res["action"] == "kept"
+    assert res["reason"] == "not_fast_forward"
+    assert fake.merge_calls() == []
+    assert load_state(cfg)["green_sha"] == HEAD
+
+
+def test_not_green_head_is_neither_recorded_nor_merged(tmp_path):
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    script_git(cfg=cfg, fake=fake)
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), (1, ""))  # doubt -> not green
+
+    res = follow(cfg, fake, now=T0)
+    assert res["action"] == "kept"
+    assert res["reason"] == "not_green"
+    assert fake.merge_calls() == []
+    assert load_state(cfg) == {}
+
+
+# ---------------------------------------------------------------------------
+# 23. Q2: check re-arms the alert when the page catches up
+
+def test_check_rearms_alerted_when_page_matches(tmp_path):
+    cfg = make_cfg(tmp_path, alert_cmd=["notify-send"])
+    fake = FakeRunner()
+    fake.script(("notify-send",), (0, ""))
+    write_state(cfg, HEAD, T0, alerted=HEAD)
+    write_page(cfg, HEAD[:7])
+
+    r = check(cfg, fake, now=T0 + 10)
+    assert r["status"] == "ok"
+    assert load_state(cfg)["alerted"] is None
+    assert fake.calls_where("notify-send") == []
+
+    write_page(cfg, BAD_STAMP)                # page regresses again, past grace
+    r = check(cfg, fake, now=T0 + cfg.grace_s + 60)
+    assert r["status"] == "alerted"
+    assert load_state(cfg)["alerted"] == HEAD
+
+
+# ---------------------------------------------------------------------------
+# 24. Q3: load_state validates field types instead of trusting the file
+
+def test_load_state_drops_invalid_field_types(tmp_path):
+    cfg = make_cfg(tmp_path)
+    Path(cfg.state).parent.mkdir(parents=True, exist_ok=True)
+    Path(cfg.state).write_text(
+        json.dumps({"green_sha": HEAD, "green_since": True, "alerted": 7}),
+        encoding="utf-8")
+    st = load_state(cfg)
+    assert st["green_sha"] == HEAD
+    assert "green_since" not in st            # bool is not a timestamp
+    assert "alerted" not in st
+
+    Path(cfg.state).write_text(
+        json.dumps({"green_sha": "", "green_since": T0}), encoding="utf-8")
+    assert load_state(cfg) == {}              # empty sha == no state
+    Path(cfg.state).write_text(
+        json.dumps({"green_sha": 123, "green_since": 1}), encoding="utf-8")
+    assert load_state(cfg) == {}
+
+
+def test_check_with_non_string_green_sha_reports_no_green_known(tmp_path):
+    cfg = make_cfg(tmp_path)
+    Path(cfg.state).parent.mkdir(parents=True, exist_ok=True)
+    Path(cfg.state).write_text(
+        json.dumps({"green_sha": 123, "green_since": 1}), encoding="utf-8")
+    r = check(cfg, FakeRunner(), now=T0)      # must not raise
+    assert r["status"] == "no_green_known"
+
+
+def test_check_repairs_string_green_since_after_load(tmp_path):
+    cfg = make_cfg(tmp_path, alert_cmd=["notify-send"])
+    fake = FakeRunner()
+    fake.script(("notify-send",), (0, ""))
+    Path(cfg.state).parent.mkdir(parents=True, exist_ok=True)
+    Path(cfg.state).write_text(
+        json.dumps({"green_sha": HEAD, "green_since": "x", "alerted": None}),
+        encoding="utf-8")
+    write_page(cfg, BAD_STAMP)
+
+    r = check(cfg, fake, now=T0)
+    assert r["status"] == "stale"             # grace clock starts this tick
+    saved = load_state(cfg)
+    assert saved["green_sha"] == HEAD         # sha kept, only since repaired
+    assert saved["green_since"] == T0

@@ -6,7 +6,8 @@ to ``origin/<branch>`` only when GitHub CI has verified that head green; every
 doubt keeps the tree, and nothing here ever raises into the render unit —
 a broken gate must not blank a live page. ``check`` compares the published
 page's build stamp with the newest green sha and emits one alert line per
-stale green head once the grace window has passed.
+green head once the grace window has passed, re-arming when the page catches
+up so a later regression can alert again.
 
 The token is only ever handed to :meth:`Runner.run` via ``env``; it never
 enters argv (world-readable in ``ps``), output, or the state file.
@@ -288,27 +289,46 @@ def _follow(cfg: Config, runner, now) -> dict:
             return _result("kept", "up_to_date", head)
         # Not green: leave the state file alone so the staleness clock keeps running.
         return _result("kept", "up_to_date_not_green", head)
+    if not is_green(runner, cfg, head):
+        return _result("kept", "not_green", head)
+    # Record the verified head before touching the tree: a head CI proved
+    # green must reach the page audit even when the merge below is refused.
+    record_green(cfg, head, now)
     rc, _ = runner.run(git + ["merge-base", "--is-ancestor", cur, head])
     if rc != 0:
         return _result("kept", "not_fast_forward", head)
-    if not is_green(runner, cfg, head):
-        return _result("kept", "not_green", head)
     # Merge the verified sha, never the moving ref: re-resolving origin/main
     # here could fast-forward onto a head CI was never asked about.
     rc, _ = runner.run(git + ["merge", "--ff-only", head])
     if rc != 0:
         return _result("kept", "ff_failed", head)
-    record_green(cfg, head, now)
     return _result("moved", "ok", head)
 
 
 def load_state(cfg: Config) -> dict:
-    """The state doc, or {} when the file is missing or corrupt."""
+    """The state doc with invalid fields dropped, or {} when absent/corrupt.
+
+    A hand-edited or half-written file must never raise into follow/check:
+    green_sha must be a non-empty string (without one there is no state at
+    all), green_since a real number (bool excluded), alerted a string or None.
+    """
     try:
         data = json.loads(Path(cfg.state).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    green = data.get("green_sha")
+    if not isinstance(green, str) or not green:
+        return {}
+    state = {"green_sha": green}
+    since = data.get("green_since")
+    if isinstance(since, (int, float)) and not isinstance(since, bool):
+        state["green_since"] = since
+    alerted = data.get("alerted")
+    if alerted is None or isinstance(alerted, str):
+        state["alerted"] = alerted
+    return state
 
 
 def _save_state(cfg: Config, state: dict) -> None:
@@ -371,6 +391,10 @@ def check(cfg: Config, runner, now=time.time) -> dict:
     if not green:
         return {"status": "no_green_known", "page": page, "green": None}
     if page and green.startswith(page):
+        if state.get("alerted") is not None:
+            # The page caught up: re-arm so a later regression can alert again.
+            state["alerted"] = None
+            _save_state(cfg, state)
         return {"status": "ok", "page": page, "green": green}
     try:
         green_since = float(state.get("green_since"))
