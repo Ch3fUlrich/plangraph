@@ -29,8 +29,12 @@ BAD = [f"login with {SECRET} on the box", f"password: {SECRET}",
 OK = ["plain text a/b login", "no keyword svc/Zq9xk2LmPw",
       "login " + "x" * 200 + " svcacct/Zq9xk2LmPw",
       "svcacct/Zq9xk2LmPw " + "x" * 200 + " login"]
-# D-388: NO exemptions. URLs, paths, extensions and brackets do not hide a pair;
-# the accepted false positive is that authors rephrase paths/URLs near credential words.
+# D-388 as revised by PL-33: the ONE exemption is a path-like token (two or more
+# '/', no '=' or ':', last '/'-segment with a file extension) -- see
+# test_keeper_guard_key.py.  Here everything else still does not hide a pair:
+# URLs, ':'-bearing or '='-bearing tokens, one-slash tokens, extension-less paths
+# and brackets; the accepted false positive is that authors rephrase those near a
+# credential word.
 BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "read svc/Zq9xk2LmPw.md for the password",
         "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw",
@@ -43,7 +47,12 @@ BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "login see https://x/y/abcdefg", "see https://x/y/abcdefg login",
         "https://example.org/Zq9xk2LmPw login page",
         "login svcacct/Secret123://", "login my://svcacct/Secret12345",
-        "my://svcacct/Secret12345 password"]
+        "my://svcacct/Secret12345 password",
+        "login admin/hunter2secret,docs/x/y.md", "login admin/hunter2secret;docs/x/y.md",
+        "login docs/x/y.md,admin/hunter2secret", "login a/b/c.md;svc/Xk9fT2mQ",
+        "login admin/hunter2secret|docs/x/y.md", "login admin/hunter2secret&docs/x/y.md",
+        "login docs/x/y.md|admin/hunter2secret"]
+OK += ["see docs/x/y.md,docs/p/q.md for the login flow"]
 
 
 @pytest.mark.parametrize("text", BAD)

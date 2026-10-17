@@ -54,7 +54,7 @@ adapter and triggers change; it is the M4 default hardening.
 | 5a | loop (§4): claims/transitions keeper-enforced; escalation triggers computed by `pg alerts` | P transitions; D alerts |
 
 **Threat model.** Agents are untrusted principals with *no OS access* to the DB: it lives in a 0700 directory of its own
-unix user (`plankeeper`); agents on any host reach only the keeper API (tailnet/HTTPS, token). OS isolation is the primary
+unix user (`plankeeper`); agents on any host reach only the keeper API (private network/HTTPS, token). OS isolation is the primary
 control; the triggers are defence in depth against keeper bugs. **Residual (stated):** root, the operator, or anyone
 running as `plankeeper` can rewrite the file — detected after the fact only; Postgres with column grants + RLS is the
 M4 hardening step, same schema [R2-imm 25–28].
@@ -73,7 +73,7 @@ M4 hardening step, same schema [R2-imm 25–28].
   record (read-only access) to resolve each run's role, model and family and to confirm the run exists — L1 supplies a run id,
   never the claims about it. A `done` verdict needs a reviewer run with role=review, principal ≠ L1 ≠ worker and family ≠ worker
   family; if either family is unresolved the verdict is **refused (fail closed)**. Residual: a compromised L1 plus a real but
-  colluding review run could forge DONE; routing-00's `pg digest` samples DONE items for this.
+  colluding review run could forge DONE; the router's `pg digest` samples DONE items for this.
 - **State machine (all allowed edges).** `open→claimed` (claim) · `claimed→open` (release, or lease expiry by reaper) ·
   `claimed→in_review` (submit, evidence present) · `in_review→claimed` (`--changes`, same epoch; 2× → `open` + alert) ·
   `in_review→done` (reviewer verdict + verified evidence) · `open|claimed|in_review→cancelled` (router/L1; not from done).
@@ -89,7 +89,7 @@ M4 hardening step, same schema [R2-imm 25–28].
 - **Validator** on every write over the whole multi-project graph: no cycle, edge targets exist, every *non-terminal* item
   reaches a goal (DONE/cancelled items are exempt, so cancelling can never freeze the system).
 - **Detection + recovery.** Hash-chained events; the head hash is appended to a root-owned log (outside agent and keeper users)
-  on every DONE transition and hourly, and tagged in git; an independent remote/signing key held by routing-00 is an M4
+  on every DONE transition and hourly, and tagged in git; an independent remote/signing key held by the router is an M4
   decision. At start the keeper refuses a DB whose head is behind the latest anchor (restored/rolled-back file) and alerts.
   Hourly `.backup` to a root-owned dir; restore is operator-only. Nightly: DONE shas still on `main` → `audit_findings`.
   Assumes agents have no sudo and do not run as the operator's user — test 1b checks this on real autoos agents.
@@ -110,10 +110,10 @@ M4 hardening step, same schema [R2-imm 25–28].
 8 V: pg verdict ID --pass | --changes "why"   # keeper verifies evidence, sets done
 9 goto 1 ; every loop: pg alerts --project P
 ```
-**Escalate to routing-00 only on:** lease expired twice on one item; evidence refused twice; `--changes` twice; reviewer
+**Escalate to the router only on:** lease expired twice on one item; evidence refused twice; `--changes` twice; reviewer
 silent past deadline or no eligible reviewer; item blocked > 4 h by another project's item; ready set empty while goal
 unreached and nothing in flight (stall); validator error; a definition change touching another project; token/identity
-anomaly; keeper unreachable > 10 min. **routing-00 through the graph:** `pg ready --all --brief`, `pg assign ID --to L1`,
+anomaly; keeper unreachable > 10 min. **The router through the graph:** `pg ready --all --brief`, `pg assign ID --to L1`,
 `pg priority ID +n` (router-only), `pg digest` (per-project counts, stalled items) — assignment by id, not long messages.
 
 ## 5. Human page (req 3)
@@ -139,7 +139,7 @@ when needed; all 11 plan files = 54,706 B), one tokenizer on both sides (format 
 than the lane files in bytes — a format sketch, not a measurement); (7) screenshots desktop 1280 px + phone 390 px (browser → workstation); (8) kill the keeper → read-only
 fallback + outbox replay; (9) one live L1 works a real lane from the graph with no prose orders.
 **Cost/time (estimates, no measured basis yet):** M2 ≈ 2–3 days, M3 ≈ 4–5 days; ≈ 0.6–1.0 M Claude tokens (L1 Sonnet +
-finals), workers/reviewers on trial/free legs; no database server, but one new long-running service (keeper HTTP/MCP + `plankeeper` unix user + root-owned anchor log + tailnet endpoint; SQLite on coding.vm; browser tests on the workstation —
+finals), workers/reviewers on trial/free legs; no database server, but one new long-running service (keeper HTTP/MCP + `plankeeper` unix user + root-owned anchor log + private network endpoint; SQLite on the coding VM; browser tests on the workstation —
 placement request at test 7). Maintenance: ours; dependencies = Python stdlib (sqlite3, graphlib); Cytoscape.js (believed MIT), the layout plugin and the MCP Python SDK
 (licence/churn unverified in research — day 1).
 
@@ -150,10 +150,10 @@ placement request at test 7). Maintenance: ours; dependencies = Python stdlib (s
 ## 8. Review record
 Seat 1 and seat 2 (autoos-agent, combo `t3-driver-clean`, runs `…review-proposal-seat1-bad5af` / `…seat2-c7f6c7`):
 25 + 22 findings on v1; the spawner left both writer/reviewer families **unresolved**, so D-206 cross-family is *not*
-verifiably met — flagged to routing-00. v1 gaps fixed here: tool sweep folded in, P/D for every req, locked-row triggers
+verifiably met — flagged to the router. v1 gaps fixed here: tool sweep folded in, P/D for every req, locked-row triggers
 (v1 wrongly blocked new dependents), recursive triggers, token issuance/TTL/binding, reviewer separation, epochs, review
 deadline, evidence kinds, snapshot signing, import path, anchor, whole-graph validator, unsourced claims removed.
 
-Sonnet final (subagent, model sonnet) on v2: NOT READY → this v3 edit addresses its points (denominator 58×, bv wording, sweep tools named, state-machine edges, reviewer loop, trigger/authorizer holes, validator deadlock, evidence binding, outage/rollback, misleading P labels). Re-review by routing-00.
+Sonnet final (subagent, model sonnet) on v2: NOT READY → this v3 edit addresses its points (denominator 58×, bv wording, sweep tools named, state-machine edges, reviewer loop, trigger/authorizer holes, validator deadlock, evidence binding, outage/rollback, misleading P labels). Re-review by the router.
 
 Sources: [R1] routing/research/2026-10-01-plan-graph-tools.md · [R2-orch] …-round2-orchestrators.md · [R2-imm] …-round2-immutability.md (numbers = its source list) · [R2-sweep] …-round2-tool-sweep.md

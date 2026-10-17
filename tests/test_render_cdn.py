@@ -163,6 +163,7 @@ def test_js_and_css_are_data_driven():
         "page.js",
         "page_ui.js",
         "page_ui_filters.js",
+        "page_stamp.js",
         "page_details.js",
         "page_model.js",
         "page_store.js",

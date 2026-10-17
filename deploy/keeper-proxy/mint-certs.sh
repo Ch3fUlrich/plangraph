@@ -6,7 +6,7 @@
 #   mint-certs.sh server <ca-dir> <out-dir> <dns> [ip]      # per sidecar: server.crt/.key, serverAuth, SAN dns(+ip)
 #   mint-certs.sh client <ca-dir> <out-dir> [cn]            # once per edge: client.crt/.key, clientAuth (Caddy)
 #
-# Conventions: CA "ohje internal hop CA", EC P-256, CA 10 y, leaves 825 d; server SAN = the upstream name Caddy
+# Conventions: CA "internal hop CA", EC P-256, CA 10 y, leaves 825 d; server SAN = the upstream name Caddy
 # dials (tls_server_name) + its LAN IP; Caddy gets ca.crt + client.* at /usr/local/etc/caddy/internal-ca/.
 set -eu
 cmd=${1:?usage: mint-certs.sh ca|server|client ...}
@@ -23,7 +23,7 @@ case "$cmd" in
     dir=${2:?ca-dir}; mkdir -p "$dir"
     [ -e "$dir/ca.key" ] && { echo "refusing: $dir/ca.key exists" >&2; exit 1; }
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 3650 \
-      -subj "/CN=ohje internal hop CA" -keyout "$dir/ca.key" -out "$dir/ca.crt" \
+      -subj "/CN=internal hop CA" -keyout "$dir/ca.key" -out "$dir/ca.crt" \
       -addext "basicConstraints=critical,CA:TRUE,pathlen:0" -addext "keyUsage=critical,keyCertSign,cRLSign" 2>/dev/null
     chmod 600 "$dir/ca.key"; echo "CA in $dir (keep ca.key offline, operator-only)";;
   server)

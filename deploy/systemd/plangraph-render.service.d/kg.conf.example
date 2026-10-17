@@ -1,0 +1,10 @@
+# Drop-in example — documentation only; copy without the .example suffix to make it live.
+# mkdir -p ~/.config/systemd/user/plangraph-render.service.d
+# cp kg.conf.example ~/.config/systemd/user/plangraph-render.service.d/kg.conf
+# systemctl --user daemon-reload
+#
+# Point the renderer at a knowledge-graph sidecar so the page can link to live graph views.
+# Both values are placeholders; the host is always loopback.
+[Service]
+Environment=PG_KG_URL=http://127.0.0.1:8080
+Environment=PG_KG_GRAPHS=<graph-name>

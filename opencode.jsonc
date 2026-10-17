@@ -1,0 +1,96 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // plangraph opencode configuration: mirrors AutoOS opencode.jsonc for WSL legs.
+  // Provides t2-worker and l2-worker agents and omniroute/mimo-v2.6-flash model so
+  // autoos-agent spawn legs run seamlessly from a plangraph checkout.
+  "permissions": [
+    // mirrors the secret-file fences in AutoOS opencode.jsonc
+    { "action": "read", "resource": "*.env", "effect": "deny" },
+    { "action": "read", "resource": "*.env.*", "effect": "deny" },
+    { "action": "read", "resource": "*auth.json", "effect": "deny" },
+    { "action": "read", "resource": "*api_keys*", "effect": "deny" },
+    { "action": "read", "resource": "*api-keys*", "effect": "deny" },
+    { "action": "read", "resource": "*client.key*", "effect": "deny" },
+    { "action": "read", "resource": "*manage.key*", "effect": "deny" },
+    { "action": "read", "resource": "*.claude.json*", "effect": "deny" },
+    { "action": "read", "resource": "*.env.example", "effect": "allow" },
+    { "action": "read", "resource": "*configuration/api-keys.example.yml", "effect": "allow" },
+    { "action": "grep", "resource": "*.env", "effect": "deny" },
+    { "action": "grep", "resource": "*.env.*", "effect": "deny" },
+    { "action": "grep", "resource": "*auth.json", "effect": "deny" },
+    { "action": "grep", "resource": "*api_keys*", "effect": "deny" },
+    { "action": "grep", "resource": "*api-keys*", "effect": "deny" },
+    { "action": "grep", "resource": "*client.key*", "effect": "deny" },
+    { "action": "grep", "resource": "*manage.key*", "effect": "deny" },
+    { "action": "grep", "resource": "*.claude.json*", "effect": "deny" },
+    { "action": "grep", "resource": "*.env.example", "effect": "allow" },
+    { "action": "grep", "resource": "*configuration/api-keys.example.yml", "effect": "allow" },
+    { "action": "glob", "resource": "*.env", "effect": "deny" },
+    { "action": "glob", "resource": "*.env.*", "effect": "deny" },
+    { "action": "glob", "resource": "*auth.json", "effect": "deny" },
+    { "action": "glob", "resource": "*api_keys*", "effect": "deny" },
+    { "action": "glob", "resource": "*api-keys*", "effect": "deny" },
+    { "action": "glob", "resource": "*client.key*", "effect": "deny" },
+    { "action": "glob", "resource": "*manage.key*", "effect": "deny" },
+    { "action": "glob", "resource": "*.claude.json*", "effect": "deny" },
+    { "action": "glob", "resource": "*.env.example", "effect": "allow" },
+    { "action": "glob", "resource": "*configuration/api-keys.example.yml", "effect": "allow" },
+    { "action": "external_directory", "resource": "*.env", "effect": "deny" },
+    { "action": "external_directory", "resource": "*.env.*", "effect": "deny" },
+    { "action": "external_directory", "resource": "*auth.json", "effect": "deny" },
+    { "action": "external_directory", "resource": "*api_keys*", "effect": "deny" },
+    { "action": "external_directory", "resource": "*api-keys*", "effect": "deny" },
+    { "action": "external_directory", "resource": "*client.key*", "effect": "deny" },
+    { "action": "external_directory", "resource": "*manage.key*", "effect": "deny" },
+    { "action": "external_directory", "resource": "*.claude.json*", "effect": "deny" }
+  ],
+  "agents": {
+    "t2-worker": {
+      "description": "Smart worker: owns one track, reconciles reviews. May launch t3-reviewer only.",
+      "mode": "subagent",
+      "model": "omniroute/mimo-v2.6-flash",
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "t3-reviewer", "effect": "allow" },
+        { "action": "task", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "t3-reviewer", "effect": "allow" },
+        { "action": "shell", "resource": "git push*", "effect": "deny" },
+        { "action": "shell", "resource": "*git *push*", "effect": "deny" },
+        { "action": "shell", "resource": "git merge*", "effect": "deny" },
+        { "action": "shell", "resource": "*git *merge*", "effect": "deny" }
+      ]
+    },
+    "l2-worker": {
+      "description": "Smart worker: owns one track, reconciles reviews. May launch t3-reviewer only.",
+      "mode": "subagent",
+      "model": "omniroute/mimo-v2.6-flash",
+      "permissions": [
+        { "action": "subagent", "resource": "*", "effect": "deny" },
+        { "action": "subagent", "resource": "t3-reviewer", "effect": "allow" },
+        { "action": "task", "resource": "*", "effect": "deny" },
+        { "action": "task", "resource": "t3-reviewer", "effect": "allow" },
+        { "action": "shell", "resource": "git push*", "effect": "deny" },
+        { "action": "shell", "resource": "*git *push*", "effect": "deny" },
+        { "action": "shell", "resource": "git merge*", "effect": "deny" },
+        { "action": "shell", "resource": "*git *merge*", "effect": "deny" }
+      ]
+    }
+  },
+  "providers": {
+    "omniroute": {
+      "name": "AutoOS OmniRoute gateway",
+      "env": ["AUTOOS_OMNIROUTE_KEY"],
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": {
+        "baseURL": "http://127.0.0.1:20128/v1"
+      },
+      "models": {
+        "mimo-v2.6-flash": {
+          "modelID": "mimo-v2.6-flash",
+          "name": "Xiaomi MiMo v2.6 Flash · 1M",
+          "limit": { "context": 1048576, "output": 65536 }
+        }
+      }
+    }
+  }
+}
