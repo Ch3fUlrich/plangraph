@@ -79,7 +79,10 @@ def validate(items):
 
     Problem codes: ``dup_key``, ``unknown_dep``, ``cycle``,
     ``depends_on_cancelled``, ``no_goal``, ``unreachable_goal``, ``bad_state``,
-    ``corrects_not_done``, ``self_dep``.
+    ``corrects_not_done``, ``self_dep``, ``loop_no_exit``, ``loop_many_exits``.
+    A ``decision`` item that depends on a ``loop`` is that loop's exit decision:
+    every non-cancelled ``loop`` needs exactly one such decision, and only
+    decisions whose state is not ``cancelled`` are counted.
     """
     idx = index(items)
     problems = []
@@ -124,6 +127,23 @@ def validate(items):
             problems.append(_problem(
                 "corrects_not_done", key,
                 f"corrects {corrects} which is {_state(target)}"))
+
+    # MODEL-LOOP: a decision depending on a loop is its exit decision; every
+    # live loop needs exactly one (cancelled decisions are not counted).
+    live_decisions = [d for d in items
+                      if d.get("kind") == "decision" and _state(d) != "cancelled"]
+    for it in items:
+        if it.get("kind") != "loop" or _state(it) == "cancelled":
+            continue
+        key = it["key"]
+        exits = [d for d in live_decisions if key in _deps(d)]
+        if not exits:
+            problems.append(_problem("loop_no_exit", key,
+                                     "no exit decision depends on this loop"))
+        elif len(exits) > 1:
+            problems.append(_problem(
+                "loop_many_exits", key,
+                f"loop has {len(exits)} exit decisions, only one allowed"))
 
     non_terminal = [it for it in items if _state(it) not in TERMINAL]
     goals = [it for it in items if it.get("kind") == "goal"]

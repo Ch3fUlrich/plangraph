@@ -44,7 +44,7 @@ used only by import/export, never by views or the keeper core. Import validates 
 - `index(items) -> dict[key,item]`
 - `validate(items) -> list[Problem]` — Problem = `{code, key, msg}`: `dup_key`, `unknown_dep`, `cycle` (list the cycle),
   `depends_on_cancelled`, `no_goal`, `unreachable_goal` (only NON-terminal items must reach a goal; done/cancelled exempt),
-  `bad_state`, `corrects_not_done`, `self_dep`.
+  `bad_state`, `corrects_not_done`, `self_dep`, `loop_no_exit`, `loop_many_exits`.
 - `ready(items, project=None) -> list[item]` — state `open`, every dep `done`; sorted by (-priority, -unblocks, estimate_h, key).
 - `blocked(items, project=None) -> dict[key, list[key]]` — open/claimed items → their unmet dependency keys.
 - `waves(items) -> list[list[key]]` — graphlib layers over non-terminal items; done deps count as satisfied; wave 0 = ready-now.
@@ -54,6 +54,10 @@ used only by import/export, never by views or the keeper core. Import validates 
 - `unblocks(items) -> dict[key,int]` — how many non-terminal items directly wait on it.
 - `brief(items, project=None, n=10) -> str` — the agent text: one line per ready item `key | title | est Nh | unblocks N | prio P`.
 Determinism: all outputs sorted; no randomness.
+
+A `loop` item kind behaves like `lane` in every view (ready/blocked/waves/critical path). Its exit is a `decision`
+item whose `depends_on` lists the loop: `validate` reports `loop_no_exit` when a non-cancelled loop has no such
+decision and `loop_many_exits` when it has more than one — cancelled decisions are never counted as exits.
 
 ## Page (`src/plangraph/render.py`)
 `render(snapshot: dict, vendor_dir: Path) -> str` returns ONE self-contained HTML string (snapshot JSON + `vendor/*.js`
