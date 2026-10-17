@@ -40,7 +40,9 @@ then paths + full shas. No status chatter.
   7. deepseek/deepseek-v4.1-flash (API)
 - Writer = the first available entry. Seats = the next available entries whose family differs from the writer and from
   each other. If no valid family is left, report BLOCKED. Record the resolved model + model_source of every run.
-- agy gets code only, never plan data, decisions or keeper content (S17; D-1704 does not lift it). Never OVH/Mistral.
+- Family = the model actually served (D-1705), so an openrouter/free run counts as the family of the model it resolved to.
+  openrouter/free counts on private repos too (operator, D-1705).
+- agy gets code only, never plan data, decisions or keeper content (S17, D-562; kept by D-1705). Never OVH/Mistral.
 - workst-L1-autoos runs the seats: send it the package (`git format-patch` + the review prompt).
 - EVERY writer task text carries this line verbatim: "Never change behaviour to satisfy a test, never special-case test
   inputs, never edit a guard/test outside your scope; report failing tests instead."
