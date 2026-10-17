@@ -3,8 +3,9 @@
 One test per tag; every assertion carries measured values (px, zoom, counts)
 from ``probes``. Where the current page violates the spec that size is marked
 ``xfail(strict=True, reason="plangraph:<OWNER>")`` (owner in the reason,
-measured value in the assertion message); a feature absent from the page
-altogether is ``skip``ped.
+measured value in the assertion message); when a fix lane makes it pass,
+strict xfail reports XPASS as a failure, so that lane removes the marker.
+A feature absent from the page altogether is ``skip``ped.
 
 All tests load ``#so=0`` (drawer closed): below 1200 px the sidebar starts open
 and a full-screen scrim eats the first graph click (repro R1, owner
@@ -113,6 +114,12 @@ def test_v_graph_4_details_panel_never_refits(page, site, size):
     _settle(page, 500)
     vp1 = probes.viewport(page)
     canvas1 = probes.visible_canvas(page)
+    st = probes.ui_state(page)
+    panel_open = page.evaluate(
+        "() => { const d = document.getElementById('details'); return !!d && !d.hidden; }")
+    assert st["sel"] == "lighthouse:LH-1" and panel_open, (
+        f"the details panel did not actually open (sel={st['sel']!r}, open={panel_open});"
+        " drift is only meaningful once the panel is shown")
     report(f"opening details (canvas {round(canvas1['w'])} px)", vp0, vp1)
     # Then a user pan, closing the panel and a window resize: same rule.
     probes.pan_node_frac(page, "pc:lighthouse", 0.35, 0.45)
@@ -278,8 +285,7 @@ def test_v_graph_8_selection_survives_reload(page, site, size):
     assert "lighthouse%3ALH-1" in page.evaluate("() => location.hash"), \
         "the selection is not in the URL"
     page.reload(wait_until="domcontentloaded")
-    page.wait_for_timeout(2500)
-    page.wait_for_timeout(2500)
+    probes.wait_layout_idle(page)
     st = probes.ui_state(page)
     zoom = probes.viewport(page)["zoom"]
     centre = probes.node_center(page, st["sel"] or "")

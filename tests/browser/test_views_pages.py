@@ -2,9 +2,11 @@
 (table, needs-you, decisions, activity, progress, knowledge, fleet, settings).
 
 Each test asserts the SPEC against the current page (src/plangraph/web): a tag
-whose behaviour is wrong today is ``xfail(strict=True)`` with the owning item; a
-feature absent from the page entirely is ``skip``. Sizes default to all three
-SIZES unless the tag names one. Assertions carry measured probe values.
+whose behaviour is wrong today is ``xfail(strict=True)`` with the owning item;
+when a fix lane makes it pass, strict xfail reports XPASS as a failure, so
+that lane removes the marker. A feature absent from the page entirely is
+``skip``. Sizes default to all three SIZES unless the tag names one.
+Assertions carry measured probe values.
 """
 from __future__ import annotations
 
@@ -41,15 +43,13 @@ def test_v_tab_1(page, site):
     _show(page, "table")
     initial = page.evaluate(
         "() => ({count: (document.querySelector('#list-content .tt-count')||{}).textContent,"
-        " rows: document.querySelectorAll('#list-content tbody tr').length})"
-    )
+        " rows: document.querySelectorAll('#list-content tbody tr').length})")
     page.evaluate("() => { const s=document.getElementById('search'); s.value='zzz-no-such-task';"
                   " s.dispatchEvent(new Event('input')); }")
     page.wait_for_timeout(220)  # > the 150 ms search debounce
     after = page.evaluate(
         "() => ({count: (document.querySelector('#list-content .tt-count')||{}).textContent,"
-        " rows: document.querySelectorAll('#list-content tbody tr').length})"
-    )
+        " rows: document.querySelectorAll('#list-content tbody tr').length})")
     assert after["rows"] < initial["rows"], (
         f"live search did not filter the table: rows stayed {initial['rows']} -> {after['rows']} "
         f"(count '{initial['count']}' vs '{after['count']}')"
@@ -78,8 +78,7 @@ def test_v_tab_2(page, site):
     _show(page, "table")
     grp_after = page.evaluate("() => PlanUI.TablePage.view.group")
     assert grp_after == grp_before == "phase", (
-        f"grouping not restored by URL: before='{grp_before}', after reload='{grp_after}', search='{url}'"
-    )
+        f"grouping not restored by URL: before='{grp_before}', after reload='{grp_after}', search='{url}'")
 
 
 @for_sizes
@@ -91,8 +90,7 @@ def test_v_tab_3(page, site):
         "() => { const tr=document.querySelector('#list-content tbody tr');"
         " if (!tr) return null; const b=tr.querySelector('.tc-open');"
         " b.click(); return {key: tr.getAttribute('data-key'),"
-        " selected: PlanPage.state.selected, uiSel: PlanUI.app.ui.get('sel')} }"
-    )
+        " selected: PlanPage.state.selected, uiSel: PlanUI.app.ui.get('sel')} }")
     assert got is not None, "table rendered no rows"
     details_text = page.evaluate(
         "() => { const d=document.getElementById('details'); return d ? (d.textContent||'').slice(0,120) : ''; }"
@@ -115,8 +113,7 @@ def test_v_tab_4(page, site):
         " return {tdDisplay: getComputedStyle(td).display, trDisplay: getComputedStyle(tr).display,"
         " hasLabel: td.getAttribute('data-label'), key: tr.getAttribute('data-key'),"
         " selected: PlanPage.state.selected, scrollW: document.documentElement.scrollWidth,"
-        " innerW: window.innerWidth} }"
-    )
+        " innerW: window.innerWidth} }")
     assert info is not None, "no table rows at 390x844"
     assert info["trDisplay"] != "table-row", f"row not a card at phone: display={info['trDisplay']}"
     assert info["tdDisplay"] not in ("table-cell",), f"cell not a card at phone: display={info['tdDisplay']}"
@@ -241,6 +238,7 @@ def test_v_need_4(page, site, size):
 def test_v_dec_1(page, site):
     """V-DEC-1: attribute (human/agent) and actor come from keeper decision
     records. No Decisions page or attribute/actor fields exist in the page."""
+    raise NotImplementedError("plangraph:PG-DEC-ATTRIBUTION: body lands with the feature")
 
 
 @pytest.mark.skip(reason="plangraph:PG-DEC-EDIT-NOTICE")
@@ -248,6 +246,7 @@ def test_v_dec_1(page, site):
 def test_v_dec_2(page, site):
     """V-DEC-2: an edit shows previous text, editor and time (hash-chained).
     No decision-edit feature exists."""
+    raise NotImplementedError("plangraph:PG-DEC-EDIT-NOTICE: body lands with the feature")
 
 
 @pytest.mark.skip(reason="plangraph:PG-DEC-EDIT-NOTICE")
@@ -255,6 +254,7 @@ def test_v_dec_2(page, site):
 def test_v_dec_3(page, site):
     """V-DEC-3: without the operator principal the edit control is not shown.
     There is no edit control or operator principal at all."""
+    raise NotImplementedError("plangraph:PG-DEC-EDIT-NOTICE: body lands with the feature")
 
 
 # ---------------------------------------------------------- Section 8: Activity
@@ -311,8 +311,9 @@ def test_v_act_2(page, site):
         " return {page: PlanUI.Pages.current(), selected: sel, inGraph: n.length>0, centred}; }"
     )
     assert st["page"] == "graph", (
-        f"key link did not switch to graph: page={st['page']!r}, selected={st['selected']!r}"
-    )
+        f"key link did not switch to graph: page={st['page']!r}, selected={st['selected']!r}")
+    assert st["inGraph"] and probes.node_in_canvas(page, st["selected"]), (
+        f"key link did not focus {st['selected']!r} inside the visible canvas: {st}")
 
 
 # ---------------------------------------------------------- Section 9: Progress
@@ -351,16 +352,14 @@ def test_v_kg_1(page, site):
     The fixture serves an enabled:false export (no 404), but the page hides the
     Knowledge tab silently instead of showing the reason.
     """
+    kg: list[int] = []
+    page.on("response", lambda r: kg.append(r.status) if r.url.endswith("kg-export.json") else None)
     _load(page, site)
-    reqs = []
-    page.on("request", lambda r: reqs.append((r.url, r.frame_url)))
-    # already loaded; re-request knowledge state
     enabled = page.evaluate("() => PlanUI.Knowledge.enabled()")
     assert enabled is False, "fixture export unexpectedly enabled"
+    assert not [s for s in kg if s == 404], "kg-export.json 404s on a render without an export"
     hidden = page.evaluate("() => document.getElementById('tab-knowledge').hidden")
-    assert hidden is False, (
-        "Knowledge tab hidden silently; V-SHELL-3 requires it visible with an empty-state reason"
-    )
+    assert hidden is False, "Knowledge tab hidden silently; V-SHELL-3 requires it visible with a reason"
 
 
 # ------------------------------------------------------------- Section 11: Fleet
@@ -369,6 +368,7 @@ def test_v_kg_1(page, site):
 def test_v_fleet_1(page, site):
     """V-FLEET-1: until the fleet API exists the Fleet tab shows its empty state
     with the reason. There is no Fleet tab or page in the shell at all."""
+    raise NotImplementedError("plangraph:UI-FLEET-TAB: body lands with the feature")
 
 
 # ---------------------------------------------------------- Section 12: Settings
