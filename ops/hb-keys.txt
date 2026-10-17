@@ -1,1 +1,5 @@
 server:RT-P1-TEMPORAL-CHECK
+plangraph:PG-UI-TABICON
+plangraph:PG-NEEDS-YOU
+plangraph:UI-TABLE
+plangraph:PG-L2-SMALLFIX-RULE
