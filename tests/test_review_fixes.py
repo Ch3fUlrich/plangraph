@@ -180,8 +180,23 @@ def test_model_id_and_alias_writers_exclude_their_family(writer, gone):
     assert len(family.families_for_risk("high", writer)) == 2
 
 
-def test_unknown_writer_family_excludes_nothing_known():
-    assert len(family.families_for_risk("high", "mystery-model")) == 2
+@pytest.mark.parametrize("writer", ["mystery-model", "", None, "  ", "gpt-claude-3", "unknwn"])
+def test_unknown_writer_family_fails_closed_in_all_three(writer):
+    """One shared check: no function treats an unresolvable writer as 'any family allowed'."""
+    for call in (lambda: family.pick_legs(writer),
+                 lambda: family.pick_legs(writer, need=2),
+                 lambda: family.families_for_risk("high", writer),
+                 lambda: family.families_for_risk("standard", writer),
+                 lambda: family.check_cross_family(writer, "claude-opus-4"),
+                 lambda: family.check_cross_family(writer, "gpt-oss-120b")):
+        with pytest.raises(family.FamilyError, match="unknown writer family"):
+            call()
+
+
+def test_known_writer_forms_still_resolve():
+    for writer, want in [("Anthropic", "anthropic"), ("ovh/gpt-oss-120b", "openai"),
+                         ("xiaomi", "xiaomi"), ("mimo-v2", "xiaomi")]:
+        assert family.writer_key(writer) == want
 
 
 def test_halt_without_key_raises_and_other_words_do_not_need_one():
