@@ -1,0 +1,27 @@
+# plangraph UI overlaps 2026-10-17 (plangraph-L1-plan2): scope narrowing after D-1747 option A. Principal router.
+batch: 2026-10-17-ui-overlaps
+principal: router
+source: 2026-10-17-ui-overlaps.md
+source_sha256: e3151b375d973f03953e8386afe102d2b412755edd83620e53a6ecd1118d31d2
+ops:
+- op: edit
+  key: plangraph:PG-ANSWER-UI
+  fields:
+    title: 'P3a: interim UI answer path through the edge proxy hop (operator verbs of QA-VERBS, source ui, md-sync mirror)'
+    done_criteria: 'operator principal accepted only via the edge proxy hop with the Authelia user header (QA-GATE files and mTLS hop); it may call only the operator verbs of QA-VERBS and the decision edit verb of PG-DEC-EDIT-NOTICE; answered event carries source ui; verify_integrity agrees; the QA-UI POST flag is switched on; md-sync mirrors the ANSWERS line for the router; when API-OIDC lands, these writes move onto it (test that the proxy path then refuses); tests; 2 HIGH seats; merged'
+    note: 'Scope narrowed 2026-10-17 by plangraph-L1-plan2 after D-1747: QA-VERBS owns the operator role and verbs, API-OIDC owns general GUI write auth, QA-UI owns the answer controls. See plangraph docs/plans/ui/2026-10-17-ui-overlaps.md.'
+- op: edit
+  key: plangraph:QA-UI
+  fields:
+    done_criteria: 'answer card component and Needs-you rows per docs/ui/VIEWS.md section 6: options with consequences, default preselected, other and skip, tasks done with a note, unblocks N column; rendered with textContent only; mode B copy line live; POST mode A behind a flag (PG-ANSWER-UI switches it on); browser tests in the UI-BROWSER-TESTS suite; 2 non-anthropic seats (XSS, CSRF, non-operator answer); routing ACCEPT; merged'
+    note: 'Scope narrowed 2026-10-17 by plangraph-L1-plan2 after D-1747: the guided one-card-at-a-time flow is PG-QUESTION-CARDS, which reuses this card component. See plangraph docs/plans/ui/2026-10-17-ui-overlaps.md.'
+- op: edit
+  key: plangraph:PG-QUESTION-CARDS
+  fields:
+    title: 'Guided answer flow: one question card at a time with Skip and Next, progress, why it matters (P2.3)'
+    done_criteria: 'guided flow over the open Needs-you rows, ordered by unblocks N: one card at a time reusing the QA-UI card component, short context and why it matters, Skip and Next, progress bar; the answer goes keeper then ANSWERS.md and the asking agent sees it; no own card rendering and no decision attribution or edit scope (those are QA-UI, PG-DEC-ATTRIBUTION and PG-DEC-EDIT-NOTICE); browser test; seat; merged'
+    note: 'Scope narrowed 2026-10-17 by plangraph-L1-plan2 after D-1747. See plangraph docs/plans/ui/2026-10-17-ui-overlaps.md.'
+- op: edit
+  key: plangraph:PG-DEC-EDIT-NOTICE
+  fields:
+    done_criteria: 'UI edit of a decision record by the operator principal with a hash-chained event that keeps the previous text; adds a fourth operator verb decision_edit next to the QA-VERBS verbs, with the same guards (text guard, caps, rate limit, every other role refused); the ready, show and brief reads report decisions changed since the caller last checked that touch its task, phase or project; edit flow per docs/ui/VIEWS.md V-DEC-2 and V-DEC-3 with a browser test; write identity: the interim proxy path of PG-ANSWER-UI, moving to API-OIDC when that lands; tests; seat; merged'
