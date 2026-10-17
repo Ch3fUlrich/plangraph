@@ -32,6 +32,10 @@ from plangraph.live_follow import (
 SENTINEL = "ghs_TESTSENTINEL0123456789"
 REPO = "acme/widgets"
 WF = "tests"
+WF_PATH = ".github/workflows/tests.yml"
+LOOKALIKE_PATH = ".github/workflows/legacy-tests.yml"
+FORK_FULL_NAME = "fork-owner/widgets"
+OTHER_HEAD_SHA = "99887766554433221100ffeeddccbbaa99887766"
 
 # 40-hex shas (all distinct prefixes, none a prefix of another)
 CUR = "00112233445566778899aabbccddeeff00112233"
@@ -118,7 +122,7 @@ def make_cfg(tmp_path: Path, **over) -> Config:
         "token_file": str(tmp_path / "env.sh"),
         "out": str(tmp_path / "out"),
         "state": str(tmp_path / "state.json"),
-        "workflow": WF,
+        "workflow_path": WF_PATH,
     }
     base.update(over)
     return Config(**base)
@@ -142,10 +146,15 @@ def gh_json(payload):
     return (0, json.dumps(payload))
 
 
-def run_entry(name=WF, status="completed", conclusion="success",
-              created_at="2026-10-01T00:00:00Z"):
-    return {"name": name, "status": status, "conclusion": conclusion,
-            "created_at": created_at}
+def run_entry(name=WF, path=WF_PATH, status="completed", conclusion="success",
+              created_at="2026-10-01T00:00:00Z", head_sha=HEAD,
+              head_repository=None):
+    """A workflow-run entry that passes the gate filters by default:
+    pinned file, our repo, and the sha the runs endpoint was queried for."""
+    return {"name": name, "path": path, "status": status, "conclusion": conclusion,
+            "created_at": created_at, "head_sha": head_sha,
+            "head_repository": dict(head_repository if head_repository is not None
+                                    else {"full_name": REPO})}
 
 
 def runs_payload(*entries):
@@ -173,8 +182,12 @@ def script_green_ci(fake: FakeRunner, sha=HEAD, candidate=PR_HEAD,
                     entries=None):
     fake.script(("gh", "api", pulls_endpoint(sha)),
                 gh_json([pr(7, sha, "main", candidate)]))
+    runs = list(entries) if entries else [run_entry(head_sha=candidate)]
+    for entry in runs:                # an entry without a head_sha is this PR head's
+        if not entry.get("head_sha"):
+            entry["head_sha"] = candidate
     fake.script(("gh", "api", runs_endpoint(candidate)),
-                gh_json(entries or runs_payload(run_entry())))
+                gh_json(runs_payload(*runs)))
 
 
 def expected_alert_line(page, green_sha, minutes):
@@ -263,7 +276,7 @@ def test_non_green_never_merges(tmp_path, case):
         fake.script(runs_key, gh_json(runs_payload()))
     elif case == "wrong_workflow":
         fake.script(runs_key, gh_json(runs_payload(
-            run_entry(name="lint"))))
+            run_entry(path=LOOKALIKE_PATH))))
     elif case == "api_fail_pulls":
         fake.script(("gh", "api", pulls_endpoint(HEAD)), (1, ""))
     elif case == "api_fail_runs":
@@ -648,7 +661,7 @@ def test_follow_then_page_stamp_check_end_to_end(tmp_path):
     fake.script(("git", "-C", t, "merge", "--ff-only"), (0, ""))
     fake.script(("gh", "api", pulls_endpoint(STAMP_SHA)), gh_json([]))
     fake.script(("gh", "api", runs_endpoint(STAMP_SHA)),
-                gh_json(runs_payload(run_entry())))
+                gh_json(runs_payload(run_entry(head_sha=STAMP_SHA))))
 
     write_page(cfg, "abc1234567")                 # rendered with the matching stamp
     res = follow(cfg, fake, now=T0)
@@ -727,19 +740,19 @@ def test_config_from_env_defaults_and_required(tmp_path):
     assert cfg.token_file == env["PLANGRAPH_GH_TOKEN_FILE"]
     assert cfg.out == env["PLANGRAPH_OUT"]
     assert Path(cfg.state) == Path(cfg.out) / ".live-follow.json"
-    assert cfg.workflow == "tests"
+    assert cfg.workflow_path == WF_PATH
     assert cfg.remote == "origin"
     assert cfg.branch == "main"
     assert cfg.alert_cmd is None
     assert cfg.grace_s == 1800
 
     env2 = base_env(tmp_path, PLANGRAPH_STATE=str(tmp_path / "st.json"),
-                    PLANGRAPH_CI_WORKFLOW="ci",
+                    PLANGRAPH_CI_WORKFLOW_PATH=".github/workflows/ci.yml",
                     PLANGRAPH_ALERT_CMD="alert --dry-run 'x y'",
                     PLANGRAPH_ALERT_GRACE_S="60")
     cfg2 = Config.from_env(env2)
     assert cfg2.state == env2["PLANGRAPH_STATE"]
-    assert cfg2.workflow == "ci"
+    assert cfg2.workflow_path == ".github/workflows/ci.yml"
     assert cfg2.alert_cmd == ["alert", "--dry-run", "x y"]
     assert cfg2.grace_s == 60
 
@@ -820,7 +833,7 @@ def test_rebase_merge_fallback_closed_merged_pr(tmp_path):
         merged_pr(9, OTHER_MERGE, cfg.branch, PH_GREEN),
     ]))
     fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry())))
+                gh_json(runs_payload(run_entry(head_sha=PH_GREEN))))
     assert is_green(fake, cfg, HEAD) is True
 
 
@@ -1097,3 +1110,115 @@ def test_check_repairs_string_green_since_after_load(tmp_path):
     saved = load_state(cfg)
     assert saved["green_sha"] == HEAD         # sha kept, only since repaired
     assert saved["green_since"] == T0
+
+
+# ---------------------------------------------------------------------------
+# 25. A1/A2/A3: the CI gate is pinned to a workflow file, the head sha and
+#     the head repository — a same-NAMED workflow from elsewhere cannot
+#     decide the result.
+
+def _head_runs_cfg(tmp_path, *entries):
+    """cfg/fake primed with no PR and exactly these runs for HEAD."""
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([]))
+    fake.script(("gh", "api", runs_endpoint(HEAD)), gh_json(runs_payload(*entries)))
+    return cfg, fake
+
+
+def test_lookalike_named_workflow_cannot_redden_a_green_head(tmp_path):
+    """A newer failing run of a *different* workflow file that is also named
+    "tests" must not override the pinned workflow's green run."""
+    cfg, fake = _head_runs_cfg(
+        tmp_path,
+        run_entry(conclusion="success", created_at="2026-10-01T00:00:00Z"),
+        run_entry(name=WF, path=LOOKALIKE_PATH, conclusion="failure",
+                  created_at="2026-10-02T00:00:00Z"),
+    )
+    assert is_green(fake, cfg, HEAD) is True
+
+
+def test_lookalike_named_workflow_cannot_green_a_red_head(tmp_path):
+    """The mirror case: the pinned workflow is red, the same-NAMED other
+    workflow is green and newer -> still not green."""
+    cfg, fake = _head_runs_cfg(
+        tmp_path,
+        run_entry(conclusion="failure", created_at="2026-10-01T00:00:00Z"),
+        run_entry(name=WF, path=LOOKALIKE_PATH, conclusion="success",
+                  created_at="2026-10-02T00:00:00Z"),
+    )
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_run_path_with_refs_pull_suffix_is_accepted(tmp_path):
+    """The API can return ".github/workflows/tests.yml@refs/pull/7/merge";
+    everything from the first "@" on is not part of the file identity."""
+    cfg, fake = _head_runs_cfg(
+        tmp_path,
+        run_entry(path=WF_PATH + "@refs/pull/7/merge"),
+    )
+    assert is_green(fake, cfg, HEAD) is True
+
+
+def test_run_without_path_is_ignored(tmp_path):
+    entry = run_entry()
+    del entry["path"]
+    cfg, fake = _head_runs_cfg(tmp_path, entry)
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_run_for_another_head_sha_is_ignored(tmp_path):
+    """A PR head that moved: a green run recorded for the old head sha says
+    nothing about the sha we asked about."""
+    cfg, fake = _head_runs_cfg(tmp_path, run_entry(head_sha=OTHER_HEAD_SHA))
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_run_head_sha_missing_is_ignored(tmp_path):
+    entry = run_entry()
+    del entry["head_sha"]
+    cfg, fake = _head_runs_cfg(tmp_path, entry)
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_run_from_a_fork_head_repository_is_ignored(tmp_path):
+    cfg, fake = _head_runs_cfg(
+        tmp_path, run_entry(head_repository={"full_name": FORK_FULL_NAME}))
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_run_without_head_repository_is_ignored(tmp_path):
+    entry = run_entry()
+    del entry["head_repository"]
+    cfg, fake = _head_runs_cfg(tmp_path, entry)
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_from_env_workflow_path(tmp_path):
+    cfg = Config.from_env(base_env(tmp_path))
+    assert cfg.workflow_path == WF_PATH
+
+    over = Config.from_env(base_env(tmp_path, PLANGRAPH_CI_WORKFLOW_PATH=WF_PATH,
+                                     PLANGRAPH_CI_WORKFLOW="tests"))
+    assert over.workflow_path == WF_PATH
+
+    # The old variable name is gone: it must not steer the gate at all.
+    legacy = Config.from_env(base_env(tmp_path, PLANGRAPH_CI_WORKFLOW="tests"))
+    assert legacy.workflow_path == WF_PATH
+
+
+def test_follow_with_only_a_lookalike_workflow_green_keeps_tree(tmp_path):
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    script_git(cfg=cfg, fake=fake)
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([]))
+    fake.script(("gh", "api", runs_endpoint(HEAD)), gh_json(runs_payload(
+        run_entry(path=LOOKALIKE_PATH, conclusion="success"))))
+
+    res = follow(cfg, fake, now=T0)
+    assert res["action"] == "kept"
+    assert res["reason"] == "not_green"
+    assert fake.merge_calls() == []
+    assert load_state(cfg) == {}

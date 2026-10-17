@@ -25,9 +25,14 @@ page every 5 minutes. Three steps, in order:
    `ExecStopPost` runs even when the render failed. It also runs with `-`, so it can never block the
    next tick.
 
-**The gate.** A head is only fast-forwarded when its PR head sha has a green `tests` workflow run on it;
-a commit with no PR must carry its own green run. Docs-only PRs produce no run at all, so their heads are
-not followed — the live page advances when the next code PR lands green. The read-only token authorising
+**The gate.** A head is only fast-forwarded when its PR head sha has a green run of the pinned
+workflow *file* (`PLANGRAPH_CI_WORKFLOW_PATH`, default `.github/workflows/tests.yml`) whose own
+`head_sha` is that sha and whose `head_repository` is `PLANGRAPH_REPO` — a same-NAMED workflow in
+another file, or a fork PR's copy of it, cannot decide the result; the run's `name` is not consulted.
+A commit with no PR must carry its own green run. Docs-only PRs produce no run at all, so their heads are
+not followed — the live page advances when the next code PR lands green. Keep `PLANGRAPH_STATE` outside
+`PLANGRAPH_OUT`: the output directory is the web-served render directory, and the gate state does not
+belong in it. The read-only token authorising
 those GitHub queries lives only in the file named by `PLANGRAPH_GH_TOKEN_FILE` — a `KEY=VALUE` file
 holding `GH_TOKEN`; keep it mode 0600 (live_follow does not check permissions) — and it is never printed
 or copied into a unit or into `render.env`.
