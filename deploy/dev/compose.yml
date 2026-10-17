@@ -74,6 +74,8 @@ services:
       POSTGRES_USER: ${PG_USER:?run tools/devstack.sh init}
       POSTGRES_PWD: ${PG_PASSWORD:?run tools/devstack.sh init}
       NUM_HISTORY_SHARDS: "4"
+    volumes:
+      - ./dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/docker.yaml:ro
     ports:
       - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
     depends_on:

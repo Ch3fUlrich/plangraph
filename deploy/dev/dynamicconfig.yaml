@@ -1,0 +1,4 @@
+# Minimal dynamic config for the plangraph local dev stack.
+# Temporal's plain server image validates this path at startup but does not
+# ship the file; an empty mapping means "no overrides".
+{}
