@@ -26,9 +26,9 @@ A full config, with the verifier paths and the legacy/decision-close settings
      "snapshot": "/home/me/keeper/plan.snapshot.json",
      "bind": "127.0.0.1:8765",
      "reap_interval": 60,
-     "repos": {"server": "/home/s/code/Server", "autoos": "/home/s/code/AutoOS"},
-     "decisions_file": "/home/s/code/routing/docs/decisions-log.md",
-     "batch_roots": ["/home/s/code/routing/docs/plan"]}
+     "repos": {"server": "$HOME/code/Server", "autoos": "$HOME/code/AutoOS"},
+     "decisions_file": "$HOME/code/routing/docs/decisions-log.md",
+     "batch_roots": ["$HOME/code/routing/docs/plan"]}
 
 `batch_roots` is the **only** place `close_on_decision` may read a batch file from.
 Empty (the default) means the verb always refuses, so leave it unset until the
@@ -80,7 +80,7 @@ same verbs are on every door (`Store`, HTTP `POST /v1/...`, MCP tool, `pg`):
     store.add_evidence_router(router, "routing:R-117", "commit",
                               {"commit": "<40-hex sha>"})
     store.close_on_decision(router, "routing:R-117",
-                            "/home/s/code/routing/docs/plan/batch-7.md@" + "<sha256>")
+                            "$HOME/code/routing/docs/plan/batch-7.md@" + "<sha256>")
 
 * `commit` passes on "the sha exists and is an ancestor of `main`" in that
   project's `repos` path — no trailer, no date window, no CI.  It is the weakest
@@ -147,9 +147,9 @@ and an option whose id differs from its label slug is written `label {id}` and p
 a generated file back plans no choices edits on unchanged items. Cells are single-line and credential-masked. Status file: `{ts, mode: "archive",
 archived, written, error}`. Turning the switch on in the timer unit is a later live step.
 
-    python3 tools/md_sync.py --questions /home/s/code/routing/QUESTIONS.md \
-        --answers /home/s/code/routing/ANSWERS.md \
-        --decisions /home/s/code/routing/docs/decisions-log.md \
+    python3 tools/md_sync.py --questions $HOME/code/routing/QUESTIONS.md \
+        --answers $HOME/code/routing/ANSWERS.md \
+        --decisions $HOME/code/routing/docs/decisions-log.md \
         --url http://127.0.0.1:8765 --token-file ~/keeper/router.token \
         [--dry-run | --apply] [--status-file /path/md-sync.status.json]
 
@@ -157,7 +157,7 @@ archived, written, error}`. Turning the switch on in the timer unit is a later l
 ONE atomic `apply_ops` call (all or nothing; a second run emits zero ops).  Exit codes as
 `apply_batch.py`: 0 ok, 1 refused (also when an ANSWERS entry was refused), 2 usage/token/IO.
 `close_on_decision` needs the router checkout in the keeper config `batch_roots`
-(`/home/s/code/routing`).  The principal in the batch is `--principal` (default `router`)
+(`$HOME/code/routing`).  The principal in the batch is `--principal` (default `router`)
 and must match the token's name.
 
 `--status-file PATH` records the run for the router as one JSON object, written atomically
