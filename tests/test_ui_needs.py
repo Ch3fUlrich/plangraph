@@ -115,9 +115,10 @@ def test_needs_page_pure(tmp_path):
                          "sort": {"col": "priority", "dir": "desc"}, "row": "zz"}
 
 def test_needs_page_static():
-    src = (WEB / "page_needs.js").read_text(encoding="utf-8")
-    assert "innerHTML" not in src
-    assert "eval(" not in src
+    for name in ("page_needs.js", "page_needs_view.js"):
+        src = (WEB / name).read_text(encoding="utf-8")
+        assert "innerHTML" not in src, name
+        assert "eval(" not in src, name
 
 
 
