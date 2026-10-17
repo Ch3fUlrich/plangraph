@@ -1721,6 +1721,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     clockTimer = setInterval(function () {
       if (refreshFn) refreshFn();
     }, 60000);
+    if (clockTimer && typeof clockTimer.unref === "function") clockTimer.unref();
     return clockTimer;
   }
 
