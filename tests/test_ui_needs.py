@@ -119,3 +119,9 @@ def test_needs_page_static():
     assert "innerHTML" not in src
     assert "eval(" not in src
 
+
+
+def test_boot_reads_pg_hash_before_first_write():
+    # Mutation that fails it: pg= read only in afterInit, after writeHash dropped it (deep link lands on Graph).
+    src = (WEB / "page_boot.js").read_text(encoding="utf-8")
+    assert "var HASH_PG" in src and "HASH_PG ||" in src

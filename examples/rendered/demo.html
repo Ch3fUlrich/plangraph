@@ -8544,6 +8544,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var BOOLS = ["showCritical", "showCross", "autoCollapseDone", "animate", "showAllEdges"];
   var TABS = ["projects", "needs", "qa", "answers", "settings"];
   var body = document.body;
+  var HASH_PG = /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);   // read before the first writeHash drops it
 
   function $(id) { return document.getElementById(id); }
   function is(str) {
@@ -8852,7 +8853,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (ui.get("view") === "table") PP.setTab("list");
     else PP.setTab("graph");
     if (PlanUI.Pages) {
-      var m = /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);
+      var m = HASH_PG || /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);
       PlanUI.Pages.onChange = writeHash;
       var first = m ? m[1] : (ui.get("view") === "table" ? "table" : "graph");
       PlanUI.Pages.show(first);
