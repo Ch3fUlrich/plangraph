@@ -47,7 +47,7 @@ D-1854: plangraph dev on the WORKSTATION dev stack; server only via ONE release 
 ## Recipes
 - Merge: `gh api -X PUT repos/Ch3fUlrich/plangraph/pulls/N/merge -f sha=<head> -f merge_method=merge -f commit_title=... -f commit_message="Plan-Item: <key>"`
   -> `ops/pg.sh evidence K --kind commit+ci --commit <merge sha>` -> `ops/pg.sh submit K` -> verdicts:
-  `python3 $sv --key K --seat-dir D --writer-family <writer> --token-dir ~/.config/plangraph` ($sv = git show origin/main:tools/seat_verdict.py > tmp).
+  `python3 $sv --key K --seat-dir D --writer-family <writer> --token-dir ~/.config/plangraph --url http://127.0.0.1:8787` (url required after #68) ($sv = git show origin/main:tools/seat_verdict.py > tmp).
 - Seat spawn: autoos-agent spawn client=qoder (qwen) or client=agy model=gemini-3.8-flash, card review, cwd = detached worktree at head,
   review_base = base sha, not_family [writer family(+qwen for agy)], no_fallthrough. Seat dir: review.txt (V1..TEST-GAMING) + evidence.json.
 - run-record evidence needs an autoos run id (<runs_dir>/<id>/job.json naming the item + exit.json rc 0), not a file path.
