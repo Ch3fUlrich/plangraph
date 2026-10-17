@@ -188,6 +188,9 @@ var doc = {
 };
 global.document = doc;
 global.window = global;
+/* fake timers so the 60 s stamp clock (page_stamp.js) never keeps node alive */
+global.setInterval = function () { return { id: 0 }; };
+global.clearInterval = function () {};
 function setG(k, v) { try { Object.defineProperty(global, k, { value: v, configurable: true, writable: true }); } catch (e) { try { global[k] = v; } catch (x) {} } }
 setG("navigator", { clipboard: { writeText: function () {} } });
 setG("location", { hash: "", pathname: "/", search: "" });

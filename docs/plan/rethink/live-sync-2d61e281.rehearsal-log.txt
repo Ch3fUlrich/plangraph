@@ -1,0 +1,176 @@
+# rehearsal 2026-10-17 T=2d61e281 vs live 102e4885; postgres:17-alpine container ls7-pg17 --memory 1g, 127.0.0.1 random port, trust auth
+MemAvailable:    9790672 kB
+Unable to find image 'postgres:17-alpine' locally
+17-alpine: Pulling from library/postgres
+e2de96513ba9: Already exists
+4ece9a32c307: Pulling fs layer
+43f9814c9a3b: Pulling fs layer
+3333950675b2: Pulling fs layer
+f3b07e8a357c: Pulling fs layer
+eb805f20f060: Pulling fs layer
+7ccdb0dcae74: Pulling fs layer
+93a3470d5852: Pulling fs layer
+b0a0d9d2abf2: Pulling fs layer
+a8a481ae6efc: Pulling fs layer
+7ccdb0dcae74: Waiting
+93a3470d5852: Waiting
+eb805f20f060: Waiting
+b0a0d9d2abf2: Waiting
+a8a481ae6efc: Waiting
+f3b07e8a357c: Waiting
+43f9814c9a3b: Verifying Checksum
+43f9814c9a3b: Download complete
+4ece9a32c307: Verifying Checksum
+4ece9a32c307: Download complete
+3333950675b2: Verifying Checksum
+3333950675b2: Download complete
+4ece9a32c307: Pull complete
+43f9814c9a3b: Pull complete
+3333950675b2: Pull complete
+eb805f20f060: Verifying Checksum
+eb805f20f060: Download complete
+7ccdb0dcae74: Verifying Checksum
+7ccdb0dcae74: Download complete
+93a3470d5852: Verifying Checksum
+93a3470d5852: Download complete
+b0a0d9d2abf2: Verifying Checksum
+b0a0d9d2abf2: Download complete
+a8a481ae6efc: Verifying Checksum
+a8a481ae6efc: Download complete
+f3b07e8a357c: Verifying Checksum
+f3b07e8a357c: Download complete
+f3b07e8a357c: Pull complete
+eb805f20f060: Pull complete
+7ccdb0dcae74: Pull complete
+93a3470d5852: Pull complete
+b0a0d9d2abf2: Pull complete
+a8a481ae6efc: Pull complete
+Digest: sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+Status: Downloaded newer image for postgres:17-alpine
+run rc=0
+dump rc=0
+-rw-r--r-- 1 root root 1403056 Oct 17 06:51 <scratch>/live.dump
+ec7be9fc09d23743
+ERROR:  CREATE DATABASE cannot run inside a transaction block
+roles rc=1
+pg_restore: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  database "keeper" does not exist
+restore rc=1
+psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed: FATAL:  database "keeper" does not exist
+roles rc=0
+restore rc=0
+7241
+1826
+4
+0
+## s2: T admin verify/migrate on restored live copy
+$ T admin verify (owner)
+chain and cache integrity ok
+rc=0
+$ T admin migrate (owner)
+schema up to date
+rc=0
+key pair written: private <scratch>/scratch/sign.key (0600), public <scratch>/scratch/sign.pub
+keygen rc=0
+add-principal reh-router router rc=2
+add-principal reh-l1 l1 rc=2
+add-principal reh-worker worker rc=2
+sed: can't read scratch/reh-router.out: No such file or directory
+add-principal reh-router tok_len=0
+add-principal reh-l1 tok_len=44
+add-principal reh-worker tok_len=44
+add-principal reh-rtr(router) tok_len=44
+# note: reh-router created once with the token not captured (zsh word-split slip in my loop); superseded by reh-rtr
+## s3: T daemon as keeper_rt: guard behaviour, rendered page, write set
+# counts before:
+events|7241 items|1826 evidence|1193 edges|2671 
+# daemon pid=2805699 PYTHONPATH=<T tree>/src
+$ GET /v1/health
+http=200
+$ GET /v1/snapshot
+http=200
+$ GET /v1/whoami
+http=200
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "G", "title": "goal", "kind": "goal", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "c", "evidence_kinds": ["any"], "operator": fals
+{"created": ["rehs:G"], "warnings": ["description missing: brief will be empty"]}
+http=200
+# legit comma path list near the word login: must be accepted
+$ POST /v1/create_items {"items": [{"project": "rehs", "id": "A", "title": "lane A", "kind": "lane", "track": "T0", "owner": "reh", "estimate_h": 1, "depends_on": [], "done_criteria": "see docs/plan/x/y.md,docs/plan/p/q.md for the
+{"created": ["rehs:A"], "attached": [{"key": "rehs:A", "under": "rehs:G"}], "warnings": ["description missing: brief will be empty"]}
+http=200
+# PG-GUARD-SEP-SPLIT bypasses: must all be 400 validation, no value echo
+$ POST /v1/edit_definition {"key": "rehs:A", "fields": {"note": "login admin/hunter2secret,docs/x/y.md"}}
+{"error": "validation", "msg": "rehs:A: note looks like it contains a credential at chars 6-25 (ad*** (len 19)) ; remove it"}
+http=400
+$ POST /v1/edit_definition {"key": "rehs:A", "fields": {"note": "login admin/hunter2secret;docs/x/y.md"}}
+{"error": "validation", "msg": "rehs:A: note looks like it contains a credential at chars 6-25 (ad*** (len 19)) ; remove it"}
+http=400
+$ POST /v1/edit_definition {"key": "rehs:A", "fields": {"note": "login admin/hunter2secret|docs/x/y.md"}}
+{"error": "validation", "msg": "rehs:A: note looks like it contains a credential at chars 6-25 (ad*** (len 19)) ; remove it"}
+http=400
+$ POST /v1/edit_definition {"key": "rehs:A", "fields": {"note": "login admin/hunter2secret&docs/x/y.md"}}
+{"error": "validation", "msg": "rehs:A: note looks like it contains a credential at chars 6-25 (ad*** (len 19)) ; remove it"}
+http=400
+# path exemption D-1613 still holds: a plain path near login is accepted
+$ POST /v1/edit_definition {"key": "rehs:A", "fields": {"note": "see ops/runbooks/login-flow.md"}}
+{"key": "rehs:A"}
+http=200
+# counts after:
+events|7245 items|1828 evidence|1193 edges|2672 
+# new events by type (since live dump):
+ERROR:  aggregate functions are not allowed in GROUP BY
+LINE 1: select type||'|'||count(*) from keeper.events where seq > (s...
+                          ^
+
+# rendered page (render unit path: keeper.cli render --cdn, T code) against the scratch daemon
+render rc=0 bytes=3425054
+1
+<title>plangraph (1828 items)</title>
+needs-view markers: 10 table-ctl markers: 20
+credential strings present in page: 1
+page served: http=200
+# T verify (runtime role) while daemon up:
+chain and cache integrity ok
+rc=0
+snapshot signature ok
+rc=0
+daemon stopped
+## s4: rollback to 102e4885 on the T-written copy (valid: no item_reopened)
+# event types present, whole copy:
+answered|4 cancelled|151 claimed|134 closed_on_decision|715 evidence_added|1193 item_created|1828 item_defined|2237 lease_expired|26 legacy_state_set|722 outage_recorded|1 priority_set|26 released|54 review_passed|38 review_verdict|53 review_withdrawn|4 submitted|59 
+# event types written by T in this rehearsal (seq > 7241):
+item_created|2 item_defined|2 
+# item_reopened events: 0
+# unknown-to-OLD event types: (types in copy) minus OLD schema.EVENT_TYPES:
+unknown to OLD: []
+EVENT_TYPES md5 (T then OLD, count of identical):       2 69a04adbe7ae
+$ OLD admin verify (owner)
+chain and cache integrity ok
+rc=0
+$ OLD admin verify-snapshot (runtime)
+snapshot signature ok
+rc=0
+# daemon pid=2806382 PYTHONPATH=<T tree>-old/src
+$ GET /v1/health
+http=200
+$ GET /v1/whoami
+http=200
+$ GET /v1/snapshot
+http=200
+# OLD write (edit note, plain path) as router:
+$ POST /v1/edit_definition {"key": "rehs:A", "fields": {"note": "rolled back to 102e4885 ok"}}
+{"key": "rehs:A"}
+http=200
+# OLD guard on the bypass shape (expected: PASSES through = the gap that T closes):
+{"error": "validation", "msg": "rehs:A: note looks like it contains a credential at chars 6-25 (ad*** (len 19)) ; remove it"}
+http=400
+daemon stopped
+$ OLD admin verify (owner) after OLD writes
+chain and cache integrity ok
+rc=0
+$ T admin verify (owner) after OLD writes
+chain and cache integrity ok
+rc=0
+# counts final:
+events|7246 items|1828 evidence|1193 edges|2672 
+
+# annotations: (1) the s4 line "OLD guard ... PASSES through" label was wrong; the observed 400 is correct: 102e4885 has NO path exemption (PG-GUARD-PATH-EXEMPT #55 and SEP-SPLIT #56 are in T only), so OLD refuses the shape. (2) "<T tree>-old" in the s4 daemon line is the OLD tree (102e4885) printed by a sed prefix slip. (3) the page contains the literal test string hunter2secret once, from existing plan text (PG-GUARD-PATH-EXEMPT description naming the test vector); it is not within credential-word range of a shape so it is not a guard hit, not a leak. (4) container removed at end; scratch daemon, http server stopped; no live keeper, port 8787, systemd unit or live schema written.

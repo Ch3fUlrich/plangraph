@@ -1,6 +1,6 @@
 # KEEPER-PG cutover: SQLite -> Postgres, blue-green runbook (NOT executed)
 
-Plan-Item: plangraph:RT-P1-KEEPER-PG-PREP (prep for plangraph:RT-P1-KEEPER-PG). Base 8165c22. Nothing here touched the live keeper or cloud.vm.
+Plan-Item: plangraph:RT-P1-KEEPER-PG-PREP (prep for plangraph:RT-P1-KEEPER-PG). Base 8165c22. Nothing here touched the live keeper or the cloud host.
 Rehearsal on a throwaway PG16 container from a copy of backup `live-sync-8165c22-20261016T082054Z` (db sha256 f82b3563...): log `keeper-pg-cutover.rehearsal-log.txt`.
 `pg` below = `python3 -m plangraph.keeper.cli`; `$KJ` = `~/.local/share/plangraph/keeper.json`; `$LIVE` = `~/.local/share/plangraph`. DSNs and secret files are named, never printed.
 

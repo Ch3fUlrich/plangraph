@@ -22,18 +22,16 @@ permissions:
   contents: read
 
 env:
-  CARGO_BUILD_JOBS: "8"   # cap per-job cargo parallelism: 4 concurrent jobs share one box (D-1393)
+  CARGO_BUILD_JOBS: "4"   # GitHub-hosted ubuntu-24.04 has 4 vCPUs
 
 jobs:
   rust:
-    runs-on: [self-hosted, fleet-ci]
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: rust
     steps:
       - uses: actions/checkout@v4
-      - name: Build tools (the self-hosted runner image has no C toolchain)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

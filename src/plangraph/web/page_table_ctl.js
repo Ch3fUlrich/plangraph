@@ -11,7 +11,7 @@
   var LABELS = { state: "State", owner: "Owner", priority: "Prio", kind: "Kind" };
   var STATE_ORDER = ["ready", "blocked", "claimed", "in_review", "open", "done", "cancelled"];
 
-  var state = { filters: { state: [], owner: [], priority: [], kind: [], op: false }, hide: {} };
+  var state = { filters: { state: [], owner: [], priority: [], kind: [], op: false }, hide: {}, sort: null };
   var base = "", openSet = {};
 
   function el(tag, cls, text) {
@@ -63,6 +63,11 @@
     if (hid.length) {
       q = (q ? q + "&" : "?") + "t_hide=" + hid.map(encodeURIComponent).join(",");
     }
+    var s = state.sort;
+    if (s && s.col && s.dir && !(s.col === "task" && s.dir === "asc")) {
+      q = (q ? q + "&" : "?") + "t_vsort=" +
+        encodeURIComponent(s.col) + ":" + encodeURIComponent(s.dir);
+    }
     try {
       if (typeof document !== "undefined" && global.history && global.location) {
         global.history.replaceState(null, "", global.location.pathname + q + global.location.hash);
@@ -78,6 +83,7 @@
     base = trimmed.split("&").filter(function (p) { return p && p.indexOf("t_") !== 0; }).join("&");
     state.filters = { state: [], owner: [], priority: [], kind: [], op: false };
     state.hide = {};
+    state.sort = null;
     if (PlanUI.tableUrlDecode) {
       var st = PlanUI.tableUrlDecode(raw);
       if (st && st.filters) {
@@ -87,13 +93,21 @@
         state.filters.op = !!st.filters.op;
       }
     }
-    var pairs = trimmed.split("&"), i, eq, key, val, ids, j;
+    var pairs = trimmed.split("&"), i, eq, key, val, ids, j, sc, sd, cp;
     for (i = 0; i < pairs.length; i++) {
       if (!pairs[i]) continue;
       eq = pairs[i].indexOf("=");
       key = eq >= 0 ? pairs[i].slice(0, eq) : pairs[i];
-      if (key !== "t_hide") continue;
       val = eq >= 0 ? pairs[i].slice(eq + 1) : "";
+      if (key === "t_vsort") {
+        try { val = decodeURIComponent(val); } catch (e) { val = val; }
+        cp = val.indexOf(":");
+        sc = cp >= 0 ? val.slice(0, cp) : "";
+        sd = cp >= 0 ? val.slice(cp + 1) : "";
+        if (sc && (sd === "asc" || sd === "desc")) state.sort = { col: sc, dir: sd };
+        continue;
+      }
+      if (key !== "t_hide") continue;
       ids = val.split(",");
       for (j = 0; j < ids.length; j++) {
         try { ids[j] = decodeURIComponent(ids[j]); } catch (e) { ids[j] = ids[j]; }
