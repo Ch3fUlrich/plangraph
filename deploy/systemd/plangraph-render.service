@@ -1,0 +1,18 @@
+[Unit]
+Description=plangraph static page: follow main, render, stamp check
+
+[Service]
+Type=oneshot
+# Render host: a fast-forwarded live checkout at $PLANGRAPH_LIVE_TREE; paths and tokens live in render.env,
+# documented by deploy/systemd/render.env.example. Adjust the file location if config lives elsewhere.
+EnvironmentFile=%h/.config/plangraph/render.env
+Environment=PG_URL=http://127.0.0.1:8787
+# Leading '-' on both hooks: a failing follow or stamp check must never block the render.
+ExecStartPre=-/bin/bash -c 'PYTHONPATH="$PLANGRAPH_LIVE_TREE/src" exec python3 -m plangraph.live_follow follow'
+# PLANGRAPH_BUILD_SHA is deliberately NOT set: render.py falls back to `git rev-parse --short=10 HEAD`
+# inside the live tree, which is the head just fast-forwarded above.
+# Render to a temp file first, so a failed or empty render leaves the old page untouched (the `</html>` guard);
+# `cat "$T" > file` publishes it: copying into the destination keeps its inode, because the web server
+# bind-mounts that single file (a `mv` would swap the inode and the container would keep serving the old one).
+ExecStart=/bin/bash -o pipefail -c 'export PYTHONPATH="$PLANGRAPH_LIVE_TREE/src"; T=$(mktemp "$PLANGRAPH_OUT"/.plan-render.XXXXXX) && python3 -m plangraph.keeper.cli render --cdn --out "$T" >/dev/null && [ -s "$T" ] && grep -q "</html>" "$T" && cat "$T" > "$PLANGRAPH_OUT"/plan-cdn.html; rc=$?; rm -f "$T"; exit $rc'
+ExecStartPost=-/bin/bash -c 'PYTHONPATH="$PLANGRAPH_LIVE_TREE/src" exec python3 -m plangraph.live_follow check'
