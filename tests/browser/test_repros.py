@@ -3,8 +3,9 @@
 One test per measured problem: it replays the row's "Repro" steps at the
 viewport that row names and asserts the *fixed* behaviour with numbers taken
 through ``tests/browser/probes.py``. Red against the current code carries
-``xfail(strict=True, reason="plangraph:<OWNER>")`` so the fix item turns it
-green; owner + observed value are in the lane REPORT. Expanded views open
+``xfail(strict=True, reason="plangraph:<OWNER>")``; when a fix lane makes it
+pass, strict xfail reports XPASS as a failure, so that lane removes the
+marker. Owner + observed value are in the lane REPORT. Expanded views open
 through the URL hash (``#cpr=..&cph=..``, page_store.js) instead of clicking,
 because clicking a project first moves the viewport (R4) and would mask the
 behaviour under test.
@@ -16,6 +17,7 @@ import re
 from urllib.parse import quote
 
 import pytest
+from playwright.sync_api import TimeoutError as PWTimeout
 
 from browser import probes
 from browser.conftest import SIZES, SNAPSHOT_PATH
@@ -161,8 +163,7 @@ def test_r1_scrim_and_sidebar_at_1024(page, site):
         " return {hidden: s.hidden, painted: cs.display !== 'none',"
         " area: Math.round(r.width * r.height)}; }")
     sidebar = page.evaluate(
-        "() => ({width: Math.round(document.getElementById('sidebar')"
-        ".getBoundingClientRect().width),"
+        "() => ({width: Math.round(document.getElementById('sidebar').getBoundingClientRect().width),"
         " sbopen: document.body.getAttribute('data-sbopen')})")
     rect = probes.canvas_rect(page)
     centre = page.evaluate(    # what actually receives a click on the canvas centre
@@ -175,8 +176,7 @@ def test_r1_scrim_and_sidebar_at_1024(page, site):
     probes.wait_layout_idle(page)
     after = graph_state(page)
 
-    assert scrim["painted"] is False or scrim["area"] == 0, (
-        "scrim painted while closed: %s" % json.dumps(scrim))
+    assert scrim["painted"] is False or scrim["area"] == 0, "scrim painted while closed: %s" % json.dumps(scrim)
     assert sidebar["sbopen"] == "0", "sidebar is open at load (%s)" % json.dumps(sidebar)
     assert centre == "cy", "element on top of the canvas centre is %r" % centre
     assert after["collapsedProjects"] != before["collapsedProjects"], (
@@ -210,8 +210,7 @@ def test_r2_panel_keeps_node_visible(page, site):
     assert inside_before, "the node was not inside before the click (test setup)"
     assert probes.node_in_canvas(page, keys[0], -24), (
         "node %s ends %.1f px outside the %.1f px canvas after docking (bbox %s)"
-        % (keys[0], (bbox["x1"] + bbox["w"]) - rect_after["width"], rect_after["width"],
-           json.dumps(bbox)))
+        % (keys[0], (bbox["x1"] + bbox["w"]) - rect_after["width"], rect_after["width"], json.dumps(bbox)))
 
 
 @pytest.mark.xfail(strict=True, reason="plangraph:UI-GRAPH-CLICK")
@@ -235,8 +234,7 @@ def test_r3_first_click_no_viewport_reset(page, site):
                abs(after["pan"]["y"] - before["pan"]["y"]))
 
     assert graph_state(page)["sel"] == keys[0], "the click did not select %s" % keys[0]
-    assert dzoom <= 0.001, "zoom changed %.6f -> %.6f (delta %.6f)" % (
-        before["zoom"], after["zoom"], dzoom)
+    assert dzoom <= 0.001, "zoom changed %.6f -> %.6f (delta %.6f)" % (before["zoom"], after["zoom"], dzoom)
     assert dpan <= 1.0, "pan moved %.1f px" % dpan
     assert not moved, "nodes moved in model coordinates: %s" % json.dumps(moved)
 
@@ -251,8 +249,7 @@ def test_r4_expand_keeps_header_position(page, site):
     for kind, stub_id, compound_id in [("project", "pc:orchard", "p:orchard"),
                                        ("phase", "phc:orchard|T1", "ph:orchard|T1")]:
         jump, where = header_jump(page, stub_id, compound_id)
-        assert max(abs(d) for d in jump) <= 4.0, (
-            "%s header jumped %s px (%s)" % (kind, json.dumps(jump), where))
+        assert max(abs(d) for d in jump) <= 4.0, "%s header jumped %s px (%s)" % (kind, json.dumps(jump), where)
 
 
 @pytest.mark.xfail(strict=True, reason="plangraph:UI-GRAPH-EXPAND")
@@ -282,11 +279,12 @@ def test_r5_click_during_relayout(page, site, gap_ms):
         "gap %d ms: click aimed at pc:lighthouse (%s px) was neither applied to it nor"
         " dropped behind an indicator: now hit=%s collapsedProjects %s -> %s, indicators=%d"
         % (gap_ms, json.dumps([round(where["x"], 1), round(where["y"], 1)]), json.dumps(hit),
-           json.dumps(before["collapsedProjects"]), json.dumps(after["collapsedProjects"]),
-           indicators))
+           json.dumps(before["collapsedProjects"]), json.dumps(after["collapsedProjects"]), indicators))
     assert "orchard" in after["collapsedProjects"], "the click landed on another project"
 
 
+# Unmarked on purpose: it passes against this fixture snapshot; the measured live
+# repro is not reproducible here, so no xfail owner applies.
 @pytest.mark.parametrize("size", [PHONE], ids=["phone"], indirect=["size"])
 def test_r6_phone_expanded_phase_has_tasks(page, site):
     """R6 (UI-GRAPH-EXPAND): at 390x844 expanding the fixture's >50-task phase
@@ -305,8 +303,7 @@ def test_r6_phone_expanded_phase_has_tasks(page, site):
     boxes = probes.rendered_boxes(
         page, ".project-compound, .project-collapsed, .task-node")
     tasks = [b for b in boxes if b["id"].startswith("t:")]
-    assert len(tasks) == expected, (
-        "expanded phase draws %d task nodes, expected %d" % (len(tasks), expected))
+    assert len(tasks) == expected, "expanded phase draws %d task nodes, expected %d" % (len(tasks), expected)
     degenerate = [{"id": t["id"], "w": round(t["w"], 1), "h": round(t["h"], 1)}
                   for t in tasks if not (t["w"] > 1 and t["h"] > 1)]
     assert not degenerate, "zero-size task nodes: %s" % json.dumps(degenerate[:5])
@@ -356,8 +353,7 @@ def test_r8_knowledge_export_requested_only_when_present(page, site):
         " return {hidden: t.hidden, width: Math.round(t.getBoundingClientRect().width),"
         " text: t.textContent.trim()}; }")
     has_export = page.evaluate(
-        "() => !!(window.PlanUI && PlanUI.Knowledge && PlanUI.Knowledge.get"
-        " && PlanUI.Knowledge.get())")
+        "() => !!(window.PlanUI && PlanUI.Knowledge && PlanUI.Knowledge.get && PlanUI.Knowledge.get())")
 
     assert not has_export, "fixture snapshot has no knowledge export"
     assert not kg_requests, (
@@ -380,8 +376,7 @@ def test_r9_expand_draws_no_invalid_endpoint_warnings(console_page):
         "() => { const cy = PlanUI.GraphView.getCy();"
         " return {edges: cy.edges().length, nodes: cy.nodes().length}; }")
 
-    assert not bad, "%d 'invalid endpoints' warning(s) over %s: %s" % (
-        len(bad), json.dumps(drawn), json.dumps(bad[:2]))
+    assert not bad, "%d 'invalid endpoints' warning(s) over %s: %s" % (len(bad), json.dumps(drawn), json.dumps(bad[:2]))
 
 
 @pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
@@ -389,7 +384,12 @@ def test_r10_graph_failure_is_logged(console_page):
     """R10 (UI-FLAKE-FIXES): a failing layout logs the reason to the console and the
     canvas says so instead of failing silently (V-GRAPH-8)."""
     pg, log = console_page(elk_fails=True, hash=OPEN_ORCHARD_T1)
-    pg.wait_for_timeout(2000)
+    try:  # bounded wait for the failure surface (replaces a blind 2000 ms sleep)
+        pg.wait_for_function(
+            "() => { const b = document.getElementById('graph-engine-banner');"
+            " return !!b && !b.hidden; }", timeout=10000)
+    except PWTimeout:
+        pass  # the banner never showing is itself what the assert below measures
     banner = pg.evaluate(
         "() => { const b = document.getElementById('graph-engine-banner');"
         " return b ? {hidden: b.hidden, text: b.textContent.trim()} : null; }")
@@ -397,4 +397,4 @@ def test_r10_graph_failure_is_logged(console_page):
     assert banner and banner["hidden"] is False, "no engine banner (%s)" % json.dumps(banner)
     errors = [e for e in log["errors"] if ELK_FAIL in e]
     assert errors, "layout failed with %r but the console logged %d error(s) naming it " \
-                   "(all errors=%s)" % (ELK_FAIL, len(errors), json.dumps(log["errors"][:5]))
+        "(all errors=%s)" % (ELK_FAIL, len(errors), json.dumps(log["errors"][:5]))

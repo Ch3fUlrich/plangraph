@@ -1,7 +1,9 @@
 """VIEWS.md V-tags for the shell: V-ALL-1..7, V-SHELL-1..4, V-SIDE-1..5, V-DET-1..5.
 Tests assert the SPEC, not current behaviour: failing code = strict xfail tagged
-with the owning card. Selections go through Table rows (.tc-open ->
-GraphView.selectNode) so tests never trigger a reveal/relayout by accident.
+with the owning card; when a fix lane makes it pass, strict xfail reports XPASS
+as a failure, so that lane removes the marker. Selections go through Table rows
+(.tc-open -> GraphView.selectNode) so tests never trigger a reveal/relayout by
+accident.
 """
 import json
 import re

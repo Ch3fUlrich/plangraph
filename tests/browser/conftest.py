@@ -129,6 +129,9 @@ def page(browser, site, vendor_assets, size):
 
     def _handle(route, request):
         url = request.url
+        if urlparse(url).scheme in ("data", "blob", "about"):
+            route.fallback()  # page-internal URLs, never stray external requests
+            return
         host = urlparse(url).hostname
         if host == "127.0.0.1":
             if url.endswith("/favicon.ico"):  # avoid a 404 console error
