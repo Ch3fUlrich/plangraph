@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Read-only plan graph: dependencies, ready and blocked work, critical path.">
+<meta name="plangraph-build" content="example">
 <title>plangraph example</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f2937'/%3E%3Cpath d='M9 22l7-12 7 12M9 22h14' fill='none' stroke='%2360a5fa' stroke-width='2'/%3E%3Ccircle cx='9' cy='22' r='3' fill='%2360a5fa'/%3E%3Ccircle cx='16' cy='10' r='3' fill='%2360a5fa'/%3E%3Ccircle cx='23' cy='22' r='3' fill='%2360a5fa'/%3E%3C/svg%3E">
 <style>
@@ -353,10 +354,22 @@ tr.flash { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .tt-fdl label{display:block;font-size:12px;white-space:nowrap}
 .tt.hc-project .th-project,.tt.hc-project td[data-col="project"],.tt.hc-phase .th-phase,.tt.hc-phase td[data-col="phase"],.tt.hc-state .th-state,.tt.hc-state td[data-col="state"]{display:none}
 .tt.hc-agent .th-agent,.tt.hc-agent td[data-col="agent"],.tt.hc-when .th-when,.tt.hc-when td[data-col="when"],.tt.hc-prev .th-prev,.tt.hc-prev td[data-col="prev"]{display:none}
+@media (min-width:601px){.tg-scroll{max-height:70vh;overflow:auto}}
+.tr:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.tc-phase,.tc-agent,.tc-when{max-width:180px;overflow:hidden;text-overflow:ellipsis}.tc-when div{overflow:hidden;text-overflow:ellipsis}
+@media (max-width:600px){.tt td{max-width:none;overflow:visible;text-overflow:clip}}
+@media (min-width:601px){.tt-bar select,.tt-bar .tt-btn,.tt .th-btn,.tt .tc-go,.tt .tl-item,.tt .tc-open{min-height:24px}}
+@media (max-width:600px){.tt td:empty{display:none}}
+@media (max-width:600px){.tt-bar select,.tt-bar button,.tt-fd summary{font-size:16px}}
+.tg-count,.tg-pct{color:var(--fg)}
 .tt.hc-next .th-next,.tt.hc-next td[data-col="next"],.tt.hc-links .th-links,.tt.hc-links td[data-col="links"],.tt.hc-prio .th-prio,.tt.hc-prio td[data-col="prio"]{display:none}
 .tt.hc-kind .th-kind,.tt.hc-kind td[data-col="kind"],.tt.hc-op .th-op,.tt.hc-op td[data-col="op"]{display:none}
 @media (max-width:600px){.tt-fd summary,.tt-fdl label,.tt-filt .tt-btn{min-height:40px;display:flex;align-items:center}}
 .tt-filt input[type=checkbox]{width:18px;height:18px;min-width:0;min-height:0;margin-right:6px;vertical-align:middle}
+
+/* ---- UI-VERSION-STAMP (V-SHELL-4): stale data turns the meta line amber
+     (--state-open is the Okabe-Ito amber in both light and dark themes) ---- */
+#meta-line.stamp-stale { color: var(--state-open); }
 
 /* plangraph page chrome (T2) — loaded AFTER page.css, so it wins the cascade.
    UI-PLAN §11: root 16 px (S 15 / L 18), project palette P1–P8, state palette
@@ -1310,10 +1323,27 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
 
 
+  var clockRegistered = false;
+
   function renderHeader() {
     var n = state.items.length;
-    var head = state.snapshot.head ? String(state.snapshot.head).slice(0, 10) + " · " : "";
-    setText($("meta-line"), head + (state.snapshot.generated || "") + " · " + n + " item" + (n === 1 ? "" : "s"));
+    var snap = state.snapshot || {};
+    var meta = $("meta-line");
+    var suffix = " · " + n + " item" + (n === 1 ? "" : "s");
+    var Stamp = global.PlanUI.Stamp;
+    if (!clockRegistered) {
+      clockRegistered = true;
+      Stamp.setRefresh(renderHeader); // V-SHELL-4: start the 60 s re-render clock
+    }
+    var st = Stamp.format(Stamp.buildSha(), snap.generated, snap.head_seq, snap.head, Date.now());
+    setText(meta, st.text + suffix);
+    if (st.title) meta.setAttribute("title", st.title);
+    else meta.removeAttribute("title");
+    var cls = String(meta.className || "").split(/\s+/).filter(function (c) {
+      return c && c !== "stamp-stale";
+    });
+    if (st.stale) cls.push("stamp-stale"); // V-SHELL-4: amber past 15 min
+    meta.className = cls.join(" ");
     var pe = Math.round(PG.percentDone(state.items, "estimate") * 100);
     var pc = Math.round(PG.percentDone(state.items, "count") * 100);
     $("progress-bar").style.width = pe + "%";
@@ -1635,6 +1665,77 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   PP.toggleFilter = toggleFilter;
   PP.isFilterOn = isOn;
   PP.renderChips = renderChips;
+})(typeof window !== "undefined" ? window : globalThis);
+
+;
+(function (global) {
+  "use strict";
+
+  var PlanUI = (global.PlanUI = global.PlanUI || {});
+  var DOT = "\u00b7"; // ·
+
+  function format(sha, generated, headSeq, headHash, nowMs) {
+    var code = sha ? String(sha) : "unknown";
+    var data = generated ? String(generated) : "-";
+    var seq = (headSeq === undefined || headSeq === null || headSeq === "")
+      ? "-" : String(headSeq);
+    var text = "code " + code + " " + DOT + " data " + data + " " + DOT + " seq " + seq;
+    var ageMin = null;
+    var stale = false;
+    if (generated) {
+      var t = Date.parse(String(generated));
+      if (!isNaN(t)) {
+        var now = typeof nowMs === "number" ? nowMs : Date.now();
+        var ageMs = now - t;
+        ageMin = Math.floor(ageMs / 60000);
+        if (ageMin < 0) ageMin = 0;
+        if (ageMs > 15 * 60000) { // strictly older than 15 min; 15:00 is fresh
+          stale = true;
+          text += " " + DOT + " age " + (ageMin >= 60
+            ? Math.floor(ageMin / 60) + "h " + (ageMin % 60) + "m"
+            : ageMin + " min");
+        }
+      } else {
+        ageMin = null;
+      }
+    }
+    var title = headHash ? "keeper head " + String(headHash).slice(0, 10) : "";
+    return { text: text, title: title, stale: stale, ageMin: ageMin };
+  }
+
+  function buildSha(doc) {
+    var d = doc || global.document;
+    if (!d || typeof d.querySelector !== "function") return "unknown";
+    var m = null;
+    try { m = d.querySelector('meta[name="plangraph-build"]'); } catch (e) { m = null; }
+    return (m && m.content) || "unknown";
+  }
+
+  var refreshFn = null;
+  var clockTimer = null;
+
+  function startClockRefresh() {
+    if (typeof document === "undefined" || typeof setInterval === "undefined") return null;
+    if (!refreshFn) return null;
+    if (clockTimer) return clockTimer;
+    clockTimer = setInterval(function () {
+      if (refreshFn) refreshFn();
+    }, 60000);
+    if (clockTimer && typeof clockTimer.unref === "function") clockTimer.unref();
+    return clockTimer;
+  }
+
+  function setRefresh(fn) {
+    refreshFn = typeof fn === "function" ? fn : null;
+    return startClockRefresh();
+  }
+
+  PlanUI.Stamp = {
+    format: format, buildSha: buildSha,
+    setRefresh: setRefresh, startClockRefresh: startClockRefresh
+  };
+
+  if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
 
 ;
@@ -6678,7 +6779,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var LABELS = { state: "State", owner: "Owner", priority: "Prio", kind: "Kind" };
   var STATE_ORDER = ["ready", "blocked", "claimed", "in_review", "open", "done", "cancelled"];
 
-  var state = { filters: { state: [], owner: [], priority: [], kind: [], op: false }, hide: {} };
+  var state = { filters: { state: [], owner: [], priority: [], kind: [], op: false }, hide: {}, sort: null };
   var base = "", openSet = {};
 
   function el(tag, cls, text) {
@@ -6730,6 +6831,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (hid.length) {
       q = (q ? q + "&" : "?") + "t_hide=" + hid.map(encodeURIComponent).join(",");
     }
+    var s = state.sort;
+    if (s && s.col && s.dir && !(s.col === "task" && s.dir === "asc")) {
+      q = (q ? q + "&" : "?") + "t_vsort=" +
+        encodeURIComponent(s.col) + ":" + encodeURIComponent(s.dir);
+    }
     try {
       if (typeof document !== "undefined" && global.history && global.location) {
         global.history.replaceState(null, "", global.location.pathname + q + global.location.hash);
@@ -6745,6 +6851,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     base = trimmed.split("&").filter(function (p) { return p && p.indexOf("t_") !== 0; }).join("&");
     state.filters = { state: [], owner: [], priority: [], kind: [], op: false };
     state.hide = {};
+    state.sort = null;
     if (PlanUI.tableUrlDecode) {
       var st = PlanUI.tableUrlDecode(raw);
       if (st && st.filters) {
@@ -6754,13 +6861,21 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         state.filters.op = !!st.filters.op;
       }
     }
-    var pairs = trimmed.split("&"), i, eq, key, val, ids, j;
+    var pairs = trimmed.split("&"), i, eq, key, val, ids, j, sc, sd, cp;
     for (i = 0; i < pairs.length; i++) {
       if (!pairs[i]) continue;
       eq = pairs[i].indexOf("=");
       key = eq >= 0 ? pairs[i].slice(0, eq) : pairs[i];
-      if (key !== "t_hide") continue;
       val = eq >= 0 ? pairs[i].slice(eq + 1) : "";
+      if (key === "t_vsort") {
+        try { val = decodeURIComponent(val); } catch (e) { val = val; }
+        cp = val.indexOf(":");
+        sc = cp >= 0 ? val.slice(0, cp) : "";
+        sd = cp >= 0 ? val.slice(cp + 1) : "";
+        if (sc && (sd === "asc" || sd === "desc")) state.sort = { col: sc, dir: sd };
+        continue;
+      }
+      if (key !== "t_hide") continue;
       ids = val.split(",");
       for (j = 0; j < ids.length; j++) {
         try { ids[j] = decodeURIComponent(ids[j]); } catch (e) { ids[j] = ids[j]; }
@@ -6996,6 +7111,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     return view.sort.dir === "desc" ? -d : d;
   }
 
+  function setSort(col, dir) {
+    view.sort = { col: col, dir: dir };
+    var t = global.PlanUI.TableCtl;
+    if (t) { t.state.sort = { col: col, dir: dir }; t.save(); }
+    render();
+  }
+
   function itemChip(key, vm) {
     var rec = vm.items.get(key);
     var b = el("button", "tl-item", key.split(":").pop());
@@ -7019,9 +7141,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var tr = el("tr", "tr state-" + (r.display || r.state));
     tr.style.setProperty("--pc", color || "#888");
     tr.setAttribute("data-key", r.key);
+    tr.tabIndex = 0;
+    tr.addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target === tr) PP().selectNode(r.key); });
     if (PP().state.selected === r.key) tr.classList.add("sel");
     var tdP = el("td", "tc-proj"); tdP.appendChild(el("span", "tc-dot")); tdP.appendChild(el("span", null, r.project)); tr.appendChild(tdP);
-    tr.appendChild(el("td", "tc-phase", r.phase));
+    var tdPh = el("td", "tc-phase", r.phase); tdPh.title = String(r.phase || ""); tr.appendChild(tdPh);
     var tdT = el("td", "tc-task");
     var open = el("button", "tc-open");
     open.type = "button";
@@ -7035,10 +7159,12 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     tdT.appendChild(go);
     tr.appendChild(tdT);
     var tdS = el("td", "tc-state"); tdS.appendChild(el("span", "tc-badge b-" + (r.display || r.state), (r.display || r.state).replace("_", " "))); tr.appendChild(tdS);
-    tr.appendChild(el("td", "tc-agent", agentOf(r) || "—"));
+    var agT = agentOf(r) || "—", tdAg = el("td", "tc-agent", agT); tdAg.title = agT; tr.appendChild(tdAg);
     var tdW = el("td", "tc-when");
-    tdW.appendChild(el("div", null, r.createdAt ? "c " + when(r.createdAt) : "c —"));
-    tdW.appendChild(el("div", null, r.updatedAt ? "m " + when(r.updatedAt) : "m —"));
+    var w1 = r.createdAt ? "c " + when(r.createdAt) : "c —", w2 = r.updatedAt ? "m " + when(r.updatedAt) : "m —";
+    tdW.appendChild(el("div", null, w1));
+    tdW.appendChild(el("div", null, w2));
+    tdW.title = w1 + " / " + w2;
     tr.appendChild(tdW);
     tr.appendChild(chipList(pick(r, "prev"), vm));
     tr.appendChild(chipList(pick(r, "next"), vm));
@@ -7060,16 +7186,17 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var ctl = global.PlanUI.TableCtl, hc = "";
     if (ctl) Object.keys(ctl.state.hide).forEach(function (id) { if (ctl.state.hide[id]) hc += " hc-" + id; });
     var t = el("table", "tt" + hc);
+    t.setAttribute("aria-label", gkey + " tasks");
     var hr = el("tr");
     COLS.forEach(function (c) {
       var th = el("th", "th-" + c.id);
+      th.setAttribute("aria-sort", view.sort.col === c.id ? (view.sort.dir === "desc" ? "descending" : "ascending") : "none");
       var b = el("button", "th-btn" + (view.sort.col === c.id ? " on" : ""), c.label + (view.sort.col === c.id ? (view.sort.dir === "asc" ? " ▲" : " ▼") : ""));
       b.type = "button";
       b.setAttribute("aria-label", "Sort by " + c.label);
       b.addEventListener("click", function () {
-        if (view.sort.col === c.id) view.sort.dir = view.sort.dir === "asc" ? "desc" : "asc";
-        else view.sort = { col: c.id, dir: "asc" };
-        render();
+        if (view.sort.col === c.id) setSort(c.id, view.sort.dir === "asc" ? "desc" : "asc");
+        else setSort(c.id, "asc");
       });
       th.appendChild(b);
       hr.appendChild(th);
@@ -7114,6 +7241,10 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var all = [];
     vm.items.forEach(function (r) { r._links = idx[r.key] || []; all.push(r); });
     if (!urlLoaded && global.PlanUI.TableCtl) { urlLoaded = true; global.PlanUI.TableCtl.load(location.search); }
+    if (global.PlanUI.TableCtl && global.PlanUI.TableCtl.state.sort && COL[global.PlanUI.TableCtl.state.sort.col]) {
+      var ss = global.PlanUI.TableCtl.state.sort;
+      view.sort = { col: ss.col, dir: ss.dir === "desc" ? "desc" : "asc" };
+    }
     var rows = all.filter(pass);
 
     var bar = el("div", "tt-bar");
@@ -7133,9 +7264,11 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
         ssel.appendChild(o);
       });
     });
-    ssel.addEventListener("change", function () { var v = ssel.value.split(":"); view.sort = { col: v[0], dir: v[1] }; render(); });
+    ssel.addEventListener("change", function () { var v = ssel.value.split(":"); setSort(v[0], v[1] === "desc" ? "desc" : "asc"); });
     slab.appendChild(ssel); bar.appendChild(slab);
-    bar.appendChild(el("span", "tt-count", rows.length + " of " + all.length + " tasks"));
+    var cnt = el("span", "tt-count", rows.length + " of " + all.length + " tasks");
+    cnt.setAttribute("role", "status"); cnt.setAttribute("aria-live", "polite");
+    bar.appendChild(cnt);
     var ca = el("button", "tt-btn", "Collapse all"); ca.type = "button";
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);

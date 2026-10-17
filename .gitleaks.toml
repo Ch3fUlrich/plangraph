@@ -1,0 +1,76 @@
+# Root leak-scanner config (gitleaks 8.30.1), auto-discovered by `gitleaks git`/`gitleaks dir`
+# and by CI.  Default rules stay on; the allowlists below are a REVIEWED set of paths whose only
+# findings are (a) ordinary prose that the entropy rule mis-fires on, or (b) synthetic,
+# credential-shaped fixtures that exercise the credential guard / redactor.  No entry below
+# exempts a whole file blindly: prose files are limited to the one mis-firing rule, and every
+# fixture entry names the exact fake value, so a NEW credential-shaped string in these files
+# still fails the gate.  Never add a path here without reviewing its findings.
+#
+# Gate: gitleaks git --log-opts=--all --redact -c .gitleaks.toml   (must exit 0)
+title = "plangraph public repo"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+# generic-api-key mis-fires on the prose "tokens, bool/str/negative" in the historical
+# PROMPT.md (deleted from the tree, still in git history).  Not a credential of any kind.
+description = "plan/prompt prose false positive in PROMPT.md (reviewed 2026-10-17)"
+targetRules = ["generic-api-key"]
+paths = ['''^PROMPT\.md$''']
+
+[[allowlists]]
+# generic-api-key mis-fires on the plan-id list "Q-API-PUSH, RT-P2-DECISIONS" in the historical
+# orchestration-setup plan (deleted from the tree, still in git history).  Not a credential.
+description = "plan prose false positive in docs/plans/2026-10-16-orchestration-setup.md (reviewed 2026-10-17)"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/plans/2026-10-16-orchestration-setup\.md$''']
+
+[[allowlists]]
+# The md_sync fixtures carry the fake demo token the redactor test suite asserts on.  Covers the
+# history of the directory (QUESTIONS.md was renamed to sample_questions.md).
+description = "synthetic demo token in md_sync fixtures (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/fixtures/md_sync/''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+# Fake credential the keeper credential-guard tests assert are found and masked.
+description = "synthetic secret in the credential-guard test (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_keeper_credential_guard\.py$''']
+regexes = ['''^svcacct/Zq9xk2LmPw$''']
+
+[[allowlists]]
+# Same fake credential, reused by the keeper estimate/src-edit guard tests.
+description = "synthetic secret in the estimate-src-edit guard test (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_keeper_estimate_src_edit\.py$''']
+regexes = ['''^svcacct/Zq9xk2LmPw$''']
+
+[[allowlists]]
+# Fake credential in the refusal corpus the key-guard test expects to be rejected.
+description = "synthetic password in the key-guard test (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_keeper_guard_key\.py$''']
+regexes = ['''^svc/Xk9fT2mQ$''']
+
+[[allowlists]]
+# Fake token handed to the redactor so the test can assert it is masked and counted.
+description = "synthetic demo token in the md_sync parse test (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_parse\.py$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+# Same fake token, in the plan-building redaction tests.
+description = "synthetic demo token in the md_sync plan test (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_plan\.py$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']

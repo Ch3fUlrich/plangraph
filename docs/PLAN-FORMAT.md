@@ -1,6 +1,6 @@
 # Plan-graph format for L1s (D-296) — v1, 2026-10-02
 
-One YAML file per change, written by a project's L1 and loaded into the keeper by the router (routing-00) through
+One YAML file per change, written by a project's L1 and loaded into the keeper by the router through
 `tools/apply_batch.py`. The same format serves a first project plan and every later change. Only fields listed here are
 validated. Any other field on an item (e.g. `budget`, `intent`, `workstreams`, `acceptance_extra`) is KEPT, folded into the
 item's `note` (YAML import today; API/batch creates after KEEPER-BATCH task B3), so write freely but put real acceptance into `done_criteria`.
@@ -25,8 +25,8 @@ secret/key/security/gateway/omniroute/deploy/keeper/fence → high; only the rou
 ## File
 ```yaml
 batch: 2026-10-02-server-plan          # unique name
-principal: routing-00                  # the router applies it
-source: /home/s/code/<repo>/docs/plan/<file>.md   # the L1's human-readable plan (optional but recommended)
+principal: router                      # the router applies it
+source: <repo-root>/docs/plan/<file>.md   # the L1's human-readable plan (optional but recommended)
 source_sha256: <sha256 of source>      # `sha256sum <source>`
 ops:
   - op: create
@@ -63,6 +63,6 @@ No cycles · every non-terminal item reaches a goal · no dependency on a cancel
 unknown `kind`/`review_tier`/evidence kind refused · keys unique.
 
 ## Process
-1. The L1 writes the file in its own repo (e.g. `docs/plan/graph/<date>-<name>.yaml`) and sends the path to routing-00.
+1. The L1 writes the file in its own repo (e.g. `docs/plan/graph/<date>-<name>.yaml`) and sends the path to the router.
 2. plangraph-L1 validates it symbolically against the live graph and returns the diff + the new ready set.
-3. After routing-00's OK, the router applies it: `python3 tools/apply_batch.py FILE --url … --token-file …` (dry run first).
+3. After the router's OK, the router applies it: `python3 tools/apply_batch.py FILE --url … --token-file …` (dry run first).
