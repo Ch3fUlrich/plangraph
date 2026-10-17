@@ -15,7 +15,7 @@ Keys now: server:RT-P1-TEMPORAL-CHECK, plangraph:MODEL-LOOP, MODEL-NAMES, PG-CI-
 - UI batch DONE: TABICON #50, SMALLFIX-RULE #51 (docs-only PR -> evidence via `gh workflow run tests.yml --ref <lane>`), UI-TABLE #52+#54 (router review
   delegated by operator; D-1644 evidence_kinds=commit+ci), NEEDS-YOU #53. Guard: PATH-EXEMPT #55 (D-1613), SEP-SPLIT #56 (judge ACCEPT).
 ## IN FLIGHT
-- LIVE-SYNC-7 GO REQUESTED from routing (07:0xZ): packet main docs/plan/rethink/live-sync-2d61e281.md §2 Step A (keeper drop-in z7) then Step B (render
+- LIVE-SYNC-7 GO GIVEN: D-1667 (routing, ~07:0xZ; Step A first, B only after A green; fresh step-3 dump sha; rollback = remove BOTH drop-ins; proposal tree stays). EXECUTE FIRST: packet main docs/plan/rethink/live-sync-2d61e281.md §2 Step A (keeper drop-in z7) then Step B (render
   drop-in plangraph-render.service.d/live-sync-z7-2d61e281.conf). Pre-GO dump sha 77f1a56d (backups/pre-go-live-sync-2d61e281-20261017T065658Z).
   On GO: run steps exactly, fresh step-3 dump sha, record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md (copy LS6 format), DONE to routing with
   gates, MainPID, max seq before/after. Rollback = rm drop-ins (always valid). zsh: use bash -c or quote multiword CLI args (my LS6 verify rc2 slip).
