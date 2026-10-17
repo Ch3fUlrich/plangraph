@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-16
 
+- **MODEL-LOOP:** item kind `loop` (free-text `kind`, no schema change) with an exit decision: `views.validate` reports `loop_no_exit` when a non-cancelled loop has no exit and `loop_many_exits` when it has more than one — an exit is a non-cancelled `decision` item whose `depends_on` lists the loop; `ready`/`blocked`/`waves`/`critical_path` treat a loop like a lane and the keeper accepts `kind: loop` at create (tests `tests/test_views_loop.py`, `tests/test_keeper_loop_kind.py`; `docs/SPEC.md` note).
 - **RT-P1-GOVERNOR:** budget governor (`src/plangraph/governor/`, `docs/governor.md`): keeper `metrics` table (schema v11, PG migration 4) with `set_metrics`/`get_metrics`/`log_governor_override`, daily job `python -m plangraph.governor metrics daily`, pure `allow()` policy (never blocks answers, operator-started sessions or operator-requested judges; non-Claude fallback when Claude is over 1/7 burn or rate limited; provider quota throttle for worker legs; overrides and fallbacks logged), and `planner.start.guard_start`.
 
 ## 2026-10-15
