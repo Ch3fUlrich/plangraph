@@ -122,3 +122,170 @@ def pan_node_to(page, node_id, to):
         " const tx = at(a.to.x, cx, cy.width()), ty = at(a.to.y, cyPos, cy.height());"
         " cy.pan({x: p.x + tx - cx, y: p.y + ty - cyPos}); return true; }",
         {"id": node_id, "to": to})
+
+def ui_state(page):
+    """Selected key, collapse sets, expanded set and focus from the live store."""
+    return page.evaluate(
+        "() => { const u = PlanUI.app && PlanUI.app.ui; if (!u) return null;"
+        " return {sel: u.get('sel'), view: u.get('view'), focusProject: u.get('focusProject'),"
+        " collapsedProjects: Array.from(u.get('collapsedProjects')),"
+        " collapsedPhases: Array.from(u.get('collapsedPhases')),"
+        " expanded: Array.from(u.get('expanded')), hash: location.hash}; }"
+    )
+
+
+def first_task_node(page):
+    """Id of the first task node in the current graph, or None."""
+    return page.evaluate("() => { const n = PlanUI.GraphView.getCy()"
+                         "                        .nodes('.task-node')[0];"
+                         "                        return n ? n.id() : null; }")
+
+
+def task_model_pos(page):
+    """{nodeId: {x, y}} for every task node — model coordinates."""
+    return page.evaluate(
+        "() => { const cy = PlanUI.GraphView.getCy(); const out = {};"
+        " if (!cy) return out; cy.nodes('.task-node').forEach(n => {"
+        " const p = n.position(); out[n.id()] = {x: p.x, y: p.y}; }); return out; }"
+    )
+
+
+def moved_nodes(before, after, tol=0.5):
+    """Ids whose model position differs by more than *tol*."""
+    return sorted(k for k in before
+                  if k in after and max(abs(before[k]["x"] - after[k]["x"]),
+                                        abs(before[k]["y"] - after[k]["y"])) > tol)
+
+
+def node_center(page, key):
+    """Page-viewport centre of the rendered node, or None when absent."""
+    return page.evaluate(
+        "(a) => { const cy = PlanUI.GraphView.getCy(); if (!cy) return null;"
+        " let n = cy.getElementById('t:' + a); if (!n.length) n = cy.getElementById(a);"
+        " if (!n.length) return null;"
+        " const b = n.renderedBoundingBox(), r = cy.container().getBoundingClientRect();"
+        " return {x: r.left + b.x1 + b.w / 2, y: r.top + b.y1 + b.h / 2,"
+        " x1: b.x1, y1: b.y1, w: b.w, h: b.h,"
+        " canvasX: r.left, canvasY: r.top, canvasW: r.width, canvasH: r.height}; }",
+        key,
+    )
+
+
+def click_node(page, key):
+    """Mouse-click the centre of *key*; returns the pre-click node_center dict."""
+    c = node_center(page, key)
+    assert c, f"node {key!r} is not in the graph"
+    page.mouse.click(c["x"], c["y"])
+    return c
+
+
+def pan_node_frac(page, key, fx, fy):
+    """Pan (no zoom) until *key*'s centre sits at canvas fraction (fx, fy)."""
+    page.evaluate(
+        "(a) => { const cy = PlanUI.GraphView.getCy();"
+        " const n = cy.getElementById(a.key); if (!n.length) return false;"
+        " const r = cy.container().getBoundingClientRect(), p = n.renderedPosition();"
+        " cy.pan({x: cy.pan().x + (r.width * a.fx - p.x), y: cy.pan().y + (r.height * a.fy - p.y)});"
+        " return true; }",
+        {"key": key, "fx": fx, "fy": fy},
+    )
+
+
+def visible_canvas(page):
+    """Canvas rect plus the details panel's covered flag (docked or sheet)."""
+    return page.evaluate(
+        "() => { const c = document.getElementById('cy');"
+        " const d = document.getElementById('details');"
+        " if (!c) return null;"
+        " const a = c.getBoundingClientRect();"
+        " const out = {x: a.x, y: a.y, w: a.width, h: a.height, covered: false};"
+        " if (d && !d.hidden) { const b = d.getBoundingClientRect();"
+        " const ox = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));"
+        " const oy = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));"
+        " out.covered = ox > 0 && oy > 0; out.panel = {x: b.x, y: b.y, w: b.width, h: b.height}; }"
+        " return out; }"
+    )
+
+
+def node_margin(page, key):
+    """Smallest px distance from the node box to the edge of the unobstructed
+    canvas (negative when it sticks out / is covered by the panel)."""
+    return page.evaluate(
+        "(a) => { const cy = PlanUI.GraphView.getCy();"
+        " let n = cy.getElementById('t:' + a.key); if (!n.length) n = cy.getElementById(a.key);"
+        " if (!n.length) return null;"
+        " const b = n.renderedBoundingBox(), r = cy.container().getBoundingClientRect();"
+        " let right = r.width - (b.x1 + b.w), left = b.x1, bottom = r.height - (b.y1 + b.h), top = b.y1;"
+        " const d = document.getElementById('details');"
+        " if (d && !d.hidden) { const q = d.getBoundingClientRect();"
+        "   if (q.left > r.left && q.left < r.right) right = Math.min(right, q.left - r.left - (b.x1 + b.w));"
+        "   if (q.top > r.top && q.top < r.bottom) bottom = Math.min(bottom, q.top - r.top - (b.y1 + b.h)); }"
+        " return {left: Math.round(left), right: Math.round(right),"
+        " top: Math.round(top), bottom: Math.round(bottom),"
+        " min: Math.round(Math.min(left, right, top, bottom))}; }",
+        {"key": key},
+    )
+
+
+def watch_console(page):
+    """Attach an extra console listener; returns the growing [(type, text)] list."""
+    seen: list[tuple[str, str]] = []
+    page.on("console", lambda m: seen.append((m.type, m.text)))
+    return seen
+
+
+def count_matching(seen, needle):
+    """How many captured console lines contain *needle*."""
+    return sum(1 for _kind, text in seen if needle in text)
+
+
+def box_layout(page, selector=".task-node, .phase-compound, .project-compound"):
+    """Rendered boxes of *selector*: task count, zero-size tasks, and overlaps
+    between boxes that are not ancestor/descendant of one another."""
+    return page.evaluate(
+        """(sel) => { const cy = PlanUI.GraphView.getCy(); const list = [];
+        cy.nodes(sel).forEach(n => { const b = n.renderedBoundingBox();
+          list.push({id: n.id(), anc: n.ancestors().map(a => a.id()),
+                     w: Math.round(b.w), h: Math.round(b.h),
+                     x1: b.x1, y1: b.y1, x2: b.x1 + b.w, y2: b.y1 + b.h}); });
+        const tasks = list.filter(x => x.id.startsWith('t:'));
+        const zero = tasks.filter(x => x.w < 1 || x.h < 1).map(x => [x.id, x.w, x.h]);
+        const pairs = [];
+        for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+          const a = list[i], b = list[j];
+          if (a.anc.includes(b.id) || b.anc.includes(a.id)) continue;
+          const w = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1);
+          const h = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
+          if (w > 0 && h > 0) pairs.push([a.id, b.id, Math.round(w), Math.round(h)]); }
+        return {nTasks: tasks.length, zero, overlaps: pairs.length,
+                pairs: pairs.slice(0, 5), sample: tasks.slice(0, 3).map(x => [x.w, x.h]),
+                canvas: [Math.round(cy.width()), Math.round(cy.height())]}; }""",
+        selector)
+
+
+def selection_emphasis(page, node_id):
+    """Opacity census after selecting *node_id*: dimmed (<= 0.3) task nodes,
+    unrelated ones still at full opacity, plus neighbours and edge opacity."""
+    return page.evaluate(
+        """(k) => { const cy = PlanUI.GraphView.getCy(); const n = cy.getElementById(k);
+        const op = x => Math.round(parseFloat(x.style('opacity')) * 100) / 100;
+        const nb = {}; n.neighborhood('node').forEach(x => { nb[x.id()] = 1; });
+        let tasks = 0, dimmed = 0, fullUnrelated = 0, fullNeighbours = 0;
+        cy.nodes('.task-node').forEach(x => { tasks++; const o = op(x);
+          if (o <= 0.3) dimmed++;
+          else if (o >= 1 && x.id() !== k && !nb[x.id()]) fullUnrelated++;
+          if (nb[x.id()] && o >= 1) fullNeighbours++; });
+        return {selected: cy.nodes(':selected').length, targetOpacity: op(n),
+                tasks, dimmed, fullUnrelated, neighbours: Object.keys(nb).length,
+                fullNeighbours, edgeOpacity: op(cy.edges().first())}; }""",
+        node_id)
+
+
+def engine_message(page):
+    """Text shown when the graph engine/layout failed (canvas + banner)."""
+    return page.evaluate(
+        """() => { const cy = document.getElementById('cy');
+        const b = document.querySelector('[class*=banner], [id*=banner], [class*=engine]');
+        const banner = b ? b.textContent.trim() : '';
+        const canvas = cy ? (cy.innerText || '').trim() : '';
+        return {canvas, banner, text: (canvas + ' ' + banner).toLowerCase()}; }""")
