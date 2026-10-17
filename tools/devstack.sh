@@ -97,24 +97,99 @@ cmd_up() {
         exit 3
     fi
     local rc=0
-    "${COMPOSE[@]}" up -d --wait --wait-timeout 180 || rc=$?
-    if [ "$rc" -ne 0 ]; then
-        # Keep every container as it is (no down/rm/kill/stop) and dump what
-        # there is so the failure can be diagnosed.
-        echo "compose up failed (exit $rc); containers left as they are" >&2
-        echo "--- containers ---" >&2
-        "${COMPOSE[@]}" ps -a || true
-        echo "--- logs (last 80 lines per service) ---" >&2
-        local services svc
-        services=$("${COMPOSE[@]}" config --services 2>/dev/null) ||
-            services="$FALLBACK_SERVICES"
-        for svc in $services; do
-            echo "--- $svc ---" >&2
-            "${COMPOSE[@]}" logs --tail 80 "$svc" 2>/dev/null || true
+    # Compose's own wait mode counts every exited container as a failure, even
+    # an exit-0 one-shot, so it cannot be used here; readiness is checked in
+    # the bounded loop below instead.
+    "${COMPOSE[@]}" up -d || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        local -a long_services=(pg temporal temporal-ui)
+        local -a one_shots=(temporal-schema temporal-namespace)
+        local timeout=180 poll=3 waited=0
+        local svc cid state health code all_ready failed
+        while :; do
+            all_ready=1
+            failed=""
+            for svc in "${one_shots[@]}" "${long_services[@]}"; do
+                cid=$("${COMPOSE[@]}" ps -a -q "$svc" 2>/dev/null | head -n 1 || true)
+                state=""
+                health=""
+                code=""
+                if [ -n "$cid" ]; then
+                    state=$(docker inspect -f '{{.State.Status}}' "$cid" 2>/dev/null || true)
+                    code=$(docker inspect -f '{{.State.ExitCode}}' "$cid" 2>/dev/null || true)
+                    health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || true)
+                fi
+                case "$svc" in
+                    temporal-schema|temporal-namespace)
+                        # One-shots must finish with exit code 0; any other
+                        # terminal state is a failure, running means waiting.
+                        if [ "$state" = "exited" ]; then
+                            if [ "$code" != "0" ]; then
+                                failed="$svc exited ($code)"
+                            fi
+                        else
+                            all_ready=0
+                        fi
+                        ;;
+                    *)
+                        # A service without a healthcheck counts as ready
+                        # when it is running.
+                        if [ "$state" = "running" ] &&
+                            { [ "$health" = "healthy" ] || [ "$health" = "none" ]; }; then
+                            :
+                        elif [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+                            failed="$svc is $state"
+                        else
+                            all_ready=0
+                        fi
+                        ;;
+                esac
+                if [ -n "$failed" ]; then
+                    break
+                fi
+            done
+            if [ -n "$failed" ]; then
+                rc=1
+                echo "stack did not become ready: $failed" >&2
+                break
+            fi
+            if [ "$all_ready" -eq 1 ]; then
+                break
+            fi
+            if [ "$waited" -ge "$timeout" ]; then
+                rc=1
+                echo "timed out after ${timeout}s waiting for the stack to become ready" >&2
+                break
+            fi
+            sleep "$poll"
+            waited=$((waited + poll))
         done
-        echo "read them again with: tools/devstack.sh logs <service>" >&2
-        exit "$rc"
+        if [ "$rc" -eq 0 ]; then
+            for svc in "${long_services[@]}"; do
+                echo "$svc: healthy"
+            done
+            for svc in "${one_shots[@]}"; do
+                echo "$svc: exited(0)"
+            done
+            echo "stack is up"
+            return 0
+        fi
     fi
+    # Keep every container as it is (no teardown) and dump what
+    # there is so the failure can be diagnosed.
+    echo "compose up failed (exit $rc); containers left as they are" >&2
+    echo "--- containers ---" >&2
+    "${COMPOSE[@]}" ps -a || true
+    echo "--- logs (last 80 lines per service) ---" >&2
+    local services
+    services=$("${COMPOSE[@]}" config --services 2>/dev/null) ||
+        services="$FALLBACK_SERVICES"
+    for svc in $services; do
+        echo "--- $svc ---" >&2
+        "${COMPOSE[@]}" logs --tail 80 "$svc" 2>/dev/null || true
+    done
+    echo "read them again with: tools/devstack.sh logs <service>" >&2
+    exit "$rc"
 }
 
 cmd_down() {

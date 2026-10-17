@@ -929,3 +929,61 @@ def test_temporal_binds_on_all_container_interfaces_and_stays_loopback_published
                 f"ports entry {entry!r} must still publish on host IP "
                 f"127.0.0.1, got {host_ip!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# 13. cmd_up does its own bounded readiness wait (no compose --wait)
+# ---------------------------------------------------------------------------
+
+LONG_RUNNING = ["pg", "temporal", "temporal-ui"]
+ONE_SHOTS = ["temporal-schema", "temporal-namespace"]
+
+
+def _cmd_up_text() -> str:
+    text = _read(DEVSTACK_PATH)
+    func = _shell_function(text, "cmd_up")
+    assert func is not None, "tools/devstack.sh must define cmd_up()"
+    return func
+
+
+def test_cmd_up_starts_without_compose_wait_flag():
+    up = _cmd_up_text()
+    assert "--wait" not in up, (
+        "cmd_up must not pass --wait to compose: --wait counts exited "
+        "one-shot containers (even exit 0) as a failure, so `up` could "
+        "never succeed"
+    )
+    assert re.search(r"\bup\s+-d\b", up), (
+        "cmd_up must start the stack with `up -d`"
+    )
+
+
+def test_cmd_up_waits_with_a_bounded_loop():
+    up = _cmd_up_text()
+    assert re.search(r"\b180\b", up), (
+        "cmd_up must bound its readiness wait with a 180 s timeout"
+    )
+    assert re.search(r"\bsleep\b", up), (
+        "cmd_up must poll with sleep between readiness checks"
+    )
+
+
+def test_cmd_up_checks_every_service_by_name():
+    up = _cmd_up_text()
+    for name in LONG_RUNNING + ONE_SHOTS:
+        assert re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", up), (
+            f"cmd_up must mention service {name!r} in its readiness check"
+        )
+
+
+def test_cmd_up_never_tears_containers_down():
+    up = _cmd_up_text()
+    bad = [
+        line
+        for line in up.splitlines()
+        if re.search(r"\b(down|rm|kill|stop)\b", line)
+    ]
+    assert not bad, (
+        "cmd_up must keep every container on failure; offending lines:\n"
+        + "\n".join(bad)
+    )
