@@ -65,7 +65,7 @@ class Config:
     token_file: str
     out: str
     state: str
-    workflow: str = "tests"
+    workflow_path: str = ".github/workflows/tests.yml"
     remote: str = "origin"
     branch: str = "main"
     alert_cmd: list[str] | None = None
@@ -109,7 +109,10 @@ class Config:
             token_file=required("PLANGRAPH_GH_TOKEN_FILE"),
             out=out,
             state=env.get("PLANGRAPH_STATE") or os.path.join(out, ".live-follow.json"),
-            workflow=env.get("PLANGRAPH_CI_WORKFLOW") or "tests",
+            workflow_path=(
+                env.get("PLANGRAPH_CI_WORKFLOW_PATH")
+                or ".github/workflows/tests.yml"
+            ),
             alert_cmd=alert_cmd,
             grace_s=grace_s,
         )
@@ -198,8 +201,36 @@ def gh_api(runner, cfg: Config, endpoint: str) -> dict | None:
     return None
 
 
+def _workflow_file(path: object) -> str | None:
+    """The workflow file a run came from, minus any "@refs/..." suffix.
+
+    The API reports a PR run as ".github/workflows/tests.yml@refs/pull/7/merge";
+    the ref part is not part of the file's identity. None when the field is
+    absent or empty — a run we cannot identify is a run that does not count.
+    """
+    if not isinstance(path, str) or not path:
+        return None
+    return path.split("@", 1)[0] or None
+
+
+def _counts_toward_gate(run: dict, cfg: Config, head_sha: str) -> bool:
+    """Whether this run is the pinned workflow of exactly this head in our repo.
+
+    A workflow *name* is not an identity: any other file, or a fork's copy of
+    the same workflow, can be named "tests". Pinning the file path and checking
+    the run's own head_sha and head_repository keeps a lookalike — including a
+    fork PR's run — from deciding the result.
+    """
+    if run.get("head_sha") != head_sha:
+        return False
+    head_repo = run.get("head_repository")
+    if not isinstance(head_repo, dict) or head_repo.get("full_name") != cfg.repo:
+        return False
+    return _workflow_file(run.get("path")) == cfg.workflow_path
+
+
 def _head_green(runner, cfg: Config, head_sha: str) -> bool:
-    """True when the newest run of cfg.workflow on head_sha completed success."""
+    """True when the newest run of cfg.workflow_path on head_sha completed success."""
     runs = gh_api(
         runner, cfg, f"repos/{cfg.repo}/actions/runs?head_sha={head_sha}&per_page=30"
     )
@@ -208,7 +239,7 @@ def _head_green(runner, cfg: Config, head_sha: str) -> bool:
     entries = [
         r
         for r in runs.get("workflow_runs") or []
-        if isinstance(r, dict) and r.get("name") == cfg.workflow
+        if isinstance(r, dict) and _counts_toward_gate(r, cfg, head_sha)
     ]
     if not entries:
         return False
