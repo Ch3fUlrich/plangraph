@@ -1,0 +1,21 @@
+# MT-003 and MT-095 reworded to fit the credential guard with no exemption (operator answer to Q-GUARD-PATH-EXEMPT, D-1816).
+# plangraph-L1-plan2 2026-10-17. Texts carry no slash-joined pairs and no paths, so they pass with or without the D-1613 path
+# exemption. Meaning unchanged; the cut-off MT-003 title is completed from its own description. Principal router.
+batch: 2026-10-17-mt-reword
+principal: router
+source: 2026-10-17-ui-overlaps.md
+source_sha256: e3151b375d973f03953e8386afe102d2b412755edd83620e53a6ecd1118d31d2
+ops:
+- op: edit
+  key: server:MT-003
+  fields:
+    title: 'OP: MT-003 Measure the UPS battery runtime and confirm the Fritzbox and the switch are connected to the UPS'
+    description: 'Measure the UPS battery runtime and confirm the Fritzbox and switch connection. Closes MT-003 in manual_todo.md with a D-id. Deferred (D-1089 triage): UPS shutdown already works (see the UPS incident doc of 2026-08-30 in the Server repo operations docs); the test drops the whole lab, so it needs the same planned outage as MT-005. Trigger: the MT-005 window.'
+    done_criteria: 'MT-003 closed in manual_todo.md (by the operator or prox) with a D-id or a commit'
+    note: 'why only the user: someone at the plug; blocked on: nothing; status open; since 2026-08-30'
+- op: edit
+  key: server:MT-095
+  fields:
+    title: 'OP: MT-095 Ombi first run, wire Radarr, Sonarr and Lidarr'
+    description: 'D-1089 manual-todo triage (Server ce72ba300): keep. Ombi is deployed (media downloader compose stack in the Server repo) with its own sign-in, not Authelia. Check first that Jellyseerr has not replaced it.'
+    done_criteria: 'the operator does the step, or a router D-row records a drop or defer outcome'
