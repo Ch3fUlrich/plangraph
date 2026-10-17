@@ -55,7 +55,20 @@ _READS_SQLITE_FILE = {
 }
 
 
+def _targets_browser_dir(config) -> bool:
+    """True when the invocation explicitly points at tests/browser (path or -m)."""
+    args = list(getattr(config.option, "file_or_dir", None) or [])
+    if any("browser" in str(a) for a in args):
+        return True
+    return "browser" in (getattr(config.option, "markexpr", "") or "")
+
+
 def pytest_ignore_collect(collection_path, config):
+    # UI-BROWSER-TESTS W1: tests/browser needs Playwright and runs in its own CI
+    # job, so the default ``pytest tests`` never collects it (explicit paths win).
+    if collection_path.name == "browser" and collection_path.parent.name == "tests":
+        if not _targets_browser_dir(config):
+            return True
     if _PG and collection_path.suffix == ".py" and collection_path.name.startswith("test_"):
         if "contract" not in collection_path.parts:
             try:

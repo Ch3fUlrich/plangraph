@@ -101,6 +101,29 @@ jobs:
       - name: pytest
         run: python -m pytest -q -n auto --dist loadgroup --durations=30 tests
 
+  # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
+  # committed local assets, so the job never needs network access to a CDN.
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: python -m pip install --quiet -r requirements-ci.txt
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: browser tests
+        run: python -m pytest -q tests/browser -m browser
+
   pytest-postgres:
     needs: select
     if: needs.select.outputs.pytest-postgres == 'true'
