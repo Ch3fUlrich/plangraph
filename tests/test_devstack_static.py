@@ -809,3 +809,61 @@ def test_docker_compose_config_publishes_only_loopback_host_ips(tmp_path):
             f"rendered service {name!r} publishes {port!r} without "
             f"host_ip: 127.0.0.1"
         )
+
+
+# ---------------------------------------------------------------------------
+# 11. temporal healthcheck / namespace readiness polling
+# ---------------------------------------------------------------------------
+
+
+def _temporal_healthcheck_test():
+    hc = _services()["temporal"].get("healthcheck") or {}
+    test = hc.get("test")
+    assert test is not None, "temporal must define a healthcheck test"
+    if isinstance(test, list):
+        return " ".join(str(part) for part in test)
+    return str(test)
+
+
+def _namespace_command_text():
+    cmd = _services()["temporal-namespace"].get("command")
+    assert cmd is not None, "temporal-namespace must define a command"
+    if isinstance(cmd, list):
+        return "\n".join(str(c) for c in cmd)
+    return str(cmd)
+
+
+def test_temporal_healthcheck_uses_only_tools_present_in_the_server_image():
+    text = _temporal_healthcheck_test()
+    # temporalio/server ships neither the `temporal` nor the `tctl` CLI, so a
+    # healthcheck that calls one always fails with "temporal: not found".
+    for absent_cli in ("temporal ", "tctl "):
+        assert absent_cli not in text, (
+            f"temporal healthcheck must not invoke the {absent_cli.strip()!r} "
+            f"CLI (the temporalio/server image does not ship it): {text!r}"
+        )
+    assert re.search(r"(^|[;&|]\s*|\s)nc(\s|$)", text), (
+        f"temporal healthcheck must use a tool that exists in the image "
+        f"(nc); got {text!r}"
+    )
+
+
+def test_temporal_namespace_waits_for_cluster_serving_before_creating():
+    text = _namespace_command_text()
+    assert "cluster health" in text, (
+        "temporal-namespace must prove readiness with "
+        f"`temporal operator cluster health`; got {text!r}"
+    )
+    assert "SERVING" in text, (
+        "temporal-namespace must check for the SERVING state"
+    )
+    assert "sleep" in text, (
+        "temporal-namespace must retry with a sleep between attempts"
+    )
+    assert re.search(r"\b(?:while|until|for|if)\b.*\b\d+\b", text, re.DOTALL), (
+        "temporal-namespace must bound the wait (a numeric retry limit), "
+        f"got {text!r}"
+    )
+    assert "plangraph-dev" in text, (
+        "temporal-namespace must still create the plangraph-dev namespace"
+    )

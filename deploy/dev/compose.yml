@@ -82,10 +82,19 @@ services:
       temporal-schema:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING"]
+      # TCP-only check on purpose: temporalio/server (the plain server image)
+      # ships NO `temporal` and NO `tctl` CLI, so a gRPC health query such as
+      # `temporal operator cluster health ... | grep -q SERVING` always fails
+      # here with "/bin/sh: temporal: not found" — the container was reported
+      # unhealthy while the server itself worked fine. The image also has no
+      # curl and no bash, only /usr/bin/nc and /usr/bin/wget, and wget cannot
+      # speak gRPC. Real cluster readiness is proven in temporal-namespace
+      # (admin-tools image, which does have the CLI).
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 7233"]
       interval: 10s
       timeout: 10s
       retries: 12
+      start_period: 30s
     deploy:
       resources:
         limits:
@@ -108,6 +117,18 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
+        # The temporal container is only TCP-checked (its image has no CLI),
+        # so gRPC readiness is proven here, where the temporal CLI exists.
+        # POSIX /bin/sh only: the admin-tools image has no bash.
+        tries=0
+        until temporal operator cluster health --address temporal:7233 2>/dev/null | grep -q SERVING; do
+          tries=$$((tries + 1))
+          if [ $${tries} -ge 60 ]; then
+            echo "temporal cluster never reported SERVING on temporal:7233 (60 tries x 2s)" >&2
+            exit 1
+          fi
+          sleep 2
+        done
         if ! temporal operator namespace describe --address temporal:7233 --namespace plangraph-dev >/dev/null 2>&1; then
           temporal operator namespace create --address temporal:7233 --namespace plangraph-dev --retention 72h
         fi
