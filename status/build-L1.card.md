@@ -1,4 +1,4 @@
-# build-L1 card · gen-12 END → gen-13 · HANDOFF #13 (docs/build-L1-handoff.md, read next) · NO cron · 2026-10-17 ~16:55Z
+# build-L1 card · gen-13 LIVE (resumed 16:53Z) · HANDOFF #13 docs/build-L1-handoff.md · NO cron · hb loop bg 8h from 16:53Z, MDSYNC wake 18:45Z
 Control repo is LOCAL ONLY (D-1751): `git push control build-L1` (bare ~/.local/share/plangraph/control.git). NEVER `git push origin build-L1` (public repo).
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
