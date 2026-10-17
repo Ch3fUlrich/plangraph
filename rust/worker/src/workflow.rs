@@ -298,6 +298,17 @@ impl Card {
                                     context_overflow: false,
                                 },
                             );
+                            rereport_judged(
+                                ctx,
+                                &cfg,
+                                &input,
+                                n,
+                                &leg.id,
+                                class,
+                                &diff_hash,
+                                &check_tail,
+                            )
+                            .await;
                         }
                         MergeStep::Moved(main_head) => {
                             // The worker already tried to rebase this attempt onto the
@@ -318,6 +329,17 @@ impl Card {
                                     context_overflow: false,
                                 },
                             );
+                            rereport_judged(
+                                ctx,
+                                &cfg,
+                                &input,
+                                n,
+                                &leg.id,
+                                ExitClass::RebaseConflict,
+                                &diff_hash,
+                                &check_tail,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -656,6 +678,57 @@ fn replace_attempt(history: &mut Vec<Attempt>, judged: Attempt) {
     }
 }
 
+/// Tell the keeper the merge-time verdict on attempt `n`.
+///
+/// The attempt was reported with its own exit class before it was merged;
+/// `replace_attempt` then corrected only the workflow history, so the keeper
+/// would still hold `ok` for an attempt that failed its post-rebase check. This
+/// sends the same attempt number again with the final class so both agree.
+/// Best effort: the correction must not take the card down, and a keeper that
+/// keeps attempt rows append-only may refuse the repeat.
+#[allow(clippy::too_many_arguments)]
+async fn rereport_judged(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    n: u32,
+    leg_id: &str,
+    exit_class: ExitClass,
+    diff_hash: &str,
+    check_tail: &str,
+) {
+    let report = judged_report(
+        &input.claim.card,
+        n,
+        leg_id,
+        exit_class,
+        diff_hash,
+        check_tail,
+    );
+    let _ = ctx
+        .execute_activity(CardActivities::report, report, activity_options(cfg))
+        .await;
+}
+
+/// The corrected report for attempt `n`: same number, final exit class.
+fn judged_report(
+    card: &str,
+    n: u32,
+    leg_id: &str,
+    exit_class: ExitClass,
+    diff_hash: &str,
+    check_tail: &str,
+) -> AttemptReport {
+    AttemptReport {
+        card: card.to_string(),
+        n,
+        leg: leg_id.to_string(),
+        exit_class,
+        diff_hash: diff_hash.to_string(),
+        check_tail: check_tail.to_string(),
+    }
+}
+
 /// Sweep dead attempts; every terminal path except `merged` runs this first.
 async fn run_janitor(
     ctx: &WorkflowContext<Card>,
@@ -963,6 +1036,18 @@ mod tests {
         assert_eq!(two.len(), 2);
         assert_eq!(two[0].exit_class, ExitClass::CheckFail);
         assert_eq!(two[1].exit_class, ExitClass::RebaseConflict);
+    }
+
+    #[test]
+    fn a_merge_time_verdict_is_re_reported_with_the_same_attempt_number() {
+        // The keeper first saw attempt 3 as `ok`; the merge-time check failed.
+        let r = judged_report("c-1", 3, "leg-a", ExitClass::CheckFail, "dh", "tail");
+        assert_eq!((r.card.as_str(), r.n, r.leg.as_str()), ("c-1", 3, "leg-a"));
+        assert_eq!(r.exit_class, ExitClass::CheckFail);
+        assert_eq!(
+            (r.diff_hash.as_str(), r.check_tail.as_str()),
+            ("dh", "tail")
+        );
     }
 
     #[test]

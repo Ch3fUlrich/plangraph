@@ -680,6 +680,42 @@ echo attempt > seed.txt"#;
     .await;
 }
 
+/// A check that passes in the attempt's worktree but fails once the attempt is
+/// rebased onto the moved main: the merge-time verdict replaces the attempt in
+/// workflow history, and the keeper must be told the same (attempt 1 reported
+/// `ok`, then re-reported `check_fail`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_time_check_fail_is_re_reported_to_the_keeper() {
+    in_local(async {
+        let script = format!("{MOVE_MAIN}echo ok > out.txt");
+        let Some(env) = env_or_skip("merge-check-fail", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-merge-check-fail";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt && ! test -f moved.txt");
+        let id = format!("e2e-merge-check-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("merge_check_fail", &id, &handle).await;
+        assert_ne!(out.detail, "merged", "{out:?}");
+        let first: Vec<ExitClass> = env
+            .keeper
+            .attempts()
+            .iter()
+            .filter(|r| r.n == 1)
+            .map(|r| r.exit_class)
+            .collect();
+        assert_eq!(
+            first,
+            vec![ExitClass::Ok, ExitClass::CheckFail],
+            "attempt 1 is reported ok, then corrected to the merge-time verdict"
+        );
+        env.stop();
+    })
+    .await;
+}
+
 /// A leg naming a harness this worker never registered is the plan's fault:
 /// the card goes back to the planner instead of crashing or retrying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
