@@ -101,12 +101,7 @@
     var snap = state.snapshot || {};
     var meta = $("meta-line");
     var suffix = " · " + n + " item" + (n === 1 ? "" : "s");
-    var Stamp = global.PlanUI && global.PlanUI.Stamp;
-    if (!Stamp) { // page_stamp.js not loaded — legacy line, no stamp
-      var head = snap.head ? String(snap.head).slice(0, 10) + " · " : "";
-      setText(meta, head + (snap.generated || "") + suffix);
-      return;
-    }
+    var Stamp = global.PlanUI.Stamp;
     if (!clockRegistered) {
       clockRegistered = true;
       Stamp.setRefresh(renderHeader); // V-SHELL-4: start the 60 s re-render clock

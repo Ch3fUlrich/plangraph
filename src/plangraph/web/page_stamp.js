@@ -55,7 +55,7 @@
   /* Re-render every 60 s so a page left open turns amber on its own.
    * The page registers its re-render fn through setRefresh (see page_ui.js);
    * the timer only runs once one exists. Guarded for non-browser
-   * environments; unref'd so node harnesses exit. */
+   * environments. */
   var refreshFn = null;
   var clockTimer = null;
 
@@ -66,7 +66,6 @@
     clockTimer = setInterval(function () {
       if (refreshFn) refreshFn();
     }, 60000);
-    if (clockTimer && typeof clockTimer.unref === "function") clockTimer.unref();
     return clockTimer;
   }
 

@@ -9,6 +9,7 @@ Synthetic data only: no hosts, IPs or home paths in the page or here.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -141,11 +142,6 @@ def test_missing_or_bad_generated_is_never_stale(tmp_path):
 SNAP = {"generated": GEN, "head": "abc1234567def0123", "head_seq": 42, "items": []}
 
 
-@pytest.mark.skipif(
-    "page_stamp.js" not in render_mod.JS_FILES,
-    reason="page_stamp.js not in JS_FILES yet (the other writer's render.py change "
-           "has not landed in this checkout)",
-)
 def test_rendered_page_carries_stamp_code_and_css():
     html = render_mod.render(SNAP, ROOT / "vendor", cdn=True)
     assert ".stamp-stale" in html          # the CSS rule for V-SHELL-4
@@ -166,8 +162,7 @@ function emit(o) { process.stdout.write(JSON.stringify(o)); }
 global.document = { querySelector: function () { return null; } };
 var timers = [];
 global.setInterval = function (fn, ms) {
-  var t = { fn: fn, ms: ms, unrefCalled: false };
-  t.unref = function () { t.unrefCalled = true; };
+  var t = { fn: fn, ms: ms };
   timers.push(t);
   return t;
 };
@@ -185,7 +180,6 @@ function main() {
   PlanUI.Stamp.setRefresh(function () { calls++; });
   out.timersAfterRegister = timers.length;
   out.intervalMs = timers.length ? timers[timers.length - 1].ms : null;
-  out.unrefCalled = timers.length ? timers[timers.length - 1].unrefCalled : false;
   if (timers.length) timers[timers.length - 1].fn();
   out.callsAfterTick = calls;
   PlanUI.Stamp.startClockRefresh();          // idempotent: one timer only
@@ -218,7 +212,6 @@ def test_stamp_timer_starts_only_with_a_registered_refresh_fn(tmp_path):
     assert out["timersWithoutRefreshFn"] == 0  # and none without a fn
     assert out["timersAfterRegister"] == 1
     assert out["intervalMs"] == 60000
-    assert out["unrefCalled"] is True         # node harnesses must still exit
     assert out["callsAfterTick"] == 1         # the tick calls the registered fn
     assert out["timersAfterSecondStart"] == 1  # registration is idempotent
 
@@ -249,7 +242,7 @@ global.document = {
 };
 var timers = [];
 global.setInterval = function (fn, ms) {
-  var t = { fn: fn, ms: ms, unref: function () {} };
+  var t = { fn: fn, ms: ms };
   timers.push(t);
   return t;
 };
@@ -291,6 +284,88 @@ def test_header_flips_to_stale_on_clock_tick_via_page_ui(tmp_path):
     assert "stamp-stale" not in (out["freshClass"] or "")
     assert "stamp-stale" in (out.get("staleClass") or ""), out
     assert f"{DOT} age 15 min" in (out.get("staleText") or ""), out
+
+
+STAMP_LINE_HARNESS = r"""
+"use strict";
+var WEB = process.argv[2];
+var GEN = process.argv[3];
+var GEN_MS = Number(process.argv[4]);
+function emit(o) { process.stdout.write(JSON.stringify(o)); }
+
+/* fake DOM, same contract as tests/test_ui_real_page.py's stub, reduced to
+ * what renderHeader touches, plus the <meta name="plangraph-build"> render.py emits */
+function FakeEl() { this.className = ""; this.attributes = {}; this.style = {}; this.textContent = ""; }
+FakeEl.prototype.setAttribute = function (n, v) { this.attributes[n] = String(v); };
+FakeEl.prototype.removeAttribute = function (n) { delete this.attributes[n]; };
+var els = {};
+["meta-line", "progress-bar", "progress-text"].forEach(function (id) { els[id] = new FakeEl(); els[id].setAttribute("id", id); });
+global.document = {
+  readyState: "loading",
+  documentElement: new FakeEl(),
+  body: new FakeEl(),
+  createElement: function () { return new FakeEl(); },
+  createTextNode: function (t) { var n = new FakeEl(); n.textContent = String(t); return n; },
+  getElementById: function (id) { return els[id] || null; },
+  querySelector: function (sel) {
+    return sel.indexOf("plangraph-build") >= 0 ? { content: "abc1234567" } : null;
+  },
+  querySelectorAll: function () { return []; },
+  addEventListener: function () {}, removeEventListener: function () {}
+};
+var timers = [];
+global.setInterval = function (fn, ms) { var t = { fn: fn, ms: ms }; timers.push(t); return t; };
+var fakeNow = GEN_MS;
+Date.now = function () { return fakeNow; };
+
+var SNAP = { generated: GEN, head: "cafe1234beef5678", head_seq: 42, items: [] };
+var ITEMS = [
+  { key: "projA:T1", project: "projA", state: "open", estimate_h: 2, depends_on: [] },
+  { key: "projA:T2", project: "projA", state: "done", estimate_h: 2, depends_on: [] }
+];
+
+function main() {
+  /* load order mirrors render.py JS_FILES: page_ui.js before page_stamp.js */
+  require(WEB + "/page.js");
+  require(WEB + "/page_ui.js");
+  require(WEB + "/page_stamp.js");
+  var PlanPage = global.PlanPage;
+  PlanPage.state.snapshot = SNAP;
+  PlanPage.state.items = ITEMS;
+  fakeNow = GEN_MS + 60000;                 // 1 min old: fresh
+  PlanPage.renderHeader();                  // what the page boot does
+  var meta = els["meta-line"];
+  var out = {
+    freshText: meta.textContent,
+    freshTitle: meta.attributes.title || "",
+    freshClass: meta.className,
+    progressText: els["progress-text"].textContent,
+    progressWidth: String(els["progress-bar"].style.width)
+  };
+  fakeNow = GEN_MS + 15 * 60000 + 1000;     // 15 min + 1 s: stale
+  timers[timers.length - 1].fn();           // the 60 s clock tick
+  out.staleClass = meta.className;
+  out.staleText = meta.textContent;
+  emit(out);
+}
+try { main(); } catch (e) { emit({ error: String((e && e.stack) || e) }); }
+"""
+
+
+@need_node
+def test_renderheader_stamp_line_and_progress_via_page_ui(tmp_path):
+    """Real renderHeader: build sha from the meta tag, full #meta-line text,
+    tooltip carries the keeper head, and the progress update is not skipped."""
+    out = run_node(tmp_path, STAMP_LINE_HARNESS, GEN, str(GEN_MS))
+    assert out["freshText"] == f"code abc1234567 {DOT} data {GEN} {DOT} seq 42 {DOT} 2 items"
+    assert "keeper head cafe1234be" in out["freshTitle"]
+    assert "cafe1234be" not in out["freshText"]  # head hash stays in the tooltip
+    assert "stamp-stale" not in out["freshClass"]
+    assert re.fullmatch(rf"\d+% done by estimate {DOT} \d+% by count",
+                        out["progressText"]), out["progressText"]
+    assert out["progressWidth"].endswith("%")
+    assert "stamp-stale" in out["staleClass"], out
+    assert f"{DOT} age" in out["staleText"], out
 
 
 def test_page_stamp_never_references_planpage():
