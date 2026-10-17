@@ -718,7 +718,7 @@ def test_main_output_never_contains_token(tmp_path, capsys):
 # 16. Config.from_env
 
 def test_config_from_env_defaults_and_required(tmp_path):
-    env = base_env(tmp_path)
+    env = base_env(tmp_path, PLANGRAPH_STATE=None)  # None drops the key: exercise the default
     cfg = Config.from_env(env)
     assert cfg.tree == env["PLANGRAPH_LIVE_TREE"]
     assert cfg.repo == REPO

@@ -29,8 +29,8 @@ those GitHub queries lives only in the file named by `PLANGRAPH_GH_TOKEN_FILE` (
 `GH_TOKEN`, mode 0600) and is never printed or copied into a unit or into `render.env`.
 
 **Staleness alert.** If the published page lags the followed head for longer than `PLANGRAPH_ALERT_GRACE_S`
-(default 1800 s, i.e. 30 min), `check` runs `PLANGRAPH_ALERT_CMD` once per stale window instead of waiting
-for a human to open the page.
+(default 1800 s, i.e. 30 min), `check` runs `PLANGRAPH_ALERT_CMD` with the alert line as its last argument
+(argv, not stdin), once per stale window instead of waiting for a human to open the page.
 
 **Install is a separate, gated deploy step** — this lane ships files only. On the render host: copy
 `plangraph-render.service` and `plangraph-render.timer` to `~/.config/systemd/user`, put an edited
