@@ -1,9 +1,9 @@
-# Lane U4: UI-NARROW-LAYOUT and UI-FLAKE-FIXES; Lane U5: UI-DEAD-CODE
+# Lane U4: UI-NARROW-LAYOUT and UI-FLAKE-FIXES
 
 Read `COMMON.md` first. Start U4 after U2 has merged.
 - UI-FLAKE-FIXES also edits `page_graph_view.js` (`runSync` catch, edges). If U3 is running, take those two hunks last and rebase on
   U3's merged head first.
-- U5 starts last.
+- U5 (UI-DEAD-CODE) has its own brief: `lane-U5-dead-code.md`.
 
 ## UI-NARROW-LAYOUT (4 h): R1
 
@@ -27,16 +27,3 @@ Read `COMMON.md` first. Start U4 after U2 has merged.
 - V-ALL-7: global keys act only on the graph page.
 - Details: `loop` renders as `iteration/max (exit)`, never as an object dump (V-DET-3).
 - The wheel sensitivity goes back to the library default, and the warning goes away.
-
-## Lane U5: UI-DEAD-CODE (3 h)
-
-Remove, or wire where U3 already did:
-- the dagre path (`page_ui.js:168-345` and its inlined vendor libs);
-- `page_graph_focus.js`, `page_graph_budget.js`, `page_graph_chips.js`, and the unused parts of `page_graph_cluster.js`, together with
-  their now-meaningless tests;
-- the `expanded` flag;
-- the hidden `#panel-qa` and `QAPage` rebuild;
-- the `#collapse-done` checkbox;
-- the `showCritical` and `autoCollapseDone` toggles.
-
-Name each in the commit. The browser suite and node tests stay green, and the page does not get larger.
