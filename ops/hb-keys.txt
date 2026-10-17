@@ -4,4 +4,4 @@ plangraph:MODEL-NAMES
 plangraph:PG-CI-FORGEJO
 plangraph:PG-PUBLIC-READY
 plangraph:UI-BROWSER-TESTS
-plangraph:UI-VERSION-STAMP
+plangraph:UI-DEPLOY-AUTO
