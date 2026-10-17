@@ -2,6 +2,5 @@ server:RT-P1-TEMPORAL-CHECK
 plangraph:MODEL-LOOP
 plangraph:MODEL-NAMES
 plangraph:PG-CI-FORGEJO
-plangraph:PG-PUBLIC-READY
 plangraph:UI-BROWSER-TESTS
 plangraph:UI-DEPLOY-AUTO
