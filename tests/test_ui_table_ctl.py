@@ -61,6 +61,13 @@ var ps = h.replace(/^\?/, "").split("&").filter(Boolean);
 o.hKeys = ps.map(function (p) { var i = p.indexOf("="); return i < 0 ? p : p.slice(0, i); }).sort().join("|");
 o.hRawScript = h.indexOf("</script>") >= 0;
 o.hHide = ps.filter(function (p) { return p.indexOf("t_hide=") === 0; }).map(function (p) { return p.slice(7); }).join("");
+ctl.reset();
+ctl.state.sort = { col: "agent", dir: "desc" };
+var sq = ctl.save();
+ctl.state.sort = null; ctl.load(sq);
+o.sortUrl = sq; o.sortRt = JSON.stringify(ctl.state.sort);
+ctl.state.sort = { col: "task", dir: "asc" }; o.sortDef = ctl.save();
+ctl.load("?t_vsort=agent:sideways"); o.sortBad = ctl.state.sort;
 console.log(JSON.stringify(o));
 """
 
@@ -98,3 +105,21 @@ def test_hostile_values_cannot_inject_params(out):
     assert out["hKeys"] == "t_hide|t_state"
     assert out["hRawScript"] is False
     assert out["hHide"] == "a%26t_hide%3Dx"
+
+
+def test_view_sort_persisted_in_url(out):
+    # Mutation that fails it: save() ignoring state.sort, or load() accepting a bad direction.
+    assert out["sortUrl"] == "?t_vsort=agent:desc"
+    assert out["sortRt"] == '{"col":"agent","dir":"desc"}'
+    assert out["sortDef"] == ""
+    assert out["sortBad"] is None
+
+
+def test_table_a11y_hooks_in_source():
+    # Mutation that fails it: aria-sort, row tabindex/Enter or cell titles dropped.
+    src = (WEB / "page_table_view.js").read_text(encoding="utf-8")
+    css = (WEB / "page.css").read_text(encoding="utf-8")
+    for needle in ('"aria-sort"', "tr.tabIndex = 0", 'e.key === "Enter"', "tdAg.title", "tdW.title", "tdPh.title", 'aria-live'):
+        assert needle in src, needle
+    assert "@media (min-width:601px){.tg-scroll{max-height:70vh;overflow:auto}}" in css
+    assert ".tr:focus-visible" in css and "text-overflow:ellipsis" in css
