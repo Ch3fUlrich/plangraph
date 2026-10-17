@@ -29,11 +29,18 @@ then paths + full shas. No status chatter.
 ## Writers, seats, evidence
 - Code is written by writer runs ONLY via the autoos-agent MCP `spawn` (D-430/D-431). Your own in-session edits count as a
   writer run, so do not write code in-session.
-- Writer (operator S17, 2026-10-16): gemini-3.8-flash via agy. agy gets code only, never plan data, decisions or keeper
-  content.
-- Seats: qwen3.8-flash (qodercli) + opencode/muse-spark-1.3-free. Never OVH/Mistral.
-- Rate limits: a rate-limited writer or seat falls back to mimo-v2.6-flash, then deepseek. Every fallback keeps seat family !=
-  writer family; if no valid family is left, report BLOCKED. Record the resolved model + model_source of every run.
+- Models (operator rule D-1704, replaces S17, D-1701 and D-1351): writer and seats come from this order; a rate-limited or
+  down entry passes to the next:
+  1. qodercli/qwen3.8-flash (ACP)
+  2. opencode/muse-spark-1.3 (ACP)
+  3. agy/gemini-3.8-flash (ACP)
+  4. opencode/mimo-v2.6-flash (ACP)
+  5. openrouter/free (API)
+  6. mimo/mimo-v2.6-flash (API)
+  7. deepseek/deepseek-v4.1-flash (API)
+- Writer = the first available entry. Seats = the next available entries whose family differs from the writer and from
+  each other. If no valid family is left, report BLOCKED. Record the resolved model + model_source of every run.
+- agy gets code only, never plan data, decisions or keeper content (S17; D-1704 does not lift it). Never OVH/Mistral.
 - workst-L1-autoos runs the seats: send it the package (`git format-patch` + the review prompt).
 - EVERY writer task text carries this line verbatim: "Never change behaviour to satisfy a test, never special-case test
   inputs, never edit a guard/test outside your scope; report failing tests instead."

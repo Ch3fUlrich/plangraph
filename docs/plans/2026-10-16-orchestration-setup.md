@@ -33,7 +33,7 @@ stopped the supervising session. Neither changes this design.
 | S14 | Graph history tab: view any past point and diff two points; "go back" opens a correction proposal through the planning-mode UI; DONE is never rewritten | AskUserQuestion |
 | S15 | Router order 2026-10-16 (items 1-7): plan base in `docs/plans/`, Rust code, SvelteKit site, plangraph wires OmniRoute per project, one project = one repo, repo hooks only where needed, all other automation through the plangraph MCP server | routing, confirmed by the operator |
 | S16 | The MCP entry runs a **Rust `plangraph mcp`** stdio server in the same binary: the existing tool set forwarded 1:1 to the keeper HTTP API, contract-tested against the Python MCP. No Python on client machines | AskUserQuestion |
-| S17 | Lane models: writer **gemini-3.8-flash via agy**; seats **qwen3.8-flash (qodercli)** + **opencode/muse-spark-1.3-free**; a rate-limited leg falls back to mimo-v2.6-flash, then deepseek. Seat family != writer family always. agy gets code only, never plan data | AskUserQuestion |
+| S17 | **Superseded by operator rule D-1704 (2026-10-17)**: writer and seats follow the D-1704 order (qwen3.8-flash via qodercli first); see briefs/COMMON.md. The agy code-only limit stays. Was: writer **gemini-3.8-flash via agy**; seats **qwen3.8-flash (qodercli)** + **opencode/muse-spark-1.3-free**; a rate-limited leg falls back to mimo-v2.6-flash, then deepseek. Seat family != writer family always. agy gets code only, never plan data | AskUserQuestion |
 | S18 | Public repo CI on **GitHub-hosted** Linux + Windows runners (tests + release builds); the workstation runner stays for private repos | AskUserQuestion |
 | S19 | Item rulings (operator decided instead of the router): `plangraph:API-PUSH` and the draft RT-P3-ASK-PUSH fold into one new item **`plangraph:Q-API-PUSH`** (the clearer name); `autoos:T2-SKILL` is cancelled as a duplicate of `plangraph:RT-P4-SKILLS-REWRITE`; `autoos:AO-CTX-RECYCLE-ALLHOSTS` folds into `plangraph:SU-HOOK-CTXGUARD` + `SU-LAUNCH`; `plangraph:CI-RUNS-ON-WORKST` is re-scoped to the private repos. Dependents are re-pointed in the same batch | AskUserQuestion |
 | S20 | Fleet capacity (router order D-1514): each host runs **`plangraph host-agent`** (a user service, set up by `plangraph setup`; no cron) that pushes one sample a minute to the keeper | AskUserQuestion |
@@ -340,7 +340,7 @@ Lanes J (fleet signals) and K (placement) are in section 12.
    an archive name. This is an operator step inside `plangraph:SPLIT-PUBLISH`.
 2. `docs/plans/` holds site strings (the two base files). It is outside the public allow-list (`tools/split/manifest.toml`)
    and stays private until scrubbed.
-3. The seat conflict (mimo writer vs mimo seat) is resolved by S17.
+3. The seat conflict (mimo writer vs mimo seat) is resolved by S17, now D-1704 (seat families differ from the writer and from each other).
 4. **Latency budget.**
    - Definition: wall-clock from Claude Code starting the hook command to the process exit. The command is the binary's
      absolute path with no shell wrapper (no `bash -c`, no `python`). Measured over 200 runs, p95, on the workstation (Windows)
