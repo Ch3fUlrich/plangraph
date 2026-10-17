@@ -276,10 +276,29 @@ def test_published_host_ports_are_exactly_55432_7233_8233():
     )
 
 
+# The ONLY line in compose.yml that may carry a wildcard bind. The
+# temporalio/server image needs BIND_ON_IP set to every container
+# interface so its listener also covers the container's own loopback
+# (the healthcheck `nc -z 127.0.0.1 7233` runs inside the container).
+# This is in-container only: it must never appear in a ports: entry or
+# anywhere else, which is why the allowance is this exact assignment
+# line and nothing broader.
+_ALLOWED_WILDCARD_LINE_RE = re.compile(
+    r'^[ \t]*BIND_ON_IP:[ \t]*"?0\.0\.0\.0"?[ \t]*(?:#.*)?$'
+)
+
+
 def test_compose_raw_text_has_no_wildcard_bind():
     text = _read(COMPOSE_PATH)
-    assert "0.0.0.0" not in text, (
-        "compose.yml raw text must not contain 0.0.0.0"
+    bad = [
+        line
+        for line in text.splitlines()
+        if "0.0.0.0" in line and not _ALLOWED_WILDCARD_LINE_RE.match(line)
+    ]
+    assert not bad, (
+        "compose.yml must not contain 0.0.0.0 outside the temporal "
+        "BIND_ON_IP assignment (ports entries and any other use are "
+        "rejected):\n" + "\n".join(bad)
     )
 
 
@@ -661,11 +680,22 @@ def test_no_hostnames_home_paths_or_foreign_ips_in_stack_files():
         for m in re.finditer(r"(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
                              r"(?![\d.])", text):
             ip = m.group(0)
-            if _valid_ipv4(ip) and ip != "127.0.0.1":
-                problems.append(
-                    f"{path.relative_to(ROOT)}: IPv4 {ip} (only 127.0.0.1 "
-                    f"is allowed)"
-                )
+            if not _valid_ipv4(ip) or ip == "127.0.0.1":
+                continue
+            if ip == "0.0.0.0":
+                # The temporal BIND_ON_IP assignment is the single allowed
+                # wildcard (in-container listener scope, not a published
+                # address); every other occurrence stays a problem.
+                line_start = text.rfind("\n", 0, m.start()) + 1
+                line_end = text.find("\n", m.start())
+                line = text[line_start:] if line_end == -1 \
+                    else text[line_start:line_end]
+                if _ALLOWED_WILDCARD_LINE_RE.match(line):
+                    continue
+            problems.append(
+                f"{path.relative_to(ROOT)}: IPv4 {ip} (only 127.0.0.1 "
+                f"is allowed)"
+            )
         if re.search(r"/home/", text):
             problems.append(f"{path.relative_to(ROOT)}: contains /home/ path")
         if re.search(r"[Cc]:[\\/][Uu]sers", text):
@@ -867,3 +897,35 @@ def test_temporal_namespace_waits_for_cluster_serving_before_creating():
     assert "plangraph-dev" in text, (
         "temporal-namespace must still create the plangraph-dev namespace"
     )
+
+
+# ---------------------------------------------------------------------------
+# 12. temporal BIND_ON_IP / in-container loopback address
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_binds_on_all_container_interfaces_and_stays_loopback_published():
+    # Without BIND_ON_IP the server image listens only on the container's
+    # bridge IP, so the `nc -z 127.0.0.1 7233` healthcheck fails inside a
+    # healthy container (verified live). Setting it must not loosen the
+    # host-side publication: every ports entry stays bound to 127.0.0.1.
+    svcs = _services()
+    env = dict(_env_items(svcs["temporal"]))
+    assert env.get("BIND_ON_IP") == "0.0.0.0", (
+        "temporal must set BIND_ON_IP: \"0.0.0.0\" so the gRPC listener "
+        "covers the container's own loopback for the healthcheck, got "
+        f"{env.get('BIND_ON_IP')!r}"
+    )
+    assert env.get("TEMPORAL_ADDRESS") == "127.0.0.1:7233", (
+        "temporal must set TEMPORAL_ADDRESS: \"127.0.0.1:7233\" so "
+        "in-container clients target the loopback listener, got "
+        f"{env.get('TEMPORAL_ADDRESS')!r}"
+    )
+    for name, svc in svcs.items():
+        for entry in svc.get("ports") or []:
+            host_ip, _ = _parse_port_binding(name, entry)
+            assert host_ip == "127.0.0.1", (
+                f"service {name!r}: BIND_ON_IP is in-container only; "
+                f"ports entry {entry!r} must still publish on host IP "
+                f"127.0.0.1, got {host_ip!r}"
+            )

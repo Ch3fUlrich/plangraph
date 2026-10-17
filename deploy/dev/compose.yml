@@ -74,6 +74,16 @@ services:
       POSTGRES_USER: ${PG_USER:?run tools/devstack.sh init}
       POSTGRES_PWD: ${PG_PASSWORD:?run tools/devstack.sh init}
       NUM_HISTORY_SHARDS: "4"
+      # Verified live: without BIND_ON_IP the server listens only on the
+      # container's bridge IP, never on the container's loopback, so the
+      # `nc -z 127.0.0.1 7233` healthcheck below reports unhealthy while
+      # the server itself works fine. Bind on all container interfaces and
+      # point in-container clients at loopback (same as the server repo's
+      # cloud Temporal stack). Host exposure is unchanged: the ports:
+      # mapping below still publishes only on 127.0.0.1, so nothing
+      # becomes reachable from outside this host.
+      BIND_ON_IP: "0.0.0.0"
+      TEMPORAL_ADDRESS: "127.0.0.1:7233"
     volumes:
       - ./dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/docker.yaml:ro
     ports:
