@@ -11,6 +11,11 @@ Done text: `ops/pg.sh show <key>` from /home/s/code/plangraph-worktrees/build-L1
 2. UI-TABLE (12 h est; deps UI-TABLE-MODEL/PHONE/VIEW/WIRE are DONE, so most is built): first audit main against the done text, list gaps, close only the gaps.
 3. PG-NEEDS-YOU: one Needs-you table replacing tab-needs + tab-qa (filters type/project/priority/age/state, sortable, deep links).
 4. PG-L2-SMALLFIX-RULE (docs): D-1272 clause into plangraph L1/L2 brief templates + orchestration docs (text in the item's done criteria).
+ADDED (router review of UI-TABLE #52, delegated by operator): item 2b UI-TABLE-FIX, standard, Plan-Item: plangraph:UI-TABLE, branch from main, do it FIRST:
+ (1) real sticky header: .tg-scroll has overflow-x:auto and no height cap -> max-height or overflow-x:clip on desktop; (2) aria-sort on sorted columns
+ (reuse page_side_tables.js); (3) sort persisted in URL like filters; (4) task rows keyboard-openable (focusable + Enter); (5) ellipsis + title on truncated
+ cells (Agent, Created/modified, Phase). Nice-to-have: desktop controls >= 24px, hide empty cells in phone cards, 16px form controls < 600px, caption/aria-label
+ + aria-live count, verify .tg-count contrast. Keep: no page h-scroll, phone cards, filters survive reload, focus ring, dark contrast. Playwright both sizes + seat.
 UI check (D-323): Playwright at 1440x900 and 390x844 against a LOCAL render of the static page with a fixture or a read-only snapshot copy (never the live
 page as the system under test), screenshots to plangraph-worktrees/ui-batch-seats/<KEY>-<sha>/shots/, checklist run by a non-writer agent (seat).
 Playwright RAM: one browser at a time; MemAvailable >= 1 GB before launch.
