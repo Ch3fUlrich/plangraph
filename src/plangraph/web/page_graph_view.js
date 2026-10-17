@@ -12,17 +12,14 @@
   PlanUI.freshCanvasSize = PlanUI.freshCanvasSize || function (c) { if (!c) return { w: 0, h: 0 }; if (typeof c.resize === "function") c.resize(); return { w: typeof c.width === "function" ? c.width() : 0, h: typeof c.height === "function" ? c.height() : 0 }; };
   var GraphExt = { call: function (n, a, c) { if (PlanUI.GraphExt && typeof PlanUI.GraphExt.call === "function") return PlanUI.GraphExt.call(n, a, c); return n === "transformElements" ? a : (n === "styles" ? [] : null); } };
 
-  var cy = null, currentUI = null, currentVM = null;
-  var lastElements = null, lastStackedLayout = null;
-  var projectSignatures = {}, projectLayouts = {};
-  var syncTimer = null, syncPromise = null, syncResolve = null;
+  var cy = null, currentUI = null, currentVM = null, lastElements = null, lastStackedLayout = null;
+  var projectSignatures = {}, projectLayouts = {}, syncTimer = null, syncPromise = null, syncResolve = null;
   var initialViewportDone = false, positionsApplied = false, userTouched = false, applying = false;
   var lastToggledId = null, lastToggledRenderedPos = null;
 
   var ctx = {
     get cy() { return cy; }, set cy(v) { cy = v; }, vm: function () { return currentVM; }, ui: function () { return currentUI; },
-    sync: function (immediate) { return sync(immediate); }, selectNode: function (key) { return selectNode(key); }, isPhone: function () { return isPhone(); },
-    get container() { return typeof document !== "undefined" && document.getElementById ? document.getElementById("cy") : null; }, set container(v) {}
+    sync: function (immediate) { return sync(immediate); }, selectNode: function (key) { return selectNode(key); }, isPhone: function () { return isPhone(); }, get container() { return typeof document !== "undefined" && document.getElementById ? document.getElementById("cy") : null; }, set container(v) {}
   };
 
   function cssVar(name) {
@@ -92,9 +89,7 @@
   }
 
   /* Semantic Zoom */
-  function updateSemanticZoom() {
-    if (PlanUI.updateSemanticZoom) PlanUI.updateSemanticZoom(cy, isPhone());
-  }
+  function updateSemanticZoom() { if (PlanUI.updateSemanticZoom) PlanUI.updateSemanticZoom(cy, isPhone()); }
 
   /* Initial Viewport */
   function setInitialViewport() {
@@ -111,10 +106,7 @@
     updateSemanticZoom();
   }
 
-  function refreshInitialViewport() {
-    if (userTouched) return;
-    setInitialViewport();
-  }
+  function refreshInitialViewport() { if (userTouched) return; setInitialViewport(); }
 
   /* Reactive Re-layout: debounced 60 ms with epoch */
   function sync(immediate) {
@@ -383,6 +375,12 @@
     mount: function (ui, vm) { currentUI = ui; currentVM = vm; initGraphView(); },
     sync: sync, getCy: function () { return cy; },
     refreshInitialViewport: refreshInitialViewport
+  };
+  if (typeof window !== "undefined") window.__pgLayoutIdle = function () {
+    return new Promise(function (resolve) { var waits = 0; (function pump() {
+      if (syncTimer || syncPromise) { Promise.resolve(syncPromise).then(pump); return; }
+      if (!cy && waits++ < 250) { setTimeout(pump, 16); return; }
+      requestAnimationFrame(function () { requestAnimationFrame(resolve); }); })(); });
   };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);
