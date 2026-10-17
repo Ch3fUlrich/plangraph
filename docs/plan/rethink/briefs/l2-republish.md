@@ -1,6 +1,6 @@
 # L2 brief: build-L2-republish (plangraph:PG-REPUBLISH-FRESH, steps 2-3 prep), parent build-L1
 Load skill `unattended-orchestration`. Rules: build-L1 branch docs/plan/rethink/briefs/l2-rules-common.md (binding: D-1704/D-1714 model order, seats with reasons per vector, judge notes, no merge, no live steps, card <= 40 lines, RECYCLE-READY before 230k).
-Host: WORKSTATION (tool-using L3 writers via autoos-agent spawn; gitleaks installed there). On coding.vm instead: D-437/D-1554, only tool-less writers/seats.
+Host: WORKSTATION (tool-using L3 writers via autoos-agent spawn; gitleaks installed there). On the coding VM instead: D-437/D-1554, only tool-less writers/seats.
 
 ## Context (operator D-1748, 2026-10-17)
 - The public repo gets a fresh one-commit export of main, built with tools/split/make_public.py. The working branches move to the PRIVATE repo Ch3fUlrich/plangraph-work.
