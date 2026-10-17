@@ -2,3 +2,4 @@ server:RT-P1-TEMPORAL-CHECK
 plangraph:MODEL-LOOP
 plangraph:MODEL-NAMES
 plangraph:PG-CI-FORGEJO
+plangraph:OPENCODE-CFG-WSL-LEGS

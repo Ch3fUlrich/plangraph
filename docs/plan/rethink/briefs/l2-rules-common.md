@@ -2,11 +2,11 @@
 - Load skill `unattended-orchestration` first. L2 = Sonnet orchestrator: split, brief, spawn, review; never write code itself, never merge
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
 - D-437/D-1317 (binding): on CODING.VM only tool-less writers/seats (review-call: L2 applies the returned diff); tool-using opencode L3s (autoos-agent spawn) only on the workstation. Commit trailer adds `Writer: <model> <run id> [tool-less]`.
-- L3 writers (operator 2026-10-15 ~19:10Z: cut Claude usage): autoos-agent `spawn` with opencode, leg order
-  (1) `omniroute/mimo-v2.6-flash` (MIMO-FIXED 2026-10-15 ~20:5xZ: live OmniRoute combo pins it to mimo/mimo-v2.6-flash, smoke 200 from the mimo provider; a 402 or any OpenRouter id on this leg = incident, report to build-L1, never use openrouter/xiaomi or deepinfra mimo ids), (2) `--free` = opencode/muse-spark-1.3-contributor-free (no key, no gateway),
-  (3) OpenRouter free (`omniroute/or-north-mini-code-free`, `or-laguna-s-2.1-free`, `or-nemotron-3-super-free`), (4) qodercli
-  Qwen3.8-Flash. Sonnet (in-session Agent tool) ONLY if all of these fail or spawner admission refuses; record why in the lane
-  record. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:
+- L3 writers AND seats = D-1704 (operator 2026-10-17, replaces D-1701 + the D-1351/2026-10-15 writer order), each model ONLY by the path named:
+  1 qodercli/qwen3.8-flash (ACP; spawn client=qoder model=qwen3.8-flash), 2 opencode/muse-spark-1.3 (ACP), 3 agy/gemini-3.8-flash (ACP), 4 opencode/mimo-v2.6-flash
+  (ACP), 5 openrouter/free (API), 6 mimo/mimo-v2.6-flash (API), 7 deepseek/deepseek-v4.1-flash (API). Rate-limited/down -> next, record skip + reason in the lane
+  record. Seats = first available entries whose family differs from the writer and from each other. Off-list models are never used. Sonnet (in-session Agent)
+  ONLY if every entry fails or spawner admission refuses; record why. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:
   diff stat, tests, files-read; relaunch, never resume, a no-change run. Run finished = exit.json / `status`; never poll job.json.
   Several writers in parallel are fine when write sets are disjoint.
 - RAM floors (operator 2026-10-15): coding.vm MemAvailable >= 1 GB, workstation >= 12 GB free. Heavy Rust/Temporal builds on the
