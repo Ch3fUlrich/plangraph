@@ -3,4 +3,3 @@ plangraph:PG-GUARD-PATH-EXEMPT
 plangraph:MODEL-LOOP
 plangraph:MODEL-NAMES
 plangraph:PG-CI-FORGEJO
-plangraph:UI-TABLE
