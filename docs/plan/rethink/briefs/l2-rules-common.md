@@ -11,7 +11,7 @@
   Several writers in parallel are fine when write sets are disjoint.
 - RAM floors (operator 2026-10-15): coding.vm MemAvailable >= 1 GB, workstation >= 12 GB free. Heavy Rust/Temporal builds on the
   workstation, one CARGO_TARGET_DIR, `cargo clean` after (D-1319).
-- Seats (tool-less, max 4 fleet-wide): openai = ovh/gpt-oss-120b via /home/s/code/plangraph-worktrees/build-L1/ops/seat.sh; qwen =
+- Seats (tool-less, max 4 fleet-wide): (gpt-oss is OFF the D-1704 list, D-1754; seats only from the D-1704 order) qwen =
   qodercli in an empty dir: `timeout 900 qodercli -p --model Qwen3.8-Flash --tools "" --no-session-persistence -o json "$(cat PROMPT)"`
   with the first line "You have NO tools and no repository access. The full material is inline below. Answer in plain text; never
   emit tool calls." NEVER ovh Qwen (times out). Prompt = vector block V1..Vn + diff + ALWAYS /home/s/code/plangraph-worktrees/build-L1/ops/tail.md last.
