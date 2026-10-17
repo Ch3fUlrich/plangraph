@@ -728,6 +728,37 @@ async fn needs_input_default_after_deadline() {
     .await;
 }
 
+/// A default whose deadline lies far beyond the wait cap: the deadline sent to
+/// the keeper is clamped to the cap, so the workflow timer and the keeper's
+/// stored deadline are the same instant and the timeout is recorded (it never
+/// parks while the keeper still holds a default).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_deadline_past_the_cap_is_clamped() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":86400,"risk_tags":[]}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-clamped", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.set_question_cap(3);
+        let claim = env.claim("e2e-clamped", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-clamped-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_clamped", &id, &handle).await;
+        assert_eq!(out.detail, "merged", "{out:?}");
+        let asked = env.keeper.questions();
+        assert_eq!(asked[0].1.deadline_s, Some(3), "{asked:?}");
+        assert_eq!(asked[0].1.default.as_deref(), Some("go with sqlite"));
+        assert_eq!(env.keeper.question_timeouts(), vec![1]);
+        env.stop();
+    })
+    .await;
+}
+
 /// A keeper that refuses to record the timeout (worker token without the
 /// router or system role) is alarmed, and the card still takes the default.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1060,6 +1091,42 @@ echo attempt > seed.txt"#;
         let sha = out.merged_sha.clone().expect("a merged card has a sha");
         assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
         assert_eq!(git(&env.repo, &["show", "main:seed.txt"]), "attempt");
+        env.stop();
+    })
+    .await;
+}
+
+/// A check that passes in the attempt's worktree but fails once the attempt is
+/// rebased onto the moved main: the merge-time verdict replaces the attempt in
+/// workflow history, and the keeper must be told the same (attempt 1 reported
+/// `ok`, then re-reported `check_fail`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_time_check_fail_is_re_reported_to_the_keeper() {
+    in_local(async {
+        let script = format!("{MOVE_MAIN}echo ok > out.txt");
+        let Some(env) = env_or_skip("merge-check-fail", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-merge-check-fail";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt && ! test -f moved.txt");
+        let id = format!("e2e-merge-check-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("merge_check_fail", &id, &handle).await;
+        assert_ne!(out.detail, "merged", "{out:?}");
+        let first: Vec<ExitClass> = env
+            .keeper
+            .attempts()
+            .iter()
+            .filter(|r| r.n == 1)
+            .map(|r| r.exit_class)
+            .collect();
+        assert_eq!(
+            first,
+            vec![ExitClass::Ok, ExitClass::CheckFail],
+            "attempt 1 is reported ok, then corrected to the merge-time verdict"
+        );
         env.stop();
     })
     .await;
