@@ -20,7 +20,7 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 | PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
 | server:RT-P1-TEMPORAL-CHECK | claimed; retarget to workstation dev stack (D-1854, D2). cloud.vm T3 -> RELEASE-DEPLOY later; prox HOLD | D1+D2 MERGE-READY from workst |
 | republish D-A/D-B (17:0xZ) | D-A=2: PG_URL + PLANGRAPH_REVIEW_URL required, no default port; set in live units + ops recipes (seat_verdict) BEFORE T1 merges. D-B: scrub the gap files, fixtures keep their shape, cargo test green, 1 PR per area | check the caller list in the T1 PR |
-| keeper-model (HIGH) | MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO claimed; lanes were based on a stale main 82613c3, told to merge 91d0cf08; L2 build-L2-keeper-model (workst) | MERGE-READY → judge → merge → next live-sync |
+| keeper-model (HIGH) | 3 lanes done by mimo writers: model-loop 6966e9b, pg-ci-forgejo d01ba29, model-names b36c442; told CI-only (workst RAM ~5 GB) + PRs | MERGE-READY -> I run seats qwen(qodercli)+gemini(agy) on coding.vm -> judge -> merge -> live-sync |
 | RT-P1 predeploy #46-#49 | L2 build-L2-rtp1-predeploy-2 (workst) | #46/#47 judge, #48/#49 self-approve; order 46,47,48,49 |
 | KEEPER-HARDENING | PG-M3 (narrowed D-1747) + KEEPER-EVIDENCE-REF-STRICT, owner me, unclaimed | lane after UI wave 1 + temporal capacity (judge) |
 | CI-RUNS-ON-WORKST / ORCH-SETUP | await routing (unchanged since gen-11) | watch |
