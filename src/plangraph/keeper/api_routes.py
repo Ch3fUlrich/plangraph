@@ -51,7 +51,7 @@ def run_gate(principal, name):
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
-          "same_family": 409}
+          "same_family": 409, "unavailable": 503}
 
 
 # Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is

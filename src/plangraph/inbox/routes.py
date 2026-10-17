@@ -164,8 +164,9 @@ def _projector_watermark(store, principal) -> dict:
                 " FROM projector_watermark ORDER BY workflow_id").fetchall()
             open_n = store.conn.execute(
                 "SELECT COUNT(*) FROM projector_alarms WHERE cleared_at IS NULL").fetchone()[0]
-        except _UNREADABLE as exc:      # table missing or unreadable: named, never silent
-            return {"error": f"watermark unreadable: {type(exc).__name__}"}
+        except _UNREADABLE as exc:      # table missing or unreadable: an HTTP error, never a 200
+            # The class name stays out of the message: it is internal detail for a client.
+            raise Refused("unavailable", "projector watermark unavailable") from exc
         moment = now
         allowed = None if principal.role in _SEES_ALL else set(principal.projects or [])
         glob, workflows = None, []
