@@ -76,6 +76,11 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
 | `audit_meta(p, project=None, stale_days=3)` | router (any project); l1 (own projects) | read-only plan-metadata audit: missing `description`/`estimate_h`/`done_criteria`/`owner` + stale claims. See "Plan metadata audit" |
+
+`python3 tools/names_backfill_dryrun.py SNAPSHOT.json [--json]` is the MODEL-NAMES dry run: it reads a plan snapshot
+JSON and only lists the active items whose `alerts` warnings are `title_is_id` / `no_description` (sorted line per
+finding: current title, a proposed title derived from the key, the head of the note's folded `description: ` line or
+`MISSING`, then `count:`) — the LIVE backfill remains the separate router step `pg migrate-descriptions`.
 **`under` (PG-L1-CREATE-WITH-EDGE, `create_items` only).** A definition may carry an optional
 `under: <key>` naming an *existing* gate/goal item G: the new item N is created and, in the SAME
 transaction, `edges(src=G, dst=N, rel='depends_on')` is inserted — G `depends_on` N — so N reaches the goal

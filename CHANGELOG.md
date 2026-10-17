@@ -4,6 +4,10 @@ Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest fir
 
 ## 2026-10-17
 
+- **MODEL-NAMES:** `tools/names_backfill_dryrun.py SNAPSHOT.json [--json]` lists (never applies) the name backfill
+  candidates of a plan snapshot: one sorted line per active item's `title_is_id` / `no_description` warning with a
+  proposed title derived from the key and the head of the note's folded `description: ` line — read-only (no DB, no
+  write verb, no network), exit 0 unless the input cannot be read (2); direct `views.warnings` tests cover both codes.
 - **PG-CI-FORGEJO:** `commit+ci` can verify a project whose CI runs on Forgejo Actions: `src/plangraph/keeper/evidence_forgejo.py` (`ForgejoStatusAdapter`) reads `GET {base}/api/v1/repos/{o}/{r}/commits/{sha}/statuses?page=&limit=` (operationId `repoListStatusesByRef`) with `Authorization: token <T>` (token re-read per call from `forgejo_token_file`, refused when missing/empty/a symlink, never in argv, URL, logs, a raised message or `repr`; stdlib `urllib.request`, https except `127.0.0.1`, hard timeout, `max_bytes` body cap, `max_pages` cap that raises on truncation), and normalises `CommitStatus` → check-runs keeping the newest status per `context` so a rerun's stale failure cannot block a green sha (unknown status fails closed). New `ci` value syntax `forgejo:<owner>/<repo>` delegates from `CIAdapter` (a `forgejo:` value without an adapter raises, a plain slug still uses `gh`); new config keys `forgejo_url` + `forgejo_token_file` (both required, `Config.__repr__` stays key-names-only). Hermetic tests on a 127.0.0.1 fake (`tests/test_evidence_forgejo.py`); proposed config diff in `docs/proposals/keeper-ci-config.md` (not applied — token mint, live `keeper.json` edit and keeper restart are operator steps).
 
 ## 2026-10-16
