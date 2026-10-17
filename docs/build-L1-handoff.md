@@ -44,7 +44,7 @@ Output style D-658 caveman. Model paths D-1504; order D-1704/D-1714 (memory mode
 - Local seat: `ops/seat.sh <model> PROMPT OUTDIR TITLE` (gateway; mimo/mimo-v2.6-flash, openrouter/nvidia/nemotron-3-super-120b-a12b:free);
   prompt = vectors + diff + ops/tail.md last. google seat = autoos-agent spawn client=agy model=gemini-3.8-flash card review, review_base,
   not_family ["qwen"], then build seat dir (review.txt from output.log V1..VERDICT, evidence.json served/finish/verdict/test_gaming).
-- Keeper DB read/admin with the keeper env (no DSN printed): job-tmp pq.sh pattern = source ~/.config/plangraph/pg-keeper.dsn,
+- Keeper DB read/admin: `ops/pq.sh script.py` or `ops/pq.sh -m plangraph.keeper.cli admin ...` (sources ~/.config/plangraph/pg-keeper.dsn,
   PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper PG_CONFIG=~/.local/share/plangraph/keeper.json, PYTHONPATH live tree, venv-pg python.
 Peers: routing (uds 7069.sock), judge server-L1-routing (newest via ListAgents), workst-L1-autoos (bridge session_01JEZtfmsUgLK745neytZL22),
 prox-L1-main (bridge session_01Fht3xuBpjDQiqRewSQe1sm).
