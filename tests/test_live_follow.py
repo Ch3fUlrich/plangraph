@@ -752,3 +752,99 @@ def test_config_from_env_required_names_variable(tmp_path, missing):
         Config.from_env(env)
     assert isinstance(ei.value, ValueError)
     assert missing in str(ei.value)
+
+
+# ---------------------------------------------------------------------------
+# 17. tightened is_green gate: exact PRs rule, fallback only closed+merged
+
+PH_RED = "dd44ee55ff660011223344556677aa11bb22cc33"
+PH_GREEN = "ee55ff660011223344556677aa11bb22cc33dd44"
+OTHER_MERGE = "ff660011223344556677aa11bb22cc33dd44ee55"
+
+
+def merged_pr(number, merge_commit_sha, base_ref, head_sha):
+    return dict(pr(number, merge_commit_sha, base_ref, head_sha),
+                state="closed", merged_at="2026-10-01T12:00:00Z")
+
+
+def test_red_exact_pr_not_rescued_by_green_unrelated_open_pr(tmp_path):
+    """An open PR onto main that merely contains the commit must not make
+    a red merged-PR commit green, and follow must not merge."""
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    script_git(cfg=cfg, fake=fake)
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([
+        merged_pr(7, HEAD, "main", PH_RED),            # the PR that merged it: red
+        dict(pr(8, OTHER_MERGE, "main", PH_GREEN),     # unrelated open PR
+             state="open", merged_at=None),
+    ]))
+    fake.script(("gh", "api", runs_endpoint(PH_RED)),
+                gh_json(runs_payload(run_entry(conclusion="failure"))))
+    fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
+                gh_json(runs_payload(run_entry())))
+
+    assert is_green(fake, cfg, HEAD) is False
+
+    res = follow(cfg, fake, now=T0)
+    assert res["action"] == "kept"
+    assert res["reason"] == "not_green"
+    assert fake.merge_calls() == []
+    assert load_state(cfg) == {}
+
+
+def test_all_exact_prs_must_be_green(tmp_path):
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([
+        merged_pr(7, HEAD, "main", PH_GREEN),
+        merged_pr(8, HEAD, "main", PH_RED),
+    ]))
+    fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
+                gh_json(runs_payload(run_entry())))
+    fake.script(("gh", "api", runs_endpoint(PH_RED)),
+                gh_json(runs_payload(run_entry(conclusion="failure"))))
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_rebase_merge_fallback_closed_merged_pr(tmp_path):
+    """merge_commit_sha differs (rebase), but the PR is closed+merged into
+    the target branch with a green head run -> green."""
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([
+        merged_pr(9, OTHER_MERGE, cfg.branch, PH_GREEN),
+    ]))
+    fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
+                gh_json(runs_payload(run_entry())))
+    assert is_green(fake, cfg, HEAD) is True
+
+
+def test_rebase_merge_fallback_rejects_open_pr(tmp_path):
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([
+        dict(pr(9, OTHER_MERGE, cfg.branch, PH_GREEN),
+             state="open", merged_at=None),
+    ]))
+    fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
+                gh_json(runs_payload(run_entry())))
+    assert is_green(fake, cfg, HEAD) is False
+
+
+def test_candidate_without_head_sha_fails_closed(tmp_path):
+    cfg = make_cfg(tmp_path)
+    put_token(tmp_path)
+    fake = FakeRunner()
+    no_head = dict(pr(7, HEAD, "main", None),
+                   state="closed", merged_at="2026-10-01T12:00:00Z")
+    del no_head["head"]
+    fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([no_head]))
+    # Even though a green run exists for the commit sha itself, the gate
+    # must not substitute it for the missing head sha.
+    fake.script(("gh", "api", runs_endpoint(HEAD)),
+                gh_json(runs_payload(run_entry())))
+    assert is_green(fake, cfg, HEAD) is False

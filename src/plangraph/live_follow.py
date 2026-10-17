@@ -203,18 +203,30 @@ def is_green(runner, cfg: Config, sha: str) -> bool:
     items = prs.get("items") or []
     if not items:
         # A commit pushed without a PR must carry its own green run.
-        heads = [sha]
+        return _head_green(runner, cfg, sha)
+    dicts = [p for p in items if isinstance(p, dict)]
+    exact = [p for p in dicts if p.get("merge_commit_sha") == sha]
+    if exact:
+        candidates = exact
     else:
-        heads = [
-            (p.get("head") or {}).get("sha") or sha
-            for p in items
-            if isinstance(p, dict)
-            and (
-                p.get("merge_commit_sha") == sha
-                or (p.get("base") or {}).get("ref") == cfg.branch
-            )
+        # Rebase merges rewrite the sha, so a closed PR into the target
+        # branch with merged_at set still identifies this commit; anything
+        # else (open PRs, PRs that merely contain the commit) must not.
+        candidates = [
+            p
+            for p in dicts
+            if (p.get("base") or {}).get("ref") == cfg.branch
+            and p.get("state") == "closed"
+            and p.get("merged_at")
         ]
-    return any(_head_green(runner, cfg, h) for h in heads)
+    if not candidates:
+        return False
+    heads = [(p.get("head") or {}).get("sha") for p in candidates]
+    if any(not h for h in heads):
+        # A candidate without a head sha cannot be verified: fail closed
+        # rather than falling back to the commit sha.
+        return False
+    return all(_head_green(runner, cfg, h) for h in heads)
 
 
 def _result(action: str, reason: str, sha: str | None = None) -> dict:
