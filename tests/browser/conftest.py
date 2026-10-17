@@ -114,6 +114,16 @@ def page(browser, site, vendor_assets, size):
     console_messages: list[tuple[str, str]] = []
     page_errors: list[str] = []
     stray_requests: list[str] = []
+    allowed: list[tuple[str, re.Pattern]] = []
+
+    def pg_allow_console(kind: str, pattern: str) -> None:
+        """Declare a console message THIS test deliberately provokes (e.g. an
+        induced library failure, or the warning the test itself asserts on) so
+        the teardown discipline below does not double-count it. Narrow pattern,
+        owner in the caller's comment."""
+        allowed.append((kind, re.compile(pattern)))
+
+    pg.pg_allow_console = pg_allow_console
     pg.on("console", lambda msg: console_messages.append((msg.type, msg.text)))
     pg.on("pageerror", lambda err: page_errors.append(str(err)))
 
@@ -140,14 +150,21 @@ def page(browser, site, vendor_assets, size):
     finally:
         context.close()
         failures = []
+
+        def _expected(kind: str, text: str) -> bool:
+            return any(k == kind and rx.search(text) for k, rx in allowed)
+
         for kind, text in console_messages:
+            if _expected(kind, text):
+                continue
             if kind == "error":
                 failures.append(f"console error: {text}")
             elif kind in ("warning", "warn") and not any(
                 r.search(text) for r in _allowed_warning_res()
             ):
                 failures.append(f"console warning (not in allow_warnings.txt): {text}")
-        failures += [f"pageerror: {e}" for e in page_errors]
+        failures += [f"pageerror: {e}" for e in page_errors
+                     if not _expected("pageerror", e)]
         failures += [f"external request aborted (tests must not hit a CDN): {u}"
                      for u in stray_requests]
         if failures:
