@@ -133,7 +133,7 @@ def _safe_json(obj: Any) -> str:
 
 def _default_title(items: list) -> str:
     n = len(items)
-    return "Plan graph" if n == 0 else f"Plan graph ({n} items)"
+    return "plangraph" if n == 0 else f"plangraph ({n} items)"
 
 
 def _new_ui(snapshot: dict) -> bool:
