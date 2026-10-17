@@ -4,11 +4,13 @@ No docker, no network — these tests only parse the files that define the
 stack and check their structure, bindings, image pins and hygiene rules.
 """
 
+import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +122,57 @@ def _resolve_port(value) -> int:
     return int(s)
 
 
+# ${NAME:-default} and ${NAME-default} — the only interpolation forms
+# allowed inside a port binding, because only they carry a checkable value.
+_PORT_DEFAULT_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?-([^{}]*)\}")
+
+
+def _expand_binding(text: str, where: str) -> str:
+    """Substitute ${NAME:-default} / ${NAME-default} with `default`.
+
+    Must run BEFORE splitting a short-form binding on ':', since the
+    default-value syntax itself contains a colon. Any remaining ${...}
+    is a variable without a default and fails the check.
+    """
+    expanded = _PORT_DEFAULT_RE.sub(lambda m: m.group(1), text)
+    if "${" in expanded:
+        raise AssertionError(
+            f"{where}: port binding {text!r} interpolates a variable "
+            f"without a default; use ${{VAR:-default}}"
+        )
+    return expanded.strip().strip('"').strip("'")
+
+
+def _parse_port_binding(name, entry):
+    """Return (host_ip, host_port:int) for one ports entry.
+
+    Accepts the short form 'IP:HOST:CONTAINER' (optionally with a
+    trailing /protocol or :protocol suffix handled via split) and the
+    long-form mapping with host_ip/published keys.
+    """
+    where = f"service {name!r}"
+    if isinstance(entry, dict):
+        published = entry.get("published")
+        assert published is not None, (
+            f"{where}: long-form port binding {entry!r} must set 'published'"
+        )
+        return entry.get("host_ip"), _resolve_port(published)
+    if not isinstance(entry, str):
+        raise AssertionError(
+            f"{where}: ports entry {entry!r} must be a string or "
+            f"long-form mapping"
+        )
+    parts = _expand_binding(entry, where).split(":")
+    if len(parts) == 4 and parts[3] in ("tcp", "udp", "sctp"):
+        parts = parts[:3]
+    assert len(parts) == 3, (
+        f"{where}: ports entry {entry!r} must be "
+        f"'127.0.0.1:HOST:CONTAINER' (3 colon-separated parts after "
+        f"expanding ${{VAR:-default}})"
+    )
+    return parts[0], _resolve_port(parts[1])
+
+
 def _case_branch(text: str, label: str):
     """Return the body of `case` branch whose label list contains `label`.
 
@@ -169,38 +222,19 @@ def test_all_published_ports_are_string_or_longform_loopback_bindings():
             f"service {name!r} must not use network_mode: host"
         )
         for entry in svc.get("ports") or []:
-            if isinstance(entry, dict):
-                assert entry.get("host_ip") == "127.0.0.1", (
-                    f"service {name!r}: long-form port binding must set "
-                    f"host_ip: 127.0.0.1, got {entry.get('host_ip')!r}"
-                )
-            elif isinstance(entry, str):
-                parts = entry.split(":")
-                assert len(parts) == 3, (
-                    f"service {name!r}: ports entry {entry!r} must be "
-                    f"'127.0.0.1:HOST:CONTAINER' (3 colon-separated parts)"
-                )
-                assert parts[0] == "127.0.0.1", (
-                    f"service {name!r}: ports entry {entry!r} must bind "
-                    f"host IP 127.0.0.1"
-                )
-            else:
-                raise AssertionError(
-                    f"service {name!r}: ports entry {entry!r} must be a "
-                    f"string or long-form mapping"
-                )
+            host_ip, _ = _parse_port_binding(name, entry)
+            assert host_ip == "127.0.0.1", (
+                f"service {name!r}: ports entry {entry!r} must bind "
+                f"host IP 127.0.0.1, got {host_ip!r}"
+            )
 
 
 def test_published_host_ports_are_exactly_55432_7233_8233():
     host_ports = set()
     for name, svc in _services().items():
         for entry in svc.get("ports") or []:
-            if isinstance(entry, dict):
-                host_ports.add(_resolve_port(entry["published"]))
-            elif isinstance(entry, str):
-                parts = entry.split(":")
-                if len(parts) == 3:
-                    host_ports.add(_resolve_port(parts[1]))
+            _, host_port = _parse_port_binding(name, entry)
+            host_ports.add(host_port)
     assert host_ports == EXPECTED_HOST_PORTS, (
         f"published host ports must be exactly {sorted(EXPECTED_HOST_PORTS)}, "
         f"got {sorted(host_ports)}"
@@ -490,8 +524,6 @@ def test_devstack_script_exists_with_bash_shebang():
 
 
 def test_devstack_script_passes_bash_dash_n():
-    import pytest
-
     bash = shutil.which("bash")
     if not bash:
         pytest.skip("bash executable not found — skipping `bash -n` check")
@@ -624,3 +656,119 @@ def test_no_hostnames_home_paths_or_foreign_ips_in_stack_files():
         "stack files must be free of host names, home paths and non-loopback "
         "IPv4 addresses:\n" + "\n".join(problems)
     )
+
+
+# ---------------------------------------------------------------------------
+# 10. docker compose config validation (skipped when docker is unavailable)
+# ---------------------------------------------------------------------------
+
+COMPOSE_CONFIG_ENV = {
+    "PG_USER": "dev",
+    "PG_PASSWORD": "dev-not-a-secret",
+    "PG_PORT": "55432",
+    "TEMPORAL_PORT": "7233",
+    "TEMPORAL_UI_PORT": "8233",
+}
+
+
+def _require_docker_compose():
+    """Return the docker executable, or skip with a clear reason."""
+    docker = shutil.which("docker")
+    if not docker:
+        pytest.skip(
+            "docker executable not found on PATH — skipping "
+            "`docker compose config` checks"
+        )
+    try:
+        probe = subprocess.run(
+            [docker, "compose", "version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        pytest.skip(f"`docker compose version` could not run ({exc}) — skipping")
+    if probe.returncode != 0:
+        pytest.skip(
+            "`docker compose version` failed — the compose plugin is not "
+            f"available: {probe.stderr.strip() or probe.stdout.strip()}"
+        )
+    return docker
+
+
+def _write_dev_env(tmp_path) -> Path:
+    env_file = tmp_path / "dev.env"
+    env_file.write_text(
+        "".join(f"{k}={v}\n" for k, v in COMPOSE_CONFIG_ENV.items()),
+        encoding="utf-8",
+    )
+    return env_file
+
+
+def _compose_argv(docker, compose_path, env_file, *config_args):
+    # `config` only — these tests must never run `up`.
+    return [
+        docker, "compose",
+        "-p", "plangraph-dev",
+        "-f", str(compose_path),
+        "--env-file", str(env_file),
+        *config_args,
+    ]
+
+
+def test_docker_compose_config_accepts_the_file(tmp_path):
+    docker = _require_docker_compose()
+    _require(COMPOSE_PATH, "docker compose config validation")
+    env_file = _write_dev_env(tmp_path)
+    try:
+        proc = subprocess.run(
+            _compose_argv(docker, COMPOSE_PATH, env_file, "config", "-q"),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "`docker compose config -q` did not finish within 60 s "
+            "(it must not contact registries or start containers)"
+        )
+    assert proc.returncode == 0, (
+        f"`docker compose config -q` rejected {COMPOSE_PATH} "
+        f"(rc={proc.returncode}):\n{proc.stderr}"
+    )
+
+
+def test_docker_compose_config_publishes_only_loopback_host_ips(tmp_path):
+    docker = _require_docker_compose()
+    _require(COMPOSE_PATH, "docker compose config rendering")
+    env_file = _write_dev_env(tmp_path)
+    try:
+        proc = subprocess.run(
+            _compose_argv(
+                docker, COMPOSE_PATH, env_file, "config", "--format", "json"
+            ),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("`docker compose config --format json` timed out after 60 s")
+    assert proc.returncode == 0, (
+        f"`docker compose config` failed (rc={proc.returncode}):\n{proc.stderr}"
+    )
+    rendered = json.loads(proc.stdout)
+    published = [
+        (name, port)
+        for name, svc in (rendered.get("services") or {}).items()
+        for port in svc.get("ports") or []
+    ]
+    assert published, (
+        "docker compose config rendered no published ports — the loopback "
+        "check would be vacuous"
+    )
+    for name, port in published:
+        host_ip = port.get("host_ip") if isinstance(port, dict) else None
+        assert host_ip == "127.0.0.1", (
+            f"rendered service {name!r} publishes {port!r} without "
+            f"host_ip: 127.0.0.1"
+        )

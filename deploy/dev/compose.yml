@@ -48,7 +48,7 @@ services:
       - ./temporal-schema.sh:/schema/setup.sh:ro
     depends_on:
       pg:
-        service_healthy
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -102,7 +102,7 @@ services:
     restart: "no"
     depends_on:
       temporal:
-        service_healthy
+        condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -131,7 +131,7 @@ services:
       - "127.0.0.1:${TEMPORAL_UI_PORT:-8233}:8080"
     depends_on:
       temporal:
-        service_healthy
+        condition: service_healthy
     deploy:
       resources:
         limits:
