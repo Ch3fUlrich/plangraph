@@ -3,7 +3,9 @@
 The per-project ``ci`` config maps a project to an ``owner/repo`` slug, a local
 repository path, or the literal ``none`` (the project has no CI, so the CI half
 of ``commit+ci`` is satisfied without a lookup). An absent entry is *not*
-``none`` — it fails closed in the verifier.
+``none`` — it fails closed in the verifier. A ``forgejo:<owner>/<repo>`` value
+is the Forgejo Actions case: it is delegated to the injected
+``ForgejoStatusAdapter`` (``evidence_forgejo.py``) and never reaches ``gh``.
 """
 
 from __future__ import annotations
@@ -66,11 +68,15 @@ class CIAdapter:
         gh: str = "gh",
         git: str = "git",
         timeout: float = 60.0,
+        forgejo: object | None = None,
     ) -> None:
         self._ci = {str(k): str(v) for k, v in dict(ci or {}).items()}
         self._gh = gh
         self._git = git
         self._timeout = float(timeout)
+        # A ForgejoStatusAdapter: only ``forgejo:`` values need it, so a
+        # deployment without one keeps working for plain slugs and paths.
+        self._forgejo = forgejo
 
     def mode(self, project: str) -> str | None:
         """Return the configured slug/path, ``"none"``, or ``None`` if unset."""
@@ -97,7 +103,18 @@ class CIAdapter:
         and a string event.
         Raises on a non-zero ``gh`` exit or unparseable output — the verifier
         catches and sanitises that.
+        A ``forgejo:<owner>/<repo>`` value never reaches ``gh``: it is delegated
+        to the injected Forgejo status adapter (``forgejo=``), and a configured
+        value without an adapter raises rather than falling back to ``gh``.
         """
+        if isinstance(repo_slug_or_path, str) and repo_slug_or_path.startswith(
+            "forgejo:"
+        ):
+            if self._forgejo is None:
+                raise RuntimeError(
+                    "forgejo CI is configured but no forgejo adapter is set"
+                )
+            return self._forgejo.check_runs(repo_slug_or_path[8:], sha)
         if not valid_commit_ref(sha):
             raise ValueError("check-runs requires a full lowercase commit sha")
         owner, repo = self._validated_slug(self._slug(repo_slug_or_path))

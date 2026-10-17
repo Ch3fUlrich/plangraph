@@ -82,7 +82,8 @@
       "env": ["AUTOOS_OMNIROUTE_KEY"],
       "package": "@opencode/ai/providers/openai-compatible",
       "settings": {
-        "baseURL": "http://127.0.0.1:20128/v1"
+        // no built-in default port: opencode substitutes PLANGRAPH_REVIEW_URL (empty if unset)
+        "baseURL": "{env:PLANGRAPH_REVIEW_URL}"
       },
       "models": {
         "mimo-v2.6-flash": {

@@ -27,7 +27,6 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_URL = "http://127.0.0.1:8787"
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -113,7 +112,7 @@ def main(argv=None):
     ap.add_argument("--seat-dir", required=True, type=Path)
     ap.add_argument("--writer-family", required=True)
     ap.add_argument("--token-dir", required=True, type=Path)
-    ap.add_argument("--url", default=os.environ.get("PG_URL") or DEFAULT_URL)
+    ap.add_argument("--url", default=os.environ.get("PG_URL"))
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
     try:
@@ -143,10 +142,13 @@ def main(argv=None):
         return EXIT_PASS_REFUSED
     payload = verdict_payload(args.key, ok, build_reason(evidence, ok, text, idx))
     if args.dry_run:
-        print(json.dumps({"url": args.url.rstrip("/") + ROUTE, "family": family,
+        print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
                           "headers": {"Authorization": "Bearer <redacted>"},
                           "body": payload}, indent=2))
         return 0
+    if not args.url:
+        print("seat_verdict: no keeper URL: pass --url or set PG_URL", file=sys.stderr)
+        return EXIT_IO
     try:
         token = (args.token_dir / f"reviewer-{family}.token").read_text("utf-8").strip()
         status, reply = send(args.url, token, payload)
