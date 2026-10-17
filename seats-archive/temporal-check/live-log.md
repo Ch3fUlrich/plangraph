@@ -9,3 +9,8 @@
 - T3 diag (temporal-check-t3-diag): root cause = admin-tools 1.32 image has no /bin/bash (OCI exec error, task 166875), NOT the DB (role/DBs/pg-net fine). Crash-loop came from the failed rollback's `up --no-deps` starting temporal without the schema one-shot. Fix lane/temporal-dbfix @531fae72 (/bin/sh entrypoints + setup.sh; stack-deploy rolls back only to a spec that ran). Re-run needs a NEW router GO (D-1724; D-1513 used up); server-28 files the GO-REQ for T2+T3.
 
 ## Re-run GO D-1744 (ref 89e8ebd8, fix 310c98e2), executor prox-L2-temporal-check [7a539b08], launched per prox-L1-main
+- Floor OK: home 12.7 GB; cloud BASE_MEMAVAIL_MB=16110; pg-net+postgres healthy; certs ca.crt 0644, server.crt 0644, server.key 0600 s:s.
+- T2 dryrun task 167005 PASS (5 containers + temporal-net, postgres untouched).
+- T3 up task 167006 12:29:43Z-12:30:02Z FAIL: 'Container temporal-schema Error service "temporal-schema" didn't complete successfully: exit 1'. Rollback: 'No previous spec ever ran ... failed-spec containers removed, stack left down.' (as designed)
+- State after: no temporal containers/network on cloud.vm; postgres Up 31h healthy; DBs untouched. T4-T6, T9 not run.
+- Gap: schema container logs removed by rollback; exit-1 cause not captured. Next GO needs fix lane (keep failed logs / manual schema one-shot).
