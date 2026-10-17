@@ -8,9 +8,9 @@ value or anything adjacent -- and ``pg render`` masks any that got in as
 ``[redacted]``.
 
 One exemption (D-1613 supersedes D-1558 and D-388's "NO exemptions"; PL-33): a
-match inside a *path-like* whitespace-delimited token is dropped.  The token
+match inside a *path-like* whitespace-delimited token (further split at ``,`` and ``;``, PG-GUARD-SEP-SPLIT) is dropped.  The token
 (stripped of surrounding quotes/brackets and of trailing ``.,;:``) must have at
-least TWO ``/`` characters, no ``=`` and no ``:`` -- a leading ``project:`` key
+least TWO ``/`` characters, only ``[\w./-]`` characters (so no ``=``, ``:``, ``|``, ``&``) -- a leading ``project:`` key
 prefix is NOT stripped, so any ``:`` disqualifies -- and its last ``/``-segment
 must end with a file extension (a ``.`` followed by 1-5 alphanumerics).  So
 ``docs/plan/manual-triage-2026-10-02.md`` or ``ops/runbooks/login-flow.md`` near
@@ -32,9 +32,13 @@ from .errors import Refused
 
 _SHAPE = re.compile(r"\w+/\w{6,}")
 _WORD = re.compile(r"credential|password|passwd|pwd|login", re.IGNORECASE)
-_TOKEN = re.compile(r"\S+")
+#: a path-test token ends at whitespace or a list separator, so ``a/secret1,docs/x/y.md``
+#: cannot hide the pair inside one path-looking token.
+_TOKEN = re.compile(r"[^\s,;]+")
 #: a file extension: '.' + 1-5 alphanumerics at the end of the last '/'-segment.
 _PATH_EXT = re.compile(r"\.[0-9A-Za-z]{1,5}\Z")
+#: a path-like token holds only these characters; any other (``|&@%``...) is not a path.
+_PATH_CHARS = re.compile(r"[\w./-]+\Z")
 #: quotes/brackets stripped from both ends of a token before the path test.
 _ENCLOSERS = "\"'`()[]{}<>"
 _NEAR = 120
@@ -48,7 +52,7 @@ def _path_like(text, start, end):
     Surrounding quotes/brackets go from both ends and trailing ``.,;:`` (in any
     mix, so ``"docs/x.md",`` ends up as ``docs/x.md``) from the right."""
     token = text[start:end].lstrip(_ENCLOSERS).rstrip(_ENCLOSERS + ".,;:")
-    return (token.count("/") >= 2 and "=" not in token and ":" not in token
+    return (token.count("/") >= 2 and bool(_PATH_CHARS.match(token))
             and bool(_PATH_EXT.search(token.rsplit("/", 1)[-1])))
 
 
