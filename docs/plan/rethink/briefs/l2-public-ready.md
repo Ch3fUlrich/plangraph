@@ -15,7 +15,7 @@ Host: WORKSTATION (tool-using L3 writers via autoos-agent spawn). If you run on 
 2. `.gitleaks.toml` allowlist for the fixture paths above, each with a reason comment; `gitleaks git --log-opts=--all` exits 0.
 3. Site strings audit at the tip: hostnames, IPs, /home paths, coding.vm, routing-00, tailnet names. Move them to config/examples, or replace them with placeholders in docs/tests; report a names-list scan as before/after counts per pattern (paths only, no values).
 4. `deploy/` site configs and any plan data: move out (to the private data repo path the router names) or replace with examples. List the files first and send build-L1 the list before deleting anything.
-5. CI: workflows need no secrets (grep `secrets.`), GitHub-hosted runners only.
+5. CI: DONE by build-L1 (PR #59 merged f3e2500e: ubuntu-24.04, no secrets, permissions read). Keep it so; never re-add self-hosted (S18).
 
 ## Review
 HIGH item: 2 non-Claude seats from different families (D-1704 order; one runs the secret scan itself), then MERGE-READY to build-L1 with PR sha(s). build-L1 sends it to the judge.
