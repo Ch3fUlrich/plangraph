@@ -18,7 +18,7 @@ from urllib.parse import quote
 import pytest
 
 from browser import probes
-from browser.conftest import SIZES
+from browser.conftest import SIZES, SNAPSHOT_PATH
 
 pytestmark = pytest.mark.browser
 
@@ -62,6 +62,13 @@ def click_header(page, node_id):
     if point is not None:
         click_point(page, point)
     return point
+
+
+def expand(page, node_id):
+    """Toggle a node via its header, then wait out the relayout it triggers."""
+    click_header(page, node_id)
+    page.wait_for_timeout(1500)
+    probes.wait_layout_idle(page)
 
 
 def header_jump(page, stub_id, compound_id):
@@ -282,28 +289,27 @@ def test_r5_click_during_relayout(page, site, gap_ms):
 
 @pytest.mark.parametrize("size", [PHONE], ids=["phone"], indirect=["size"])
 def test_r6_phone_expanded_phase_has_tasks(page, site):
-    """R6 (UI-GRAPH-EXPAND): at 390x844 an expanded phase draws its tasks at real
-    size and no project box overlaps another (V-GRAPH-10)."""
+    """R6 (UI-GRAPH-EXPAND): at 390x844 expanding the fixture's >50-task phase
+    (harbor|P1) draws every task at real size and no project box overlaps (V-GRAPH-10)."""
+    items = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))["items"]
+    expected = sum(1 for i in items if i["project"] == "harbor" and i["phase"] == "P1")
     page.goto(site)
     probes.wait_layout_idle(page)
     page.wait_for_timeout(300)
-    click_header(page, "pc:orchard")
-    page.wait_for_timeout(1500)
-    probes.wait_layout_idle(page)
+    expand(page, "pc:harbor")
     # the expanded card lands off-canvas; pan it to the middle like a user would
-    probes.pan_node_to(page, "phc:orchard|T1", {"x": {"centre": True}, "y": {"centre": True}})
+    probes.pan_node_to(page, "phc:harbor|P1", {"x": {"centre": True}, "y": {"centre": True}})
     page.wait_for_timeout(400)
-    click_header(page, "phc:orchard|T1")
-    page.wait_for_timeout(1500)
-    probes.wait_layout_idle(page)
+    expand(page, "phc:harbor|P1")
 
     boxes = probes.rendered_boxes(
         page, ".project-compound, .project-collapsed, .task-node")
     tasks = [b for b in boxes if b["id"].startswith("t:")]
-    assert len(tasks) == 2, "expanded phase draws %d task nodes, expected 2" % len(tasks)
+    assert len(tasks) == expected, (
+        "expanded phase draws %d task nodes, expected %d" % (len(tasks), expected))
     degenerate = [{"id": t["id"], "w": round(t["w"], 1), "h": round(t["h"], 1)}
                   for t in tasks if not (t["w"] > 1 and t["h"] > 1)]
-    assert not degenerate, "zero-size task nodes: %s" % json.dumps(degenerate)
+    assert not degenerate, "zero-size task nodes: %s" % json.dumps(degenerate[:5])
     cards = [b for b in boxes if b["id"].split(":")[0] in ("p", "pc")]
     pairs = [(a["id"], b["id"]) for i, a in enumerate(cards) for b in cards[i + 1:]
              if a["x1"] < b["x2"] and b["x1"] < a["x2"] and a["y1"] < b["y2"] and b["y1"] < a["y2"]]
@@ -322,9 +328,7 @@ def test_r7_back_stays_in_app(page, site):
     click_point(page, {"x": point["x"], "y": point["y"] + point["box"]["h"] / 2})
     page.wait_for_timeout(800)
     probes.wait_layout_idle(page)
-    click_header(page, "pc:harbor")
-    page.wait_for_timeout(1500)
-    probes.wait_layout_idle(page)
+    expand(page, "pc:harbor")
     assert graph_state(page)["sel"] == keys[0], "selection lost before Back"
     url_before = page.url
 
@@ -370,9 +374,7 @@ def test_r9_expand_draws_no_invalid_endpoint_warnings(console_page):
     probes.wait_layout_idle(pg)
     pg.wait_for_timeout(400)
     for node_id in ("pc:harbor", "phc:harbor|P1"):
-        click_header(pg, node_id)
-        pg.wait_for_timeout(1500)
-        probes.wait_layout_idle(pg)
+        expand(pg, node_id)
     bad = [w for w in log["warnings"] if INVALID_ENDPOINTS.search(w)]
     drawn = pg.evaluate(
         "() => { const cy = PlanUI.GraphView.getCy();"
