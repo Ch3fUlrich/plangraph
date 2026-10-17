@@ -1,36 +1,50 @@
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
-# build-L1 handoff #12 (gen-11 end -> gen-12, 2026-10-17 ~07:00Z)
-Startup: skill unattended-orchestration. NO crons (D-1377); wait via ONE background command that exits. Effort medium. Msgs only BLOCKED/DONE/
-MERGE-READY/GO/L2-LAUNCH/incident. Never AskUserQuestion; questions to routing with options+default. Card <= 40 lines.
-Rules: D-1504 model paths. D-1442 judge = server-L1-routing (ref changes on recycle: ListAgents, newest bg one). D-1533 any family.
-D-437/D-1554 coding.vm only TOOL-LESS writers/seats; D-1569 docker ok for throwaway test DB only. Dismissed seat fail verdicts are NOT countable (judge).
+# build-L1 handoff #13 (gen-12 end -> gen-13, 2026-10-17 ~16:55Z)
+Startup: skill unattended-orchestration (references/main-orchestrator.md; depth rule: phase >= 2 tasks -> Sonnet L2 via routing L2-LAUNCH;
+L3 via autoos-agent spawn; L1 holds plan graph, merges, live steps only). NO crons; wait via ONE bg command that exits. Effort medium.
+Msgs only BLOCKED/DONE/MERGE-READY/GO/L2-LAUNCH/incident. Never AskUserQuestion; questions to routing with options + default. Card <= 40 lines.
+Output style D-658 caveman. Model paths D-1504; order D-1704/D-1714 (memory model-order-d1704). D-437/D-1554: coding.vm tool-less only.
 
-## Leases (FIRST after clear)
-Run: `cd /home/s/code/plangraph-worktrees/build-L1; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done`, then ONE bg loop:
-`for i in $(seq 1 16); do sleep 1800; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done; done` (8 h; restart when it exits).
-Keys now: server:RT-P1-TEMPORAL-CHECK, plangraph:MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO. Remove a key only AFTER the item is DONE.
+## FIRST after clear
+1. `cd /home/s/code/plangraph-worktrees/build-L1; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done`
+2. ONE bg loop (8 h; restart when it exits):
+   `for i in $(seq 1 16); do sleep 1800; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done; done`
+   Keys: TEMPORAL-CHECK, MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO, UI-BROWSER-TESTS, UI-DEPLOY-AUTO. Drop a key only when the item leaves `claimed`.
+3. Control branch: commit + `git push control build-L1` ONLY (local bare repo, D-1751). Never origin.
 
-## Gen-11 landed (main 2d61e281 + packet ce3c2dee)
-- Keeper verbs D-1542 all DONE (#39-#44). LIVE-SYNC-6 DONE (GO D-1569): keeper LIVE = 102e4885, drop-in z6, record seats-archive/live-sync-6-102e4885/LIVE-RECORD.md.
-- UI batch DONE: TABICON #50, SMALLFIX-RULE #51 (docs-only PR -> evidence via `gh workflow run tests.yml --ref <lane>`), UI-TABLE #52+#54 (router review
-  delegated by operator; D-1644 evidence_kinds=commit+ci), NEEDS-YOU #53. Guard: PATH-EXEMPT #55 (D-1613), SEP-SPLIT #56 (judge ACCEPT).
-## IN FLIGHT
-- LIVE-SYNC-7 GO GIVEN: D-1667 (routing, ~07:0xZ; Step A first, B only after A green; fresh step-3 dump sha; rollback = remove BOTH drop-ins; proposal tree stays). EXECUTE FIRST: packet main docs/plan/rethink/live-sync-2d61e281.md §2 Step A (keeper drop-in z7) then Step B (render
-  drop-in plangraph-render.service.d/live-sync-z7-2d61e281.conf). Pre-GO dump sha 77f1a56d (backups/pre-go-live-sync-2d61e281-20261017T065658Z).
-  On GO: run steps exactly, fresh step-3 dump sha, record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md (copy LS6 format), DONE to routing with
-  gates, MainPID, max seq before/after. Rollback = rm drop-ins (always valid). zsh: use bash -c or quote multiword CLI args (my LS6 verify rc2 slip).
-  FINDING: render + md-sync run from .claude/worktrees/proposal -> NEVER retire worktree-proposal at ROLLBACK-HOLD (tell routing again then).
-- build-L2-keeper-model (workstation, session_01CbRb89Zc9xrbezss6j8BCi, via workst-L1-autoos): MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO (HIGH -> judge).
-  Seats there: qwen qodercli + gemini via agy. MODEL-LOOP may need a schema/kind migration -> live-sync impact.
-- build-L2-rtp1-predeploy-2 (workstation session_019HCi2CNLnEFtGZQS8XcaDy): W-F7 fix round on PRs #46-#49, then one delta seat round, MERGE-READY
-  "N countable + M dismissed". #46/#47 HIGH judge; #48/#49 self-approve (1 earlier pass + 1 fresh delta pass). Merge order 46,47,48,49.
-- TEMPORAL-CHECK T3 blocked on operator certs OS-208. MDSYNC 24h check due 2026-10-17 18:45Z -> DONE to routing.
-- ROLLBACK-HOLD after 06:42Z: ask routing to retire drop-ins live-sync-1b923e5/8165c22/cd85d13 ONLY (keep proposal tree, see finding).
-- Not taken (wait): PG-DEC-ATTRIBUTION (schema), PG-PROJECT-PRIORITY (needs PG-ANSWER-UI), QA-VERBS/PG-ANSWER-UI (auth), MODEL-HOST (live data),
-  PUBLIC-READY/SPLIT-PUBLIC (outward), KG-ADAPTER/MODEL-STATS.
-## Merge recipe
-`gh pr ready N; gh pr merge N --merge --match-head-commit <sha>` -> `ops/pg.sh evidence K --kind commit+ci --commit <head>` -> submit -> verdicts:
-`python3 $sv --key K --seat-dir D --writer-family <xiaomi|anthropic> --token-dir ~/.config/plangraph` ($sv = `git show origin/main:tools/seat_verdict.py`
-to a tmp file; qwen dirs w/o evidence.json: `python3 ops/qseat.py D/qwen D/qw/out.json` first). Item define: JSON list with "id"+"project",
-"under" a plangraph gate (routing gates refused); the live guard scans text, so never put credential-like samples in item text.
-Peers: routing [5a7958], judge server-L1-routing (newest), workst-L1-autoos [b76c36], prox-L1-main [8fa900].
+## Gen-12 landed
+- LIVE-SYNC-7 (D-1667): keeper LIVE 2d61e281, MainPID 2817573, dump 42579d25.
+- PR #58 opencode cfg (2168134e), #59 CI GitHub-hosted (f3e2500e, D-1718: public repo -> no self-hosted runners).
+- PG-PUBLIC-READY: #60 70e6576f (judge GO after G1), #61 bd223f11 (cloud host nit). in_review; D-1748 closed it router-side.
+- UI-VERSION-STAMP DONE #62 d34da322 (xiaomi verdict). UI-DEPLOY-AUTO merged #63 91d0cf08 (judge D-1809, G1b met).
+- OPENCODE-CFG-WSL-LEGS DONE. OS-208 certs confirmed done. reviewer-google principal created (D-1811; token ~/.config/plangraph/reviewer-google.token 0600).
+- Private mirror Ch3fUlrich/plangraph-work (step 1 of PG-REPUBLISH-FRESH); proof ~/.local/share/plangraph/republish/.
+- Decisions this gen: D-1748/D-1751 (public history -> fresh one-commit export after running lanes merge; dev stays public; control data
+  local only), D-1754 (judge never posts keeper verdicts; seats do), D-1747 (PG-M3 narrowed), D-1766/1767 (router plan cleanups).
+
+## IN FLIGHT (owner -> what I do on its message)
+- build-L2-ui-u1-stamp (workst, bridge session_01EbC9mvYMPZuBWbjk4xrDYm): UI-DEPLOY-AUTO follow-up PR (wf pin path/id + run.head_sha,
+  STATE outside OUT, sentinel scans all paths). On MERGE-READY: check diff, 2 seats ok -> merge (standard) -> GO-REQ to routing for the
+  live install (render unit from deploy/systemd templates as a live-sync drop-in, D-825 steps, rollback = remove drop-in) -> run-record
+  evidence -> submit -> seat_verdict google (~/.local/share/plangraph/seats/pr63/google-agy) + xiaomi (rerun mimo on seats/pr63/PROMPT-A1/A2/B).
+- build-L2-ui-u2-browser (workst): UI-BROWSER-TESTS. On MERGE-READY: seats ok -> merge -> evidence/submit/verdict. Then L2-LAUNCH U3+U4
+  (lane/ui-plan 2bd22de4 docs/plans/ui/briefs), U5 after both.
+- build-L2-republish (workst, bridge session_01VCAryp65QuCgxZJ7G9W2ww): brief docs/plan/rethink/briefs/l2-republish.md + D-1751 amendment
+  (full-dev manifest incl rust + all workflows; T6 pre-push scrub hook; T7 gitleaks allowlist value constraint; step plan incl cut timing,
+  open-PR move onto new root, delete list, archive plangraph-work). Never let it push public main or delete branches. On step plan -> routing GO.
+  After T7 merges: PG-PUBLIC-READY seats gemini(agy client) + mimo, post via seat_verdict -> done -> then claim PG-REPUBLISH-FRESH.
+- prox-L1-main: TEMPORAL-CHECK T3 #3 failed (temporal unhealthy after start, logs lost). Wait for its log-capture/diag + new GO; log privately.
+- build-L2-keeper-model, build-L2-rtp1-predeploy-2: unchanged; MERGE-READY -> judge (HIGH) / self-approve per card.
+- MDSYNC 24h check 18:45Z -> DONE to routing.
+
+## Recipes
+- Merge: `gh api -X PUT repos/Ch3fUlrich/plangraph/pulls/N/merge -f sha=<head> -f merge_method=merge -f commit_message="Plan-Item: <key>"`
+  -> `ops/pg.sh evidence K --kind commit+ci --commit <head>` -> `ops/pg.sh submit K` -> verdicts:
+  `python3 $sv --key K --seat-dir D --writer-family <writer> --token-dir ~/.config/plangraph` ($sv = git show origin/main:tools/seat_verdict.py > tmp).
+- Local seat: `ops/seat.sh <model> PROMPT OUTDIR TITLE` (gateway; mimo/mimo-v2.6-flash, openrouter/nvidia/nemotron-3-super-120b-a12b:free);
+  prompt = vectors + diff + ops/tail.md last. google seat = autoos-agent spawn client=agy model=gemini-3.8-flash card review, review_base,
+  not_family ["qwen"], then build seat dir (review.txt from output.log V1..VERDICT, evidence.json served/finish/verdict/test_gaming).
+- Keeper DB read/admin with the keeper env (no DSN printed): job-tmp pq.sh pattern = source ~/.config/plangraph/pg-keeper.dsn,
+  PG_KEEPER_BACKEND=postgres PG_SCHEMA=keeper PG_CONFIG=~/.local/share/plangraph/keeper.json, PYTHONPATH live tree, venv-pg python.
+Peers: routing (uds 7069.sock), judge server-L1-routing (newest via ListAgents), workst-L1-autoos (bridge session_01JEZtfmsUgLK745neytZL22),
+prox-L1-main (bridge session_01Fht3xuBpjDQiqRewSQe1sm).
