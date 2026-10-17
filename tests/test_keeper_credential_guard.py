@@ -29,8 +29,12 @@ BAD = [f"login with {SECRET} on the box", f"password: {SECRET}",
 OK = ["plain text a/b login", "no keyword svc/Zq9xk2LmPw",
       "login " + "x" * 200 + " svcacct/Zq9xk2LmPw",
       "svcacct/Zq9xk2LmPw " + "x" * 200 + " login"]
-# D-388: NO exemptions. URLs, paths, extensions and brackets do not hide a pair;
-# the accepted false positive is that authors rephrase paths/URLs near credential words.
+# D-388 as revised by PL-33: the ONE exemption is a path-like token (two or more
+# '/', no '=' or ':', last '/'-segment with a file extension) -- see
+# test_keeper_guard_key.py.  Here everything else still does not hide a pair:
+# URLs, ':'-bearing or '='-bearing tokens, one-slash tokens, extension-less paths
+# and brackets; the accepted false positive is that authors rephrase those near a
+# credential word.
 BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "read svc/Zq9xk2LmPw.md for the password",
         "login uses svc/Zq9xk2Lm.json", "pwd x.y/Zq9xk2LmPw",
