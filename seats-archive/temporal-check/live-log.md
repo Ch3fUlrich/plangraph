@@ -3,3 +3,4 @@
 - T2 PASS: dryrun Semaphore task 164707 @314c06d4, exactly 5 containers + temporal-net, postgres untouched.
 - T3 BLOCKED: cloud $APPS_ROOT/temporal/tls missing (T0 operator, OS-208). prox L2 stopped; relaunch when certs exist.
 - 2026-10-17 11:3xZ: OS-208 confirmed done (prox-L1-main read-only): cloud tls ca.crt/server.crt/server.key Oct 16 18:50, CN=cloud.vm SAN cloud.vm+192.168.178.159, to 2029-01-18. Routing asked to close OS-208 + relaunch prox-L2 for T3-T6+T9. WSL client dir unverified (needed for T9).
+- 2026-10-17: prox-L2-temporal-check [4d1de438] relaunched T3-T6+T9 (D-1719). WSL client dir PRESENT (workst-L1-autoos: ca.crt 631, client.crt 648, client.key 241, all 600) -> T9 prerequisite met. Plangraph workst runners removed (D-1718).
