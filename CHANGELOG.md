@@ -2,6 +2,13 @@
 
 Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest first.
 
+## 2026-10-17
+
+- **MODEL-NAMES:** `tools/names_backfill_dryrun.py SNAPSHOT.json [--json]` lists (never applies) the name backfill
+  candidates of a plan snapshot: one sorted line per active item's `title_is_id` / `no_description` warning with a
+  proposed title derived from the key and the head of the note's folded `description: ` line — read-only (no DB, no
+  write verb, no network), exit 0 unless the input cannot be read (2); direct `views.warnings` tests cover both codes.
+
 ## 2026-10-16
 
 - **RT-P1-GOVERNOR:** budget governor (`src/plangraph/governor/`, `docs/governor.md`): keeper `metrics` table (schema v11, PG migration 4) with `set_metrics`/`get_metrics`/`log_governor_override`, daily job `python -m plangraph.governor metrics daily`, pure `allow()` policy (never blocks answers, operator-started sessions or operator-requested judges; non-Claude fallback when Claude is over 1/7 burn or rate limited; provider quota throttle for worker legs; overrides and fallbacks logged), and `planner.start.guard_start`.
