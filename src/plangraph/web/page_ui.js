@@ -92,6 +92,10 @@
 
   /* ---- header, chips, legend --------------------------------------------- */
 
+  /* page_stamp.js loads after this file (JS_FILES order), so register the
+   * 60 s clock-refresh callback on the first render, when Stamp is present. */
+  var clockRegistered = false;
+
   function renderHeader() {
     var n = state.items.length;
     var snap = state.snapshot || {};
@@ -102,6 +106,10 @@
       var head = snap.head ? String(snap.head).slice(0, 10) + " · " : "";
       setText(meta, head + (snap.generated || "") + suffix);
       return;
+    }
+    if (!clockRegistered) {
+      clockRegistered = true;
+      Stamp.setRefresh(renderHeader); // V-SHELL-4: start the 60 s re-render clock
     }
     var st = Stamp.format(Stamp.buildSha(), snap.generated, snap.head_seq, snap.head, Date.now());
     setText(meta, st.text + suffix);

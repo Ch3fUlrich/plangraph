@@ -26,9 +26,10 @@
       var t = Date.parse(String(generated));
       if (!isNaN(t)) {
         var now = typeof nowMs === "number" ? nowMs : Date.now();
-        ageMin = Math.floor((now - t) / 60000);
+        var ageMs = now - t;
+        ageMin = Math.floor(ageMs / 60000);
         if (ageMin < 0) ageMin = 0;
-        if (ageMin >= 15) {
+        if (ageMs > 15 * 60000) { // strictly older than 15 min; 15:00 is fresh
           stale = true;
           text += " " + DOT + " age " + (ageMin >= 60
             ? Math.floor(ageMin / 60) + "h " + (ageMin % 60) + "m"
@@ -52,20 +53,32 @@
   }
 
   /* Re-render every 60 s so a page left open turns amber on its own.
-   * Guarded for non-browser environments; unref'd so node harnesses exit. */
-  function startClockRefresh(render) {
+   * The page registers its re-render fn through setRefresh (see page_ui.js);
+   * the timer only runs once one exists. Guarded for non-browser
+   * environments; unref'd so node harnesses exit. */
+  var refreshFn = null;
+  var clockTimer = null;
+
+  function startClockRefresh() {
     if (typeof document === "undefined" || typeof setInterval === "undefined") return null;
-    var iv = setInterval(function () {
-      var fn = render || (global.PlanPage && global.PlanPage.renderHeader);
-      if (fn) fn();
+    if (!refreshFn) return null;
+    if (clockTimer) return clockTimer;
+    clockTimer = setInterval(function () {
+      if (refreshFn) refreshFn();
     }, 60000);
-    if (iv && typeof iv.unref === "function") iv.unref();
-    return iv;
+    if (clockTimer && typeof clockTimer.unref === "function") clockTimer.unref();
+    return clockTimer;
   }
 
-  startClockRefresh();
+  function setRefresh(fn) {
+    refreshFn = typeof fn === "function" ? fn : null;
+    return startClockRefresh();
+  }
 
-  PlanUI.Stamp = { format: format, buildSha: buildSha, startClockRefresh: startClockRefresh };
+  PlanUI.Stamp = {
+    format: format, buildSha: buildSha,
+    setRefresh: setRefresh, startClockRefresh: startClockRefresh
+  };
 
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);

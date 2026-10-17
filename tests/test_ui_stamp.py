@@ -108,6 +108,23 @@ def test_stale_clock_boundary_and_age_text(tmp_path):
 
 
 @need_node
+def test_exactly_15_minutes_is_fresh_one_second_more_is_stale(tmp_path):
+    """Spec: stale means OLDER than 15 min — strict ms comparison, not >= 15 floor."""
+    cases = [
+        {"sha": "s", "generated": GEN, "headSeq": 1, "headHash": None,
+         "nowMs": GEN_MS + 15 * 60_000},
+        {"sha": "s", "generated": GEN, "headSeq": 1, "headHash": None,
+         "nowMs": GEN_MS + 15 * 60_000 + 1000},
+    ]
+    exact, later = run_format(tmp_path, cases)
+    assert exact["stale"] is False and f"{DOT} age" not in exact["text"]
+    assert exact["ageMin"] == 15  # ageMin stays floor minutes
+    assert later["stale"] is True
+    assert later["ageMin"] == 15
+    assert later["text"].endswith(f"{DOT} age 15 min")
+
+
+@need_node
 def test_missing_or_bad_generated_is_never_stale(tmp_path):
     cases = [
         {"sha": "s", "generated": None, "headSeq": 1, "headHash": None, "nowMs": at_age(999)},
@@ -133,3 +150,150 @@ def test_rendered_page_carries_stamp_code_and_css():
     html = render_mod.render(SNAP, ROOT / "vendor", cdn=True)
     assert ".stamp-stale" in html          # the CSS rule for V-SHELL-4
     assert "PlanUI.Stamp" in html          # the page_stamp.js code is inlined
+
+
+# --------------------------------------------------------------------------- #
+# V-SHELL-4 clock timer: the 60 s re-render must call the REGISTERED refresh
+# fn (Stamp.setRefresh), never a hard-coded global, and must not start before
+# a fn is registered. Fake setInterval + fake Date.now; no real timers.
+# --------------------------------------------------------------------------- #
+
+TIMER_HARNESS = r"""
+"use strict";
+var WEB = process.argv[2];
+function emit(o) { process.stdout.write(JSON.stringify(o)); }
+
+global.document = { querySelector: function () { return null; } };
+var timers = [];
+global.setInterval = function (fn, ms) {
+  var t = { fn: fn, ms: ms, unrefCalled: false };
+  t.unref = function () { t.unrefCalled = true; };
+  timers.push(t);
+  return t;
+};
+
+function main() {
+  var PlanUI = require(WEB + "/page_stamp.js");
+  var out = {
+    setRefreshPresent: typeof PlanUI.Stamp.setRefresh === "function",
+    timersAfterLoad: timers.length
+  };
+  PlanUI.Stamp.startClockRefresh();          // still no refresh fn registered
+  out.timersWithoutRefreshFn = timers.length;
+  if (!out.setRefreshPresent) { emit(out); return; }
+  var calls = 0;
+  PlanUI.Stamp.setRefresh(function () { calls++; });
+  out.timersAfterRegister = timers.length;
+  out.intervalMs = timers.length ? timers[timers.length - 1].ms : null;
+  out.unrefCalled = timers.length ? timers[timers.length - 1].unrefCalled : false;
+  if (timers.length) timers[timers.length - 1].fn();
+  out.callsAfterTick = calls;
+  PlanUI.Stamp.startClockRefresh();          // idempotent: one timer only
+  out.timersAfterSecondStart = timers.length;
+  emit(out);
+}
+try { main(); } catch (e) { emit({ error: String((e && e.stack) || e) }); }
+"""
+
+
+def run_node(tmp_path: Path, harness_src: str, *args: str) -> dict:
+    harness = tmp_path / "stamp_timer_harness.js"
+    harness.write_text(harness_src, encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(harness), str(WEB), *[str(a) for a in args]],
+        capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=str(ROOT),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip(), "harness produced no JSON"
+    out = json.loads(proc.stdout)
+    assert "error" not in out, out.get("error")
+    return out
+
+
+@need_node
+def test_stamp_timer_starts_only_with_a_registered_refresh_fn(tmp_path):
+    out = run_node(tmp_path, TIMER_HARNESS)
+    assert out["setRefreshPresent"] is True, "PlanUI.Stamp.setRefresh missing"
+    assert out["timersAfterLoad"] == 0        # no timer at script load
+    assert out["timersWithoutRefreshFn"] == 0  # and none without a fn
+    assert out["timersAfterRegister"] == 1
+    assert out["intervalMs"] == 60000
+    assert out["unrefCalled"] is True         # node harnesses must still exit
+    assert out["callsAfterTick"] == 1         # the tick calls the registered fn
+    assert out["timersAfterSecondStart"] == 1  # registration is idempotent
+
+
+WIRING_HARNESS = r"""
+"use strict";
+var WEB = process.argv[2];
+var GEN = process.argv[3];
+var GEN_MS = Number(process.argv[4]);
+function emit(o) { process.stdout.write(JSON.stringify(o)); }
+
+/* minimal fake DOM: only the three nodes renderHeader touches */
+function FakeEl() { this.className = ""; this.attributes = {}; this.style = {}; this.textContent = ""; }
+FakeEl.prototype.setAttribute = function (n, v) { this.attributes[n] = String(v); };
+FakeEl.prototype.removeAttribute = function (n) { delete this.attributes[n]; };
+var els = {};
+["meta-line", "progress-bar", "progress-text"].forEach(function (id) { els[id] = new FakeEl(); });
+global.document = {
+  readyState: "loading",
+  documentElement: new FakeEl(),
+  body: new FakeEl(),
+  createElement: function () { return new FakeEl(); },
+  createTextNode: function (t) { var n = new FakeEl(); n.textContent = String(t); return n; },
+  getElementById: function (id) { return els[id] || null; },
+  querySelector: function () { return null; },
+  querySelectorAll: function () { return []; },
+  addEventListener: function () {}, removeEventListener: function () {}
+};
+var timers = [];
+global.setInterval = function (fn, ms) {
+  var t = { fn: fn, ms: ms, unref: function () {} };
+  timers.push(t);
+  return t;
+};
+var fakeNow = GEN_MS;
+Date.now = function () { return fakeNow; };
+
+var SNAP = { generated: GEN, head: "abc1234567def0123", head_seq: 42, items: [] };
+
+function main() {
+  /* load order mirrors render.py JS_FILES: page_ui.js before page_stamp.js */
+  require(WEB + "/page.js");
+  require(WEB + "/page_ui.js");
+  require(WEB + "/page_stamp.js");
+  var PlanPage = global.PlanPage;
+  var out = { timersAfterLoad: timers.length };
+  PlanPage.state.snapshot = SNAP;
+  fakeNow = GEN_MS + 60000;                 // 1 min old: fresh
+  PlanPage.renderHeader();                  // what the page boot does
+  out.timersAfterFirstRender = timers.length;
+  out.freshClass = els["meta-line"].className;
+  if (!timers.length) { emit(out); return; }
+  out.intervalMs = timers[timers.length - 1].ms;
+  fakeNow = GEN_MS + 15 * 60000 + 1000;     // 15 min + 1 s: stale
+  timers[timers.length - 1].fn();           // the 60 s clock tick
+  out.staleClass = els["meta-line"].className;
+  out.staleText = els["meta-line"].textContent;
+  emit(out);
+}
+try { main(); } catch (e) { emit({ error: String((e && e.stack) || e) }); }
+"""
+
+
+@need_node
+def test_header_flips_to_stale_on_clock_tick_via_page_ui(tmp_path):
+    out = run_node(tmp_path, WIRING_HARNESS, GEN, str(GEN_MS))
+    assert out["timersAfterLoad"] == 0, out   # no timer before a refresh fn exists
+    assert out["timersAfterFirstRender"] == 1, out  # page_ui registered renderHeader
+    assert out["intervalMs"] == 60000
+    assert "stamp-stale" not in (out["freshClass"] or "")
+    assert "stamp-stale" in (out.get("staleClass") or ""), out
+    assert f"{DOT} age 15 min" in (out.get("staleText") or ""), out
+
+
+def test_page_stamp_never_references_planpage():
+    """Defect 1: the stamp module must not hard-code global.PlanPage.renderHeader."""
+    src = (WEB / "page_stamp.js").read_text(encoding="utf-8")
+    assert "PlanPage" not in src
