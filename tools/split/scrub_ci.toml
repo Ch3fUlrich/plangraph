@@ -1,0 +1,614 @@
+# scrub_check allowances for the pre-push hook and the CI whole-tree scan
+# (.github/workflows/tests.yml "scrub" job).  The whole tree is PUBLIC (D-1751), so there are
+# no path-wide rule allowances: each entry names one file, one rule and the sha256 of one
+# matched value, plus why it is synthetic (D-1883).  Get hashes with
+#   python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml --hash-hits
+# (prints hashes only, never values).  Symlink and private-word hits are never allowable.
+
+[scrub]
+
+[[scrub.allow_value]]
+path = ".gitleaks.toml"
+rule = "credential-shape"
+value_sha256 = "b4b169401a4aea03b545b9825171c94cd41336757dbdcd400427e68c9ff4a2e5"
+why = "gitleaks rule pattern text in the gitleaks config itself, not a credential"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/src/tls.rs"
+rule = "token-shape"
+value_sha256 = "3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d"
+why = "test-only PEM fixture whose body is a marker word, not a key (tls.rs mod tests)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/answer.json"
+rule = "high-entropy"
+value_sha256 = "13468a2ca62d937d579895c1784ffceb51b03152f103318da4a6b6874c0c74e5"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/default.json"
+rule = "high-entropy"
+value_sha256 = "111b10963fc22983817d61be3f0b4c84c070e7e8328070b00346dce58fadaf31"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/src/harness.rs"
+rule = "credential-shape"
+value_sha256 = "af896a5f354b5297fb7dde9efe8f2b1de11e2fc5315fe28ce1d7468c1953b7ab"
+why = "test-only symlink target to a system file in harness.rs mod tests (escape-link check)"
+
+[[scrub.allow_value]]
+path = "rust/worker/src/tls.rs"
+rule = "token-shape"
+value_sha256 = "3021d90eb9437b2d8f30e8363695c4418b5e5f1870801b5c317e9398ee0f572d"
+why = "test-only PEM fixture whose body is a marker word, not a key (tls.rs mod tests)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/cancel.json"
+rule = "high-entropy"
+value_sha256 = "4ae88819d3cbf2e74acf8ab83816e9f2f01fd9de1f8c99b7830a178092c8d9fc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "0201a027c8c3ca7027345cdcff6640283f0df5294155eec72d67ea21177e2997"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "10a29c8e607ac35663f6246c1a575196b31c6d19807a8ddeb45d0dec4f6ac1e7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "5f27483d482045e3237d4ff859a2ec92b577d7adc4a4159eabeb461ca9db0886"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/cancel.json"
+rule = "high-entropy"
+value_sha256 = "4ae88819d3cbf2e74acf8ab83816e9f2f01fd9de1f8c99b7830a178092c8d9fc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "0201a027c8c3ca7027345cdcff6640283f0df5294155eec72d67ea21177e2997"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "10a29c8e607ac35663f6246c1a575196b31c6d19807a8ddeb45d0dec4f6ac1e7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "5f27483d482045e3237d4ff859a2ec92b577d7adc4a4159eabeb461ca9db0886"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker-core/src/stall.rs"
+rule = "high-entropy"
+value_sha256 = "2862d784be4189818fe8ef77ae693f35a8ffab912546cf6b03fee1023ebe03f0"
+why = "test-only byte alphabet literal in stall.rs mod tests"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/answer.json"
+rule = "high-entropy"
+value_sha256 = "5ad1e52d262f7841c97510462d8fa02c6208e43bee4bb06da28896f8b5045871"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/default.json"
+rule = "high-entropy"
+value_sha256 = "291bd6ff2128ec71965d18b3b804b8802c47639d4ceb3541fe66ee7b485020ed"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/cancel.json"
+rule = "high-entropy"
+value_sha256 = "4bb127b346477ba032825f99e95a1c850507190ba08e686b105cd1b9057df7ba"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "0e238e025cb84b8e31d2283d992d04a94032bf75644cc2953ed081a779ece12a"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "1ae207b7d43768d1140f9e7e4c85f633bf430b9b1f99d25f211adcefb9707ff8"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "5fe22ebc890da3c3a3831d71da48e9c00b6b50c595663245a74edcf341d6784d"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/cancel.json"
+rule = "high-entropy"
+value_sha256 = "4bb127b346477ba032825f99e95a1c850507190ba08e686b105cd1b9057df7ba"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "0e238e025cb84b8e31d2283d992d04a94032bf75644cc2953ed081a779ece12a"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "1ae207b7d43768d1140f9e7e4c85f633bf430b9b1f99d25f211adcefb9707ff8"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "5fe22ebc890da3c3a3831d71da48e9c00b6b50c595663245a74edcf341d6784d"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/answer.json"
+rule = "high-entropy"
+value_sha256 = "d31121b2497f4a85f8c26822ba73cae4fc12371945566efff5f008df17a1bd15"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/default.json"
+rule = "high-entropy"
+value_sha256 = "735b6ef64f068458692cf4939bb1701ee582470a3917cda80cad513663f62b42"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/cancel.json"
+rule = "high-entropy"
+value_sha256 = "513e77dd6b5226b289b77440810ac715eb850950207be8e23d296e1bb20aa680"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "1b756b2111e253aec526bb32949a2a734d5a9d55c5ca5a82538c3fd982056c52"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "3d46f2e57d9b3f74e68808e7076b5391b4f6cd370a5dedb7f49f9cc27f3011a9"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "6e5a9ef1e513a968e2163485a482960d88a791e8bae967fdd9bbb0a7a9bc9ef6"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/cancel.json"
+rule = "high-entropy"
+value_sha256 = "513e77dd6b5226b289b77440810ac715eb850950207be8e23d296e1bb20aa680"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "1b756b2111e253aec526bb32949a2a734d5a9d55c5ca5a82538c3fd982056c52"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "3d46f2e57d9b3f74e68808e7076b5391b4f6cd370a5dedb7f49f9cc27f3011a9"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "6e5a9ef1e513a968e2163485a482960d88a791e8bae967fdd9bbb0a7a9bc9ef6"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/answer.json"
+rule = "high-entropy"
+value_sha256 = "de7b16153f9448c02cb2447a27d0126a919d085b4f31b1c6e13a9637fea8f218"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/spikes/temporal-spike/tests/fixtures/default.json"
+rule = "high-entropy"
+value_sha256 = "dc088fed4235822e54d0de48a0665c237f0f9654323aa23e574afb07ff43440d"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/cancel.json"
+rule = "high-entropy"
+value_sha256 = "59e17cc2f475b0d96ee4f2aba863b31ee597225c191244e3a4a2aa2caddbb0e2"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "21c0b1dcc2fb948c98055360f12bfdad7f6a84946205993620cbc520257e6c96"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "4259b80e3bb9618b434f32010c35ea5e4efa5118d0f37418f709c2c33c0b185f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "9628369d7fd13b41f5484ab4223fc5fa027f9f1cc283c4d7321a0036a1828b23"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/cancel.json"
+rule = "high-entropy"
+value_sha256 = "59e17cc2f475b0d96ee4f2aba863b31ee597225c191244e3a4a2aa2caddbb0e2"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "21c0b1dcc2fb948c98055360f12bfdad7f6a84946205993620cbc520257e6c96"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "4259b80e3bb9618b434f32010c35ea5e4efa5118d0f37418f709c2c33c0b185f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "9628369d7fd13b41f5484ab4223fc5fa027f9f1cc283c4d7321a0036a1828b23"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/cancel.json"
+rule = "high-entropy"
+value_sha256 = "7848a5ef23d03afe6a60063848149e86daabb9d1fb07d067467ff8fa311e6349"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "290f579ca9c77f16d7f4d398d9360a803a1e70fe1e0ff6a7a88da75cc6310b64"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "99c79ee47cfafa8ad569d1db748e0c92ac421a25864f73ca792d572f76d78e29"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "99b527e8a575d0caa6a2f81d3654d75d8786b1f38bd388eb8875b3aef3b33bea"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/cancel.json"
+rule = "high-entropy"
+value_sha256 = "7848a5ef23d03afe6a60063848149e86daabb9d1fb07d067467ff8fa311e6349"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "290f579ca9c77f16d7f4d398d9360a803a1e70fe1e0ff6a7a88da75cc6310b64"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "99c79ee47cfafa8ad569d1db748e0c92ac421a25864f73ca792d572f76d78e29"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "99b527e8a575d0caa6a2f81d3654d75d8786b1f38bd388eb8875b3aef3b33bea"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "54f55b9320a1a8740feaa862cc4abbc89d0f90e0b55575d5e101f8e88f7608cc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "aee164947401f211a1b75120339c3b258c9b4d78947193579c593705a5af57b8"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "c6e59bad0ee6eba5ff0ccf561841b46019177384bb57cfeee0dfa941af4df742"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "54f55b9320a1a8740feaa862cc4abbc89d0f90e0b55575d5e101f8e88f7608cc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "aee164947401f211a1b75120339c3b258c9b4d78947193579c593705a5af57b8"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "c6e59bad0ee6eba5ff0ccf561841b46019177384bb57cfeee0dfa941af4df742"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "56f7042dcafe41fca0384ca1ddb0eb25c8d3f955d8b870acbd4868ed45af8ffc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "b0fe502da3c03ba0f63f2bd9609918f66934bde9c41253f877cc3cd20397f67d"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "da525957014772ab842f15fcf6a2514e916fefe59328766e7f302568ef7cf0e4"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "56f7042dcafe41fca0384ca1ddb0eb25c8d3f955d8b870acbd4868ed45af8ffc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "b0fe502da3c03ba0f63f2bd9609918f66934bde9c41253f877cc3cd20397f67d"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "da525957014772ab842f15fcf6a2514e916fefe59328766e7f302568ef7cf0e4"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "5b333c693746d40385e07bbac869a756f67a2b215fe1be0fea36fe80cae12228"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "b2aced76d754fca561e6d34c8fe09026de7891ae485caab3b68f8e9fa3bb0236"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "dbb324ffc1bc3622394641eac866f4396ca06dd7b1f5fa6410b65277ffeaca1f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "5b333c693746d40385e07bbac869a756f67a2b215fe1be0fea36fe80cae12228"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "b2aced76d754fca561e6d34c8fe09026de7891ae485caab3b68f8e9fa3bb0236"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "dbb324ffc1bc3622394641eac866f4396ca06dd7b1f5fa6410b65277ffeaca1f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "60fb054b99c9879aa0910bf2a0dd9aa54660b4b63a9d1b1989ba8c1f45a3580f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "cfa9c15c716bb2d39a453128c62c927b52851aa9b5fdf1fe5d67d3c258358447"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "eca9f85836dd52dc2d8fc63a02258f735d6b93eb9a0aec64111917ef3740f5fc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "60fb054b99c9879aa0910bf2a0dd9aa54660b4b63a9d1b1989ba8c1f45a3580f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "cfa9c15c716bb2d39a453128c62c927b52851aa9b5fdf1fe5d67d3c258358447"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "eca9f85836dd52dc2d8fc63a02258f735d6b93eb9a0aec64111917ef3740f5fc"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "6119963143041cb1dd144da33570f8b4c6d0aa3e25813d43b7297379d5de321e"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "d16a83e28b084d920ecd737c1d3373231e7a80fbf904d73b90e7c4314570d01e"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/happy.json"
+rule = "high-entropy"
+value_sha256 = "f72312ae810cc4cc6d71ef4508b48e9497614c81cf3c868055ddcf4c02a7b7cf"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "6119963143041cb1dd144da33570f8b4c6d0aa3e25813d43b7297379d5de321e"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "d16a83e28b084d920ecd737c1d3373231e7a80fbf904d73b90e7c4314570d01e"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/happy.json"
+rule = "high-entropy"
+value_sha256 = "f72312ae810cc4cc6d71ef4508b48e9497614c81cf3c868055ddcf4c02a7b7cf"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "6a650c7270202eec53b78be5dda02436303b9d464790ba08c5feb83faf7595b7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "eb856773a4a26b0a50cb25f004b3007e19745cfb21d886a49694f9d7c82d7c6f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "6a650c7270202eec53b78be5dda02436303b9d464790ba08c5feb83faf7595b7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/contract_defect.json"
+rule = "high-entropy"
+value_sha256 = "eb856773a4a26b0a50cb25f004b3007e19745cfb21d886a49694f9d7c82d7c6f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "7e93b1a733bce437e20e4c673ce7a9a7d0fca1ac82aafd1dc5feb7bca2dd36d9"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "7e93b1a733bce437e20e4c673ce7a9a7d0fca1ac82aafd1dc5feb7bca2dd36d9"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "a536929803264c0e695de20e6f6a88c3611ff0d68090b9ea49949a5e63489b06"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "a536929803264c0e695de20e6f6a88c3611ff0d68090b9ea49949a5e63489b06"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "af9cb447bd037ace66ed610e600a4c23f52ffe4aa57e11303317ac40f265c56f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "af9cb447bd037ace66ed610e600a4c23f52ffe4aa57e11303317ac40f265c56f"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "b17a1b7e013b719d7bcd2074142fafcfcdc203635a1a256d4e01059b4297a952"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "b17a1b7e013b719d7bcd2074142fafcfcdc203635a1a256d4e01059b4297a952"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "ddc91d98bf6359b00fa11d9617e6407282e68e630160d5bf02b0900440a856d9"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "ddc91d98bf6359b00fa11d9617e6407282e68e630160d5bf02b0900440a856d9"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "e4dd6c3d81df63b88363229256a8d840c8f2466bf90b4e593c1211530d115b75"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "e4dd6c3d81df63b88363229256a8d840c8f2466bf90b4e593c1211530d115b75"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "ee97d9a87beff65c7d2f3e128c338877598495d263b3243fc6c9af1178cfccfa"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/check_fails.json"
+rule = "high-entropy"
+value_sha256 = "ee97d9a87beff65c7d2f3e128c338877598495d263b3243fc6c9af1178cfccfa"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
