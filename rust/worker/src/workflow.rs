@@ -755,10 +755,12 @@ async fn question_step(
     n: u32,
 ) -> WorkflowResult<QuestionStep> {
     let card = &input.claim.card;
-    let q = q.normalized();
     let cap = input
         .question_wait_cap_s
         .map_or(cfg.wait_cap, Duration::from_secs);
+    // Clamped before it is sent: the keeper must not hold a default whose
+    // deadline lies beyond the cap this workflow will park at.
+    let q = q.normalized().clamped_to(cap);
     let plan = question::plan_wait(&q, cap);
 
     // An activity error here (after its transient retries) parks the card with

@@ -108,6 +108,30 @@ impl Question {
     }
 }
 
+impl Question {
+    /// The question with its deadline clamped to the wait cap.
+    ///
+    /// The keeper stores the default and applies it at the deadline, so a
+    /// deadline past `wait_cap` would leave the workflow parked (no
+    /// `question_timeout` recorded) while the keeper still held a default it
+    /// would later take. Clamping makes the keeper's deadline and the
+    /// workflow's timer the same instant. A cap under one second leaves no
+    /// usable deadline, so the default is dropped with it.
+    pub fn clamped_to(&self, wait_cap: Duration) -> Question {
+        let mut out = self.clone();
+        let cap_s = wait_cap.as_secs();
+        match out.deadline_s {
+            Some(s) if s > cap_s && cap_s == 0 => {
+                out.deadline_s = None;
+                out.default = None;
+            }
+            Some(s) if s > cap_s => out.deadline_s = Some(cap_s),
+            _ => {}
+        }
+        out
+    }
+}
+
 /// What the scan of a harness output found.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Scan {
@@ -294,9 +318,10 @@ mod tests {
         let p = plan_wait(&q(Some("d"), Some(10), &[]), cap);
         assert_eq!(p.wait, Duration::from_secs(10));
         assert_eq!(p.on_timer, OnTimer::UseDefault("d".into()));
-        // Past the cap: park at the cap, the default is never reached.
-        let p = plan_wait(&q(Some("d"), Some(101), &[]), cap);
-        assert_eq!((p.wait, p.on_timer), (cap, OnTimer::Park));
+        // Past the cap the question is clamped first (see `clamped_to`), so the
+        // timer and the keeper's stored deadline are the same instant.
+        let p = plan_wait(&q(Some("d"), Some(101), &[]).clamped_to(cap), cap);
+        assert_eq!((p.wait, p.on_timer), (cap, OnTimer::UseDefault("d".into())));
         // No default, no deadline, or risk-tagged (after normalizing): cap and park.
         for raw in [
             q(None, Some(3), &[]),
@@ -306,6 +331,22 @@ mod tests {
             let p = plan_wait(&raw.normalized(), cap);
             assert_eq!((p.wait, p.on_timer), (cap, OnTimer::Park));
         }
+    }
+
+    #[test]
+    fn a_deadline_past_the_cap_is_clamped_to_it() {
+        let cap = Duration::from_secs(100);
+        let far = q(Some("d"), Some(86_400), &[]).normalized();
+        let c = far.clamped_to(cap);
+        assert_eq!((c.deadline_s, c.default.as_deref()), (Some(100), Some("d")));
+        // Inside the cap, and no deadline at all: untouched.
+        let near = q(Some("d"), Some(100), &[]).normalized();
+        assert_eq!(near.clamped_to(cap), near);
+        let none = q(None, None, &[]).normalized();
+        assert_eq!(none.clamped_to(cap), none);
+        // A cap under a second leaves no deadline, so no default either.
+        let c = far.clamped_to(Duration::from_millis(500));
+        assert_eq!((c.deadline_s, c.default), (None, None));
     }
 
     #[test]
