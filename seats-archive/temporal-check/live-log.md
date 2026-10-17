@@ -14,3 +14,4 @@
 - T3 up task 167006 12:29:43Z-12:30:02Z FAIL: 'Container temporal-schema Error service "temporal-schema" didn't complete successfully: exit 1'. Rollback: 'No previous spec ever ran ... failed-spec containers removed, stack left down.' (as designed)
 - State after: no temporal containers/network on cloud.vm; postgres Up 31h healthy; DBs untouched. T4-T6, T9 not run.
 - Gap: schema container logs removed by rollback; exit-1 cause not captured. Next GO needs fix lane (keep failed logs / manual schema one-shot).
+- ROOT CAUSE (prox-L1-main, read-only): PG log 12:29:58Z `pg_hba.conf rejects connection for host "10.210.8.3", user "temporal", database "temporal"`. pg_hba allows temporal DBs only from 172.16.0.0/12; cloud.vm pg-net is 10.210.8.0/24. Fix: pg_hba rows for 10.210.8.0/24 (temporal, temporal_visibility) before reject + README; apply = pg_reload_conf -> new GO. Log-capture on rollback = separate HIGH follow-up.
