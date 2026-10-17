@@ -1,0 +1,10 @@
+# plangraph UI plan follow-up 2026-10-17 (plangraph-L1-plan2): UI-DEPLOY-AUTO trigger matches what CI can do. Principal router.
+batch: 2026-10-17-ui-briefs-fix
+principal: router
+source: 2026-10-17-ui-plan.md
+source_sha256: 3b1749aa65c2e0b596ebe6a4ddec8e52ebbe1168c2cdf998fb2595168d9b2fa2
+ops:
+- op: edit
+  key: plangraph:UI-DEPLOY-AUTO
+  fields:
+    description: 'Today a merge reaches the live page only through the manual live-sync runbook (new detached worktree plus a hand-edited drop-in), and the render unit is not in the repo (plan section 1). CI runs on GitHub-hosted runners, only on PRs, and cannot reach the LAN, and D-1377 forbids new schedules, so the live host pulls: the existing 5-min render run fetches origin/main and deploys a head whose PR passed CI. Brief: plangraph docs/plans/ui/briefs/lane-U1-stamp-deploy.md. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
