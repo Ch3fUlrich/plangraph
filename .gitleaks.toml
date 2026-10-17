@@ -16,15 +16,19 @@ useDefault = true
 # generic-api-key mis-fires on the prose "tokens, bool/str/negative" in the historical
 # PROMPT.md (deleted from the tree, still in git history).  Not a credential of any kind.
 description = "plan/prompt prose false positive in PROMPT.md (reviewed 2026-10-17)"
+condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^PROMPT\.md$''']
+regexes = ['''^bool/str/negative$''']
 
 [[allowlists]]
 # generic-api-key mis-fires on the plan-id list "Q-API-PUSH, RT-P2-DECISIONS" in the historical
 # orchestration-setup plan (deleted from the tree, still in git history).  Not a credential.
 description = "plan prose false positive in docs/plans/2026-10-16-orchestration-setup.md (reviewed 2026-10-17)"
+condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^docs/plans/2026-10-16-orchestration-setup\.md$''']
+regexes = ['''^RT\-P2\-DECISIONS$''']
 
 [[allowlists]]
 # The md_sync fixtures carry the fake demo token the redactor test suite asserts on.  Covers the
