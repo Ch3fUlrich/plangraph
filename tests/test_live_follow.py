@@ -848,3 +848,127 @@ def test_candidate_without_head_sha_fails_closed(tmp_path):
     fake.script(("gh", "api", runs_endpoint(HEAD)),
                 gh_json(runs_payload(run_entry())))
     assert is_green(fake, cfg, HEAD) is False
+
+
+# ---------------------------------------------------------------------------
+# 18. F1: bad grace / bad alert cmd -> ConfigError naming the variable, exit 2
+
+@pytest.mark.parametrize("value", ["abc", "-5", "0", "1.5"])
+def test_config_bad_grace_names_variable_and_main_exits_two(tmp_path, value, capsys):
+    env = base_env(tmp_path, PLANGRAPH_ALERT_GRACE_S=value)
+    with pytest.raises(ConfigError) as ei:
+        Config.from_env(env)
+    assert "PLANGRAPH_ALERT_GRACE_S" in str(ei.value)
+
+    rc = main(["follow"], env=env, runner=FakeRunner(), now=T0)
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert "Traceback" not in cap.err
+    lines = [l for l in cap.err.splitlines() if l.startswith("live_follow: ")]
+    assert lines, cap.err
+    assert "PLANGRAPH_ALERT_GRACE_S" in lines[0]
+
+
+def test_config_unbalanced_alert_cmd_names_variable_and_main_exits_two(tmp_path, capsys):
+    env = base_env(tmp_path, PLANGRAPH_ALERT_CMD='alert --msg "unbalanced')
+    with pytest.raises(ConfigError) as ei:
+        Config.from_env(env)
+    assert "PLANGRAPH_ALERT_CMD" in str(ei.value)
+
+    rc = main(["check"], env=env, runner=FakeRunner(), now=T0)
+    cap = capsys.readouterr()
+    assert rc == 2
+    assert "Traceback" not in cap.err
+    lines = [l for l in cap.err.splitlines() if l.startswith("live_follow: ")]
+    assert lines, cap.err
+    assert "PLANGRAPH_ALERT_CMD" in lines[0]
+
+
+# ---------------------------------------------------------------------------
+# 19. F2: alert cmd failure keeps the alert pending and retries next tick
+
+def test_check_alert_cmd_failure_retries_next_tick(tmp_path, capsys):
+    cfg = make_cfg(tmp_path, alert_cmd=["notify-send"])
+    fake = FakeRunner()
+    fake.script(("notify-send",), [(127, ""), (0, "")])
+    write_state(cfg, HEAD, T0)
+    write_page(cfg, BAD_STAMP)
+
+    r = check(cfg, fake, now=T0 + 3600)              # past grace, handler fails
+    assert r["status"] == "stale"
+    assert load_state(cfg).get("alerted") != HEAD    # not marked alerted
+    err = capsys.readouterr().err
+    assert expected_alert_line(BAD_STAMP, HEAD, 60) in err
+    assert len(fake.calls_where("notify-send")) == 1
+
+    r = check(cfg, fake, now=T0 + 3660)              # next tick, handler ok
+    assert r["status"] == "alerted"
+    assert load_state(cfg)["alerted"] == HEAD
+    assert len(fake.calls_where("notify-send")) == 2
+
+
+# ---------------------------------------------------------------------------
+# 20. F3: corrupt green_since restarts the grace clock and is persisted
+
+@pytest.mark.parametrize("since", ["missing", "garbage", "future"])
+def test_check_corrupt_green_since_restarts_grace_clock(tmp_path, since):
+    cfg = make_cfg(tmp_path, alert_cmd=["notify-send"])
+    fake = FakeRunner()
+    fake.script(("notify-send",), (0, ""))
+    Path(cfg.state).parent.mkdir(parents=True, exist_ok=True)
+    st = {"green_sha": HEAD, "alerted": None}
+    if since == "garbage":
+        st["green_since"] = "not-a-timestamp"
+    elif since == "future":
+        st["green_since"] = T0 + 10_000_000
+    elif since == "missing":
+        pass
+    Path(cfg.state).write_text(json.dumps(st), encoding="utf-8")
+    write_page(cfg, BAD_STAMP)
+
+    r = check(cfg, fake, now=T0)
+    assert r["status"] == "stale"                    # clock starts this tick
+    assert fake.calls_where("notify-send") == []
+    saved = load_state(cfg)
+    assert saved["green_sha"] == HEAD                # sha kept, only since repaired
+    assert saved["green_since"] == T0
+
+    r = check(cfg, fake, now=T0 + cfg.grace_s)       # still within grace
+    assert r["status"] == "stale"
+    assert fake.calls_where("notify-send") == []
+
+    r = check(cfg, fake, now=T0 + cfg.grace_s + 60)  # grace finally passed
+    assert r["status"] == "alerted"
+    assert load_state(cfg)["alerted"] == HEAD
+
+
+# ---------------------------------------------------------------------------
+# 21. F4: main survives an unexpected failure inside check, quietly
+
+def test_main_check_survives_unwritable_state_path(tmp_path, capsys):
+    # The alert handler "succeeds" but, in doing so, replaces the state file
+    # with a directory: the subsequent state save raises OSError. main must
+    # still print exactly one JSON line, return 0, and echo nothing.
+    env = base_env(tmp_path, PLANGRAPH_ALERT_CMD="notify-send")
+    cfg = Config.from_env(env)
+    fake = FakeRunner()
+
+    def eat_state(argv, env_, cwd):
+        p = Path(cfg.state)
+        p.unlink()
+        p.mkdir()
+        return (0, "")
+
+    fake.script(("notify-send",), eat_state)
+    write_state(cfg, HEAD, T0)
+    write_page(cfg, BAD_STAMP)
+
+    rc = main(["check"], env=env, runner=fake, now=T0 + 3600)
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert "Traceback" not in cap.err
+    assert str(cfg.state) not in cap.err
+    assert str(cfg.state) not in cap.out
+    lines = cap.out.strip().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == {"status": "error"}

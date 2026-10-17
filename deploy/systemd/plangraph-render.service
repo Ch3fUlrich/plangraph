@@ -15,4 +15,7 @@ ExecStartPre=-/bin/bash -c 'PYTHONPATH="$PLANGRAPH_LIVE_TREE/src" exec python3 -
 # `cat "$T" > file` publishes it: copying into the destination keeps its inode, because the web server
 # bind-mounts that single file (a `mv` would swap the inode and the container would keep serving the old one).
 ExecStart=/bin/bash -o pipefail -c 'export PYTHONPATH="$PLANGRAPH_LIVE_TREE/src"; T=$(mktemp "$PLANGRAPH_OUT"/.plan-render.XXXXXX) && python3 -m plangraph.keeper.cli render --cdn --out "$T" >/dev/null && [ -s "$T" ] && grep -q "</html>" "$T" && cat "$T" > "$PLANGRAPH_OUT"/plan-cdn.html; rc=$?; rm -f "$T"; exit $rc'
-ExecStartPost=-/bin/bash -c 'PYTHONPATH="$PLANGRAPH_LIVE_TREE/src" exec python3 -m plangraph.live_follow check'
+# The stamp check is ExecStopPost, not ExecStartPost: for a Type=oneshot unit ExecStartPost only runs when
+# ExecStart succeeded, but the staleness alert exists exactly for the failed-render case; ExecStopPost runs
+# after ExecStart whether or not it succeeded. Keep the leading '-': a failing check must not taint the unit.
+ExecStopPost=-/bin/bash -c 'PYTHONPATH="$PLANGRAPH_LIVE_TREE/src" exec python3 -m plangraph.live_follow check'

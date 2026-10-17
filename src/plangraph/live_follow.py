@@ -80,7 +80,28 @@ class Config:
 
         out = required("PLANGRAPH_OUT")
         alert = env.get("PLANGRAPH_ALERT_CMD")
+        alert_cmd = None
+        if alert:
+            try:
+                alert_cmd = shlex.split(alert)
+            except ValueError:
+                raise ConfigError(
+                    "PLANGRAPH_ALERT_CMD is not a valid command line "
+                    "(unbalanced quote?)"
+                ) from None
         grace = env.get("PLANGRAPH_ALERT_GRACE_S")
+        grace_s = 1800
+        if grace:
+            try:
+                grace_s = int(grace)
+            except ValueError:
+                raise ConfigError(
+                    f"PLANGRAPH_ALERT_GRACE_S is not an integer: {grace!r}"
+                ) from None
+            if grace_s <= 0:
+                raise ConfigError(
+                    f"PLANGRAPH_ALERT_GRACE_S must be > 0, got {grace_s}"
+                )
         return cls(
             tree=required("PLANGRAPH_LIVE_TREE"),
             repo=required("PLANGRAPH_REPO"),
@@ -88,8 +109,8 @@ class Config:
             out=out,
             state=env.get("PLANGRAPH_STATE") or os.path.join(out, ".live-follow.json"),
             workflow=env.get("PLANGRAPH_CI_WORKFLOW") or "tests",
-            alert_cmd=shlex.split(alert) if alert else None,
-            grace_s=int(grace) if grace else 1800,
+            alert_cmd=alert_cmd,
+            grace_s=grace_s,
         )
 
 
@@ -353,8 +374,16 @@ def check(cfg: Config, runner, now=time.time) -> dict:
         return {"status": "ok", "page": page, "green": green}
     try:
         green_since = float(state.get("green_since"))
+        if green_since > moment:
+            # A clock skew (or hand-edited file) must not suspend alerts.
+            green_since = moment
+            state["green_since"] = green_since
+            _save_state(cfg, state)
     except (TypeError, ValueError):
+        # Corrupt or missing since: the grace clock starts from this tick.
         green_since = moment
+        state["green_since"] = green_since
+        _save_state(cfg, state)
     if moment - green_since > cfg.grace_s and state.get("alerted") != green:
         minutes = int((moment - green_since) / 60)
         line = (
@@ -363,7 +392,11 @@ def check(cfg: Config, runner, now=time.time) -> dict:
         )
         if cfg.alert_cmd:
             # The alert line is the handler's last argv element, not stdin.
-            runner.run(list(cfg.alert_cmd) + [line])
+            rc, _ = runner.run(list(cfg.alert_cmd) + [line])
+            if rc != 0:
+                # The alert did not land: echo it and retry on the next tick.
+                print(line, file=sys.stderr)
+                return {"status": "stale", "page": page, "green": green}
         else:
             print(line, file=sys.stderr)
         state["alerted"] = green
@@ -389,10 +422,18 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
         print(f"live_follow: {exc}", file=sys.stderr)
         return 2
     active = runner if runner is not None else Runner()
-    result = (
-        follow(cfg, active, now) if command == "follow" else check(cfg, active, now)
-    )
-    print(json.dumps(result))
+    try:
+        result = (
+            follow(cfg, active, now) if command == "follow" else check(cfg, active, now)
+        )
+        print(json.dumps(result))
+    except Exception:
+        # Never a traceback into the render unit, and never exception text
+        # (it can echo paths or the token): one neutral JSON line, exit 0.
+        if command == "follow":
+            print(json.dumps({"action": "kept", "reason": "error"}))
+        else:
+            print(json.dumps({"status": "error"}))
     return 0
 
 

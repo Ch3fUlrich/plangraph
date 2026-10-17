@@ -20,7 +20,7 @@ NEW_FILES = [SERVICE, TIMER, *DROPINS, ENV_EXAMPLE,
              ROOT / "deploy" / "nginx" / "plan-page.conf.example",
              ROOT / "deploy" / "README.md", Path(__file__)]
 
-INI_KEYS = ("Environment", "EnvironmentFile", "ExecStartPre", "ExecStart", "ExecStartPost")
+INI_KEYS = ("Environment", "EnvironmentFile", "ExecStartPre", "ExecStart", "ExecStopPost")
 SYSTEM_BINARIES = {"/bin/bash", "/usr/bin/python3"}
 ALLOWED_IP = "127.0.0.1"
 
@@ -70,9 +70,13 @@ def test_service_shape():
     assert not svc.has_section("Install"), "service must not ship an [Install] section"
     lines = read(SERVICE).splitlines()
     assert sum(line.startswith("ExecStart=") for line in lines) == 1, "exactly one ExecStart (strict=False keeps the last)"
-    for key in ("ExecStartPre", "ExecStartPost"):
-        hook = svc.get("Service", key, fallback="")
-        assert hook.startswith("-"), f"{key} must start with '-' so a {key} failure cannot block the render"
+    assert not any(line.startswith("ExecStartPost") for line in lines), \
+        "ExecStartPost is skipped when ExecStart fails: a oneshot check hook must be ExecStopPost"
+    assert sum(line.startswith("ExecStopPost=") for line in lines) == 1, "exactly one ExecStopPost"
+    assert svc.get("Service", "ExecStartPre", fallback="").startswith("-"), \
+        "ExecStartPre must start with '-' so a follow failure cannot block the render"
+    assert svc.get("Service", "ExecStopPost", fallback="").lstrip().startswith("-"), \
+        "ExecStopPost must start with '-' so a stamp check failure cannot taint the unit"
 
 
 def test_execstart_publishes_in_place():
@@ -80,12 +84,15 @@ def test_execstart_publishes_in_place():
     assert 'grep -q "</html>"' in start, "a truncated render must not replace a good page"
     assert 'cat "$T" >' in start, "publish with cat > so the destination inode survives the bind mount"
     assert "mv " not in start, "mv would swap the inode the web server bind-mounted"
+    assert not any("mv " in line for line in read(SERVICE).splitlines()
+                   if line.startswith("ExecStart") and not line.startswith("ExecStart=")), \
+        "only ExecStart publishes the page; no other ExecStart-family line may mv"
 
 
 def test_follow_hooks():
     svc = parse(SERVICE)
-    for key, step in (("ExecStartPre", "follow"), ("ExecStartPost", "check")):
-        hook = svc.get("Service", key, fallback="")
+    for key, step in (("ExecStartPre", "follow"), ("ExecStopPost", "check")):
+        hook = svc.get("Service", key, fallback="").lstrip("-")
         assert "plangraph.live_follow" in hook, f"{key} must run the live_follow module"
         assert step in shlex.split(hook, posix=True)[-1].split(), f"{key} must run live_follow {step}"
 
