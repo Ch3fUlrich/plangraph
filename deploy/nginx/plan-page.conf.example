@@ -1,0 +1,21 @@
+# plangraph static page: serve ONE rendered file at /plan from the web container.
+# Drop-in fragment — include it from the server block that terminates the public listener, e.g.
+#   include /etc/nginx/conf.d/plan-page.conf;
+# Only the container-side path below is fixed: plan-cdn.html is bind-mounted as a single file, so the
+# render unit must overwrite it in place (`cat "$T" > file`, see deploy/systemd/plangraph-render.service),
+# never `mv` — a rename swaps the inode and this mount keeps exposing the old file.
+location = /plan {
+    alias /srv/plan/plan-cdn.html;
+    default_type text/html;
+
+    # The page is republished every few minutes; always revalidate, so a stale cache never outlives a render.
+    add_header Cache-Control "no-cache";
+
+    # A plan page is mostly repeated markup: gzip pays for itself here. gzip must be enabled in http{},
+    # and text/html is compressed by default — listed to keep the intent visible if defaults change.
+    gzip on;
+    gzip_types text/html;
+
+    # No directory listing, no fallback: /plan is the only path this block owns.
+    access_log off;
+}

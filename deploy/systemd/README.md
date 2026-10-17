@@ -11,6 +11,11 @@ All units are user units (`systemctl --user`), not system units.
 | plangraph-keeper.service | persistent keeper daemon | keeper host |
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |
 | plangraph-projector-reconcile.timer | nightly timer (03:30) starting the reconcile service | keeper host |
+| plangraph-render.service | one tick: follow the gated head, render the static page, check the stamp | render host |
+| plangraph-render.timer | timer driving plangraph-render.service every 5 min | render host |
+| render.env.example | environment template for plangraph-render.service (paths, not secrets) | render host |
+| plangraph-render.service.d/kg.conf.example | drop-in example: knowledge-graph sidecar endpoints | render host |
+| plangraph-render.service.d/live-tree.conf.example | drop-in example: override the live tree location | render host |
 
 ## 2. Install (keeper host)
 
