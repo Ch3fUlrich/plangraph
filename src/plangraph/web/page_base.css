@@ -396,3 +396,5 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 .sb-menu button{width:100%;min-height:44px}
 .prg-total{margin:0 0 10px;font-weight:600}.prg-scroll{overflow-x:auto;max-width:100%}.prg-table td.prg-name{font-weight:600}.prg-cell{white-space:nowrap}.prg-pct{font-size:11px;color:var(--muted)}
 .prg-bar{display:inline-block;width:64px;height:8px;border-radius:4px;background:var(--border);vertical-align:middle;margin-right:6px;overflow:hidden}.prg-fill{display:block;height:100%;background:var(--state-ready)}
+
+.ny-t a.ny-id{font-weight:600}.ny-t .tc-badge{display:inline-block;margin:4px 6px 0 0;white-space:normal}#sb-panel-needs select.tt-age{font:inherit;font-size:14px;padding:4px 6px;min-height:32px}.ny-t td.ny-prio,.ny-t td.ny-age{text-align:right}@media (max-width:600px){.ny-t a.ny-id{display:flex;align-items:center;min-height:40px}.ny-t .ny-ans{min-height:40px;min-width:40px}}

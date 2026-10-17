@@ -757,6 +757,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 .prg-total{margin:0 0 10px;font-weight:600}.prg-scroll{overflow-x:auto;max-width:100%}.prg-table td.prg-name{font-weight:600}.prg-cell{white-space:nowrap}.prg-pct{font-size:11px;color:var(--muted)}
 .prg-bar{display:inline-block;width:64px;height:8px;border-radius:4px;background:var(--border);vertical-align:middle;margin-right:6px;overflow:hidden}.prg-fill{display:block;height:100%;background:var(--state-ready)}
 
+.ny-t a.ny-id{font-weight:600}.ny-t .tc-badge{display:inline-block;margin:4px 6px 0 0;white-space:normal}#sb-panel-needs select.tt-age{font:inherit;font-size:14px;padding:4px 6px;min-height:32px}.ny-t td.ny-prio,.ny-t td.ny-age{text-align:right}@media (max-width:600px){.ny-t a.ny-id{display:flex;align-items:center;min-height:40px}.ny-t .ny-ans{min-height:40px;min-width:40px}}
+
 /* PlanUI graph styles — UI-PLAN §4, §10, §11 (T3b-1).
  * Tokens from page_base.css only, no new colours, no url(), no @import.
  * Every interactive element has >= 44x44 px hit target at both viewports.
@@ -915,8 +917,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   <nav class="tabs" role="tablist" aria-label="Pages">
     <button id="tab-graph" data-page="graph" type="button" role="tab" aria-selected="true" aria-controls="panel-graph">Graph</button>
     <button id="tab-list" data-page="table" type="button" role="tab" aria-selected="false" aria-controls="panel-list">Table</button>
-    <button id="tab-qa" data-page="qa" type="button" role="tab" aria-selected="false" aria-controls="panel-qa"><span class="sb-label">Decisions &amp; Q&amp;A</span><span class="sb-count" id="sb-count-qa" hidden>0</span></button>
-    <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
+    <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs you</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
     <button id="tab-activity" data-page="activity" type="button" role="tab" aria-selected="false" aria-controls="panel-activity">Activity</button>
     <button id="tab-progress" data-page="progress" type="button" role="tab" aria-selected="false" aria-controls="panel-progress">Progress</button>
     <button id="tab-knowledge" data-page="knowledge" type="button" role="tab" aria-selected="false" aria-controls="panel-knowledge" hidden>Knowledge</button>
@@ -958,7 +959,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       <div id="list-content"></div>
     </section>
 
-    <section id="panel-qa" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-qa" hidden>
+    <section id="panel-qa" class="tabpanel pg" role="tabpanel" aria-label="Decisions and Q&amp;A (shown in Needs you)" aria-hidden="true" hidden>
       <div id="sb-panel-qa" class="pg-body"></div>
       <div id="sb-panel-answers" class="pg-body"></div>
     </section>
@@ -987,8 +988,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
 <nav id="tabbar" aria-label="Main sections">
   <button type="button" class="tab-btn" data-screen="graph" aria-current="page">Graph</button>
   <button type="button" class="tab-btn" data-screen="table">Table</button>
-  <button type="button" class="tab-btn" data-screen="qa">Q&amp;A</button>
-  <button type="button" class="tab-btn" data-screen="needs">Needs You<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
+  <button type="button" class="tab-btn" data-screen="needs">Needs you<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
   <button type="button" class="tab-btn" data-screen="menu">Filter</button>
   <button type="button" class="tab-btn" data-screen="settings" aria-label="Settings">&#9881;</button>
 </nav>
@@ -3075,6 +3075,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   }
 
   function renderNeeds() {
+    if (global.PlanUI && global.PlanUI.NeedsPage) { global.PlanUI.NeedsPage.render(B().vm()); return; }
     var base = B(), el = base.el, VM = base.vm();
     var box = base.$("sb-panel-needs");
     if (!box) return;
@@ -7403,8 +7404,462 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (ans) clear(ans);
   }
 
-  PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer, refresh: refresh, effectiveStatus: effectiveStatus };
+  PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer, refresh: refresh, effectiveStatus: effectiveStatus, editor: editor, exportBar: exportBar };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
+})(typeof window !== "undefined" ? window : globalThis);
+
+;
+(function (global) {
+  "use strict";
+
+  var PlanUI = (global.PlanUI = global.PlanUI || {});
+
+  var FACETS = ["type", "project", "priority", "state"];
+  var AGES = ["", "1", "7", "30", "30+"];
+  var COLS = ["type", "id", "title", "project", "priority", "state", "age"];
+  var DEFAULT_SORT = { col: "priority", dir: "desc" };
+
+  function effStatus(q) {
+    return (PlanUI.QAPage && PlanUI.QAPage.effectiveStatus) ?
+      PlanUI.QAPage.effectiveStatus(q) : String(q.status || "");
+  }
+  function ageOf(x, now) {
+    var t = x ? Date.parse(x) : NaN;
+    if (isNaN(t)) return null;
+    return Math.max(0, Math.floor((now - t) / 86400000));
+  }
+  function num(v) { var n = Number(v); return v === "" || v === null || v === undefined || isNaN(n) ? null : n; }
+  function str(v) { return v === null || v === undefined ? "" : String(v); }
+
+  function rows(vm, nowMs) {
+    var now = typeof nowMs === "number" ? nowMs : Date.now();
+    var out = [], list = (vm && vm.needsYou) || [], i, e;
+    for (i = 0; i < list.length; i++) {
+      e = list[i];
+      if (e.text !== undefined) continue;
+      out.push({ type: "task", id: e.key, title: str(e.title), project: str(e.project),
+        priority: num(e.priority), state: str(e.display),
+        ageDays: ageOf(e.updatedAt || e.createdAt, now), key: str(e.key), ref: e });
+    }
+    list = (vm && vm.questions) || [];
+    for (i = 0; i < list.length; i++) {
+      e = list[i];
+      out.push({ type: "question", id: e.id, title: str(e.text), project: str(e.project),
+        priority: null, state: effStatus(e), ageDays: null, key: str(e.item), ref: e });
+    }
+    list = (vm && vm.decisions) || [];
+    for (i = 0; i < list.length; i++) {
+      e = list[i];
+      out.push({ type: "decision", id: e.id, title: str(e.title), project: str(e.project),
+        priority: null, state: "decided", ageDays: ageOf(e.date, now),
+        key: (e.items && e.items[0]) || "", ref: e });
+    }
+    return out;
+  }
+
+  function inNum(list, v) {
+    for (var i = 0; i < list.length; i++) if (Number(list[i]) === v) return true;
+    return false;
+  }
+
+  function filter(rs, f) {
+    f = f || {};
+    var out = [], i, r, a, ok, list;
+    for (i = 0; i < rs.length; i++) {
+      r = rs[i];
+      list = f.type || [];
+      if (list.length && list.indexOf(str(r.type)) < 0) continue;
+      list = f.project || [];
+      if (list.length && list.indexOf(str(r.project)) < 0) continue;
+      list = f.state || [];
+      if (list.length && list.indexOf(str(r.state)) < 0) continue;
+      list = f.priority || [];
+      if (list.length && (r.priority === null || !inNum(list, r.priority))) continue;
+      ok = true;
+      a = f.age || "";
+      if (a) {
+        if (r.ageDays === null) ok = false;
+        else if (a === "30+") ok = r.ageDays > 30;
+        else ok = r.ageDays <= Number(a);
+      }
+      if (!ok) continue;
+      out.push(r);
+    }
+    return out;
+  }
+
+  function cmp(a, b) {
+    if (PlanUI.naturalCmp) return PlanUI.naturalCmp(a, b);
+    return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0;
+  }
+  function val(r, col) {
+    if (col === "priority") return r.priority;
+    if (col === "age") return r.ageDays;
+    return str(r[col]);
+  }
+  function sort(rs, spec) {
+    rs = rs || [];
+    var col = (spec && COLS.indexOf(spec.col) >= 0) ? spec.col : DEFAULT_SORT.col;
+    var dir = (spec && spec.dir === "asc") ? 1 : -1;
+    var idx = [], i, out = [];
+    for (i = 0; i < rs.length; i++) idx.push(i);
+    idx.sort(function (a, b) {
+      var va = val(rs[a], col), vb = val(rs[b], col);
+      var na = va === null || va === undefined || va === "";
+      var nb = vb === null || vb === undefined || vb === "";
+      if (na || nb) { if (na && nb) return a - b; return na ? 1 : -1; }
+      var c = (typeof va === "number" && typeof vb === "number") ? va - vb : cmp(va, vb);
+      return c === 0 ? a - b : c * dir;
+    });
+    for (i = 0; i < idx.length; i++) out.push(rs[idx[i]]);
+    return out;
+  }
+
+  function encList(v) {
+    var p = [], i;
+    for (i = 0; i < v.length; i++) p.push(encodeURIComponent(str(v[i])));
+    return p.join(",");
+  }
+  function encode(f, spec, rowId) {
+    f = f || {};
+    spec = spec || DEFAULT_SORT;
+    var p = [], i, key, col, dir;
+    for (i = 0; i < FACETS.length; i++) {
+      key = FACETS[i];
+      if (f[key] && f[key].length) p.push("n_" + key + "=" + encList(f[key]));
+    }
+    if (f.age && AGES.indexOf(String(f.age)) >= 0) p.push("n_age=" + encodeURIComponent(f.age));
+    col = (spec && COLS.indexOf(spec.col) >= 0) ? spec.col : DEFAULT_SORT.col;
+    dir = (spec && spec.dir === "asc") ? "asc" : "desc";
+    if (col !== DEFAULT_SORT.col || dir !== DEFAULT_SORT.dir) p.push("n_sort=" + col + ":" + dir);
+    if (rowId !== undefined && rowId !== null && rowId !== "") p.push("n_row=" + encodeURIComponent(str(rowId)));
+    return p.join("&");
+  }
+
+  function decode(search) {
+    var f = { type: [], project: [], priority: [], state: [], age: "" };
+    var spec = { col: DEFAULT_SORT.col, dir: DEFAULT_SORT.dir };
+    var row = "";
+    var raw = search == null ? "" : String(search);
+    if (raw.charAt(0) === "?" || raw.charAt(0) === "#") raw = raw.slice(1);
+    var pairs = raw.split("&"), i, eq, k, v, j, parts, n;
+    for (i = 0; i < pairs.length; i++) {
+      if (!pairs[i]) continue;
+      eq = pairs[i].indexOf("=");
+      k = eq >= 0 ? pairs[i].slice(0, eq) : pairs[i];
+      v = eq >= 0 ? pairs[i].slice(eq + 1) : "";
+      try { v = decodeURIComponent(v); } catch (e) { v = v; }
+      if (k === "n_type" || k === "n_project" || k === "n_state") {
+        parts = v.split(",");
+        for (j = 0; j < parts.length; j++) if (parts[j]) f[k.slice(2)].push(parts[j]);
+      } else if (k === "n_priority") {
+        parts = v.split(",");
+        for (j = 0; j < parts.length; j++) {
+          n = Number(parts[j]);
+          if (parts[j] !== "" && !isNaN(n)) f.priority.push(n);
+        }
+      } else if (k === "n_age") {
+        if (AGES.indexOf(v) >= 0) f.age = v;
+      } else if (k === "n_sort") {
+        parts = v.split(":");
+        if (COLS.indexOf(parts[0]) >= 0) {
+          spec.col = parts[0];
+          spec.dir = parts[1] === "asc" ? "asc" : "desc";
+        }
+      } else if (k === "n_row") {
+        row = v;
+      }
+    }
+    return { f: f, sort: spec, row: row };
+  }
+
+  PlanUI.NeedsPage = { rows: rows, filter: filter, sort: sort, encode: encode, decode: decode,
+    FACETS: FACETS, AGES: AGES, COLS: COLS, DEFAULT_SORT: DEFAULT_SORT };
+  if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
+})(typeof window !== "undefined" ? window : globalThis);
+
+;
+(function (global) {
+  "use strict";
+  if (typeof document === "undefined") return;
+
+  var PlanUI = (global.PlanUI = global.PlanUI || {});
+  var NP = (PlanUI.NeedsPage = PlanUI.NeedsPage || {});
+  var LABELS = { type: "Type", project: "Project", priority: "Prio", state: "State" };
+  var FACETS = ["type", "project", "priority", "state"];
+  var COLS = [["type", "Type", "tc-type"], ["id", "ID", "tc-key"], ["title", "Title", "tc-title"],
+    ["project", "Project", "tc-project"], ["priority", "Prio", "tc-priority"],
+    ["state", "State", "tc-state"], ["age", "Age", "tc-age"]];
+  var DEFF = { type: [], project: [], priority: [], state: [], age: "" };
+  var CAP = 300;
+  var f = clone(DEFF), sort = { col: "priority", dir: "desc" };
+  var openF = {}, openA = "", showAll = false, init = false, rowId = "", flashed = false, vm = null;
+
+  function clone(o) {
+    var c = {}, k;
+    for (k in o) if (o.hasOwnProperty(k)) c[k] = Array.isArray(o[k]) ? o[k].slice() : o[k];
+    return c;
+  }
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+  function td(tr, cls, label, node) {
+    var d = el("td", cls);
+    d.setAttribute("data-label", label);
+    d.appendChild(node);
+    tr.appendChild(d);
+    return d;
+  }
+
+  function facetItems(all, key) {
+    var map = {}, keys = [], out = [], i, r, v;
+    for (i = 0; i < all.length; i++) {
+      r = all[i];
+      if (key === "priority") {
+        if (r.priority === null || r.priority === undefined) continue;
+        v = String(r.priority);
+      } else v = String(r[key] === null || r[key] === undefined ? "" : r[key]);
+      if (!map[v]) { map[v] = { v: v, n: 0 }; keys.push(v); }
+      map[v].n++;
+    }
+    keys.sort(function (a, b) {
+      if (key === "priority") return (Number(b) || 0) - (Number(a) || 0);
+      if (PlanUI.naturalCmp) return PlanUI.naturalCmp(a, b);
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    for (i = 0; i < keys.length; i++) out.push(map[keys[i]]);
+    return out;
+  }
+  function cb(text, checked, aria, apply) {
+    var lb = el("label", "tt-fl"), b = el("input");
+    b.type = "checkbox";
+    b.checked = !!checked;
+    b.setAttribute("aria-label", aria);
+    lb.appendChild(b);
+    lb.appendChild(el("span", null, text));
+    b.addEventListener("change", function () {
+      apply(b.checked);
+      showAll = false;
+      commit();
+    });
+    return lb;
+  }
+  function facet(all, key) {
+    var d = el("details", "tt-fd"), list = el("div", "tt-fdl"), sel = f[key];
+    d.appendChild(el("summary", null, LABELS[key] + " (" + sel.length + ")"));
+    facetItems(all, key).forEach(function (it) {
+      var val = key === "priority" ? Number(it.v) : it.v;
+      list.appendChild(cb(it.v + " (" + it.n + ")", sel.indexOf(val) >= 0,
+        "Filter " + LABELS[key] + " " + it.v, function (on) {
+          var i = sel.indexOf(val);
+          if (on && i < 0) sel.push(val);
+          if (!on && i >= 0) sel.splice(i, 1);
+        }));
+    });
+    d.appendChild(list);
+    d.open = !!openF[key];
+    d.addEventListener("toggle", function () { openF[key] = d.open; });
+    return d;
+  }
+  function bar(all) {
+    var d = el("div", "tt-filt"), lab = el("label", "tt-fl"), sel = el("select", "tt-age"), cl;
+    FACETS.forEach(function (key) { d.appendChild(facet(all, key)); });
+    [["", "Any age"], ["1", "1 day or less"], ["7", "7 days or less"],
+      ["30", "30 days or less"], ["30+", "Older than 30 days"]].forEach(function (o) {
+      var op = el("option", null, o[1]);
+      op.value = o[0];
+      sel.appendChild(op);
+    });
+    sel.value = f.age;
+    sel.setAttribute("aria-label", "Filter by age");
+    sel.addEventListener("change", function () {
+      f.age = sel.value;
+      showAll = false;
+      commit();
+    });
+    lab.appendChild(el("span", null, "Age"));
+    lab.appendChild(sel);
+    d.appendChild(lab);
+    cl = el("button", "tt-btn tt-clear", "Clear filters");
+    cl.type = "button";
+    cl.setAttribute("aria-label", "Clear all needs-you filters");
+    cl.addEventListener("click", function () {
+      f = clone(DEFF);
+      showAll = false;
+      commit();
+    });
+    d.appendChild(cl);
+    return d;
+  }
+
+  function commit() {
+    var q = NP.encode ? NP.encode(f, sort, rowId) : "", keep = [], s, i, k;
+    try {
+      s = String(global.location.search || "").slice(1).split("&");
+      for (i = 0; i < s.length; i++) {
+        k = s[i] ? s[i].split("=")[0] : "";
+        if (s[i] && k.indexOf("n_") !== 0) keep.push(s[i]);
+      }
+      var parts = [q].concat(keep).filter(function (p) { return !!p; });
+      var url = global.location.pathname + (parts.length ? "?" + parts.join("&") : "") +
+        (global.location.hash || "");
+      global.history.replaceState(null, "", url);
+    } catch (e) { /* file:// may throw */ }
+    render(vm);
+  }
+
+  function head() {
+    var tr = el("tr"), th;
+    COLS.forEach(function (c) {
+      th = el("th");
+      th.setAttribute("data-label", c[1]);
+      th.setAttribute("aria-sort", sort.col === c[0] ?
+        (sort.dir === "asc" ? "ascending" : "descending") : "none");
+      var b = el("button", "th-btn", c[1] + (sort.col === c[0] ? (sort.dir === "asc" ? " \u25B2" : " \u25BC") : ""));
+      b.type = "button";
+      b.setAttribute("aria-label", "Sort by " + c[1]);
+      b.addEventListener("click", function () {
+        sort = sort.col === c[0] ? { col: c[0], dir: sort.dir === "asc" ? "desc" : "asc" }
+          : { col: c[0], dir: (c[0] === "priority" || c[0] === "age") ? "desc" : "asc" };
+        showAll = false;
+        commit();
+      });
+      th.appendChild(b);
+      tr.appendChild(th);
+    });
+    th = el("th");
+    th.setAttribute("data-label", "Open");
+    th.textContent = "Open";
+    tr.appendChild(th);
+    return tr;
+  }
+  function row(r) {
+    var tr = el("tr"), i, proj = null;
+    tr.id = "ny-row-" + r.id;
+    if (vm && vm.projects) for (i = 0; i < vm.projects.length; i++)
+      if (vm.projects[i].name === r.project) proj = vm.projects[i];
+    if (proj) { try { tr.style.setProperty("--pc", proj.color || "#888"); } catch (e) { /* ignore */ } }
+
+    td(tr, "tc-type", "Type", el("span", null,
+      r.type.charAt(0).toUpperCase() + r.type.slice(1)));
+
+    var a = el("a", "ny-id", r.id);
+    a.href = (global.location ? global.location.pathname : "") + "?" +
+      (NP.encode ? NP.encode(f, sort, r.id) : "") + "#pg=needs";
+    if (r.type !== "task" && PlanUI.Preview && PlanUI.Preview.attach) {
+      try {
+        PlanUI.Preview.attach(a, r.type === "decision"
+          ? { kind: "decision", id: r.id, title: r.title, text: r.ref.text, date: r.ref.date,
+              project: r.project, items: r.ref.items }
+          : { kind: "question", id: r.id, title: r.ref.text, text: r.ref.text,
+              project: r.project, status: r.state, answer: r.ref.answer, item: r.ref.item });
+      } catch (e) { /* preview optional */ }
+    }
+    td(tr, "tc-key", "ID", a);
+
+    var tc = td(tr, "tc-title", "Title", el("span", "ny-tt", r.title || ""));
+    var wk = r.type === "question" ? "answer" : (r.type === "task" ? r.ref && r.ref.wait : "");
+    if (wk) {   // D-677
+      var bd = el("span", "tc-badge", wk === "answer" ? "Needs your answer" : "Needs your task");
+      bd.style.background = "var(--wait-" + wk + ")";
+      bd.style.color = "#fff";
+      tc.appendChild(bd);
+    }
+    if (r.type === "question") {
+      var ab = el("button", "tt-btn ny-ans", openA === r.id ? "Close" : "Answer");
+      ab.type = "button";
+      ab.addEventListener("click", function () {
+        openA = (openA === r.id) ? "" : r.id;
+        render(vm);
+      });
+      tc.appendChild(ab);
+      if (openA === r.id && PlanUI.QAPage && PlanUI.QAPage.editor) {
+        var ed = PlanUI.QAPage.editor(r.ref, function () { openA = ""; render(vm); });
+        if (ed) {
+          var box = el("div", "ny-ed");
+          box.appendChild(ed);
+          tc.appendChild(box);
+        }
+      }
+    }
+
+    td(tr, "tc-project", "Project", el("span", null, r.project || "-"));
+    td(tr, "tc-priority", "Prio", el("span", null,
+      r.priority === null || r.priority === undefined ? "-" : r.priority));
+    td(tr, "tc-state", "State", el("span", null, r.state || "-"));
+    td(tr, "tc-age", "Age", el("span", null,
+      r.ageDays === null || r.ageDays === undefined ? "-" : r.ageDays + "d"));
+
+    var key = r.key || "";
+    var has = !!(key && vm && vm.items && vm.items.get && vm.items.get(key));
+    var jb = el("button", "tt-btn ny-jump", "Jump");
+    jb.type = "button";
+    jb.disabled = !has;
+    jb.setAttribute("aria-label", "Jump to " + (key || r.id));
+    jb.addEventListener("click", function () {
+      if (!has) return;
+      if (PlanUI.app && PlanUI.app.jump) PlanUI.app.jump(key);
+      else if (typeof PlanPage !== "undefined" && PlanPage.focusNode) PlanPage.focusNode(key);
+    });
+    td(tr, "tc-open", "Open", jb);
+    return tr;
+  }
+
+  function flash() {
+    if (flashed || !rowId) return;
+    var tr = document.getElementById("ny-row-" + rowId);
+    if (!tr) return;
+    flashed = true;
+    try { tr.scrollIntoView({ block: "center" }); } catch (e) { if (tr.scrollIntoView) tr.scrollIntoView(); }
+    tr.className += " flash";
+    setTimeout(function () {
+      var n = document.getElementById("ny-row-" + rowId);
+      if (n) n.className = n.className.replace(/\s*\bflash\b/g, "");
+    }, 1600);
+  }
+
+  function render(m) {
+    vm = m || vm;
+    var host = document.getElementById("sb-panel-needs");
+    if (!host || !vm) return;
+    if (!init) {
+      init = true;
+      var d = NP.decode ? NP.decode(global.location ? global.location.search : "") : null;
+      if (d && d.f) f = d.f;
+      if (d && d.sort) sort = d.sort;
+      rowId = (d && d.row) || "";
+    }
+    var now = Date.now();
+    var all = NP.rows(vm, now);
+    var list = NP.sort(NP.filter(all, f, now), sort);
+    while (host.firstChild) host.removeChild(host.firstChild);
+    host.appendChild(el("h2", "ny-h", "Needs you (" + list.length + " of " + all.length + ")"));
+    if (PlanUI.QAPage && PlanUI.QAPage.exportBar) {
+      var eb = PlanUI.QAPage.exportBar(vm);
+      if (eb) host.appendChild(eb);
+    }
+    host.appendChild(bar(all));
+    if (!all.length) { host.appendChild(el("p", "ny-empty", "Nothing needs you right now.")); return; }
+    if (!list.length) { host.appendChild(el("p", "ny-empty", "No rows match the current filters.")); return; }
+    var t = el("table", "tt ny-t"), thead = el("thead"), tb = el("tbody");
+    thead.appendChild(head());
+    t.appendChild(thead);
+    list.slice(0, showAll ? list.length : CAP).forEach(function (r) { tb.appendChild(row(r)); });
+    t.appendChild(tb);
+    host.appendChild(t);
+    if (!showAll && list.length > CAP) {
+      var more = el("button", "tt-btn ny-all", "Show all " + list.length + " rows");
+      more.type = "button";
+      more.addEventListener("click", function () { showAll = true; render(vm); });
+      host.appendChild(more);
+    }
+    flash();
+  }
+
+  NP.render = render;
 })(typeof window !== "undefined" ? window : globalThis);
 
 ;
@@ -7619,14 +8074,15 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var PlanUI = (global.PlanUI = global.PlanUI || {});
   if (typeof document === "undefined") return;
 
-  var PANELS = { graph: "panel-graph", table: "panel-list", qa: "panel-qa", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", knowledge: "panel-knowledge", settings: "panel-settings" };
-  var TABS = { graph: "tab-graph", table: "tab-list", qa: "tab-qa", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", knowledge: "tab-knowledge", settings: "tab-settings" };
+  var PANELS = { graph: "panel-graph", table: "panel-list", needs: "panel-needs", activity: "panel-activity", progress: "panel-progress", knowledge: "panel-knowledge", settings: "panel-settings" };
+  var TABS = { graph: "tab-graph", table: "tab-list", needs: "tab-needs", activity: "tab-activity", progress: "tab-progress", knowledge: "tab-knowledge", settings: "tab-settings" };
   var SBW_KEY = "plangraph.ui.sbw.v1", SBW_MIN = 180, SBW_MAX = 560;
   var ui = null, cur = "graph";
 
   function $(id) { return document.getElementById(id); }
 
   function show(name) {
+    if (name === "qa") name = "needs";
     if (!PANELS[name] || (name === "knowledge" && !(PlanUI.Knowledge && PlanUI.Knowledge.enabled()))) name = "graph";
     cur = name;
     var PP = global.PlanPage;
@@ -8088,6 +8544,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
   var BOOLS = ["showCritical", "showCross", "autoCollapseDone", "animate", "showAllEdges"];
   var TABS = ["projects", "needs", "qa", "answers", "settings"];
   var body = document.body;
+  var HASH_PG = /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);   // read before the first writeHash drops it
 
   function $(id) { return document.getElementById(id); }
   function is(str) {
@@ -8396,7 +8853,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     if (ui.get("view") === "table") PP.setTab("list");
     else PP.setTab("graph");
     if (PlanUI.Pages) {
-      var m = /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);
+      var m = HASH_PG || /[#&]pg=(qa|needs|settings)\b/.exec(location.hash);
       PlanUI.Pages.onChange = writeHash;
       var first = m ? m[1] : (ui.get("view") === "table" ? "table" : "graph");
       PlanUI.Pages.show(first);
