@@ -3,9 +3,8 @@
   // plangraph opencode configuration: mirrors AutoOS opencode.jsonc for WSL legs.
   // Provides t2-worker and l2-worker agents and omniroute/mimo-v2.6-flash model so
   // autoos-agent spawn legs run seamlessly from a plangraph checkout.
-  "model": "omniroute/mimo-v2.6-flash",
   "permissions": [
-    // Secret file protection fences (mirrors AutoOS opencode.jsonc lines ~424-462)
+    // mirrors the secret-file fences in AutoOS opencode.jsonc
     { "action": "read", "resource": "*.env", "effect": "deny" },
     { "action": "read", "resource": "*.env.*", "effect": "deny" },
     { "action": "read", "resource": "*auth.json", "effect": "deny" },

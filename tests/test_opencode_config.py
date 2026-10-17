@@ -33,6 +33,7 @@ def iter_values(obj):
 
 def test_agents_exist_with_model():
     cfg = load_config()
+    assert "model" not in cfg, "opencode.jsonc should not have top-level 'model' key"
     assert "agents" in cfg, "opencode.jsonc missing 'agents' block"
     agents = cfg["agents"]
 
@@ -78,6 +79,16 @@ def test_secret_deny_rules_exist():
         for p in perms
         if p.get("action") == "external_directory" and p.get("effect") == "deny"
     }
+    grep_denies = {
+        p["resource"]
+        for p in perms
+        if p.get("action") == "grep" and p.get("effect") == "deny"
+    }
+    glob_denies = {
+        p["resource"]
+        for p in perms
+        if p.get("action") == "glob" and p.get("effect") == "deny"
+    }
 
     secret_patterns = {
         "*.env",
@@ -92,6 +103,10 @@ def test_secret_deny_rules_exist():
 
     assert secret_patterns.issubset(read_denies), f"Missing read denies: {secret_patterns - read_denies}"
     assert secret_patterns.issubset(ext_denies), f"Missing external_directory denies: {secret_patterns - ext_denies}"
+    assert "*.env" in grep_denies, "Missing grep deny: *.env"
+    assert "*api-keys*" in grep_denies, "Missing grep deny: *api-keys*"
+    assert "*.env" in glob_denies, "Missing glob deny: *.env"
+    assert "*api-keys*" in glob_denies, "Missing glob deny: *api-keys*"
 
 
 def test_no_credential_like_keys():
