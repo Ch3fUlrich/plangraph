@@ -173,16 +173,34 @@ def _parse_port_binding(name, entry):
     return parts[0], _resolve_port(parts[1])
 
 
-def _case_branch(text: str, label: str):
-    """Return the body of `case` branch whose label list contains `label`.
+def _shell_function(text: str, name: str):
+    """Return the source of the shell function `name() { ... }`.
 
-    Matches lines like:   reset)  /  up)  /  "logs"|l)  /  keeper) ...
-    Branch ends at the first ';;' or 'esac' after the label line.
+    The function starts at its `name() {` line (column 0) and ends at the
+    first closing brace at column 0. Returns None when not found.
+    """
+    m = re.search(rf"^{re.escape(name)}\(\)[ \t]*\{{", text, re.MULTILINE)
+    if m is None:
+        return None
+    end_m = re.search(r"^\}", text[m.start():], re.MULTILINE)
+    if end_m is None:
+        return None
+    return text[m.start():m.start() + end_m.end()]
+
+
+def _case_branch_parts(text: str, label: str):
+    """Return the contiguous text segments that make up a `case` branch.
+
+    A segment list contains the branch text (from the label line up to the
+    first ';;' or 'esac' after it) and, when the branch dispatches to a
+    function named `cmd_<label>` (one-line labels like `up) cmd_up ;;`), the
+    body of that shell function. Labels may appear on their own line
+    ('reset)') or with the branch on the same line.
     Returns None when no such label is found.
     """
     label_re = re.compile(
         r"""^[ \t]*["']?([A-Za-z][A-Za-z0-9_-]*(?:\|[A-Za-z][A-Za-z0-9_-]*)*)"""
-        r"""["']?[ \t]*\)[ \t]*(?:&&[ \t]*)?$""",
+        r"""["']?[ \t]*\)""",
         re.MULTILINE,
     )
     branches = []
@@ -194,8 +212,25 @@ def _case_branch(text: str, label: str):
         branches.append((labels, text[start:end]))
     for labels, body in branches:
         if label in labels:
-            return body
+            parts = [body]
+            func = _shell_function(text, f"cmd_{label}")
+            if func is not None and f"cmd_{label}" in body:
+                parts.append(func)
+            return parts
     return None
+
+
+def _case_branch(text: str, label: str):
+    """Return the text of a `case` branch (see _case_branch_parts).
+
+    When the branch dispatches to `cmd_<label>`, the returned text is the
+    branch text followed by the body of that shell function. Returns None
+    when no such label is found.
+    """
+    parts = _case_branch_parts(text, label)
+    if parts is None:
+        return None
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +588,10 @@ def test_down_v_only_inside_reset_branch():
     assert reset_branch is not None, (
         "tools/devstack.sh must have a reset case branch"
     )
-    # everything that is NOT the reset branch must not contain `down -v`
-    non_reset = text.replace(reset_branch, "\n" * reset_branch.count("\n"))
+    # everything that is NOT the reset branch/function must not contain `down -v`
+    non_reset = text
+    for part in _case_branch_parts(text, "reset"):
+        non_reset = non_reset.replace(part, "\n" * part.count("\n"))
     bad = [
         line
         for line in non_reset.splitlines()

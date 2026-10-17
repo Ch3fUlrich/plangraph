@@ -16,11 +16,12 @@ FALLBACK_SERVICES="pg temporal-schema temporal temporal-namespace temporal-ui"
 
 usage() {
     cat >&2 <<'EOF'
-usage: tools/devstack.sh {init,up,down,reset,logs,keeper}
+usage: tools/devstack.sh {init,up,down,reset,status,logs,keeper}
   init                 create deploy/dev/.env (password never printed, file never overwritten)
   up                   start the stack and wait until healthy
   down                 stop the stack (volumes kept)
   reset --yes          destroy the stack AND its volumes (data is lost)
+  status               show containers and endpoints
   logs [service...]    follow logs (--tail 200)
   keeper               run the working-tree keeper against the dev Postgres
 EOF
