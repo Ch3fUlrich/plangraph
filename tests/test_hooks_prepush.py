@@ -45,6 +45,19 @@ def commit_file(repo, rel, text):
     return git(repo, "rev-parse", "HEAD").strip()
 
 
+def commit_symlink(repo, rel, target):
+    """Make *rel* a symlink to *target*: a type change if it already existed as a
+    regular file, an addition otherwise."""
+    p = Path(repo) / rel
+    p.unlink(missing_ok=True)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, p)
+    git(repo, "add", "-A")
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+        "commit", "-qm", "relink")
+    return git(repo, "rev-parse", "HEAD").strip()
+
+
 def run_hook(repo, lines, env_extra=None):
     env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
@@ -86,6 +99,35 @@ def test_hook_passes_a_clean_push(repo):
     head = commit_file(r, "app/other.py", "y = 2\n")
     res = run_hook(r, [push_line("main", head, base)])
     assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_hook_refuses_a_type_change_into_a_home_path_symlink(repo):
+    r, _ = repo
+    remote = commit_file(r, "app/notes.txt", "plain file\n")
+    head = commit_symlink(r, "app/notes.txt", "/home/" + "zoe/prod-notes.txt")
+    res = run_hook(r, [push_line("main", head, remote)])
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "app/notes.txt:0: symlink" in out
+    assert "zoe" not in out, "the link target is the leak and must not be printed"
+
+
+def test_type_change_to_an_in_repo_relative_symlink_matches_the_added_case(repo):
+    """The symlink rule is blind to the target, so a T change and the equivalent
+    addition are refused alike (scrub_check: a link target is never allow-listable)."""
+    r, base = repo
+    added = commit_symlink(r, "app/new_link.txt", "../clean.py")
+    res_add = run_hook(r, [push_line("main", added, base)])
+    out_add = res_add.stdout + res_add.stderr
+    remote = commit_file(r, "app/old_notes.txt", "plain file\n")
+    head = commit_symlink(r, "app/old_notes.txt", "../clean.py")
+    res_chg = run_hook(r, [push_line("main", head, remote)])
+    out_chg = res_chg.stdout + res_chg.stderr
+    for res, out, rel in ((res_add, out_add, "app/new_link.txt"),
+                          (res_chg, out_chg, "app/old_notes.txt")):
+        assert res.returncode == 1, out
+        assert f"{rel}:0: symlink" in out
+        assert "../clean.py" not in out
 
 
 def test_unset_scrub_words_is_graceful_with_notice(repo):

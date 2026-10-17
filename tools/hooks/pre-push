@@ -101,7 +101,7 @@ def main():
         base = base_commit(remote_sha, local_sha)
         for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():
             parts = line.split("\t")
-            if len(parts) != 2 or parts[0].startswith(("D", "T")):
+            if len(parts) != 2 or parts[0].startswith("D"):
                 continue
             scan_blob(parts[1], local_sha, cfg, find_shapes, hits)
     if hits:
