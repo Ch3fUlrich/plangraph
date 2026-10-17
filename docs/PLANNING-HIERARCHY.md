@@ -10,6 +10,7 @@ copy it here; change the skill and link from here.
 |---|---|
 | Layers, per-layer model/effort, phases, one-agent-per-task, task-size contract, fix-tasks, reports | [`skills/plangraph-planning/SKILL.md`](../skills/plangraph-planning/SKILL.md) |
 | Brief templates | [`skills/plangraph-planning/references/task-contract.md`](../skills/plangraph-planning/references/task-contract.md) |
+| Small-fix rule D-1272 (L2 self-fix <= ~10 lines, never auth/access/secrets, `Writer: L2`, 2 seats + judge); L1/L2 briefs carry it. When the orchestration skills move into `plangraph/skills` (AO-SKILLS-TO-PLANGRAPH) the moved `unattended-orchestration` text keeps this clause | [`SKILL.md`](../skills/plangraph-planning/SKILL.md) "Small-fix rule", [`task-contract.md`](../skills/plangraph-planning/references/task-contract.md) "Orchestrator briefs" |
 | Report JSON schemas | [`skills/plangraph-planning/references/schemas.md`](../skills/plangraph-planning/references/schemas.md) |
 | Coding rules for implementers | AutoOS skill `coding-principles`: `AutoOS/.agents/skills/coding-principles/SKILL.md` |
 | Launching, watching, relaunching layers (levels L0-L3, rules R-orch-*, R-worker-*) | AutoOS skill `unattended-orchestration`: `AutoOS/.agents/skills/unattended-orchestration/SKILL.md` |

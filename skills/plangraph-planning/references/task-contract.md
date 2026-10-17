@@ -22,6 +22,17 @@ and never fix.
 Fix-task brief: the original brief, plus `Fixes: <task id>`, the failing reviewer findings or the
 error record, and "failure summary only; you have no memory of the previous attempt".
 
+## Orchestrator briefs (L1 / L2)
+
+Every L1 and L2 brief carries this clause verbatim (D-1272, operator 2026-10-13):
+
+```
+Small fixes: L1 writes no code. An L2 may write a fix itself only if it is <= ~10 changed lines
+and touches no auth, access or secrets code; larger or such changes go to an L3 writer. The fix
+needs 2 seats + the judge like any change, and the lane record and commit trailer say
+`Writer: L2`.
+```
+
 Splitting heuristics: split on module, interface, test or migration boundary; merge tasks that
 touch the same file; fold trivial edits into a neighbour with the same scope.
 
