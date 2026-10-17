@@ -60,6 +60,7 @@ where a section below quotes a stable fragment such as `op <n> <op> <key>`). A
 | `evidence_missing`, `evidence_unverified` | 400 | evidence rules (section 5) |
 | `family_unknown` | 400 | a reviewer or claimant has no family |
 | `cycle` | 400 | the change would create a dependency cycle |
+| `unavailable` | 503 | a read-only projection table is missing or unreadable (`projector_watermark`); no details |
 | `internal` | 500 | unexpected failure, no details |
 
 Malformed client input must never produce `500`.

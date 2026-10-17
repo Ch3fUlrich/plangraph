@@ -9,6 +9,7 @@ import pytest
 from door_util import Doors
 from keeper_util import World
 from plangraph.inbox.form import PAGE
+from plangraph.keeper.errors import Refused
 
 WM = ("INSERT INTO projector_watermark(workflow_id, run_id, run_ord, event_id, status, plan_key,"
       " updated_at) VALUES(?,?,?,?,?,?,?)")
@@ -102,7 +103,28 @@ def test_open_alarm_count_is_withheld_from_project_restricted_callers(doors, w):
     assert get(doors, "l1main")[1]["open_alarms"] is None       # unscoped count would leak other:B
 
 
-def test_unreadable_watermark_table_is_a_named_error():
+def test_unreadable_watermark_table_is_a_503_over_http(doors, w, monkeypatch):
+    import sqlite3
+
+    real = w.store.conn
+
+    class Broken:
+        def execute(self, sql, *a):
+            if "projector_watermark" in sql:
+                raise sqlite3.OperationalError("no such table: projector_watermark")
+            return real.execute(sql, *a)
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    monkeypatch.setattr(w.store, "conn", Broken())
+    status, body = get(doors)
+    assert status == 503, body
+    assert body["error"] == "unavailable"
+    assert "OperationalError" not in str(body) and "sqlite" not in str(body).lower()
+
+
+def test_unreadable_watermark_table_is_refused_not_a_200_body():
     import sqlite3
     from types import SimpleNamespace
     from plangraph.inbox import routes
@@ -113,8 +135,10 @@ def test_unreadable_watermark_table_is_a_named_error():
 
     store = SimpleNamespace(conn=Conn(), now=lambda: 0.0,
                             _run=lambda principal, action, key, fn: fn(0.0))
-    body = routes._projector_watermark(store, SimpleNamespace(role="router", projects=None))
-    assert body == {"error": "watermark unreadable: OperationalError"}
+    with pytest.raises(Refused) as exc:
+        routes._projector_watermark(store, SimpleNamespace(role="router", projects=None))
+    assert exc.value.code == "unavailable"
+    assert "OperationalError" not in str(exc.value)
 
 
 def test_page_renders_a_withheld_alarm_count_as_na_not_zero():
