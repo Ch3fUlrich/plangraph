@@ -277,6 +277,15 @@ def _allowed_shas(rel, rule, cfg):
     return cfg["_allow_value"].get((rel, rule), ())
 
 
+def pending_value_shas(rel, rule, vals, cfg):
+    """sha256s of *vals* matched for (rel, rule) that no ``[[scrub.allow_value]]``
+    entry covers -- empty when every value is allowed, so the rule drops its hit.
+
+    The single source of the per-value allowance check, shared by :func:`scan_tree`
+    and the pre-push hook.  Returns hashes only; a matched value is never returned."""
+    return sorted({_sha(v) for v in vals} - set(_allowed_shas(rel, rule, cfg)))
+
+
 def _value_allows(entries):
     """Validate ``[[scrub.allow_value]]`` entries -> ``{(path, rule): {sha256, ...}}``.
 
@@ -332,7 +341,7 @@ def scan_tree(root, cfg, with_skipped=False):
             for rule, vals in sorted(scan_line_values(line, cfg, find_shapes).items()):
                 if rule in skip:
                     continue
-                pending = sorted({_sha(v) for v in vals} - set(_allowed_shas(rel, rule, cfg)))
+                pending = pending_value_shas(rel, rule, vals, cfg)
                 if pending:
                     hits.append(Hit(rel, n, rule, pending[0]))
     return (hits, skipped) if with_skipped else hits
