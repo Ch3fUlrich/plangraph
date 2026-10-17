@@ -8,7 +8,7 @@ Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-in
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 
 ## D-1851 BUDGET MODE (19:30Z-~03:30Z operator away): no Claude writers/seats, no new Sonnet L2s; priority P1 PH-RT-RUNTIME + deploy install.
-P1 all -CODE done; WORKER/PROJECTOR gated on TEMPORAL-CHECK (prox pushed 19:4xZ for T3 #4 GO). L2-LAUNCH build-L2-p1-rehearsal (opencode go, workst) brief control e192f256 l2-p1-rehearsal-ocgo.md.
+D-1854: dev moves to the WORKSTATION (plan control ae87b45b workst-devstack-plan.md: D1 compose/devstack.sh, D2 temporal check dev, D3 keeper+pytest-pg dev, D4 P1 rehearsal, D5 release doc) run as L3s by workst-L1-autoos; item changes sent to graphrestructure (DEVSTACK, RELEASE-DEPLOY, retarget TEMPORAL-CHECK); prox told to HOLD T3 #4. p1-rehearsal L2 PARKED (no go path; ORCH-RUNS-WITHOUT-CLAUDE). R1 audit L3 qwen 20261017-193107-p1-audit-qwen-e4c89b running.
 Stopped: ui-u1-stamp, public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-model, ui-u2-browser (U3-5 deferred). Continue: rtp1-predeploy-2.
 ## Open
 | Item | State | Next |
@@ -17,7 +17,7 @@ Stopped: ui-u1-stamp, public-ready. Finish-then-stop: republish (D-B scrub defer
 | UI-BROWSER-TESTS (U2) | claimed; L2 build-L2-ui-u2-browser (workst, lane/ui-browser-tests) | MERGE-READY → seats → merge; then U3+U4 (lane/ui-plan 2bd22de4 briefs), U5 after both; max 3 |
 | PG-PUBLIC-READY | in_review (D-1748 closed it; merged #60/#61). Keeper close needs 2 verdicts: google + xiaomi | wait republish T7 (allowlist value constraint) → seats gemini(agy)+mimo on f3e2500e..fix → seat_verdict |
 | PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
-| server:RT-P1-TEMPORAL-CHECK | claimed. T3 #3 (GO D-1750) FAIL 12:57Z temporal unhealthy ~10s; pg_hba fixed live; logs lost. Log PRIVATE ~/.local/share/plangraph/temporal-check/live-log.md | prox-L1-main: log capture (sd-rollback-sha) or diag → new GO; then T4-T6, T9, T11 |
+| server:RT-P1-TEMPORAL-CHECK | claimed; retarget to workstation dev stack (D-1854, D2). cloud.vm T3 -> RELEASE-DEPLOY later; prox HOLD | D1+D2 MERGE-READY from workst |
 | republish D-A/D-B (17:0xZ) | D-A=2: PG_URL + PLANGRAPH_REVIEW_URL required, no default port; set in live units + ops recipes (seat_verdict) BEFORE T1 merges. D-B: scrub the gap files, fixtures keep their shape, cargo test green, 1 PR per area | check the caller list in the T1 PR |
 | keeper-model (HIGH) | MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO claimed; lanes were based on a stale main 82613c3, told to merge 91d0cf08; L2 build-L2-keeper-model (workst) | MERGE-READY → judge → merge → next live-sync |
 | RT-P1 predeploy #46-#49 | L2 build-L2-rtp1-predeploy-2 (workst) | #46/#47 judge, #48/#49 self-approve; order 46,47,48,49 |
