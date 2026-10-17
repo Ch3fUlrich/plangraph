@@ -94,8 +94,24 @@
 
   function renderHeader() {
     var n = state.items.length;
-    var head = state.snapshot.head ? String(state.snapshot.head).slice(0, 10) + " · " : "";
-    setText($("meta-line"), head + (state.snapshot.generated || "") + " · " + n + " item" + (n === 1 ? "" : "s"));
+    var snap = state.snapshot || {};
+    var meta = $("meta-line");
+    var suffix = " · " + n + " item" + (n === 1 ? "" : "s");
+    var Stamp = global.PlanUI && global.PlanUI.Stamp;
+    if (!Stamp) { // page_stamp.js not loaded — legacy line, no stamp
+      var head = snap.head ? String(snap.head).slice(0, 10) + " · " : "";
+      setText(meta, head + (snap.generated || "") + suffix);
+      return;
+    }
+    var st = Stamp.format(Stamp.buildSha(), snap.generated, snap.head_seq, snap.head, Date.now());
+    setText(meta, st.text + suffix);
+    if (st.title) meta.setAttribute("title", st.title);
+    else meta.removeAttribute("title");
+    var cls = String(meta.className || "").split(/\s+/).filter(function (c) {
+      return c && c !== "stamp-stale";
+    });
+    if (st.stale) cls.push("stamp-stale"); // V-SHELL-4: amber past 15 min
+    meta.className = cls.join(" ");
     var pe = Math.round(PG.percentDone(state.items, "estimate") * 100);
     var pc = Math.round(PG.percentDone(state.items, "count") * 100);
     $("progress-bar").style.width = pe + "%";
