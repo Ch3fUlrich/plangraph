@@ -10,7 +10,9 @@ The config maps the store and its verifiers onto real paths:
 * ``repos``         — ``{project: working tree path}`` for the git verifier
 * ``runs_dir``      — where ``run-record`` jobs live
 * ``decisions_file``— the DECISIONS.md the ``decision`` verifier reads
-* ``ci``            — ``{project: "owner/repo" | "none"}``
+* ``ci``            — ``{project: "owner/repo" | "forgejo:owner/repo" | "none"}``
+* ``forgejo_url``   — Forgejo base URL for ``forgejo:`` ci values (https)
+* ``forgejo_token_file`` — path of the file holding the read-only Forgejo token
 * ``batch_roots``   — directories ``close_on_decision`` may read batch files from
 * ``bind``          — ``"host:port"`` (or ``host``/``port`` keys)
 * ``default_lease`` — seconds a claim is held without a heartbeat
@@ -76,6 +78,12 @@ class Config:
         self.snapshot_pubkey = (str(self._resolve(data["snapshot_pubkey"]))
                                 if data.get("snapshot_pubkey") else None)
         self.ci = dict(data.get("ci") or {})
+        # PG-CI-FORGEJO: where the Forgejo commit-status API lives and which
+        # file holds its read-only token. Both are needed before a
+        # ``forgejo:owner/repo`` ci value can be looked up (evidence.default_context).
+        # Values, never shown: __repr__ lists key names only (see below).
+        self.forgejo_url = data.get("forgejo_url")
+        self.forgejo_token_file = data.get("forgejo_token_file")
         # X7b: the directories ``close_on_decision`` may read a batch file from.
         # Empty means the verb always refuses, so an unconfigured deployment
         # cannot close an item on a batch the operator never sanctioned.

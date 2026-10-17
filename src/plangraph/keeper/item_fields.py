@@ -14,7 +14,9 @@ runs the item, <= ``AGENT_ID_CAP`` chars of ``[A-Za-z0-9._:@-]``) and ``phase_ki
 
 MODEL-KINDS: ``KINDS`` lists the item kinds.  ``question``, ``decision`` and
 ``operator_task`` wait on the operator: ``kind_defaults`` gives their create-time
-``operator`` / ``wait`` defaults (explicit values always win).
+``operator`` / ``wait`` defaults (explicit values always win).  MODEL-LOOP adds
+``loop``: a repeatable kind that blocks dependents like a lane and needs exactly
+one exit decision (a ``decision`` item depending on it).
 """
 from __future__ import annotations
 
@@ -113,8 +115,9 @@ def check_model_fields(fields, kind, key=None):
                           f"{where}phase_kind is only allowed on gate items")
 
 
-#: Item kinds.  The last three wait on the operator and block dependents like a lane.
-KINDS = ("lane", "gate", "goal", "question", "decision", "operator_task")
+#: Item kinds.  ``question`` / ``decision`` / ``operator_task`` wait on the
+#: operator; every kind blocks dependents like a lane (MODEL-LOOP: ``loop``).
+KINDS = ("lane", "gate", "goal", "question", "decision", "operator_task", "loop")
 #: kind -> (operator, wait) used when the definition does not say.
 KIND_DEFAULTS = {"question": (True, "answer"), "decision": (True, "answer"),
                  "operator_task": (True, "task")}

@@ -2,6 +2,8 @@
 
 Design: `docs/proposals/2026-10-08-pg-proxy-access.md`. Same pattern as omnigraph.
 
+The 192.0.2.x placeholder addresses in `nginx.conf` fail closed (no real peer matches them); substitute the actual LAN/edge addresses before go-live.
+
 ## Going live (each step needs its parked router item; D-759 option A = mutual TLS on the LAN hop)
 0. Operator (shared "internal hop CA", also used by the omnigraph hop):
    `mint-certs.sh ca <offline-ca-dir>` once; `mint-certs.sh server <ca-dir> deploy/keeper-proxy/tls keeper.example.invalid

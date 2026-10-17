@@ -30,10 +30,12 @@ import argparse
 import html
 import json
 import os
+import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
-__all__ = ["render", "main", "default_vendor_dir", "cdn_script_tags"]
+__all__ = ["render", "main", "default_vendor_dir", "cdn_script_tags", "build_sha"]
 
 #: Assets (template, CSS, JS) shipped next to this module.
 ASSETS_DIR = Path(__file__).resolve().parent / "web"
@@ -45,6 +47,7 @@ JS_FILES = (
     "page.js",
     "page_ui.js",
     "page_ui_filters.js",
+    "page_stamp.js",
     "page_details.js",
     "page_model.js",
     "page_store.js",
@@ -223,6 +226,33 @@ def _strip_line_comments(js: str) -> str:
         out.append(line)
     return "\n".join(out)
 
+_SHA_SAFE = re.compile(r"[0-9A-Za-z._-]+")
+
+
+def build_sha(pkg_dir: Path | None = None) -> str:
+    """Resolve the build SHA stamped into the page (UI-VERSION-STAMP).
+
+    Order: ``PLANGRAPH_BUILD_SHA`` env, then ``git rev-parse`` in *pkg_dir*
+    (default: the installed package directory), else ``"unknown"``. The result
+    is restricted to ``[0-9A-Za-z._-]`` because it lands in an HTML attribute.
+    """
+    sha = os.environ.get("PLANGRAPH_BUILD_SHA", "").strip()
+    if not sha:
+        pkg_dir = Path(__file__).resolve().parent if pkg_dir is None else Path(pkg_dir)
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(pkg_dir), "rev-parse", "--short=10", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode == 0:
+                sha = proc.stdout.strip()
+        except Exception:
+            sha = ""
+    return sha if _SHA_SAFE.fullmatch(sha) else "unknown"
+
+
 def render(
     snapshot: dict,
     vendor_dir: Path,
@@ -262,6 +292,7 @@ def render(
         "@@VENDOR_SCRIPTS@@": vendor_scripts,
         "@@PAGE_JS@@": page_js,
         "@@SNAPSHOT_JSON@@": _safe_json(safe_snapshot),
+        "@@BUILD_SHA@@": html.escape(build_sha(), quote=True),
     }
     for token, value in replacements.items():
         doc = doc.replace(token, value)

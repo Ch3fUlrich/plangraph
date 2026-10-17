@@ -355,3 +355,7 @@ tr.flash { background: color-mix(in srgb, var(--accent) 30%, transparent); }
 .tt.hc-kind .th-kind,.tt.hc-kind td[data-col="kind"],.tt.hc-op .th-op,.tt.hc-op td[data-col="op"]{display:none}
 @media (max-width:600px){.tt-fd summary,.tt-fdl label,.tt-filt .tt-btn{min-height:40px;display:flex;align-items:center}}
 .tt-filt input[type=checkbox]{width:18px;height:18px;min-width:0;min-height:0;margin-right:6px;vertical-align:middle}
+
+/* ---- UI-VERSION-STAMP (V-SHELL-4): stale data turns the meta line amber
+     (--state-open is the Okabe-Ito amber in both light and dark themes) ---- */
+#meta-line.stamp-stale { color: var(--state-open); }
