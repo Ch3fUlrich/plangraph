@@ -1,0 +1,14 @@
+{
+ "requested_model": "qodercli/Qwen3.8-Flash",
+ "served_model": "Qwen3.8-Flash",
+ "served_model_source": "client-reported (qodercli)",
+ "finish_reason": "stop",
+ "verdict": "pass",
+ "test_gaming": "no",
+ "run_id": "20261017-111353-seat-qwen-pr58-r2-10bb9c",
+ "reviewed_sha": "82ac6ae4d59690cbebbcec8d1bd1bdc53e09afb5",
+ "review_base": "ce3c2dee",
+ "writer": "agy/gemini-3.8-flash (google)",
+ "output_log_sha256": "99177e358ca2c58d6a13530321c542215f7ecd3722e1f4eaa60cb5967e3aa675",
+ "note": "ACCEPT normalized to pass (seat printed ACCEPT, brief asked pass|fail)"
+}

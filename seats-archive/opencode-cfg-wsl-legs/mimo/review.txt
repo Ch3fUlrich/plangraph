@@ -1,0 +1,14 @@
+VERDICT: pass
+TEST-GAMING: no
+info opencode.jsonc:22 - allow `*.env.example` (and line 23 `*configuration/api-keys.example.yml`) comes after the `*.env.*` / `*api-keys*` denies, so last-match-wins opens those two paths; both are `.example`/example templates, not secret files, and matches the stated AutoOS mirror intent — not a secret re-open.
+info opencode.jsonc:14-51 - deny fences cover read/grep/glob/external_directory for 8 secret patterns; external_directory has no allow overrides; no top-level `model` key (verified by parse).
+info opencode.jsonc:88 - provider `env` is name-only (`AUTOOS_OMNIROUTE_KEY`); no key/token/secret values anywhere in the change (grep for `sk-`, value-bearing keys returned nothing).
+info tests/test_opencode_config.py:142-153 - asserts the done criteria directly: agents t2-worker/l2-worker present, both model `omniroute/mimo-v2.6-flash`, no top-level model — reads the config artifact, not constants the test writes.
+info tests/test_opencode_config.py:174-217 - deny-fence assertions compare expected patterns against parsed config; the expected set is test-defined but the artifact under test is the config, so not circular gaming; no skipped tests.
+info tests/test_opencode_config.py:220-227 - credential scan only matches `sk-[A-Za-z0-9]{8,}` (narrow), but manual inspection confirms no keys; test is hermetic (file-relative Path, json+regex only, no network/subprocess) — 4 passed in 0.03s.
+info REVIEW-DIFF.patch:1,103 - scope check: diff contains exactly two file headers, `opencode.jsonc` and `tests/test_opencode_config.py`; nothing else touched, nothing writes outside the sandbox.
+info scope - top-level permissions are deny-only fences plus two example-file allows; no top-level agent/model override, so plain plangraph opencode sessions are unharmed (only secret-file reads are blocked, which is the intent).
+Repro: `python3 -m pytest tests/test_opencode_config.py -q` → `4 passed in 0.03s`; `grep -n "^diff --git" REVIEW-DIFF.patch` → only the 2 expected file headers.
+
+  (none)
+autoos-agent: redacted 4 secret(s) from worker output

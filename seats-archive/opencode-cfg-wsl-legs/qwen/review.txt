@@ -1,0 +1,12 @@
+VERDICT: pass
+TEST-GAMING: no
+minor opencode.jsonc:38 - `external_directory` denies reuse file globs (`*.env`, `*auth.json`); that action normally takes directory paths, so this group is likely inert — cosmetic since read/grep/glob are fenced.
+minor opencode.jsonc:14 - the fences cover read/grep/glob only, not `shell`; `cat .env` still works, so these are guardrails, not a hard secret boundary (matches the AutoOS shape, noting for the record).
+minor opencode.jsonc:85 - `baseURL` is loopback-only; a WSL leg where the gateway runs on the Windows host (NAT mode, not mirrored) will fail to connect. Done-criteria claims rc0 measured on WSL, so accepted as verified externally.
+minor opencode.jsonc:63 - `t3-reviewer` is allowed in both agents but never defined here; the allow is inert unless the agent comes from user-level config. Harmless, but the "May launch t3-reviewer only" description overstates what this file guarantees.
+minor tests/test_opencode_config.py:45 - `assert agents["t2-worker"] == agents["l2-worker"]` locks in current duplication as a requirement; not part of the criteria, so a future intentional divergence (e.g. cheaper l2 model) fails this test.
+minor tests/test_opencode_config.py:106 - grep/glob deny coverage is asserted for only 2 of the 8 secret patterns (read/external_directory check all 8); config has all 8, so no real gap today, but a dropped grep deny would pass.
+info tests/test_opencode_config.py:34 - the tests validate the file's declared shape and secret hygiene, not the spawn requirement (`autoos-agent run --client opencode --model omniroute/mimo-v2.6-flash --dry-run` / `--free --dry-run` rc0); that remains a human/measured gate.
+Checks 1-4 all clear: parses as JSONC (comment stripper protects `//` inside the `http://` and `https://` literals — json.loads would otherwise fail loudly), `env` holds only the name `AUTOOS_OMNIROUTE_KEY` with no key value anywhere, the two `allow` rules are ordered after their `deny` matches and scope only `*.env.example` / `api-keys.example.yml`, patch touches exactly the 2 stated files, and no top-level `model` means plain plangraph opencode sessions keep their own default. Note: bash for `pytest`/`python3` was blocked in this headless seat, so parse/test-passing was verified by static trace, not execution; `git rev-parse HEAD` → 90de51e (source 82ac6ae4) confirms the stamp.
+
+  (none)

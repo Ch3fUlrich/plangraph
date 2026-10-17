@@ -3,7 +3,7 @@
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
 - D-437/D-1317 (binding): on CODING.VM only tool-less writers/seats (review-call: L2 applies the returned diff); tool-using opencode L3s (autoos-agent spawn) only on the workstation. Commit trailer adds `Writer: <model> <run id> [tool-less]`.
 - L3 writers AND seats = D-1704 (operator 2026-10-17, replaces D-1701 + the D-1351/2026-10-15 writer order), each model ONLY by the path named:
-  1 qodercli/qwen3.8-flash (ACP; spawn client=qoder model=qwen3.8-flash), 2 opencode/muse-spark-1.3 (ACP), 3 agy/gemini-3.8-flash (ACP), 4 opencode/mimo-v2.6-flash
+  1 qodercli/qwen3.8-flash incl. qodercli 'Efficient' (D-1714; spawn client=qoder model=Qwen3.8-Flash, case-sensitive), 2 opencode free deepseek-v4.1-flash-free / glm-5.3-free (D-1714; muse free gone), 3 agy/gemini-3.8-flash (ACP), 4 opencode/mimo-v2.6-flash
   (ACP), 5 openrouter/free (API), 6 mimo/mimo-v2.6-flash (API), 7 deepseek/deepseek-v4.1-flash (API). Rate-limited/down -> next, record skip + reason in the lane
   record. Seats = first available entries whose family differs from the writer and from each other. Off-list models are never used. Sonnet (in-session Agent)
   ONLY if every entry fails or spawner admission refuses; record why. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:
