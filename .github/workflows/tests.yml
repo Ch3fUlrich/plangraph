@@ -25,6 +25,20 @@ permissions:
   contents: read
 
 jobs:
+  # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
+  # the private word list never enters CI; output is path:line:rule only.
+  scrub:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: scrub_check (public patterns)
+        run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
+
   pytest:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

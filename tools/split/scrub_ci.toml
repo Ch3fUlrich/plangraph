@@ -1,0 +1,28 @@
+# scrub_check allowances for the CI whole-tree scan (.github/workflows/tests.yml:
+# the "scrub" job).  These paths are NOT part of the public split (see [public] in
+# tools/split/manifest.toml), so their infra hostnames, synthetic fixtures and plan
+# traces never reach the public repo.  The public surface stays fully checked:
+# private-word and symlink hits are deliberately not allowed here, and the hook /
+# CI pass no words list at all.  Genuine allowances for public files belong in
+# manifest.toml, not in this file.
+
+[scrub]
+
+[[scrub.allow]]
+path = "docs/plan/**"
+rules = ["hostname", "ipv4", "ipv6", "email", "token-shape", "high-entropy",
+         "credential-shape", "home-path"]
+
+[[scrub.allow]]
+path = "rust/**"
+rules = ["hostname", "ipv4", "ipv6", "email", "token-shape", "high-entropy",
+         "credential-shape", "home-path"]
+
+[[scrub.allow]]
+path = "deploy/**"
+rules = ["hostname", "ipv4", "ipv6", "email", "token-shape", "high-entropy",
+         "credential-shape", "home-path"]
+
+[[scrub.allow]]
+path = ".gitleaks.toml"
+rules = ["credential-shape"]

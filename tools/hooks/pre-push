@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Pre-push scrub gate (D-1751).
+
+Runs the tools/split/scrub_check rules over the files changed in the commits being
+pushed (diff vs the remote sha; for a new branch, vs the merge-base with origin/main).
+The private word list path comes ONLY from the environment: PLANGRAPH_SCRUB_WORDS,
+with optional extra rules in PLANGRAPH_SCRUB_RULES.  Unset: the public patterns still
+run and a one-line notice is printed.  Any hit refuses the push (exit 1); the output
+is file:line and rule id only -- a matched value is never printed, nor the words-file
+path.  Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+SPLIT = Path(__file__).resolve().parent.parent / "split"
+sys.path.insert(0, str(SPLIT))
+import scrub_check as sc  # noqa: E402
+
+ZERO = "0" * 40
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+# Public allow-lists reviewed into the repo; loaded always so pushes of already
+# vetted files behave like the CI tree scan.  Never a place for private words.
+BASE_RULES = ("manifest.toml", "scrub_ci.toml")
+
+
+def git(*args):
+    return subprocess.run(["git", *args], capture_output=True)
+
+
+def git_out(*args):
+    r = git(*args)
+    return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+
+
+def base_commit(remote_sha, local_sha):
+    """What the pushed commits add: the remote sha when the push fast-forwards,
+    else a merge-base; a new branch diffs against origin/main's merge-base, and
+    with no usable base at all, everything in the pushed commits is checked."""
+    if remote_sha != ZERO and git("cat-file", "-e", remote_sha + "^{commit}").returncode == 0:
+        if git("merge-base", "--is-ancestor", remote_sha, local_sha).returncode == 0:
+            return remote_sha
+        mb = git_out("merge-base", remote_sha, local_sha)
+        if mb:
+            return mb
+    else:
+        if git_out("rev-parse", "--verify", "-q", "origin/main"):
+            mb = git_out("merge-base", "origin/main", local_sha)
+            if mb:
+                return mb
+    return EMPTY_TREE
+
+
+def scan_blob(rel, local_sha, cfg, find_shapes, hits):
+    skip = sc._allowed(rel, cfg)
+    if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
+        hits.append(sc.Hit(rel, 0, "private-word"))
+    entry = git_out("ls-tree", local_sha, "--", rel)
+    if entry.startswith("120000 "):  # a link target is a path leak, never allow-listable
+        hits.append(sc.Hit(rel, 0, "symlink"))
+        return
+    r = git("show", f"{local_sha}:{rel}")
+    if r.returncode != 0:
+        return  # deleted, or a submodule gitlink
+    data = r.stdout
+    if b"\x00" in data[:8192]:
+        return  # binary files are not scanned, same as scrub_check
+    for n, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
+        for rule in sorted(sc.scan_line(line, cfg, find_shapes) - skip):
+            hits.append(sc.Hit(rel, n, rule))
+
+
+def main():
+    refs = [rec.split() for rec in sys.stdin.read().splitlines() if rec.strip()]
+    words = os.environ.get("PLANGRAPH_SCRUB_WORDS") or None
+    if not words:
+        print("pre-push: PLANGRAPH_SCRUB_WORDS unset: public patterns only, "
+              "the private-word rule is inactive", file=sys.stderr)
+    rules_files = [str(SPLIT / name) for name in BASE_RULES if (SPLIT / name).is_file()]
+    if os.environ.get("PLANGRAPH_SCRUB_RULES"):
+        rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])
+    try:
+        cfg = sc.build_config(words_file=words, rules_files=rules_files)
+    except Exception as exc:  # fail closed; never echo the paths
+        print(f"pre-push: bad scrub config: {type(exc).__name__}: push refused",
+              file=sys.stderr)
+        if isinstance(exc, ValueError) and "word list line" in str(exc):
+            print(f"pre-push: {exc}", file=sys.stderr)
+        return 1
+    find_shapes = sc._shape_finder()
+    hits = []
+    for rec in refs:
+        if len(rec) != 4:
+            continue
+        _, local_sha, _, remote_sha = rec
+        if local_sha == ZERO:  # branch deletion: nothing pushed to scan
+            continue
+        base = base_commit(remote_sha, local_sha)
+        for line in git_out("diff", "--no-renames", "--name-status", base, local_sha).splitlines():
+            parts = line.split("\t")
+            if len(parts) != 2 or parts[0].startswith(("D", "T")):
+                continue
+            scan_blob(parts[1], local_sha, cfg, find_shapes, hits)
+    if hits:
+        sc.report(hits, words=cfg["_words"])
+        print(f"pre-push: {len(hits)} scrub hit(s): push refused "
+              "(rule ids above; matched values are never shown)", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
