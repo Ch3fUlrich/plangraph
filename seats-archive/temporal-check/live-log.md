@@ -7,3 +7,5 @@
 - 2026-10-17 11:28Z T3 FAIL (prox-L2 [4d1de438], Semaphore task 166875): temporal crash-loop "no usable database connection found"; schema/namespace one-shots never ran; rolled back via down (task 166877); DBs untouched; no keeper verify needed. BASE_MEMAVAIL_MB=16142. Details -> server-28.
   detail (prox-L1): "sql schema version compatibility check failed ... no usable database connection found"; temporal-schema + temporal-namespace stayed Created; auto-rollback incomplete ("previous spec re-apply rc=1"); down 166877 clean. Read-only diagnosis lane on home ordered (build-L1).
 - T3 diag (temporal-check-t3-diag): root cause = admin-tools 1.32 image has no /bin/bash (OCI exec error, task 166875), NOT the DB (role/DBs/pg-net fine). Crash-loop came from the failed rollback's `up --no-deps` starting temporal without the schema one-shot. Fix lane/temporal-dbfix @531fae72 (/bin/sh entrypoints + setup.sh; stack-deploy rolls back only to a spec that ran). Re-run needs a NEW router GO (D-1724; D-1513 used up); server-28 files the GO-REQ for T2+T3.
+
+## Re-run GO D-1744 (ref 89e8ebd8, fix 310c98e2), executor prox-L2-temporal-check [7a539b08], launched per prox-L1-main
