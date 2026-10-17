@@ -16,6 +16,10 @@
   with the first line "You have NO tools and no repository access. The full material is inline below. Answer in plain text; never
   emit tool calls." NEVER ovh Qwen (times out). Prompt = vector block V1..Vn + diff + ALWAYS /home/s/code/plangraph-worktrees/build-L1/ops/tail.md last.
   Split diffs > ~60 KB by module with a file->part map. Adjudicate each finding against code. Do not record keeper verdicts; return seat dirs.
+- Judge notes (PR #60, 2026-10-17):
+  - A seat must give findings or reasons per vector; a bare "PASS" is not a verdict.
+  - Ask the seat to verify each claim (scan results, test counts); never state a claim as fact in the prompt (D-1607).
+  - Seat prompts can embed removed site strings: keep them private (never push them to the public repo); give the judge path + sha256 + diff-coverage count.
   HIGH lanes: 2 non-Claude families PASS on the final head.
 - Tests (operator 2026-10-16 ~03:4xZ overrides D-1338 for small changes): small change (docs/briefs, <= ~50 changed lines, one module, no schema/auth/migration/HIGH path) = run only the affected tests (`pytest -q <touched test files>` / `cargo test -p <crate>`), no full suite; docs-only PRs need no CI. Larger or HIGH changes: full local suite once before the PR push, then CI (PR into main only). Never push a red lane.
 - Every commit ends with ONE trailer paragraph (no blank line inside): `Plan-Item: <key>` / `Co-Authored-By: ...`.
