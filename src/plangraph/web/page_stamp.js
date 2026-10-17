@@ -66,6 +66,11 @@
     clockTimer = setInterval(function () {
       if (refreshFn) refreshFn();
     }, 60000);
+    /* A background refresh timer must never keep a non-browser host (node,
+     * a headless renderer) alive: in node the handle is a Timeout and
+     * unref() lets the process exit while the timer still ticks. Browsers
+     * return a plain number, so the guard makes this a no-op there. */
+    if (clockTimer && typeof clockTimer.unref === "function") clockTimer.unref();
     return clockTimer;
   }
 

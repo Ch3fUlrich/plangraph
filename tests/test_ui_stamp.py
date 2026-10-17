@@ -216,6 +216,46 @@ def test_stamp_timer_starts_only_with_a_registered_refresh_fn(tmp_path):
     assert out["timersAfterSecondStart"] == 1  # registration is idempotent
 
 
+# --------------------------------------------------------------------------- #
+# Regression: the 60 s refresh timer must be unref()'d so a node harness that
+# does NOT fake setInterval still exits on its own. Real timers only here.
+# --------------------------------------------------------------------------- #
+
+REAL_TIMER_EXIT_HARNESS = r"""
+"use strict";
+var WEB = process.argv[2];
+function emit(o) { process.stdout.write(JSON.stringify(o)); }
+
+/* real setInterval, only wrapped to count; nothing is faked away */
+var started = 0;
+var realSetInterval = global.setInterval;
+global.setInterval = function (fn, ms) { started++; return realSetInterval(fn, ms); };
+global.document = { querySelector: function () { return null; } };
+
+var PlanUI = require(WEB + "/page_stamp.js");
+PlanUI.Stamp.setRefresh(function () {});
+emit({ timersStarted: started });
+/* no process.exit(): if the live 60 s timer keeps the event loop ref'd,
+ * node hangs and the subprocess timeout below fires */
+"""
+
+
+@need_node
+def test_real_set_interval_does_not_keep_the_node_process_alive(tmp_path):
+    harness = tmp_path / "stamp_real_timer_exit_harness.js"
+    harness.write_text(REAL_TIMER_EXIT_HARNESS, encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            ["node", str(harness), str(WEB)],
+            capture_output=True, text=True, encoding="utf-8", timeout=5, cwd=str(ROOT),
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("node did not exit: the 60 s refresh timer is not unref()'d")
+    assert proc.returncode == 0, proc.stderr
+    out = json.loads(proc.stdout)
+    assert out["timersStarted"] == 1  # the timer really was started, unfaked
+
+
 WIRING_HARNESS = r"""
 "use strict";
 var WEB = process.argv[2];
