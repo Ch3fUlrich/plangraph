@@ -10,8 +10,8 @@ Keep all state in one directory owned by the keeper's unix user:
 ## 1. Init and config
 Write `$KEEPER/keeper.json`; any mode other than **600** is refused:
 
-    {"db": "/home/me/keeper/keeper.db",
-     "snapshot": "/home/me/keeper/plan.snapshot.json",
+    {"db": "/path/to/keeper/keeper.db",
+     "snapshot": "/path/to/keeper/plan.snapshot.json",
      "bind": "127.0.0.1:8765",
      "reap_interval": 60}
 
@@ -22,13 +22,13 @@ Write `$KEEPER/keeper.json`; any mode other than **600** is refused:
 A full config, with the verifier paths and the legacy/decision-close settings
 (X7b) filled in:
 
-    {"db": "/home/me/keeper/keeper.db",
-     "snapshot": "/home/me/keeper/plan.snapshot.json",
+    {"db": "/path/to/keeper/keeper.db",
+     "snapshot": "/path/to/keeper/plan.snapshot.json",
      "bind": "127.0.0.1:8765",
      "reap_interval": 60,
-     "repos": {"server": "$HOME/code/Server", "autoos": "$HOME/code/AutoOS"},
-     "decisions_file": "$HOME/code/routing/docs/decisions-log.md",
-     "batch_roots": ["$HOME/code/routing/docs/plan"]}
+     "repos": {"server": "/path/to/Server", "autoos": "/path/to/AutoOS"},
+     "decisions_file": "/path/to/routing/docs/decisions-log.md",
+     "batch_roots": ["/path/to/routing/docs/plan"]}
 
 `batch_roots` is the **only** place `close_on_decision` may read a batch file from.
 Empty (the default) means the verb always refuses, so leave it unset until the
@@ -80,7 +80,7 @@ same verbs are on every door (`Store`, HTTP `POST /v1/...`, MCP tool, `pg`):
     store.add_evidence_router(router, "routing:R-117", "commit",
                               {"commit": "<40-hex sha>"})
     store.close_on_decision(router, "routing:R-117",
-                            "$HOME/code/routing/docs/plan/batch-7.md@" + "<sha256>")
+                            "/path/to/routing/docs/plan/batch-7.md@" + "<sha256>")
 
 * `commit` passes on "the sha exists and is an ancestor of `main`" in that
   project's `repos` path — no trailer, no date window, no CI.  It is the weakest

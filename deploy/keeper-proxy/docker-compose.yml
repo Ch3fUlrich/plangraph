@@ -1,6 +1,6 @@
 # =====================================================================#
 #  plangraph-keeper-proxy — LAN sidecar for the keeper API (PG-PROXY-ACCESS, D-713)
-#  Caddy vhost keeper.ohje.ooguy.com (TLS, IP allowlist as omnigraph, no Authelia)
+#  Caddy vhost keeper.example.com (TLS, IP allowlist as omnigraph, no Authelia)
 #  -> keeper.example.internal 192.0.2.10:8788 (this container, mutual TLS, D-759 A) -> keeper 127.0.0.1:8787.
 #  The keeper keeps its loopback-only bind; auth stays the per-principal bearer.
 #  NOT LIVE until the parked router item PG-PROXY-LISTENER is approved.

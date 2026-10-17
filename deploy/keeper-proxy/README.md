@@ -3,7 +3,7 @@
 Design: `docs/proposals/2026-10-08-pg-proxy-access.md`. Same pattern as omnigraph.
 
 ## Going live (each step needs its parked router item; D-759 option A = mutual TLS on the LAN hop)
-0. Operator (shared "ohje internal hop CA", also used by the omnigraph hop):
+0. Operator (shared "internal hop CA", also used by the omnigraph hop):
    `mint-certs.sh ca <offline-ca-dir>` once; `mint-certs.sh server <ca-dir> deploy/keeper-proxy/tls keeper.example.internal
    192.0.2.10`; `mint-certs.sh client <ca-dir> <edge-dir>` once for the Caddy edge. `tls/` is git-ignored.
    Copy `ca.crt client.crt client.key` to the Caddy host at `/usr/local/etc/caddy/internal-ca/` (root-only).
@@ -13,7 +13,7 @@ Design: `docs/proposals/2026-10-08-pg-proxy-access.md`. Same pattern as omnigrap
    (TLS ok, no bearer), while `curl --cacert tls/ca.crt https://keeper.example.internal:8788/v1/whoami` fails the handshake.
 2. PG-PROXY-VHOST (prox, Server repo `server/network/opnsense/caddy.d/`):
    ```
-   keeper.ohje.ooguy.com {
+   keeper.example.com {
        import secure_headers
        @outside not remote_ip 192.0.2.0/24 198.51.100.0/24 fd00::/8
        respond @outside 403
@@ -33,6 +33,6 @@ Design: `docs/proposals/2026-10-08-pg-proxy-access.md`. Same pattern as omnigrap
    The Caddy -> sidecar hop is mutual TLS (D-759 A); the sidecar also accepts only the edge IP (192.0.2.11,
    check it) and 127.0.0.1. Fallback if the operator declines the CA: option B (plain hop, as omnigraph, plus an
    OPNsense rule allowing 8788 only from the edge).
-3. Check from each remote L1: MCP env `PG_URL=https://keeper.ohje.ooguy.com`,
+3. Check from each remote L1: MCP env `PG_URL=https://keeper.example.com`,
    `PG_TOKEN_FILE=~/.config/plangraph/<name>.token` → `whoami` answers with its principal.
 4. PG-PROXY-CUTOVER: `tailscale serve --https=8787 off`; remove the ssh relay forced command for prox-L1.
