@@ -55,7 +55,7 @@ def test_provider_omniroute():
 
     assert "AUTOOS_OMNIROUTE_KEY" in omniroute.get("env", [])
     assert omniroute.get("package") == "@opencode/ai/providers/openai-compatible"
-    assert omniroute.get("settings", {}).get("baseURL") == "http://127.0.0.1:20128/v1"
+    assert omniroute.get("settings", {}).get("baseURL") == "{env:PLANGRAPH_REVIEW_URL}"
 
     models = omniroute.get("models", {})
     assert "mimo-v2.6-flash" in models, "Model 'mimo-v2.6-flash' not found under omniroute"

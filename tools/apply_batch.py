@@ -14,7 +14,9 @@ import yaml
 
 import apply_batch_atomic as atomic
 
-DEFAULT_URL = "http://127.0.0.1:8787"
+# No built-in keeper URL (D-A): --url or PG_URL required.  Import-time snapshot
+# kept for md_sync's argparse default; main() re-reads the env at every call.
+DEFAULT_URL = os.environ.get("PG_URL")
 TIMEOUT = 15
 OP_SPECS = {
     "create": (["item"], {}),
@@ -270,7 +272,7 @@ def main(argv=None, out=None, err=None):
     err = err or sys.stderr
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("batch_file", nargs="?")
-    parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument("--url", default=None)
     parser.add_argument("--token-file", required=True)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--from", dest="from_n", default=None)
@@ -324,6 +326,14 @@ def main(argv=None, out=None, err=None):
         print_help(err)
         if queue_mode:
             line("error: missing BATCH.yaml argument", refusal=True)
+        return _done(2)
+    url = opts.url or os.environ.get("PG_URL")
+    if not url:
+        msg = "error: no keeper URL: pass --url or set PG_URL"
+        err.write(msg + "\n")
+        if queue_attempt:
+            line(msg, refusal=True)
+        print_help(err)
         return _done(2)
     start = 1
     if opts.from_n is not None:
@@ -398,7 +408,7 @@ def main(argv=None, out=None, err=None):
                                           for name in sorted(counts))
                                  or "no ops") + " (no calls made)")
             return _done(0)
-        session = Session(opts.url, token)
+        session = Session(url, token)
     except (BatchError, OSError) as exc:
         err.write(f"error: {exc}\n")
         if queue_mode:

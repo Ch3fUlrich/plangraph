@@ -42,9 +42,9 @@ def test_https_base_url_with_prefix_builds_v1_urls(tmp_path):
 
 def test_cleartext_warning_only_for_remote_http():
     assert cleartext_warning("https://keeper.example.test") is None
-    assert cleartext_warning("http://127.0.0.1:8787") is None
-    assert cleartext_warning("http://localhost:8787") is None
+    assert cleartext_warning("http://127.0.0.1:8765") is None
+    assert cleartext_warning("http://localhost:8765") is None
     assert cleartext_warning("") is None
-    warn = cleartext_warning("http://plain.example.test:8788")
+    warn = cleartext_warning("http://plain.example.test:8080")
     assert warn and "clear text" in warn and "plain.example.test" in warn
     assert "secret" not in warn

@@ -13,12 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-__all__ = ["DEFAULT_MAX_TOKENS", "DEFAULT_GATEWAY", "GATEWAY_ENV_VAR",
-           "MissingKey", "CallResult", "request_body", "request_headers",
-           "gateway_base_url", "call", "write_seat_dir"]
+__all__ = ["DEFAULT_MAX_TOKENS", "GATEWAY_ENV_VAR",
+           "MissingKey", "MissingGatewayURL", "CallResult", "request_body",
+           "request_headers", "gateway_base_url", "call", "write_seat_dir"]
 
 DEFAULT_MAX_TOKENS = 16000
-DEFAULT_GATEWAY = "http://127.0.0.1:20128/v1"
 GATEWAY_ENV_VAR = "PLANGRAPH_REVIEW_URL"
 SESSION_HEADER = "x-review-session-id"
 MAX_ERROR_SNIPPET = 200
@@ -29,6 +28,10 @@ _SESSION_TAG_RE = re.compile(r"^[A-Za-z0-9._/-]{1,120}$")
 
 class MissingKey(RuntimeError):
     """Review key env var missing (names the var only)."""
+
+
+class MissingGatewayURL(MissingKey):
+    """Review gateway URL missing (names the var only)."""
 
 
 def utc_now() -> str:
@@ -171,7 +174,10 @@ def call(model: str, prompt: str, *, url: str | None = None,
     key = (source.get(key_env) or "").strip() if source is not None else ""
     if not key:
         raise MissingKey("missing review key: set %s" % key_env)
-    base = gateway_base_url(url or (source.get(GATEWAY_ENV_VAR) or "") or DEFAULT_GATEWAY)
+    base_url = url or (source.get(GATEWAY_ENV_VAR) or "").strip()
+    if not base_url:
+        raise MissingGatewayURL("missing review gateway URL: set %s" % GATEWAY_ENV_VAR)
+    base = gateway_base_url(base_url)
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     tag = session_tag(title, digest)
     run_id = mint_run_id(slugify(title or "review"))
