@@ -2,3 +2,4 @@
 # One regex per line: <regex>  # owner: <plan item key>
 # A `warning`-level console message that matches none of these fails the test.
 You have set a custom wheel sensitivity\.  # owner: UI-BROWSER-TESTS
+has invalid endpoints and so it is impossible to draw  # owner: plangraph:UI-FLAKE-FIXES (V-GRAPH-12 / R9)
