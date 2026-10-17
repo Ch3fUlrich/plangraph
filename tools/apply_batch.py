@@ -14,9 +14,7 @@ import yaml
 
 import apply_batch_atomic as atomic
 
-# No built-in keeper URL (D-A): --url or PG_URL required.  Import-time snapshot
-# kept for md_sync's argparse default; main() re-reads the env at every call.
-DEFAULT_URL = os.environ.get("PG_URL")
+# No built-in keeper URL (D-A): --url or PG_URL required; main() reads the env at call time.
 TIMEOUT = 15
 OP_SPECS = {
     "create": (["item"], {}),
