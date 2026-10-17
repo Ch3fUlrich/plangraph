@@ -1,0 +1,153 @@
+# plangraph local development stack — WORKSTATION/DEV USE ONLY.
+# Everything is published on 127.0.0.1 only (loopback); NO TLS anywhere.
+# Never expose these ports beyond loopback; never reuse this file in production.
+# Run it through tools/devstack.sh (it generates deploy/dev/.env via
+# `tools/devstack.sh init` and passes it to docker compose).
+# Image tags/digests are recorded in deploy/dev/PINS.
+name: plangraph-dev
+
+services:
+  pg:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:?run tools/devstack.sh init}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?run tools/devstack.sh init}
+    ports:
+      - "127.0.0.1:${PG_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./pg-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging:
+      driver: local
+      options:
+        max-size: 25m
+
+  temporal-schema:
+    image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+    restart: "no"
+    entrypoint: ["/bin/sh", "/schema/setup.sh"]
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      POSTGRES_SEEDS: pg
+      POSTGRES_USER: ${PG_USER:?run tools/devstack.sh init}
+      POSTGRES_PWD: ${PG_PASSWORD:?run tools/devstack.sh init}
+    volumes:
+      - ./temporal-schema.sh:/schema/setup.sh:ro
+    depends_on:
+      pg:
+        service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: 25m
+
+  temporal:
+    image: temporalio/server:1.32.0@sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      DBNAME: temporal
+      VISIBILITY_DBNAME: temporal_visibility
+      POSTGRES_SEEDS: pg
+      POSTGRES_USER: ${PG_USER:?run tools/devstack.sh init}
+      POSTGRES_PWD: ${PG_PASSWORD:?run tools/devstack.sh init}
+      NUM_HISTORY_SHARDS: "4"
+    ports:
+      - "127.0.0.1:${TEMPORAL_PORT:-7233}:7233"
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "temporal operator cluster health --address 127.0.0.1:7233 | grep -q SERVING"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: 25m
+
+  temporal-namespace:
+    image: temporalio/admin-tools:1.32.0@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca
+    restart: "no"
+    depends_on:
+      temporal:
+        service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if ! temporal operator namespace describe --address temporal:7233 --namespace plangraph-dev >/dev/null 2>&1; then
+          temporal operator namespace create --address temporal:7233 --namespace plangraph-dev --retention 72h
+        fi
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: 25m
+
+  temporal-ui:
+    image: temporalio/ui:2.56.0@sha256:66d55d383bfb334ee0781f21a3b36c865b3f0f2262491a070bb2143394e9fe88
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "127.0.0.1:${TEMPORAL_UI_PORT:-8233}:8080"
+    depends_on:
+      temporal:
+        service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: 25m
+
+networks:
+  default:
+    driver: bridge
+
+volumes:
+  pgdata:

@@ -9,3 +9,5 @@ graphify-out/
 logs/
 .playwright-mcp/
 .venv-pg/
+deploy/dev/.env
+deploy/dev/keeper.json

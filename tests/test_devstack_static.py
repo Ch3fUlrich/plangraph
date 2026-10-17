@@ -1,0 +1,626 @@
+"""Static tests for the D1 local dev stack (deploy/dev/*, tools/devstack.sh).
+
+No docker, no network — these tests only parse the files that define the
+stack and check their structure, bindings, image pins and hygiene rules.
+"""
+
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+DEV_DIR = ROOT / "deploy" / "dev"
+COMPOSE_PATH = DEV_DIR / "compose.yml"
+PINS_PATH = DEV_DIR / "PINS"
+DEV_ENV_EXAMPLE_PATH = DEV_DIR / "dev.env.example"
+PG_INIT_DIR = DEV_DIR / "pg-init"
+SCHEMA_SCRIPT_PATH = DEV_DIR / "temporal-schema.sh"
+DEVSTACK_PATH = ROOT / "tools" / "devstack.sh"
+GITIGNORE_PATH = ROOT / ".gitignore"
+
+EXPECTED_SERVICES = {
+    "pg",
+    "temporal-schema",
+    "temporal",
+    "temporal-namespace",
+    "temporal-ui",
+}
+
+EXPECTED_HOST_PORTS = {55432, 7233, 8233}
+
+# Canonical pins copied from the server repo's Temporal stack
+# (server/coding/temporal/docker-compose.yml, section x-image-pins,
+# commit 8640037a). Same tags and digests.
+EXPECTED_IMAGE_REFS = {
+    "temporalio/server:1.32.0"
+    "@sha256:c3e752127759616bb1615e0f9ba0e21635aeb5fdeb922de4f371c350955f46ae",
+    "temporalio/admin-tools:1.32.0"
+    "@sha256:a9f84fb9a374b2374fe2e67c8efc0468ff3f1c66c8a0b14597ec86e349e62bca",
+    "temporalio/ui:2.56.0"
+    "@sha256:66d55d383bfb334ee0781f21a3b36c865b3f0f2262491a070bb2143394e9fe88",
+    "postgres:16",
+}
+
+DEV_ENV_KEYS = {
+    "PG_USER",
+    "PG_PASSWORD",
+    "PG_PORT",
+    "TEMPORAL_PORT",
+    "TEMPORAL_UI_PORT",
+    "KEEPER_PORT",
+}
+
+# Secret-like env var names in compose.yml must never be literal values.
+SECRET_ENV_NAMES = {"PG_PASSWORD", "POSTGRES_PASSWORD", "POSTGRES_PWD"}
+
+SUBCOMMANDS = ["init", "up", "down", "reset", "status", "logs", "keeper"]
+
+
+def _require(path: Path, why: str) -> Path:
+    assert path.is_file(), (
+        f"{path.relative_to(ROOT)} is missing — D1-static implementation not "
+        f"written yet (needed because {why})"
+    )
+    return path
+
+
+def _read(path: Path) -> str:
+    _require(path, "static dev-stack tests")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _compose():
+    text = _read(COMPOSE_PATH)
+    data = yaml.safe_load(text)
+    assert isinstance(data, dict), "compose.yml must parse to a mapping"
+    return data
+
+
+def _services():
+    data = _compose()
+    svcs = data.get("services")
+    assert isinstance(svcs, dict), "compose.yml must define a 'services' mapping"
+    return svcs
+
+
+def _env_items(svc: dict):
+    """Yield (name, value_or_None) for a service's environment.
+
+    value is None when the variable is only *named* (dict with null value,
+    or bare KEY in list form), meaning docker takes it from .env.
+    """
+    env = svc.get("environment") or {}
+    if isinstance(env, dict):
+        for k, v in env.items():
+            yield str(k), (None if v is None else str(v))
+    else:
+        for item in env:
+            raw = str(item)
+            if "=" in raw:
+                k, _, v = raw.partition("=")
+                yield k.strip(), v
+            else:
+                yield raw.strip(), None
+
+
+def _resolve_port(value) -> int:
+    """Resolve a published host port, accepting ${VAR:-default} form."""
+    s = str(value).strip().strip('"').strip("'")
+    m = re.fullmatch(r"\$\{([A-Za-z_][A-Za-z0-9_]*):-?(\d+)\}", s)
+    if m:
+        return int(m.group(2))
+    assert re.fullmatch(r"\d+", s), (
+        f"published port {value!r} must be a literal number or "
+        f"${{VAR:-default}} form"
+    )
+    return int(s)
+
+
+def _case_branch(text: str, label: str):
+    """Return the body of `case` branch whose label list contains `label`.
+
+    Matches lines like:   reset)  /  up)  /  "logs"|l)  /  keeper) ...
+    Branch ends at the first ';;' or 'esac' after the label line.
+    Returns None when no such label is found.
+    """
+    label_re = re.compile(
+        r"""^[ \t]*["']?([A-Za-z][A-Za-z0-9_-]*(?:\|[A-Za-z][A-Za-z0-9_-]*)*)"""
+        r"""["']?[ \t]*\)[ \t]*(?:&&[ \t]*)?$""",
+        re.MULTILINE,
+    )
+    branches = []
+    for m in label_re.finditer(text):
+        labels = m.group(1).split("|")
+        start = m.end()
+        end_m = re.search(r";;|[ \t]esac\b", text[start:])
+        end = start + (end_m.end() if end_m else len(text) - start)
+        branches.append((labels, text[start:end]))
+    for labels, body in branches:
+        if label in labels:
+            return body
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 1. compose.yml parses and defines exactly the expected services
+# ---------------------------------------------------------------------------
+
+
+def test_compose_parses_and_defines_exactly_the_five_services():
+    svcs = _services()
+    assert set(svcs) == EXPECTED_SERVICES, (
+        "services must be exactly "
+        f"{sorted(EXPECTED_SERVICES)}, found {sorted(svcs)}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 2. every published port is loopbound to 127.0.0.1, host ports exact
+# ---------------------------------------------------------------------------
+
+
+def test_all_published_ports_are_string_or_longform_loopback_bindings():
+    for name, svc in _services().items():
+        assert svc.get("network_mode") != "host", (
+            f"service {name!r} must not use network_mode: host"
+        )
+        for entry in svc.get("ports") or []:
+            if isinstance(entry, dict):
+                assert entry.get("host_ip") == "127.0.0.1", (
+                    f"service {name!r}: long-form port binding must set "
+                    f"host_ip: 127.0.0.1, got {entry.get('host_ip')!r}"
+                )
+            elif isinstance(entry, str):
+                parts = entry.split(":")
+                assert len(parts) == 3, (
+                    f"service {name!r}: ports entry {entry!r} must be "
+                    f"'127.0.0.1:HOST:CONTAINER' (3 colon-separated parts)"
+                )
+                assert parts[0] == "127.0.0.1", (
+                    f"service {name!r}: ports entry {entry!r} must bind "
+                    f"host IP 127.0.0.1"
+                )
+            else:
+                raise AssertionError(
+                    f"service {name!r}: ports entry {entry!r} must be a "
+                    f"string or long-form mapping"
+                )
+
+
+def test_published_host_ports_are_exactly_55432_7233_8233():
+    host_ports = set()
+    for name, svc in _services().items():
+        for entry in svc.get("ports") or []:
+            if isinstance(entry, dict):
+                host_ports.add(_resolve_port(entry["published"]))
+            elif isinstance(entry, str):
+                parts = entry.split(":")
+                if len(parts) == 3:
+                    host_ports.add(_resolve_port(parts[1]))
+    assert host_ports == EXPECTED_HOST_PORTS, (
+        f"published host ports must be exactly {sorted(EXPECTED_HOST_PORTS)}, "
+        f"got {sorted(host_ports)}"
+    )
+
+
+def test_compose_raw_text_has_no_wildcard_bind():
+    text = _read(COMPOSE_PATH)
+    assert "0.0.0.0" not in text, (
+        "compose.yml raw text must not contain 0.0.0.0"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3. no secret literals
+# ---------------------------------------------------------------------------
+
+
+def test_no_literal_password_values_in_compose():
+    for name, svc in _services().items():
+        for var, value in _env_items(svc):
+            if var.upper() in SECRET_ENV_NAMES or "PASSWORD" in var.upper():
+                if value is None:
+                    continue  # named only -> taken from .env
+                assert "${" in value, (
+                    f"service {name!r}: {var} must be a ${{VAR}} reference, "
+                    f"not a literal ({value!r})"
+                )
+            # also guard PWD-style names (POSTGRES_PWD)
+            if var.upper().endswith("_PWD"):
+                if value is None:
+                    continue
+                assert "${" in value, (
+                    f"service {name!r}: {var} must be a ${{VAR}} reference, "
+                    f"not a literal ({value!r})"
+                )
+
+
+def test_dev_env_example_has_exact_keys_and_empty_password():
+    text = _read(DEV_ENV_EXAMPLE_PATH)
+    keys = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        keys[k.strip()] = v.strip()
+    assert set(keys) == DEV_ENV_KEYS, (
+        f"dev.env.example must list exactly {sorted(DEV_ENV_KEYS)}, "
+        f"got {sorted(keys)}"
+    )
+    assert keys["PG_PASSWORD"] == "", (
+        "dev.env.example: PG_PASSWORD must be empty"
+    )
+
+
+def _token_shape_hits(text: str):
+    """Return labels of token-shaped strings found in text.
+
+    Patterns are assembled at runtime so this test file never contains a
+    matchable literal itself.
+    """
+    hits = []
+    literals = {
+        "gh p-token prefix": "gh" + "p_",
+        "gh s-token prefix": "gh" + "s_",
+        "github fine-grained token prefix": "github_" + "pat_",
+        "private key marker": "BEGIN PRIV" + "ATE KEY",
+    }
+    for label, needle in literals.items():
+        if needle in text:
+            hits.append(label)
+    # 32+ hex run outside a sha256: digest
+    stripped = re.sub(r"sha256:[0-9a-fA-F]{64}", "", text)
+    if re.search(r"(?<![0-9a-fA-F])[0-9a-fA-F]{32,}(?![0-9a-fA-F])", stripped):
+        hits.append("32+ hex run outside a sha256: digest")
+    return hits
+
+
+def test_no_token_shaped_strings_in_dev_files_devstack_or_this_test():
+    assert DEV_DIR.is_dir(), (
+        "deploy/dev/ is missing — D1-static implementation not written yet"
+    )
+    targets = sorted(p for p in DEV_DIR.rglob("*") if p.is_file())
+    targets.append(DEVSTACK_PATH)
+    targets.append(Path(__file__))
+    problems = []
+    for path in targets:
+        if not path.is_file():
+            continue  # missing files are reported by other tests
+        hits = _token_shape_hits(_read(path))
+        if hits:
+            problems.append(f"{path.relative_to(ROOT)}: {', '.join(hits)}")
+    assert not problems, "token-shaped strings found:\n" + "\n".join(problems)
+
+
+# ---------------------------------------------------------------------------
+# 4. images match PINS
+# ---------------------------------------------------------------------------
+
+
+def _parse_pins():
+    text = _read(PINS_PATH)
+    pins = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        name, sep, ref = stripped.partition("=")
+        assert sep, f"PINS line {line!r} must be 'name=image-reference'"
+        pins[name.strip()] = ref.strip()
+    return text, pins
+
+
+def test_pins_file_is_plain_text_and_cites_server_source():
+    text, pins = _parse_pins()
+    assert pins, "PINS must contain at least one name=image-reference line"
+    assert "x-image-pins" in text, (
+        "PINS must cite the server-repo source: a line containing "
+        "'x-image-pins' (section of server/coding/temporal/docker-compose.yml)"
+    )
+
+
+def test_compose_images_match_pins_exactly_both_directions():
+    _, pins = _parse_pins()
+    images = set()
+    for name, svc in _services().items():
+        img = svc.get("image")
+        assert isinstance(img, str) and img, (
+            f"service {name!r} must declare an image:"
+        )
+        images.add(img)
+    pin_refs = set(pins.values())
+    assert images == pin_refs, (
+        "every image: in compose.yml must equal a PINS reference and every "
+        f"PINS reference must be used.\ncompose: {sorted(images)}\n"
+        f"PINS:    {sorted(pin_refs)}"
+    )
+    assert pin_refs == EXPECTED_IMAGE_REFS, (
+        "PINS references must be the canonical images with the same tags and "
+        f"digests as the cloud stack.\nexpected: {sorted(EXPECTED_IMAGE_REFS)}\n"
+        f"got:      {sorted(pin_refs)}"
+    )
+
+
+def test_temporalio_image_refs_are_digest_pinned_with_version_tag():
+    _, pins = _parse_pins()
+    for name, ref in pins.items():
+        if "temporalio/" not in ref:
+            continue
+        assert "@sha256:" in ref, (
+            f"PINS {name!r}: temporalio reference must be digest-pinned "
+            f"(@sha256:...), got {ref!r}"
+        )
+        assert re.search(r":\d[^@/]*@sha256:[0-9a-f]{64}$", ref), (
+            f"PINS {name!r}: temporalio reference must carry a version tag "
+            f"before @sha256:, got {ref!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 5. one-shot services, entrypoints, depends_on, namespace
+# ---------------------------------------------------------------------------
+
+
+def test_one_shot_services_have_restart_no():
+    svcs = _services()
+    for name in ("temporal-schema", "temporal-namespace"):
+        value = svcs[name].get("restart")
+        assert value == "no", (
+            f"service {name!r} must set restart: \"no\" (quoted string), "
+            f"got {value!r}"
+        )
+
+
+def test_temporal_schema_entrypoint_uses_sh_not_bash():
+    svc = _services()["temporal-schema"]
+    entry = svc.get("entrypoint")
+    if isinstance(entry, str):
+        first = entry.split()[0] if entry.split() else ""
+        joined = entry
+    else:
+        assert isinstance(entry, list) and entry, (
+            "temporal-schema must define an entrypoint"
+        )
+        first = str(entry[0])
+        joined = " ".join(str(e) for e in entry)
+    assert first == "/bin/sh", (
+        f"temporal-schema entrypoint must start with /bin/sh (the image has "
+        f"no bash), got {first!r}"
+    )
+    assert "/schema/setup.sh" in joined, (
+        "temporal-schema entrypoint must run /schema/setup.sh"
+    )
+
+
+def test_temporal_schema_mounted_script_exists_and_is_posix_sh():
+    first_line = ""
+    for chunk in (_services()["temporal-schema"].get("volumes") or []):
+        if "temporal-schema.sh" in str(chunk):
+            assert ":ro" in str(chunk) or "readonly" in str(chunk).lower(), (
+                f"temporal-schema.sh mount must be read-only: {chunk!r}"
+            )
+    assert SCHEMA_SCRIPT_PATH.is_file(), (
+        "deploy/dev/temporal-schema.sh must exist (mounted as "
+        "/schema/setup.sh)"
+    )
+    first_line = SCHEMA_SCRIPT_PATH.read_text(
+        encoding="utf-8", errors="replace"
+    ).splitlines()[0]
+    assert first_line.strip() == "#!/bin/sh", (
+        f"temporal-schema.sh must start with #!/bin/sh (no bash), "
+        f"got {first_line!r}"
+    )
+
+
+def test_depends_on_conditions():
+    svcs = _services()
+
+    def condition(svc_name, dep_name):
+        dep = svcs[svc_name].get("depends_on")
+        if isinstance(dep, dict) and dep_name in dep:
+            entry = dep[dep_name]
+            if isinstance(entry, dict):
+                return entry.get("condition")
+            return None
+        return None
+
+    assert condition("temporal", "temporal-schema") == (
+        "service_completed_successfully"
+    ), "temporal must depend_on temporal-schema with condition: service_completed_successfully"
+    for svc_name in ("temporal-namespace", "temporal-ui"):
+        assert condition(svc_name, "temporal") == "service_healthy", (
+            f"{svc_name} must depend_on temporal with condition: "
+            f"service_healthy"
+        )
+
+
+def test_namespace_command_creates_plangraph_dev():
+    svc = _services()["temporal-namespace"]
+    cmd = svc.get("command")
+    assert cmd is not None, "temporal-namespace must define a command"
+    if isinstance(cmd, list):
+        text = " ".join(str(c) for c in cmd)
+    else:
+        text = str(cmd)
+    assert "plangraph-dev" in text, (
+        f"temporal-namespace command must create namespace plangraph-dev, "
+        f"got {text!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 6. pg-init creates the three databases
+# ---------------------------------------------------------------------------
+
+
+def test_pg_init_sql_creates_keeper_temporal_and_visibility_databases():
+    assert PG_INIT_DIR.is_dir(), "deploy/dev/pg-init/ must exist"
+    sql_files = sorted(PG_INIT_DIR.glob("*.sql"))
+    assert sql_files, "deploy/dev/pg-init/ must contain at least one *.sql"
+    text = "\n".join(
+        f.read_text(encoding="utf-8", errors="replace") for f in sql_files
+    )
+    for dbname in ("keeper", "temporal", "temporal_visibility"):
+        assert re.search(
+            rf"CREATE\s+DATABASE\s+(?:IF\s+NOT\s+EXISTS\s+)?[\"'`]?{dbname}"
+            rf"[\"'`]?\b",
+            text,
+            re.IGNORECASE,
+        ), (
+            f"pg-init SQL must contain CREATE DATABASE {dbname}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 7. tools/devstack.sh
+# ---------------------------------------------------------------------------
+
+
+def test_devstack_script_exists_with_bash_shebang():
+    text = _read(DEVSTACK_PATH)
+    first_line = text.splitlines()[0].strip()
+    assert re.fullmatch(r"#!/(usr/bin/env )?(usr/bin/)?bash\b.*", first_line), (
+        f"tools/devstack.sh must start with a bash shebang, got {first_line!r}"
+    )
+
+
+def test_devstack_script_passes_bash_dash_n():
+    import pytest
+
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash executable not found — skipping `bash -n` check")
+    _require(DEVSTACK_PATH, "bash -n syntax check")
+    proc = subprocess.run(
+        [bash, "-n", str(DEVSTACK_PATH)],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"bash -n failed on tools/devstack.sh:\n{proc.stderr}"
+    )
+
+
+def test_devstack_handles_all_subcommand_case_labels():
+    text = _read(DEVSTACK_PATH)
+    for word in SUBCOMMANDS:
+        assert _case_branch(text, word) is not None, (
+            f"tools/devstack.sh must handle subcommand {word!r} "
+            f"(a case label like '{word})' was not found)"
+        )
+
+
+def test_down_v_only_inside_reset_branch():
+    text = _read(DEVSTACK_PATH)
+    reset_branch = _case_branch(text, "reset")
+    assert reset_branch is not None, (
+        "tools/devstack.sh must have a reset case branch"
+    )
+    # everything that is NOT the reset branch must not contain `down -v`
+    non_reset = text.replace(reset_branch, "\n" * reset_branch.count("\n"))
+    bad = [
+        line
+        for line in non_reset.splitlines()
+        if re.search(r"down\s+(?:-\S+\s+)*-v\b", line)
+    ]
+    assert not bad, (
+        "`down -v` is only allowed in the reset branch; found in:\n"
+        + "\n".join(bad)
+    )
+
+
+def test_up_branch_keeps_containers_of_a_failed_start():
+    text = _read(DEVSTACK_PATH)
+    up_branch = _case_branch(text, "up")
+    assert up_branch is not None, "tools/devstack.sh must have an up case branch"
+    for line in up_branch.splitlines():
+        if re.search(r"\b(docker|compose)\b.*\b(down|rm|kill)\b", line):
+            raise AssertionError(
+                "the up branch must not tear containers down on failure "
+                "(a failed up keeps its containers and logs); "
+                f"offending line: {line.strip()!r}"
+            )
+    assert "--no-recreate" not in up_branch, (
+        "the up branch must not use --no-recreate"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. .gitignore
+# ---------------------------------------------------------------------------
+
+
+def test_gitignore_lists_env_and_keeper_json():
+    candidates = [GITIGNORE_PATH, DEV_DIR / ".gitignore"]
+    lines = set()
+    for p in candidates:
+        if p.is_file():
+            lines.update(
+                l.strip() for l in p.read_text(encoding="utf-8").splitlines()
+            )
+    for entry in ("deploy/dev/.env", "deploy/dev/keeper.json"):
+        assert entry in lines, (
+            f".gitignore must list {entry!r} as a line"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 9. no host names / home paths / non-loopback IPv4 in the stack files
+# ---------------------------------------------------------------------------
+
+
+def _valid_ipv4(s: str) -> bool:
+    return all(0 <= int(o) <= 255 for o in s.split("."))
+
+
+def test_no_hostnames_home_paths_or_foreign_ips_in_stack_files():
+    assert DEV_DIR.is_dir(), (
+        "deploy/dev/ is missing — D1-static implementation not written yet"
+    )
+    files = sorted(p for p in DEV_DIR.rglob("*") if p.is_file())
+    files.append(DEVSTACK_PATH)
+    problems = []
+    for path in files:
+        if not path.is_file():
+            continue
+        text = _read(path)
+        for m in re.finditer(r"(?<![\d.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+                             r"(?![\d.])", text):
+            ip = m.group(0)
+            if _valid_ipv4(ip) and ip != "127.0.0.1":
+                problems.append(
+                    f"{path.relative_to(ROOT)}: IPv4 {ip} (only 127.0.0.1 "
+                    f"is allowed)"
+                )
+        if re.search(r"/home/", text):
+            problems.append(f"{path.relative_to(ROOT)}: contains /home/ path")
+        if re.search(r"[Cc]:[\\/][Uu]sers", text):
+            problems.append(
+                f"{path.relative_to(ROOT)}: contains a Windows users path"
+            )
+        for m in re.finditer(
+            r"\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*"
+            r"\.(?:com|net|org|dev|io|ai|app|cloud|local)\b",
+            text,
+        ):
+            problems.append(
+                f"{path.relative_to(ROOT)}: looks like a host name "
+                f"({m.group(0)})"
+            )
+        for m in re.finditer(
+            r"(?:https?|ftp|ssh|git)://(?!(?:127\.0\.0\.1|localhost)"
+            r"(?::|/|\b))\S+",
+            text,
+        ):
+            problems.append(
+                f"{path.relative_to(ROOT)}: non-local URL {m.group(0)!r}"
+            )
+    assert not problems, (
+        "stack files must be free of host names, home paths and non-loopback "
+        "IPv4 addresses:\n" + "\n".join(problems)
+    )
