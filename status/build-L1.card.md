@@ -7,10 +7,13 @@ D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts 
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 
+## D-1851 BUDGET MODE (19:30Z-~03:30Z operator away): no Claude writers/seats, no new Sonnet L2s; priority P1 PH-RT-RUNTIME + deploy install.
+P1 all -CODE done; WORKER/PROJECTOR gated on TEMPORAL-CHECK (prox pushed 19:4xZ for T3 #4 GO). L2-LAUNCH build-L2-p1-rehearsal (opencode go, workst) brief control e192f256 l2-p1-rehearsal-ocgo.md.
+Stopped: ui-u1-stamp, public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-model, ui-u2-browser (U3-5 deferred). Continue: rtp1-predeploy-2.
 ## Open
 | Item | State | Next |
 |---|---|---|
-| UI-DEPLOY-AUTO (HIGH) | #64 merged 539ef09d (seats xiaomi jpM + google agy 20261017-183546, ~/.local/share/plangraph/seats/pr64). GO-REQ sent 18:4xZ: plan ~/.local/share/plangraph/deploy-auto/GO-REQ-install.md; needs operator D for the new RO GH token gh-ro.env | GO -> steps 1-5 -> run-record -> submit -> verdicts google+xiaomi |
+| UI-DEPLOY-AUTO (HIGH) | LIVE 19:25Z (GO D-1850): z8 drop-in, tree live-render, render.env, token gh-live-follow.env (gh auth, rw scopes; OS-GH-RO-TOKEN). Record ~/.local/share/plangraph/deploy-auto/RUN-RECORD-install-539ef09d.md. submit REFUSED: run-record kind wants autoos run dir | BLOCKED to routing: *set_kind decision D-1850 / waive -> submit -> verdicts google+xiaomi |
 | UI-BROWSER-TESTS (U2) | claimed; L2 build-L2-ui-u2-browser (workst, lane/ui-browser-tests) | MERGE-READY → seats → merge; then U3+U4 (lane/ui-plan 2bd22de4 briefs), U5 after both; max 3 |
 | PG-PUBLIC-READY | in_review (D-1748 closed it; merged #60/#61). Keeper close needs 2 verdicts: google + xiaomi | wait republish T7 (allowlist value constraint) → seats gemini(agy)+mimo on f3e2500e..fix → seat_verdict |
 | PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
