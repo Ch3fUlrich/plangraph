@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use temporalio_macros::activities;
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
@@ -37,16 +37,36 @@ pub const TASK_QUEUE: &str = "pg-cards";
 /// How long a worker waits for a competing merge before giving up.
 const MERGE_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The merge activity's own budget: the start-to-close window the workflow gives
+/// it (`workflow::once_options`), and the single value everything inside the
+/// merge is derived from.
+pub(crate) fn merge_window(cfg: &Config) -> Duration {
+    cfg.start_to_close
+}
+
+/// Time kept back at the end of the merge window for what follows the
+/// post-rebase check: the fast-forward, the release of the keeper lock and the
+/// activity result. A quarter of the window, at most a minute.
+pub(crate) fn merge_reserve(cfg: &Config) -> Duration {
+    (merge_window(cfg) / 4).min(Duration::from_secs(60))
+}
+
+/// Budget for rebase, confinement recheck and post-rebase check together:
+/// strictly less than the merge window, so the check is killed (and judged
+/// `check_fail`) before Temporal times the activity out while a detached
+/// blocking thread keeps running it.
+pub(crate) fn merge_work_budget(cfg: &Config) -> Duration {
+    merge_window(cfg).saturating_sub(merge_reserve(cfg))
+}
+
 /// Seconds the keeper-held merge lock stays valid without a release.
 ///
-/// The lock is taken before the file lock, so it must outlive the whole merge
-/// activity: the wait for a competing merge ([`MERGE_LOCK_TIMEOUT`]) plus the
-/// confinement recheck, rebase and post-rebase check, all of which the merge
-/// activity's start-to-close timeout (`cfg.start_to_close`, see
-/// `workflow::once_options`) already bounds. A fixed 120 s could expire under a
+/// Derived from the merge window: the lock is taken before the file lock, so it
+/// must outlive the whole merge activity, i.e. the window plus the wait for a
+/// competing merge ([`MERGE_LOCK_TIMEOUT`]). A fixed 120 s could expire under a
 /// slow check and let a second merger in while this one was still running.
 fn merge_lock_ttl_s(cfg: &Config) -> u64 {
-    cfg.start_to_close.as_secs().max(1) + MERGE_LOCK_TIMEOUT.as_secs()
+    merge_window(cfg).as_secs().max(1) + MERGE_LOCK_TIMEOUT.as_secs()
 }
 
 /// Input of the `card` workflow: the claim, the legs it may run on, and where.
@@ -359,6 +379,7 @@ fn merge_fenced(
     cfg: &Config,
     input: &MergeInput,
     fence: &Fence,
+    started: Instant,
 ) -> Result<MergeResult, mergelock::MergeError> {
     let repo = Path::new(&input.repo);
     let main_ref = format!("refs/heads/{}", input.main_branch);
@@ -405,9 +426,29 @@ fn merge_fenced(
 
     // A rebased tree is code nobody ran: check it once before it lands.
     if let (true, Some(cmd)) = (rebased, input.check_cmd.as_deref()) {
-        let r = check::run_check(cmd, wt, cfg.start_to_close, cfg.check_tail_lines)?;
+        // The check gets what is left of the merge budget, not a fresh
+        // start_to_close: the blocking thread cannot be cancelled from outside,
+        // so the deadline has to be honoured in here.
+        let left = merge_work_budget(cfg).saturating_sub(started.elapsed());
+        if left.is_zero() {
+            return Ok(merge_result(
+                "check_fail",
+                head_of_main()?,
+                "merge budget exhausted before the post-rebase check".to_string(),
+            ));
+        }
+        let r = check::run_check(cmd, wt, left, cfg.check_tail_lines)?;
         if !r.passed() {
-            return Ok(merge_result("check_fail", head_of_main()?, r.tail));
+            let tail = if r.timed_out {
+                format!(
+                    "post-rebase check exceeded the merge budget
+{}",
+                    r.tail
+                )
+            } else {
+                r.tail
+            };
+            return Ok(merge_result("check_fail", head_of_main()?, tail));
         }
     }
 
@@ -447,6 +488,8 @@ pub(crate) fn do_merge(
     cfg: &Config,
     input: &MergeInput,
 ) -> Result<MergeResult, mergelock::MergeError> {
+    // The merge budget starts here, before the keeper lock is even asked for.
+    let started = Instant::now();
     let repo = Path::new(&input.repo);
     let owner = merge_owner_id();
     let fence = match keeper.acquire_merge_lock(&input.repo, owner, merge_lock_ttl_s(cfg)) {
@@ -462,7 +505,7 @@ pub(crate) fn do_merge(
         repo: &input.repo,
         fence,
     };
-    merge_fenced(cfg, input, &_lease.fence)
+    merge_fenced(cfg, input, &_lease.fence, started)
 }
 
 /// The keeper-held merge lock, released on drop.
@@ -1397,6 +1440,51 @@ mod tests {
         let res = merge(&keeper, &input);
         assert_eq!(res.outcome, "check_fail");
         assert!(res.detail.contains("broke after rebase"));
+        assert_eq!(git(p, &["rev-parse", "main"]), moved);
+        assert!(!keeper.merge_lock_held());
+    }
+
+    #[test]
+    fn merge_budget_sits_inside_the_window_and_the_lock_ttl_covers_it() {
+        for secs in [4u64, 900, 5400] {
+            let mut cfg = tiny();
+            cfg.start_to_close = Duration::from_secs(secs);
+            assert!(merge_work_budget(&cfg) < merge_window(&cfg), "{secs}");
+            assert!(merge_work_budget(&cfg) + merge_reserve(&cfg) <= merge_window(&cfg));
+            assert!(merge_reserve(&cfg) <= Duration::from_secs(60));
+            assert!(
+                merge_lock_ttl_s(&cfg)
+                    >= merge_window(&cfg).as_secs() + MERGE_LOCK_TIMEOUT.as_secs()
+            );
+        }
+    }
+
+    #[test]
+    fn do_merge_post_rebase_check_honours_the_merge_deadline() {
+        let (r, base) = repo();
+        let p = r.path();
+        let root = tempfile::tempdir().unwrap();
+        attempt_worktree(p, root.path(), "c1", "x.txt", "x", &base);
+        write(p, "y.txt", "y");
+        let moved = commit_all(p, "advance");
+
+        let mut input = merge_input(p, &AttemptId::new("c1", 1).branch(), &base);
+        input.worktree = root
+            .path()
+            .join(AttemptId::new("c1", 1).dir_name())
+            .to_string_lossy()
+            .into_owned();
+        // A check far longer than the whole merge window.
+        input.check_cmd = Some("sleep 120".to_string());
+        let mut cfg = tiny();
+        cfg.start_to_close = Duration::from_secs(4);
+        let keeper = StubKeeper::default();
+        let t = Instant::now();
+        let res = do_merge(&keeper, &cfg, &input).unwrap();
+        assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+        assert_eq!(res.outcome, "check_fail", "{res:?}");
+        assert!(res.detail.contains("merge budget"), "{}", res.detail);
+        // Nothing landed, and the keeper lock came back.
         assert_eq!(git(p, &["rev-parse", "main"]), moved);
         assert!(!keeper.merge_lock_held());
     }
