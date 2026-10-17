@@ -22,7 +22,7 @@ No benchmarked task size exists. Sources agree on principles rather than figures
 context with room to spare, one narrow objective per worker, independent siblings, fixed prompt
 chains when subtasks are known and orchestrator-workers only when they are not, route models by
 task nature rather than input size, keep fan-out modest. Hence the skill uses a checklist, not a
-token number. Sources: Codex CLI task decomposition guide (codex.danielvaughan.com, 2026-04-28),
+token number. Sources: Codex CLI task decomposition guide, 2026-04-28,
 "Runtime-Structured Task Decomposition for Agentic Coding Systems" (arXiv 2605.15425),
 Uno-Orchestra (arXiv 2605.05007), the aiwg subagent-scoping rule. Existing AutoOS rules agree:
 R-orch-02, R-orch-30, swarm-orchestration sections 2 and 5.
