@@ -47,7 +47,10 @@ BAD += ["login svcacct/Zq9xk2Lm.x", "login a/bcdefgh.x",
         "login see https://x/y/abcdefg", "see https://x/y/abcdefg login",
         "https://example.org/Zq9xk2LmPw login page",
         "login svcacct/Secret123://", "login my://svcacct/Secret12345",
-        "my://svcacct/Secret12345 password"]
+        "my://svcacct/Secret12345 password",
+        "login admin/hunter2secret,docs/x/y.md", "login admin/hunter2secret;docs/x/y.md",
+        "login docs/x/y.md,admin/hunter2secret", "login a/b/c.md;svc/Xk9fT2mQ"]
+OK += ["see docs/x/y.md,docs/p/q.md for the login flow"]
 
 
 @pytest.mark.parametrize("text", BAD)
