@@ -10,7 +10,8 @@
 //!    (lowest tier first); else `Wait` (exponential, jittered, capped). These
 //!    never consume attempts.
 //! 3. Context overflow -> `UpgradeClass` (128k -> 256k -> 1m), then `Park`.
-//! 4. Two identical failures with an unchanged diff -> `Quarantine`.
+//! 4. Two identical failures (`check_fail` / `no_change`) with an unchanged
+//!    diff -> `Quarantine`.
 //! 5. Fewer than `retries_per_tier` attempts on the tier -> `Retry`; otherwise
 //!    `Promote` to the next tier (once per card, from a clean worktree) or `Park`.
 
@@ -60,6 +61,18 @@ impl Attempt {
 
     fn limited(&self) -> bool {
         !self.consumes_attempt()
+    }
+
+    /// A no-change run and a failed check are the same dead end: the work is
+    /// unfinished, the provider is healthy, and the attempt consumed budget.
+    fn same_failure_kind(&self, other: &Attempt) -> bool {
+        matches!(
+            (self.exit_class, other.exit_class),
+            (
+                ExitClass::CheckFail | ExitClass::NoChange,
+                ExitClass::CheckFail | ExitClass::NoChange
+            )
+        )
     }
 }
 
@@ -156,11 +169,7 @@ pub fn next_action(cfg: &Config, inp: &Input) -> Action {
         .filter(|a| a.consumes_attempt())
         .collect();
     if let [.., a, b] = counted[..] {
-        if a.exit_class == ExitClass::CheckFail
-            && b.exit_class == ExitClass::CheckFail
-            && a.diff_hash == b.diff_hash
-            && a.check_hash == b.check_hash
-        {
+        if a.same_failure_kind(b) && a.diff_hash == b.diff_hash && a.check_hash == b.check_hash {
             return Action::Quarantine;
         }
     }

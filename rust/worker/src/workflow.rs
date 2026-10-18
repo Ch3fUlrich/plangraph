@@ -1164,6 +1164,7 @@ fn exit_name(class: ExitClass) -> &'static str {
     match class {
         ExitClass::Ok => "ok",
         ExitClass::CheckFail => "check_fail",
+        ExitClass::NoChange => "no_change",
         ExitClass::FlakyCheck => "flaky_check",
         ExitClass::UsageLimit => "usage_limit",
         ExitClass::Outage => "outage",
