@@ -133,6 +133,30 @@ pub struct ProbeResult {
     pub branch: String,
 }
 
+/// Run a card's gate command (taken from the card) in a worktree.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateInput {
+    /// Directory the command runs in.
+    pub workdir: String,
+    /// The gate command, run via `sh -c`.
+    pub cmd: String,
+    /// Kill after this many seconds; unset or larger than the configured
+    /// `start_to_close` = `start_to_close`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<u64>,
+}
+
+/// Outcome of a gate run: the `check::CheckResult` fields plus `passed`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateResult {
+    pub passed: bool,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    pub timed_out: bool,
+    pub tail: String,
+    pub output_hash: String,
+}
+
 /// The write set a merge re-checks under the lock.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfineSpec {
@@ -348,6 +372,36 @@ pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
         cfg.check_tail_lines,
     );
     map_probe(outcome, id.branch())
+}
+
+/// Run the gate command of a card through the shared check runner. An empty
+/// command is an error, never a pass. The deadline is honoured in here because
+/// the blocking thread cannot be cancelled from outside.
+pub(crate) fn do_gate(cfg: &Config, input: &GateInput) -> std::io::Result<GateResult> {
+    if input.cmd.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "gate command is empty",
+        ));
+    }
+    let timeout = input
+        .timeout_s
+        .map(Duration::from_secs)
+        .map_or(cfg.start_to_close, |t| t.min(cfg.start_to_close));
+    let r = check::run_check(
+        &input.cmd,
+        Path::new(&input.workdir),
+        timeout,
+        cfg.check_tail_lines,
+    )?;
+    Ok(GateResult {
+        passed: r.passed(),
+        exit_code: r.exit_code,
+        signal: r.signal,
+        timed_out: r.timed_out,
+        tail: r.tail,
+        output_hash: r.output_hash,
+    })
 }
 
 fn merge_result(outcome: &str, main_head: String, detail: String) -> MergeResult {
@@ -647,6 +701,20 @@ impl CardActivities {
         let cfg = self.deps.cfg.clone();
         tokio::task::spawn_blocking(move || do_probe(&cfg, &input))
             .await
+            .map_err(activity_error)
+    }
+
+    /// Run a card's gate command in a worktree and report the outcome.
+    #[activity]
+    pub async fn gate(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: GateInput,
+    ) -> Result<GateResult, ActivityError> {
+        let cfg = self.deps.cfg.clone();
+        tokio::task::spawn_blocking(move || do_gate(&cfg, &input))
+            .await
+            .map_err(activity_error)?
             .map_err(activity_error)
     }
 
@@ -1521,5 +1589,97 @@ mod tests {
         // Commit beyond base but a failing check is `partial`, so it is removed.
         assert_eq!(do_janitor(&tiny(), &input).unwrap(), 1);
         assert!(!wt.path.exists());
+    }
+
+    fn gate_input(dir: &std::path::Path, cmd: &str, timeout_s: Option<u64>) -> GateInput {
+        GateInput {
+            workdir: dir.to_string_lossy().into_owned(),
+            cmd: cmd.to_string(),
+            timeout_s,
+        }
+    }
+
+    #[test]
+    fn gate_pass() {
+        let d = tempfile::tempdir().unwrap();
+        let r = do_gate(&tiny(), &gate_input(d.path(), "echo fine", None)).unwrap();
+        assert!(r.passed && !r.timed_out);
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(r.tail, "fine");
+        assert!(!r.output_hash.is_empty());
+    }
+
+    #[test]
+    fn gate_fail_keeps_tail_and_a_stable_hash() {
+        let d = tempfile::tempdir().unwrap();
+        let a = do_gate(&tiny(), &gate_input(d.path(), "echo nope; exit 3", None)).unwrap();
+        let b = do_gate(&tiny(), &gate_input(d.path(), "echo nope; exit 3", None)).unwrap();
+        assert!(!a.passed && !a.timed_out);
+        assert_eq!(a.exit_code, Some(3));
+        assert!(a.tail.contains("nope"));
+        assert_eq!(a.output_hash, b.output_hash);
+    }
+
+    #[test]
+    fn gate_timeout_is_reported_and_capped_by_start_to_close() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Instant::now();
+        let r = do_gate(
+            &tiny(),
+            &gate_input(d.path(), "echo start; sleep 30", Some(1)),
+        )
+        .unwrap();
+        assert!(r.timed_out && !r.passed);
+        assert!(r.tail.contains("start"));
+        assert!(t.elapsed() < Duration::from_secs(20));
+        // A requested timeout above start_to_close is capped to it.
+        let cfg = Config {
+            start_to_close: Duration::from_secs(1),
+            ..tiny()
+        };
+        let r = do_gate(&cfg, &gate_input(d.path(), "sleep 30", Some(3600))).unwrap();
+        assert!(r.timed_out && !r.passed);
+    }
+
+    #[test]
+    fn gate_empty_command_is_an_error_not_a_pass() {
+        let d = tempfile::tempdir().unwrap();
+        let e = do_gate(&tiny(), &gate_input(d.path(), "   ", None)).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    /// The gate activity is registered next to the others (default name `CardActivities::<method>`, like probe and merge) under a fixed,
+    /// deterministic name, and its payload types keep a stable JSON shape, so
+    /// a recorded history that scheduled `gate` replays against the same names
+    /// and types. Registering twice would panic or clobber, so register once.
+    #[test]
+    fn gate_activity_is_registered_with_a_replay_safe_name_and_types() {
+        assert_eq!(CardActivities::gate.name(), "CardActivities::gate");
+        assert_eq!(CardActivities::attempt.name(), "attempt");
+        assert_eq!(CardActivities::probe.name(), "CardActivities::probe");
+        assert_eq!(CardActivities::merge.name(), "CardActivities::merge");
+        let mut defs = temporalio_sdk::activities::ActivityDefinitions::default();
+        defs.register_activities(CardActivities::new(deps()));
+        // Input without the optional field (older or minimal recording) decodes.
+        let i: GateInput = serde_json::from_str(r#"{"workdir":"/w","cmd":"true"}"#).unwrap();
+        assert_eq!(i.timeout_s, None);
+        assert_eq!(
+            serde_json::to_string(&i).unwrap(),
+            r#"{"workdir":"/w","cmd":"true"}"#
+        );
+        let r = GateResult {
+            passed: true,
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+            tail: "t".into(),
+            output_hash: "h".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"passed":true,"exit_code":0,"signal":null,"timed_out":false,"tail":"t","output_hash":"h"}"#
+        );
+        let back: GateResult = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
     }
 }
