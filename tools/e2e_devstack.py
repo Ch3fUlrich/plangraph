@@ -11,9 +11,8 @@ Needs running: `tools/devstack.sh start` and `tools/devstack.sh keeper` (its kee
 (--temporal-cli / TEMPORAL_CLI). This script never starts or stops any of them. Everything is
 loopback; the live keeper port 8787 is refused.
 
-Front-only gap: the keeper has no HTTP door yet for /v1/attempts|park|complete|alarms|locks, so
-the worker talks to the same VerbFront as the local e2e and the run prints the paths only the
-front answered under 'front-only verbs (keeper has no door yet)'.
+The worker talks straight to the keeper; the run reads the keeper audit_log back to show which
+worker verbs (attempt, park, complete, alarm, lock acquire/release) the real keeper served.
 
 Usage: python3 tools/e2e_devstack.py [--leg stub|opencode] [--model <opencode model>] ...
 """
@@ -152,6 +151,19 @@ def read_attempts(cfg: Path, key: str) -> list[dict]:
         conn.close()
 
 
+def read_audit(cfg: Path, actor: str) -> list[dict]:
+    """The keeper's own audit trail for one principal, straight from the dev keeper's DB."""
+    from plangraph.keeper import config as kconfig, db as kdb
+    cfg_obj = kconfig.load_config(cfg)
+    conn = kdb.open_db(cfg_obj.db, **cfg_obj.db_options)
+    try:
+        return [dict(r) for r in
+                conn.execute("SELECT action, key, ok, code FROM audit_log WHERE actor=?"
+                             " ORDER BY id", (actor,))]
+    finally:
+        conn.close()
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--temporal", default=os.environ.get("TEMPORAL_ADDR", "127.0.0.1:7233"),
@@ -227,11 +239,9 @@ def main() -> int:
             step("leg=opencode: the question step is skipped (that path needs a real model that "
                  "asks); this mode only requires the card to finish done/merged")
 
-        step("start VerbFront + pg-worker against the dev keeper")
-        front = u.VerbFront(keeper)
-        cleanup.append(("front", front.stop))
+        step("start pg-worker against the dev keeper")
         env = dict(os.environ, PG_TEMPORAL_ADDR=f"http://{args.temporal}", PG_BUILD_ID=build_id,
-                   PG_NAMESPACE="default", PG_KEEPER_URL=front.base,
+                   PG_NAMESPACE="default", PG_KEEPER_URL=keeper,
                    PG_KEEPER_TOKEN=tokens["worker"],
                    GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
                    GIT_AUTHOR_NAME="worker", GIT_AUTHOR_EMAIL="w@example.com",
@@ -306,11 +316,19 @@ def main() -> int:
                     f"{c}={row[c]}" for c in ATTEMPT_COLS if c in row))
             if not any(a["exit_class"] == "ok" for a in rows):
                 raise Fail(f"no attempt with exit_class ok: {rows}")
-            print("[step] front-only verbs (keeper has no door yet)")
-            print("[step] " + json.dumps(sorted(set(front.paths()) - set(u.FORWARDED))))
+            audit = read_audit(cfg, names["worker"])
+            for row in audit:
+                print(f"[step] audit action={row['action']} key={row['key']} "
+                      f"ok={row['ok']} code={row['code']}")
+            seen = sorted({r["action"] for r in audit if r["ok"]})
+            print("[step] worker verbs served by the keeper: " + json.dumps(seen))
+            for verb in ("worker_attempt", "lock_acquire", "lock_release"):
+                if verb not in seen:
+                    raise Fail(f"keeper did not serve the {verb} verb")
             print("RTP1 DEVSTACK RECORD " + json.dumps({
                 "item": key, "workflow_id": wid, "leg": args.leg, "base_sha": base_sha,
                 "merged_sha": merged_sha, "temporal_http": args.temporal_http,
+                "worker_verbs": seen,
                 "attempts": [(a["n"], a["exit_class"]) for a in rows]}, sort_keys=True))
         finally:
             while cleanup:
