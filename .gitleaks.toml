@@ -78,3 +78,10 @@ condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_md_sync_plan\.py$''']
 regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "test sentinel for OPENCODE_API_KEY in worker-core sandbox_env tests (fake, reviewed 2026-10-18)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^rust/worker-core/src/sandbox_env\.rs$''']
+regexes = ['''^sentinel-wf8-opkey$''']
