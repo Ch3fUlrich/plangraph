@@ -12,6 +12,10 @@
 #                              # the postgres container and its data; state files kept
 #   devstack.sh status         # one line per component + the exports a driver needs
 #   devstack.sh keeper         # migrate + run keeper in the foreground (needs postgres up)
+# Fresh stack: `status` reports "keeper: stopped" and the keeper database is empty until
+# `keeper` has run once (it runs `admin migrate`, then stays in the foreground; Ctrl-C after
+# "schema up to date" is enough). A migrated-only database already satisfies tools/pg-drill-local.sh
+# (schema_migrations has 4 rows, verified against postgres:16); order: start, keeper, pg-drill-local.sh.
 #   devstack.sh set-current    # re-run just the worker deployment set-current-version step
 set -euo pipefail
 

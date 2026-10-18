@@ -20,7 +20,21 @@ DOCKER_FAKE = """\
 TMP="{tmp}"
 l=docker; for a in "$@"; do l="$l $a"; done; printf '%s\\n' "$l" >>"$TMP/calls.log"
 case "${{1:-}}" in
-  run) touch "$TMP/container" ;;
+  run)
+    if [ "${{2:-}}" = "-d" ]; then
+      touch "$TMP/container"; exit 0
+    fi
+    # run --rm ... : client fallback. Skip flags up to the image, then the next arg is the tool.
+    tool=""; past=0
+    while [ "$#" -gt 0 ]; do
+      a="$1"; shift
+      if [ "$past" = 1 ]; then tool="$a"; break; fi
+      [ "$a" = "postgres:16" ] && past=1
+    done
+    if [ -n "$tool" ] && [ -x "$TMP/clientbin/$tool" ]; then
+      exec "$TMP/clientbin/$tool" "$@"
+    fi
+    exit 127 ;;
   rm) rm -f "$TMP/container" ;;
 esac
 exit 0
@@ -30,17 +44,21 @@ PSQL_FAKE = """\
 #!/bin/bash
 TMP="{tmp}"
 l=psql; for a in "$@"; do l="$l $a"; done
-dsn=""; query=""; tbl=""; prev=""
+dsn=""; query=""; sch=""; tbl=""; prev=""
 for a in "$@"; do
   case "$prev" in
     -c) query="$a" ;;
-    -v) [ "${{a#tbl=}}" != "$a" ] && tbl="${{a#tbl=}}" ;;
+    -v)
+      [ "${{a#tbl=}}" != "$a" ] && tbl="${{a#tbl=}}"
+      [ "${{a#sch=}}" != "$a" ] && sch="${{a#sch=}}"
+      ;;
   esac
   case "$a" in
     postgresql://*) dsn="$a" ;;
   esac
   prev="$a"
 done
+[ -n "$sch" ] || sch="${{FAKE_SCHEMA:-public}}"
 if [ -z "$query" ]; then
   IFS= read -r sql
   # STDIN queries carry the raw SQL text: log it so tests can prove it is never rewritten
@@ -59,7 +77,7 @@ case "$sql" in
     if [ "$dsn" = postgresql://postgres@127.0.0.1:55998/keeper ]; then var=FAKE_TABLES_SRC; else var=FAKE_TABLES_RESTORE; fi
     tables="${{!var}}"
     old_ifs="$IFS"; IFS=' '
-    for t in $tables; do printf '%s\\n' "$t"; done
+    for t in $tables; do printf '%s\\t%s\\n' "$sch" "$t"; done
     IFS="$old_ifs"
     exit 0 ;;
   *"count(*)"*)
@@ -104,22 +122,37 @@ exit 0
 
 DEFAULT_TABLES = "t1 t2 t3"
 
+CLIENT_TOOLS = ("psql", "pg_dump", "pg_restore", "pg_isready")
+
+COUNT_SQL = 'SELECT count(*) FROM :"sch".:"tbl"'
+
 
 class Drill:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, host_tools=True):
         self.tmp = tmp_path
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
-        for name, text in (
-            ("docker", DOCKER_FAKE),
+        clients = (
             ("psql", PSQL_FAKE),
             ("pg_dump", PG_DUMP_FAKE),
             ("pg_restore", PG_RESTORE_FAKE),
             ("pg_isready", PG_ISREADY_FAKE),
-        ):
+        )
+        docker_only = [
+            ("docker", DOCKER_FAKE),
+            *(clients if host_tools else []),
+        ]
+        for name, text in docker_only:
             f = bin_dir / name
             f.write_text(text.format(tmp=str(tmp_path)))
             os.chmod(f, 0o755)
+        if not host_tools:
+            client_dir = tmp_path / "clientbin"
+            client_dir.mkdir()
+            for name, text in clients:
+                f = client_dir / name
+                f.write_text(text.format(tmp=str(tmp_path)))
+                os.chmod(f, 0o755)
         self.env = {
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "HOME": str(tmp_path),
@@ -163,6 +196,17 @@ class Drill:
 @pytest.fixture
 def drill(tmp_path):
     return Drill(tmp_path)
+
+
+@pytest.fixture
+def drill_nohost(tmp_path):
+    drill = Drill(tmp_path, host_tools=False)
+    # the fallback can only be exercised when the real clients are nowhere reachable
+    for tool in CLIENT_TOOLS:
+        if shutil.which(tool, path=drill.env["PATH"]) or shutil.which(tool):
+            pytest.skip(f"{tool} is installed system-wide (possibly outside the drill PATH "
+                        f"{drill.env['PATH']}); the postgres:16 fallback cannot be exercised")
+    return drill
 
 
 def test_ok_path_prints_summary_and_per_table_lines(drill):
@@ -268,7 +312,7 @@ def test_hostile_table_name_reaches_psql_only_via_dash_v(drill):
                              "FAKE_COUNTS_SRC": counts, "FAKE_COUNTS_RESTORE": counts})
     assert r.returncode == 0, r.stdout + r.stderr
     assert f'table {hostile} 3' in r.stdout.splitlines()
-    sql = 'SELECT count(*) FROM public.:"tbl"'
+    sql = COUNT_SQL
     lines = drill.lines()
     count_calls = [l for l in lines if sql in l]
     # the count query is sent on STDIN with the SQL text unchanged: the name is never
@@ -303,6 +347,93 @@ def test_notready_container_fails_within_health_budget(drill):
     assert r.returncode == 1
     assert any(l.startswith("PG-DRILL fail") for l in r.stdout.splitlines())
     assert any(l.startswith("docker rm") and "drill-test" in l for l in drill.lines())
+
+
+def test_missing_host_tools_fall_back_to_postgres_image(drill_nohost):
+    r = drill_nohost.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert re.fullmatch(r"PG-DRILL ok rto_s=\d+ rows=22", r.stdout.splitlines()[-1]), r.stdout
+    lines = drill_nohost.lines()
+    runs = [l for l in lines if l.startswith("docker run")]
+    assert len([l for l in runs if l.startswith("docker run -d")]) == 1
+    rm_runs = [l for l in lines if l.startswith("docker run --rm")]
+    for tool in CLIENT_TOOLS:
+        assert any(f" postgres:16 {tool}" in l for l in rm_runs), f"no docker fallback for {tool}: {lines}"
+    # every fallback call runs as the caller's uid:gid with the dump dir bind-mounted
+    # at the identical in-container path, so -f/-d paths pass through unchanged
+    dump_runs = [l for l in rm_runs if " postgres:16 pg_dump" in l]
+    assert len(dump_runs) == 1, lines
+    tokens = dump_runs[0].split()
+    dump_file = tokens[tokens.index("-f") + 1]
+    mount = f"{Path(dump_file).parent}:{Path(dump_file).parent}"
+    for l in rm_runs:
+        assert re.search(r"--user \S+:\S+", l), l
+        assert f" -v {mount}" in l, l
+    restore_runs = [l for l in rm_runs if " postgres:16 pg_restore" in l]
+    assert len(restore_runs) == 1, lines
+    assert f"{Path(dump_file).parent}/keeper.dump" in restore_runs[0], restore_runs[0]
+    # count queries reach the containerized psql on STDIN, SQL text unchanged
+    count_calls = [l for l in lines if COUNT_SQL in l]
+    assert len(count_calls) == 6  # src+restore x 3 tables
+    for l in count_calls:
+        assert l.endswith(f"<<{COUNT_SQL}"), l
+        assert "-v sch=public" in l, l
+        assert re.search(r"-v tbl=\S+", l), l
+    assert "0.0.0" + ".0" not in "\n".join(lines)
+    assert not (drill_nohost.tmp / "container").exists()
+
+
+def test_host_tools_used_unchanged_when_present(drill):
+    r = drill.run()
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not any(l.startswith("docker run --rm") for l in drill.lines())
+
+
+def test_hostile_name_also_safe_via_docker_fallback(drill_nohost):
+    hostile = 'a";DROP_TABLE_x;--'
+    tables = f'{hostile} t2'
+    counts = f'{hostile}=3 t2=5'
+    r = drill_nohost.run(extra_env={"FAKE_TABLES_SRC": tables, "FAKE_TABLES_RESTORE": tables,
+                                    "FAKE_COUNTS_SRC": counts, "FAKE_COUNTS_RESTORE": counts})
+    assert r.returncode == 0, r.stdout + r.stderr
+    sql = COUNT_SQL
+    count_calls = [l for l in drill_nohost.lines() if sql in l]
+    assert len(count_calls) == 4  # src+restore x 2 tables
+    for l in count_calls:
+        assert "-v sch=public" in l, l
+        assert f"-v tbl={hostile}" in l or "-v tbl=t2" in l, l
+        assert hostile not in l[l.index("<<"):], l
+    joined = "\n".join(drill_nohost.lines())
+    assert f"{sql}{hostile}" not in joined
+    # every logged occurrence of the hostile name is a -v tbl= value, nowhere else
+    for l in drill_nohost.lines():
+        if hostile in l:
+            assert f"-v tbl={hostile}" in l, l
+
+
+def test_vacuous_failure_message_tells_operator_what_to_do(tmp_path):
+    cases = [
+        (tmp_path / "rows", {"FAKE_COUNTS_SRC": "t1=0 t2=0 t3=0",
+                             "FAKE_COUNTS_RESTORE": "t1=0 t2=0 t3=0"}),
+        (tmp_path / "tables", {"FAKE_TABLES_RESTORE": ""}),
+    ]
+    for sub, env in cases:
+        sub.mkdir()
+        r = Drill(sub).run(extra_env=env)
+        assert r.returncode == 1, (env, r.stdout)
+        fails = [l for l in r.stdout.splitlines() if l.startswith("PG-DRILL fail vacuous:")]
+        assert fails, (env, r.stdout)
+        for hint in ("devstack.sh start", "devstack.sh keeper", "SRC_DSN"):
+            assert any(hint in l for l in fails), (env, r.stdout)
+
+
+def test_non_public_schema_tables_are_counted(drill):
+    r = drill.run(extra_env={"FAKE_SCHEMA": "k_abc"})
+    assert r.returncode == 0, r.stdout + r.stderr
+    lines = r.stdout.splitlines()
+    assert lines[:3] == ["table k_abc.t1 10", "table k_abc.t2 5", "table k_abc.t3 7"]
+    assert re.fullmatch(r"PG-DRILL ok rto_s=\d+ rows=22", lines[-1]), lines
+    assert any("-v sch=k_abc" in l for l in drill.lines())
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")

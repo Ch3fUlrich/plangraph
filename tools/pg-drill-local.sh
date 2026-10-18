@@ -6,6 +6,20 @@
 # if any table appears in the restore but not the source, if any count differs, or if the
 # restore is vacuous (0 tables or 0 total rows) — an empty restore matching an empty check
 # is never a pass. Health waits are bounded by DRILL_HEALTH_TIMEOUT (default 60 s).
+#
+# Usage sequence: client tools (pg_dump, psql, pg_restore, pg_isready) are taken from PATH,
+# and any that is missing runs from the postgres:16 image via docker (host network, dump
+# dir mounted at the same path), so the host needs only docker. Sequence on a fresh stack:
+#   tools/devstack.sh start
+#   tools/devstack.sh keeper   # once: runs `plangraph.keeper.cli admin migrate`, which
+#                              # creates the keeper schema with a populated schema_migrations
+#                              # table (4 rows at schema version 4), then stays in the
+#                              # foreground — stop it with Ctrl-C after "schema up to date"
+#   tools/pg-drill-local.sh
+# A migrated-only database passes the >0 total rows check because schema_migrations alone
+# has rows (verified against a real postgres:16 with admin migrate: 21 tables in one
+# k_<hash> schema, 4 schema_migrations rows) and because the drill covers every
+# non-system schema, not only public.
 set -euo pipefail
 
 usage() {
@@ -40,6 +54,17 @@ fail() { # fail <msg>: print one PG-DRILL fail line and exit 1
   exit 1
 }
 
+pgtool() { # pgtool <tool> args... : host tool if on PATH, else the same tool from the postgres:16 image
+  local tool="$1"; shift
+  if command -v "$tool" >/dev/null 2>&1; then "$tool" "$@"; return; fi
+  # --network host: reaches the 127.0.0.1-published source and drill ports from inside the
+  # container.  -v "$DRILL_DUMP_DIR:$DRILL_DUMP_DIR": the dump dir is mounted at the
+  # identical path so -f / pg_restore file args resolve the same way in container and host.
+  # -i: passes stdin through, so table_count's piped query works.  --user: the container
+  # writes into the host-owned 0700 mktemp dir, so it must run as the host uid/gid.
+  docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$DRILL_DUMP_DIR:$DRILL_DUMP_DIR" postgres:16 "$tool" "$@"
+}
+
 cleanup() {
   docker rm -f "$DRILL_NAME" >/dev/null 2>&1 || true
   if [ "$DRILL_DUMP_OWNED" = 1 ]; then
@@ -62,19 +87,21 @@ wait_for() { # wait_for <seconds> <cmd...> — poll once per second until the co
   return 1
 }
 
-list_tables() { # list_tables <dsn> — user (BASE TABLE) names in schema public, sorted
-  psql "$1" -A -t -c \
-    "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
+list_tables() { # list_tables <dsn> — one "schema<TAB>table" line per BASE TABLE in every
+                # non-system schema (the keeper lives in a derived k_<hash> schema, not public)
+  pgtool psql "$1" -A -t -F $'\t' -c \
+    "SELECT table_schema, table_name FROM information_schema.tables WHERE table_type='BASE TABLE' AND table_schema <> 'information_schema' AND table_schema NOT LIKE 'pg\_%' ORDER BY 1,2" \
+    </dev/null
 }
 
-table_count() { # table_count <dsn> <table> — exact count(*); psql quotes :"tbl" only via STDIN, not -c
-  printf '%s\n' 'SELECT count(*) FROM public.:"tbl"' |
-    psql "$1" -A -t -v ON_ERROR_STOP=1 -v "tbl=$2"
+table_count() { # table_count <dsn> <schema> <table> — exact count(*); psql quotes :"sch"/:"tbl" only via STDIN, not -c
+  printf '%s\n' 'SELECT count(*) FROM :"sch".:"tbl"' |
+    pgtool psql "$1" -A -t -v ON_ERROR_STOP=1 -v "sch=$2" -v "tbl=$3"
 }
 
 t0="$(date +%s)"
 
-pg_dump -Fc "$SRC_DSN" -f "$DUMP_FILE" || fail "pg_dump against the source failed"
+pgtool pg_dump -Fc "$SRC_DSN" -f "$DUMP_FILE" </dev/null || fail "pg_dump against the source failed"
 
 # A crashed earlier drill leaves a name-occupied container behind; remove it before the fresh run.
 docker rm -f "$DRILL_NAME" >/dev/null 2>&1 || true
@@ -82,42 +109,48 @@ docker run -d --name "$DRILL_NAME" --memory "$DRILL_MEMORY" \
   -e POSTGRES_HOST_AUTH_METHOD=trust \
   -p "127.0.0.1:$DRILL_PORT:5432" postgres:16 >/dev/null || fail "docker run failed"
 
-wait_for "$DRILL_HEALTH_TIMEOUT" pg_isready -h 127.0.0.1 -p "$DRILL_PORT" -U postgres ||
+wait_for "$DRILL_HEALTH_TIMEOUT" pgtool pg_isready -h 127.0.0.1 -p "$DRILL_PORT" -U postgres </dev/null ||
   fail "drill container never became ready within ${DRILL_HEALTH_TIMEOUT} s"
 
-psql "postgresql://postgres@127.0.0.1:$DRILL_PORT/postgres" -c 'CREATE DATABASE keeper_drill' >/dev/null ||
+pgtool psql "postgresql://postgres@127.0.0.1:$DRILL_PORT/postgres" -c 'CREATE DATABASE keeper_drill' >/dev/null </dev/null ||
   fail "createdb keeper_drill failed"
-pg_restore --no-owner -d "$RESTORED_DSN" "$DUMP_FILE" || fail "pg_restore into keeper_drill failed"
+pgtool pg_restore --no-owner -d "$RESTORED_DSN" "$DUMP_FILE" </dev/null || fail "pg_restore into keeper_drill failed"
 
 compare_counts() {
-  local src_tables restored_tables t sc dc
+  local src_tables restored_tables line s t name sc dc
   src_tables="$(list_tables "$SRC_DSN")" || fail "listing source tables failed"
   restored_tables="$(list_tables "$RESTORED_DSN")" || fail "listing restored tables failed"
 
   if [ -z "$restored_tables" ]; then
-    echo "PG-DRILL fail vacuous: restored database has 0 tables"
+    echo "PG-DRILL fail vacuous: restored database has 0 tables - the source database holds no keeper data yet; start postgres with tools/devstack.sh start, then run tools/devstack.sh keeper once so it migrates (a migrated database is enough; stop the keeper afterwards), or point SRC_DSN at a seeded database"
     exit 1
   fi
 
-  while IFS= read -r t; do
+  # Membership keys are full "schema<TAB>table" lines; the displayed name drops the
+  # schema only for public, so output stays `table t1 10` for public tables.
+  while IFS=$'\t' read -r s t; do
     [ -n "$t" ] || continue
-    printf '%s\n' "$restored_tables" | grep -Fxq -- "$t" ||
-      fail "table $t missing from restored database"
-    sc="$(table_count "$SRC_DSN" "$t")" || fail "counting $t in the source failed"
-    dc="$(table_count "$RESTORED_DSN" "$t")" || fail "counting $t in the restore failed"
-    [ "$sc" = "$dc" ] || fail "count mismatch for table $t: source=$sc restored=$dc"
-    echo "table $t $dc"
+    line="$s"$'\t'"$t"
+    if [ "$s" = public ]; then name="$t"; else name="$s.$t"; fi
+    printf '%s\n' "$restored_tables" | grep -Fxq -- "$line" ||
+      fail "table $name missing from restored database"
+    sc="$(table_count "$SRC_DSN" "$s" "$t")" || fail "counting $name in the source failed"
+    dc="$(table_count "$RESTORED_DSN" "$s" "$t")" || fail "counting $name in the restore failed"
+    [ "$sc" = "$dc" ] || fail "count mismatch for table $name: source=$sc restored=$dc"
+    echo "table $name $dc"
     TOTAL_ROWS=$((TOTAL_ROWS + dc))
   done <<<"$src_tables"
 
-  while IFS= read -r t; do
+  while IFS=$'\t' read -r s t; do
     [ -n "$t" ] || continue
-    printf '%s\n' "$src_tables" | grep -Fxq -- "$t" ||
-      fail "unexpected table $t present in restore but not in source"
+    line="$s"$'\t'"$t"
+    if [ "$s" = public ]; then name="$t"; else name="$s.$t"; fi
+    printf '%s\n' "$src_tables" | grep -Fxq -- "$line" ||
+      fail "unexpected table $name present in restore but not in source"
   done <<<"$restored_tables"
 
   if [ "$TOTAL_ROWS" = 0 ]; then
-    echo "PG-DRILL fail vacuous: restored database has 0 total rows"
+    echo "PG-DRILL fail vacuous: restored database has 0 total rows - the source database holds no keeper data yet; start postgres with tools/devstack.sh start, then run tools/devstack.sh keeper once so it migrates (a migrated database is enough; stop the keeper afterwards), or point SRC_DSN at a seeded database"
     exit 1
   fi
 }
