@@ -18,13 +18,17 @@
 //!
 //! `PG_OPENCODE_SERVER_URL` is a bare `http(s)://host[:port]` URL: userinfo
 //! (`user:pass@`) and other schemes are rejected at startup. Tokens go through
-//! the harness env, never the URL or argv (argv is world-readable).
+//! the staged harness auth dir (`PG_HARNESS_AUTH_DIR`), never the URL or argv
+//! (argv is world-readable) and never the child's environment.
 //!
-//! The merge-lock fence high-water mark (`mergelock`) relies on the keeper
-//! issuing strictly monotonic fence tokens: a keeper that reuses or rewinds a
-//! token would let a stale holder pass the fence. Worker deployment versioning is opt-in via
-//! [`pg_worker::buildid::from_env`], which stays off unless a valid build id is
-//! available (see that module for the switch).
+//! Merge exclusion is the file lock plus a local CAS in `mergelock`: the
+//! deployment model is a single worker host per repo, the lock does not
+//! coordinate hosts. The repo-side fence high-water mark relies on the keeper
+//! issuing strictly monotonic tokens, which only carries cross-host value once
+//! a real keeper implements the lock endpoint (RELEASE-DEPLOY gap, see
+//! docs/plan/rtp1-predeploy-gaps.md row 17). Worker deployment versioning is
+//! opt-in via [`pg_worker::buildid::from_env`], which stays off unless a valid
+//! build id is available (see that module for the switch).
 
 use std::str::FromStr;
 use std::sync::Arc;

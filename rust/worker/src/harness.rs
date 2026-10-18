@@ -150,8 +150,9 @@ impl Harness for ClaudeCode {
 /// The env var naming the opencode server an [`OpencodeServer`] leg attaches to.
 /// It must be a bare `http(s)://host[:port]` URL: userinfo (`user:pass@`) is
 /// rejected because the URL lands in the child's argv (visible to every local
-/// user via the process table). Tokens and passwords go through the harness
-/// env, never through the URL or argv.
+/// user via the process table). Tokens and passwords go through the staged
+/// harness auth files (`PG_HARNESS_AUTH_DIR`), never through the URL, argv or
+/// the child's environment.
 pub const OPENCODE_SERVER_ENV: &str = "PG_OPENCODE_SERVER_URL";
 
 /// Why an [`OpencodeServer`] could not be built.
@@ -161,7 +162,9 @@ pub enum HarnessConfigError {
     MissingServerUrl(&'static str),
     #[error("{0} must be an http:// or https:// URL")]
     BadServerScheme(&'static str),
-    #[error("{0} must not carry credentials (user:pass@); pass tokens through the harness env")]
+    #[error(
+        "{0} must not carry credentials (user:pass@); stage tokens via the harness auth dir instead"
+    )]
     ServerUrlUserinfo(&'static str),
 }
 
@@ -276,11 +279,13 @@ impl HarnessRegistry {
 
 /// Build the command for `h` and run it under the stall/timeout watchdog.
 ///
-/// The child never inherits the worker's environment: it gets the allowlist of
-/// [`pg_worker_core::sandbox_env`] (`PATH`, `LANG`, `TERM`, toolchain
-/// locations, the agent CLIs' own `OPENCODE_*` / `CLAUDE_CODE_*` settings),
-/// whatever the harness set on its command itself, and `home` as `HOME`.
-/// `PG_*`, `TEMPORAL_*` and provider keys therefore stay with the worker.
+/// The child never inherits the worker's environment: it gets the exact-name
+/// allowlist of [`pg_worker_core::sandbox_env`] (`PATH`, `LANG`, `TERM`,
+/// toolchain locations), whatever the harness set on its command itself, and
+/// `home` as `HOME`. `PG_*`, `TEMPORAL_*`, provider keys and the agent CLIs'
+/// own credentials therefore stay with the worker: harness auth is staged
+/// into `home` as files (`sandbox_env::stage_harness_auth`), never passed by
+/// env.
 ///
 /// `cancelled` is polled while the child runs so a cancel kills the process
 /// group promptly instead of waiting for stall, timeout or natural exit.
