@@ -23,6 +23,9 @@ case "${{1:-}}" in
     printf '%s\\n' "$$" >"$TMP/temporal_child.pid"
     if [ "${{FAKE_SERVER_DIE:-}}" = 1 ]; then exit 1; fi
     # -a makes /proc/<pid>/cmdline contain "start-dev" so the script trusts the pid file
+    if [ "${{FAKE_IGNORE_TERM:-}}" = 1 ]; then
+      exec -a "temporal server start-dev" bash -c 'trap "" TERM; while :; do sleep 1; done'
+    fi
     exec -a "temporal server start-dev" sleep 300 ;;
   operator)
     if [ "${{FAKE_HEALTH_FAIL:-}}" = 1 ]; then exit 1; fi
@@ -46,7 +49,7 @@ case "${{1:-}}" in
       -aq) [ -e "$TMP/container" ] && printf 'abc123\\n' ;;
     esac
     exit 0 ;;
-  run) touch "$TMP/container" "$TMP/running"; exit 0 ;;
+  run) if [ "${{FAKE_RUN_FAIL:-}}" = 1 ]; then touch "$TMP/container"; exit 1; fi; touch "$TMP/container" "$TMP/running"; exit 0 ;;
   start) touch "$TMP/running"; exit 0 ;;
   stop) rm -f "$TMP/running"; exit 0 ;;
   rm) rm -f "$TMP/container" "$TMP/running"; exit 0 ;;
@@ -173,7 +176,7 @@ def test_stop_kills_temporal_and_stops_container_but_keeps_state(stack):
 def test_stop_purge_removes_the_container(stack):
     assert stack.run("start").returncode == 0
     assert stack.run("stop", "--purge").returncode == 0
-    assert "docker rm -f devstack-test-pg" in stack.lines()
+    assert "docker rm -f -v devstack-test-pg" in stack.lines()
     assert not (stack.tmp / "container").exists()
     assert not (stack.tmp / "running").exists()
 
@@ -195,6 +198,20 @@ def test_temporal_health_failure_kills_process_and_exits_1(stack):
     assert "not healthy within 3 s" in r.stderr
     assert not (stack.state / "temporal.pid").exists()
     pid = int((stack.tmp / "temporal_child.pid").read_text().strip())
+    assert not alive(pid)
+
+
+def test_health_timeout_escalates_to_kill_for_term_ignoring_server(stack):
+    # the fake ignores TERM; the script must escalate to KILL after its short grace
+    r = stack.run("start", timeout=30, extra_env={
+        "FAKE_HEALTH_FAIL": "1", "FAKE_IGNORE_TERM": "1"})
+    assert r.returncode == 1
+    assert "not healthy within 3 s" in r.stderr
+    assert not (stack.state / "temporal.pid").exists()
+    pid = int((stack.tmp / "temporal_child.pid").read_text().strip())
+    deadline = time.monotonic() + 3
+    while alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert not alive(pid)
 
 
@@ -235,6 +252,21 @@ def test_reused_container_that_never_becomes_ready_is_stopped_not_removed(stack)
     assert not any(l.startswith("docker rm") for l in second)
 
 
+def test_fresh_container_that_never_becomes_ready_is_removed_with_volume(stack):
+    r = stack.run("start", timeout=30, extra_env={"FAKE_PG_NOTREADY": "1"})
+    assert r.returncode == 1
+    assert "docker rm -f -v devstack-test-pg" in stack.lines()
+    assert not any(l.startswith("docker rm") and " -v" not in l for l in stack.lines())
+    assert not (stack.tmp / "container").exists()
+
+
+def test_docker_run_failure_removes_partial_container_with_volume(stack):
+    r = stack.run("start", timeout=30, extra_env={"FAKE_RUN_FAIL": "1"})
+    assert r.returncode == 1
+    assert "docker rm -f -v devstack-test-pg" in stack.lines()
+    assert not any(l.startswith("docker rm") and " -v" not in l for l in stack.lines())
+
+
 def test_set_current_failure_does_not_fail_start(stack):
     # the script retries 5x with 2 s sleeps; allow headroom
     r = stack.run("start", timeout=40, extra_env={"FAKE_SETCUR_FAIL": "1"})
@@ -246,6 +278,13 @@ def test_bogus_pg_mode_exits_2(stack):
     r = stack.run("start", extra_env={"DEVSTACK_PG_MODE": "bogus"})
     assert r.returncode == 2
     assert "DEVSTACK_PG_MODE" in r.stderr
+
+
+def test_bogus_pg_mode_is_rejected_before_temporal_starts(stack):
+    r = stack.run("start", extra_env={"DEVSTACK_PG_MODE": "bogus"})
+    assert r.returncode == 2
+    assert not any("start-dev" in l for l in stack.lines())
+    assert not (stack.state / "temporal.pid").exists()
 
 
 def test_missing_temporal_cli_exits_1_with_hint(stack):
