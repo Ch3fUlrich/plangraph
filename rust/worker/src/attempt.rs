@@ -608,12 +608,16 @@ mod tests {
 
         fn command(&self, run: &HarnessRun) -> Command {
             // The fixture is one argv element, never interpolated into the
-            // script: its content is arbitrary JSON.
+            // script: its content is arbitrary JSON. It must be *printed*,
+            // not opened: `"$1"` is the stream itself, not a path to it, so
+            // `cat "$1"` would only report a failed lookup on stderr and the
+            // classifier would see an empty run. The format string is a
+            // constant, so backslashes in the JSON are never interpreted.
             let mut script = String::new();
             if self.write_file {
                 script.push_str("printf 'hi\\n' > out.txt\n");
             }
-            script.push_str(&format!("cat \"$1\"\nexit {}", self.code));
+            script.push_str(&format!("printf '%s' \"$1\"\nexit {}", self.code));
             let mut c = Command::new("sh");
             c.arg("-c")
                 .arg(script)
