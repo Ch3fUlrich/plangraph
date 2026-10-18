@@ -1,8 +1,9 @@
 plangraph:UI-BROWSER-TESTS
 plangraph:UI-DEPLOY-AUTO
-plangraph:RT-P1-REVIEW
 server:RT-P1-TEMPORAL-CHECK
 plangraph:RT-P1-FLOW-UNBLOCK
 plangraph:DEV-PGDRILL-LOCAL
 plangraph:RT-P1-VERBS-LIVE-GUARDS
 plangraph:RT-P1-VERBS-FOLLOWUP
+plangraph:RT-P1-QUESTION-TIMER
+plangraph:RT-GATE-WIRING
