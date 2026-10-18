@@ -4,7 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## 2026-10-18
 
-- **RT-P1-VERBS-LIVE-GUARDS:** `/v1/park` now checks the claim holder/delegate, an unexpired lease and an optional body `epoch` like heartbeat/submit (a stale worker cannot park a re-claimed card; router/system exempt; a holder's park of a `claimed` card releases the claim); merge locks are lease locks whose owner is bound to the calling principal (`<principal>:<owner>`, echoed by acquire and required verbatim by release; cross-principal acquire and release are 409). Tests in `tests/test_keeper_worker_verbs.py`.
+- **RT-P1-VERBS-LIVE-GUARDS:** `/v1/park` now checks the claim holder/delegate, an unexpired lease and an optional body `epoch` like heartbeat/submit (a stale worker cannot park a re-claimed card; router/system exempt; a holder's park of a `claimed` card releases the claim). Parking a claimed card now also revokes the card's run tokens, as release does. Merge locks are lease locks, not store-side fencing, whose owner is bound to the calling principal and stored as `<principal>:<owner>` (`%` and `:` in the principal name are percent-escaped, so the first `:` always ends the principal segment; echoed by acquire and required verbatim by release; cross-principal acquire and release are 409). Tests in `tests/test_keeper_worker_verbs.py`.
 
 ## 2026-10-17
 

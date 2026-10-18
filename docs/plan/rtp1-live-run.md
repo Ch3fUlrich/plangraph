@@ -60,7 +60,7 @@ options before it can reach the cluster (live gap).
   `/v1/complete` only audit (attempt rows come from the projector; done belongs to the keeper's
   review path). `/v1/park` is bound to the card's claim (when a card carries one, the caller must be
   its holder or delegate with an unexpired lease; an optional body `epoch` must match; router/system
-  principals are exempt); merge locks are lease locks (not fencing) whose owner is stored as
+  principals are exempt); merge locks are lease locks, not store-side fencing, whose owner is stored as
   `<principal>:<owner>`, and the acquire response returns that prefixed owner, which release must
   send back verbatim.
 

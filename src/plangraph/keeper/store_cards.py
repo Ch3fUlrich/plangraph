@@ -399,16 +399,16 @@ class CardsMixin:
         """Move *key* to *state*; *scope(project)* does the authorisation check.
 
         Idempotent: re-applying the state the item already has changes nothing.
-        `guard(item)`, if given, runs inside the write lock right after `scope`
-        and may raise; `release_claim` lets a `claimed` item move to *state*
-        and clears its claim.
+        `guard(item)`, if given, runs inside the write lock after the scope and
+        lock checks and may raise; `release_claim` lets a `claimed` item move to
+        *state* and clears its claim.
         """
         with self._write():
             item = self._get_or_refuse(key)
             scope(item["project"])
+            self._assert_unlocked(item)
             if guard is not None:
                 guard(item)
-            self._assert_unlocked(item)
             was = item["state"]
             if was not in SETTABLE_STATES and not (release_claim and was == "claimed"):
                 raise Refused("bad_state", f"{key} is {was}; set_state moves only"

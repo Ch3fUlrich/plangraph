@@ -14,7 +14,8 @@ from urllib.parse import quote
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed, to_claimed
+from keeper_util import World, seed, to_claimed, to_done
+from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 
 
@@ -162,7 +163,7 @@ def test_a_long_alarm_reason_is_clipped_not_refused(doors, w):
 
 
 # --------------------------------------------------------------------- locks
-def test_lock_acquire_release_chain_with_fence_tokens(doors, w):
+def test_lock_acquire_release_chain_with_generation_tokens(doors, w):
     repo = "org/repo name"
     held = {"owner": "w1", "ttl_s": 60}
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"), held) \
@@ -302,6 +303,19 @@ def test_a_delegate_and_the_router_may_park_a_claimed_card(doors, w):
     to_claimed(w, routed, "l1main")
     assert doors.http("router", "POST", "/v1/park", park(routed)) == (204, "")
     assert state(w, delegated) == "parked" and state(w, routed) == "parked"
+    for key in (delegated, routed):
+        row = w.conn.execute(
+            "SELECT claimed_by, delegate, lease_until FROM items WHERE key=?",
+            (key,)).fetchone()
+        assert row[0] is None and row[1] is None and row[2] is None
+
+
+# -------------------------- a locked card gets the usual locked refusal
+def test_park_of_a_locked_card_gets_the_usual_locked_refusal(doors, w):
+    key, = seed(w, [("A", [])])
+    to_done(w, key)
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key))
+    assert (status, body["error"]) == (409, "locked")
 
 
 # ------------------------------------ the lock owner binds to the principal
@@ -327,3 +341,71 @@ def test_lock_owner_is_bound_to_the_principal(doors, w):
                       {"token": 1, "owner": "workerA:run1"}) == (204, "")
     assert doors.http("workerB", "POST", lock_path("r", "acquire"), held) \
         == (200, {"token": 2, "owner": "workerB:run1"})
+
+
+# ------------------------- the binding survives a colon in the principal name
+def test_lock_owner_binding_survives_a_colon_in_the_principal_name(w):
+    pa = auth.authenticate(w.conn, auth.add_principal(w.conn, "a:b", "worker",
+                                                     ["demo"], family="famX"))
+    pb = auth.authenticate(w.conn, auth.add_principal(w.conn, "a", "worker",
+                                                     ["demo"], family="famY"))
+    pc = auth.authenticate(w.conn, auth.add_principal(w.conn, "ab", "worker",
+                                                     ["demo"], family="famZ"))
+    assert w.store.lock_acquire(pa, "r", {"owner": "x", "ttl_s": 60}) \
+        == {"token": 1, "owner": "a%3Ab:x"}
+    with pytest.raises(Refused) as exc:
+        w.store.lock_acquire(pb, "r", {"owner": "b:x", "ttl_s": 60})
+    assert exc.value.code == "conflict"
+    with pytest.raises(Refused) as exc:
+        w.store.lock_release(pb, "r", {"token": 1, "owner": "a%3Ab:x"})
+    assert exc.value.code == "conflict"
+    with pytest.raises(Refused) as exc:
+        w.store.lock_release(pb, "r", {"token": 1, "owner": "a:b:x"})
+    assert exc.value.code == "conflict"
+    assert w.store.lock_release(pa, "r",
+                                {"token": 1, "owner": "a%3Ab:x"}) == {}
+    assert w.store.lock_acquire(pb, "r2", {"owner": "y", "ttl_s": 60}) \
+        == {"token": 1, "owner": "a:y"}
+    with pytest.raises(Refused) as exc:
+        w.store.lock_release(pc, "r2", {"token": 1, "owner": "a:y"})
+    assert exc.value.code == "conflict"
+
+
+# ------------------- park of a claimed card revokes its run tokens
+class _Runs:
+    """Minimal run record: run ids wa/wb name demo:A / demo:B."""
+
+    _JOBS = {"wa": "demo:A", "wb": "demo:B"}
+
+    def valid_run_id(self, run_id):
+        return isinstance(run_id, str) and run_id.replace("-", "").isalnum()
+
+    def job(self, run_id):
+        if run_id not in self._JOBS:
+            raise FileNotFoundError(run_id)
+        return {"request": {"title": f"work on {self._JOBS[run_id]}"}, "task": ""}
+
+
+def _revoked_at(w, key, token):
+    return w.conn.execute(
+        "SELECT revoked_at FROM run_tokens WHERE key=? AND token_sha256=?",
+        (key, auth.hash_token(token))).fetchone()["revoked_at"]
+
+
+def test_park_of_a_claimed_card_revokes_run_tokens_like_release(doors, w):
+    w.store.ctx = {"runs": _Runs()}
+    a, b, c = seed(w, [("A", []), ("B", []), ("C", [])])
+    to_claimed(w, a, "l1main")
+    to_claimed(w, b, "l1main")
+    token_a = w.store.mint_run_token(w.p("l1main"), a, "writer", "wa")["token"]
+    token_b = w.store.mint_run_token(w.p("l1main"), b, "writer", "wb")["token"]
+
+    assert doors.http("router", "POST", "/v1/park", park(a)) == (204, "")
+
+    assert _revoked_at(w, a, token_a) is not None
+    assert _revoked_at(w, b, token_b) is None
+    assert [p for p in w.store.verify_integrity()
+            if p["code"].startswith("token_")] == []
+
+    w.store.set_state(w.p("router"), c, "running")   # plain set_state never revokes
+    assert _revoked_at(w, b, token_b) is None

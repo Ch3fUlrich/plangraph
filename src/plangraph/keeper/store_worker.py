@@ -7,8 +7,13 @@ router and system principals pass anywhere.
 ``worker_park`` is bound to the card's current claim: the caller must be the
 claim holder (or its delegate) and the lease must still be alive.  Merge-lock
 owners are bound to the calling principal: the stored and echoed owner is
-``<principal>:<owner>``, and the lock is a lease lock whose ``token`` is a
-monotonically growing advisory generation, not a fencing token.
+``<escaped principal>:<owner>``, where ``%`` and ``:`` in the principal name
+are percent-escaped so the first ``:`` always ends the principal segment, and
+the lock is a lease lock: mutual exclusion by expiry, with ``token`` a
+monotonically growing advisory generation.  The keeper does not fence writes
+store-side — it never rejects a stale writer's later writes.  The Rust client
+names this value ``Fence``; the keeper guarantees a lease lock, not store-side
+fencing of writes.
 
 ``attempts`` rows are written ONLY by the projector, which reads Temporal
 history: it numbers them ``MAX(n)+1`` and carries the cost.  ``worker_attempt``
@@ -60,9 +65,14 @@ def _card_name(body):
     return card if isinstance(card, str) else None
 
 
+def _escape_principal_name(name):
+    """Percent-escape ``%`` and ``:`` so the first ``:`` ends the name segment."""
+    return name.replace("%", "%25").replace(":", "%3A")
+
+
 def _lock_owner(principal, owner):
     """The stored/echoed lock owner: bound to the calling principal."""
-    return f"{principal.name}:{owner}"
+    return f"{_escape_principal_name(principal.name)}:{owner}"
 
 
 class WorkerMixin:
@@ -193,9 +203,13 @@ class WorkerMixin:
 
     # -------------------------------------------------------- merge locks
     # A lease lock: expiry is what makes it safe, the token is only an
-    # advisory generation that grows on each (re)acquisition, not a fence.
+    # advisory generation that grows on each (re)acquisition.  The keeper
+    # never fences writes store-side: a stale writer's later writes are not
+    # rejected.
     # Owners are bound to the calling principal and stored as
-    # ``<principal>:<owner>``.
+    # ``<escaped principal>:<owner>``, with ``%`` and ``:`` in the principal
+    # name percent-escaped so the first ``:`` always ends the principal
+    # segment.
     def lock_acquire(self, principal, repo, body):
         """Acquire or renew the lease lock for *repo*; returns the owner string
         (already principal-prefixed) and the advisory generation token."""
@@ -251,7 +265,8 @@ class WorkerMixin:
         repo = _text("repo", repo, required=True, cap=512)
         _check_body(body, _RELEASE_KEYS, "lock_release")
         owner = _text("owner", body.get("owner"), required=True, cap=512)
-        if not owner.startswith(principal.name + ":"):
+        segment, sep, _rest = owner.partition(":")
+        if not sep or segment != _escape_principal_name(principal.name):
             raise Refused("conflict", "merge lock is held by another principal")
         token = body.get("token")
         if isinstance(token, bool) or not isinstance(token, int):
