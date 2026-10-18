@@ -13,7 +13,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | DEV-PGDRILL D2 | rt-side-2 | dev-guard + deflake test_extra_table_only_in_restore_fails -> evidence + D-1988 -> submit -> xiaomi+google (seats/pgdrill-0df12c0) |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | claimed 14:36Z, briefed inline |
-| GATE-WIRING | predeploy-4 | redo Claude-written parts (b11c60a) by non-Claude writer; GateInput = list of named checks (D-2002) |
+| GATE-WIRING | predeploy-4->5 (RECYCLE, L2-LAUNCH asked) | redo Claude-written parts (b11c60a) by non-Claude writer; GateInput = list of named checks (D-2002) |
 | OPENCODE-HARDEN / WF-VERSIONING | predeploy-4 | claimed 14:36Z, briefed inline |
 | PHASE-RUNNER | predeploy-4 | needs GATE-WIRING done -> I claim; Jev shadow call site lives here (D-2002) |
 | JEV-SHADOW | predeploy-4 | stub + per-axis records + kappa, one call site (routing activity) |
