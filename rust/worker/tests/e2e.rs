@@ -1044,9 +1044,7 @@ async fn needs_input_ask_refused_parks_with_question_not_recorded() {
         assert_eq!(out.outcome, "parked", "{out:?}");
         let alarms = env.keeper.alarms();
         assert!(
-            alarms
-                .iter()
-                .any(|a| a.reason == "question not recorded"),
+            alarms.iter().any(|a| a.reason == "question not recorded"),
             "{alarms:?}"
         );
         assert_eq!(env.keeper.parked().len(), 1);
