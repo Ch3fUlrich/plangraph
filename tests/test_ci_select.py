@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+
+import pytest
 import subprocess
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ci_select.py"
@@ -304,3 +306,23 @@ def test_cli_gate_problems(capsys):
     assert ret == 1
     captured = capsys.readouterr()
     assert "scrub: failure" in captured.err
+
+
+@pytest.mark.parametrize("path", ["tests/test_x.py", "vendor/lib.js", "tools/other.py", "./src/a.py"])
+def test_each_python_prefix_selects_pytest(path):
+    res = select([path])
+    assert res["pytest"] and res["pytest-postgres"] and not res["full"]
+    assert not res["rust"]
+
+
+def test_select_full_cli_runs_every_suite(capsys):
+    assert main(["select", "--full"]) == 0
+    out = capsys.readouterr().out
+    assert "full=true" in out and "rust-spike=true" in out and "false" not in out
+
+
+def test_gate_cancelled_selected_suite_is_a_problem():
+    outs = {s: "false" for s in SUITES}
+    outs["pytest"] = "true"
+    needs = {"select": {"result": "success", "outputs": outs}, "pytest": {"result": "cancelled"}}
+    assert gate(needs) == ["pytest: cancelled"]
