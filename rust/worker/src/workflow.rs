@@ -10,7 +10,7 @@
 use crate::activities::AskInput;
 use crate::activities::{
     CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, JanitorInput, MergeInput,
-    MergeResult, ProbeInput, ProbeResult, Tick,
+    MergeResult, ProbeInput, ProbeResult, Tick, park_json_with_attempt,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
@@ -379,7 +379,7 @@ impl Card {
                                 DoneInput {
                                     card: input.claim.card.clone(),
                                     merged_sha: sha.clone(),
-                                    attempt: None,
+                                    attempt: Some(n.max(1)),
                                 },
                                 activity_options(&cfg),
                             )
@@ -402,6 +402,7 @@ impl Card {
                                     &cfg,
                                     &packet,
                                     MERGE_LOCK_PARK_REASON.to_string(),
+                                    n.max(1),
                                 )
                                 .await?;
                                 return Ok(parked(n));
@@ -523,7 +524,14 @@ impl Card {
                         &check_tail,
                     );
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                    park_and_alarm(ctx, &cfg, &packet, PROBE_FAIL_PARK_REASON.to_string()).await?;
+                    park_and_alarm(
+                        ctx,
+                        &cfg,
+                        &packet,
+                        PROBE_FAIL_PARK_REASON.to_string(),
+                        n.max(1),
+                    )
+                    .await?;
                     return Ok(parked(n));
                 }
 
@@ -561,6 +569,7 @@ impl Card {
                                     &cfg,
                                     &packet,
                                     exit_name(packet.exit_class).to_string(),
+                                    n.max(1),
                                 )
                                 .await?;
                                 return Ok(parked(n));
@@ -580,6 +589,7 @@ impl Card {
                                     &cfg,
                                     &packet,
                                     exit_name(packet.exit_class).to_string(),
+                                    n.max(1),
                                 )
                                 .await?;
                                 return Ok(parked(n));
@@ -599,8 +609,14 @@ impl Card {
                         if waited >= cfg.wait_cap {
                             let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                             run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                            park_and_alarm(ctx, &cfg, &packet, WAIT_CAP_PARK_REASON.to_string())
-                                .await?;
+                            park_and_alarm(
+                                ctx,
+                                &cfg,
+                                &packet,
+                                WAIT_CAP_PARK_REASON.to_string(),
+                                n.max(1),
+                            )
+                            .await?;
                             return Ok(parked(n));
                         }
                         waits += 1;
@@ -626,6 +642,7 @@ impl Card {
                             &cfg,
                             &packet,
                             exit_name(packet.exit_class).to_string(),
+                            n.max(1),
                         )
                         .await?;
                         return Ok(finish("quarantined", None, n));
@@ -638,6 +655,7 @@ impl Card {
                             &cfg,
                             &packet,
                             exit_name(packet.exit_class).to_string(),
+                            n.max(1),
                         )
                         .await?;
                         return Ok(finish("planner", None, n));
@@ -649,6 +667,7 @@ impl Card {
                             &cfg,
                             &packet,
                             exit_name(packet.exit_class).to_string(),
+                            n.max(1),
                         )
                         .await?;
                         return Ok(finish("parked", None, n));
@@ -772,7 +791,7 @@ async fn question_step(
             AskInput {
                 card: card.clone(),
                 question: q.clone(),
-                attempt: None,
+                attempt: Some(n.max(1)),
             },
             activity_options(cfg),
         )
@@ -856,7 +875,7 @@ async fn question_step(
                         Alarm {
                             card: card.clone(),
                             reason: QUESTION_TIMEOUT_REFUSED_REASON.to_string(),
-                            attempt: None,
+                            attempt: Some(n.max(1)),
                         },
                     )
                     .await;
@@ -896,7 +915,7 @@ async fn park_question(
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    park_and_alarm(ctx, cfg, &packet, reason.to_string()).await?;
+    park_and_alarm(ctx, cfg, &packet, reason.to_string(), n.max(1)).await?;
     Ok(QuestionStep::Finished(parked(n)))
 }
 
@@ -1066,15 +1085,20 @@ fn janitor_options(cfg: &Config) -> ActivityOptions {
 }
 
 /// Record a park packet and raise the alarm that goes with it.
+///
+/// `attempt` is the card attempt number (`n`, 1-based) the park happened on:
+/// it rides in the packet JSON and on the alarm so the keeper can fence both
+/// calls to this run of this attempt, never Temporal's activity retry count.
 async fn park_and_alarm(
     ctx: &WorkflowContext<Card>,
     cfg: &Config,
     packet: &ParkPacket,
     reason: String,
+    attempt: u32,
 ) -> WorkflowResult<()> {
     ctx.execute_activity(
         CardActivities::park,
-        packet.to_json(),
+        park_json_with_attempt(packet, Some(attempt)),
         activity_options(cfg),
     )
     .await?;
@@ -1084,7 +1108,7 @@ async fn park_and_alarm(
         Alarm {
             card: packet.card.clone(),
             reason,
-            attempt: None,
+            attempt: Some(attempt),
         },
     )
     .await;
