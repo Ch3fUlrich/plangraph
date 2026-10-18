@@ -50,7 +50,8 @@ assert_dev_target() { # assert_dev_target <dsn> — 0 if the DSN is the dev targ
     postgres://*) rest="${dsn#postgres://}" ;;
     *) return 1 ;;
   esac
-  rest="${rest%%\?*}"
+  # a query string can override host/port/hostaddr in libpq, so any query is refused
+  case "$rest" in *\?*) return 1 ;; esac
   authority="${rest%%/*}"
   hostport="${authority##*@}"
   case "$hostport" in

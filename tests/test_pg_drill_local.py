@@ -486,6 +486,13 @@ def test_no_port_dsn_refused(drill):
     assert not any(l.startswith(("pg_dump", "docker")) for l in drill.lines())
 
 
+def test_query_string_host_override_refused(drill):
+    r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@127.0.0.1:55998/keeper?host=db.example.invalid&port=5432"})
+    assert r.returncode == 2
+    assert r.stdout.strip() == REFUSAL
+    assert not any(l.startswith(("pg_dump", "docker")) for l in drill.lines())
+
+
 def test_hostile_dsn_refused_without_shell_effects(drill):
     r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@127.0.0.1:55998$(touch PWNED)/keeper"})
     assert r.returncode == 2
