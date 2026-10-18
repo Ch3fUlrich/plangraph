@@ -1,9 +1,10 @@
 //! Replace secret-shaped substrings before text is persisted or replayed.
 //!
 //! Gate/check tails land in workflow history and can carry credentials that
-//! a child process echoed. Redaction runs BEFORE the byte cap in
-//! [`redacted_tail`], so a cut can never leave half a secret behind, and the
-//! cap trims on a `char` boundary so the result is always valid UTF-8.
+//! a child process echoed. Redaction runs BEFORE the line cut and the byte cap
+//! in [`redacted_tail`], so a cut can never leave half a secret behind — not
+//! even the tail half of a multi-line PEM block that straddles the cut — and
+//! the cap trims on a `char` boundary so the result is always valid UTF-8.
 
 use std::sync::OnceLock;
 
@@ -17,20 +18,29 @@ pub const MAX_TAIL_BYTES: usize = 64 * 1024;
 fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
-        let specs: [&'static str; 6] = [
-            // 1. Authorization/Bearer headers: keep the word "Bearer", cut the value.
+        let specs: [&'static str; 8] = [
+            // 1. PEM private-key blocks, complete: header through the matching
+            //    footer, newlines included. Applied FIRST and to the whole
+            //    text, because a multi-line secret cannot be redacted line by
+            //    line — a line-wise cut would leave the half behind it.
+            r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+            // 2. A PEM header with no END after it (the block was cut off by
+            //    the supervised-output cap): redact from the header to the end
+            //    of the text. Second, so a complete block is always preferred.
+            r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*",
+            // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
-            // 2. KEY=value env style: keep the name, cut the value (bare, "quoted" or 'quoted').
+            // 4. KEY=value env style: keep the name, cut the value (bare, "quoted" or 'quoted').
             r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)\s*[=:]\s*("[^"\n]*"|'[^'\n]*'|[^\s"']+)"#,
-            // 3. Prefixed tokens: one alternation; every prefix is distinctive
+            // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
             r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
-            // 4. JWT-like: three base64url segments, header always starts "eyJ".
+            // 6. JWT-like: three base64url segments, header always starts "eyJ".
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
-            // 5. Long hex — a 40-char git sha is caught too; acceptable, and shas
+            // 7. Long hex — a 40-char git sha is caught too; acceptable, and shas
             // in history are decorative while leaked tokens are not.
             r"\b[0-9a-fA-F]{32,}\b",
-            // 6. Long base64/url-safe blob: raw, not compiled — see [`redact`].
+            // 8. Long base64/url-safe blob: raw, not compiled — see [`redact`].
             r"[A-Za-z0-9+/_-]{40,}={0,2}",
         ];
         specs
@@ -41,17 +51,23 @@ fn patterns() -> &'static [regex::Regex] {
 }
 
 /// Replace token-shaped secrets in `text` with `REDACTED`.
+///
+/// Patterns 1–2 handle multi-line PEM blocks and are applied first, to the
+/// whole text; the rest are line-local. Idempotent: running an already
+/// redacted text through again changes nothing.
 pub fn redact(text: &str) -> String {
     let rs = patterns();
-    // 1–5 in order.
-    let out = rs[0].replace_all(text, "Bearer [REDACTED]").into_owned();
-    let out = rs[1].replace_all(&out, "$1=[REDACTED]").into_owned();
-    let out = rs[2].replace_all(&out, REDACTED).into_owned();
-    let out = rs[3].replace_all(&out, REDACTED).into_owned();
+    // 1–7 in order.
+    let out = rs[0].replace_all(text, REDACTED).into_owned();
+    let out = rs[1].replace_all(&out, REDACTED).into_owned();
+    let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
+    let out = rs[3].replace_all(&out, "$1=[REDACTED]").into_owned();
     let out = rs[4].replace_all(&out, REDACTED).into_owned();
-    // 6. Long blobs — but only runs mixing digits and letters, so plain long
+    let out = rs[5].replace_all(&out, REDACTED).into_owned();
+    let out = rs[6].replace_all(&out, REDACTED).into_owned();
+    // 8. Long blobs — but only runs mixing digits and letters, so plain long
     // words and letter-only paths survive.
-    rs[5]
+    rs[7]
         .replace_all(&out, |m: &regex::Captures| {
             let t = m.get(0).unwrap().as_str();
             let has_digit = t.chars().any(|c| c.is_ascii_digit());
@@ -65,23 +81,34 @@ pub fn redact(text: &str) -> String {
         .into_owned()
 }
 
-/// Last `max_lines` lines of `text`, redacted, then capped to `max_bytes`
-/// bytes (keep the END, cut on a char boundary).
-///
-/// Order matters: lines -> redact -> byte cap. A cut can never leave half a
-/// secret, because secrets are already replaced.
-pub fn redacted_tail(text: &str, max_lines: usize, max_bytes: usize) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let kept = lines[lines.len().saturating_sub(max_lines)..].join("\n");
-    let mut s = redact(&kept);
-    if s.len() > max_bytes {
-        let mut start = s.len() - max_bytes;
-        while start < s.len() && !s.is_char_boundary(start) {
-            start += 1;
-        }
-        s = s[start..].to_string();
+/// Cap `s` to its last `max_bytes` bytes, keeping the END and cutting on a
+/// `char` boundary. The final, defensive step of every tail that reaches
+/// workflow history.
+pub fn cap_tail_bytes(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
     }
-    s
+    let mut start = s.len() - max_bytes;
+    while start < s.len() && !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_string()
+}
+
+/// The tail of `text` that may reach history: the WHOLE text redacted first,
+/// then the last `max_lines` lines, then capped to `max_bytes` bytes (keep the
+/// END, cut on a `char` boundary).
+///
+/// Redacting the whole text BEFORE the line cut is the point of this function:
+/// a multi-line secret (a PEM block) straddling the cut is replaced as a
+/// whole, so no cut can ever leave half of one behind. Redaction is
+/// idempotent, so a caller may run an already-redacted tail through here
+/// again to re-apply the caps.
+pub fn redacted_tail(text: &str, max_lines: usize, max_bytes: usize) -> String {
+    let redacted = redact(text);
+    let lines: Vec<&str> = redacted.lines().collect();
+    let kept = lines[lines.len().saturating_sub(max_lines)..].join("\n");
+    cap_tail_bytes(&kept, max_bytes)
 }
 
 #[cfg(test)]
@@ -94,7 +121,7 @@ mod tests {
         ["sk", "-", &"a".repeat(24)].concat()
     }
     fn gh() -> String {
-        ["gh", "p_", &["b1".repeat(15), "z"].concat()].concat()
+        ["gh", "p_", &["b1".repeat(15), "z".to_string()].concat()].concat()
     }
     fn gpat() -> String {
         ["github", "_pat_", &"Zq9".repeat(8)].concat()
@@ -123,6 +150,78 @@ mod tests {
     }
     fn env() -> String {
         ["API_", "KEY=", "hunter22hunter22"].concat()
+    }
+
+    /// The PEM block used in these tests: an obviously fake header,
+    /// letter-only base64 bodies — which the generic blob pattern would NOT
+    /// catch (it needs digits and letters), so the PEM pattern is what must —
+    /// and the matching footer.
+    fn pem_block(body_lines: usize) -> Vec<String> {
+        let mut v = vec!["-----BEGIN TEST PRIVATE KEY-----".to_string()];
+        for _ in 0..body_lines {
+            v.push("A".repeat(64));
+        }
+        v.push("-----END TEST PRIVATE KEY-----".to_string());
+        v
+    }
+
+    #[test]
+    fn pem_block_is_redacted_whole() {
+        let block = pem_block(10);
+        let text = format!("before\n{}\nafter", block.join("\n"));
+        let out = redact(&text);
+        assert!(!out.contains("PRIVATE KEY"), "{out}");
+        assert!(!out.contains(&"A".repeat(64)), "{out}");
+        assert!(out.contains(REDACTED), "{out}");
+        // The whole multi-line block collapses into one placeholder line.
+        assert_eq!(out.lines().count(), 3, "{out}");
+    }
+
+    #[test]
+    fn pem_header_without_end_redacts_to_the_end_of_the_text() {
+        // The supervised-output cap can cut a block after its header; what
+        // follows the header must not survive without it.
+        let block = pem_block(10);
+        let text = format!("ok line\n{}", block.join("\n"));
+        let out = redact(&text);
+        assert!(out.starts_with("ok line"), "{out}");
+        assert!(!out.contains("PRIVATE KEY"), "{out}");
+        assert!(!out.contains(&"A".repeat(64)), "{out}");
+        assert!(out.ends_with(REDACTED), "{out}");
+    }
+
+    #[test]
+    fn two_pem_blocks_are_redacted_separately() {
+        let block = pem_block(4);
+        let text = format!("{}\nmid\n{}", block.join("\n"), block.join("\n"));
+        let out = redact(&text);
+        assert!(!out.contains("PRIVATE KEY"), "{out}");
+        assert!(!out.contains(&"A".repeat(64)), "{out}");
+        // The line between the two blocks survives; each block is one line now.
+        assert_eq!(out.lines().count(), 3, "{out}");
+        assert!(out.contains("\nmid\n"), "{out}");
+    }
+
+    #[test]
+    fn redacted_tail_of_a_multiline_secret_across_the_cut() {
+        // 100 lines with a PEM block at lines 40..57: the last-50-line cut
+        // falls in the middle of the body, so cutting before redacting would
+        // keep raw body lines whose header that names them is gone.
+        let block = pem_block(15);
+        let mut text = String::new();
+        for i in 1..=39 {
+            text.push_str(&format!("line {i}\n"));
+        }
+        text.push_str(&block.join("\n"));
+        text.push('\n');
+        for i in 57..=100 {
+            text.push_str(&format!("line {i}\n"));
+        }
+        let out = redacted_tail(&text, 50, MAX_TAIL_BYTES);
+        assert!(!out.contains("PRIVATE KEY"), "{out}");
+        assert!(!out.contains(&"A".repeat(64)), "{out}");
+        assert!(out.contains(REDACTED), "{out}");
+        assert!(out.contains("line 100"), "{out}");
     }
 
     #[test]

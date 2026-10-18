@@ -228,7 +228,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("work");
         std::fs::create_dir(&root).unwrap();
-        expect_err(absolute(tmp.path()), &root, "path escapes the work root");
+        expect_err(&absolute(tmp.path()), &root, "path escapes the work root");
         expect_err("/", &root, "path escapes the work root");
     }
 
@@ -240,7 +240,7 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let evil = tmp.path().join("work-evil");
         std::fs::create_dir(&evil).unwrap();
-        expect_err(absolute(&evil), &root, "path escapes the work root");
+        expect_err(&absolute(&evil), &root, "path escapes the work root");
     }
 
     #[cfg(all(test, unix))]
