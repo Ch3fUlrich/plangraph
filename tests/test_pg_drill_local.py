@@ -131,6 +131,9 @@ CLIENT_TOOLS = ("psql", "pg_dump", "pg_restore", "pg_isready")
 
 COUNT_SQL = 'SELECT count(*) FROM :"sch".:"tbl"'
 
+REFUSAL = ("PG-DRILL refused: non-dev target; a LIVE drill needs a separate GO "
+           "and a password-auth drill container")
+
 
 class Drill:
     def __init__(self, tmp_path, host_tools=True):
@@ -162,6 +165,7 @@ class Drill:
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "HOME": str(tmp_path),
             "SRC_DSN": "postgresql://postgres@127.0.0.1:55998/keeper",
+            "PG_PORT": "55998",
             "DRILL_PORT": "55999",
             "DRILL_NAME": "drill-test",
             "DRILL_MEMORY": "1g",
@@ -314,9 +318,10 @@ def test_pg_restore_failure_removes_container(drill):
 
 def test_extra_table_only_in_restore_fails(drill):
     r = drill.run(extra_env={"FAKE_TABLES_RESTORE": "t1 t2 t3 t4"})
-    assert r.returncode == 1
-    assert any(l.startswith("PG-DRILL fail") and "t4" in l for l in r.stdout.splitlines())
-    assert not any(l.startswith("PG-DRILL ok") for l in r.stdout.splitlines())
+    out = f"stdout={r.stdout!r} stderr={r.stderr!r}"
+    assert r.returncode == 1, out
+    assert any(l.startswith("PG-DRILL fail") and "t4" in l for l in r.stdout.splitlines()), out
+    assert not any(l.startswith("PG-DRILL ok") for l in r.stdout.splitlines()), out
 
 
 def test_hostile_table_name_reaches_psql_only_via_dash_v(drill):
@@ -384,6 +389,7 @@ def test_missing_host_tools_fall_back_to_postgres_image(drill_nohost):
     for l in rm_runs:
         assert re.search(r"--user \S+:\S+", l), l
         assert f" -v {mount}" in l, l
+        assert " --memory 1g " in l, l
     restore_runs = [l for l in rm_runs if " postgres:16 pg_restore" in l]
     assert len(restore_runs) == 1, lines
     assert f"{Path(dump_file).parent}/keeper.dump" in restore_runs[0], restore_runs[0]
@@ -450,6 +456,40 @@ def test_non_public_schema_tables_are_counted(drill):
     assert re.fullmatch(r"PG-DRILL ok rto_s=\d+ rows=22", lines[-1]), lines
     counts = [l for l in drill.lines() if COUNT_SQL in l]
     assert len(counts) == 6 and all("-v sch=k_abc" in l for l in counts), counts
+
+
+def test_non_dev_dsn_refused(drill):
+    r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@db.example.invalid:55998/keeper"})
+    assert r.returncode == 2
+    assert r.stdout.strip() == REFUSAL
+    assert not any(l.startswith(("pg_dump", "docker")) for l in drill.lines())
+
+
+def test_localhost_dev_dsn_passes(drill):
+    r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@localhost:55998/keeper"})
+    assert r.returncode != 2
+    assert REFUSAL not in r.stdout
+    assert any(l.startswith("pg_dump") for l in drill.lines())
+
+
+def test_right_host_wrong_port_refused(drill):
+    r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@127.0.0.1:5432/keeper"})
+    assert r.returncode == 2
+    assert r.stdout.strip() == REFUSAL
+    assert not any(l.startswith(("pg_dump", "docker")) for l in drill.lines())
+
+
+def test_no_port_dsn_refused(drill):
+    r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@127.0.0.1/keeper"})
+    assert r.returncode == 2
+    assert r.stdout.strip() == REFUSAL
+    assert not any(l.startswith(("pg_dump", "docker")) for l in drill.lines())
+
+
+def test_hostile_dsn_refused_without_shell_effects(drill):
+    r = drill.run(extra_env={"SRC_DSN": "postgresql://postgres@127.0.0.1:55998$(touch PWNED)/keeper"})
+    assert r.returncode == 2
+    assert not (drill.tmp / "PWNED").exists()
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
