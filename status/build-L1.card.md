@@ -15,7 +15,8 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 ## GEN-15 (D-1932 ONLY PH-RT-RUNTIME; D-1919 budget; D-1933 TEMPORAL-CHECK -> dev start-dev, cloud parts -> RELEASE-DEPLOY)
 | P1 lane | State | Next |
 |---|---|---|
-| TEMPORAL-CHECK | DEV DONE: ~/.local/share/plangraph/temporal-check/dev/temporal-dev-check.md e1c6b934 (all PASS, RSS 166/205 MB); retarget not applied yet | routing apply -> claim -> evidence (decision/run-record) -> submit |
+| TEMPORAL-CHECK | retargeted D-1943 (dev); dep DEVSTACK; DEV record e1c6b934 ready (temporal-check/dev) | after DEVSTACK done: claim, evidence, adopt decision row, submit |
+| DEVSTACK (new D-1943) | CLAIMED e1 (hb key); lane ordered to predeploy-2 (devstack.sh start-dev + docker run postgres:16, no compose) | MERGE-READY -> seats -> merge -> submit |
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
 | #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
 | #46 WORKER | MERGED 30b738ba (judge GO cbf83e48; deploy single-host) | evidence when claimable |
@@ -36,5 +37,4 @@ Leases: ops/hb-keys.txt (3 keys); bg loop dies with clear → restart FIRST (han
 - Keeper: tier-high verdicts need 2 distinct non-claimant families; claimant build-L1 = anthropic. Working seat families: xiaomi (mimo; gateway API times out at 300 s now), google (agy client only; omniroute google = 401), nvidia (nemotron free, no principal: evidence only). deepseek 400, gpt-oss off list.
 - Decision evidence ref key is `id` ({"id":"D-NNN"}), not `decision`.
 - systemd drop-ins: lexical order, new ones sort LAST. zsh `$b:r` modifier: brace vars before ':'.
-- docs-only PRs skip CI (path filters): `gh workflow run tests.yml --ref <lane>` for evidence. `gh pr edit/merge` breaks (projects classic) → `gh api -X PATCH/PUT .../pulls/N[/merge]`.
-- Lane PRs cut before #59 still runs-on self-hosted fleet-ci (no runners): test main+head on ci/prN-<sha> (workflow_dispatch), merge PR by head sha.
+- docs-only PRs skip CI; pre-#59 lanes runs-on self-hosted (no runners): test main+head on ci/prN-<sha> via `gh workflow run tests.yml --ref`. `gh pr edit/merge` broken -> `gh api` PATCH/PUT, graphql markPullRequestReadyForReview for drafts.
