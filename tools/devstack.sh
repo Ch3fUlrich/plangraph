@@ -12,6 +12,10 @@
 #                              # the postgres container and its data; state files kept
 #   devstack.sh status         # one line per component + the exports a driver needs
 #   devstack.sh keeper         # migrate + run keeper in the foreground (needs postgres up)
+# Fresh stack: `status` reports "keeper: stopped" and the keeper database is empty until
+# `keeper` has run once (it runs `admin migrate`, then stays in the foreground; Ctrl-C after
+# "schema up to date" is enough). A migrated-only database already satisfies tools/pg-drill-local.sh
+# (schema_migrations has 4 rows, verified against postgres:16); order: start, keeper, pg-drill-local.sh.
 #   devstack.sh set-current    # re-run just the worker deployment set-current-version step
 set -euo pipefail
 
@@ -20,13 +24,17 @@ usage() {
     "usage: devstack.sh start|stop [--purge]|status|keeper|set-current" \
     "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT DEVSTACK_DEPLOYMENT" \
     "     DEVSTACK_BUILD_ID PG_PORT DEVSTACK_PG_NAME KEEPER_PORT DEVSTACK_PG_MODE PG_BIN" \
-    "     DEVSTACK_HEALTH_TIMEOUT"
+    "     DEVSTACK_HEALTH_TIMEOUT" \
+    "     TEMPORAL_CLI_VERSION TEMPORAL_CLI_SHA256 DEVSTACK_TEMPORAL_URL_BASE"
 }
 
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Defaults are overridable so CI and co-located stacks can move ports/paths without editing this file.
 DEVSTACK_STATE="${DEVSTACK_STATE:-$REPO_ROOT/.devstack}"
+# Captured before the default is applied: ensure_temporal_cli may only hit the network when
+# the operator did not choose a CLI themselves.
+TEMPORAL_CLI_EXPLICIT="${TEMPORAL_CLI+1}"
 TEMPORAL_CLI="${TEMPORAL_CLI:-temporal}"
 TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
 TEMPORAL_UI_PORT="${TEMPORAL_UI_PORT:-8233}"
@@ -37,6 +45,11 @@ DEVSTACK_PG_NAME="${DEVSTACK_PG_NAME:-plangraph-devstack-pg}"
 KEEPER_PORT="${KEEPER_PORT:-18787}"
 DEVSTACK_PG_MODE="${DEVSTACK_PG_MODE:-auto}"
 DEVSTACK_HEALTH_TIMEOUT="${DEVSTACK_HEALTH_TIMEOUT:-60}"
+# Auto-download pin for ensure_temporal_cli; SHA256 may only be overridden together with the
+# version, so an arbitrary version never runs on a stale (mismatching) hash.
+TEMPORAL_CLI_VERSION="${TEMPORAL_CLI_VERSION:-1.9.1}"
+TEMPORAL_CLI_SHA256="${TEMPORAL_CLI_SHA256:-}"
+DEVSTACK_TEMPORAL_URL_BASE="${DEVSTACK_TEMPORAL_URL_BASE:-https://github.com/temporalio/cli/releases/download}"
 
 mkdir -p "$DEVSTACK_STATE"
 PG_DSN="postgresql://postgres@127.0.0.1:$PG_PORT/keeper"
@@ -114,11 +127,115 @@ set_current_version() {
     --yes
 }
 
-start_temporal() {
-  if ! command -v "$TEMPORAL_CLI" >/dev/null 2>&1; then
+ensure_temporal_cli() {
+  # Host-agnostic CLI resolution: never touch the network when the CLI is already present.
+  if command -v "$TEMPORAL_CLI" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -n "$TEMPORAL_CLI_EXPLICIT" ]; then
+    # The operator picked the CLI; a bad pick is their problem to fix, not ours to paper
+    # over with an unasked-for download.
     echo "temporal: CLI '$TEMPORAL_CLI' not found (set TEMPORAL_CLI)" >&2
     exit 1
   fi
+  if [ -x "$DEVSTACK_STATE/bin/temporal" ]; then
+    TEMPORAL_CLI="$DEVSTACK_STATE/bin/temporal"
+    return 0
+  fi
+  local os arch url expected actual fetch
+  os="$(uname -s)"
+  case "$os" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    *)
+      echo "temporal: unsupported OS '$os' for CLI auto-download (set TEMPORAL_CLI)" >&2
+      exit 1 ;;
+  esac
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64) arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *)
+      echo "temporal: unsupported architecture '$arch' for CLI auto-download (set TEMPORAL_CLI)" >&2
+      exit 1 ;;
+  esac
+  # Explicit TEMPORAL_CLI_SHA256 wins (hermetic tests / non-pinned versions); otherwise the
+  # download must match the table for the pinned version — any other version needs both vars.
+  if [ -n "$TEMPORAL_CLI_SHA256" ]; then
+    expected="$TEMPORAL_CLI_SHA256"
+  elif [ "$TEMPORAL_CLI_VERSION" = "1.9.1" ]; then
+    case "${os}_${arch}" in
+      darwin_amd64) expected=48cdd6c84c56e27ae8e4d9a47052b89289a9c552dee029b49dd312c6fb72873f ;;
+      darwin_arm64) expected=41e0425378fcb4fb5766340b97435e20fe47bbff2d7bf644ec2d51f7662b7c56 ;;
+      linux_amd64) expected=09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5 ;;
+      linux_arm64) expected=6c57c352d52fc3df34412376fd9ba6f74b7e3ace8e426e6cba8600156d36a145 ;;
+      *)
+        echo "temporal: no sha256 pin for ${os}_${arch}, set TEMPORAL_CLI_SHA256" >&2
+        exit 1 ;;
+    esac
+  else
+    echo "temporal: TEMPORAL_CLI_VERSION=$TEMPORAL_CLI_VERSION is not pinned; set TEMPORAL_CLI_SHA256 too" >&2
+    exit 1
+  fi
+  if command -v curl >/dev/null 2>&1; then
+    fetch=curl
+  elif command -v wget >/dev/null 2>&1; then
+    fetch=wget
+  else
+    echo "temporal: neither curl nor wget available to fetch the CLI (set TEMPORAL_CLI)" >&2
+    exit 1
+  fi
+  url="${DEVSTACK_TEMPORAL_URL_BASE}/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_${os}_${arch}.tar.gz"
+  mkdir -p "$DEVSTACK_STATE/bin"
+  _tcli_tmp="$(mktemp "$DEVSTACK_STATE/temporal_cli_download.XXXXXX")"
+  _tcli_stage="$(mktemp -d "$DEVSTACK_STATE/temporal_cli_stage.XXXXXX")"
+  # (globals: the EXIT trap runs after the function's locals are gone) Archive and staging dir go on any exit or signal; bin/temporal is only moved in whole after a
+  # verified extract, so an interrupted run cannot leave a partial binary the -x cache check accepts.
+  trap 'rm -rf "${_tcli_tmp:-}" "${_tcli_stage:-}"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  echo "temporal: fetching CLI v$TEMPORAL_CLI_VERSION ($url)"
+  if [ "$fetch" = curl ]; then
+    if ! curl -fsSL "$url" -o "$_tcli_tmp"; then
+      rm -f "$_tcli_tmp"
+      echo "temporal: download failed (set TEMPORAL_CLI to a local binary)" >&2
+      exit 1
+    fi
+  else
+    if ! wget -qO- "$url" >"$_tcli_tmp"; then
+      rm -f "$_tcli_tmp"
+      echo "temporal: download failed (set TEMPORAL_CLI to a local binary)" >&2
+      exit 1
+    fi
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$_tcli_tmp" | cut -d' ' -f1)"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$_tcli_tmp" | cut -d' ' -f1)"
+  else
+    rm -f "$_tcli_tmp"
+    echo "temporal: no sha256 tool (sha256sum/shasum) to verify the download" >&2
+    exit 1
+  fi
+  if [ "$actual" != "$expected" ]; then
+    rm -f "$_tcli_tmp"
+    echo "temporal: sha256 mismatch" >&2
+    exit 1
+  fi
+  if ! tar -xzf "$_tcli_tmp" -C "$_tcli_stage" temporal; then
+    echo "temporal: archive did not contain a 'temporal' binary" >&2
+    exit 1
+  fi
+  chmod +x "$_tcli_stage/temporal"
+  mv -f "$_tcli_stage/temporal" "$DEVSTACK_STATE/bin/temporal"
+  rm -rf "$_tcli_tmp" "$_tcli_stage"
+  trap - EXIT INT TERM
+  TEMPORAL_CLI="$DEVSTACK_STATE/bin/temporal"
+  echo "temporal: installed CLI v$TEMPORAL_CLI_VERSION at $TEMPORAL_CLI"
+}
+
+start_temporal() {
+  ensure_temporal_cli
   local pid
   pid="$(pid_of "$DEVSTACK_STATE/temporal.pid" start-dev)"
   if [ -n "$pid" ]; then
@@ -362,7 +479,7 @@ case "${1:-}" in
   stop) shift; cmd_stop "$@" ;;
   status) cmd_status ;;
   keeper) cmd_keeper ;;
-  set-current) set_current_version ;;
+  set-current) ensure_temporal_cli; set_current_version ;;
   -h|--help|help) usage ;;
   "") usage; exit 2 ;;
   *) echo "unknown command: $1" >&2; usage; exit 2 ;;

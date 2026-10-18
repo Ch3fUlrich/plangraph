@@ -1224,3 +1224,45 @@ path = "rust/worker/tests/fixtures/projector/needs_input_answered.json"
 rule = "high-entropy"
 value_sha256 = "f3f368abdf2eb58f5a051f4edb827072b28386873af90d6918ed30adca565267"
 why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "22ad1eabefb2c176cdb59007d10e3af279d9bf474296c8826ed4711dfaea555a"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "2840eca9840be7642bed0e616036e53c39edf021829e7ed70216a6275766b872"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "9e5c9a666613cb394d4e10a01a2ee41581af6ba3c8091f72ecfbbe4cefd23d61"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "b412323f16913d7103ea15942a740d5824e69e4f4f017a09704c45aba403f715"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "c5fb3b7dcf031032f26acfc32042c08d55e291367de9c9d57b6bc60eae66719e"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "e0d8f682b955ec1f8d8f448f194a08c68927f6d3b8286961d45acd12a66ea1d8"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
+rule = "high-entropy"
+value_sha256 = "e27ef69a72d731b4192ee9c5f9ed945555c78485b5c1385600114c14ed916706"
+why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"

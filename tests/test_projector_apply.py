@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.fmt import show_text
 from plangraph.projector import apply as papply
 from plangraph.projector.apply import Projector, project_source
 from plangraph.projector.models import AttemptRec, RunProjection, StateRec
@@ -100,6 +101,36 @@ def test_attempt_numbers_continue_across_two_runs_of_one_key(world, projector):
         (1, "r1", "temporal:5:1"), (2, "r2", "temporal:5:1"), (3, "r2", "temporal:9:2")]
     assert {r[:5] for r in applied(world) if r[4] == "attempt"} == {
         (WF, "r1", "5", 1, "attempt"), (WF, "r2", "5", 1, "attempt"), (WF, "r2", "9", 2, "attempt")}
+
+
+def test_projected_usage_reaches_show_and_sums_cost(world, projector):
+    """tokens and cost on an activity result land in attempts and in show's rollup."""
+    def rec(act, att, sched, cost, tin, tout):
+        return AttemptRec(WF, "r1", act, att, sched, sched + 3, KEY, "ok", "h", "m", "h/m",
+                          "256k", T0, T1, tin, tout, cost)
+
+    projector.apply_run(proj(attempts=[rec("5", 1, 5, 0.25, 100, 20),
+                                       rec("9", 2, 9, 0.5, 200, 40)]), run_ord=0)
+    assert [(a["tokens_in"], a["tokens_out"], a["cost"]) for a in attempts(world)] == [
+        (100, 20, 0.25), (200, 40, 0.5)]
+    info = world.store.show(world.p("system"), KEY)
+    assert [(a["n"], a["tokens_in"], a["tokens_out"], a["cost"]) for a in info["attempts"]] == [
+        (1, 100, 20, 0.25), (2, 200, 40, 0.5)]
+    assert info["attempt_cost"] == 0.75
+    assert "attempts 1:ok; 2:ok | cost 0.75" in show_text(info)
+
+
+def test_projected_attempt_without_usage_stays_null_not_zero(world, projector):
+    """An absent cost is NULL end to end: no invented 0, no cost segment in show."""
+    projector.apply_run(proj(attempts=[AttemptRec(
+        WF, "r1", "5", 1, 5, 8, KEY, "ok", "h", "m", "h/m", "256k", T0, T1,
+        None, None, None)]), run_ord=0)
+    row, = attempts(world)
+    assert (row["tokens_in"], row["tokens_out"], row["cost"]) == (None, None, None)
+    info = world.store.show(world.p("system"), KEY)
+    assert info["attempt_cost"] is None
+    text = show_text(info)
+    assert "attempts 1:ok" in text and "cost" not in text.split("attempts", 1)[1]
 
 
 def test_missing_item_is_counted_and_not_recorded(world, projector):
