@@ -284,8 +284,8 @@ impl HarnessRegistry {
 /// toolchain locations), whatever the harness set on its command itself, and
 /// `home` as `HOME`. `PG_*`, `TEMPORAL_*`, provider keys and the agent CLIs'
 /// own credentials therefore stay with the worker: harness auth is staged
-/// into `home` as files (`sandbox_env::stage_harness_auth`), never passed by
-/// env.
+/// into `home` as files (`sandbox_env::HomeGuard::stage_harness_auth`),
+/// never passed by env.
 ///
 /// `cancelled` is polled while the child runs so a cancel kills the process
 /// group promptly instead of waiting for stall, timeout or natural exit.

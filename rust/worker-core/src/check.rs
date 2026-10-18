@@ -87,6 +87,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env)]
     fn check_runs_without_worker_secrets_and_with_a_private_home() {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("c1-1");

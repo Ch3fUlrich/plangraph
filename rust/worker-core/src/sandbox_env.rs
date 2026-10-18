@@ -9,8 +9,8 @@
 //! `CLAUDE_CODE_OAUTH_TOKEN`), plus a private per-attempt `HOME` so tools
 //! cannot read the operator's dotfiles. Both the harness ([`confine_harness`])
 //! and the card's check command ([`confine_check`]) get [`PASS`] only: harness
-//! auth never travels by environment — [`stage_harness_auth`] copies it into
-//! the harness's private HOME as files.
+//! auth never travels by environment — [`HomeGuard::stage_harness_auth`]
+//! copies it into the harness's private HOME as files.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -38,7 +38,8 @@ pub fn is_passed_check(name: &str) -> bool {
 
 /// Confine a harness child (and its `--version` probe): [`PASS`], a private
 /// `HOME`, and what the caller set on `cmd`. Harness auth is staged into
-/// `home` as files ([`stage_harness_auth`]), never passed by environment.
+/// `home` as files ([`HomeGuard::stage_harness_auth`]), never passed by
+/// environment.
 pub fn confine_harness(cmd: &mut Command, home: &Path) {
     confine_with(cmd, home, is_passed);
 }
@@ -92,10 +93,12 @@ fn home_with_suffix(dir: &Path, suffix: &str) -> PathBuf {
 }
 
 /// Creates a private `HOME` and removes it on drop, unless it already existed
-/// (an enclosing attempt owns it then).
+/// (an enclosing attempt owns it then). Files staged into the home via
+/// [`HomeGuard::stage_harness_auth`] are removed on drop either way.
 pub struct HomeGuard {
     path: PathBuf,
     owned: bool,
+    staged: Vec<PathBuf>,
 }
 
 impl HomeGuard {
@@ -111,11 +114,30 @@ impl HomeGuard {
     fn at(path: PathBuf) -> std::io::Result<HomeGuard> {
         let owned = !path.exists();
         std::fs::create_dir_all(&path)?;
-        Ok(HomeGuard { path, owned })
+        Ok(HomeGuard {
+            path,
+            owned,
+            staged: Vec::new(),
+        })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Copy the auth files named by [`HARNESS_AUTH_DIR_ENV`] into this home,
+    /// preserving relative paths. Regular files are created mode 0600 and
+    /// directories mode 0700 from the outset (unix): the bytes are written
+    /// into the privately-opened file, never copied world-readable and
+    /// chmod-ed afterwards. One level of subdirectories is copied; the walk
+    /// is never recursive and never follows a symlink — a symlink in the
+    /// source is refused outright, so an auth tree is plain files or nothing
+    /// is staged. Unset or a missing directory is a no-op: an auth-less
+    /// harness run (a test) is normal. Everything staged is recorded and
+    /// removed on drop, even when the home pre-existed and is not taken as a
+    /// whole.
+    pub fn stage_harness_auth(&mut self) -> std::io::Result<()> {
+        stage_auth_into(&self.path, &mut self.staged)
     }
 }
 
@@ -123,6 +145,11 @@ impl Drop for HomeGuard {
     fn drop(&mut self) {
         if self.owned {
             let _ = std::fs::remove_dir_all(&self.path);
+            return;
+        }
+        // A pre-existing home stays, but the auth files we put in it do not.
+        for staged in &self.staged {
+            let _ = std::fs::remove_file(staged);
         }
     }
 }
@@ -133,14 +160,9 @@ impl Drop for HomeGuard {
 /// the staged files, never from the environment.
 pub const HARNESS_AUTH_DIR_ENV: &str = "PG_HARNESS_AUTH_DIR";
 
-/// Copy the auth files named by [`HARNESS_AUTH_DIR_ENV`] into `home`,
-/// preserving relative paths. Regular files land mode 0600, created
-/// directories mode 0700 (unix). One level of subdirectories is copied; the
-/// walk is never recursive and never follows a symlink — a symlink in the
-/// source is refused outright, so an auth tree is plain files or nothing is
-/// staged. Unset or a missing directory is a no-op: an auth-less harness run
-/// (a test) is normal. The files go away with the [`HomeGuard`] of `home`.
-pub fn stage_harness_auth(home: &Path) -> std::io::Result<()> {
+/// Body of [`HomeGuard::stage_harness_auth`]: stages each file and records it
+/// so the guard can undo it.
+fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()> {
     let Some(dir) = std::env::var_os(HARNESS_AUTH_DIR_ENV) else {
         return Ok(());
     };
@@ -156,13 +178,12 @@ pub fn stage_harness_auth(home: &Path) -> std::io::Result<()> {
             return Err(symlink_refused(&entry.path()));
         }
         if ft.is_file() {
-            stage_file(&entry.path(), &home.join(entry.file_name()))?;
+            stage_file(&entry.path(), &home.join(entry.file_name()), staged)?;
         } else if ft.is_dir() {
             // One level of subdirectories, no deeper: everything below is
             // skipped rather than recursed into.
             let dest = home.join(entry.file_name());
-            std::fs::create_dir_all(&dest)?;
-            set_mode(&dest, 0o700)?;
+            create_staged_dir(&dest)?;
             for sub in std::fs::read_dir(entry.path())? {
                 let sub = sub?;
                 let sft = sub.file_type()?;
@@ -170,7 +191,7 @@ pub fn stage_harness_auth(home: &Path) -> std::io::Result<()> {
                     return Err(symlink_refused(&sub.path()));
                 }
                 if sft.is_file() {
-                    stage_file(&sub.path(), &dest.join(sub.file_name()))?;
+                    stage_file(&sub.path(), &dest.join(sub.file_name()), staged)?;
                 }
             }
         }
@@ -188,25 +209,35 @@ fn symlink_refused(path: &Path) -> std::io::Error {
     )
 }
 
-fn stage_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::copy(from, to)?;
-    // fs::copy preserves the source permissions; auth files are private here
-    // no matter how they were stored in the source tree.
-    set_mode(to, 0o600)
-}
-
-/// Set unix permissions; a no-op elsewhere (the staging tests are unix-only).
-fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+/// Create a staged directory at its final mode 0700 (unix) up front, so no
+/// window exists between creation and the private mode taking effect.
+fn create_staged_dir(path: &Path) -> std::io::Result<()> {
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        use std::os::unix::fs::DirBuilderExt;
+        b.mode(0o700);
     }
-    #[cfg(not(unix))]
+    b.create(path)
+}
+
+/// Copy `from` into a freshly created `to` opened at mode 0600 (unix) before
+/// any byte lands, then record it for the guard's drop. `create_new` also
+/// refuses to overwrite a same-named file that predates the staging.
+fn stage_file(from: &Path, to: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
     {
-        let _ = (path, mode);
-        Ok(())
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
+    let mut dest = opts.open(to)?;
+    let mut src = std::fs::File::open(from)?;
+    std::io::copy(&mut src, &mut dest)?;
+    staged.push(to.to_path_buf());
+    Ok(())
 }
 
 #[cfg(all(test, unix))]
@@ -268,6 +299,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env)]
     fn child_sees_allowlist_explicit_vars_and_private_home_only() {
         let home = tempfile::tempdir().unwrap();
         // A secret-looking variable in the worker's own environment. The name
@@ -303,6 +335,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env)]
     fn agent_credentials_reach_neither_harness_nor_check_child() {
         let home = tempfile::tempdir().unwrap();
         // Sentinel values unique to this test; no other test reads them.
@@ -361,6 +394,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(env)]
     fn stage_harness_auth_stages_plain_files_and_refuses_symlinks() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
@@ -368,8 +402,8 @@ mod tests {
         let dir = root.path().join("c1-3");
         // Unset is a no-op: an auth-less harness run stays empty.
         std::env::remove_var(HARNESS_AUTH_DIR_ENV);
-        let g = HomeGuard::for_dir(&dir).unwrap();
-        stage_harness_auth(g.path()).unwrap();
+        let mut g = HomeGuard::for_dir(&dir).unwrap();
+        g.stage_harness_auth().unwrap();
         assert_eq!(std::fs::read_dir(g.path()).unwrap().count(), 0);
         drop(g);
 
@@ -378,8 +412,8 @@ mod tests {
         std::fs::write(src.join("sub").join("login"), "x").unwrap();
         std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
         {
-            let g = HomeGuard::for_dir(&dir).unwrap();
-            stage_harness_auth(g.path()).unwrap();
+            let mut g = HomeGuard::for_dir(&dir).unwrap();
+            g.stage_harness_auth().unwrap();
             let f = g.path().join("credentials.json");
             assert_eq!(std::fs::read_to_string(&f).unwrap(), "sentinel-wf8-auth");
             assert_eq!(
@@ -408,8 +442,33 @@ mod tests {
         // must not hand the agent a path outside the auth dir.
         std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
         std::os::unix::fs::symlink("/etc/passwd", src.join("evil")).unwrap();
-        let g = HomeGuard::for_dir(&dir).unwrap();
-        assert!(stage_harness_auth(g.path()).is_err());
+        let mut g = HomeGuard::for_dir(&dir).unwrap();
+        assert!(g.stage_harness_auth().is_err());
         std::env::remove_var(HARNESS_AUTH_DIR_ENV);
+    }
+
+    #[test]
+    #[serial_test::serial(env)]
+    fn staged_auth_is_removed_even_from_a_pre_existing_home() {
+        let root = tempfile::tempdir().unwrap();
+        let src = root.path().join("auth");
+        let dir = root.path().join("c1-4");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("credentials.json"), "sentinel-wf8-auth").unwrap();
+        std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
+        // The home pre-exists (an enclosing attempt owns it), so the guard
+        // must not take it down — but everything it staged must still go.
+        let home = home_for(&dir);
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("operator-file"), "keep").unwrap();
+        {
+            let mut g = HomeGuard::for_dir(&dir).unwrap();
+            g.stage_harness_auth().unwrap();
+            assert!(home.join("credentials.json").exists());
+        }
+        std::env::remove_var(HARNESS_AUTH_DIR_ENV);
+        assert!(!home.join("credentials.json").exists());
+        assert!(home.join("operator-file").exists());
+        assert!(home.is_dir());
     }
 }

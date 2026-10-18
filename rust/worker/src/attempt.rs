@@ -216,10 +216,11 @@ fn run_attempt_inner(
     // The agent's private HOME lives beside the worktree (never in its diff) and
     // goes away with the attempt. The check below gets its own HOME, so a login
     // the harness persisted here never reaches the check child.
-    let home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
+    let mut home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
     // Harness auth travels as staged files in this HOME, never by env (the
-    // confined env carries no credential names; see sandbox_env).
-    pg_worker_core::sandbox_env::stage_harness_auth(home.path())?;
+    // confined env carries no credential names; see sandbox_env). The guard
+    // removes what it staged when the attempt ends.
+    home.stage_harness_auth()?;
     let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
