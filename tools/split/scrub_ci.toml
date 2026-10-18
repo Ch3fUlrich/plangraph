@@ -612,3 +612,27 @@ path = "rust/worker/tests/fixtures/projector/check_fails.json"
 rule = "high-entropy"
 value_sha256 = "ee97d9a87beff65c7d2f3e128c338877598495d263b3243fc6c9af1178cfccfa"
 why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/usage_limit_reroute.json"
+rule = "high-entropy"
+value_sha256 = "18e59994a44f7e2e2204206471b185ffe7d59c5edac4847b1831662499d14752"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/projector/usage_limit_reroute.json"
+rule = "high-entropy"
+value_sha256 = "18e59994a44f7e2e2204206471b185ffe7d59c5edac4847b1831662499d14752"
+why = "same recorded Temporal history fixture, copy used by the projector tests"
+
+[[scrub.allow_value]]
+path = "rust/worker-core/src/sandbox_env.rs"
+rule = "credential-shape"
+value_sha256 = "033855f4e28b61defe234841d46323fcf101111b43e35ee9bdca38a865519097"
+why = "test-only: reads the staged synthetic auth file name through the child HOME (sandbox_env mod tests)"
+
+[[scrub.allow_value]]
+path = "rust/worker-core/src/sandbox_env.rs"
+rule = "credential-shape"
+value_sha256 = "af896a5f354b5297fb7dde9efe8f2b1de11e2fc5315fe28ce1d7468c1953b7ab"
+why = "test-only symlink target to a system file in sandbox_env mod tests (symlink-refusal check)"
