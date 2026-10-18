@@ -10,7 +10,6 @@ import seat_verdict as sv  # noqa: E402
 from plangraph.review.family import (  # noqa: E402
     FAMILIES,
     LEGS,
-    NEVER,
     FamilyError,
     FleetFull,
     NoEligibleLeg,
@@ -62,12 +61,12 @@ def test_parity_edges(model, want):
     assert model_family(model) == want == sv.model_family(model)
 
 
-def test_legs_and_never_shape():
-    assert [leg.name for leg in LEGS] == ["openai", "qwen"]
-    assert [leg.family for leg in LEGS] == ["openai", "alibaba"]
+def test_legs_shape():
+    assert [leg.name for leg in LEGS] == ["openai", "qwen", "anthropic", "opencode"]
+    assert [leg.family for leg in LEGS] == ["openai", "alibaba", "anthropic", "deepseek"]
     assert LEGS[0].model == "ovh/gpt-oss-120b" and LEGS[0].kind == "gateway"
     assert LEGS[1].model == "Qwen3.8-Flash" and LEGS[1].kind == "qoder"
-    assert NEVER == ("anthropic",)
+    assert LEGS[2].kind == "gateway" and LEGS[3].kind == "opencode"
     assert issubclass(NoEligibleLeg, ValueError)
 
 
@@ -78,20 +77,21 @@ def test_leg_for_served_and_requested():
     assert leg_for("qwen3-max") == LEGS[1]
     assert leg_for("mystery-1") is None
     assert leg_for(None) is None
-    assert leg_for("claude-opus-4") is None
+    assert leg_for("claude-opus-4") == LEGS[2]
 
 
-def test_writer_openai_gets_qwen_only():
+def test_writer_openai_prefers_qwen():
     assert pick_legs("openai") == [LEGS[1]]
 
 
-def test_writer_alibaba_gets_openai_only():
+def test_writer_alibaba_prefers_openai():
     assert pick_legs("alibaba") == [LEGS[0]]
 
 
 def test_writer_anthropic_prefers_openai_then_qwen():
     assert pick_legs("anthropic") == [LEGS[0]]
     assert pick_legs("anthropic", need=2) == [LEGS[0], LEGS[1]]
+    assert LEGS[2] not in pick_legs("anthropic", need=3)
 
 
 def test_writer_case_insensitive():
@@ -101,20 +101,22 @@ def test_writer_case_insensitive():
     assert check_cross_family("OpenAI", "Qwen3.8-Flash") == "alibaba"
 
 
-def test_need_two_with_writer_openai_refused():
+def test_need_beyond_distinct_families_refused():
+    assert [leg.family for leg in pick_legs("openai", need=2)] == ["alibaba", "anthropic"]
     with pytest.raises(NoEligibleLeg) as exc:
-        pick_legs("openai", need=2)
+        pick_legs("openai", need=4)
     assert "openai" in str(exc.value)
 
 
 def test_down_names_writer_and_set():
     with pytest.raises(NoEligibleLeg) as exc:
-        pick_legs("openai", down=frozenset({"qwen"}))
+        pick_legs("openai", down=frozenset({"qwen", "anthropic", "opencode"}))
     assert "openai" in str(exc.value) and "qwen" in str(exc.value)
     assert pick_legs("anthropic", down=frozenset({"qwen"})) == [LEGS[0]]
     assert pick_legs("anthropic", down=frozenset({"openai"})) == [LEGS[1]]
+    assert pick_legs("anthropic", down=frozenset({"openai", "qwen"})) == [LEGS[3]]
     with pytest.raises(NoEligibleLeg):
-        pick_legs("anthropic", down=frozenset({"openai", "qwen"}))
+        pick_legs("anthropic", down=frozenset({"openai", "qwen", "opencode"}))
 
 
 def test_fleet_cap():
@@ -137,7 +139,8 @@ def test_check_cross_family_refusals():
     with pytest.raises(FamilyError):
         check_cross_family("meta", "llama-4")
     with pytest.raises(FamilyError):
-        check_cross_family("openai", "claude-opus-4")
+        check_cross_family("anthropic", "claude-opus-4")
+    assert check_cross_family("openai", "claude-opus-4") == "anthropic"
     with pytest.raises(FamilyError):
         check_cross_family("openai", "mystery-1")
     with pytest.raises(FamilyError):

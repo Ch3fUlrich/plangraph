@@ -13,6 +13,7 @@ __all__ = [
     "split_parts",
     "part_map",
     "assemble_all",
+    "assemble_diff",
 ]
 
 NO_TOOLS_PREAMBLE = (
@@ -133,3 +134,23 @@ def assemble_all(vectors: list[str], files: dict[str, str],
         labelled.extend(sorted(part.items()))
         prompts.append(assemble(vectors, labelled, preamble=preamble))
     return prompts
+
+
+def assemble_diff(vectors: list[str], diff_text: str,
+                  max_bytes: int = 60_000, preamble: bool = True) -> list[str]:
+    """One prompt per module part of a diff, each carrying the file map.
+
+    Parts come from split.split_diff_by_module: grouped by module, never
+    truncated (a file above max_bytes is alone in its own part).
+    """
+    from . import split
+
+    if not vectors:
+        raise ValueError("vectors must not be empty")
+    parts = split.split_diff_by_module(diff_text, max_bytes)
+    if not parts:
+        return assemble_all(vectors, {}, max_bytes, preamble)
+    mapping = split.render_part_map(parts)
+    return [assemble(vectors, [("FILE-PART MAP", mapping),
+                               ("DIFF PART %d [%s]" % (p.index, p.module), p.text)],
+                     preamble=preamble) for p in parts]
