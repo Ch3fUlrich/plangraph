@@ -10,7 +10,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 |---|---|---|
 | DONE | - | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW (+FOLLOWUP, TEMPORAL-CHECK server); QUESTION-TIMER 541e4a6c (deploy conds -> WF-VERSIONING); LIVE-GUARDS 2424d40b (live cond -> EXEC-OWNERSHIP) |
 | md-sync F7 | rt-side-2 | FAILED since 08:48Z; F7 merge -> D-1992 steps 1-3 (handoff IN FLIGHT 1); OS-OCGO-LOGIN closes via D-2003 after |
-| DEV-PGDRILL D2 | rt-side-2 | dev-guard + deflake test_extra_table_only_in_restore_fails -> evidence + D-1988 -> submit -> xiaomi+google (seats/pgdrill-0df12c0) |
+| DEV-PGDRILL D2 | rt-side-2 | #89 head 6e911f53 CI green (att2), mimo PASS -> GO-REQ judge sent -> merge -> evidence + D-1988 -> submit -> verdicts. FLAKES: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) -> CI-GATE/DRILLS |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | claimed 14:36Z, briefed inline |
 | GATE-WIRING | predeploy-4->5 (RECYCLE, L2-LAUNCH asked) | redo Claude-written parts (b11c60a) by non-Claude writer; GateInput = list of named checks (D-2002) |
