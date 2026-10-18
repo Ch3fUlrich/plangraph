@@ -104,7 +104,7 @@ class SupportMixin:
         claimant = item.get("claimed_by") or ""
         foreign_claim = self.conn.execute(
             "SELECT ts FROM events WHERE key=? AND type='claimed'"
-            " AND IFNULL(actor, '') != ? ORDER BY seq DESC LIMIT 1",
+            " AND COALESCE(actor, '') != ? ORDER BY seq DESC LIMIT 1",
             (item["key"], claimant)).fetchone()
         epochs = []
         for row in (released, foreign_claim):
