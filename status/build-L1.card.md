@@ -16,11 +16,11 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 | P1 lane | State | Next |
 |---|---|---|
 | TEMPORAL-CHECK | retargeted D-1943 (dev); dep DEVSTACK; DEV record e1c6b934 ready (temporal-check/dev) | after DEVSTACK done: claim, evidence, adopt decision row, submit |
-| DEVSTACK (new D-1943) | CLAIMED e1 (hb key); lane ordered to predeploy-2 (devstack.sh start-dev + docker run postgres:16, no compose) | MERGE-READY -> seats -> merge -> submit |
+| DEVSTACK (new D-1943) | CLAIMED e1 (hb key); lane B of predeploy-3 [dd472a] (devstack.sh start-dev + docker run postgres:16, no compose) | MERGE-READY -> seats -> merge -> submit |
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
 | #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
 | #46 WORKER | MERGED 30b738ba (judge GO cbf83e48; deploy single-host) | evidence when claimable |
-| #49 INBOX | head 0d05f76 CI green; seats 0 countable (LOW+MED) -> fix round; L2 predeploy-2 RECYCLE-READY -> L2-LAUNCH predeploy-3 | MERGE-READY -> merge |
+| #49 INBOX | head 0d05f76 CI green; seats 0 countable (LOW+MED) -> fix round; L2 build-L2-rtp1-predeploy-3 [dd472a] LAUNCHED (predeploy-2 stopped) | MERGE-READY -> merge |
 | CLASS-COMBOS | workst-L1-autoos claimed e1, lane autoos-L2-small-lanes | MERGE-READY + probe |
 ## Open
 | Item | State | Next |
