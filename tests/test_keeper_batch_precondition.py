@@ -101,6 +101,19 @@ def test_precondition_untouched_item_passes_and_zero_refuses(w):
     assert "base_seq 0: changed after base_seq: demo:A" in ei.value.msg
 
 
+def test_precondition_boundary_event_at_base_seq_is_not_stale(w):
+    """(d1) an event AT base_seq is not stale; only seq > base_seq refuses."""
+    w.store.apply_ops(w.p("router"), [
+        {"op": "edit", "key": "demo:A", "fields": {"title": "boundary touch"}},
+    ])
+    boundary = _max_seq(w)
+    res = w.store.apply_ops(w.p("router"), [
+        {"op": "edit", "key": "demo:A", "fields": {"title": "after boundary"}},
+    ], base_seq=boundary)
+    assert res["applied"] == 1
+    assert _item(w, "demo:A")["title"] == "after boundary"
+
+
 def test_precondition_absent_base_seq_does_no_check(w):
     """(d) base_seq absent or None skips stale check."""
     w.store.apply_ops(w.p("router"), [
@@ -172,7 +185,8 @@ def test_depends_on_add_remove_forms(w):
          "fields": {"depends_on": {"add": ["B"]}}},
     ])
     assert res["applied"] == 1
-    assert _item(w, "demo:GOAL")["depends_on"] == ["demo:A", "demo:C", "demo:B"]
+    assert _item(w, "demo:GOAL")["depends_on"] == sorted(
+        ["demo:A", "demo:C", "demo:B"])
 
     # 4. add of present is no-op
     res = w.store.apply_ops(w.p("router"), [
@@ -180,7 +194,8 @@ def test_depends_on_add_remove_forms(w):
          "fields": {"depends_on": {"add": ["demo:B"]}}},
     ])
     assert res["applied"] == 1
-    assert _item(w, "demo:GOAL")["depends_on"] == ["demo:A", "demo:C", "demo:B"]
+    assert _item(w, "demo:GOAL")["depends_on"] == sorted(
+        ["demo:A", "demo:C", "demo:B"])
 
     # 5. bad shapes refused
     for bad in ({"invalid": ["demo:A"]}, {"add": "demo:A"}, {"remove": 1}, {"add": [123]}):
