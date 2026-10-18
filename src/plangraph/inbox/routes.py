@@ -27,7 +27,7 @@ from . import temporal_signal
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "PAGE_HEADERS", "page", "read", "write"]
 
-READ_VERBS = {"questions", "alarms"}
+READ_VERBS = {"questions", "alarms", "projector_watermark"}
 WRITE_VERBS = {"ask_question", "answer_question", "resignal_question", "ack_alarm"}
 
 _STATES = ("open", "answered", "timeout", "all")
@@ -152,6 +152,38 @@ def _alarms(store, principal) -> dict:
     return store._run(principal, "alarms", None, fn)
 
 
+def _projector_watermark(store, principal) -> dict:
+    """Read-only projection progress: per-workflow rows, the global scan stamp, open alarms.
+
+    open_alarms counts every project, so a project-restricted caller gets None.
+    """
+    def fn(now):
+        try:
+            rows = store.conn.execute(
+                "SELECT workflow_id, run_id, run_ord, event_id, status, plan_key, updated_at"
+                " FROM projector_watermark ORDER BY workflow_id").fetchall()
+            open_n = store.conn.execute(
+                "SELECT COUNT(*) FROM projector_alarms WHERE cleared_at IS NULL").fetchone()[0]
+        except _UNREADABLE as exc:      # table missing or unreadable: an HTTP error, never a 200
+            # The class name stays out of the message: it is internal detail for a client.
+            raise Refused("unavailable", "projector watermark unavailable") from exc
+        moment = now
+        allowed = None if principal.role in _SEES_ALL else set(principal.projects or [])
+        glob, workflows = None, []
+        for r in rows:
+            if r["workflow_id"] == "*":
+                glob = {"updated_at": r["updated_at"],
+                        "age_s": _age_s(store, r["updated_at"], moment)}
+            elif allowed is None or _project(r["plan_key"]) in allowed:
+                workflows.append({"workflow_id": r["workflow_id"], "run_id": r["run_id"],
+                                  "run_ord": r["run_ord"], "event_id": r["event_id"],
+                                  "status": r["status"], "plan_key": r["plan_key"],
+                                  "updated_at": r["updated_at"]})
+        return {"global": glob, "workflows": workflows, "open_alarms": None if allowed is not None else int(open_n)}
+
+    return store._run(principal, "projector_watermark", None, fn)
+
+
 def _stored_answer(store, question_id) -> dict | None:
     """The stored answer of *question_id* as a signal request, or ``None``."""
     row = store.conn.execute(
@@ -238,6 +270,8 @@ def read(store, principal, name: str, query: dict) -> dict:
         return _list(store, principal, query)
     if name == "alarms":
         return _alarms(store, principal)
+    if name == "projector_watermark":
+        return _projector_watermark(store, principal)
     raise Refused("not_found", f"no read verb {name!r}")
 
 

@@ -31,6 +31,7 @@ textarea{width:100%;min-height:5rem;margin:.5rem 0}
 <button id="load">Load</button><button id="ref">Refresh</button>
 </div>
 <div id="msg" class="mut"></div>
+<div id="wm" class="mut"></div>
 <div id="list"></div>
 <h2>Alarms</h2>
 <div id="alarms"></div>
@@ -98,6 +99,16 @@ function loadAlarms(){
   })})
   .catch(function(e){msg("error: "+e.message,"err")});
 }
+function loadWatermark(){
+  fetch("/v1/projector_watermark",{headers:hdr(false)})
+  .then(function(r){return r.json().catch(function(){return {}}).then(function(b){
+    var w=$("wm");
+    if(!r.ok||b.error){w.textContent="projector watermark: unavailable";return}
+    var g=b.global;
+    w.textContent="projector watermark: "+(g?(g.updated_at+" ("+(g.age_s==null?"?":g.age_s)+"s ago)"):"never run")+" - "+(b.open_alarms==null?"n/a":b.open_alarms)+" open alarm(s)";
+  })})
+  .catch(function(){$("wm").textContent="projector watermark: unavailable"});
+}
 function load(){
   token=$("tok").value;
   if(!token){msg("enter a token first","err");return}
@@ -109,7 +120,7 @@ function load(){
     l.textContent="";
     qs.forEach(function(q){l.appendChild(card(q))});
     msg(qs.length+" open question(s)");
-    loadAlarms();
+    loadAlarms();loadWatermark();
   })})
   .catch(function(e){msg("error: "+e.message,"err")});
 }
