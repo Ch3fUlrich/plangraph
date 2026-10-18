@@ -84,6 +84,37 @@ async fn replays_needs_input_timeout() {
 }
 
 #[tokio::test]
+async fn replays_needs_input_timeout_midwait() {
+    replayer()
+        .replay_workflow(history("needs_input_timeout_midwait"))
+        .await
+        .expect("needs_input_timeout_midwait history replays");
+}
+
+/// The mid-wait fixture must stop on the durable TimerStarted the restarted
+/// worker resumes, with the question deadline as its fire timeout.
+#[test]
+fn midwait_timer_matches_question_deadline() {
+    let path = format!(
+        "{}/tests/fixtures/needs_input_timeout_midwait.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let doc: serde_json::Value = serde_json::from_slice(&bytes).expect("parse midwait json");
+    let timer = doc["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .find(|e| e["event_type"].as_i64() == Some(17))
+        .expect("a TimerStarted event");
+    assert_eq!(
+        timer["attributes"]["TimerStartedEventAttributes"]["start_to_fire_timeout"].as_str(),
+        Some("2.000000000s"),
+        "the resumed timer fires at the 2s question deadline"
+    );
+}
+
+#[tokio::test]
 async fn replays_cancel() {
     replayer()
         .replay_workflow(history("cancel"))

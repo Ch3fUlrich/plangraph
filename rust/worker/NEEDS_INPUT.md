@@ -39,7 +39,7 @@ A card can stop and ask a human instead of failing. Nothing here touches keeper 
      (this activity never fails). Alarms are best effort everywhere: an alarm that
      cannot be delivered after 3 tries is dropped, never a workflow failure;
    - timer without default (none, no deadline, risk-tagged, or past the cap): park + alarm
-     `question unanswered`;
+     `question_timeout` (the park packet's check tail is `question_timeout: <question text>`);
    - cancel: janitor, `cancelled`.
 6. **Budget.** The question attempt is reported to the keeper but kept out of the
    retry history, so asking never spends retries. What bounds a card that keeps

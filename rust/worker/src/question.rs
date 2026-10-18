@@ -174,6 +174,16 @@ fn parse_line(json: &str) -> Result<Question, String> {
     }
 }
 
+/// Alarm reason when a wait timer expires with no usable default. The keeper's
+/// `/v1/park` takes only card/tier/exit_class/check_tail, so the reason travels
+/// in the check tail and the alarm.
+pub const TIMEOUT_PARK_REASON: &str = "question_timeout";
+
+/// Check tail for a timed-out question: the reason prefixed to the question.
+pub fn timeout_park_tail(text: &str) -> String {
+    format!("{TIMEOUT_PARK_REASON}: {text}")
+}
+
 /// What the workflow does when its wait timer fires unanswered.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OnTimer {
@@ -385,6 +395,14 @@ mod tests {
         let p = prompt_with_answers("do it", &[long]);
         assert!(p.ends_with(TRUNCATION_MARKER));
         assert!(p.chars().count() < MAX_TEXT_CHARS + 200);
+    }
+
+    #[test]
+    fn timeout_park_tail_prefixes_the_reason() {
+        assert_eq!(
+            timeout_park_tail("which db?"),
+            "question_timeout: which db?"
+        );
     }
 
     #[test]

@@ -822,11 +822,20 @@ async fn needs_input_risk_tagged_never_defaults() {
             env.keeper
                 .alarms()
                 .iter()
-                .any(|a| a.reason == "question unanswered"),
+                .any(|a| a.reason == "question_timeout"),
             "{:?}",
             env.keeper.alarms()
         );
-        assert_eq!(env.keeper.parked().len(), 1);
+        let parked = env.keeper.parked();
+        assert_eq!(parked.len(), 1);
+        assert!(
+            parked
+                .iter()
+                .filter(|p| p.check_tail.starts_with("question_timeout: "))
+                .count()
+                == 1,
+            "{parked:?}"
+        );
         env.stop();
     })
     .await;
