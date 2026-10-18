@@ -315,8 +315,10 @@ def test_each_python_prefix_selects_pytest(path):
     assert not res["rust"]
 
 
-def test_select_full_cli_runs_every_suite(capsys):
-    assert main(["select", "--full"]) == 0
+def test_select_full_cli_runs_every_suite(capsys, monkeypatch):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    # --full must win over an explicit docs-only file list (push/dispatch path)
+    assert main(["select", "--full", "--files", "docs/a.md"]) == 0
     out = capsys.readouterr().out
     assert "full=true" in out and "rust-spike=true" in out and "false" not in out
 
