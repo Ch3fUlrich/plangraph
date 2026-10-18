@@ -43,7 +43,7 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 USAGE = ("usage: md_sync.py --questions P --answers P --decisions P "
          "[--dry-run | --apply] --url U --token-file F [--principal NAME] "
          "[--batch-out FILE] [--status-file FILE] [--keeper-config PATH] "
-         "[--decisions-since N]\n")
+         "[--decisions-since N] [--gate KEY]\n")
 
 SLEEP = time.sleep
 
@@ -225,6 +225,9 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--status-file")
     parser.add_argument("--keeper-config")
     parser.add_argument("--decisions-since", type=int, default=1)
+    # Import-target override: the gate key the plan links new lanes to
+    # (resolved through the snapshot's rehome aliases in build_plan).
+    parser.add_argument("--gate", default=None)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
@@ -282,7 +285,9 @@ def main(argv=None, out=None, err=None):
         decisions = mp.parse_decisions(decisions_text)
         session = apply_batch.Session(opts.url, token)
         try:
-            items = session.get("snapshot").get("items") or []
+            snapshot = session.get("snapshot")
+            items = snapshot.get("items") or []
+            aliases = snapshot.get("aliases") or {}
         except apply_batch.ApiError as exc:
             err.write(f"error: cannot read the live graph: {exc.code} {exc.msg}\n")
             return stop(2, f"error: cannot read the live graph: {exc.code} {exc.msg}")
@@ -290,7 +295,8 @@ def main(argv=None, out=None, err=None):
             plan = mplan.build_plan(questions, answers, skipped, decisions, items,
                                     decisions_view=DecisionsAdapter(opts.decisions),
                                     decisions_text=decisions_text, repos=repos,
-                                    since=opts.decisions_since)
+                                    since=opts.decisions_since,
+                                    aliases=aliases, gate=opts.gate)
         except mplan.PlanError as exc:
             out.write(f"error: {exc}\n")
             return stop(1, f"error: {exc}")

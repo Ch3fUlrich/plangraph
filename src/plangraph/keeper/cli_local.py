@@ -9,7 +9,8 @@ from __future__ import annotations
 from .. import views
 from .item_fields import MODEL_FIELDS
 
-__all__ = ["evidence_ref", "local_show", "local_alerts", "local_digest"]
+__all__ = ["evidence_ref", "resolve_alias", "local_show", "local_alerts",
+           "local_digest"]
 
 
 def evidence_ref(args) -> dict:
@@ -34,12 +35,22 @@ def evidence_ref(args) -> dict:
     return ref
 
 
-def local_show(items, key, aliases=None) -> dict:
-    """The same shape as ``Store.show``, from snapshot items."""
-    for _ in range(16):  # old -> new, like Store.resolve_key
+def resolve_alias(aliases, key):
+    """Follow ``old -> new`` aliases to the live key (``key`` if none).
+
+    The snapshot-shaped counterpart of ``Store.resolve_key``: same 16-hop cap,
+    so a cyclic alias table cannot loop forever.
+    """
+    for _ in range(16):
         if key not in (aliases or {}):
             break
         key = aliases[key]
+    return key
+
+
+def local_show(items, key, aliases=None) -> dict:
+    """The same shape as ``Store.show``, from snapshot items."""
+    key = resolve_alias(aliases, key)
     index = {it["key"]: it for it in items}
     item = index.get(key)
     if item is None:
