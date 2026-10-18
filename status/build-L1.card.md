@@ -1,5 +1,5 @@
 # build-L1 card · gen-15 · HANDOFF #15 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
-Control repo is LOCAL ONLY (D-1751): `git push control build-L1` (bare ~/.local/share/plangraph/control.git). NEVER `git push origin build-L1` (public repo).
+Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: Taildrop (+sha256) to bz-wg-pdw028 BEFORE L2-LAUNCH; origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 
