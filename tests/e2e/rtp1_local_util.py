@@ -1,9 +1,8 @@
 """Helpers for the local RT-P1 end-to-end test (not collected by pytest).
 
-Pieces: the keeper HTTP server over a seeded ``World``, a thin front for the verbs the keeper
-does not serve yet (``/v1/attempts|park|complete|alarms|locks``), a PATH-stubbed fake
-``opencode``, the Rust worker as a subprocess, a fixture git repo, and small HTTP/JSON helpers.
-Loopback only.
+Pieces: the keeper HTTP server over a seeded ``World`` (the worker talks to it directly; it serves
+the verbs and the locks itself), a PATH-stubbed fake ``opencode``, the Rust worker as a subprocess,
+a fixture git repo, and small HTTP/JSON helpers.  Loopback only.
 """
 from __future__ import annotations
 
@@ -16,7 +15,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from plangraph.keeper import api, config
@@ -24,8 +22,6 @@ from plangraph.keeper import api, config
 ANSWER_TOKEN = "ANSWER-PURPLE-42"       # appears only in the human answer, never in the card prompt
 BRANCH = "phase-rtp1"                   # the phase branch the card merges into
 CARD_FILE = "out.txt"
-LOCAL_VERBS = ("/v1/attempts", "/v1/park", "/v1/complete", "/v1/alarms")
-FORWARDED = ("/v1/ask_question", "/v1/answer_question")
 
 FAKE_OPENCODE = """#!/bin/sh
 # argv: run -m <model> <prompt>.  The prompt only carries the answer on the resumed attempt.
@@ -82,88 +78,6 @@ class KeeperServer:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
-
-
-class VerbFront:
-    """What the worker talks to: ask/answer go to the real keeper (token passed through); the verbs
-    the keeper has no door for yet are answered here and recorded (a merge lock hands out a
-    growing fence).  Listed in the run record so nobody mistakes them for keeper behaviour."""
-
-    def __init__(self, keeper_base: str) -> None:
-        self.keeper_base = keeper_base
-        self.calls: list[tuple[str, object]] = []
-        self.lock = threading.Lock()
-        self.fence = 0
-        front = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
-
-            def log_message(self, *args):    # quiet
-                pass
-
-            def do_POST(self):
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length) if length else b""
-                front.handle(self, raw)
-
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.base = f"http://127.0.0.1:{self.server.server_address[1]}"
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-
-    def stop(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
-
-    @staticmethod
-    def _send(h, status: int, payload=None) -> None:
-        body = b"" if payload is None else json.dumps(payload).encode()
-        h.send_response(status)
-        if status != 204:
-            h.send_header("Content-Type", "application/json")
-            h.send_header("Content-Length", str(len(body)))
-        h.end_headers()
-        if body:
-            h.wfile.write(body)
-
-    def handle(self, h, raw: bytes) -> None:
-        path = h.path
-        doc = json.loads(raw.decode() or "null")
-        with self.lock:
-            self.calls.append((path, doc))
-        if path in FORWARDED:
-            request = urllib.request.Request(self.keeper_base + path, data=raw, method="POST")
-            request.add_header("Content-Type", "application/json")
-            auth = h.headers.get("Authorization")
-            if auth:
-                request.add_header("Authorization", auth)
-            try:
-                with urllib.request.urlopen(request, timeout=15) as response:
-                    body, status = response.read(), response.status
-            except urllib.error.HTTPError as exc:
-                body, status = exc.read(), exc.code
-            h.send_response(status)
-            h.send_header("Content-Type", "application/json")
-            h.send_header("Content-Length", str(len(body)))
-            h.end_headers()
-            h.wfile.write(body)
-        elif path in LOCAL_VERBS:
-            self._send(h, 204)
-        elif path.startswith("/v1/locks/") and path.endswith("/acquire"):
-            with self.lock:
-                self.fence += 1
-                token = self.fence
-            self._send(h, 200, {"token": token, "owner": doc.get("owner", "")})
-        elif path.startswith("/v1/locks/") and path.endswith("/release"):
-            self._send(h, 204)
-        else:
-            self._send(h, 404, {"error": "not_found"})
-
-    def paths(self) -> list[str]:
-        with self.lock:
-            return [p for p, _ in self.calls]
 
 
 # ------------------------------------------------------------------ git + worker

@@ -7,11 +7,14 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+import urllib.parse
+
 from ..inbox import routes as _inbox
 from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
-           "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS"]
+           "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS",
+           "WORKER_VERBS", "worker_write"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
@@ -23,7 +26,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "reopen", "set_kind", "set_metrics",
-               "governor_override"}
+               "governor_override",
+               "attempts", "park", "complete", "alarms", "locks"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -52,6 +56,43 @@ def run_gate(principal, name):
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
           "same_family": 409, "unavailable": 503}
+
+
+#: RT-P1-KEEPER: the Rust worker's verbs (rust/worker/src/keeper.rs).
+WORKER_VERBS = frozenset({"attempts", "park", "complete", "alarms", "locks"})
+
+
+def worker_write(store, principal, name, extra, body):
+    """The worker verbs; a ``None`` result means 204 with an empty body.
+
+    ``locks`` arrives as ``POST /v1/locks/<repo>/<action>``: ``extra`` is the
+    percent-encoded single repo segment joined with the action, so split on
+    "/" first and unquote the repo after.
+    """
+    if name != "locks":
+        if not isinstance(body, dict):
+            raise Refused("validation", "body must be a JSON object")
+        if name == "attempts":
+            store.worker_attempt(principal, body)
+        elif name == "park":
+            store.worker_park(principal, body)
+        elif name == "complete":
+            store.worker_complete(principal, body)
+        else:
+            store.worker_alarm(principal, body)
+        return None
+    parts = extra.split("/")
+    if len(parts) != 2:
+        raise Refused("not_found", f"unknown locks route /v1/locks/{extra}")
+    repo, action = urllib.parse.unquote(parts[0]), parts[1]
+    if not repo:
+        raise Refused("not_found", "locks needs a repo segment")
+    if action == "acquire":
+        return store.lock_acquire(principal, repo, body)
+    if action == "release":
+        store.lock_release(principal, repo, body)
+        return None
+    raise Refused("not_found", f"unknown locks route /v1/locks/{extra}")
 
 
 # Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is
