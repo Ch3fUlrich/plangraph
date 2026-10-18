@@ -138,7 +138,7 @@ ensure_temporal_cli() {
     TEMPORAL_CLI="$DEVSTACK_STATE/bin/temporal"
     return 0
   fi
-  local os arch url tmp expected actual fetch
+  local os arch url expected actual fetch
   os="$(uname -s)"
   case "$os" in
     Linux) os=linux ;;
@@ -183,42 +183,49 @@ ensure_temporal_cli() {
   fi
   url="${DEVSTACK_TEMPORAL_URL_BASE}/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_${os}_${arch}.tar.gz"
   mkdir -p "$DEVSTACK_STATE/bin"
-  tmp="$(mktemp "$DEVSTACK_STATE/temporal_cli_download.XXXXXX")"
+  _tcli_tmp="$(mktemp "$DEVSTACK_STATE/temporal_cli_download.XXXXXX")"
+  _tcli_stage="$(mktemp -d "$DEVSTACK_STATE/temporal_cli_stage.XXXXXX")"
+  # (globals: the EXIT trap runs after the function's locals are gone) Archive and staging dir go on any exit or signal; bin/temporal is only moved in whole after a
+  # verified extract, so an interrupted run cannot leave a partial binary the -x cache check accepts.
+  trap 'rm -rf "${_tcli_tmp:-}" "${_tcli_stage:-}"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   echo "temporal: fetching CLI v$TEMPORAL_CLI_VERSION ($url)"
   if [ "$fetch" = curl ]; then
-    if ! curl -fsSL "$url" -o "$tmp"; then
-      rm -f "$tmp"
+    if ! curl -fsSL "$url" -o "$_tcli_tmp"; then
+      rm -f "$_tcli_tmp"
       echo "temporal: download failed (set TEMPORAL_CLI to a local binary)" >&2
       exit 1
     fi
   else
-    if ! wget -qO- "$url" >"$tmp"; then
-      rm -f "$tmp"
+    if ! wget -qO- "$url" >"$_tcli_tmp"; then
+      rm -f "$_tcli_tmp"
       echo "temporal: download failed (set TEMPORAL_CLI to a local binary)" >&2
       exit 1
     fi
   fi
   if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$tmp" | cut -d' ' -f1)"
+    actual="$(sha256sum "$_tcli_tmp" | cut -d' ' -f1)"
   elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$tmp" | cut -d' ' -f1)"
+    actual="$(shasum -a 256 "$_tcli_tmp" | cut -d' ' -f1)"
   else
-    rm -f "$tmp"
+    rm -f "$_tcli_tmp"
     echo "temporal: no sha256 tool (sha256sum/shasum) to verify the download" >&2
     exit 1
   fi
   if [ "$actual" != "$expected" ]; then
-    rm -f "$tmp"
+    rm -f "$_tcli_tmp"
     echo "temporal: sha256 mismatch" >&2
     exit 1
   fi
-  if ! tar -xzf "$tmp" -C "$DEVSTACK_STATE/bin" temporal; then
-    rm -f "$tmp" "$DEVSTACK_STATE/bin/temporal"
+  if ! tar -xzf "$_tcli_tmp" -C "$_tcli_stage" temporal; then
     echo "temporal: archive did not contain a 'temporal' binary" >&2
     exit 1
   fi
-  rm -f "$tmp"
-  chmod +x "$DEVSTACK_STATE/bin/temporal"
+  chmod +x "$_tcli_stage/temporal"
+  mv -f "$_tcli_stage/temporal" "$DEVSTACK_STATE/bin/temporal"
+  rm -rf "$_tcli_tmp" "$_tcli_stage"
+  trap - EXIT INT TERM
   TEMPORAL_CLI="$DEVSTACK_STATE/bin/temporal"
   echo "temporal: installed CLI v$TEMPORAL_CLI_VERSION at $TEMPORAL_CLI"
 }

@@ -22,14 +22,14 @@ BASH = shutil.which("bash") or "/bin/bash"
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="devstack.sh is a posix bash script")
 
 VERSION = "9.9.9"
-DOWNLOAD_TMP = "temporal_cli_download.tar.gz"
+DOWNLOAD_GLOB = "temporal_cli_*"  # mktemp archive + staging dir; both must be gone after any run
 
 # external commands devstack.sh touches from the set-current code path (plus a couple of
 # safety nets); symlinking only these keeps the fake PATH hermetic while `temporal` is absent.
 # gzip is a hard requirement: tar -xzf execs it as a child ("tar (child): gzip: Cannot exec"
 # when it is missing from PATH).
 TOOLS = ["bash", "mkdir", "dirname", "uname", "gzip", "curl", "tar", "sha256sum", "cut",
-         "mktemp", "tr", "head", "chmod", "rm", "cat", "sleep"]
+         "mktemp", "tr", "head", "chmod", "rm", "mv", "cat", "sleep"]
 # platform-dependent fallbacks the script probes at runtime: linked when present, no skip
 OPTIONAL_TOOLS = ["shasum", "sha256", "wget"]
 
@@ -124,7 +124,7 @@ def test_missing_cli_with_correct_sha256_installs_and_proceeds(tmp_path):
     # installed stub for worker deployment set-current-version
     assert f"temporal: installed CLI v{VERSION}" in r.stdout
     assert "worker deployment set-current-version" in calls(tmp_path)
-    assert not (tmp_path / "state" / DOWNLOAD_TMP).exists()
+    assert not list((tmp_path / "state").glob(DOWNLOAD_GLOB))
 
 
 def test_wrong_sha256_exits_1_and_removes_download(tmp_path):
@@ -138,8 +138,27 @@ def test_wrong_sha256_exits_1_and_removes_download(tmp_path):
     assert r.returncode == 1
     assert "temporal: sha256 mismatch" in r.stderr
     assert not (tmp_path / "state" / "bin" / "temporal").exists()
-    assert not (tmp_path / "state" / DOWNLOAD_TMP).exists()
+    assert not list((tmp_path / "state").glob(DOWNLOAD_GLOB))
     assert calls(tmp_path) == ""
+
+
+def test_archive_without_binary_exits_1_leaving_nothing_behind(tmp_path):
+    os_name, arch = host_os_arch()
+    make_release(tmp_path, os_name, arch)
+    tarball = tmp_path / "rel" / f"v{VERSION}" / f"temporal_cli_{VERSION}_{os_name}_{arch}.tar.gz"
+    other = tmp_path / "other"
+    other.write_text("x")
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(other, arcname="other")
+    env = base_env(tmp_path, make_path_bin(tmp_path, "pathbin"),
+                   TEMPORAL_CLI_SHA256=hashlib.sha256(tarball.read_bytes()).hexdigest())
+
+    r = run_devstack(env, "set-current")
+
+    assert r.returncode == 1
+    assert "did not contain a 'temporal' binary" in r.stderr
+    assert not (tmp_path / "state" / "bin" / "temporal").exists()
+    assert not list((tmp_path / "state").glob(DOWNLOAD_GLOB))
 
 
 def test_cli_already_on_path_never_downloads(tmp_path):
