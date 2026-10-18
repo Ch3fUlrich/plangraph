@@ -62,7 +62,8 @@ class SupportMixin:
         The injected ``ctx`` supplies the adapters; the store always overrides
         ``now`` and derives ``claim_time`` from the item's latest ``claimed``
         event, so the real verifiers compare a commit against the actual claim
-        instant rather than a caller-supplied one.
+        instant rather than a caller-supplied one.  ``bind_floor_time`` is the
+        F1 floor for trailer-bound commits (see :meth:`_bind_floor_time`).
         """
         base = self.ctx
 
@@ -76,7 +77,8 @@ class SupportMixin:
         return Context(
             git=adapter("git"), ci=adapter("ci"), runs=adapter("runs"),
             semaphore=adapter("semaphore"), decisions=adapter("decisions"),
-            now=now, claim_time=self._claim_time(item))
+            now=now, claim_time=self._claim_time(item),
+            bind_floor_time=self._bind_floor_time(item))
 
     def _claim_time(self, item):
         """The epoch of the item's current claim, or ``None`` if never claimed."""
@@ -87,6 +89,31 @@ class SupportMixin:
             return None
         parsed = parse_iso(row["ts"])
         return parsed.timestamp() if parsed is not None else None
+
+    def _bind_floor_time(self, item):
+        """The F1 commit-time floor for this item's ``Plan-Item`` trailer.
+
+        The later of the latest ``released`` event and the latest ``claimed``
+        event by a principal other than the current claimant; ``None`` when
+        neither exists, which binds a trailer-carrying commit with no lower
+        bound (a first claim never invalidates commits that preceded it).
+        """
+        released = self.conn.execute(
+            "SELECT ts FROM events WHERE key=? AND type='released'"
+            " ORDER BY seq DESC LIMIT 1", (item["key"],)).fetchone()
+        claimant = item.get("claimed_by") or ""
+        foreign_claim = self.conn.execute(
+            "SELECT ts FROM events WHERE key=? AND type='claimed'"
+            " AND IFNULL(actor, '') != ? ORDER BY seq DESC LIMIT 1",
+            (item["key"], claimant)).fetchone()
+        epochs = []
+        for row in (released, foreign_claim):
+            if row is None:
+                continue
+            parsed = parse_iso(row["ts"])
+            if parsed is not None:
+                epochs.append(parsed.timestamp())
+        return max(epochs) if epochs else None
 
     def verify_chain(self):
         return events.verify_chain(self.conn)

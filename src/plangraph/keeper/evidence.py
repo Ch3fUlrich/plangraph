@@ -375,18 +375,22 @@ class CommitCiVerifier:
                 f"commit {commit} does not carry trailer 'Plan-Item: {label}'", ref
             )
 
-        claim_epoch = as_epoch(getattr(ctx, "claim_time", None))
-        if claim_epoch is None:
-            return _fail("no claim time available to compare the commit time", ref)
-        try:
-            author_epoch, committer_epoch = _commit_times(ctx.git, repo, commit)
-        except Exception as exc:  # noqa: BLE001
-            return _fail(f"git error reading the commit time ({type(exc).__name__})", ref)
-        if author_epoch is None or committer_epoch is None:
-            return _fail(f"could not read the commit time of {commit}", ref)
-        threshold = claim_epoch - _skew(ctx)
-        if author_epoch < threshold or committer_epoch < threshold:
-            return _fail(f"commit {commit} predates the claim", ref)
+        # F1: the matching Plan-Item trailer binds this commit to the item, so
+        # the time threshold is the last release/re-claim floor, not the
+        # current claim.  No floor (never released, never claimed by someone
+        # else) means no lower bound at all.
+        floor_epoch = as_epoch(getattr(ctx, "bind_floor_time", None))
+        if floor_epoch is not None:
+            try:
+                author_epoch, committer_epoch = _commit_times(ctx.git, repo, commit)
+            except Exception as exc:  # noqa: BLE001
+                return _fail(f"git error reading the commit time ({type(exc).__name__})", ref)
+            if author_epoch is None or committer_epoch is None:
+                return _fail(f"could not read the commit time of {commit}", ref)
+            threshold = floor_epoch - _skew(ctx)
+            if author_epoch < threshold or committer_epoch < threshold:
+                return _fail(f"commit {commit} predates the item's last "
+                             "release/re-claim", ref)
 
         try:
             ci_mode = ctx.ci.mode(project) if ctx.ci is not None else None

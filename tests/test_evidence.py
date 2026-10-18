@@ -126,20 +126,61 @@ def test_commit_ci_wrong_trailer_value():
     assert verify("commit+ci", {"commit": SHA}, ctx).ok is False
 
 
-def test_commit_ci_commit_older_than_claim():
-    # 1000 s before the claim is far outside the default 120 s skew.
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1000))
+# --------------------------------------------------------------------------- #
+# commit+ci: F1 trailer binding replaces the claim-time window
+# --------------------------------------------------------------------------- #
+
+def test_commit_ci_trailer_bound_commit_predating_current_claim_passes():
+    # The Plan-Item trailer binds the commit to the item, so the threshold is
+    # the last release/re-claim (CLAIM-2000), not the current claim (CLAIM):
+    # a commit at CLAIM-1000 is newer than the floor and verifies.
+    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1000),
+                   bind_floor_time=CLAIM - 2000)
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is True, res.detail
+
+
+def test_commit_ci_predating_last_release_refused():
+    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 2500),
+                   bind_floor_time=CLAIM - 2000)
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "release" in res.detail
+
+
+def test_commit_ci_predating_foreign_claim_refused():
+    # Same floor value, but semantically the last claim by another principal.
+    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 2500),
+                   bind_floor_time=CLAIM - 2000)
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "re-claim" in res.detail
+
+
+def test_commit_ci_different_plan_item_key_refused_even_with_floor():
+    # A trailer naming another key never binds, whatever the floor says.
+    ctx = make_ctx(git=FakeGit(trailers={"Plan-Item": "routing:T9-OTHER"},
+                               commit_time=CLAIM - 1000),
+                   bind_floor_time=CLAIM - 2000)
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "Plan-Item" in res.detail
+
+
+def test_commit_ci_commit_older_than_bind_floor_refused():
+    # 1000 s before the floor is far outside the default 120 s skew.
+    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1000), bind_floor_time=CLAIM)
     res = verify("commit+ci", {"commit": SHA}, ctx)
     assert res.ok is False
     assert "claim" in res.detail.lower() or "predate" in res.detail.lower()
 
 
-def test_commit_ci_no_claim_time_fails_closed():
-    ctx = make_ctx()
-    ctx.claim_time = None
+def test_commit_ci_never_claimed_trailer_bound_has_no_floor():
+    # No release and no foreign claim: the trailer-bound commit is not
+    # time-checked at all, so a missing claim time cannot fail it closed.
+    ctx = make_ctx(claim_time=None)
     res = verify("commit+ci", {"commit": SHA}, ctx)
-    assert res.ok is False
-    assert "claim" in res.detail.lower()
+    assert res.ok is True, res.detail
 
 
 def test_commit_ci_red_ci():
