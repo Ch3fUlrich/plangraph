@@ -154,3 +154,4 @@ or PATH; skipped when missing) and runs real workflows. Migration test: upgrade 
   unit. The projector never sets `done`/`cancelled`: closing a card stays a keeper verb.
 * Attempts have no dedicated keeper event type; `state_set` events (written by `Store.set_state`) are the keeper events the
   projector produces, the attempt rows themselves are the append-only record of each attempt.
+
