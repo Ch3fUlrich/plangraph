@@ -201,12 +201,19 @@ class TokensMixin:
             (self._iso(expires), principal.token_id))
 
     # -------------------------------------------------------- revocation
-    def _revoke_for_event(self, principal, key, type, now):
-        """Revoke the tokens an event makes stale, in the event's transaction."""
+    def _revoke_for_event(self, principal, key, type, now, payload=None):
+        """Revoke the tokens an event makes stale, in the event's transaction.
+
+        Besides ``_REVOKE_ALL``, a ``state_set`` whose payload carries
+        ``released: True`` (a park of a claimed card releases the claim)
+        revokes every live token of the item.
+        """
         if key is None:
             return
         token_id = getattr(principal, "token_id", None)
         if type in _REVOKE_ALL:
+            where, args = "key=?", (key,)
+        elif type == "state_set" and (payload or {}).get("released") is True:
             where, args = "key=?", (key,)
         elif type == "submitted":
             where, args = "key=? AND role='writer'", (key,)

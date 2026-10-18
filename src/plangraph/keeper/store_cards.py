@@ -394,25 +394,40 @@ class CardsMixin:
                                  lambda project: self._may_write_for(principal,
                                                                      project))
 
-    def _apply_state(self, principal, key, state, why, now, scope):
+    def _apply_state(self, principal, key, state, why, now, scope,
+                     guard=None, release_claim=False):
         """Move *key* to *state*; *scope(project)* does the authorisation check.
 
         Idempotent: re-applying the state the item already has changes nothing.
+        `guard(item)`, if given, runs inside the write lock after the scope and
+        lock checks and may raise; `release_claim` lets a `claimed` item move to
+        *state* and clears its claim.
         """
         with self._write():
             item = self._get_or_refuse(key)
             scope(item["project"])
             self._assert_unlocked(item)
+            if guard is not None:
+                guard(item)
             was = item["state"]
-            if was not in SETTABLE_STATES:
+            if was not in SETTABLE_STATES and not (release_claim and was == "claimed"):
                 raise Refused("bad_state", f"{key} is {was}; set_state moves only"
                               f" {list(SETTABLE_STATES)}")
             if was == state:
                 return {"key": key, "state": state, "changed": False}
-            self._append(principal, key, "state_set",
-                         {"state": state, "was": was, "reason": why}, now)
-            cursor = self.conn.execute(
-                "UPDATE items SET state=?, updated_at=? WHERE key=? AND state=?"
-                " AND epoch=?", (state, self._iso(now), key, was, item["epoch"]))
+            payload = {"state": state, "was": was, "reason": why}
+            if release_claim and was == "claimed":
+                payload["released"] = True
+            self._append(principal, key, "state_set", payload, now)
+            if release_claim and was == "claimed":
+                cursor = self.conn.execute(
+                    "UPDATE items SET state=?, claimed_by=NULL, delegate=NULL,"
+                    " reviewer=NULL, lease_until=NULL, review_waiver=NULL,"
+                    " updated_at=? WHERE key=? AND state=? AND epoch=?",
+                    (state, self._iso(now), key, was, item["epoch"]))
+            else:
+                cursor = self.conn.execute(
+                    "UPDATE items SET state=?, updated_at=? WHERE key=? AND state=?"
+                    " AND epoch=?", (state, self._iso(now), key, was, item["epoch"]))
             self._race_guard(cursor, key, was, item["epoch"])
         return {"key": key, "state": state, "changed": True}

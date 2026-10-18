@@ -14,7 +14,8 @@ from urllib.parse import quote
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed
+from keeper_util import World, seed, to_claimed, to_done
+from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 
 
@@ -43,6 +44,13 @@ def lock_path(repo, action):
 def attempt(card, n=1):
     return {"card": card, "n": n, "leg": "free", "exit_class": "ok",
             "diff_hash": "deadbeef", "check_tail": "boom"}
+
+
+def park(card, **extra):
+    body = {"card": card, "tier": "free", "exit_class": "check_fail",
+            "check_tail": "boom"}
+    body.update(extra)
+    return body
 
 
 def state(w, key):
@@ -155,37 +163,39 @@ def test_a_long_alarm_reason_is_clipped_not_refused(doors, w):
 
 
 # --------------------------------------------------------------------- locks
-def test_lock_acquire_release_chain_with_fence_tokens(doors, w):
+def test_lock_acquire_release_chain_with_generation_tokens(doors, w):
     repo = "org/repo name"
     held = {"owner": "w1", "ttl_s": 60}
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"), held) \
-        == (200, {"token": 1, "owner": "w1"})
+        == (200, {"token": 1, "owner": "workerA:w1"})
     status, body = doors.http("workerA", "POST", lock_path(repo, "acquire"),
                               {"owner": "w2", "ttl_s": 60})
     assert (status, body["error"]) == (409, "conflict")
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"), held) \
-        == (200, {"token": 1, "owner": "w1"})                # same owner: same token
+        == (200, {"token": 1, "owner": "workerA:w1"})    # same owner: same token
     assert doors.http("workerA", "POST", lock_path(repo, "release"),
-                      {"token": 1, "owner": "w1"}) == (204, "")
+                      {"token": 1, "owner": "workerA:w1"}) == (204, "")
     status, body = doors.http("workerA", "POST", lock_path(repo, "release"),
-                              {"token": 1, "owner": "w1"})   # no longer held
+                              {"token": 1, "owner": "workerA:w1"})   # no longer held
     assert (status, body["error"]) == (409, "conflict")
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"),
                       {"owner": "w2", "ttl_s": 60}) \
-        == (200, {"token": 2, "owner": "w2"})                # tokens only grow
+        == (200, {"token": 2, "owner": "workerA:w2"})    # tokens only grow
     status, body = doors.http("workerA", "POST", lock_path(repo, "release"),
-                              {"token": 1, "owner": "w1"})   # stale token
+                              {"token": 1, "owner": "workerA:w1"})   # stale token
     assert (status, body["error"]) == (409, "conflict")
 
 
 def test_an_expired_lock_is_regranted_and_the_old_release_fails(doors, w):
     assert doors.http("workerA", "POST", lock_path("r", "acquire"),
-                      {"owner": "w1", "ttl_s": 10}) == (200, {"token": 1, "owner": "w1"})
+                      {"owner": "w1", "ttl_s": 10}) \
+        == (200, {"token": 1, "owner": "workerA:w1"})
     w.clock.advance(11)
     assert doors.http("workerA", "POST", lock_path("r", "acquire"),
-                      {"owner": "w2", "ttl_s": 10}) == (200, {"token": 2, "owner": "w2"})
+                      {"owner": "w2", "ttl_s": 10}) \
+        == (200, {"token": 2, "owner": "workerA:w2"})
     status, body = doors.http("workerA", "POST", lock_path("r", "release"),
-                              {"token": 1, "owner": "w1"})
+                              {"token": 1, "owner": "workerA:w1"})
     assert (status, body["error"]) == (409, "conflict")
 
 
@@ -237,3 +247,178 @@ def test_store_lock_acquire_as_reader_raises_forbidden(w):
     with pytest.raises(Refused) as exc:
         w.store.lock_acquire(w.p("reader"), "r", {"owner": "o", "ttl_s": 5})
     assert exc.value.code == "forbidden"
+
+
+# -------------------------------------- park guards a claimed card
+def test_park_by_a_stale_worker_after_reclaim_is_refused(doors, w):
+    key, = seed(w, [("A", [])])
+    epoch = to_claimed(w, key, "workerA", lease_s=60)
+    w.store.release(w.p("workerA"), key, epoch)
+    to_claimed(w, key, "workerB", lease_s=60)
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key))
+    assert (status, body["error"]) == (403, "forbidden")
+    assert state(w, key) == "claimed"
+
+
+# ------------------------------------------- park checks the epoch
+def test_park_with_a_stale_epoch_is_refused_and_current_epoch_is_ok(doors, w):
+    key, = seed(w, [("A", [])])
+    e1 = to_claimed(w, key, "workerA")
+    w.store.release(w.p("workerA"), key, e1)
+    e2 = to_claimed(w, key, "workerA")
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key, epoch=e1))
+    assert (status, body["error"]) == (409, "epoch_stale")
+    assert doors.http("workerA", "POST", "/v1/park", park(key, epoch=e2)) == (204, "")
+    assert state(w, key) == "parked"
+
+
+# ------------------------------- the holder parks without an epoch
+def test_the_current_holder_parks_a_claimed_card_without_an_epoch(doors, w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    assert doors.http("workerA", "POST", "/v1/park", park(key)) == (204, "")
+    assert state(w, key) == "parked"
+    row = w.conn.execute(
+        "SELECT claimed_by, lease_until FROM items WHERE key=?", (key,)).fetchone()
+    assert row[0] is None and row[1] is None
+    assert doors.http("workerA", "POST", "/v1/park", park(key)) == (204, "")
+
+
+# ------------------------------------------ park refuses an expired lease
+def test_park_with_an_expired_lease_is_refused(doors, w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA", lease_s=60)
+    w.clock.advance(61)
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key))
+    assert (status, body["error"]) == (409, "epoch_stale")
+    assert state(w, key) == "claimed"
+
+
+# ------------------------- a delegate and the router may park a claimed card
+def test_a_delegate_and_the_router_may_park_a_claimed_card(doors, w):
+    delegated, routed = seed(w, [("A", []), ("B", [])])
+    to_claimed(w, delegated, "l1main")
+    w.store.delegate(w.p("l1main"), delegated, "workerB")
+    assert doors.http("workerB", "POST", "/v1/park", park(delegated)) == (204, "")
+    to_claimed(w, routed, "l1main")
+    assert doors.http("router", "POST", "/v1/park", park(routed)) == (204, "")
+    assert state(w, delegated) == "parked" and state(w, routed) == "parked"
+    for key in (delegated, routed):
+        row = w.conn.execute(
+            "SELECT claimed_by, delegate, lease_until FROM items WHERE key=?",
+            (key,)).fetchone()
+        assert row[0] is None and row[1] is None and row[2] is None
+
+
+# -------------------------- a locked card gets the usual locked refusal
+def test_park_of_a_locked_card_gets_the_usual_locked_refusal(doors, w):
+    key, = seed(w, [("A", [])])
+    to_done(w, key)
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key))
+    assert (status, body["error"]) == (409, "locked")
+
+
+# ------------------------------------ the lock owner binds to the principal
+def test_lock_owner_is_bound_to_the_principal(doors, w):
+    held = {"owner": "run1", "ttl_s": 60}
+    assert doors.http("workerA", "POST", lock_path("r", "acquire"), held) \
+        == (200, {"token": 1, "owner": "workerA:run1"})
+    status, body = doors.http("workerB", "POST", lock_path("r", "acquire"), held)
+    assert (status, body["error"]) == (409, "conflict")
+    status, body = doors.http("workerB", "POST", lock_path("r", "acquire"),
+                              {"owner": "workerA:run1", "ttl_s": 60})
+    assert (status, body["error"]) == (409, "conflict")
+    assert doors.http("workerA", "POST", lock_path("r", "acquire"), held) \
+        == (200, {"token": 1, "owner": "workerA:run1"})  # same owner: same token
+    status, body = doors.http("workerB", "POST", lock_path("r", "release"),
+                              {"token": 1, "owner": "workerA:run1"})
+    assert (status, body["error"]) == (409, "conflict")
+    assert doors.http("workerB", "POST", lock_path("r", "release"),
+                      {"token": 1, "owner": "run1"})[0] == 409
+    assert doors.http("workerA", "POST", lock_path("r", "release"),
+                      {"token": 1, "owner": "run1"})[0] == 409
+    assert doors.http("workerA", "POST", lock_path("r", "release"),
+                      {"token": 1, "owner": "workerA:run1"}) == (204, "")
+    assert doors.http("workerB", "POST", lock_path("r", "acquire"), held) \
+        == (200, {"token": 2, "owner": "workerB:run1"})
+
+
+# ------------------------- the binding survives a colon in the principal name
+def test_lock_owner_binding_survives_a_colon_in_the_principal_name(w):
+    pa = auth.authenticate(w.conn, auth.add_principal(w.conn, "a:b", "worker",
+                                                     ["demo"], family="famX"))
+    pb = auth.authenticate(w.conn, auth.add_principal(w.conn, "a", "worker",
+                                                     ["demo"], family="famY"))
+    pc = auth.authenticate(w.conn, auth.add_principal(w.conn, "ab", "worker",
+                                                     ["demo"], family="famZ"))
+    assert w.store.lock_acquire(pa, "r", {"owner": "x", "ttl_s": 60}) \
+        == {"token": 1, "owner": "a%3Ab:x"}
+    with pytest.raises(Refused) as exc:
+        w.store.lock_acquire(pb, "r", {"owner": "b:x", "ttl_s": 60})
+    assert exc.value.code == "conflict"
+    with pytest.raises(Refused) as exc:
+        w.store.lock_release(pb, "r", {"token": 1, "owner": "a%3Ab:x"})
+    assert exc.value.code == "conflict"
+    with pytest.raises(Refused) as exc:
+        w.store.lock_release(pb, "r", {"token": 1, "owner": "a:b:x"})
+    assert exc.value.code == "conflict"
+    assert w.store.lock_release(pa, "r",
+                                {"token": 1, "owner": "a%3Ab:x"}) == {}
+    assert w.store.lock_acquire(pb, "r2", {"owner": "y", "ttl_s": 60}) \
+        == {"token": 1, "owner": "a:y"}
+    with pytest.raises(Refused) as exc:
+        w.store.lock_release(pc, "r2", {"token": 1, "owner": "a:y"})
+    assert exc.value.code == "conflict"
+
+
+# ------------------- a stored lock owner is always releasable
+def test_a_stored_lock_owner_is_always_releasable(w):
+    long_name = ":" * 100                      # escapes to 300 characters
+    token = auth.add_principal(w.conn, long_name, "worker", ["demo"], family="famL")
+    pl = auth.authenticate(w.conn, token)
+    with pytest.raises(Refused) as exc:
+        w.store.lock_acquire(pl, "r", {"owner": "o" * 256, "ttl_s": 60})
+    assert exc.value.code == "validation"
+    held = w.store.lock_acquire(pl, "r", {"owner": "o" * 100, "ttl_s": 60})
+    assert held["token"] == 1
+    assert w.store.lock_release(pl, "r", held) == {}
+
+
+# ------------------- park of a claimed card revokes its run tokens
+class _Runs:
+    """Minimal run record: run ids wa/wb name demo:A / demo:B."""
+
+    _JOBS = {"wa": "demo:A", "wb": "demo:B"}
+
+    def valid_run_id(self, run_id):
+        return isinstance(run_id, str) and run_id.replace("-", "").isalnum()
+
+    def job(self, run_id):
+        if run_id not in self._JOBS:
+            raise FileNotFoundError(run_id)
+        return {"request": {"title": f"work on {self._JOBS[run_id]}"}, "task": ""}
+
+
+def _revoked_at(w, key, token):
+    return w.conn.execute(
+        "SELECT revoked_at FROM run_tokens WHERE key=? AND token_sha256=?",
+        (key, auth.hash_token(token))).fetchone()["revoked_at"]
+
+
+def test_park_of_a_claimed_card_revokes_run_tokens_like_release(doors, w):
+    w.store.ctx = {"runs": _Runs()}
+    a, b, c = seed(w, [("A", []), ("B", []), ("C", [])])
+    to_claimed(w, a, "l1main")
+    to_claimed(w, b, "l1main")
+    token_a = w.store.mint_run_token(w.p("l1main"), a, "writer", "wa")["token"]
+    token_b = w.store.mint_run_token(w.p("l1main"), b, "writer", "wb")["token"]
+
+    assert doors.http("router", "POST", "/v1/park", park(a)) == (204, "")
+
+    assert _revoked_at(w, a, token_a) is not None
+    assert _revoked_at(w, b, token_b) is None
+    assert [p for p in w.store.verify_integrity()
+            if p["code"].startswith("token_")] == []
+
+    w.store.set_state(w.p("router"), c, "running")   # plain set_state never revokes
+    assert _revoked_at(w, b, token_b) is None
