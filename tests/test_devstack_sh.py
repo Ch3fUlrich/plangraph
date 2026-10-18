@@ -49,7 +49,7 @@ case "${{1:-}}" in
       -aq) [ -e "$TMP/container" ] && printf 'abc123\\n' ;;
     esac
     exit 0 ;;
-  run) touch "$TMP/container" "$TMP/running"; exit 0 ;;
+  run) if [ "${{FAKE_RUN_FAIL:-}}" = 1 ]; then touch "$TMP/container"; exit 1; fi; touch "$TMP/container" "$TMP/running"; exit 0 ;;
   start) touch "$TMP/running"; exit 0 ;;
   stop) rm -f "$TMP/running"; exit 0 ;;
   rm) rm -f "$TMP/container" "$TMP/running"; exit 0 ;;
@@ -250,6 +250,21 @@ def test_reused_container_that_never_becomes_ready_is_stopped_not_removed(stack)
     assert "docker start devstack-test-pg" in second
     assert "docker stop devstack-test-pg" in second
     assert not any(l.startswith("docker rm") for l in second)
+
+
+def test_fresh_container_that_never_becomes_ready_is_removed_with_volume(stack):
+    r = stack.run("start", timeout=30, extra_env={"FAKE_PG_NOTREADY": "1"})
+    assert r.returncode == 1
+    assert "docker rm -f -v devstack-test-pg" in stack.lines()
+    assert not any(l.startswith("docker rm") and " -v" not in l for l in stack.lines())
+    assert not (stack.tmp / "container").exists()
+
+
+def test_docker_run_failure_removes_partial_container_with_volume(stack):
+    r = stack.run("start", timeout=30, extra_env={"FAKE_RUN_FAIL": "1"})
+    assert r.returncode == 1
+    assert "docker rm -f -v devstack-test-pg" in stack.lines()
+    assert not any(l.startswith("docker rm") and " -v" not in l for l in stack.lines())
 
 
 def test_set_current_failure_does_not_fail_start(stack):

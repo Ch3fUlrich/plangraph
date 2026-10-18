@@ -223,7 +223,7 @@ start_postgres() {
       if ! docker run -d --name "$DEVSTACK_PG_NAME" --memory 1g \
         -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=keeper \
         -p "127.0.0.1:$PG_PORT:5432" postgres:16 >/dev/null; then
-        docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+        docker rm -f -v "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
         echo "postgres: docker run failed; removed any partially created container" >&2
         exit 1
       fi
@@ -235,7 +235,7 @@ start_postgres() {
       echo "postgres: container $DEVSTACK_PG_NAME never became ready within ${DEVSTACK_HEALTH_TIMEOUT} s" >&2
       # Only a container this invocation created is destroyed; a reused one is stopped so its data survives.
       if [ "$created" = 1 ]; then
-        docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+        docker rm -f -v "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
       else
         docker stop "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
       fi
@@ -281,7 +281,7 @@ cmd_stop() {
   stop_pidfile "$DEVSTACK_STATE/keeper.pid" plangraph.keeper.daemon
   if pg_docker_exists; then
     if [ "$purge" = 1 ]; then
-      # -v also removes the image's anonymous data volume so --purge does not leak it.
+      # -v also removes the container's anonymous data volume so --purge does not leak it.
       docker rm -f -v "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
     else
       # Stop only: the container (and its data) survives for the next start's docker reuse.
