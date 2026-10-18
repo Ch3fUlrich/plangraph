@@ -1,42 +1,53 @@
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
-# build-L1 handoff #15 (gen-14 end -> gen-15, 2026-10-18 ~04:20Z, D-1919 budget stop)
-Startup unchanged (skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop; effort medium; caveman).
-IN FORCE: D-1919 (15% Claude left, max 5%/day): no new L2s, no Claude writers/seats, free/qwen L3 only; msgs only BLOCKED/MERGED/GO-REQ.
-
-## Gen-14 landed
-- Merged: #65 cec80a38 MODEL-LOOP, #66 de5523f6 PG-CI-FORGEJO, #67 c17ea59d MODEL-NAMES, #68 665f68ba, #70 79b7457f,
-  #69 c9c11c5a (after NO-GO D-1882 -> fix D-1883), #72 b766859a (hook allow_value + cli no default port). Main = b766859a.
-- Keeper DONE: MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO (2 verdicts each). hb keys now 3.
-- Republish: step plan control 588d6838 accepted as shape (D-1898), no exec GO. P1+P2 closed (#72). Open: P3 T2 manifest
-  (D-B scrub lanes), P4 private words list on host, R3 lane-branch list. L2 relaunch WAIT until budget (D-1916). Scope D-1916:
-  rust/deploy public scrubbed for real; 8 docs/plan records already moved (private evidence/docs-plan-rethink).
-- C1 (judge #66): forgejo status trust filter must be in the forgejo-switch done criteria before any project ci=forgejo:.
-- Lessons (not yet sent to skill owner): FAMILYFENCE refuses any --model pin when not_family set (l3-driver);
-  opencode/*-free models undeclared in opencode.jsonc -> not spawnable via autoos; glm-5.3 not in registry.
-- Evidence recipe: keeper verifies commit+ci at ATTACH time on the exact merge sha: push ci/<sha> branch + gh workflow run
-  tests.yml --ref ci/<sha>, attach after green, delete branch. run-record needs job.json/exit.json in server runs dir
-  (workstation runs: workst-L1-autoos Taildrop tar -> `tailscale file get`, inspect, cp -n).
-- seat_verdict needs --url http://127.0.0.1:8787 now.
+# build-L1 handoff #16 (gen-15 end -> gen-16, 2026-10-18 ~13:50Z, recycle D-1990)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop; effort medium; caveman.
+IN FORCE: D-1932 ONLY PH-RT-RUNTIME. D-1919 budget: writers qwen (qodercli) / opencode free, seats non-Claude, Claude orchestrates only.
+D-1964: L2 up to 3 L3 writers parallel, claim BEFORE PR, PROGRESS line to routing every 2 h, phase % line on every close.
+D-1984 (Q19): read item + named docs before asking anyone. D-1985: Jev key only from opencode auth store at call time.
 
 ## FIRST after clear
 1. `cd /home/s/code/plangraph-worktrees/build-L1; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done`
 2. ONE bg loop: `for i in $(seq 1 16); do sleep 1800; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done; done`
-   (gen-14 loop restarted 04:02Z, dies with clear.) Keys: UI-BROWSER-TESTS, UI-DEPLOY-AUTO (TEMPORAL-CHECK released D-1933, re-add on re-claim).
 3. Control branch: commit + `git push control build-L1` ONLY (local bare repo, D-1751). Never origin.
-4. Collect the 6 keeper-model seats (below), then judge.
+4. Tools (job tmp is gone): ~/.local/share/plangraph/tools-l1/{sv.py (seat verdict), q2seat.py <seatdir> <head> (qwen out.json ->
+   review.txt+evidence.json), build.py (close-seat prompt builder), pgbin/ (docker pg client wrappers, --memory 1g)}.
 
-## IN FLIGHT
-- build-L2-ui-u1-stamp: D1 dev-stack-static resumed (GO 20:1xZ, RAM ok) -> MERGE-READY -> seats gemini+mimo (free) -> merge.
-- build-L2-rtp1-predeploy-2: #46-#49 (#46/#47 judge).
-- UI-DEPLOY-AUTO: waits routing rev 4 apply (release/re-claim/evidence/submit).
-- PARKED: republish L2, UI-BROWSER-TESTS, p1-rehearsal.
+## Gen-15 landed
+- Merged: #75 #81 records, #82 VERBS, #84 (broke main) -> #86 34806368 fix, #85 4b2f3591 FOLLOWUP, #80 cdd0655d PGDRILL. Main = cdd0655d.
+- DONE: DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW, VERBS-FOLLOWUP. PH-RT-RUNTIME 4/13 direct deps.
+- CI: tests.yml has NO push trigger: after every merge `gh workflow run tests.yml --ref main`, watch, then attach commit+ci.
+
+## IN FLIGHT (act in this order)
+1. md-sync (D-1990 blocker, GO D-1992): cause tools/md_sync_plan.py:27-30 hard-codes routing:PH-OPERATOR (rehomed to
+   plangraph:PH-OPERATOR by D-1834). F7 at rt-side-2 (alias resolve + --gate). On F7 MERGE-READY: merge, CI, seat PASS, then
+   D-1992 steps EXACTLY: (1) dry-run md-sync at the full merge sha vs live keeper, counts only; HOLD + send summary if refusals>0,
+   ops>20 or anything under a cancelled parent; (2) worktree pinned at sha (detached) + drop-in
+   ~/.config/systemd/user/plangraph-md-sync.service.d/z9-md-sync-<sha8>.conf (Environment=PYTHONPATH=<wt>/src, ExecStart= then
+   ExecStart with <wt>/tools paths; same args as unit); daemon-reload, reset-failed, start .timer + .path; (3) read back one run:
+   exit 0, refused=0, routerctl alarms gone. Report sha, drop-in path, dry-run counts, read-back line. Rollback rm drop-in + reload.
+   NEVER edit the frozen .claude/worktrees/proposal tree.
+2. TEMPORAL-CHECK: review_tier=none -> keeper refuses verdicts; router close_on_decision D-1967 asked (seat qwen PASS
+   seats/temporal-check/qwen). Drop from hb-keys when done.
+3. DEV-PGDRILL-LOCAL (HIGH): #80 merged, commit+ci attached. Lane D2 (rt-side-2, D-1988): dev-only guard + --memory on client
+   docker + tests. After D2 merge: evidence commit+ci D2 + decision D-1988, submit, verdicts seats/pgdrill-0df12c0/{mimo,gemini}
+   (writer qwen). Run record evidence/pgdrill-codingvm-0df12c0-ok.log (rows=58).
+4. #83 QUESTION-TIMER (HIGH, rt-side-2): restart e2e + pytest, re-seat -> GO-REQ judge.
+5. FLOW-UNBLOCK lane F (HIGH, rt-side-2, F1-F7). After done: claim RT-QC-ACCEPTS, tell rt-side-2 "QC claimed".
+6. predeploy-4 [bridge session_01CpY4...]: LIVE-GUARDS G1/G2 (HIGH -> judge), RT-GATE-WIRING, E2E driver, JEV-SHADOW (test call
+   OK 200 jev-1.13-free; flag PLANGRAPH_JEV default off).
+7. FLEET-SID-REFRESH: hold mimo2 PASS until routing attaches coding.vm live proof (router-owned).
+8. CLASS-COMBOS: workst-L1-autoos owns.
 
 ## Recipes
-- Merge: `gh api -X PUT repos/Ch3fUlrich/plangraph/pulls/N/merge -f sha=<head> -f merge_method=merge -f commit_title=... -f commit_message="Plan-Item: <key>"`
-  -> `ops/pg.sh evidence K --kind commit+ci --commit <merge sha>` -> `ops/pg.sh submit K` -> verdicts:
-  `python3 $sv --key K --seat-dir D --writer-family <writer> --token-dir ~/.config/plangraph --url http://127.0.0.1:8787` (url required after #68) ($sv = git show origin/main:tools/seat_verdict.py > tmp).
-- Seat spawn: autoos-agent spawn client=qoder (qwen) or client=agy model=gemini-3.8-flash, card review, cwd = detached worktree at head,
-  review_base = base sha, not_family [writer family(+qwen for agy)], no_fallthrough. Seat dir: review.txt (V1..TEST-GAMING) + evidence.json.
-- run-record evidence needs an autoos run id (<runs_dir>/<id>/job.json naming the item + exit.json rc 0), not a file path.
-- Keeper DB: `ops/pq.sh ...` (see gen-12 handoff in git history).
-Peers: routing (uds 7069.sock), judge server-L1-routing, workst-L1-autoos [b76c36], prox-L1-main, plangraph-L1-graphrestructure.
+- Merge: `gh api -X PUT repos/Ch3fUlrich/plangraph/pulls/N/merge -f sha=<head40> -f merge_method=merge -f commit_title=...
+  -f commit_message="Plan-Item: plangraph:KEY"` (trailer ONLY) -> dispatch CI on main -> `ops/pg.sh evidence K --kind commit+ci
+  --commit <merge40>` -> submit -> `python3 ~/.local/share/plangraph/tools-l1/sv.py --key K --seat-dir D --writer-family W
+  --token-dir ~/.config/plangraph --url http://127.0.0.1:8787` (seat dir: review.txt TEST-GAMING ": 0 hits" + VERDICT, evidence.json).
+- MERGE GATE: pytest + pytest-postgres + scrub (+ rust when touched) green on head; rust-only PRs now trigger pytest (#86).
+- qwen seat: `cd empty && timeout 900 qodercli -p --model Qwen3.8-Flash --tools "" --no-session-persistence -o json "$(cat P)"`;
+  prompts end with ops/tail.md. mimo: `sh ops/seat.sh mimo/mimo-v2.6-flash P OUT TITLE` (times out >~47 KB).
+- Dev stack on coding.vm: DEVSTACK_STATE=<tmp> TEMPORAL_PORT=27233 TEMPORAL_UI_PORT=28233 PG_PORT=25432 KEEPER_PORT=28787,
+  python = ~/.local/share/plangraph/venv-pg/bin (psycopg); admin add-principal X --role router + admin import tests/fixtures/import_mini.
+- Keeper DB: `ops/pq.sh ...`.
+Peers: routing (uds 7069.sock), judge server-L1-routing, build-L2-rt-side-2 [bridge session_01D3w3...], build-L2-rtp1-predeploy-4,
+workst-L1-autoos.

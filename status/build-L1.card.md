@@ -1,4 +1,4 @@
-# build-L1 card · gen-15 · HANDOFF #15 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
+# build-L1 card · gen-16 · HANDOFF #16 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
@@ -12,7 +12,8 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | P1 item | State | Next |
 |---|---|---|
 | DONE today | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW, VERBS-FOLLOWUP (#85 4b2f3591) | phase 4/13 direct deps |
-| TEMPORAL-CHECK (server) | in_review, D-1967 attached | router close |
+| TEMPORAL-CHECK (server) | in_review, tier none: router close_on_decision D-1967 asked (qwen seat PASS seats/temporal-check) | router close -> drop hb key |
+| md-sync (D-1990 blocker) | FAILED since 08:48Z: routing:PH-OPERATOR rehomed; F7 at rt-side-2 | F7 merge -> GO D-1992 steps (handoff #16 IN FLIGHT 1) |
 | VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
 | E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
 | DEV-PGDRILL-LOCAL (HIGH) | #80 merged cdd0655d (GO D-1988), commit+ci attached; run record evidence/pgdrill-codingvm-0df12c0-ok.log; seats seats/pgdrill-0df12c0 | rt-side-2 lane D2 dev-guard (D-1988) -> merge -> evidence + D-1988 -> submit -> verdicts xiaomi+google |
