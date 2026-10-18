@@ -3,7 +3,7 @@ Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Wor
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 
-## Main = 4b2f3591 (#85, #86 34806368 main-red fix, #82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
+## Main = cdd0655d (#80, #85, #86 34806368 main-red fix, #82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 
@@ -15,7 +15,7 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | TEMPORAL-CHECK (server) | in_review, D-1967 attached | router close |
 | VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
 | E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
-| DEV-PGDRILL-LOCAL (HIGH) | #80 head 0df12c06 seats mimo+gemini PASS; my coding.vm run ok rows=58 (evidence/pgdrill-codingvm-0df12c0-ok.log) | GO-REQ judge -> merge -> evidence + 2 verdicts |
+| DEV-PGDRILL-LOCAL (HIGH) | #80 merged cdd0655d (GO D-1988), commit+ci attached; run record evidence/pgdrill-codingvm-0df12c0-ok.log; seats seats/pgdrill-0df12c0 | rt-side-2 lane D2 dev-guard (D-1988) -> merge -> evidence + D-1988 -> submit -> verdicts xiaomi+google |
 | FLOW-UNBLOCK (HIGH, D-1968) | claimed; rt-side lane F (brief 5dbd1f31) | after #80 |
 | FLEET-SID-REFRESH | in_review; seats FIX; routing fixing in routing repo (D-1971) | re-seat on routing's new sha |
 | PG-PUBLIC-READY | in_review until history cut (D-1966); options record republish/public-cut-options-20261018.md (A default) | operator after P1 |
