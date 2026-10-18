@@ -887,6 +887,7 @@ async fn needs_input_rounds_are_bounded() {
             env.keeper.alarms()
         );
         assert_eq!(env.keeper.parked().len(), 1);
+        assert_eq!(env.keeper.parked()[0].check_tail, "again?");
         env.stop();
     })
     .await;
@@ -1016,6 +1017,40 @@ async fn needs_input_ask_outage_parks_with_an_alarm() {
                 .any(|a| a.reason.starts_with("question not recorded")),
             "{alarms:?}"
         );
+        assert_eq!(env.keeper.parked().len(), 1);
+        assert_eq!(env.keeper.parked()[0].check_tail, "which db?");
+        env.stop();
+    })
+    .await;
+}
+
+/// A keeper that refuses the question outright (403: retrying cannot help)
+/// parks the card with the `question not recorded` alarm and the question text
+/// as the packet's check tail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_ask_refused_parks_with_question_not_recorded() {
+    in_local(async {
+        let script = r#"echo 'PG_QUESTION: {"text":"which db?"}'"#;
+        let Some(env) = env_or_skip("needs-input-ask-refused", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_ask_status(Some(403));
+        let claim = env.claim("e2e-ask-refused", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-ask-refused-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_ask_refused", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        let alarms = env.keeper.alarms();
+        assert!(
+            alarms
+                .iter()
+                .any(|a| a.reason == "question not recorded"),
+            "{alarms:?}"
+        );
+        assert_eq!(env.keeper.parked().len(), 1);
+        assert_eq!(env.keeper.parked()[0].check_tail, "which db?");
         env.stop();
     })
     .await;
