@@ -2,7 +2,7 @@
 
 Jev is a free decision model run in SHADOW: it never changes a decision, a slow or
 failing Jev never blocks, and the flag defaults to ``off``.  These tests drive the
-runner's real entry points (``shadow_routing`` / ``shadow_qc_accept``) with stub
+runner's real entry point (``shadow_routing``) with stub
 mode and fake clients; the two ``api``-mode tests point ``cfg.url`` at a closed
 127.0.0.1 port and never let a default credential location be read (the auth path/db
 overrides are set to unusable tmp paths).
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import inspect
 import json
 import logging
 import socket
@@ -20,6 +21,7 @@ import pytest
 
 from keeper_util import World, seed
 from plangraph.planner import jev_client, jev_questions, jev_shadow, routing
+from plangraph.review.actions import plan_actions
 
 
 # --------------------------------------------------------------------- helpers
@@ -111,10 +113,8 @@ def test_off_does_no_work(monkeypatch):
     sink = seen.append
     # env={} -> mode off; and an explicit off cfg
     assert jev_shadow.shadow_routing(c, route, sink=sink, env={}) == []
-    assert jev_shadow.shadow_qc_accept(c, {"verdict": "pass"}, sink=sink, env={}) is None
     off = jev_client.JevConfig(mode="off")
     assert jev_shadow.shadow_routing(c, route, sink=sink, cfg=off) == []
-    assert jev_shadow.shadow_qc_accept(c, {"verdict": "pass"}, sink=sink, cfg=off) is None
     assert calls == []
     assert seen == []
 
@@ -139,9 +139,10 @@ def test_stub_routing_rows_in_order_and_sink():
         assert row["jev_confidence"] is not None
         assert row["jev_model"] == "stub"
         assert row["latency_ms"] == 0
-        assert set(row) == {"card", "attempt", "kind", "rule_answer", "jev_answer",
-                            "jev_probabilities", "jev_confidence", "status",
-                            "reason", "jev_model", "latency_ms"}
+        assert set(row) == {"card", "attempt", "decision_id", "input_hash", "kind",
+                            "rule_answer", "jev_answer", "jev_probabilities",
+                            "jev_confidence", "status", "reason", "jev_model",
+                            "latency_ms"}
 
 
 # -------------------------------------------------------- decision unchanged
@@ -261,64 +262,19 @@ def test_missing_card_key_returns_rows_but_skips_the_sink():
     assert seen == []
 
 
-def test_the_hooks_swallow_an_internal_error(monkeypatch):
+def test_the_hook_swallows_an_internal_error(monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("bug")
 
     monkeypatch.setattr(jev_questions, "routing_questions", boom)
     assert jev_shadow.shadow_routing(card(), route_for(), cfg=stub_cfg(), env={}) == []
-    monkeypatch.setattr(jev_questions, "qc_question", boom)
-    assert jev_shadow.shadow_qc_accept(card(), {"verdict": "pass"},
-                                       cfg=stub_cfg(), env={}) is None
 
 
-# ---------------------------------------------------------------- QC-accept
-def test_qc_off_returns_none(monkeypatch):
-    monkeypatch.delenv("PLANGRAPH_JEV", raising=False)
-    assert jev_shadow.shadow_qc_accept(card(), {"verdict": "pass"}, env={}) is None
-    assert jev_shadow.shadow_qc_accept(
-        card(), {"verdict": "pass"}, cfg=jev_client.JevConfig(mode="off")) is None
-
-
-def test_qc_stub_row_and_rule_answer():
-    seen = []
-    row = jev_shadow.shadow_qc_accept(card(), {"verdict": "pass"}, sink=seen.append,
-                                      attempt=1, cfg=stub_cfg(), env={})
-    assert row["kind"] == "qc_accept"
-    assert row["card"] == "demo:A" and row["attempt"] == 1
-    assert row["status"] == "ok" and row["jev_model"] == "stub"
-    assert row["rule_answer"] == "accept"
-    assert seen == [row]
-
-
-def test_qc_rule_answer_reads_bool_then_verdict():
-    cfg = stub_cfg()
-    assert jev_shadow.shadow_qc_accept(card(), None, rule_accept=True,
-                                       cfg=cfg)["rule_answer"] == "accept"
-    assert jev_shadow.shadow_qc_accept(card(), None, rule_accept=False,
-                                       cfg=cfg)["rule_answer"] == "reject"
-    assert jev_shadow.shadow_qc_accept(card(), {"verdict": "pass"},
-                                       cfg=cfg)["rule_answer"] == "accept"
-    for verdict in ({"verdict": "fix"}, {"verdict": "halt"}, None, "garbage"):
-        assert jev_shadow.shadow_qc_accept(card(), verdict, cfg=cfg)["rule_answer"] == "reject"
-
-
-def test_qc_never_raises_on_odd_input():
-    cfg = stub_cfg()
-    assert jev_shadow.shadow_qc_accept(card(), object(), cfg=cfg)["kind"] == "qc_accept"
-    row = jev_shadow.shadow_qc_accept(None, object(), cfg=cfg)
-    assert row["kind"] == "qc_accept" and row["card"] is None
-
-
-def test_qc_timeout_and_error_rows(monkeypatch):
-    monkeypatch.setattr(jev_client, "ask", slow_ask)
-    row = jev_shadow.shadow_qc_accept(card(), {"verdict": "pass"},
-                                      cfg=api_cfg(timeout_s=0.2), env={})
-    assert row["status"] == "timeout" and row["kind"] == "qc_accept"
-    monkeypatch.setattr(jev_client, "ask", boom_ask)
-    row = jev_shadow.shadow_qc_accept(card(), {"verdict": "pass"},
-                                      cfg=api_cfg(), env={})
-    assert row["status"] == "error" and row["reason"] == "RuntimeError"
+def test_qc_hooks_and_shadow_param_removed():
+    assert not hasattr(jev_shadow, "qc_hook")
+    assert not hasattr(jev_shadow, "shadow_qc_accept")
+    sig = inspect.signature(plan_actions)
+    assert "shadow" not in sig.parameters
 
 
 # ----------------------------------------------------------- keeper roundtrip
@@ -333,6 +289,8 @@ def test_store_sink_roundtrip(w):
     assert [entry["kind"] for entry in stored] == list(jev_questions.ROUTING_KINDS)
     for row, entry in zip(rows, stored):
         assert entry["key"] == key and entry["attempt"] == 1
+        assert entry["decision_id"] == row["decision_id"]
+        assert entry["input_hash"] == row["input_hash"]
         assert entry["rule_answer"] == row["rule_answer"]
         assert entry["jev_answer"] == row["jev_answer"]
         assert entry["status"] == "ok" and entry["jev_model"] == "stub"
@@ -421,3 +379,75 @@ def test_the_key_never_reaches_a_row_or_the_log(tmp_path, caplog):
     assert fake_key not in json.dumps(rows)
     assert fake_key not in repr(cfg)
     assert fake_key not in caplog.text
+
+
+# ------------------------------------------------ decision_id and input_hash
+def test_all_four_rows_share_one_decision_id_and_two_calls_differ():
+    cfg = stub_cfg()
+    c = card()
+    route = route_for(c)
+    rows1 = jev_shadow.shadow_routing(c, route, cfg=cfg, env={})
+    rows2 = jev_shadow.shadow_routing(c, route, cfg=cfg, env={})
+
+    assert len(rows1) == 4
+    dec_ids1 = {r["decision_id"] for r in rows1}
+    assert len(dec_ids1) == 1
+    dec_id1 = next(iter(dec_ids1))
+    assert isinstance(dec_id1, str) and len(dec_id1) == 32
+
+    assert len(rows2) == 4
+    dec_ids2 = {r["decision_id"] for r in rows2}
+    assert len(dec_ids2) == 1
+    dec_id2 = next(iter(dec_ids2))
+    assert isinstance(dec_id2, str) and len(dec_id2) == 32
+
+    assert dec_id1 != dec_id2
+
+
+def test_input_hash_is_sha256_of_state_and_raw_state_never_appears():
+    import hashlib
+    cfg = stub_cfg()
+    c = card()
+    route = route_for(c)
+    state = jev_questions.routing_state(c, route)
+    expected_hash = hashlib.sha256(state.encode()).hexdigest()
+
+    rows = jev_shadow.shadow_routing(c, route, cfg=cfg, env={})
+    assert len(rows) == 4
+    hashes = {r["input_hash"] for r in rows}
+    assert hashes == {expected_hash}
+
+    dumped = json.dumps(rows)
+    assert state not in dumped
+    # Check that non-trivial substrings of state are not leaked into any row
+    for line in state.splitlines():
+        trimmed = line.strip()
+        if len(trimmed) > 10:
+            assert trimmed not in dumped
+
+
+def test_fallback_rows_carry_decision_id_and_input_hash(monkeypatch):
+    import hashlib
+    c = card()
+    route = route_for(c)
+    expected_hash = hashlib.sha256(
+        jev_questions.routing_state(c, route).encode()).hexdigest()
+
+    # Timeout fallback path
+    monkeypatch.setattr(jev_client, "ask", slow_ask)
+    timeout_rows = jev_shadow.shadow_routing(c, route, cfg=api_cfg(timeout_s=0.2), env={})
+    assert len(timeout_rows) == 4
+    assert [r["status"] for r in timeout_rows] == ["timeout"] * 4
+    dec_ids_timeout = {r["decision_id"] for r in timeout_rows}
+    assert len(dec_ids_timeout) == 1 and None not in dec_ids_timeout
+    assert {r["input_hash"] for r in timeout_rows} == {expected_hash}
+
+    # Error fallback path
+    monkeypatch.setattr(jev_client, "ask", boom_ask)
+    error_rows = jev_shadow.shadow_routing(c, route, cfg=api_cfg(), env={})
+    assert len(error_rows) == 4
+    assert [r["status"] for r in error_rows] == ["error"] * 4
+    dec_ids_error = {r["decision_id"] for r in error_rows}
+    assert len(dec_ids_error) == 1 and None not in dec_ids_error
+    assert {r["input_hash"] for r in error_rows} == {expected_hash}
+

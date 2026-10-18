@@ -85,3 +85,13 @@ rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tools/split/gitleaks.toml"
 rules = ["credential-shape"]
+# RT-P1-JEV-SHADOW: reviewed synthetic fixtures
+[[scrub.allow]]
+path = "src/plangraph/planner/jev_client.py"
+rules = ["credential-shape"]
+[[scrub.allow]]
+path = "tests/test_jev_client.py"
+rules = ["credential-shape"]
+[[scrub.allow]]
+path = "tests/test_planner_jev_questions.py"
+rules = ["ipv4"]

@@ -66,7 +66,7 @@ def test_agrees_none_when_jev_answer_missing_or_absent():
 
 # --- row_view -------------------------------------------------------------
 
-_VIEW_KEYS = {"id", "attempt", "kind", "rule_answer", "jev_answer", "agree",
+_VIEW_KEYS = {"decision_id", "input_hash", "id", "attempt", "kind", "rule_answer", "jev_answer", "agree",
               "jev_probabilities", "jev_confidence", "status", "reason",
               "outcome", "jev_model", "latency_ms", "created_at", "outcome_at"}
 
@@ -111,8 +111,16 @@ def test_report_all_kinds_always_present_even_when_empty():
     for stats in rep["kinds"].values():
         assert stats["total"] == 0
         assert stats["agreement_rate"] is None
+        assert stats["kappa"] is None
+        assert stats["confusion"] == {}
+        assert stats["labels"] == []
+        assert stats["no_answer"] == 0
     assert rep["overall"]["total"] == 0
     assert rep["overall"]["agreement_rate"] is None
+    assert rep["overall"]["kappa"] is None
+    assert rep["overall"]["confusion"] == {}
+    assert rep["overall"]["labels"] == []
+    assert rep["overall"]["no_answer"] == 0
 
 
 def test_report_mixed_counts_and_rates():
@@ -120,11 +128,15 @@ def test_report_mixed_counts_and_rates():
     assert rep["kinds"]["harness"] == {
         "total": 5, "ok": 3, "agree": 2, "disagree": 1, "timeout": 1,
         "unavailable": 1, "error": 0, "agreement_rate": 0.6667,
-        "with_outcome": 1}
+        "with_outcome": 1, "no_answer": 2, "kappa": 0.0,
+        "confusion": {"hold": {"hold": 2, "run": 1}, "run": {"hold": 0, "run": 0}},
+        "labels": ["hold", "run"]}
     assert rep["kinds"]["qc_accept"] == {
         "total": 2, "ok": 1, "agree": 1, "disagree": 0, "timeout": 0,
         "unavailable": 0, "error": 1, "agreement_rate": 1.0,
-        "with_outcome": 1}
+        "with_outcome": 1, "no_answer": 1, "kappa": None,
+        "confusion": {"accept": {"accept": 1}},
+        "labels": ["accept"]}
 
 
 def test_report_excludes_non_ok_from_the_rate():
@@ -143,6 +155,14 @@ def test_report_overall_sums_the_kinds():
     assert overall["error"] == 1
     assert overall["with_outcome"] == 2
     assert overall["agreement_rate"] == 0.75
+    assert overall["no_answer"] == 3
+    assert overall["kappa"] == 0.5556
+    assert overall["labels"] == ["accept", "hold", "run"]
+    assert overall["confusion"] == {
+        "accept": {"accept": 1, "hold": 0, "run": 0},
+        "hold": {"accept": 0, "hold": 2, "run": 1},
+        "run": {"accept": 0, "hold": 0, "run": 0},
+    }
 
 
 def test_report_rate_none_when_no_ok_rows():
@@ -220,3 +240,176 @@ def test_render_dash_rate_when_a_kind_has_no_ok_rows():
     text = jr.render(jr.agreement_report([_row(kind="window", status="timeout")]))
     assert text.startswith("window")
     assert "(rate -)" in text
+
+
+# --- kappa and confusion matrix -------------------------------------------
+
+def test_report_kappa_perfect_agreement():
+    # 2 labels with matching rule and jev answers:
+    # rows: (a, a), (b, b).
+    # P_o = 2 / 2 = 1.0
+    # P_e = (1*1 + 1*1) / 4 = 0.5
+    # kappa = (1.0 - 0.5) / (1.0 - 0.5) = 1.0
+    rows = [
+        _row(kind="harness", status="ok", rule_answer="a", jev_answer="a"),
+        _row(kind="harness", status="ok", rule_answer="b", jev_answer="b"),
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["harness"]
+    assert stats["kappa"] == 1.0
+    assert stats["labels"] == ["a", "b"]
+    assert stats["confusion"] == {"a": {"a": 1, "b": 0}, "b": {"a": 0, "b": 1}}
+    assert stats["no_answer"] == 0
+
+
+def test_report_kappa_total_disagreement_2_labels():
+    # 2 labels "a" and "b", 5 rows each where rule and jev always differ.
+    # rule=a, jev=b (5 times)
+    # rule=b, jev=a (5 times)
+    # Total N = 10
+    # Observed agreement P_o = 0 / 10 = 0.0
+    # Marginals:
+    #   Rule: R_a = 5, R_b = 5
+    #   Jev:  J_a = 5, J_b = 5
+    # Expected agreement P_e = (5*5 + 5*5) / 100 = 50 / 100 = 0.5
+    # Cohen's kappa = (P_o - P_e) / (1 - P_e) = (0.0 - 0.5) / (1.0 - 0.5) = -0.5 / 0.5 = -1.0
+    rows = [
+        *[_row(kind="window", status="ok", rule_answer="a", jev_answer="b") for _ in range(5)],
+        *[_row(kind="window", status="ok", rule_answer="b", jev_answer="a") for _ in range(5)],
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["window"]
+    assert stats["kappa"] == -1.0
+    assert stats["labels"] == ["a", "b"]
+    assert stats["confusion"] == {"a": {"a": 0, "b": 5}, "b": {"a": 5, "b": 0}}
+
+
+def test_report_kappa_chance_level():
+    # 2 labels "a" and "b", uniform cross-product:
+    # (a, a), (a, b), (b, a), (b, b).
+    # N = 4
+    # Observed agreement P_o = 2 / 4 = 0.5
+    # Marginals:
+    #   Rule: R_a = 2, R_b = 2
+    #   Jev:  J_a = 2, J_b = 2
+    # Expected agreement P_e = (2*2 + 2*2) / 16 = 8 / 16 = 0.5
+    # kappa = (0.5 - 0.5) / (1.0 - 0.5) = 0.0
+    rows = [
+        _row(kind="budget", status="ok", rule_answer="a", jev_answer="a"),
+        _row(kind="budget", status="ok", rule_answer="a", jev_answer="b"),
+        _row(kind="budget", status="ok", rule_answer="b", jev_answer="a"),
+        _row(kind="budget", status="ok", rule_answer="b", jev_answer="b"),
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["budget"]
+    assert stats["kappa"] == 0.0
+    assert stats["confusion"] == {"a": {"a": 1, "b": 1}, "b": {"a": 1, "b": 1}}
+
+
+def test_report_kappa_single_label_undefined():
+    # Only 1 label "a" is present across all usable rows.
+    # R_a = 3, J_a = 3, N = 3
+    # P_o = 3 / 3 = 1.0
+    # P_e = (3 * 3) / 9 = 1.0
+    # Expected agreement == 1.0 -> denominator (1 - P_e) is 0 -> kappa is None.
+    rows = [
+        _row(kind="review", status="ok", rule_answer="a", jev_answer="a"),
+        _row(kind="review", status="ok", rule_answer="a", jev_answer="a"),
+        _row(kind="review", status="ok", rule_answer="a", jev_answer="a"),
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["review"]
+    assert stats["kappa"] is None
+    assert stats["labels"] == ["a"]
+    assert stats["confusion"] == {"a": {"a": 3}}
+
+
+def test_report_no_answer_rows_excluded_from_kappa_and_matrix():
+    # 2 ok rows: (a, a) and (b, b)
+    # plus non-ok rows: timeout, unavailable, error, and an ok row with jev_answer=None
+    rows = [
+        _row(kind="harness", status="ok", rule_answer="a", jev_answer="a"),
+        _row(kind="harness", status="ok", rule_answer="b", jev_answer="b"),
+        _row(kind="harness", status="timeout", jev_answer=None),
+        _row(kind="harness", status="unavailable", jev_answer=None),
+        _row(kind="harness", status="error", jev_answer=None),
+        _row(kind="harness", status="ok", rule_answer="c", jev_answer=None),
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["harness"]
+    assert stats["no_answer"] == 4
+    assert stats["ok"] == 3
+    # Only the 2 usable rows contribute to labels and confusion
+    assert stats["labels"] == ["a", "b"]
+    assert stats["confusion"] == {"a": {"a": 1, "b": 0}, "b": {"a": 0, "b": 1}}
+    assert stats["kappa"] == 1.0
+
+
+def test_report_deterministic_confusion_ordering():
+    # Add rows with labels in arbitrary order: "z", "a", "m"
+    rows = [
+        _row(kind="qc_accept", status="ok", rule_answer="z", jev_answer="m"),
+        _row(kind="qc_accept", status="ok", rule_answer="a", jev_answer="z"),
+        _row(kind="qc_accept", status="ok", rule_answer="m", jev_answer="a"),
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["qc_accept"]
+    # Labels must be sorted
+    assert stats["labels"] == ["a", "m", "z"]
+    # Outer dict keys must be in sorted order
+    assert list(stats["confusion"].keys()) == ["a", "m", "z"]
+    # Inner dict keys must be in sorted order
+    for row_k in stats["confusion"]:
+        assert list(stats["confusion"][row_k].keys()) == ["a", "m", "z"]
+
+
+def test_report_kappa_3_labels_hand_computed():
+    # Hand-computed 3-label example with labels "A", "B", "C".
+    # Confusion counts:
+    #   rule=A, jev=A: 3
+    #   rule=A, jev=B: 1
+    #   rule=B, jev=A: 1
+    #   rule=B, jev=B: 2
+    #   rule=B, jev=C: 1
+    #   rule=C, jev=C: 2
+    #
+    # Matrix:
+    #       Jev: A  B  C | Total Rule
+    # Rule A:    3  1  0 | 4
+    # Rule B:    1  2  1 | 4
+    # Rule C:    0  0  2 | 2
+    # Total Jev: 4  3  3 | N = 10
+    #
+    # Observed agreement:
+    #   agree = 3 + 2 + 2 = 7
+    #   P_o = 7 / 10 = 0.7
+    #
+    # Expected agreement by chance:
+    #   P(A) = (4 * 4) / 100 = 0.16
+    #   P(B) = (4 * 3) / 100 = 0.12
+    #   P(C) = (2 * 3) / 100 = 0.06
+    #   P_e = 0.16 + 0.12 + 0.06 = 0.34
+    #
+    # Cohen's kappa:
+    #   kappa = (P_o - P_e) / (1 - P_e)
+    #         = (0.70 - 0.34) / (1.0 - 0.34)
+    #         = 0.36 / 0.66
+    #         = 6 / 11
+    #         = 0.545454... -> rounded to 4 places: 0.5455
+    rows = [
+        *[_row(kind="harness", status="ok", rule_answer="A", jev_answer="A") for _ in range(3)],
+        *[_row(kind="harness", status="ok", rule_answer="A", jev_answer="B") for _ in range(1)],
+        *[_row(kind="harness", status="ok", rule_answer="B", jev_answer="A") for _ in range(1)],
+        *[_row(kind="harness", status="ok", rule_answer="B", jev_answer="B") for _ in range(2)],
+        *[_row(kind="harness", status="ok", rule_answer="B", jev_answer="C") for _ in range(1)],
+        *[_row(kind="harness", status="ok", rule_answer="C", jev_answer="C") for _ in range(2)],
+    ]
+    rep = jr.agreement_report(rows)
+    stats = rep["kinds"]["harness"]
+    assert stats["labels"] == ["A", "B", "C"]
+    assert stats["confusion"] == {
+        "A": {"A": 3, "B": 1, "C": 0},
+        "B": {"A": 1, "B": 2, "C": 1},
+        "C": {"A": 0, "B": 0, "C": 2},
+    }
+    assert stats["kappa"] == 0.5455

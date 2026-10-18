@@ -10,14 +10,13 @@ pieces:
 
 HARD RULES this module exists to enforce:
 
-* Jev NEVER changes a decision.  Both hooks return *rows*, never a route or a
-  verdict, and both deep-copy their inputs, so Jev can never mutate the caller's
-  card or route.
+* Jev NEVER changes a decision.  The routing hook returns *rows*, never a route,
+  and deep-copies its inputs, so Jev can never mutate the caller's card or route.
 * A slow, failing or unavailable Jev NEVER blocks.  Every ask runs in a daemon
   thread bounded by a hard deadline (:func:`guarded`), a timeout is reported as
   ``timeout`` and an exception as ``error`` (class name only, never the message),
-  and both hooks wrap their whole body so an internal bug returns ``[]`` / ``None``
-  instead of raising.
+  and the hook wraps its whole body so an internal bug returns ``[]`` instead
+  of raising.
 * The flag defaults to ``off``: nothing runs, no thread starts, no request is made.
 
 The key VALUE is never touched here - ``jev_client`` resolves it at call time and
@@ -30,15 +29,17 @@ A ``row`` is exactly the body of ``Store.jev_record`` (see ``store_jev._RECORD_K
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import threading
+import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from . import jev_client, jev_questions
 
-__all__ = ["Sink", "store_sink", "guarded", "shadow_routing", "shadow_qc_accept",
-           "qc_hook", "fill_outcome", "jsonl_sink"]
+__all__ = ["Sink", "store_sink", "guarded", "shadow_routing", "fill_outcome",
+           "jsonl_sink"]
 
 #: Cap on a row's ``reason`` before it is handed to a sink (``store_jev`` clips to 200 too).
 _REASON_CAP = 200
@@ -131,7 +132,8 @@ def _cfg_model(cfg, answer=None) -> str:
     return fallback if isinstance(fallback, str) else ""
 
 
-def _rows_from(answers, kinds_to_rule, attempt, card_key, cfg) -> list[dict]:
+def _rows_from(answers, kinds_to_rule, attempt, card_key, cfg, *,
+               decision_id=None, input_hash=None) -> list[dict]:
     """One ``jev_record`` body per kind in ``kinds_to_rule`` (``{kind: rule_answer}``).
 
     Each row takes status/reason/model/latency from the matching
@@ -162,6 +164,8 @@ def _rows_from(answers, kinds_to_rule, attempt, card_key, cfg) -> list[dict]:
         rows.append({
             "card": card_key,
             "attempt": attempt,
+            "decision_id": decision_id,
+            "input_hash": input_hash,
             "kind": kind,
             "rule_answer": rule_answer,
             "jev_answer": choice,
@@ -233,88 +237,19 @@ def shadow_routing(card, route, *, sink=None, attempt=None, cfg=None,
         kinds_to_rule = jev_questions.rule_answers(route_copy)
         state = jev_questions.routing_state(card_copy, route_copy)
         questions = jev_questions.routing_questions(card_copy)
+        decision_id = uuid.uuid4().hex
+        input_hash = hashlib.sha256(state.encode()).hexdigest()
         status, answers, reason = _ask_guarded(state, questions, cfg, env)
         if status != "ok":
             answers = _fallback_answers(kinds_to_rule, status, reason)
         key = card_copy.get("key") if isinstance(card_copy, Mapping) else None
-        rows = _rows_from(answers, kinds_to_rule, attempt, key, cfg)
+        rows = _rows_from(answers, kinds_to_rule, attempt, key, cfg,
+                          decision_id=decision_id, input_hash=input_hash)
         if _recordable(key):
             _deliver(rows, sink)
         return rows
     except Exception:  # noqa: BLE001 - an internal bug must never break routing
         return []
-
-
-def shadow_qc_accept(card, verdict, *, rule_accept=None, phase=None, sink=None,
-                     attempt=None, cfg=None, env=None) -> dict | None:
-    """Shadow the QC-accept decision: ask Jev whether to accept and return one row.
-
-    Same guarantees as :func:`shadow_routing` (never raises, ``off`` -> ``None``
-    immediately, deep-copied inputs, bounded by the same deadline).  ``rule_accept``
-    as a ``bool`` is the rules' answer (``"accept"``/``"reject"``); otherwise it is
-    derived from ``verdict`` via :func:`jev_questions.rule_qc_answer`.  ``card`` may
-    be ``None`` (treated as an empty mapping).  Returns the single ``qc_accept`` row.
-    """
-    try:
-        cfg = cfg or jev_client.config_from_env(env)
-        if not jev_client.enabled(cfg):
-            return None
-        card_copy = copy.deepcopy(card) if card is not None else {}
-        if not isinstance(card_copy, Mapping):
-            card_copy = {}
-        verdict_copy = copy.deepcopy(verdict)
-        if isinstance(rule_accept, bool):
-            rule_answer = "accept" if rule_accept else "reject"
-        else:
-            rule_answer = jev_questions.rule_qc_answer(verdict_copy)
-        kinds_to_rule = {"qc_accept": rule_answer}
-        state = jev_questions.qc_state(card_copy, verdict_copy, phase)
-        questions = {"qc_accept": jev_questions.qc_question()}
-        status, answers, reason = _ask_guarded(state, questions, cfg, env)
-        if status != "ok":
-            answers = _fallback_answers(kinds_to_rule, status, reason)
-        key = card_copy.get("key")
-        rows = _rows_from(answers, kinds_to_rule, attempt, key, cfg)
-        if _recordable(key):
-            _deliver(rows, sink)
-        return rows[0] if rows else None
-    except Exception:  # noqa: BLE001 - an internal bug must never break the QC hook
-        return None
-
-
-def qc_hook(card, *, sink=None, attempt=None, cfg=None, env=None):
-    """Build the time-bounded ``plan_actions(..., shadow=...)`` QC-accept hook.
-
-    The returned ``hook(verdict, phase, key, plan)`` asks Jev the SAME accept/reject
-    question as the rules, in shadow, through :func:`shadow_qc_accept` with
-    ``rule_accept=bool(plan.get("pass"))`` (the plan's own answer), and returns
-    ``None``: it is observation only, so it can never change the plan.
-
-    ``card`` is used as given when it already carries a ``key``; when ``key`` is a
-    non-empty string and the card has none it is added
-    (``{**(card or {}), "key": key}``) so the row is recordable.  ``sink``,
-    ``attempt``, ``cfg`` and ``env`` are forwarded unchanged.  The hook never raises,
-    so a bad card, a failing Jev or a broken sink is swallowed and the caller's plan
-    is untouched.  Typical use, beside the pure decision::
-
-        plan_actions(verdict, "p1", key,
-                     shadow=qc_hook(card, sink=store_sink(store, principal), attempt=n))
-    """
-    def hook(verdict, phase, key, plan) -> None:
-        try:
-            has_key = isinstance(card, Mapping) and bool(card.get("key"))
-            card_with_key = ({**(card or {}), "key": key}
-                             if isinstance(key, str) and key and not has_key
-                             else card)
-            shadow_qc_accept(card_with_key, verdict,
-                             rule_accept=bool(plan.get("pass")),
-                             phase=phase, sink=sink, attempt=attempt,
-                             cfg=cfg, env=env)
-        except Exception:  # noqa: BLE001 - the caller's plan must never break
-            pass
-        return None
-
-    return hook
 
 
 def fill_outcome(store, principal, card_key, outcome, *, attempt=_UNSET) -> int:

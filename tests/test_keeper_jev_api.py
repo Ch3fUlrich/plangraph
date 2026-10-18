@@ -45,7 +45,7 @@ def doors(w, tmp_path):
 def rec(card, **over):
     """A minimal valid ``jev_record`` body for *card*, with *over* applied."""
     body = {"card": card, "kind": "harness", "rule_answer": "rules",
-            "jev_answer": "jev", "status": "ok"}
+            "jev_answer": "rules", "status": "ok"}
     body.update(over)
     return body
 

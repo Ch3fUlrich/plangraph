@@ -252,6 +252,8 @@ CREATE TABLE IF NOT EXISTS jev_shadow (
     id                INTEGER PRIMARY KEY,
     key               TEXT NOT NULL,
     attempt           INTEGER,
+    decision_id       TEXT,
+    input_hash        TEXT,
     kind              TEXT NOT NULL CHECK (kind IN ({_in(JEV_KINDS)})),
     rule_answer       TEXT NOT NULL,
     jev_answer        TEXT,

@@ -79,6 +79,14 @@ def test_record_validation_refusals(w):
         ({"jev_probabilities": {"a": "x"}}, "validation"),
         ({"jev_confidence": True}, "validation"),
         ({"latency_ms": -1}, "validation"),
+        ({"decision_id": "x" * 65}, "validation"),
+        ({"decision_id": 123}, "validation"),
+        ({"decision_id": True}, "validation"),
+        ({"input_hash": "a" * 63}, "validation"),
+        ({"input_hash": "a" * 65}, "validation"),
+        ({"input_hash": "g" * 64}, "validation"),
+        ({"input_hash": "A" * 64}, "validation"),
+        ({"input_hash": 123}, "validation"),
         ({"bogus": 1}, "validation"),                 # unknown field
     ]
     for over, code in bad:
@@ -204,9 +212,10 @@ def test_outcome_first_write_wins_and_leaves_the_rest_of_the_row(w):
     after = w.store.jev_rows(key)[0]
     assert after["outcome"] == "one"
     assert after["outcome_at"] is not None
-    others = ["id", "key", "attempt", "kind", "rule_answer", "jev_answer",
-              "jev_probabilities", "jev_confidence", "status", "reason",
-              "jev_model", "latency_ms", "created_at"]
+    others = ["id", "key", "attempt", "decision_id", "input_hash", "kind",
+              "rule_answer", "jev_answer", "jev_probabilities",
+              "jev_confidence", "status", "reason", "jev_model", "latency_ms",
+              "created_at"]
     assert {c: after[c] for c in others} == {c: before[c] for c in others}
 
 
@@ -280,3 +289,64 @@ def test_the_audit_never_holds_answers_or_probabilities(w):
     assert marker not in blob
     assert "rules-secret" not in blob
     assert "choice" not in blob
+
+
+# ------------------------------------------------ decision_id and input_hash
+def test_decision_id_and_input_hash_store_roundtrip_and_nullability(w):
+    key, = seed(w, [("A", [])])
+    h = "0123456789abcdef" * 4
+    # Store with decision_id and input_hash
+    w.store.jev_record(w.p("router"), row(key, attempt=1, decision_id="dec-123",
+                                          input_hash=h))
+    # Store with null decision_id and input_hash
+    w.store.jev_record(w.p("router"), row(key, attempt=2, decision_id=None,
+                                          input_hash=None))
+    # Store with omitted decision_id and input_hash
+    w.store.jev_record(w.p("router"), row(key, attempt=3))
+
+    rows = w.store.jev_rows(key)
+    assert len(rows) == 3
+    assert rows[0]["decision_id"] == "dec-123"
+    assert rows[0]["input_hash"] == h
+
+    assert rows[1]["decision_id"] is None
+    assert rows[1]["input_hash"] is None
+
+    assert rows[2]["decision_id"] is None
+    assert rows[2]["input_hash"] is None
+
+
+def test_decision_id_length_boundary_and_valid_hash(w):
+    key, = seed(w, [("A", [])])
+    # Exact 64 chars decision_id is allowed
+    w.store.jev_record(w.p("router"), row(key, attempt=1, decision_id="x" * 64,
+                                          input_hash="0" * 64))
+    row_back = w.store.jev_rows(key)[0]
+    assert row_back["decision_id"] == "x" * 64
+    assert row_back["input_hash"] == "0" * 64
+
+    # 65 chars decision_id is refused
+    with pytest.raises(Refused) as exc:
+        w.store.jev_record(w.p("router"), row(key, attempt=2, decision_id="x" * 65))
+    assert exc.value.code == "validation"
+
+    # Non-hex hash is refused
+    with pytest.raises(Refused) as exc:
+        w.store.jev_record(w.p("router"), row(key, attempt=2, input_hash="z" * 64))
+    assert exc.value.code == "validation"
+
+
+def test_row_view_carries_decision_id_and_input_hash():
+    from plangraph.keeper import jev_report
+    h = "abcdef0123456789" * 4
+    raw_row = {
+        "id": 1, "card": "demo:A", "attempt": 1, "decision_id": "dec-456",
+        "input_hash": h, "kind": "harness", "rule_answer": "rules",
+        "jev_answer": "rules", "status": "ok", "reason": "why",
+        "jev_model": "test", "latency_ms": 5, "created_at": "2026-01-01T00:00:00Z",
+        "outcome": None, "outcome_at": None,
+    }
+    view = jev_report.row_view(raw_row)
+    assert view["decision_id"] == "dec-456"
+    assert view["input_hash"] == h
+    assert view["agree"] is True

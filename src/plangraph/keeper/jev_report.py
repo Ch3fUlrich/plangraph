@@ -23,14 +23,15 @@ _STATUSES = ("ok", "timeout", "unavailable", "error")
 # Fields of the public row view, in display order.  ``key`` is internal routing
 # bookkeeping and is dropped on purpose; ``agree`` is computed, not stored.
 _VIEW_FIELDS = (
-    "id", "attempt", "kind", "rule_answer", "jev_answer", "agree",
-    "jev_probabilities", "jev_confidence", "status", "reason", "outcome",
-    "jev_model", "latency_ms", "created_at", "outcome_at",
+    "id", "attempt", "decision_id", "input_hash", "kind", "rule_answer",
+    "jev_answer", "agree", "jev_probabilities", "jev_confidence", "status",
+    "reason", "outcome", "jev_model", "latency_ms", "created_at",
+    "outcome_at",
 )
 
-# The eight counters that ``agreement_report`` sums per kind and overall.
+# The nine counters that ``agreement_report`` sums per kind and overall.
 _COUNTERS = ("total", "ok", "agree", "disagree", "timeout", "unavailable",
-             "error", "with_outcome")
+             "error", "with_outcome", "no_answer")
 
 
 def agrees(row: Mapping) -> bool | None:
@@ -69,10 +70,16 @@ def agreement_report(rows) -> dict:
     skipped.  An unknown or missing ``status`` is counted as ``"error"``.  Every
     kind is present even with no rows.  ``agreement_rate`` is ``agree / ok``
     rounded to four places (None when there were no ok rows): timeout,
-    unavailable and error rows are counted but excluded from the rate.  The
-    ``overall`` entry sums the kinds before applying the same rate.
+    unavailable and error rows are counted but excluded from the rate.  Each
+    axis also reports ``kappa`` (Cohen's kappa, None when undefined),
+    ``confusion`` (nested dict in sorted label order), ``labels`` (sorted list)
+    and ``no_answer`` (count of non-usable rows).  The ``overall`` entry sums
+    the kinds and applies the same metrics across all rows.
     """
     kinds = {kind: _blank_stats() for kind in _KINDS}
+    kind_pairs: dict[str, list[tuple[str, str]]] = {kind: [] for kind in _KINDS}
+    all_pairs: list[tuple[str, str]] = []
+
     for row in rows:
         if not isinstance(row, Mapping):
             continue
@@ -93,11 +100,36 @@ def agreement_report(rows) -> dict:
                 stats["agree"] += 1
             elif verdict is False:
                 stats["disagree"] += 1
+
+            jev = row.get("jev_answer")
+            rule = row.get("rule_answer")
+            if jev is not None and rule is not None:
+                pair = (str(rule), str(jev))
+                kind_pairs[kind].append(pair)
+                all_pairs.append(pair)
+            else:
+                stats["no_answer"] += 1
         else:
             stats[status] += 1
-    report = {"kinds": kinds, "overall": _sum_stats(kinds.values())}
-    for stats in [*kinds.values(), report["overall"]]:
+            stats["no_answer"] += 1
+
+    overall = _sum_stats(kinds.values())
+    report = {"kinds": kinds, "overall": overall}
+
+    for kind in _KINDS:
+        stats = kinds[kind]
         _add_rate(stats)
+        kappa, confusion, labels = _compute_kappa_and_confusion(kind_pairs[kind])
+        stats["kappa"] = kappa
+        stats["confusion"] = confusion
+        stats["labels"] = labels
+
+    _add_rate(overall)
+    overall_kappa, overall_confusion, overall_labels = _compute_kappa_and_confusion(all_pairs)
+    overall["kappa"] = overall_kappa
+    overall["confusion"] = overall_confusion
+    overall["labels"] = overall_labels
+
     return report
 
 
@@ -131,7 +163,52 @@ def _decode_probabilities(text):
 def _blank_stats() -> dict:
     stats = {field: 0 for field in _COUNTERS}
     stats["agreement_rate"] = None
+    stats["kappa"] = None
+    stats["confusion"] = {}
+    stats["labels"] = []
     return stats
+
+
+def _compute_kappa_and_confusion(
+    pairs: list[tuple[str, str]],
+) -> tuple[float | None, dict[str, dict[str, int]], list[str]]:
+    """Compute Cohen's kappa, sorted confusion matrix, and sorted labels.
+
+    Uses integer arithmetic for numerator and denominator to prevent float
+    rounding inaccuracies, rounding kappa to 4 decimal places at the end.
+    Returns (None, {}, []) when there are no usable pairs.
+    """
+    if not pairs:
+        return None, {}, []
+
+    label_set: set[str] = set()
+    pair_counts: dict[tuple[str, str], int] = {}
+    for r, j in pairs:
+        label_set.add(r)
+        label_set.add(j)
+        pair_counts[(r, j)] = pair_counts.get((r, j), 0) + 1
+
+    labels = sorted(label_set)
+    confusion = {
+        r: {j: pair_counts.get((r, j), 0) for j in labels}
+        for r in labels
+    }
+
+    n = len(pairs)
+    r_counts = {lbl: sum(confusion[lbl][j] for j in labels) for lbl in labels}
+    j_counts = {lbl: sum(confusion[r][lbl] for r in labels) for lbl in labels}
+    agree_count = sum(confusion[lbl][lbl] for lbl in labels)
+
+    sum_pe = sum(r_counts[lbl] * j_counts[lbl] for lbl in labels)
+    denom = n * n - sum_pe
+    if denom == 0:
+        kappa = None
+    else:
+        num = n * agree_count - sum_pe
+        val = round(num / denom, 4)
+        kappa = 0.0 if val == 0.0 else val
+
+    return kappa, confusion, labels
 
 
 def _sum_stats(all_stats) -> dict:

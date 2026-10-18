@@ -83,6 +83,10 @@ def test_show_carries_the_row_views_and_overall_agreement(w):
     assert (overall["ok"], overall["agree"], overall["disagree"],
             overall["timeout"]) == (2, 1, 1, 1)
     assert overall["agreement_rate"] == 0.5
+    assert overall["kappa"] == 0.0
+    assert overall["no_answer"] == 2
+    assert overall["labels"] == ["a", "b"]
+    assert overall["confusion"] == {"a": {"a": 1, "b": 1}, "b": {"a": 0, "b": 0}}
 
     text = fmt.show_text(info)
     assert "jev agree 1/2 (rate 0.50) timeout 1 unavailable 1 error 0" in text
@@ -115,3 +119,10 @@ def test_jev_report_text_renders_empty_and_populated_reports(w):
     text = fmt.jev_report_text(w.store.jev_report(w.p("reader")))
     assert "harness" in text
     assert "rate 0.5000" in text
+
+
+def test_jev_axis_text():
+    line = fmt.jev_axis_text("harness", {"kappa": 0.5, "ok": 12})
+    assert line == "jev harness kappa 0.5 n=12"
+    line_none = fmt.jev_axis_text("window", {"kappa": None, "ok": 0})
+    assert line_none == "jev window kappa - n=0"

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 
 from . import jev_report
 from .errors import Refused
@@ -35,11 +36,35 @@ _TEXT_CAP = 200
 _MODEL_CAP = 100
 _PROB_CAP = 255
 _PROB_NAME_CAP = 200
+_DECISION_ID_CAP = 64
+_INPUT_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 
 _RECORD_KEYS = frozenset((
-    "card", "attempt", "kind", "rule_answer", "jev_answer", "jev_probabilities",
-    "jev_confidence", "status", "reason", "jev_model", "latency_ms"))
+    "card", "attempt", "decision_id", "input_hash", "kind", "rule_answer",
+    "jev_answer", "jev_probabilities", "jev_confidence", "status", "reason",
+    "jev_model", "latency_ms"))
 _OUTCOME_KEYS = frozenset(("card", "attempt", "kind", "outcome"))
+
+
+def _decision_id(value):
+    """An optional decision identifier; refuse non-strings and > 64 chars."""
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, str) or len(value) > _DECISION_ID_CAP:
+        raise Refused("validation",
+                      f"decision_id must be a string of at most {_DECISION_ID_CAP} characters or null")
+    return value
+
+
+def _input_hash(value):
+    """An optional SHA-256 hash of the input state; refuse bad shapes."""
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, str)
+            or not _INPUT_HASH_RE.match(value)):
+        raise Refused("validation",
+                      "input_hash must be a 64-character lowercase hex string or null")
+    return value
 
 
 def _positive_attempt(value):
@@ -111,6 +136,8 @@ class JevMixin:
         card = _text("card", body.get("card"), required=True)
         key = self._jev_scoped(principal, card)
         attempt = _positive_attempt(body.get("attempt"))
+        decision_id = _decision_id(body.get("decision_id"))
+        input_hash = _input_hash(body.get("input_hash"))
         kind = body.get("kind")
         if kind not in JEV_KINDS:
             raise Refused("validation", f"kind must be one of {list(JEV_KINDS)}")
@@ -155,13 +182,13 @@ class JevMixin:
                           "latency_ms must be a non-negative integer or null")
         with self._write():
             row = self.conn.execute(
-                "INSERT INTO jev_shadow(id,key,attempt,kind,rule_answer,jev_answer,"
-                "jev_probabilities,jev_confidence,status,reason,outcome,jev_model,"
-                "latency_ms,created_at,outcome_at)"
+                "INSERT INTO jev_shadow(id,key,attempt,decision_id,input_hash,kind,"
+                "rule_answer,jev_answer,jev_probabilities,jev_confidence,status,"
+                "reason,outcome,jev_model,latency_ms,created_at,outcome_at)"
                 " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM jev_shadow),"
-                "?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL) RETURNING id",
-                (key, attempt, kind, rule, answer, probs, confidence, status,
-                 reason, model, latency, self._iso(now))).fetchone()
+                "?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,NULL) RETURNING id",
+                (key, attempt, decision_id, input_hash, kind, rule, answer, probs,
+                 confidence, status, reason, model, latency, self._iso(now))).fetchone()
         return {"id": row[0], "card": key, "kind": kind}
 
     # ------------------------------------------------------------- outcome
@@ -212,9 +239,10 @@ class JevMixin:
     def jev_rows(self, key):
         """Every ``jev_shadow`` row for *key*, oldest first (no audit, no role)."""
         rows = self.conn.execute(
-            "SELECT id,key,attempt,kind,rule_answer,jev_answer,jev_probabilities,"
-            "jev_confidence,status,reason,outcome,jev_model,latency_ms,created_at,"
-            "outcome_at FROM jev_shadow WHERE key=? ORDER BY id", (key,)).fetchall()
+            "SELECT id,key,attempt,decision_id,input_hash,kind,rule_answer,"
+            "jev_answer,jev_probabilities,jev_confidence,status,reason,outcome,"
+            "jev_model,latency_ms,created_at,outcome_at FROM jev_shadow WHERE key=? ORDER BY id",
+            (key,)).fetchall()
         return [dict(row) for row in rows]
 
     def jev_report(self, principal, project=None):

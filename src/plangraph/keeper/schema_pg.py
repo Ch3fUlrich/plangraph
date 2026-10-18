@@ -427,6 +427,8 @@ CREATE TABLE jev_shadow (
     id                BIGINT PRIMARY KEY,
     key               TEXT COLLATE "C" NOT NULL,
     attempt           BIGINT,
+    decision_id       TEXT COLLATE "C",
+    input_hash        TEXT COLLATE "C",
     kind              TEXT COLLATE "C" NOT NULL CHECK (kind IN ({_in(JEV_KINDS)})),
     rule_answer       TEXT COLLATE "C" NOT NULL,
     jev_answer        TEXT COLLATE "C",

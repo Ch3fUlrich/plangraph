@@ -11,7 +11,8 @@ agreement) and ``record_outcome`` later appends the attempt outcome for the same
 
 The **Jev hook** (RT-P1-JEV-SHADOW) runs beside that legacy one, on its OWN switch:
 ``PLANGRAPH_JEV=off|stub|api`` (default ``off``), driven by
-:mod:`plangraph.planner.jev_shadow`.  It asks the free Jev decision model the four
+:mod:`plangraph.planner.jev_shadow`.  The routing hook here (``route_with_shadow``)
+is the one Jev call site in the repo.  It asks the free Jev decision model the four
 routing questions (harness, window class, attempt budget, review level) in shadow and
 sends the rows to a sink: the keeper store when ``store``/``principal`` are given, else
 the same JSONL log (rows with ``event="jev"``).  It runs regardless of
