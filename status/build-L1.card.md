@@ -20,7 +20,7 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
 | #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
 | #46 WORKER | MERGED 30b738ba (judge GO cbf83e48; deploy single-host) | evidence when claimable |
-| #49 INBOX | L2: merge main 30b738ba + 3 judge LOW fixes, delta seats | MERGE-READY -> merge (standard) |
+| #49 INBOX | head 0d05f76 CI green; seats 0 countable (LOW+MED) -> fix round; L2 predeploy-2 RECYCLE-READY -> L2-LAUNCH predeploy-3 | MERGE-READY -> merge |
 | CLASS-COMBOS | workst-L1-autoos claimed e1, lane autoos-L2-small-lanes | MERGE-READY + probe |
 ## Open
 | Item | State | Next |
