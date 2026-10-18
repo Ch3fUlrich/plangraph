@@ -9,7 +9,8 @@ plangraph is split in two (M2c):
 
 Nothing site-specific lives in the public repo: no hostnames, IPs, e-mail addresses, keys, home
 paths, router or project names, plans or decisions. The code reads every such value from the
-keeper config (below), so the two repos only meet at run time.
+keeper config (below), so the two repos only meet at run time. Decision ids (D-NNN) may appear
+bare; decision titles or text are never quoted here.
 
 ## What the public repo contains
 
