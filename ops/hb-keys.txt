@@ -2,6 +2,5 @@ plangraph:UI-BROWSER-TESTS
 plangraph:UI-DEPLOY-AUTO
 plangraph:RT-P1-FLOW-UNBLOCK
 plangraph:DEV-PGDRILL-LOCAL
-plangraph:RT-P1-VERBS-LIVE-GUARDS
 plangraph:RT-GATE-WIRING
 plangraph:RT-P1-JEV-SHADOW

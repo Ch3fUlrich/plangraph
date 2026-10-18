@@ -3,7 +3,7 @@ HOLD D-1998 (P1 plan audit, p1-audit-L1 read-only, never msg): in-flight lanes -
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
-## Main = 541e4a6c (#83 QUESTION-TIMER, #80, #85, #86 34806368 main-red fix, #82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
+## Main = 2424d40b (#88 LIVE-GUARDS, #83 QUESTION-TIMER, #80, #85, #86 34806368 main-red fix, #82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 ## GEN-15 (D-1932 ONLY PH-RT-RUNTIME; D-1919 budget; D-1933 TEMPORAL-CHECK -> dev start-dev, cloud parts -> RELEASE-DEPLOY)
@@ -12,7 +12,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | DONE today | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW, VERBS-FOLLOWUP (#85 4b2f3591) | phase 4/13 direct deps |
 | TEMPORAL-CHECK (server) | DONE (router close D-1967+D-1993) | hb key dropped |
 | md-sync (D-1990 blocker) | FAILED since 08:48Z: routing:PH-OPERATOR rehomed; F7 at rt-side-2 | F7 merge -> GO D-1992 steps (handoff #16 IN FLIGHT 1) |
-| VERBS-LIVE-GUARDS (HIGH) | MERGED 2424d40b (judge GO); main CI pytest red: test_pg_drill_local::test_extra_table_only_in_restore_fails (rc ok, no "t4" line; flaky?) -> rerun; seats ~/.local/share/plangraph/seats/guards-ff24168; LIVE COND: Rust park sends epoch OR 1 principal/process; locks unique owner | green -> evidence -> submit -> verdicts |
+| VERBS-LIVE-GUARDS (HIGH) | DONE 2424d40b (#88, judge GO, google+xiaomi; CI att2 green, att1 flaky pg_drill t4 -> D2 deflake); LIVE COND: Rust park sends epoch OR 1 principal/process; locks unique owner | P1 6/13 |
 | RT-GATE-WIRING (HIGH) | head b11c60a: driver wrote tests/docs/fixes (Claude, D-1919) -> told redo by non-Claude writer | seats after redo |
 | E2E (FROZEN D-1998) | head 7b1e92a (lane/rt-p1-e2e-devstack, no PR): seat-A fixes in (port refusals, claim-before-workflow 1800s, exact stub verbs+attempts, new --leg stub-fail), 96 pass hermetic; NOT re-run on real stack; writer deepseek-free (qwen hung) -> seats gemini+mimo | after audit: real-stack both legs + run record, round-2 seats, PR |
 | QUESTION-TIMER #83 (HIGH) | DONE 541e4a6c (judge GO, verdicts google+xiaomi, seats ~/.local/share/plangraph/seats/qtimer-f54dbe1a); DEPLOY GATE: (1) drain or replay-test pre-change histories (park args changed) (2) restart e2e needs real SDK shutdown + worker-identity assert before durability = evidence | P1 5/13 | hb key dropped |
