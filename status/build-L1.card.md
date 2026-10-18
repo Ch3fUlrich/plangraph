@@ -10,7 +10,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 |---|---|---|
 | DONE | - | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW (+FOLLOWUP, TEMPORAL-CHECK server); QUESTION-TIMER 541e4a6c (deploy conds -> WF-VERSIONING); LIVE-GUARDS 2424d40b (live cond -> EXEC-OWNERSHIP) |
 | md-sync | - | LIVE 15:28Z on wt md-sync-8f7f1c55 (drop-in z9, judge GO, 2 seats mimo+gemini); OS-OCGO-LOGIN DONE 15:30Z (router fixed D-rows, D-2016); follow-up: exclude kind=gate from gone |
-| OCGO | - | ROUTER-L0 claimed (BLOCKED: mimo not private-safe, default agy gemini); PROBE+FLEET-BUS claimed for workst [b76c36] (D-2023); L1-FALLBACK after PROBE; FLEET-CUTOVER mine last |
+| OCGO | - | ROUTER-L0: AGENTS.md routing PR#1 11b64d42 (agy gemini, seat qwen PASS) MERGE-READY; lane start BLOCKED D-437 (default router/workst runs it). PROBE+FLEET-BUS+L1-FALLBACK claimed for workst [b76c36] (D-2023/2025); FLEET-BUS pull mode (D-2026); FLEET-CUTOVER mine last |
 | DEV-PGDRILL | - | DONE #89 d8c7b606 (judge GO, D-1988 closed; xiaomi+google). FLAKES for CI-GATE/DRILLS: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | EXEC A 0d03f9e + B 00290c2 (lane/rt-p1-exec-ownership), D1 Rust BLOCKED: Go 5h limit -> probe qwen/kimi/minimax once else wait reset; BATCH/CIG on leg 3+ |
