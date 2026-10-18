@@ -1,12 +1,15 @@
-"""D-434: the router's one narrow definition edit on an active item.
+"""D-434 (widened by F4): the router's narrow definition edits on an active item.
 
 ``edit_definition`` freezes a definition once the item leaves ``open``.  The
-single exception is the router's (decision D-434): it alone may change
-``review_tier`` and/or ``evidence_kinds`` -- and nothing else -- while the item
-is ``claimed`` or ``in_review`` and not yet locked.  Every such edit bumps
-``round``, so the verdicts the earlier round recorded stop counting under the
-new tier, and carries a ``"while": "<state>"`` marker the fold replays the bump
-from, so ``verify_integrity`` agrees with the cache.
+single exception is the router's (decision D-434, widened by F4): it alone may
+change ``review_tier``, ``evidence_kinds``, ``done_criteria`` and
+``depends_on`` -- and nothing else -- while the item is ``claimed`` or
+``in_review`` and not yet locked.  Every such edit bumps ``round``, so the
+verdicts the earlier round recorded stop counting, and carries a
+``"while": "<state>"`` marker the fold replays the bump from, so
+``verify_integrity`` agrees with the cache.  Each edit's ``item_defined`` event
+also carries ``who`` plus the ``before``/``after`` values of every changed
+field (F4 audit).
 
 The same shape must survive ``apply_ops``: one transaction re-tiering to
 ``none``, attaching the decision and closing on it -- or rolling all of it
@@ -87,7 +90,12 @@ def test_router_re_tiers_claimed_item_with_while_marker(w):
     event = last_defined(w)
     assert (event["actor"], event["role"]) == ("router", "router")
     assert event["payload"] == {"fields": ["evidence_kinds", "review_tier"],
-                                "review_tier": "none", "while": "claimed"}
+                                "review_tier": "none", "while": "claimed",
+                                "who": "router",
+                                "before": {"evidence_kinds": ["any"],
+                                           "review_tier": "standard"},
+                                "after": {"evidence_kinds": ["decision"],
+                                          "review_tier": "none"}}
     cache = w.store._item(KEY)
     assert folded(w)["round"] == cache["round"]
     assert folded(w)["review_tier"] == "none"
@@ -108,7 +116,9 @@ def test_router_edits_evidence_kinds_on_in_review_item(w):
     event = last_defined(w)
     assert event["actor"] == "router"
     assert event["payload"] == {"fields": ["evidence_kinds"],
-                                "while": "in_review"}
+                                "while": "in_review", "who": "router",
+                                "before": {"evidence_kinds": ["any"]},
+                                "after": {"evidence_kinds": ["decision"]}}
     assert folded(w)["round"] == item["round"]
     assert w.store.verify_integrity() == []
     assert w.store.verify_chain() == []
@@ -304,3 +314,118 @@ def test_batch_failing_last_op_rolls_back_the_re_tier_and_evidence(tmp_path):
     assert w.store.verify_integrity() == []
     assert w.store.verify_chain() == []
     w.close()
+
+
+# --------------------------------------------- F4: done_criteria / depends_on
+def test_router_edits_done_criteria_of_claimed_item(w):
+    """F4: the router's active-item exception covers ``done_criteria`` too."""
+    epoch = to_claimed(w, KEY)
+    out = w.store.edit_definition(w.p("router"), KEY,
+                                  {"done_criteria": "tighter criteria"})
+    assert out == {"key": KEY}
+    item = w.store._item(KEY)
+    assert (item["state"], item["epoch"]) == ("claimed", epoch)
+    assert item["done_criteria"] == "tighter criteria"
+    assert item["round"] == 1          # the same bump the tier edit gets
+    event = last_defined(w)
+    assert (event["actor"], event["role"]) == ("router", "router")
+    assert event["payload"] == {"fields": ["done_criteria"],
+                                "while": "claimed", "who": "router",
+                                "before": {"done_criteria": "criteria"},
+                                "after": {"done_criteria": "tighter criteria"}}
+    assert folded(w)["round"] == item["round"]
+    assert w.store.verify_integrity() == []
+    assert w.store.verify_chain() == []
+
+
+def test_router_edits_depends_on_of_claimed_item(tmp_path):
+    """F4: a claimed item's dependency edges are the router's to rewrite."""
+    w = World(tmp_path)
+    seed(w, [("A", []), ("B", [])])
+    epoch = to_claimed(w, KEY)
+    out = w.store.edit_definition(w.p("router"), KEY, {"depends_on": ["demo:B"]})
+    assert out == {"key": KEY}
+    item = w.store._item(KEY)
+    assert (item["state"], item["epoch"]) == ("claimed", epoch)
+    assert item["depends_on"] == ["demo:B"]
+    edges = {(r["src"], r["dst"]) for r in
+             w.conn.execute("SELECT src,dst FROM edges WHERE rel='depends_on'")}
+    assert ("demo:A", "demo:B") in edges
+    assert item["round"] == 1          # even a depends-on-only edit bumps it
+    event = last_defined(w)
+    assert event["actor"] == "router"
+    assert event["payload"] == {"fields": ["depends_on"],
+                                "while": "claimed", "who": "router",
+                                "before": {"depends_on": []},
+                                "after": {"depends_on": ["demo:B"]}}
+    assert folded(w)["round"] == item["round"]
+    assert w.store.verify_integrity() == []
+    assert w.store.verify_chain() == []
+    w.close()
+
+
+def test_non_router_cannot_edit_done_criteria_or_depends_on_while_claimed(w):
+    to_claimed(w, KEY)
+    events_before = snap(w)[2]
+    for who in ("l1main", "workerA", "reviewer"):
+        for fields in ({"done_criteria": "x"}, {"depends_on": ["demo:B"]},
+                       {"review_tier": "high", "done_criteria": "x"}):
+            with pytest.raises(Refused) as exc:
+                w.store.edit_definition(w.p(who), KEY, fields)
+            assert exc.value.code == "forbidden", (who, fields)
+    # l1main manages demo, so it is the router rule, not authorisation scope,
+    # that stops it: the refusal names the exception it is asking for.
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p("l1main"), KEY, {"done_criteria": "x"})
+    assert "only the router may edit" in exc.value.msg
+    item = w.store._item(KEY)
+    assert item["state"] == "claimed"
+    assert item["done_criteria"] == "criteria"
+    assert item["depends_on"] == []
+    assert item["round"] == 0
+    assert snap(w)[2] == events_before   # no item_defined from any of them
+    assert w.store.verify_integrity() == []
+
+
+def test_router_active_edit_event_carries_before_and_after(tmp_path):
+    """Both new fields in one in-review edit: the audit values are exact."""
+    w = World(tmp_path)
+    seed(w, [("A", []), ("B", [])])
+    epoch = to_in_review(w, KEY)               # submit bumped round to 1
+    out = w.store.edit_definition(w.p("router"), KEY,
+                                  {"done_criteria": "revised",
+                                   "depends_on": ["demo:B"]})
+    assert out == {"key": KEY}
+    item = w.store._item(KEY)
+    assert (item["state"], item["epoch"]) == ("in_review", epoch)
+    assert item["done_criteria"] == "revised"
+    assert item["depends_on"] == ["demo:B"]
+    assert item["round"] == 2
+    event = last_defined(w)
+    assert event["payload"] == {"fields": ["depends_on", "done_criteria"],
+                                "while": "in_review", "who": "router",
+                                "before": {"done_criteria": "criteria",
+                                           "depends_on": []},
+                                "after": {"done_criteria": "revised",
+                                          "depends_on": ["demo:B"]}}
+    assert folded(w)["round"] == item["round"]
+    assert w.store.verify_integrity() == []
+    assert w.store.verify_chain() == []
+    w.close()
+
+
+def test_other_fields_stay_closed_while_claimed(w):
+    """F4 widens the mask to exactly two fields: anything else stays open-only."""
+    to_claimed(w, KEY)
+    events_before = snap(w)[2]
+    with pytest.raises(Refused) as exc:
+        w.store.edit_definition(w.p("router"), KEY,
+                                {"done_criteria": "x", "title": "y"})
+    assert exc.value.code == "bad_state"
+    assert "not open" in exc.value.msg
+    item = w.store._item(KEY)
+    assert item["done_criteria"] == "criteria"
+    assert item["title"] == "title A"
+    assert item["round"] == 0
+    assert snap(w)[2] == events_before
+    assert w.store.verify_integrity() == []
