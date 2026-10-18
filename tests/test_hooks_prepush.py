@@ -5,6 +5,7 @@ matched value), so these tests only drive it as git would: ref lines on stdin,
 exit code 0/1, output free of the planted strings.
 """
 import os
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -27,6 +28,24 @@ def fake_ip():
 
 def fake_word():
     return "zor" + "pshot"
+
+
+def fake_ip2():
+    """A second ipv4 hit outside the doc allow-prefixes, built at runtime like fake_ip."""
+    return ".".join(str(o) for o in (192, 5, 6, 7))
+
+
+def sha(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def value_rules(path, rule, *values):
+    """A rules.toml with one [[scrub.allow_value]] per *value* for (path, rule)."""
+    body = "[scrub]\n"
+    for v in values:
+        body += ('[[scrub.allow_value]]\npath = "' + path + '"\nrule = "' + rule + '"\n'
+                 'value_sha256 = "' + sha(v) + '"\nwhy = "reviewed synthetic fixture"\n')
+    return body
 
 
 def git(cwd, *args):
@@ -167,6 +186,75 @@ def test_words_file_from_env_refuses_without_echoing_the_word(repo, tmp_path):
     assert "app/plan.py:1: private-word" in out
     assert fake_word() not in out
     assert str(words) not in out, "the words-file path itself may leak a private name"
+
+
+def test_hook_applies_an_allow_value_so_the_push_passes(repo, tmp_path):
+    """CI's tree scan exempts a reviewed value by (path, rule, sha256); a push of the
+    same file must pass too -- scan_blob now runs the value-aware check, not scan_line."""
+    r, base = repo
+    rules = tmp_path / "rules.toml"
+    rules.write_text(value_rules("app/data.json", "ipv4", fake_ip()))
+    head = commit_file(r, "app/data.json", '{"ip": "' + fake_ip() + '"}\n')
+    res = run_hook(r, [push_line("main", head, base)],
+                   env_extra={"PLANGRAPH_SCRUB_RULES": str(rules)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert fake_ip() not in out, "an allowed value is still never printed"
+
+
+def test_hook_refuses_when_a_second_value_on_the_line_is_not_allowed(repo, tmp_path):
+    r, base = repo
+    rules = tmp_path / "rules.toml"
+    rules.write_text(value_rules("app/data.json", "ipv4", fake_ip()))
+    head = commit_file(r, "app/data.json",
+                       '{"ips": ["' + fake_ip() + '", "' + fake_ip2() + '"]}\n')
+    res = run_hook(r, [push_line("main", head, base)],
+                   env_extra={"PLANGRAPH_SCRUB_RULES": str(rules)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "app/data.json:1: ipv4" in out
+    for value in (fake_ip(), fake_ip2()):
+        assert value not in out
+
+
+def test_hook_allow_value_is_bound_to_its_path(repo, tmp_path):
+    """The same value at a different path is not covered by the allowance."""
+    r, base = repo
+    rules = tmp_path / "rules.toml"
+    rules.write_text(value_rules("app/data.json", "ipv4", fake_ip()))
+    head = commit_file(r, "app/other.json", '{"ip": "' + fake_ip() + '"}\n')
+    res = run_hook(r, [push_line("main", head, base)],
+                   env_extra={"PLANGRAPH_SCRUB_RULES": str(rules)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "app/other.json:1: ipv4" in out
+    assert fake_ip() not in out
+
+
+def test_hook_value_allows_a_path_level_private_word_hit(repo, tmp_path):
+    """A path-level private-word hit carries the relative path as its value, so the
+    same [[scrub.allow_value]] entry that lets CI's scan_tree pass lets the push pass."""
+    r, base = repo
+    rel = "app/" + fake_word() + "-plan.txt"
+    words = tmp_path / "words.txt"
+    words.write_text(fake_word() + "\n")
+    head = commit_file(r, rel, "clean\n")
+    lines = [push_line("main", head, base)]
+
+    res = run_hook(r, lines, env_extra={"PLANGRAPH_SCRUB_WORDS": str(words)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "<path-hash:" in out
+    for leak in (fake_word(), rel):
+        assert leak not in out, "the hitting path is itself the leak"
+
+    rules = tmp_path / "rules.toml"
+    rules.write_text(value_rules(rel, "private-word", rel))
+    res = run_hook(r, lines, env_extra={"PLANGRAPH_SCRUB_WORDS": str(words),
+                                        "PLANGRAPH_SCRUB_RULES": str(rules)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "<path-hash:" not in out and fake_word() not in out
 
 
 def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():

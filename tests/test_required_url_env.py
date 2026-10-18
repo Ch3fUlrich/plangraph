@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 import apply_batch  # noqa: E402
 import seat_verdict as sv  # noqa: E402
 
+from plangraph.keeper import cli as keeper_cli, cli_verbs  # noqa: E402
+from plangraph.keeper.cli_verbs import Session  # noqa: E402
 from plangraph.review import gateway as g  # noqa: E402
 
 TOKEN = "dummy"
@@ -81,3 +83,39 @@ def test_apply_batch_url_from_env(tmp_path, monkeypatch):
                            str(tmp_path / "none.token")], out=out, err=err)
     assert rc == 1  # no url error: fails later on the unreadable source instead
     assert "PG_URL" not in err.getvalue()
+
+
+# ------------------------------------------------------ keeper cli (cli_verbs.Session)
+
+def test_cli_session_requires_url(monkeypatch):
+    monkeypatch.delenv("PG_URL", raising=False)
+    with pytest.raises(cli_verbs.MissingKeeperURL) as exc:
+        Session().call("GET", "ready")
+    assert "PG_URL" in str(exc.value)
+
+
+def test_cli_session_refuses_before_token_read(monkeypatch, tmp_path):
+    monkeypatch.delenv("PG_URL", raising=False)
+    monkeypatch.setenv("PG_TOKEN_FILE", str(tmp_path / "absent.token"))
+    with pytest.raises(cli_verbs.MissingKeeperURL):
+        Session().call("GET", "ready")   # not the token-file Unreachable
+
+
+def test_cli_session_resolves_url_at_call_time(monkeypatch):
+    monkeypatch.delenv("PG_URL", raising=False)
+    session = Session()
+    monkeypatch.setenv("PG_URL", "http://127.0.0.1:1/")
+    assert session.url == "http://127.0.0.1:1"
+
+
+def test_cli_session_explicit_url_wins(monkeypatch):
+    monkeypatch.setenv("PG_URL", "http://127.0.0.1:1")
+    assert Session(url="http://127.0.0.1:2").url == "http://127.0.0.1:2"
+
+
+def test_cli_main_refuses_without_url(monkeypatch, capsys):
+    monkeypatch.delenv("PG_URL", raising=False)
+    monkeypatch.delenv("PG_TOKEN_FILE", raising=False)
+    assert keeper_cli.main(["ready"]) == cli_verbs.EXIT_REFUSED
+    err = capsys.readouterr().err
+    assert "no keeper URL" in err and "PG_URL" in err

@@ -1,7 +1,9 @@
 """CLI verbs: talk to the API with urllib and fall back to the local snapshot.
 
 The token is read from ``PG_TOKEN_FILE`` (mode 600), never from argv and never
-printed.  Exit codes: 0 ok, 2 refused, 3 unreachable.  On an unreachable keeper a
+printed.  The keeper URL comes from ``--url`` or ``PG_URL``, resolved at call
+time; there is no built-in default (D-A=2).  Exit codes: 0 ok, 2 refused,
+3 unreachable.  On an unreachable keeper a
 *read* verb is answered from the local ``plan.snapshot.json`` (signature-checked when
 configured, M2B) with :mod:`plangraph.views` + a stderr notice; a write only exits 3.
 """
@@ -23,7 +25,8 @@ from .credential_guard import mask_all
 from .snapshot_io import SignError, read_snapshot
 from .cli_local import evidence_ref, local_alerts, local_digest, local_show
 
-__all__ = ["Session", "RefusedCli", "Unreachable", "parse_duration",
+__all__ = ["Session", "RefusedCli", "MissingKeeperURL", "Unreachable",
+           "parse_duration",
            "EXIT_OK", "EXIT_REFUSED", "EXIT_UNREACHABLE"]
 
 EXIT_OK = 0
@@ -44,6 +47,13 @@ class RefusedCli(Exception):
 
 class Unreachable(Exception):
     """The keeper could not be reached (connection error or 5xx)."""
+
+
+class MissingKeeperURL(RefusedCli):
+    """No keeper URL configured (D-A=2: the client has no default port)."""
+
+    def __init__(self):
+        super().__init__("no keeper URL: pass --url or set PG_URL")
 
 
 def parse_duration(value) -> int:
@@ -75,11 +85,17 @@ class Session:
 
     def __init__(self, json_mode=False, config_path=None, url=None):
         self.json_mode = bool(json_mode)
-        self.url = (url or os.environ.get("PG_URL")
-                    or "http://127.0.0.1:8765").rstrip("/")
+        self._url = url
         self.config_path = config_path or os.environ.get("PG_CONFIG")
         self._token = None
         self._config = None
+
+    @property
+    def url(self):
+        url = self._url or os.environ.get("PG_URL")
+        if not url:
+            raise MissingKeeperURL()
+        return url.rstrip("/")
 
     # --------------------------------------------------------------- token
     def token(self):
