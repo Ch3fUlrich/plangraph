@@ -83,6 +83,11 @@ struct Env {
     workroot: PathBuf,
     keeper: Arc<StubKeeper>,
     client: Client,
+    /// The activities' dependencies, kept so a restarted worker can be built
+    /// with the same keeper, harnesses and config.
+    deps: Deps,
+    /// The `PG_TEMPORAL_ADDR` url, kept so a restarted worker can reconnect.
+    addr: String,
     task_queue: String,
     worker: std::cell::RefCell<Option<tokio::task::JoinHandle<()>>>,
     /// A built worker not yet polling, for tests that signal before any worker runs.
@@ -146,7 +151,7 @@ impl Env {
         let opts = WorkerOptions::new(task_queue.as_str())
             .register_workflow::<Card>()
             .expect("register card workflow")
-            .register_activities(CardActivities::new(deps))
+            .register_activities(CardActivities::new(deps.clone()))
             .build();
 
         // The worker holds its own connection so the test client stays free to
@@ -176,6 +181,8 @@ impl Env {
             workroot: workroot_path,
             keeper,
             client,
+            deps,
+            addr: addr.to_string(),
             task_queue,
             worker: std::cell::RefCell::new(worker),
             held: std::cell::RefCell::new(held),
@@ -260,6 +267,31 @@ impl Env {
             });
             *self.worker.borrow_mut() = Some(handle);
         }
+    }
+
+    /// Restarts the poll loop like a crash or a redeploy would: the old worker
+    /// is aborted and a fresh one, with no memory of anything the old one
+    /// held, starts polling the same task queue. The workflow server replays
+    /// the history onto it, so only state carried in the history survives.
+    async fn restart_worker(&self) {
+        self.stop();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let opts = WorkerOptions::new(self.task_queue.as_str())
+            .register_workflow::<Card>()
+            .expect("register card workflow")
+            .register_activities(CardActivities::new(self.deps.clone()))
+            .build();
+        let url = Url::from_str(&self.addr).expect("PG_TEMPORAL_ADDR parses as a url");
+        let conn = Connection::connect(ConnectionOptions::new(url).build())
+            .await
+            .expect("connect restart worker client");
+        let wclient =
+            Client::new(conn, ClientOptions::new("default").build()).expect("restart client");
+        let mut worker = Worker::new(&self._runtime, wclient, opts).expect("build restart worker");
+        let handle = tokio::task::spawn_local(async move {
+            let _ = worker.run().await;
+        });
+        *self.worker.borrow_mut() = Some(handle);
     }
 }
 
