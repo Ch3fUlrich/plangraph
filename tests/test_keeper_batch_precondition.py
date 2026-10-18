@@ -101,6 +101,18 @@ def test_precondition_untouched_item_passes_and_zero_refuses(w):
     assert "base_seq 0: changed after base_seq: demo:A" in ei.value.msg
 
 
+def test_precondition_boundary_event_at_base_seq_is_not_stale(w):
+    """An item whose last event IS base_seq (not after it) is fresh."""
+    w.store.apply_ops(w.p("router"), [
+        {"op": "edit", "key": "demo:A", "fields": {"title": "boundary touch"}},
+    ])
+    boundary = _max_seq(w)
+    res = w.store.apply_ops(w.p("router"), [
+        {"op": "edit", "key": "demo:A", "fields": {"title": "after boundary"}},
+    ], base_seq=boundary)
+    assert res["applied"] == 1
+
+
 def test_precondition_absent_base_seq_does_no_check(w):
     """(d) base_seq absent or None skips stale check."""
     w.store.apply_ops(w.p("router"), [
