@@ -15,12 +15,12 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 ## GEN-15 (D-1932 ONLY PH-RT-RUNTIME; D-1919 budget; D-1933 TEMPORAL-CHECK -> dev start-dev, cloud parts -> RELEASE-DEPLOY)
 | P1 lane | State | Next |
 |---|---|---|
-| TEMPORAL-CHECK | claim RELEASED for routing retarget (D-1933, new RT-P1-DEVSTACK); dev check running in predeploy-2 L2 | re-claim after apply; attach DONE TEMPORAL-CHECK-DEV record |
+| TEMPORAL-CHECK | DEV DONE: ~/.local/share/plangraph/temporal-check/dev/temporal-dev-check.md e1c6b934 (all PASS, RSS 166/205 MB); retarget not applied yet | routing apply -> claim -> evidence (decision/run-record) -> submit |
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
 | #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
-| #46 WORKER | NO-GO D-1934: C1 env allowlist + C2 fence wording -> L2 fix, re-seat 2 fam | MERGE-READY -> judge -> merge; then #49 rebase |
+| #46 WORKER | C1/C2 fixed head cbf83e48 CI green; re-judge GO-REQ sent (C1 seats all fix-dismissed; 36 scrub allowances flagged) | GO -> merge |
+| #49 INBOX | L2 updating on main+#46 head, delta seats | MERGE-READY after #46 |
 | CLASS-COMBOS | workst-L1-autoos claimed e1, lane autoos-L2-small-lanes | MERGE-READY + probe |
-| E2E / RT-P0 | wait / FLEET-SID-REFRESH = routing (D-1933) | track |
 ## Open
 | Item | State | Next |
 |---|---|---|
