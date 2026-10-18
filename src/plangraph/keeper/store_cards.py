@@ -11,7 +11,10 @@ trigger).
 * ``add_decision``: an operator decision or judge ruling (router only).
 * ``ask_question`` / ``answer_question``: a structured question with an optional default
   and deadline.  A risk-tagged question never has a default.  ``source='question_timeout'``
-  applies the default once the deadline has passed.
+  applies the default once the deadline has passed.  RT-P1-EXEC-OWNERSHIP: an ask
+  carrying ``(workflow_id, run_id, attempt)`` is checked against the card's recorded
+  exec owner exactly like a run-carrying ``set_state`` move; a worker/spawner that
+  omits them on an owned card is refused.
 * ``set_budget``: absolute tokens/cost/meter for one provider and day.
 * ``set_state``: move an item among the non-claim states (open, ready, running,
   needs_input, waiting, failed, parked); claim, review, done and cancel keep their verbs.
@@ -321,14 +324,17 @@ class CardsMixin:
 
     # ------------------------------------------------------------ questions
     def ask_question(self, principal, key, text, default_answer=None, deadline=None,
-                     risk_tags=()):
+                     risk_tags=(), exec_workflow_id=None, exec_run_id=None,
+                     exec_attempt=None):
         return self._run(principal, "ask_question", key,
                          lambda now: self._ask_question(principal, key, text,
                                                         default_answer, deadline,
-                                                        risk_tags, now))
+                                                        risk_tags, now,
+                                                        exec_workflow_id,
+                                                        exec_run_id, exec_attempt))
 
     def _ask_question(self, principal, key, text, default_answer, deadline, risk_tags,
-                      now):
+                      now, exec_workflow_id=None, exec_run_id=None, exec_attempt=None):
         self._require_role(principal, "router", "l1", "worker", "spawner", "system")
         body = _text("text", text, required=True, key=key)
         default = _text("default_answer", default_answer, key=key)
@@ -346,6 +352,23 @@ class CardsMixin:
             item = self._get_or_refuse(key)
             self._may_act_in(principal, item["project"])
             self._assert_unlocked(item)
+            # RT-P1-EXEC-OWNERSHIP: an ask carrying any exec field is checked
+            # against the recorded owner (a first ask records it; a stale run
+            # or a backwards attempt is refused and inserts no question).  A
+            # worker/spawner that omits all three on an owned card names no
+            # run, so it is refused as validation; router/l1/system callers
+            # (planner, router) never are.
+            if any(part is not None
+                   for part in (exec_workflow_id, exec_run_id, exec_attempt)):
+                self._exec_check(self.conn, key, exec_workflow_id, exec_run_id,
+                                 exec_attempt)
+            elif principal.role in ("worker", "spawner"):
+                row = self.conn.execute(
+                    "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
+                if row is not None and row["exec_run_id"] is not None:
+                    raise Refused("validation",
+                                  f"{key} has an exec owner: workflow_id, run_id"
+                                  " and attempt are required")
             row = self.conn.execute(
                 "INSERT INTO questions(id,key,text,default_answer,deadline,risk_tags,"
                 "state,created_at)"
