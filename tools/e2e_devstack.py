@@ -9,12 +9,14 @@ through the keeper, the merge on the phase branch, and the attempt rows read fro
 Needs running: `tools/devstack.sh start` and `tools/devstack.sh keeper` (its keeper.json lives in
 --state), plus a built pg-worker (--worker-bin / PG_WORKER_BIN) and the temporal CLI
 (--temporal-cli / TEMPORAL_CLI). This script never starts or stops any of them. Everything is
-loopback; the live keeper port 8787 is refused.
+loopback; `tools/devstack.sh status` prints the matching `export TEMPORAL_ADDR=...` and
+`export PLANGRAPH_TEMPORAL_HTTP=...` for the devstack's own ports -- --temporal and --keeper
+have no defaults and any port in REFUSED_PORTS (the live/default ones) is a hard error.
 
 The worker talks straight to the keeper; the run reads the keeper audit_log back to show which
-worker verbs (attempt, park, complete, alarm, lock acquire/release) the real keeper served.
+worker verbs (claim, attempt, park, complete, alarm, lock acquire/release) the real keeper served.
 
-Usage: python3 tools/e2e_devstack.py [--leg stub|opencode] [--model <opencode model>] ...
+Usage: python3 tools/e2e_devstack.py [--leg stub|stub-fail|opencode] [--model <opencode model>] ...
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -39,6 +42,15 @@ import rtp1_local_util as u  # noqa: E402
 
 PROJECT = "demo"
 QUESTION_WAIT_S, WORKFLOW_WAIT_S = 90, 300
+#: these are the live/default ports of the operator's real Temporal, UI, Postgres and
+#: keeper; the e2e must never touch them.
+REFUSED_PORTS = frozenset({7233, 8233, 55432, 8787})
+#: longer than the sum of QUESTION_WAIT_S + WORKFLOW_WAIT_S + projector waits (~400 s
+#: worst case), so no heartbeat is needed; the assert below is the guard -- if those
+#: waits are ever raised past the lease, the script must heartbeat (verb `heartbeat`,
+#: body key+epoch).
+CLAIM_LEASE_S = 1800
+assert QUESTION_WAIT_S + WORKFLOW_WAIT_S + 120 < CLAIM_LEASE_S
 # Same rows the test helper attempts() reads; db_pg translates the '?' placeholders.
 ATTEMPT_COLS = ("n", "exit_class", "cost", "tokens_in", "tokens_out", "harness", "model")
 
@@ -51,23 +63,39 @@ def step(msg: str) -> None:
     print(f"[step] {msg}", flush=True)
 
 
+def assert_verbs(seen: list[str], required: tuple[str, ...], forbidden: tuple[str, ...] = ()) -> None:
+    missing = [v for v in required if v not in seen]
+    if missing:
+        raise Fail(f"keeper did not serve the required verb(s): {', '.join(missing)}")
+    present = [v for v in forbidden if v in seen]
+    if present:
+        raise Fail(f"keeper served verb(s) that must not occur on this leg: {', '.join(present)}")
+
+
+def _refuse_port(port: int | str, what: str) -> None:
+    if int(port) in REFUSED_PORTS:
+        raise Fail(f"{what} must not use the live/default port {port}")
+
+
 def _hostport(addr: str, what: str) -> tuple[str, str]:
     host, sep, port = addr.rpartition(":")
     if not sep or not port.isdigit():
         raise Fail(f"{what} must be HOST:PORT (got {addr!r})")
     if host != "127.0.0.1":
         raise Fail(f"{what} must be loopback (refusing {addr!r})")
+    _refuse_port(port, what)
     return host, port
 
 
-def _check_url(url: str, what: str, refuse_port: int | None = None) -> str:
+def _check_url(url: str, what: str) -> str:
     parsed = urllib.parse.urlparse(url if "//" in url else f"http://{url}")
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise Fail(f"{what} is not a URL (got {url!r})")
     if parsed.hostname != "127.0.0.1":
         raise Fail(f"{what} must be loopback (refusing {url!r})")
-    if refuse_port and parsed.port == refuse_port:
-        raise Fail(f"{what} must not use the live keeper port {refuse_port}")
+    if parsed.port is None:
+        raise Fail(f"{what} needs an explicit port")
+    _refuse_port(parsed.port, what)
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
@@ -105,6 +133,24 @@ def add_principal(cfg: Path, name: str, role: str, projects: str) -> str:
     if not match:
         raise Fail(f"add-principal {name}: token not in output shape")
     return match.group(1)
+
+
+def claim_item(keeper: str, worker_token: str, key: str) -> int:
+    """Claim the card as the worker principal over the real verb; returns the epoch."""
+    status, body = u.call(keeper, "POST", "/v1/claim", token=worker_token,
+                          body={"key": key, "lease_s": CLAIM_LEASE_S})
+    epoch = (body or {}).get("epoch")
+    if status != 200 or not isinstance(epoch, int):
+        raise Fail(f"claim {key}: status {status}, body {body}")
+    return epoch
+
+
+def release_claim(keeper: str, worker_token: str, key: str, epoch: int) -> None:
+    """Best effort at teardown: a refusal (the card already left `claimed`) is only logged."""
+    status, body = u.call(keeper, "POST", "/v1/release", token=worker_token,
+                          body={"key": key, "epoch": epoch})
+    if status != 200:
+        sys.stderr.write(f"teardown release: status {status} body {body} (a finished card is expected to refuse)\n")
 
 
 def define_item(cfg: Path, keeper: str, router_token: str, key_id: str, scratch: Path) -> str:
@@ -164,36 +210,76 @@ def read_audit(cfg: Path, actor: str) -> list[dict]:
         conn.close()
 
 
-def parse_args() -> argparse.Namespace:
+def write_failing_opencode(bin_dir: Path) -> None:
+    """An `opencode` that always dies: exit 1 with unknown stderr, so the worker cannot map it
+    to a known exit class. The worker classifies it as `worker_crash`, retries it
+    `retries_per_tier` times (3) and parks the card with an alarm (budget/mod.rs policy order).
+    Temp name + rename, like `u.write_fake_opencode`, so the worker never execs a half-written file.
+    """
+    bin_dir.mkdir(parents=True)
+    tmp = bin_dir / "opencode.tmp"
+    tmp.write_text("#!/bin/sh\necho segfault >&2\nexit 1\n", encoding="utf-8")
+    tmp.chmod(tmp.stat().st_mode | stat.S_IXUSR)
+    os.replace(tmp, bin_dir / "opencode")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--temporal", default=os.environ.get("TEMPORAL_ADDR", "127.0.0.1:7233"),
-                   help="dev server HOST:PORT (env TEMPORAL_ADDR)")
+    p.add_argument("--temporal", default=os.environ.get("TEMPORAL_ADDR", ""),
+                   help="dev server HOST:PORT (env TEMPORAL_ADDR), required")
     p.add_argument("--temporal-http", default=os.environ.get("PLANGRAPH_TEMPORAL_HTTP", ""),
                    help="Temporal HTTP API the keeper signals through (env PLANGRAPH_TEMPORAL_HTTP)")
-    p.add_argument("--keeper", default="http://127.0.0.1:18787", help="dev keeper URL")
+    p.add_argument("--keeper", default=os.environ.get("KEEPER_URL", ""),
+                   help="dev keeper URL (env KEEPER_URL), required")
     p.add_argument("--state", default=os.environ.get("DEVSTACK_STATE", str(REPO / ".devstack")),
                    help="devstack state dir holding keeper.json (env DEVSTACK_STATE)")
     p.add_argument("--worker-bin", default=os.environ.get("PG_WORKER_BIN", ""),
                    help="built pg-worker (env PG_WORKER_BIN)")
     p.add_argument("--temporal-cli", default=os.environ.get("TEMPORAL_CLI") or shutil.which("temporal"),
                    help="temporal CLI binary (env TEMPORAL_CLI)")
-    p.add_argument("--leg", choices=("stub", "opencode"), default="stub")
+    p.add_argument("--leg", choices=("stub", "stub-fail", "opencode"), default="stub")
     p.add_argument("--model", default="", help="opencode model id for --leg opencode")
     p.add_argument("--keep", action="store_true", help="keep the scratch dir")
-    return p.parse_args()
+    return p.parse_args(argv)
+
+
+def validate_args(args) -> tuple[str, str]:
+    """No-filesystem, no-network argument checks; returns (keeper_url, temporal_http_url_or_empty)."""
+    if not args.temporal:
+        raise Fail("--temporal HOST:PORT (or env TEMPORAL_ADDR) is required: point it at the "
+                   "devstack's own Temporal port, never the default 7233")
+    if not args.keeper:
+        raise Fail("--keeper URL (or env KEEPER_URL) is required: the devstack keeper, never "
+                   "the live 8787")
+    _hostport(args.temporal, "--temporal")
+    keeper = _check_url(args.keeper, "--keeper")
+    http = _check_url(args.temporal_http, "--temporal-http") if args.temporal_http else ""
+    if args.leg == "opencode" and not args.model:
+        raise Fail("--leg opencode needs --model <opencode model id>")
+    return keeper, http
+
+
+def check_keeper_config(cfg: Path) -> None:
+    """The keeper config must not point at the live Postgres or keeper bind either."""
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Fail(f"{cfg} unreadable: {exc}") from exc
+    dsn_port = urllib.parse.urlparse(str(data.get("dsn", ""))).port
+    if dsn_port is not None:
+        _refuse_port(dsn_port, "keeper.json dsn")
+    _host, sep, bind_port = str(data.get("bind", "")).rpartition(":")
+    if sep and bind_port.isdigit():
+        _refuse_port(bind_port, "keeper.json bind")
 
 
 def main() -> int:
     args = parse_args()
-    keeper = _check_url(args.keeper, "--keeper", refuse_port=8787)
-    _hostport(args.temporal, "--temporal")
-    if args.temporal_http:
-        _check_url(args.temporal_http, "--temporal-http")
-    if args.leg == "opencode" and not args.model:
-        raise Fail("--leg opencode needs --model <opencode model id>")
+    keeper, _http = validate_args(args)
     cfg = Path(args.state) / "keeper.json"
     if not cfg.is_file():
         raise Fail(f"{cfg} missing — run tools/devstack.sh keeper first")
+    check_keeper_config(cfg)
     worker_bin, cli = args.worker_bin, args.temporal_cli
     for what, path in (("--worker-bin", worker_bin), ("--temporal-cli", cli)):
         if not path or not Path(path).is_file():
@@ -224,6 +310,10 @@ def main() -> int:
 
         step(f"define the card item via the real CLI: {key}")
         define_item(cfg, keeper, tokens["router"], f"DS-{pid}", scratch)
+        epoch = claim_item(keeper, tokens["worker"], key)
+        cleanup.append(("release claim",
+                        lambda: release_claim(keeper, tokens["worker"], key, epoch)))
+        step(f"claimed {key} as {names['worker']} epoch {epoch}")
 
         step(f"scratch repo + workroot under {scratch}")
         repo = scratch / "repo"
@@ -235,9 +325,13 @@ def main() -> int:
                  "harness": "opencode"}]
         if args.leg == "stub":
             u.write_fake_opencode(scratch / "stub-bin")   # asks PG_QUESTION, on the answer writes out.txt
+        elif args.leg == "stub-fail":
+            write_failing_opencode(scratch / "stub-bin")  # always crashes -> worker_crash x3 -> parked
         else:
             step("leg=opencode: the question step is skipped (that path needs a real model that "
                  "asks); this mode only requires the card to finish done/merged")
+            step("NOTE: the opencode leg is not verifiable from WSL (Windows npm shim); "
+                 "run it from a native opencode host")
 
         step("start pg-worker against the dev keeper")
         env = dict(os.environ, PG_TEMPORAL_ADDR=f"http://{args.temporal}", PG_BUILD_ID=build_id,
@@ -246,7 +340,7 @@ def main() -> int:
                    GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
                    GIT_AUTHOR_NAME="worker", GIT_AUTHOR_EMAIL="w@example.com",
                    GIT_COMMITTER_NAME="worker", GIT_COMMITTER_EMAIL="w@example.com")
-        if args.leg == "stub":                            # isolated HOME: the stub needs no config
+        if args.leg in ("stub", "stub-fail"):              # isolated HOME: the stubs need no config
             env["PATH"] = f"{scratch / 'stub-bin'}:{env['PATH']}"
             env["HOME"] = str(scratch)
         worker = u.WorkerProc(worker_bin, env, scratch / "worker.log")
@@ -301,12 +395,20 @@ def main() -> int:
                                                                   WORKFLOW_WAIT_S))
             finally:
                 loop.close()
-            if result["outcome"] != "done" or "merged" not in json.dumps(result):
-                raise Fail(f"card outcome {result.get('outcome')!r}, expected done/merged")
-            merged = u.git(repo, "show", f"{u.BRANCH}:{u.CARD_FILE}")   # raises if absent
-            merged_sha = u.git(repo, "rev-parse", u.BRANCH)
-            step(f"workflow done; {u.CARD_FILE} merged on {u.BRANCH} ({merged_sha[:9]})"
-                 + (f", content {merged!r}" if args.leg == "stub" else ""))
+            if args.leg == "stub-fail":
+                # the failing stub crashed every retry, so the card parked with an alarm and
+                # never merged: there is no merge commit to read on this leg
+                if result["outcome"] != "parked":
+                    raise Fail(f"card outcome {result.get('outcome')!r}, expected parked")
+                merged_sha = ""
+                step(f"workflow finished; outcome {result['outcome']} (no merge on this leg)")
+            else:
+                if result["outcome"] != "done" or "merged" not in json.dumps(result):
+                    raise Fail(f"card outcome {result.get('outcome')!r}, expected done/merged")
+                merged = u.git(repo, "show", f"{u.BRANCH}:{u.CARD_FILE}")   # raises if absent
+                merged_sha = u.git(repo, "rev-parse", u.BRANCH)
+                step(f"workflow done; {u.CARD_FILE} merged on {u.BRANCH} ({merged_sha[:9]})"
+                     + (f", content {merged!r}" if args.leg == "stub" else ""))
 
             step("project again, then read the attempt rows back from the dev keeper")
             run_projector(cfg, args.temporal)
@@ -314,22 +416,33 @@ def main() -> int:
             for row in rows:
                 print("[step] attempt " + " ".join(
                     f"{c}={row[c]}" for c in ATTEMPT_COLS if c in row))
-            if not any(a["exit_class"] == "ok" for a in rows):
-                raise Fail(f"no attempt with exit_class ok: {rows}")
+            pairs = [(a["n"], a["exit_class"]) for a in rows]
+            if args.leg == "stub":
+                if pairs != [(1, "needs_input"), (2, "ok")]:
+                    raise Fail(f"attempt pairs {pairs}, expected [(1, 'needs_input'), (2, 'ok')]")
+            elif args.leg == "stub-fail":
+                if pairs != [(1, "worker_crash"), (2, "worker_crash"), (3, "worker_crash")]:
+                    raise Fail(f"attempt pairs {pairs}, expected worker_crash x3")
+            elif not any(a["exit_class"] == "ok" for a in rows):
+                raise Fail(f"no attempt with exit_class ok: {rows}")   # opencode needs a real model
             audit = read_audit(cfg, names["worker"])
             for row in audit:
                 print(f"[step] audit action={row['action']} key={row['key']} "
                       f"ok={row['ok']} code={row['code']}")
             seen = sorted({r["action"] for r in audit if r["ok"]})
             print("[step] worker verbs served by the keeper: " + json.dumps(seen))
-            for verb in ("worker_attempt", "lock_acquire", "lock_release"):
-                if verb not in seen:
-                    raise Fail(f"keeper did not serve the {verb} verb")
+            if args.leg == "stub-fail":
+                assert_verbs(seen, ("claim", "worker_attempt", "worker_park", "worker_alarm"),
+                             forbidden=("worker_complete", "lock_acquire"))
+            else:
+                assert_verbs(seen, ("claim", "worker_attempt", "worker_complete",
+                                    "lock_acquire", "lock_release"))
             print("RTP1 DEVSTACK RECORD " + json.dumps({
                 "item": key, "workflow_id": wid, "leg": args.leg, "base_sha": base_sha,
                 "merged_sha": merged_sha, "temporal_http": args.temporal_http,
+                "outcome": result["outcome"], "epoch": epoch,
                 "worker_verbs": seen,
-                "attempts": [(a["n"], a["exit_class"]) for a in rows]}, sort_keys=True))
+                "attempts": pairs}, sort_keys=True))
         finally:
             while cleanup:
                 name, stop = cleanup.pop()
@@ -344,6 +457,12 @@ def main() -> int:
         print(f"E2E-DEVSTACK-FAIL: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:
+        while cleanup:
+            name, stop = cleanup.pop()
+            try:
+                stop()
+            except Exception as exc:               # noqa: BLE001 - keep tearing down
+                sys.stderr.write(f"teardown {name}: {exc!r}\n")
         if not args.keep:
             shutil.rmtree(scratch, ignore_errors=True)
         else:

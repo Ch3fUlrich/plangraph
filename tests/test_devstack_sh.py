@@ -307,3 +307,20 @@ def test_shellcheck_clean():
     # real PATH for this test only (shutil.which above + inherited os.environ below)
     r = subprocess.run(["shellcheck", str(SCRIPT)], capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_start_defaults_temporal_http_port_to_18233(stack):
+    # devstack.sh defaults TEMPORAL_HTTP_PORT to 18233, the devstack's own HTTP API port: the live
+    # one is 8233 and the keeper signals workflows through this URL, so both the start-dev flag and
+    # the status export must land on 18233 when the variable is unset.
+    stack.env.pop("TEMPORAL_HTTP_PORT")
+    try:
+        assert stack.run("start").returncode == 0
+        dev = [l for l in stack.lines() if l.startswith("temporal server start-dev")]
+        assert len(dev) == 1, dev
+        assert "--http-port 18233" in dev[0]
+        r = stack.run("status")
+        assert r.returncode == 0
+        assert "export PLANGRAPH_TEMPORAL_HTTP=http://127.0.0.1:18233" in r.stdout
+    finally:
+        stack.run("stop", timeout=60)
