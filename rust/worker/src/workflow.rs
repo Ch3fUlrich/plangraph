@@ -9,8 +9,8 @@
 
 use crate::activities::AskInput;
 use crate::activities::{
-    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, JanitorInput, MergeInput,
-    MergeResult, ProbeInput, ProbeResult, Tick,
+    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, GateInput, GateResult,
+    JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
@@ -46,6 +46,15 @@ const MERGE_RETRY_CAP: u32 = 20;
 
 /// Alarm reason when the keeper merge lock stayed unavailable.
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
+
+/// Temporal patch marker for the card's gate running before a merge.
+///
+/// Scheduling the `gate` activity adds a command to the workflow history that a
+/// history recorded before this change has no room for. `gate_step` asks the SDK
+/// for this marker first, so an old in-flight card replays without the gate while
+/// a card started after the change runs it. The id is pinned by a test: renaming
+/// it would strand every card whose history already carries the old marker.
+const GATE_PATCH: &str = "gate-before-merge-v1";
 
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
@@ -370,9 +379,16 @@ impl Card {
             // Inner loop: a merge can move the base and hand a synthetic attempt back
             // to the policy without starting a new worktree.
             loop {
-                // Step 4: merge an `ok` (or probed already-done) attempt now.
+                // Step 4: merge an `ok` (or probed already-done) attempt now, but
+                // only after the card's gate has passed on the exact tree about to
+                // be merged. A gate that blocks produces the same step a merge-time
+                // check failure would, so the arms below need no gate case.
                 if let Some(branch) = branch_to_merge.take() {
-                    match merge_step(ctx, &cfg, &input, &base_sha, &branch, n).await? {
+                    let step = match gate_step(ctx, &cfg, &input, &base_sha, n).await? {
+                        Some(blocked) => blocked,
+                        None => merge_step(ctx, &cfg, &input, &base_sha, &branch, n).await?,
+                    };
+                    match step {
                         MergeStep::Merged(sha) => {
                             ctx.execute_activity(
                                 CardActivities::complete,
@@ -951,6 +967,124 @@ fn map_merge_result(r: MergeResult) -> MergeStep {
     }
 }
 
+/// The card's gate command: its own check command, or `None` when it configures
+/// none.
+///
+/// A blank command means the card has nothing to verify, so the gate is skipped
+/// and the merge proceeds. The original string is returned, untrimmed: the shell
+/// is what decides whitespace, and `merge_fenced` still runs an empty
+/// `check_cmd` through `sh -c ''` (which passes). The `gate` activity instead
+/// rejects an empty command as invalid input, so the workflow must never hand it
+/// one — hence `None` here and the trim test rather than an emptiness test.
+fn gate_command(input: &CardInput) -> Option<&str> {
+    let cmd = input.claim.check_cmd.as_str();
+    if cmd.trim().is_empty() {
+        None
+    } else {
+        Some(cmd)
+    }
+}
+
+/// Run the card's gate in the attempt worktree before the branch is merged.
+///
+/// `Ok(None)` means the merge may proceed: there is no gate to run, or it
+/// passed. `Ok(Some(step))` means the gate blocked the merge, and the step is
+/// exactly the one a merge-time check failure produces (`CheckFail`, the gate's
+/// tail, main's head as the base), so the run loop's `Failed` arm retries or
+/// parks the card with no gate-specific case.
+///
+/// Replay safety comes first: scheduling the gate is a new command in the
+/// history, so `ctx.patched` records (or replays) the marker before anything
+/// else. `false` means the history predates the gate, so nothing is scheduled
+/// and the old workflow replays unchanged; `true` means the gate runs. The check
+/// is unconditional and outside any gate-specific branch, so every pass — a
+/// first pass or one reached after a retry — takes the same path.
+async fn gate_step(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    base_sha: &str,
+    n: u32,
+) -> WorkflowResult<Option<MergeStep>> {
+    if !ctx.patched(GATE_PATCH) {
+        return Ok(None);
+    }
+    let Some(cmd) = gate_command(input) else {
+        return Ok(None);
+    };
+    let r: GateResult = match ctx
+        .execute_activity(
+            CardActivities::gate,
+            GateInput {
+                workroot: input.workroot.clone(),
+                // The same worktree `merge_step` hands the merge: the gate must
+                // judge the tree that will land, not a fresh checkout of it.
+                workdir: format!(
+                    "{}/{}",
+                    input.workroot,
+                    AttemptId::new(input.claim.card.clone(), n).dir_name()
+                ),
+                cmd: cmd.to_string(),
+                // Unset: the activity clamps to the configured `start_to_close`.
+                timeout_s: None,
+            },
+            gate_options(cfg),
+        )
+        .await
+    {
+        Ok(r) => r,
+        // A cancelled call ends the workflow the same way every other activity
+        // call in this file does.
+        Err(e) if e.as_cancelled().is_some() => return Err(e.into()),
+        // A gate that could not run must never fall through to the merge, so it
+        // parks the card; the merge refusal class is what the policy grows into.
+        Err(e) => {
+            return Ok(Some(MergeStep::Failed(
+                ExitClass::MergeRefused,
+                format!("gate activity failed: {e}"),
+                base_sha.to_string(),
+            )));
+        }
+    };
+    Ok(map_gate_result(r, base_sha))
+}
+
+/// Map a gate result to the step the run loop acts on: `None` when the gate
+/// passed and the merge may go ahead.
+///
+/// The gate is the card's own check command, so one that does not pass —
+/// including one that timed out — is a merge-time check failure. `base_sha` is
+/// main's head because a blocked gate leaves main exactly where it was.
+fn map_gate_result(r: GateResult, base_sha: &str) -> Option<MergeStep> {
+    if r.passed {
+        return None;
+    }
+    let tail = if r.timed_out {
+        format!("gate timed out\n{}", r.tail)
+    } else {
+        r.tail
+    };
+    Some(MergeStep::Failed(
+        ExitClass::CheckFail,
+        tail,
+        base_sha.to_string(),
+    ))
+}
+
+/// The options the `gate` activity gets: it heartbeats, so it carries a
+/// heartbeat timeout, and a gate may be re-run a bounded number of times before
+/// the run loop treats the failure as it does any other activity error.
+fn gate_options(cfg: &Config) -> ActivityOptions {
+    let retry = RetryPolicy::builder()
+        .initial_interval(Duration::from_secs(2))
+        .maximum_attempts(3)
+        .build();
+    ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+        .heartbeat_timeout(cfg.heartbeat_timeout)
+        .retry_policy(retry)
+        .build()
+}
+
 /// True once the keeper merge lock has stayed unavailable for more than
 /// [`MERGE_RETRY_CAP`] retries: the card parks instead of waiting again.
 fn merge_retry_exhausted(retries: u32) -> bool {
@@ -1417,6 +1551,97 @@ mod tests {
         assert_eq!(base, "new");
         adopt_base(&mut base, String::new());
         assert_eq!(base, "new", "an empty head keeps the base");
+    }
+
+    fn gate_result(
+        passed: bool,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        tail: &str,
+    ) -> GateResult {
+        GateResult {
+            passed,
+            exit_code,
+            signal: None,
+            timed_out,
+            tail: tail.to_string(),
+            output_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn gate_command_is_none_for_an_empty_or_blank_check() {
+        for blank in ["", " ", "\t\n  "] {
+            let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
+            input.claim.check_cmd = blank.to_string();
+            // A card with no check command has nothing to verify: no gate is
+            // scheduled, and the activity is never handed an empty command.
+            assert_eq!(gate_command(&input), None, "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn gate_command_is_some_otherwise() {
+        let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
+        input.claim.check_cmd = "  cargo test  ".to_string();
+        // The original string is returned, not a trimmed copy: the shell owns
+        // whitespace.
+        assert_eq!(gate_command(&input), Some("  cargo test  "));
+    }
+
+    #[test]
+    fn map_gate_result_is_none_only_when_the_gate_passed() {
+        assert!(map_gate_result(gate_result(true, Some(0), false, ""), "base").is_none());
+        // `passed` is the authority: a stale nonzero exit code does not block.
+        assert!(map_gate_result(gate_result(true, Some(3), false, "boom"), "base").is_none());
+    }
+
+    #[test]
+    fn map_gate_result_blocks_a_failure_with_check_fail() {
+        let step = map_gate_result(gate_result(false, Some(3), false, "boom"), "base");
+        match step {
+            Some(MergeStep::Failed(ExitClass::CheckFail, tail, base)) => {
+                assert_eq!(tail, "boom");
+                // A blocked gate leaves main alone, so the base is main's head.
+                assert_eq!(base, "base");
+            }
+            other => panic!("a failed gate must block the merge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_gate_result_marks_a_timeout_in_the_tail() {
+        let Some(MergeStep::Failed(ExitClass::CheckFail, tail, base)) =
+            map_gate_result(gate_result(false, None, true, "partial output"), "base")
+        else {
+            panic!("a timed-out gate must block the merge");
+        };
+        assert!(tail.starts_with("gate timed out"), "{tail}");
+        assert!(tail.ends_with("partial output"), "{tail}");
+        assert_eq!(base, "base");
+    }
+
+    #[test]
+    fn gate_options_are_bounded() {
+        let cfg = Config::default();
+        let opts = gate_options(&cfg);
+        assert_eq!(
+            opts.close_timeouts.start_to_close(),
+            Some(cfg.start_to_close)
+        );
+        assert_eq!(opts.heartbeat_timeout, Some(cfg.heartbeat_timeout));
+        let retry = opts
+            .retry_policy
+            .expect("the gate options carry a retry policy");
+        assert_eq!(retry.maximum_attempts(), 3);
+        assert_eq!(retry.initial_interval(), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn gate_patch_id_is_stable() {
+        // Renaming the marker would strand every card whose history already
+        // carries it, so the id is pinned.
+        assert_eq!(GATE_PATCH, "gate-before-merge-v1");
     }
 
     #[test]

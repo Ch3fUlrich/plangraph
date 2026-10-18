@@ -1,7 +1,7 @@
 //! Run a card's check command and keep the tail of its output.
 
 use crate::hash::hash_bytes;
-use crate::stall::{supervise, Opts};
+use crate::stall::{supervise_with_cancel, Opts};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::Path;
@@ -13,6 +13,9 @@ pub struct CheckResult {
     pub exit_code: Option<i32>,
     pub signal: Option<i32>,
     pub timed_out: bool,
+    /// The caller's cancel closure fired; the process group was killed.
+    #[serde(default)]
+    pub cancelled: bool,
     /// Last N lines of combined stdout+stderr.
     pub tail: String,
     /// Hash of `tail`, for "identical failure" comparisons.
@@ -21,7 +24,7 @@ pub struct CheckResult {
 
 impl CheckResult {
     pub fn passed(&self) -> bool {
-        self.exit_code == Some(0) && !self.timed_out
+        self.exit_code == Some(0) && !self.timed_out && !self.cancelled
     }
 }
 
@@ -31,15 +34,17 @@ pub fn tail_lines(text: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-/// Run `cmd` via `sh -c` in `dir`; kill it after `timeout`.
+/// Run `cmd` via `sh -c` in `dir`; kill it after `timeout`; let `cancelled`
+/// stop the whole process group early.
 ///
 /// The child gets the secret-free environment of [`crate::sandbox_env`]
 /// (no agent credentials, unlike the harness) and its own private `HOME` (`<dir>.home-check`, never the harness HOME), never the worker's own environment.
-pub fn run_check(
+pub fn run_check_cancellable(
     cmd: &str,
     dir: &Path,
     timeout: Duration,
     tail_n: usize,
+    cancelled: &dyn Fn() -> bool,
 ) -> io::Result<CheckResult> {
     let home = crate::sandbox_env::HomeGuard::for_check(dir)?;
     let mut c = Command::new("sh");
@@ -50,20 +55,36 @@ pub fn run_check(
         grace: Duration::from_secs(2),
         ..Opts::default()
     };
-    let r = supervise(c, &opts)?;
+    let r = supervise_with_cancel(c, &opts, cancelled)?;
     let tail = tail_lines(&String::from_utf8_lossy(&r.output), tail_n);
     Ok(CheckResult {
         exit_code: r.code,
         signal: r.signal,
         timed_out: r.timed_out,
+        cancelled: r.cancelled,
         output_hash: hash_bytes(tail.as_bytes()),
         tail,
     })
 }
 
+/// Non-cancellable wrapper around [`run_check_cancellable`].
+///
+/// The child gets the secret-free environment of [`crate::sandbox_env`]
+/// (no agent credentials, unlike the harness) and its own private `HOME` (`<dir>.home-check`, never the harness HOME), never the worker's own environment.
+pub fn run_check(
+    cmd: &str,
+    dir: &Path,
+    timeout: Duration,
+    tail_n: usize,
+) -> io::Result<CheckResult> {
+    run_check_cancellable(cmd, dir, timeout, tail_n, &|| false)
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     const T: Duration = Duration::from_secs(20);
 
@@ -149,5 +170,99 @@ mod tests {
         let c = run_check("echo other; exit 1", d.path(), T, 50).unwrap();
         assert_eq!(a.output_hash, b.output_hash);
         assert_ne!(a.output_hash, c.output_hash);
+    }
+
+    /// True if Linux still exposes this pid as a live (non-zombie) process.
+    fn pid_alive(pid: &str) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+            s.rsplit(')')
+                .next()
+                .and_then(|t| t.split_whitespace().next())
+                != Some("Z")
+        })
+    }
+
+    #[test]
+    fn cancel_kills_the_child_and_its_group() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().to_path_buf();
+        let pid_file = dir.join("child.pid");
+        let flag = Arc::new(AtomicBool::new(false));
+        let start = Instant::now();
+        let handle = {
+            let pf = pid_file.clone();
+            let flag = Arc::clone(&flag);
+            std::thread::spawn(move || {
+                // Wait (up to 5 s) until the command recorded the grandchild
+                // pid, then cancel ~300 ms later.
+                for _ in 0..500 {
+                    if pf.exists() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::thread::sleep(Duration::from_millis(300));
+                flag.store(true, Ordering::SeqCst);
+            })
+        };
+        let r = run_check_cancellable(
+            "sleep 60 & echo $! > child.pid; wait",
+            &dir,
+            Duration::from_secs(30),
+            50,
+            &|| flag.load(Ordering::SeqCst),
+        )
+        .unwrap();
+        handle.join().unwrap();
+        assert!(r.cancelled);
+        assert!(!r.passed());
+        assert!(!r.timed_out);
+        assert!(start.elapsed() < Duration::from_secs(15));
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let pid = pid.trim();
+        if Path::new("/proc/self").exists() {
+            let mut dead = false;
+            for _ in 0..300 {
+                if !pid_alive(pid) {
+                    dead = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(dead, "backgrounded sleep {pid} is still alive");
+        }
+    }
+
+    #[test]
+    fn already_cancelled_never_runs_to_completion() {
+        let d = tempfile::tempdir().unwrap();
+        let start = Instant::now();
+        let r = run_check_cancellable("sleep 30", d.path(), Duration::from_secs(30), 50, &|| true)
+            .unwrap();
+        assert!(r.cancelled);
+        assert!(start.elapsed() < Duration::from_secs(15));
+    }
+
+    #[test]
+    fn not_cancelled_is_unchanged() {
+        let d = tempfile::tempdir().unwrap();
+        let r = run_check_cancellable("echo hi", d.path(), T, 50, &|| false).unwrap();
+        assert!(r.passed());
+        assert!(!r.cancelled);
+        assert_eq!(r.tail, "hi");
+    }
+
+    #[test]
+    fn serde_default_for_cancelled() {
+        let v = serde_json::json!({
+            "exit_code": 0,
+            "signal": null,
+            "timed_out": false,
+            "tail": "",
+            "output_hash": "",
+        });
+        let r: CheckResult = serde_json::from_value(v).unwrap();
+        assert!(!r.cancelled);
+        assert!(r.passed());
     }
 }
