@@ -13,6 +13,10 @@ import seat_verdict as sv  # noqa: E402
 FIX = Path(__file__).resolve().parent / "fixtures" / "review"
 
 
+ONLY_OPENAI = frozenset({"anthropic", "opencode"})  # writer alibaba
+ONLY_QWEN = frozenset({"anthropic", "opencode"})  # writer openai
+
+
 def read(name):
     """Read one recorded reply fixture."""
     return (FIX / name).read_text(encoding="utf-8")
@@ -76,6 +80,7 @@ def test_writer_openai_uses_qwen(tmp_path):
                              gateway_call=no_gateway, qoder_run=fake_qoder)
     assert len(outcomes) == 1
     item = outcomes[0]
+    assert item.tried == ["qwen"]
     assert (item.leg, item.family) == ("qwen", "alibaba")
     assert seen["model"] == "Qwen3.8-Flash"
     assert item.pass_allowed is True
@@ -84,7 +89,7 @@ def test_writer_openai_uses_qwen(tmp_path):
 
 
 def test_writer_alibaba_uses_openai(tmp_path):
-    """Writer alibaba leaves only the openai (gateway) leg."""
+    """Writer alibaba prefers the openai (gateway) leg."""
     def fake_gateway(model, prompt, title=None):
         assert model == "ovh/gpt-oss-120b"
         return gw_result(read("ok_pass.txt"))
@@ -114,9 +119,10 @@ def test_need_two_anthropic_gives_two_families(tmp_path):
 
 
 def test_down_qwen_with_openai_raises(tmp_path):
-    """Writer openai with qwen down has no eligible leg."""
+    """Writer openai with every other leg down has no eligible leg."""
     with pytest.raises(family.NoEligibleLeg):
-        seat.run_seat(spec_for(tmp_path, "openai", down=frozenset({"qwen"})),
+        seat.run_seat(spec_for(tmp_path, "openai",
+                               down=frozenset({"qwen", "anthropic", "opencode"})),
                        gateway_call=lambda *a, **k: None,
                        qoder_run=lambda *a, **k: None)
 
@@ -137,7 +143,7 @@ def test_failed_leg_collected(tmp_path):
     def fake_gateway(model, prompt, title=None):
         return gw_result("", finish=None, status=500, error="HTTP 500: boom")
 
-    outcomes = seat.run_seat(spec_for(tmp_path, "alibaba"),
+    outcomes = seat.run_seat(spec_for(tmp_path, "alibaba", down=ONLY_OPENAI),
                              gateway_call=fake_gateway,
                              qoder_run=lambda *a, **k: None)
     assert len(outcomes) == 1
@@ -180,7 +186,7 @@ def test_gaming_missing_refused(tmp_path, capsys):
     def fake_gateway(model, prompt, title=None):
         return gw_result(read("no_without_zero_hits.txt"))
 
-    outcomes = seat.run_seat(spec_for(tmp_path, "alibaba"),
+    outcomes = seat.run_seat(spec_for(tmp_path, "alibaba", down=ONLY_OPENAI),
                              gateway_call=fake_gateway,
                              qoder_run=lambda *a, **k: None)
     assert outcomes[0].pass_allowed is False
@@ -206,7 +212,7 @@ def test_qoder_tool_call_never_passes(tmp_path, capsys):
     def fake_qoder(prompt, model=None):
         return qo_result(read("ok_pass.txt"), finish="tool_call")
 
-    outcomes = seat.run_seat(spec_for(tmp_path, "openai"),
+    outcomes = seat.run_seat(spec_for(tmp_path, "openai", down=ONLY_QWEN),
                              gateway_call=lambda *a, **k: None,
                              qoder_run=fake_qoder)
     assert outcomes[0].verdict.verdict is None

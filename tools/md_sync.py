@@ -219,7 +219,7 @@ def main(argv=None, out=None, err=None):
     parser = argparse.ArgumentParser(add_help=False)
     for name in ("questions", "answers", "decisions", "token-file"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--url", default=apply_batch.DEFAULT_URL)
+    parser.add_argument("--url", default=None)
     parser.add_argument("--principal", default="router")
     parser.add_argument("--batch-out")
     parser.add_argument("--status-file")
@@ -242,6 +242,15 @@ def main(argv=None, out=None, err=None):
         """Leave the run's status behind, then hand back the exit code."""
         write_status(opts.status_file, status, error, err)
         return rc
+
+    # PG-REPUBLISH-FRESH: resolve the keeper URL at call time (no import-time
+    # default); refuse before any file read or network call when it stays empty.
+    opts.url = opts.url or os.environ.get("PG_URL")
+    if not opts.url:
+        msg = "error: no keeper URL: pass --url or set PG_URL"
+        err.write(msg + "\n")
+        err.write(USAGE)
+        return stop(2, msg)
 
     for attempt in (0, 1):
         try:

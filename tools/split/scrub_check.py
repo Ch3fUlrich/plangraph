@@ -7,6 +7,7 @@ matched value is never printed, stored or returned.  Exit 0 clean, 1 on any hit,
 2 on a usage/config error.
 
     scrub_check.py TREE [--rules rules.toml] [--words private_words.txt]
+                        [--hash-hits]
 
 ``rules.toml`` (merged over the built-in defaults, lists are extended)::
 
@@ -17,6 +18,19 @@ matched value is never printed, stored or returned.  Exit 0 clean, 1 on any hit,
     [[scrub.allow]]                                       # skip rules for paths
     path = "vendor/**"
     rules = ["ipv4", "high-entropy"]
+    [[scrub.allow_value]]                                 # skip one matched value
+    path = "tests/fixtures/token.json"                    # exact path, no globs
+    rule = "token-shape"                                  # one known rule id
+    value_sha256 = "<sha256 hex of the exact matched text>"
+    why = "reviewed synthetic fixture"                    # required; never printed
+
+A value allowance suppresses a hit only when *path*, *rule* and the sha256 of the
+matched text all match (matched text = the whole regex match, in tree-relative
+line context).  A missing or empty key, a glob in *path*, an unknown rule or a
+malformed hash is a ``ValueError`` naming the entry number only -- neither path
+nor value is echoed.  ``--hash-hits`` appends `` sha256=<hex>`` to every hit line,
+so an allowance can be written without anyone seeing the value.  Symlink hits are
+never allow-listable (path-wide or per value) and carry no hash.
 
 The private word list (one word per line, ``#`` comments, ``re:`` prefix for a
 regex) is kept private by the caller; only its path is passed in.
@@ -37,10 +51,16 @@ import tomllib
 from collections import namedtuple
 from pathlib import Path
 
-Hit = namedtuple("Hit", "path line rule")
+#: ``sha`` is the sha256 of one matched value that is still hitting (empty when the
+#: hit has no value to allow-list, e.g. a symlink); the value itself is never kept.
+Hit = namedtuple("Hit", "path line rule sha", defaults=("",))
 
 RULES = ("hostname", "ipv4", "ipv6", "email", "token-shape", "high-entropy",
          "credential-shape", "home-path", "private-word", "symlink")
+
+#: keys every [[scrub.allow_value]] entry needs, and the shape of its hash.
+_VALUE_KEYS = ("path", "rule", "value_sha256", "why")
+_SHA256 = re.compile(r"[0-9a-fA-F]{64}")
 
 _HOST_SUFFIX = r"(?:internal|lan|corp|intranet|home\.arpa|ts\.net|tailnet|localdomain)"
 _HOST = re.compile(r"(?<![\w.-])[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)*\." + _HOST_SUFFIX
@@ -149,25 +169,29 @@ def _load_words(path):
     return pats
 
 
-def build_config(words_file=None, rules_files=(), allow=None, **over):
-    """Merge DEFAULTS, rules files, *allow* entries and keyword overrides."""
+def build_config(words_file=None, rules_files=(), allow=None, allow_value=None, **over):
+    """Merge DEFAULTS, rules files, *allow*/*allow_value* entries and keyword overrides."""
     cfg = {k: list(v) if isinstance(v, list) else v for k, v in DEFAULTS.items()}
     allow_entries = []
+    value_entries = []
     for rf in rules_files:
         with open(rf, "rb") as fh:
             sect = tomllib.load(fh).get("scrub", {})
         allow_entries += sect.pop("allow", [])
+        value_entries += sect.pop("allow_value", [])
         for k, v in sect.items():
             if k not in cfg:
                 raise ValueError(f"unknown [scrub] key {k!r} in {rf}")
             cfg[k] = cfg[k] + list(v) if isinstance(v, list) else v
     allow_entries += list(allow or [])
+    value_entries += list(allow_value or [])
     cfg.update(over)
     for e in allow_entries:
         bad = set(e.get("rules", [])) - set(RULES)
         if bad or "path" not in e:
             raise ValueError(f"bad allow entry (rules {sorted(bad)}): needs path + known rules")
     cfg["_allow"] = [(glob_re(e["path"], ci=True), set(e["rules"])) for e in allow_entries]
+    cfg["_allow_value"] = _value_allows(value_entries)
     cfg["_host_re"] = [re.compile(p, re.IGNORECASE) for p in cfg["hostname_patterns"]]
     cfg["_words"] = _load_words(words_file) if words_file else []
     return cfg
@@ -184,52 +208,57 @@ def _email_ok(m, cfg):
     return d in cfg["allow_email_domains"] or any(d.endswith(s) for s in cfg["allow_email_suffixes"])
 
 
-def _entropy_hit(line, cfg):
-    """High-entropy token: mixed case+digit (>= entropy_min); letters+digits of one case
-    (length >= 32, >= entropy_min + 0.2); plain hex only on a line naming a secret."""
+def _entropy_hits(line, cfg):
+    """High-entropy tokens on the line: mixed case+digit (>= entropy_min); letters+digits
+    of one case (length >= 32, >= entropy_min + 0.2); plain hex only on a line naming a secret."""
     secretish = _SECRET_WORD.search(line)
+    out = []
     for m in _ENTROPY_CAND.finditer(line):
         t = m.group()
         lo, up, dg = (re.search(p, t) for p in ("[a-z]", "[A-Z]", r"\d"))
         if _HEX.fullmatch(t):
             if len(t) >= 32 and secretish and entropy(t) >= 3.0:
-                return True
+                out.append(t)
         elif lo and up and dg:
             if entropy(t) >= cfg["entropy_min"]:
-                return True
+                out.append(t)
         elif dg and (lo or up) and len(t) >= 32 and entropy(t) >= cfg["entropy_min"] + 0.2:
-            return True
-    return False
+            out.append(t)
+    return out
 
 
-def _ipv6_hit(line):
-    return bool(_IPV6_FULL.search(line) or _IPV6_LOOP.search(line)
-                or any(re.search(r"\d", m.group()) for m in _IPV6_COMP.finditer(line)))
+def _ipv6_hits(line):
+    """The address-shaped matches (a compressed form needs a digit: db::add is code)."""
+    return ([m.group() for m in _IPV6_FULL.finditer(line)]
+            + [m.group() for m in _IPV6_LOOP.finditer(line)]
+            + [m.group() for m in _IPV6_COMP.finditer(line) if re.search(r"\d", m.group())])
+
+
+def scan_line_values(line, cfg, find_shapes):
+    """``{rule: [matched text, ...]}`` for one line; an empty list never happens.
+
+    The matched text is kept only to hash it against ``[[scrub.allow_value]]``:
+    it is never printed, returned by :func:`scan_line` or stored in a ``Hit``."""
+    hosts = [m.group() for p in cfg["_host_re"] for m in p.finditer(line)]
+    hosts += [m.group() for m in _HOST.finditer(line)]
+    found = {
+        "hostname": hosts,
+        "ipv4": [m.group() for m in _IPV4.finditer(line) if not _ip_ok(m, cfg)],
+        "ipv6": _ipv6_hits(line),
+        "email": [m.group() for m in _EMAIL.finditer(line) if not _email_ok(m, cfg)],
+        "token-shape": [m.group() for p in _TOKENS for m in p.finditer(line)],
+        "high-entropy": _entropy_hits(line, cfg),
+        "credential-shape": [m.group() for m in find_shapes(line)],
+        "home-path": [m.group() for m in _HOME.finditer(line)
+                      if (m.group(1) or m.group(2)).lower() not in cfg["allow_home_names"]],
+        "private-word": [m.group() for p in cfg["_words"] for m in p.finditer(line)],
+    }
+    return {rule: vals for rule, vals in found.items() if vals}
 
 
 def scan_line(line, cfg, find_shapes):
     """The rules that fire on one line (a set; values are not retained)."""
-    found = set()
-    if any(p.search(line) for p in cfg["_host_re"]) or _HOST.search(line):
-        found.add("hostname")
-    if any(not _ip_ok(m, cfg) for m in _IPV4.finditer(line)):
-        found.add("ipv4")
-    if _ipv6_hit(line):
-        found.add("ipv6")
-    if any(not _email_ok(m, cfg) for m in _EMAIL.finditer(line)):
-        found.add("email")
-    if any(p.search(line) for p in _TOKENS):
-        found.add("token-shape")
-    if _entropy_hit(line, cfg):
-        found.add("high-entropy")
-    if find_shapes(line):
-        found.add("credential-shape")
-    if any((m.group(1) or m.group(2)).lower() not in cfg["allow_home_names"]
-           for m in _HOME.finditer(line)):
-        found.add("home-path")
-    if any(p.search(line) for p in cfg["_words"]):
-        found.add("private-word")
-    return found
+    return set(scan_line_values(line, cfg, find_shapes))
 
 
 def _allowed(rel, cfg):
@@ -240,8 +269,53 @@ def _allowed(rel, cfg):
     return skip
 
 
+def _sha(text):
+    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+
+
+def _allowed_shas(rel, rule, cfg):
+    return cfg["_allow_value"].get((rel, rule), ())
+
+
+def pending_value_shas(rel, rule, vals, cfg):
+    """sha256s of *vals* matched for (rel, rule) that no ``[[scrub.allow_value]]``
+    entry covers -- empty when every value is allowed, so the rule drops its hit.
+
+    The single source of the per-value allowance check, shared by :func:`scan_tree`
+    and the pre-push hook.  Returns hashes only; a matched value is never returned."""
+    return sorted({_sha(v) for v in vals} - set(_allowed_shas(rel, rule, cfg)))
+
+
+def _value_allows(entries):
+    """Validate ``[[scrub.allow_value]]`` entries -> ``{(path, rule): {sha256, ...}}``.
+
+    Fail closed: a missing/empty key, a glob in path, an unknown rule or a malformed
+    hash raises.  The message carries the entry number only -- path and value are
+    never echoed (a path can itself hold a private word)."""
+    out = {}
+    for n, e in enumerate(entries, 1):
+        if not isinstance(e, dict):
+            raise ValueError(f"bad allow_value entry {n}: expected a table")
+        bad = [k for k in _VALUE_KEYS if not isinstance(e.get(k), str) or not e[k].strip()]
+        if bad:
+            raise ValueError(f"bad allow_value entry {n}: missing or empty {sorted(bad)}")
+        path, rule = e["path"], e["rule"]
+        if any(c in path for c in "*?[]"):
+            raise ValueError(f"bad allow_value entry {n}: path must be exact, no globs")
+        if rule not in RULES:
+            raise ValueError(f"bad allow_value entry {n}: unknown rule")
+        digest = e["value_sha256"].strip().lower()
+        if not _SHA256.fullmatch(digest):
+            raise ValueError(f"bad allow_value entry {n}: value_sha256 is not 64 hex chars")
+        out.setdefault((path, rule), set()).add(digest)
+    return out
+
+
 def scan_tree(root, cfg, with_skipped=False):
-    """Hits for every file under *root* (``.git`` skipped, symlinks never followed)."""
+    """Hits for every file under *root* (``.git`` skipped, symlinks never followed).
+
+    A rule that is not path-wide allowed still drops its hit only when *every*
+    value it matched on the line is allowed by ``[[scrub.allow_value]]``."""
     root = Path(root)
     find_shapes = _shape_finder()
     hits, skipped = [], []
@@ -251,7 +325,9 @@ def scan_tree(root, cfg, with_skipped=False):
             continue
         skip = _allowed(rel, cfg)
         if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
-            hits.append(Hit(rel, 0, "private-word"))
+            digest = _sha(rel)
+            if digest not in _allowed_shas(rel, "private-word", cfg):
+                hits.append(Hit(rel, 0, "private-word", digest))
         if p.is_symlink():  # never allow-listable: a link target is a path leak
             hits.append(Hit(rel, 0, "symlink"))
             continue
@@ -262,8 +338,12 @@ def scan_tree(root, cfg, with_skipped=False):
             skipped.append(rel)
             continue
         for n, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
-            for rule in sorted(scan_line(line, cfg, find_shapes) - skip):
-                hits.append(Hit(rel, n, rule))
+            for rule, vals in sorted(scan_line_values(line, cfg, find_shapes).items()):
+                if rule in skip:
+                    continue
+                pending = pending_value_shas(rel, rule, vals, cfg)
+                if pending:
+                    hits.append(Hit(rel, n, rule, pending[0]))
     return (hits, skipped) if with_skipped else hits
 
 
@@ -280,10 +360,12 @@ def shown_path(hit, words=()):
     return hit.path
 
 
-def report(hits, out=None, skipped=(), words=()):
+def report(hits, out=None, skipped=(), words=(), hash_hits=False):
+    """``path:line: rule`` (plus `` sha256=<hex>`` under *hash_hits*); never a value."""
     out = out or sys.stdout
     for h in hits:
-        print(f"{shown_path(h, words)}:{h.line}: {h.rule}", file=out)
+        tail = f" sha256={h.sha}" if hash_hits and h.sha else ""
+        print(f"{shown_path(h, words)}:{h.line}: {h.rule}{tail}", file=out)
     for s in skipped:
         print(f"{path_tag(s)}: binary file not scanned", file=out)
     files = len({h.path for h in hits})
@@ -296,6 +378,9 @@ def main(argv=None):
     ap.add_argument("--rules", action="append", default=[], help="rules.toml (repeatable)")
     ap.add_argument("--words", help="private word list file (stays private)")
     ap.add_argument("--resolve", metavar="HASH", help="print the path(s) behind a <path-hash:HASH>")
+    ap.add_argument("--hash-hits", action="store_true",
+                    help="append sha256=<hex> of the matched value to every hit line "
+                         "(the hash is for [[scrub.allow_value]]; the value stays hidden)")
     args = ap.parse_args(argv)
     if not Path(args.tree).is_dir():
         print(f"scrub_check: not a directory: {args.tree}", file=sys.stderr)
@@ -304,8 +389,9 @@ def main(argv=None):
         cfg = build_config(words_file=args.words, rules_files=args.rules)
     except (OSError, ValueError, re.error, tomllib.TOMLDecodeError) as exc:
         print(f"scrub_check: bad config: {type(exc).__name__}", file=sys.stderr)
-        if isinstance(exc, ValueError) and "word list line" in str(exc):
-            print(f"scrub_check: {exc}", file=sys.stderr)
+        detail = str(exc) if isinstance(exc, ValueError) else ""
+        if "word list line" in detail or "allow_value entry" in detail:  # both echo nothing
+            print(f"scrub_check: {detail}", file=sys.stderr)
         return 2
     if not args.words and not args.resolve:
         print("scrub_check: warning: no --words, the private-word rule is inactive", file=sys.stderr)
@@ -315,7 +401,7 @@ def main(argv=None):
         print("\n".join(found))
         return 0 if found else 1
     hits, skipped = scan_tree(args.tree, cfg, with_skipped=True)
-    report(hits, skipped=skipped, words=cfg["_words"])
+    report(hits, skipped=skipped, words=cfg["_words"], hash_hits=args.hash_hits)
     return 1 if hits else 0
 
 

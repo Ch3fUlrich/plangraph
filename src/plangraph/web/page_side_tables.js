@@ -80,6 +80,7 @@
 
   /* ---- Needs You ---------------------------------------------------------- */
   function renderNeeds() {
+    if (global.PlanUI && global.PlanUI.NeedsPage) { global.PlanUI.NeedsPage.render(B().vm()); return; }
     var base = B(), el = base.el, VM = base.vm();
     var box = base.$("sb-panel-needs");
     if (!box) return;

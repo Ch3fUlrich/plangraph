@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from .apply import UNKNOWN_SHAPE
 from .history import project_history
 
 __all__ = ["ReconcileReport", "reconcile", "open_alarms"]
@@ -112,7 +113,9 @@ def reconcile(store, source, projector=None, *, now=time.time, grace_s=900,
     stamp = store._iso(now_ts)
     conn = store.conn
     with store._write():
-        present = {(r["kind"], r["workflow_id"], r["key"]): r for r in open_alarms(store)}
+        # ``unknown_shape`` alarms belong to ``apply`` and are never cleared by a pass
+        present = {(r["kind"], r["workflow_id"], r["key"]): r for r in open_alarms(store)
+                   if r["kind"] != UNKNOWN_SHAPE}
         for ident, row in present.items():
             if ident not in wanted:
                 conn.execute("UPDATE projector_alarms SET cleared_at=? WHERE id=?",

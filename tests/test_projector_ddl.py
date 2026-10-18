@@ -120,7 +120,7 @@ def test_model_field_order_follows_the_spec():
     assert names(StateRec) == ["workflow_id", "run_id", "event_id", "plan_key", "state", "reason"]
     assert names(RunProjection) == ["workflow_id", "run_id", "plan_key", "status", "start_time",
                                     "last_event_id", "attempts", "states", "outcome",
-                                    "next_run_id"]
+                                    "next_run_id", "shape_issues"]
 
 
 def test_constants_come_from_the_keeper():

@@ -7,6 +7,7 @@ Deterministic: fixed clock, in-memory throwaway keeper DB, synthetic plans only.
 """
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -35,7 +36,15 @@ def build():
         snap = store.snapshot(router)
         conn.close()
     snap["head"] = None  # event hashes carry no meaning for the examples
-    page = render.render(snap, render.default_vendor_dir(), title="plangraph example", cdn=True)
+    prev_sha = os.environ.get("PLANGRAPH_BUILD_SHA")
+    os.environ["PLANGRAPH_BUILD_SHA"] = "example"  # a git-derived sha would change every commit
+    try:
+        page = render.render(snap, render.default_vendor_dir(), title="plangraph example", cdn=True)
+    finally:
+        if prev_sha is None:
+            del os.environ["PLANGRAPH_BUILD_SHA"]
+        else:
+            os.environ["PLANGRAPH_BUILD_SHA"] = prev_sha
     source = (EX / "batch" / "demo-source.md").read_bytes()
     batch = (EX / "batch" / "demo-batch.yaml").read_text()
     sha = hashlib.sha256(source).hexdigest()

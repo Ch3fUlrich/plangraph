@@ -50,6 +50,14 @@ Two plan-graph item kinds per layer: a **phase item** (kind `planning` or `work`
 - The spawner provides the toolchain in the brief: lint, test and format commands, the coding
   rules from `coding-principles`, and the files in scope. Agents do not discover them.
 
+### Small-fix rule (D-1272, operator 2026-10-13)
+
+L1 writes no code. An L2 orchestrator may write a fix itself only when it is **at most ~10 changed
+lines** and touches **no auth, access or secrets** code; anything larger or in those areas goes
+to an L3 writer. Such a fix still gets **2 seats plus the judge** like any other change, and the
+lane record names `Writer: L2` (commit trailer `Writer: L2`). Every L1 and L2 brief carries this
+clause (`references/task-contract.md`, "Orchestrator briefs").
+
 ## 3. Task-size contract (decided 2026-10-08)
 
 A task is **valid** only if all of these hold; the phase agent splits or merges until they do:
@@ -220,6 +228,7 @@ claiming cross-family coverage.
 - [ ] Every task passes the section 3 contract; file scopes disjoint; toolchain in each brief
 - [ ] Every task item has a card in the same batch; cards relative-pathed, risk tags explicit
 - [ ] One agent per task; implementers parallel only when independent
+- [ ] L1/L2 briefs carry the D-1272 small-fix clause; an L2 self-fix is <= ~10 lines, never auth/access/secrets, `Writer: L2`, 2 seats + judge
 - [ ] Readiness and routing left to the keeper; refused cards answered from the planner queue
 - [ ] Reviewers cheap and cross-family; failures become fix-tasks (max 2) then escalate
 - [ ] Done reports, error records and the phase digest filed; plan-graph states updated

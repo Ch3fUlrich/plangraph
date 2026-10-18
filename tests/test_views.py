@@ -314,6 +314,29 @@ def test_brief_empty_when_nothing_ready():
     assert views.brief(load("empty.json")) == ""
 
 
+# ---------------------------------------------------------------- warnings
+
+def test_warnings_flag_id_title_and_missing_description_on_one_item():
+    items = [
+        item("demo:X", title="X-1"),                 # both findings
+        item("demo:Y", title="Named work"),          # only the description is missing
+        item("demo:D", state="done", title="D-1"),   # locked: never warned about
+    ]
+    rows = views.warnings(items)
+    assert [(p["code"], p["key"]) for p in rows] == [
+        ("no_description", "demo:X"),
+        ("no_description", "demo:Y"),
+        ("title_is_id", "demo:X"),
+    ]
+
+
+def test_warnings_are_sorted_by_code_then_key():
+    items = [item(key, title=title) for key, title in
+             [("demo:B", "B-2"), ("demo:A", "plain title"), ("demo:C", "C-3")]]
+    rows = [(p["code"], p["key"]) for p in views.warnings(items)]
+    assert rows == sorted(rows)
+
+
 # ---------------------------------------------------------------- determinism
 
 def test_views_are_order_independent():

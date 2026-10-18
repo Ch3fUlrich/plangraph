@@ -26,6 +26,7 @@ except ModuleNotFoundError as exc:               # history.py lands separately
 __all__ = ["Projector", "ApplyResult", "project_source"]
 
 GLOBAL_WATERMARK = "*"
+UNKNOWN_SHAPE = "unknown_shape"      # alarm kind (free text, no migration)
 _REASON_CAP = 500
 
 
@@ -182,9 +183,29 @@ class Projector:
     def touch_global_watermark(self) -> None:
         self._upsert_watermark(GLOBAL_WATERMARK, "", 0, 0, "", "")
 
+    # ------------------------------------------------------------- shapes
+    def _raise_shapes(self, proj: RunProjection) -> None:
+        """One open ``unknown_shape`` alarm per (workflow, run, activity); repeats are no-ops."""
+        for issue in proj.shape_issues:
+            key = f"{issue.run_id}:{issue.activity_id}"
+            with self.store._write():
+                if self.conn.execute(
+                        "SELECT 1 FROM projector_alarms WHERE kind=? AND workflow_id=? AND key=?"
+                        " AND cleared_at IS NULL", (UNKNOWN_SHAPE, issue.workflow_id, key)
+                        ).fetchone() is not None:
+                    continue
+                next_id = self.conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms").fetchone()[0]
+                self.conn.execute(
+                    "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail, raised_at)"
+                    " VALUES(?,?,?,?,?,?)",
+                    (next_id, UNKNOWN_SHAPE, issue.workflow_id, key, issue.detail[:_REASON_CAP],
+                     self._stamp()))
+
     # ----------------------------------------------------------------- run
     def apply_run(self, proj: RunProjection, *, run_ord: int) -> ApplyResult:
         result = ApplyResult()
+        self._raise_shapes(proj)
         if proj.plan_key is None:
             result.unmapped = 1
             return result

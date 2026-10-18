@@ -65,7 +65,7 @@ def test_clean_tree_passes(tmp_path):
     tree = tmp_path / "clean"
     tree.mkdir()
     (tree / "ok.py").write_text(
-        "import os\nURL = 'http://127.0.0.1:8787'\nHOME = '~/data'\n"
+        "import os\nURL = 'http://127.0.0.1:8765'\nHOME = '~/data'\n"
         "mail = 'noreply@example.invalid'\nsha = '" + "0123456789abcdef" * 4 + "'\n"
         "ip = '192.0.2.7'\nname = 'test_keeper_credential_guard_shapes_are_masked'\n")
     assert sc.scan_tree(tree, _cfg(tmp_path)) == []

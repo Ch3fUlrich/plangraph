@@ -234,6 +234,6 @@
     if (ans) clear(ans);
   }
 
-  PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer, refresh: refresh, effectiveStatus: effectiveStatus };
+  PlanUI.QAPage = { render: render, answers: answers, setAnswer: setAnswer, refresh: refresh, effectiveStatus: effectiveStatus, editor: editor, exportBar: exportBar };
   if (typeof module !== "undefined" && module.exports) module.exports = PlanUI;
 })(typeof window !== "undefined" ? window : globalThis);

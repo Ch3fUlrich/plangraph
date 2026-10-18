@@ -16,6 +16,7 @@
   var ROLE_LABEL = { planning: "Planning", implementation: "Implementation", review: "Review" };
   var MAX_ROWS = 300;                                   // per group, "show more" beyond
   var view = { group: "project", sort: { col: "task", dir: "asc" }, collapsed: {}, more: {} };
+  var urlLoaded = false;
 
   function el(tag, cls, text) {
     var n = document.createElement(tag);
@@ -111,7 +112,10 @@
     { id: "when", label: "Created / modified", val: function (r) { return r.updatedAt; }, group: function (r) { return day(r.updatedAt); } },
     { id: "prev", label: "Previous", val: function (r) { return pick(r, "prev").length; }, num: true, group: function (r) { var n = pick(r, "prev").length; return n ? "has previous" : "no previous"; } },
     { id: "next", label: "Next", val: function (r) { return pick(r, "next").length; }, num: true, group: function (r) { var n = pick(r, "next").length; return n ? "has next" : "no next"; } },
-    { id: "links", label: "Decisions & questions", val: function (r) { return (r._links || []).length; }, num: true, group: function (r) { var n = (r._links || []).length; return n ? "has decisions/questions" : "none"; } }
+    { id: "links", label: "Decisions & questions", val: function (r) { return (r._links || []).length; }, num: true, group: function (r) { var n = (r._links || []).length; return n ? "has decisions/questions" : "none"; } },
+    { id: "prio", label: "Prio", val: function (r) { return Number(r.priority) || 0; }, num: true },
+    { id: "kind", label: "Kind", val: function (r) { return r.kind || ""; } },
+    { id: "op", label: "Op", val: function (r) { return global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? 1 : 0; }, num: true }
   ];
   var COL = {}; COLS.forEach(function (c) { COL[c.id] = c; });
   PlanUI.TABLE_PAGE_COLUMNS = COLS;
@@ -128,6 +132,13 @@
     var c = COL[view.sort.col] || COL.task, va = c.val(a), vb = c.val(b);
     var d = c.num ? (va - vb) : cmpN(String(va), String(vb));
     return view.sort.dir === "desc" ? -d : d;
+  }
+
+  function setSort(col, dir) {
+    view.sort = { col: col, dir: dir };
+    var t = global.PlanUI.TableCtl;
+    if (t) { t.state.sort = { col: col, dir: dir }; t.save(); }
+    render();
   }
 
   /* ---- cells ---------------------------------------------------------------- */
@@ -154,9 +165,11 @@
     var tr = el("tr", "tr state-" + (r.display || r.state));
     tr.style.setProperty("--pc", color || "#888");
     tr.setAttribute("data-key", r.key);
+    tr.tabIndex = 0;
+    tr.addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target === tr) PP().selectNode(r.key); });
     if (PP().state.selected === r.key) tr.classList.add("sel");
     var tdP = el("td", "tc-proj"); tdP.appendChild(el("span", "tc-dot")); tdP.appendChild(el("span", null, r.project)); tr.appendChild(tdP);
-    tr.appendChild(el("td", "tc-phase", r.phase));
+    var tdPh = el("td", "tc-phase", r.phase); tdPh.title = String(r.phase || ""); tr.appendChild(tdPh);
     var tdT = el("td", "tc-task");
     var open = el("button", "tc-open");
     open.type = "button";
@@ -170,34 +183,45 @@
     tdT.appendChild(go);
     tr.appendChild(tdT);
     var tdS = el("td", "tc-state"); tdS.appendChild(el("span", "tc-badge b-" + (r.display || r.state), (r.display || r.state).replace("_", " "))); tr.appendChild(tdS);
-    tr.appendChild(el("td", "tc-agent", agentOf(r) || "—"));
+    var agT = agentOf(r) || "—", tdAg = el("td", "tc-agent", agT); tdAg.title = agT; tr.appendChild(tdAg);
     var tdW = el("td", "tc-when");
-    tdW.appendChild(el("div", null, r.createdAt ? "c " + when(r.createdAt) : "c —"));
-    tdW.appendChild(el("div", null, r.updatedAt ? "m " + when(r.updatedAt) : "m —"));
+    var w1 = r.createdAt ? "c " + when(r.createdAt) : "c —", w2 = r.updatedAt ? "m " + when(r.updatedAt) : "m —";
+    tdW.appendChild(el("div", null, w1));
+    tdW.appendChild(el("div", null, w2));
+    tdW.title = w1 + " / " + w2;
     tr.appendChild(tdW);
     tr.appendChild(chipList(pick(r, "prev"), vm));
     tr.appendChild(chipList(pick(r, "next"), vm));
     var tdL = el("td", "tc-links");
     (r._links || []).forEach(function (l) { tdL.appendChild(linkChip(l)); });
     tr.appendChild(tdL);
+    tr.appendChild(el("td", null, r.priority == null ? "" : String(r.priority)));
+    tr.appendChild(el("td", null, r.kind || "—"));
+    tr.appendChild(el("td", null, global.PlanUI.TableCtl && global.PlanUI.TableCtl.operatorNeeded(r) ? "●" : ""));
     /* UI-TABLE-PHONE: below 600 px each row is a card; the cell label comes from data-label. */
-    for (var ci = 0; ci < COLS.length && ci < tr.childNodes.length; ci++) tr.childNodes[ci].setAttribute("data-label", COLS[ci].label);
+    for (var ci = 0; ci < COLS.length && ci < tr.childNodes.length; ci++) {
+      tr.childNodes[ci].setAttribute("data-label", COLS[ci].label);
+      tr.childNodes[ci].setAttribute("data-col", COLS[ci].id);
+    }
     return tr;
   }
 
   function tableFor(rows, vm, colorOf, gkey) {
     var wrap = el("div", "tg-scroll");
-    var t = el("table", "tt");
+    var ctl = global.PlanUI.TableCtl, hc = "";
+    if (ctl) Object.keys(ctl.state.hide).forEach(function (id) { if (ctl.state.hide[id]) hc += " hc-" + id; });
+    var t = el("table", "tt" + hc);
+    t.setAttribute("aria-label", gkey + " tasks");
     var hr = el("tr");
     COLS.forEach(function (c) {
       var th = el("th", "th-" + c.id);
+      th.setAttribute("aria-sort", view.sort.col === c.id ? (view.sort.dir === "desc" ? "descending" : "ascending") : "none");
       var b = el("button", "th-btn" + (view.sort.col === c.id ? " on" : ""), c.label + (view.sort.col === c.id ? (view.sort.dir === "asc" ? " ▲" : " ▼") : ""));
       b.type = "button";
       b.setAttribute("aria-label", "Sort by " + c.label);
       b.addEventListener("click", function () {
-        if (view.sort.col === c.id) view.sort.dir = view.sort.dir === "asc" ? "desc" : "asc";
-        else view.sort = { col: c.id, dir: "asc" };
-        render();
+        if (view.sort.col === c.id) setSort(c.id, view.sort.dir === "asc" ? "desc" : "asc");
+        else setSort(c.id, "asc");
       });
       th.appendChild(b);
       hr.appendChild(th);
@@ -227,6 +251,7 @@
     var s = PP().state;
     if (s.projectsOff && s.projectsOff[r.project]) return false;
     if (s.tracksOff && s.tracksOff[r.phase]) return false;
+    if (global.PlanUI.TableCtl && !global.PlanUI.TableCtl.pass(r)) return false;
     var q = global.PlanUI.app && global.PlanUI.app.ui ? global.PlanUI.app.ui.get("query") : "";
     if (q && PlanUI.Query && PlanUI.Query.match) { try { return PlanUI.Query.match(r, q); } catch (e) { return true; } }
     return true;
@@ -241,6 +266,11 @@
     (vm.projects || []).forEach(function (p) { colors[p.name] = p.color; });
     var all = [];
     vm.items.forEach(function (r) { r._links = idx[r.key] || []; all.push(r); });
+    if (!urlLoaded && global.PlanUI.TableCtl) { urlLoaded = true; global.PlanUI.TableCtl.load(location.search); }
+    if (global.PlanUI.TableCtl && global.PlanUI.TableCtl.state.sort && COL[global.PlanUI.TableCtl.state.sort.col]) {
+      var ss = global.PlanUI.TableCtl.state.sort;
+      view.sort = { col: ss.col, dir: ss.dir === "desc" ? "desc" : "asc" };
+    }
     var rows = all.filter(pass);
 
     var bar = el("div", "tt-bar");
@@ -261,12 +291,15 @@
         ssel.appendChild(o);
       });
     });
-    ssel.addEventListener("change", function () { var v = ssel.value.split(":"); view.sort = { col: v[0], dir: v[1] }; render(); });
+    ssel.addEventListener("change", function () { var v = ssel.value.split(":"); setSort(v[0], v[1] === "desc" ? "desc" : "asc"); });
     slab.appendChild(ssel); bar.appendChild(slab);
-    bar.appendChild(el("span", "tt-count", rows.length + " of " + all.length + " tasks"));
+    var cnt = el("span", "tt-count", rows.length + " of " + all.length + " tasks");
+    cnt.setAttribute("role", "status"); cnt.setAttribute("aria-live", "polite");
+    bar.appendChild(cnt);
     var ca = el("button", "tt-btn", "Collapse all"); ca.type = "button";
     var ea = el("button", "tt-btn", "Expand all"); ea.type = "button";
     box.appendChild(bar);
+    if (global.PlanUI.TableCtl) box.appendChild(global.PlanUI.TableCtl.bar(all, render));
 
     var groups = [], map = {};
     rows.sort(cmp);

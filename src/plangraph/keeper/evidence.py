@@ -30,6 +30,7 @@ from typing import Any
 
 from .evidence_ci import CIAdapter
 from .evidence_decisions import DecisionsAdapter
+from .evidence_forgejo import ForgejoStatusAdapter
 from .evidence_git import GitAdapter, LegacyCommitVerifier
 from .evidence_runs import RunRecordAdapter
 from .evidence_semaphore import SemaphoreAdapter, SemaphoreError, positive_int
@@ -580,13 +581,21 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
     """Build the real adapters from a keeper config mapping.
 
     Expected keys: ``repos`` (project → path), ``ci`` (project → slug/path/
-    ``none``), ``runs_dir``, ``decisions_file`` and optional ``skew`` seconds.
-    Nothing here performs I/O or connects anywhere; the adapters only read when
-    a verifier calls them.
+    ``none``/``forgejo:owner/repo``), ``runs_dir``, ``decisions_file`` and
+    optional ``skew`` seconds. ``forgejo_url`` **and** ``forgejo_token_file``
+    together build the Forgejo status adapter a ``forgejo:`` ci value needs;
+    with either missing, no adapter is built and such a value fails closed in
+    ``CIAdapter.check_runs``. Nothing here performs I/O or connects anywhere;
+    the adapters only read when a verifier calls them.
     """
+    forgejo = None
+    forgejo_url = _cfg(config, "forgejo_url")
+    forgejo_token_file = _cfg(config, "forgejo_token_file")
+    if forgejo_url and forgejo_token_file:
+        forgejo = ForgejoStatusAdapter(str(forgejo_url), str(forgejo_token_file))
     return Context(
         git=GitAdapter(_cfg(config, "repos", {}) or {}),
-        ci=CIAdapter(_cfg(config, "ci", {}) or {}),
+        ci=CIAdapter(_cfg(config, "ci", {}) or {}, forgejo=forgejo),
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),

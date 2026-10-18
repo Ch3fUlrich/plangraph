@@ -1,0 +1,13 @@
+# Drop-in example — documentation only; copy without the .example suffix to make it live.
+# mkdir -p ~/.config/systemd/user/plangraph-render.service.d
+# cp live-tree.conf.example ~/.config/systemd/user/plangraph-render.service.d/live-tree.conf
+# systemctl --user daemon-reload
+#
+# Keep the render host's live tree out of render.env: an empty EnvironmentFile= clears the list inherited
+# from the base unit, then the Environment= lines below supply the same values. Paths are placeholders.
+[Service]
+EnvironmentFile=
+Environment=PLANGRAPH_LIVE_TREE=%h/plangraph-live
+Environment=PLANGRAPH_OUT=%h/plangraph-live/out
+Environment=PLANGRAPH_REPO=owner/name
+Environment=PLANGRAPH_GH_TOKEN_FILE=%h/.config/plangraph/gh-token.env
