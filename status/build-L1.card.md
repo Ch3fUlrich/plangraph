@@ -3,7 +3,7 @@ Control repo is LOCAL ONLY (D-1751): `git push control build-L1` (bare ~/.local/
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 
-## Main = c9c11c5a (#69 c9c11c5a GO re-verdict, #67 c17ea59d, #70 79b7457f, #68 665f68ba, #66 de5523f6, #65 cec80a38; D-1882). keeper-model DONE: MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO done (2 verdicts each).
+## Main = b766859a (#72 b766859a P1+P2, #69 c9c11c5a GO re-verdict, #67 c17ea59d, #70 79b7457f, #68 665f68ba, #66 de5523f6, #65 cec80a38; D-1882). keeper-model DONE: MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO done (2 verdicts each).
 C1 (judge #66): forgejo status trust filter BEFORE any project ci=forgejo: -> forgejo-switch done criteria.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
@@ -19,8 +19,7 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 | UI-BROWSER-TESTS (U2) | PARKED 2026-10-17: WIP lane/ui-browser-tests @6fd8de39 (pushed, no PR) (41 pass/18 skip/100 xfail), verify + W4 hardening + 2nd seat pending; L2 stopped (RAM <12 GB, budget) | relaunch when RAM ok + P1 done; gemini seat from coding.vm |
 | PG-PUBLIC-READY | in_review (D-1748 closed it; merged #60/#61). Keeper close needs 2 verdicts: google + xiaomi | wait republish T7 (allowlist value constraint) → seats gemini(agy)+mimo on f3e2500e..fix → seat_verdict |
 | PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
-| republish follow-ups | branch pg-republish-followups (wt republish-fu): hook allow_value run 20261017-232410-...1b92de; T1d cli_verbs default port run 20261017-232418-...59506c (qwen) | cherry-pick -> CI -> seats gemini+mimo -> self-approve? (HIGH item -> judge) -> merge |
-| republish GO | D-1898: step plan 588d6838 shape accepted, NO exec GO; L2 relaunch = operator ~03:30Z. Before GO request: P1-P4 closed, R1 timer pause step, R2 mirror path D-row, R3 lane-branch merged/parked list to routing | wait operator |
+| republish GO | D-1898: step plan 588d6838 shape accepted, NO exec GO; L2 relaunch = operator ~03:30Z. Before GO request: P1+P2 CLOSED (#72); P3 T2 manifest + P4 words list open, R1 timer pause step, R2 mirror path D-row, R3 lane-branch merged/parked list to routing | wait operator |
 | server:RT-P1-TEMPORAL-CHECK | claimed; retarget to dev stack (D-1854). Likely T3 #3 cause found: temporal 1.32 image lacks dynamicconfig/docker.yaml (sent prox; fix before release GO). D1 lane/dev-stack-static WIP, RAM freed 20:1xZ (54 GB), GO sent u1-stamp | D1 MERGE-READY -> D2 |
 | republish D-A/D-B (17:0xZ) | D-A=2: PG_URL + PLANGRAPH_REVIEW_URL required, no default port; set in live units + ops recipes (seat_verdict) BEFORE T1 merges. D-B: scrub the gap files, fixtures keep their shape, cargo test green, 1 PR per area | check the caller list in the T1 PR |
 | RT-P1 predeploy #46-#49 | L2 build-L2-rtp1-predeploy-2 (workst) | #46/#47 judge, #48/#49 self-approve; order 46,47,48,49 |
