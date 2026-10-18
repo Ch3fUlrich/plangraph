@@ -112,3 +112,30 @@ def test_md_sync_archive_url_from_flag_still_works(tmp_path, monkeypatch):
                        "--url", "http://127.0.0.1:1"], out=out, err=err)
     assert NO_URL not in err.getvalue()
     assert rc == 2 and "cannot read the live graph" in err.getvalue()
+
+
+def _fake_snapshot(self, verb):
+    return {"items": [], "aliases": {"old:G": "new:G"}}
+
+
+def test_md_sync_gate_flag_and_snapshot_aliases_reach_build_plan(tmp_path, monkeypatch):
+    monkeypatch.delenv("PG_URL", raising=False)
+    _make_inputs(tmp_path)
+    monkeypatch.setattr(apply_batch.Session, "get", _fake_snapshot)
+    captured = {}
+
+    def fake_build(questions, answers, skipped, decision_ids, items, **kw):
+        captured.update(kw)
+        return md_sync.mplan.Plan()
+
+    monkeypatch.setattr(md_sync.mplan, "build_plan", fake_build)
+    out, err = io.StringIO(), io.StringIO()
+    rc = md_sync.main(["--questions", str(tmp_path / "questions.md"),
+                       "--answers", str(tmp_path / "answers.md"),
+                       "--decisions", str(tmp_path / "decisions.md"),
+                       "--token-file", str(tmp_path / "tok"),
+                       "--url", "http://127.0.0.1:1",
+                       "--gate", "plangraph:PH-OPERATOR"], out=out, err=err)
+    assert rc == 0
+    assert captured["gate"] == "plangraph:PH-OPERATOR"
+    assert captured["aliases"] == {"old:G": "new:G"}
