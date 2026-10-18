@@ -12,3 +12,4 @@ plangraph:OCGO-ROUTER-L0
 plangraph:OCGO-PROBE
 plangraph:OCGO-FLEET-BUS
 plangraph:OCGO-L1-FALLBACK
+plangraph:DEV-PGDRILL-LOCAL-REDO
