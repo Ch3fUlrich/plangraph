@@ -83,7 +83,7 @@ def test_base_seq_stale_edit_refuses_whole_batch(world, srv, token_file, tmp_pat
     assert rc == 1, out + errtxt
     assert "changed after base_seq" in out
     assert "demo:E1" in out
-    assert "batch X7d-stale_edit_batch: conflict" in out
+    assert "batch stale_edit_batch: conflict" in out
     assert "nothing applied (the whole batch was rolled back)" in out
     assert "op 1 " not in out
     # Verify neither op took effect
@@ -112,7 +112,7 @@ def test_base_seq_stale_cancel_refuses(world, srv, token_file, tmp_path):
 
     assert rc == 1, out + errtxt
     assert "changed after base_seq: demo:C1" in out
-    assert "batch X7d-stale_cancel_batch: conflict" in out
+    assert "batch stale_cancel_batch: conflict" in out
     assert "nothing applied (the whole batch was rolled back)" in out
     assert state_of(world, "demo:C1") != "cancelled"
 
@@ -249,7 +249,7 @@ def test_preview_prints_dropped_dep_and_writes_nothing(world, srv, token_file, t
     assert rc == 0, out + errtxt
     assert "dropped dependency demo:P3 from demo:P1" in out
     assert "preview: nothing applied (dry run on the keeper)" in out
-    assert "applied 1 of" not in out
+    assert "applied " not in out
 
     ev_count_after = world.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     assert ev_count_after == ev_count_before
