@@ -21,7 +21,7 @@ IN FORCE: D-1919 (15% Claude left, max 5%/day): no new L2s, no Claude writers/se
 ## FIRST after clear
 1. `cd /home/s/code/plangraph-worktrees/build-L1; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done`
 2. ONE bg loop: `for i in $(seq 1 16); do sleep 1800; for k in $(cat ops/hb-keys.txt); do ops/pg.sh heartbeat $k; done; done`
-   (gen-13 loop started 16:53Z, dies with clear.) Keys: TEMPORAL-CHECK, MODEL-LOOP, MODEL-NAMES, PG-CI-FORGEJO, UI-BROWSER-TESTS, UI-DEPLOY-AUTO.
+   (gen-14 loop restarted 04:02Z, dies with clear.) Keys: TEMPORAL-CHECK, UI-BROWSER-TESTS, UI-DEPLOY-AUTO.
 3. Control branch: commit + `git push control build-L1` ONLY (local bare repo, D-1751). Never origin.
 4. Collect the 6 keeper-model seats (below), then judge.
 
