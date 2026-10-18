@@ -83,6 +83,7 @@ class Stack:
             "TEMPORAL_CLI": str(bin_dir / "temporal"),
             "TEMPORAL_PORT": "17999",
             "TEMPORAL_UI_PORT": "18999",
+            "TEMPORAL_HTTP_PORT": "18998",
             "PG_PORT": "55999",
             "DEVSTACK_PG_NAME": "devstack-test-pg",
             "DEVSTACK_PG_MODE": "docker",
@@ -115,7 +116,7 @@ def test_start_launches_temporal_set_current_and_one_docker_pg(stack):
     lines = stack.lines()
     dev = [l for l in lines if l.startswith("temporal server start-dev")]
     assert dev == [f"temporal server start-dev --ip 127.0.0.1 --port 17999 --ui-port 18999 "
-                   f"--db-filename {stack.state}/temporal.db"]
+                   f"--http-port 18998 --db-filename {stack.state}/temporal.db"]
     setcur = [l for l in lines if l.startswith("temporal worker deployment set-current-version")]
     assert len(setcur) == 1
     assert "--address 127.0.0.1:17999 --deployment-name d --build-id v1" in setcur[0]
@@ -143,10 +144,12 @@ def test_status_reports_running_then_stopped_after_stop(stack):
     assert stack.run("start").returncode == 0
     r = stack.run("status")
     assert r.returncode == 0
-    assert any(l.startswith("temporal: running") for l in r.stdout.splitlines())
+    assert any(l.startswith("temporal: running") and "http=127.0.0.1:18998" in l
+               for l in r.stdout.splitlines())
     assert "postgres: running (docker devstack-test-pg)" in r.stdout
     assert "export PG_DSN=postgresql://postgres@127.0.0.1:55999/keeper" in r.stdout
     assert "export PG_KEEPER_BACKEND=postgres" in r.stdout
+    assert "export PLANGRAPH_TEMPORAL_HTTP=http://127.0.0.1:18998" in r.stdout
     assert stack.run("stop").returncode == 0
     r = stack.run("status")
     assert r.returncode == 1

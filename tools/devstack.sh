@@ -6,6 +6,7 @@
 # State (db files, pids, logs) persists in $DEVSTACK_STATE; stop never deletes it so a restart
 # picks up where the last session left off.
 # Health waits (temporal cluster health, pg_isready) are bounded by DEVSTACK_HEALTH_TIMEOUT (default 60 s).
+# The Temporal HTTP API on $TEMPORAL_HTTP_PORT is how the keeper signals workflows (answer_question).
 #
 #   devstack.sh start          # temporal + set-current-version + postgres
 #   devstack.sh stop           # stop kills temporal/keeper and stops postgres; --purge removes
@@ -18,7 +19,7 @@ set -euo pipefail
 usage() {
   printf '%s\n' \
     "usage: devstack.sh start|stop [--purge]|status|keeper|set-current" \
-    "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT DEVSTACK_DEPLOYMENT" \
+    "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT TEMPORAL_HTTP_PORT DEVSTACK_DEPLOYMENT" \
     "     DEVSTACK_BUILD_ID PG_PORT DEVSTACK_PG_NAME KEEPER_PORT DEVSTACK_PG_MODE PG_BIN" \
     "     DEVSTACK_HEALTH_TIMEOUT"
 }
@@ -30,6 +31,7 @@ DEVSTACK_STATE="${DEVSTACK_STATE:-$REPO_ROOT/.devstack}"
 TEMPORAL_CLI="${TEMPORAL_CLI:-temporal}"
 TEMPORAL_PORT="${TEMPORAL_PORT:-7233}"
 TEMPORAL_UI_PORT="${TEMPORAL_UI_PORT:-8233}"
+TEMPORAL_HTTP_PORT="${TEMPORAL_HTTP_PORT:-18233}"
 DEVSTACK_DEPLOYMENT="${DEVSTACK_DEPLOYMENT:-d}"
 DEVSTACK_BUILD_ID="${DEVSTACK_BUILD_ID:-v1}"
 PG_PORT="${PG_PORT:-55432}"
@@ -128,7 +130,8 @@ start_temporal() {
   # start-dev persists to a single db file under the state dir, so restarts keep history.
   # No --headless: we advertise the UI on --ui-port.
   nohup "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port "$TEMPORAL_PORT" \
-    --ui-port "$TEMPORAL_UI_PORT" --db-filename "$DEVSTACK_STATE/temporal.db" \
+    --ui-port "$TEMPORAL_UI_PORT" --http-port "$TEMPORAL_HTTP_PORT" \
+    --db-filename "$DEVSTACK_STATE/temporal.db" \
     >"$DEVSTACK_STATE/temporal.log" 2>&1 &
   pid=$!
   printf '%s\n' "$pid" >"$DEVSTACK_STATE/temporal.pid"
@@ -143,7 +146,7 @@ start_temporal() {
       exit 1
     fi
     if "$TEMPORAL_CLI" operator cluster health --address "$TEMPORAL_ADDR" >/dev/null 2>&1; then
-      echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT"
+      echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT http=127.0.0.1:$TEMPORAL_HTTP_PORT"
       return 0
     fi
     sleep 1
@@ -293,7 +296,7 @@ cmd_status() {
   local ok=0 pid
   pid="$(pid_of "$DEVSTACK_STATE/temporal.pid" start-dev)"
   if [ -n "$pid" ]; then
-    echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT"
+    echo "temporal: running pid=$pid $TEMPORAL_ADDR ui=127.0.0.1:$TEMPORAL_UI_PORT http=127.0.0.1:$TEMPORAL_HTTP_PORT"
   else
     echo "temporal: stopped"
     ok=1
@@ -316,6 +319,7 @@ cmd_status() {
   echo "export PG_KEEPER_BACKEND=postgres"
   echo "export PG_DSN=$PG_DSN"
   echo "export TEMPORAL_ADDR=$TEMPORAL_ADDR"
+  echo "export PLANGRAPH_TEMPORAL_HTTP=http://127.0.0.1:$TEMPORAL_HTTP_PORT"
   return "$ok"
 }
 
@@ -337,6 +341,8 @@ with open(sys.argv[1], "w") as fh:
 PY
   )
   chmod 600 "$file"
+  # Keeper signals workflows (answer_question) over the Temporal HTTP API.
+  export PLANGRAPH_TEMPORAL_HTTP="http://127.0.0.1:$TEMPORAL_HTTP_PORT"
   PYTHONPATH="$REPO_ROOT/src" python3 -m plangraph.keeper.cli --config "$file" admin migrate
   export PG_KEEPER_BACKEND=postgres PG_DSN="$PG_DSN"
   # exec so the pid file matches the foreground process the daemon actually runs as; write it
