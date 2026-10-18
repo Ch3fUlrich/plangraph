@@ -4,9 +4,13 @@ No keeper or inbox writes happen here: the caller posts the fix cards and
 the inbox payloads. A halt payload is exactly the body ``plangraph.inbox.routes._ask``
 reads, ``{key, text, default_answer, deadline, risk_tags}``, with
 ``default_answer`` and ``deadline`` always ``None`` (never a default answer).
+The default call is still pure: an optional ``shadow`` hook on
+:func:`plan_actions` only observes a deep copy of the decision (it may record the
+answer elsewhere, e.g. a keeper sink), and can never change the plan returned.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 __all__ = ["plan_actions"]
@@ -50,14 +54,8 @@ def _finding(item: Any, phase: str, n: int) -> dict:
     return {"title": title, "finding": text, "files": files}
 
 
-def plan_actions(verdict: Any, phase: str, key: str | None = None) -> dict:
-    """Plan {fix_cards, inbox, pass} for a verdict at a phase.
-
-    fix: one fix card per finding (one generic card when none are listed);
-    halt: one inbox question for plan *key* (required: ValueError when missing), no default;
-    pass: nothing to do. A verdict
-    with no usable word plans nothing and does not pass.
-    """
+def _plan(verdict: Any, phase: str, key: str | None) -> dict:
+    """The pure plan for a verdict at a phase (the decision ``plan_actions`` returns)."""
     word = _word(verdict)
     plan: dict = {"fix_cards": [], "inbox": [], "pass": False}
     if word == "pass":
@@ -87,4 +85,35 @@ def plan_actions(verdict: Any, phase: str, key: str | None = None) -> dict:
             "deadline": None,
             "risk_tags": tags,
         })
+    return plan
+
+
+def plan_actions(verdict: Any, phase: str, key: str | None = None,
+                 *, shadow: Any = None) -> dict:
+    """Plan {fix_cards, inbox, pass} for a verdict at a phase.
+
+    fix: one fix card per finding (one generic card when none are listed);
+    halt: one inbox question for plan *key* (required: ValueError when missing), no default;
+    pass: nothing to do. A verdict
+    with no usable word plans nothing and does not pass.
+
+    ``shadow`` is an optional observation-only callable
+    ``(verdict, phase, key, plan) -> None``.  It is handed a ``copy.deepcopy`` of the
+    verdict (the original verdict when that deepcopy fails) and of the plan, its
+    exceptions are swallowed, and the plan returned here is always the plan this
+    function computed - a shadow can never change a decision, and an internal
+    ``ValueError`` from a halt without a key is raised before any shadow runs.  A
+    caller-supplied shadow MUST be time-bounded
+    (:func:`plangraph.planner.jev_shadow.qc_hook` is); nothing is written here.
+    """
+    plan = _plan(verdict, phase, key)
+    if shadow is not None:
+        try:
+            try:
+                verdict_copy = copy.deepcopy(verdict)
+            except Exception:  # noqa: BLE001 - an uncopyable verdict is observed as-is
+                verdict_copy = verdict
+            shadow(verdict_copy, phase, key, copy.deepcopy(plan))
+        except Exception:  # noqa: BLE001 - an observation must never change the decision
+            pass
     return plan

@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
-from .schema import EXIT_CLASSES, WINDOW_CLASSES
+from .schema import EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, WINDOW_CLASSES
 
 __all__ = ["Migration", "MIGRATIONS", "LATEST", "parse_tables", "table_bodies",
            "BOOTSTRAP"]
@@ -419,11 +419,36 @@ CREATE TABLE merge_locks (
 );
 """
 
+#: Logical twin of ``schema.JEV_DDL`` (SQLite schema v13).  ``id BIGINT PRIMARY KEY``
+#: is NOT NULL on both backends (unlike a TEXT primary key); ``key`` carries no
+#: foreign key.  ``outcome`` is the one column filled in later, first write wins.
+_V6 = f"""
+CREATE TABLE jev_shadow (
+    id                BIGINT PRIMARY KEY,
+    key               TEXT COLLATE "C" NOT NULL,
+    attempt           BIGINT,
+    kind              TEXT COLLATE "C" NOT NULL CHECK (kind IN ({_in(JEV_KINDS)})),
+    rule_answer       TEXT COLLATE "C" NOT NULL,
+    jev_answer        TEXT COLLATE "C",
+    jev_probabilities TEXT COLLATE "C",
+    jev_confidence    DOUBLE PRECISION,
+    status            TEXT COLLATE "C" NOT NULL CHECK (status IN ({_in(JEV_STATUSES)})),
+    reason            TEXT COLLATE "C" NOT NULL DEFAULT '',
+    outcome           TEXT COLLATE "C",
+    jev_model         TEXT COLLATE "C" NOT NULL DEFAULT '',
+    latency_ms        BIGINT,
+    created_at        TEXT COLLATE "C" NOT NULL,
+    outcome_at        TEXT COLLATE "C"
+);
+CREATE INDEX idx_jev_shadow_key ON jev_shadow(key);
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
               Migration(4, "governor: metrics", _V4),
-              Migration(5, "locks: merge_locks", _V5))
+              Migration(5, "locks: merge_locks", _V5),
+              Migration(6, "jev: jev_shadow", _V6))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

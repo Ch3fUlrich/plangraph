@@ -23,7 +23,8 @@ __all__ = ["run", "TABLES", "CopyError"]
 TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
-          "projector_applied", "projector_watermark", "projector_alarms", "merge_locks")
+          "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
+          "jev_shadow")
 _BATCH = 500
 
 
