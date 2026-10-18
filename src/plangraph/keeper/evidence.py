@@ -449,18 +449,28 @@ class RunRecordVerifier:
 
         needles = [n for n in (item.get("key"), item.get("id")) if isinstance(n, str) and n]
         request = job.get("request") if isinstance(job.get("request"), dict) else {}
-        haystack = " ".join(
-            str(part)
-            for part in (request.get("title"), job.get("task"))
-            if part is not None
-        )
-        if not any(needle in haystack for needle in needles):
-            wanted = item.get("key") or item.get("id")
-            return _fail(f"run {run_id} does not mention {wanted}", ref)
+        item_key = request.get("item_key")
+        if isinstance(item_key, str) and item_key:
+            if item_key not in needles:
+                wanted = item.get("key") or item.get("id")
+                return _fail(f"run {run_id} item_key={item_key!r} is not {wanted}", ref)
+        else:
+            haystack = " ".join(
+                str(part)
+                for part in (request.get("title"), job.get("task"))
+                if part is not None
+            )
+            if not any(needle in haystack for needle in needles):
+                wanted = item.get("key") or item.get("id")
+                return _fail(f"run {run_id} does not mention {wanted}"
+                             " (legacy title match)", ref)
 
         if exit_record.get("rc") != 0:
             return _fail(f"run {run_id} exited rc={exit_record.get('rc')!r}", ref)
-        return Result(True, f"run {run_id} for {item.get('key') or item.get('id')} rc=0", ref)
+        detail = f"run {run_id} for {item.get('key') or item.get('id')} rc=0"
+        if not (isinstance(item_key, str) and item_key):
+            detail += " (legacy title match)"
+        return Result(True, detail, ref)
 
 
 # --------------------------------------------------------------------------- #

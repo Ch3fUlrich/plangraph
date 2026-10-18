@@ -84,16 +84,24 @@ class TokensMixin:
         if not isinstance(job, dict):
             raise Refused("evidence_unverified", f"run {run_id} record is malformed")
         request = job.get("request") if isinstance(job.get("request"), dict) else {}
-        haystack = " ".join(str(part) for part in (request.get("title"),
-                                                   job.get("task"))
-                            if part is not None)
         needles = [n for n in (item.get("key"), item.get("id"))
                    if isinstance(n, str) and n]
-        # whole-token match: ``demo:A`` must not match ``demo:AB`` or ``xdemo:A``
-        if not any(re.search(r"(?<![\w:.-])" + re.escape(needle) + r"(?![\w.-])",
-                             haystack) for needle in needles):
-            raise Refused("evidence_unverified",
-                          f"run {run_id} does not mention {item['key']}")
+        item_key = request.get("item_key")
+        if isinstance(item_key, str) and item_key:
+            if item_key not in needles:
+                raise Refused("evidence_unverified",
+                              f"run {run_id} item_key={item_key!r} "
+                              f"is not {item['key']}")
+        else:
+            haystack = " ".join(str(part) for part in (request.get("title"),
+                                                       job.get("task"))
+                                if part is not None)
+            # whole-token match: ``demo:A`` must not match ``demo:AB`` or ``xdemo:A``
+            if not any(re.search(r"(?<![\w:.-])" + re.escape(needle) + r"(?![\w.-])",
+                                 haystack) for needle in needles):
+                raise Refused("evidence_unverified",
+                              f"run {run_id} does not mention {item['key']}"
+                              " (legacy title match)")
         return job
 
     def _mint(self, principal, key, role, run_id, now):

@@ -144,6 +144,50 @@ def test_mint_without_run_record_refused(w):
     assert code(mint, w, "l1main", "demo:A", "writer", "w1") == "evidence_unverified"
 
 
+class JobRuns:
+    def __init__(self, job):
+        self._job = job
+
+    def valid_run_id(self, run_id):
+        return run_id == "w1"
+
+    def job(self, run_id):
+        return dict(self._job)
+
+
+def mint_with_job(w, job):
+    w.store.ctx = {"runs": JobRuns(job)}
+    return mint(w, "l1main", "demo:A", "writer", "w1")
+
+
+def test_check_run_item_key_matches(w):
+    to_claimed(w, "demo:A")
+    assert mint_with_job(w, {"request": {"title": "unrelated",
+                                         "item_key": "demo:A"}, "task": ""})["token"]
+
+
+def test_check_run_item_key_differs_title_contains_key(w):
+    to_claimed(w, "demo:A")
+    assert code(mint_with_job, w, {"request": {
+        "title": "work on demo:A", "item_key": "demo:B"}, "task": ""}) \
+        == "evidence_unverified"
+
+
+def test_check_run_item_key_prefix_collision(w):
+    to_claimed(w, "demo:A")
+    assert code(mint_with_job, w, {"request": {
+        "title": "work on demo:A", "item_key": "demo:AB"}, "task": ""}) \
+        == "evidence_unverified"
+
+
+def test_check_run_absent_item_key_is_legacy(w):
+    to_claimed(w, "demo:A")
+    assert mint_with_job(w, {"request": {"title": "work on demo:A"},
+                             "task": ""})["token"]
+    assert code(mint_with_job, w, {"request": {"title": "work on demo:B"},
+                                   "task": ""}) == "evidence_unverified"
+
+
 def test_no_principal_named_run(w):
     assert code(auth.add_principal, w.conn, "run:w1", "worker", ["demo"]) == "validation"
 

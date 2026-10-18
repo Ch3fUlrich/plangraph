@@ -62,6 +62,48 @@ def test_run_record_missing_exit_file():
     assert verify("run-record", {"run_id": "run-1"}, ctx).ok is False
 
 
+def test_run_record_item_key_matches():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "unrelated heading", "item_key": ITEM["key"]}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is True
+
+
+def test_run_record_item_key_differs_title_contains_key():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "work on " + ITEM["key"], "item_key": "routing:OTHER"}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is False
+    assert ITEM["key"] in res.detail
+
+
+def test_run_record_item_key_prefix_collision():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": ITEM["key"], "item_key": ITEM["key"] + "B"}, "task": ""}))
+    assert verify("run-record", {"run_id": "run-1"}, ctx).ok is False
+
+
+def test_run_record_item_key_matched_by_id_only():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "unrelated", "item_key": ITEM["id"]}, "task": ""}))
+    assert verify("run-record", {"run_id": "run-1"}, ctx).ok is True
+
+
+def test_run_record_absent_item_key_is_legacy_ok():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "x " + ITEM["key"] + " y"}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is True
+    assert "legacy title match" in res.detail
+
+
+def test_run_record_absent_item_key_is_legacy_fail():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {"title": "nothing here"}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is False
+    assert "legacy title match" in res.detail
+
+
 # --------------------------------------------------------------------------- #
 # semaphore-task
 # --------------------------------------------------------------------------- #

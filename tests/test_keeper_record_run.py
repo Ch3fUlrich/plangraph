@@ -123,6 +123,8 @@ def test_done_item_locked(w):
     {"run_id": "r1", "phase": "started",
      "seats": [{"model": "s", "verdict": "maybe"}]},
     {"run_id": "r1", "phase": "started", "rc": "zero"},
+    {"run_id": "r1", "phase": "started", "item_key": 7},
+    {"run_id": "r1", "phase": "started", "item_key": ["demo:A"]},
     {"phase": "started"},
     {"run_id": "r1"},
 ])
@@ -131,6 +133,16 @@ def test_bad_runs_are_validation(w, run):
     with pytest.raises(Refused) as exc:
         w.store.record_run(sp(w), "demo:A", run)
     assert exc.value.code == "validation"
+
+
+def test_record_run_accepts_item_key(w):
+    to_claimed(w, "demo:A")
+    w.store.record_run(sp(w), "demo:A", started(item_key="demo:A"))
+    row = w.conn.execute(
+        "SELECT payload FROM events WHERE key='demo:A' AND type='run_recorded'"
+    ).fetchone()
+    assert json.loads(row["payload"])["item_key"] == "demo:A"
+    assert verify_integrity(w.conn) == []
 
 
 def test_unknown_key_not_found(w):
