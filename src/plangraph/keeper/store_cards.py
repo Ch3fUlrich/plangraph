@@ -390,9 +390,18 @@ class CardsMixin:
                           f"state must be one of {list(SETTABLE_STATES)}; claim, review,"
                           " done and cancel have their own verbs")
         why = _text("reason", reason or "", cap=500, key=key)
+        return self._apply_state(principal, key, state, why, now,
+                                 lambda project: self._may_write_for(principal,
+                                                                     project))
+
+    def _apply_state(self, principal, key, state, why, now, scope):
+        """Move *key* to *state*; *scope(project)* does the authorisation check.
+
+        Idempotent: re-applying the state the item already has changes nothing.
+        """
         with self._write():
             item = self._get_or_refuse(key)
-            self._may_write_for(principal, item["project"])
+            scope(item["project"])
             self._assert_unlocked(item)
             was = item["state"]
             if was not in SETTABLE_STATES:

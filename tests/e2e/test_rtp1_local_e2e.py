@@ -5,7 +5,7 @@ Everything binds 127.0.0.1 on free ports.  The keeper backend follows ``PG_KEEPE
 other keeper tests.  The same steps are the live-run script once a cloud cluster is reachable
 (``docs/plan/rtp1-live-run.md``).
 
-Flow: dev server -> keeper (+ front for the worker verbs the keeper lacks) -> worker -> Card workflow
+Flow: dev server -> keeper -> worker -> Card workflow
 -> worker asks a question -> projector -> router answers (signal over the Temporal HTTP API) ->
 second attempt merges -> projector again -> rebuild equality -> review leg over the phase diff.
 """
@@ -63,7 +63,7 @@ def run_projector(cfg: Path, address: str) -> dict:
 
 @pytest.fixture
 def rig(tmp_path, monkeypatch):
-    """Dev server, keeper, front, worker; torn down in reverse; logs stay under tmp_path."""
+    """Dev server, keeper, worker; torn down in reverse; logs stay under tmp_path."""
     started = []                                     # cleanup stack: (name, stop)
 
     def push(name, stop):
@@ -88,8 +88,6 @@ def rig(tmp_path, monkeypatch):
         seed(r.world, [("E2E-1", [])])
         r.keeper = u.KeeperServer(r.world, tmp_path)
         push("keeper", r.keeper.stop)
-        r.front = u.VerbFront(r.keeper.base)
-        push("front", r.front.stop)
 
         r.repo = tmp_path / "repo"
         r.base_sha = u.init_repo(r.repo)
@@ -99,7 +97,7 @@ def rig(tmp_path, monkeypatch):
         u.write_fake_opencode(bin_dir)
         env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HOME": str(tmp_path),
                "PG_TEMPORAL_ADDR": f"http://{r.addr}", "PG_BUILD_ID": BUILD_ID, "PG_NAMESPACE": "default",
-               "PG_KEEPER_URL": r.front.base, "PG_KEEPER_TOKEN": r.world.tok("workerA"),
+               "PG_KEEPER_URL": r.keeper.base, "PG_KEEPER_TOKEN": r.world.tok("workerA"),
                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
                "GIT_AUTHOR_NAME": "worker", "GIT_AUTHOR_EMAIL": "w@example.com",
                "GIT_COMMITTER_NAME": "worker", "GIT_COMMITTER_EMAIL": "w@example.com"}
@@ -203,9 +201,16 @@ def _flow(rig, tmp_path):
     assert_rebuild_equal(world, source, [ITEM], tmp_path)
     mark("rebuilt_equal")
 
-    verbs = r.front.paths()
-    assert "/v1/ask_question" in verbs and any(p.endswith("/acquire") for p in verbs), verbs
-    assert "/v1/complete" in verbs and "/v1/attempts" in verbs, verbs
+    audited = {row[0] for row in world.conn.execute(
+        "SELECT action FROM audit_log WHERE ok=1 AND action IN (?,?,?,?,?)",
+        ("ask_question", "worker_attempt", "worker_complete", "lock_acquire", "lock_release")).fetchall()}
+    assert audited == {"ask_question", "worker_attempt", "worker_complete", "lock_acquire", "lock_release"}, audited
+    refused = world.conn.execute(
+        "SELECT COUNT(*) FROM audit_log WHERE ok=0 AND action IN (?,?,?,?,?,?)",
+        ("worker_attempt", "worker_park", "worker_complete", "worker_alarm", "lock_acquire", "lock_release")).fetchone()[0]
+    assert refused == 0, refused
+    locks = world.conn.execute("SELECT token, owner FROM merge_locks").fetchall()
+    assert len(locks) == 1 and locks[0][0] >= 1 and locks[0][1] == "", [tuple(x) for x in locks]   # taken, then released
 
     # 8. review leg over the phase diff (recorded replies, no network)
     diff = u.git(r.repo, "diff", r.base_sha, u.BRANCH)
@@ -218,8 +223,7 @@ def _flow(rig, tmp_path):
         "question_id": question["id"], "answer_signal": answered["signal"],
         "attempts": [(a["n"], a["exit_class"]) for a in rows], "merged_sha": merged_sha,
         "keeper_backend": os.environ.get("PG_KEEPER_BACKEND", "sqlite"),
-        "front_only_verbs": sorted({"/v1/locks/<repo>" if "/locks/" in p else p
-                                    for p in verbs} - set(u.FORWARDED)),
+        "keeper_audited_verbs": sorted(audited),
         "review": review, "timings_s": timings, "logs": str(tmp_path)}, sort_keys=True))
     loop.close()
 

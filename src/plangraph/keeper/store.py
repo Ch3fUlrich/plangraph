@@ -46,6 +46,7 @@ from .store_support import SupportMixin, iso, parse_iso
 from .store_tokens import TokensMixin
 from .store_verbs import VerbsMixin
 from .store_waiver import WaiverMixin
+from .store_worker import WorkerMixin
 
 __all__ = ["Store", "Refused", "iso", "parse_iso"]
 
@@ -69,7 +70,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
-            ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin):
+            ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
+            WorkerMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
