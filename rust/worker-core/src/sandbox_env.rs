@@ -212,8 +212,13 @@ fn symlink_refused(path: &Path) -> std::io::Error {
 /// Create a staged directory at its final mode 0700 (unix) up front, so no
 /// window exists between creation and the private mode taking effect. A
 /// pre-existing directory is forced to 0700 as well, since `mode(0o700)` only
-/// applies to a directory `create` actually makes.
+/// applies to a directory `create` actually makes. A pre-existing symlink at
+/// `path` is refused outright: the 0700 fix-up follows symlinks and would
+/// change the mode of a foreign target.
 fn create_staged_dir(path: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(path).is_ok_and(|md| md.file_type().is_symlink()) {
+        return Err(symlink_refused(path));
+    }
     let mut b = std::fs::DirBuilder::new();
     b.recursive(true);
     #[cfg(unix)]
@@ -480,6 +485,24 @@ mod tests {
         assert_eq!(
             std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
             0o700
+        );
+    }
+
+    #[test]
+    fn create_staged_dir_refuses_a_symlinked_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        // The 0700 fix-up follows symlinks, so a linked-to directory must be
+        // refused rather than having a foreign target's mode changed.
+        assert!(create_staged_dir(&link).is_err());
+        assert_eq!(
+            std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0o755
         );
     }
 
