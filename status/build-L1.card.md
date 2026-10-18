@@ -17,7 +17,8 @@ Stopped: public-ready. Finish-then-stop: republish (D-B scrub deferred), keeper-
 |---|---|---|
 | TEMPORAL-CHECK | claim RELEASED for routing retarget (D-1933, new RT-P1-DEVSTACK); dev check running in predeploy-2 L2 | re-claim after apply; attach DONE TEMPORAL-CHECK-DEV record |
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
-| #46 WORKER / #47 PROJECTOR | MERGE-READY, judge GO-REQ sent server-L1-routing [c7e1f4] | GO -> merge 46, 47, then #49 INBOX (stack) |
+| #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
+| #46 WORKER | NO-GO D-1934: C1 env allowlist + C2 fence wording -> L2 fix, re-seat 2 fam | MERGE-READY -> judge -> merge; then #49 rebase |
 | CLASS-COMBOS | workst-L1-autoos claimed e1, lane autoos-L2-small-lanes | MERGE-READY + probe |
 | E2E / RT-P0 | wait / FLEET-SID-REFRESH = routing (D-1933) | track |
 ## Open
@@ -37,3 +38,4 @@ Leases: ops/hb-keys.txt (3 keys); bg loop dies with clear → restart FIRST (han
 - Decision evidence ref key is `id` ({"id":"D-NNN"}), not `decision`.
 - systemd drop-ins: lexical order, new ones sort LAST. zsh `$b:r` modifier: brace vars before ':'.
 - docs-only PRs skip CI (path filters): `gh workflow run tests.yml --ref <lane>` for evidence. `gh pr edit/merge` breaks (projects classic) → `gh api -X PATCH/PUT .../pulls/N[/merge]`.
+- Lane PRs cut before #59 still runs-on self-hosted fleet-ci (no runners): test main+head on ci/prN-<sha> (workflow_dispatch), merge PR by head sha.
