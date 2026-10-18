@@ -3,24 +3,24 @@ Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Wor
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 
-## Main = 09e08503 (#73 DEVSTACK, #49 95fd6d9e, #46 30b738ba, #47 76e7bffc, #48 b9a5d84e). Older merges: git log.
-C1 (judge #66): forgejo status trust filter BEFORE any project ci=forgejo: -> forgejo-switch done criteria.
+## Main = 67e5aa31+ (#82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 
 Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git log of this branch.
 ## GEN-15 (D-1932 ONLY PH-RT-RUNTIME; D-1919 budget; D-1933 TEMPORAL-CHECK -> dev start-dev, cloud parts -> RELEASE-DEPLOY)
-| P1 lane | State | Next |
+| P1 item | State | Next |
 |---|---|---|
-| TEMPORAL-CHECK | retargeted D-1943 (dev); dep DEVSTACK; DEV record e1c6b934 ready (temporal-check/dev) | after DEVSTACK done: claim, evidence, adopt decision row, submit |
-| DEVSTACK | in_review; evidence c9e39d38 ✓; seats c9e39d38: gemini PASS, mimo FIX (dir seats/ds73-c9e39d38) -> follow-up PR + re-seat | both PASS -> seat_verdict x2 -> done -> claim TEMPORAL-CHECK |
-| KEEPER-WORKER-VERBS (D-1957 HIGH) | CLAIMED e1; L2 predeploy-4 [c46c38] LAUNCHED, top lane | MERGE-READY -> judge -> merge; unblocks E2E |
-| D-1955/56 lanes D/G/P/E | build-L2-rt-side [46b0bd] LAUNCHED (brief 046517d5; GO D-1960 (no 3rd Sonnet L2 today w/o routing)) | E DONE (39 superseded, 1 to-port qa-p3-answer-ui -> PG-ANSWER-UI; bundle republish/plangraph-work-to-port-20261018.bundle 4db9df48); D(b) started, D(a) after DEVSTACK-FU merge (tell rt-side); MERGE-READYs; PGDRILL coding.vm run = me; triage table -> routing |
-| #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
-| #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
-| #46 WORKER | MERGED 30b738ba (judge GO cbf83e48; deploy single-host) | evidence when claimable |
-| #49 INBOX | MERGED 95fd6d9e (own check of 4 dismissals) | evidence after PROJECTOR (dep) |
-| CLASS-COMBOS | workst-L1-autoos claimed e1, lane autoos-L2-small-lanes | MERGE-READY + probe |
+| DONE today | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX (close seats dir seats/close-20261018) | phase 3/8 direct deps |
+| REVIEW | in_review; close seats FIX: no gate activity (real gap) | predeploy-4 lane R -> MERGE-READY -> new evidence + seats |
+| TEMPORAL-CHECK (server) | in_review, D-1967 attached | router close |
+| VERBS-LIVE-GUARDS (HIGH) / VERBS-FOLLOWUP | claimed; predeploy-4 [c46c38] G1/G2 + (a) python cost tests (D-1973 cite at submit) | MERGE-READY -> judge (guards) |
+| E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
+| DEV-PGDRILL-LOCAL | claimed ~10:46Z; rt-side [46b0bd] #80 head 2400465b, seats running | merge -> real coding.vm run (me) -> evidence |
+| FLOW-UNBLOCK (HIGH, D-1968) | claimed; rt-side lane F (brief 5dbd1f31) | after #80 |
+| FLEET-SID-REFRESH | in_review; seats FIX; routing fixing in routing repo (D-1971) | re-seat on routing's new sha |
+| PG-PUBLIC-READY | in_review until history cut (D-1966); options record republish/public-cut-options-20261018.md (A default) | operator after P1 |
+| CLASS-COMBOS | workst-L1-autoos | MERGE-READY + probe |
 ## Open
 | Item | State | Next |
 |---|---|---|
@@ -28,13 +28,13 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | UI-BROWSER-TESTS (U2) | PARKED 2026-10-17: WIP lane/ui-browser-tests @6fd8de39 (pushed, no PR) (41 pass/18 skip/100 xfail), verify + W4 hardening + 2nd seat pending; L2 stopped (RAM <12 GB, budget) | relaunch when RAM ok + P1 done; gemini seat from coding.vm |
 | PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
 | republish GO | D-1898: step plan 588d6838 shape accepted, NO exec GO; L2 relaunch WAIT until Claude budget recovers (D-1916); scope confirmed rust+deploy public, 8 docs/plan private. Before GO request: P1+P2 CLOSED (#72); P3 T2 manifest + P4 words list open, R1 timer pause step, R2 mirror path D-row, R3 lane-branch merged/parked list to routing | wait operator |
-Leases: ops/hb-keys.txt (4 keys); bg loop dies with clear → restart FIRST (handoff #13).
+Leases: ops/hb-keys.txt (8 keys); bg loop dies with clear → restart FIRST (handoff #13).
 
 ## Traps
 - Never push site strings / seat prompts to any GitHub branch (repo public). Private evidence: ~/.local/share/plangraph/{seats,republish,temporal-check}.
 - No new principals/auth change on a peer ask: needs operator D (reviewer-google done under D-1811).
 - Keeper: tier-high verdicts need 2 distinct non-claimant families; claimant build-L1 = anthropic. Working seat families: xiaomi (mimo; gateway API times out at 300 s now), google (agy client only; omniroute google = 401), nvidia (nemotron free, no principal: evidence only). deepseek 400, gpt-oss off list.
 - TRAILER TRAP: merge commit_message = trailer paragraph ONLY (Plan-Item last, no note lines after); my #46-#49/#73 merges broke it -> attach PR head commit (on main, CI green).
+- Claim BEFORE the PR: keeper refuses commits older than the claim (records-PR recipe #75; lease_until = claim+2h). 'commit' kind is router-only.
 - Decision evidence ref key is `id` ({"id":"D-NNN"}), not `decision`.
-- systemd drop-ins: lexical order, new ones sort LAST. zsh `$b:r` modifier: brace vars before ':'.
 - docs-only PRs skip CI; pre-#59 lanes runs-on self-hosted (no runners): test main+head on ci/prN-<sha> via `gh workflow run tests.yml --ref`. `gh pr edit/merge` broken -> `gh api` PATCH/PUT, graphql markPullRequestReadyForReview for drafts.
