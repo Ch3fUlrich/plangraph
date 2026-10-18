@@ -379,6 +379,7 @@ impl Card {
                                 DoneInput {
                                     card: input.claim.card.clone(),
                                     merged_sha: sha.clone(),
+                                    attempt: None,
                                 },
                                 activity_options(&cfg),
                             )
@@ -771,6 +772,7 @@ async fn question_step(
             AskInput {
                 card: card.clone(),
                 question: q.clone(),
+                attempt: None,
             },
             activity_options(cfg),
         )
@@ -854,6 +856,7 @@ async fn question_step(
                         Alarm {
                             card: card.clone(),
                             reason: QUESTION_TIMEOUT_REFUSED_REASON.to_string(),
+                            attempt: None,
                         },
                     )
                     .await;
@@ -1081,6 +1084,7 @@ async fn park_and_alarm(
         Alarm {
             card: packet.card.clone(),
             reason,
+            attempt: None,
         },
     )
     .await;

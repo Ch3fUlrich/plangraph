@@ -9,7 +9,7 @@
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
-use crate::keeper::{Alarm, AttemptReport, Claim, Fence, Keeper};
+use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper};
 use crate::mergelock::{self, MergeOutcome};
 use crate::question::Question;
 use pg_worker_core::budget;
@@ -91,6 +91,10 @@ pub struct CardInput {
 pub struct AskInput {
     pub card: String,
     pub question: Question,
+    /// The card attempt number (monotone per run), not Temporal's activity
+    /// retry count. Unset on older inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
 }
 
 /// Result of the `card` workflow.
@@ -206,6 +210,10 @@ pub struct MergeResult {
 pub struct DoneInput {
     pub card: String,
     pub merged_sha: String,
+    /// The card attempt number (monotone per run), not Temporal's activity
+    /// retry count. Unset on older inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
 }
 
 /// Sweep dead attempts of one repo.
@@ -317,6 +325,49 @@ fn gate_error(e: std::io::Error) -> ActivityError {
     } else {
         activity_error(e)
     }
+}
+
+/// The execution identity for a keeper call made by this activity: workflow
+/// and run from the activity context, the attempt from the activity input —
+/// the *card* attempt number, monotone per run, never Temporal's
+/// `ActivityInfo::attempt` (the activity retry count, which resets per
+/// activity and would be refused as lower by the Python keeper).
+fn exec_of(ctx: &ActivityContext, attempt: Option<u32>) -> ExecId {
+    let info = ctx.info();
+    ExecId {
+        workflow_id: info.workflow_id.clone(),
+        run_id: info.workflow_run_id.clone(),
+        attempt,
+    }
+}
+
+/// The card attempt a `park` activity input carries as an extra `"attempt"`
+/// key beside the packet fields, `None` when absent, unparseable or outside
+/// `u32` (an unknown key is ignored by `ParkPacket::from_json`, so a bad value
+/// only costs the identity, never the park itself).
+fn park_attempt_of(input: &str) -> Option<u32> {
+    serde_json::from_str::<serde_json::Value>(input)
+        .ok()?
+        .get("attempt")?
+        .as_u64()?
+        .try_into()
+        .ok()
+}
+
+/// The park packet JSON the workflow hands to the `park` activity, with the
+/// card attempt number added as an extra top-level key when it is known.
+/// [`ParkPacket::from_json`] ignores the extra key (the activity re-reads it
+/// there to build the [`ExecId`]), so the packet itself round-trips.
+pub fn park_json_with_attempt(p: &ParkPacket, attempt: Option<u32>) -> String {
+    let Some(attempt) = attempt else {
+        return p.to_json();
+    };
+    let mut v: serde_json::Value =
+        serde_json::from_str(&p.to_json()).expect("packet serializes to JSON");
+    if let Some(obj) = v.as_object_mut() {
+        obj.insert("attempt".into(), serde_json::json!(attempt));
+    }
+    v.to_string()
 }
 
 /// A wall-clock tick with fresh jitter. Nondeterminism stays in the activity so
@@ -779,14 +830,18 @@ impl CardActivities {
     #[activity]
     pub async fn park(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: String,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
+        // The card attempt rides along as an extra key of the packet JSON
+        // (`ParkPacket::from_json` ignores it); read it before the blocking
+        // task so the exec identity is built from this activity's context.
+        let exec = exec_of(&ctx, park_attempt_of(&input));
         tokio::task::spawn_blocking(move || {
             let packet =
                 ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
-            keeper.park(&packet).map_err(activity_error)
+            keeper.park(&packet, &exec).map_err(activity_error)
         })
         .await
         .map_err(activity_error)?
@@ -796,11 +851,12 @@ impl CardActivities {
     #[activity]
     pub async fn complete(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: DoneInput,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        tokio::task::spawn_blocking(move || keeper.complete(&input.card, &input.merged_sha))
+        let exec = exec_of(&ctx, input.attempt);
+        tokio::task::spawn_blocking(move || keeper.complete(&input.card, &input.merged_sha, &exec))
             .await
             .map_err(activity_error)?
             .map_err(activity_error)
@@ -810,11 +866,12 @@ impl CardActivities {
     #[activity]
     pub async fn alarm(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: Alarm,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        tokio::task::spawn_blocking(move || keeper.alarm(&input))
+        let exec = exec_of(&ctx, input.attempt);
+        tokio::task::spawn_blocking(move || keeper.alarm(&input, &exec))
             .await
             .map_err(activity_error)?
             .map_err(activity_error)
@@ -828,13 +885,14 @@ impl CardActivities {
     #[activity]
     pub async fn ask_question(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: AskInput,
     ) -> Result<Option<i64>, ActivityError> {
         let keeper = self.deps.keeper.clone();
+        let exec = exec_of(&ctx, input.attempt);
         let res = tokio::task::spawn_blocking(move || {
             retry_transient(&TRANSIENT_BACKOFF, || {
-                keeper.ask_question(&input.card, &input.question)
+                keeper.ask_question(&input.card, &input.question, &exec)
             })
         })
         .await
@@ -1076,6 +1134,7 @@ mod tests {
         round_trip(&DoneInput {
             card: "c1".to_string(),
             merged_sha: "sha".to_string(),
+            attempt: None,
         });
         round_trip(&JanitorInput {
             repo: "/r".to_string(),
@@ -1095,6 +1154,34 @@ mod tests {
         assert_eq!(out.detail, "");
         assert_eq!(out.merged_sha.as_deref(), Some("sha"));
         assert_eq!(out.attempts, 1);
+    }
+
+    /// The park activity input carries the card attempt as an extra top-level
+    /// key: `park_json_with_attempt` adds it, and `ParkPacket::from_json` still
+    /// parses the result because it ignores unknown keys.
+    #[test]
+    fn park_json_with_attempt_carries_the_attempt_and_still_parses() {
+        use pg_worker_core::exit_class::ExitClass;
+        let p = ParkPacket {
+            card: "c1".to_string(),
+            tier: Tier::Free,
+            exit_class: ExitClass::CheckFail,
+            check_tail: "boom".to_string(),
+        };
+
+        let tagged = park_json_with_attempt(&p, Some(4));
+        let v: serde_json::Value = serde_json::from_str(&tagged).unwrap();
+        assert_eq!(v["attempt"], 4);
+        assert_eq!(v.as_object().unwrap().len(), 5);
+        assert_eq!(ParkPacket::from_json(&tagged).unwrap(), p);
+        // The activity reads the same key back out of the input.
+        assert_eq!(park_attempt_of(&tagged), Some(4));
+
+        // Unset attempt: the plain packet JSON, no extra key at all.
+        let plain = park_json_with_attempt(&p, None);
+        assert_eq!(plain, p.to_json());
+        assert_eq!(ParkPacket::from_json(&plain).unwrap(), p);
+        assert_eq!(park_attempt_of(&plain), None);
     }
 
     #[test]
