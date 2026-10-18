@@ -14,6 +14,7 @@ if TOOLS_DIR not in sys.path:
 
 import apply_batch
 import apply_batch_atomic as atomic
+from keeper_util import defn
 from test_apply_batch import world, srv, token_file, run, item_count, write_batch as _base_write_batch
 
 try:
@@ -53,16 +54,15 @@ def max_event_seq(world):
 
 
 def test_base_seq_stale_edit_refuses_whole_batch(world, srv, token_file, tmp_path):
-    # Setup two items
-    init_ops = [
-        {"op": "create", "item": [
-            {"project": "demo", "id": "E1", "title": "Initial E1"},
-            {"project": "demo", "id": "E2", "title": "Initial E2"},
-        ]}
-    ]
-    b_init = write_batch(tmp_path, ops=init_ops, name="init_edit")
-    rc0, _, _ = run(b_init, srv.base_url, token_file)
-    assert rc0 == 0
+    # Setup items
+    e1 = defn("E1")
+    e1["title"] = "Initial E1"
+    e2 = defn("E2")
+    e2["title"] = "Initial E2"
+    world.store.create_items(
+        world.p("router"),
+        [e1, e2, defn("GOAL", ["E1", "E2"], kind="goal")],
+    )
 
     base_seq = max_event_seq(world)
 
@@ -83,7 +83,7 @@ def test_base_seq_stale_edit_refuses_whole_batch(world, srv, token_file, tmp_pat
     assert rc == 1, out + errtxt
     assert "changed after base_seq" in out
     assert "demo:E1" in out
-    assert "batch stale_edit_batch: conflict" in out
+    assert "batch X7d-stale_edit_batch: conflict" in out
     assert "nothing applied (the whole batch was rolled back)" in out
     assert "op 1 " not in out
     # Verify neither op took effect
@@ -92,12 +92,12 @@ def test_base_seq_stale_edit_refuses_whole_batch(world, srv, token_file, tmp_pat
 
 
 def test_base_seq_stale_cancel_refuses(world, srv, token_file, tmp_path):
-    init_ops = [
-        {"op": "create", "item": {"project": "demo", "id": "C1", "title": "Initial C1"}}
-    ]
-    b_init = write_batch(tmp_path, ops=init_ops, name="init_cancel")
-    rc0, _, _ = run(b_init, srv.base_url, token_file)
-    assert rc0 == 0
+    c1 = defn("C1")
+    c1["title"] = "Initial C1"
+    world.store.create_items(
+        world.p("router"),
+        [c1, defn("GOAL", ["C1"], kind="goal")],
+    )
 
     base_seq = max_event_seq(world)
 
@@ -112,18 +112,18 @@ def test_base_seq_stale_cancel_refuses(world, srv, token_file, tmp_path):
 
     assert rc == 1, out + errtxt
     assert "changed after base_seq: demo:C1" in out
-    assert "batch stale_cancel_batch: conflict" in out
+    assert "batch X7d-stale_cancel_batch: conflict" in out
     assert "nothing applied (the whole batch was rolled back)" in out
     assert state_of(world, "demo:C1") != "cancelled"
 
 
 def test_fresh_base_seq_applies(world, srv, token_file, tmp_path):
-    init_ops = [
-        {"op": "create", "item": {"project": "demo", "id": "F1", "title": "Initial F1"}}
-    ]
-    b_init = write_batch(tmp_path, ops=init_ops, name="init_fresh")
-    rc0, _, _ = run(b_init, srv.base_url, token_file)
-    assert rc0 == 0
+    f1 = defn("F1")
+    f1["title"] = "Initial F1"
+    world.store.create_items(
+        world.p("router"),
+        [f1, defn("GOAL", ["F1"], kind="goal")],
+    )
 
     base_seq = max_event_seq(world)
 
@@ -152,16 +152,20 @@ def test_per_op_with_base_seq_exits_2(world, srv, token_file, tmp_path):
 
 
 def test_depends_on_add_remove_and_dropped_dep_printed(world, srv, token_file, tmp_path):
-    # Create T1, T2, T3
-    init_ops = [
-        {"op": "create", "item": [
-            {"project": "demo", "id": "T1", "title": "Item T1"},
-            {"project": "demo", "id": "T2", "title": "Item T2"},
-            {"project": "demo", "id": "T3", "title": "Item T3"},
-        ]},
+    world.store.create_items(
+        world.p("router"),
+        [
+            defn("T1"),
+            defn("T2"),
+            defn("T3"),
+            defn("GOAL", ["T1", "T2", "T3"], kind="goal"),
+        ],
+    )
+
+    add_ops = [
         {"op": "edit", "key": "demo:T1", "fields": {"depends_on": {"add": ["demo:T2", "demo:T3"]}}},
     ]
-    b1 = write_batch(tmp_path, ops=init_ops, name="b_deps_add")
+    b1 = write_batch(tmp_path, ops=add_ops, name="b_deps_add")
     rc1, out1, err1 = run(b1, srv.base_url, token_file)
     assert rc1 == 0, out1 + err1
 
@@ -217,17 +221,21 @@ def test_dry_run_unchanged_and_prints_note(world, srv, token_file, tmp_path):
 
 
 def test_preview_prints_dropped_dep_and_writes_nothing(world, srv, token_file, tmp_path):
-    init_ops = [
-        {"op": "create", "item": [
-            {"project": "demo", "id": "P1", "title": "Preview P1"},
-            {"project": "demo", "id": "P2", "title": "Preview P2"},
-            {"project": "demo", "id": "P3", "title": "Preview P3"},
-        ]},
-        {"op": "edit", "key": "demo:P1", "fields": {"depends_on": ["demo:P2", "demo:P3"]}},
-    ]
-    b_init = write_batch(tmp_path, ops=init_ops, name="init_preview")
-    rc0, _, _ = run(b_init, srv.base_url, token_file)
-    assert rc0 == 0
+    p1 = defn("P1", ["P2", "P3"])
+    p1["title"] = "Preview P1"
+    p2 = defn("P2")
+    p2["title"] = "Preview P2"
+    p3 = defn("P3")
+    p3["title"] = "Preview P3"
+    world.store.create_items(
+        world.p("router"),
+        [
+            p2,
+            p3,
+            p1,
+            defn("GOAL", ["P1", "P2", "P3"], kind="goal"),
+        ],
+    )
 
     ev_count_before = world.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     title_before = title_of(world, "demo:P1")
@@ -241,7 +249,7 @@ def test_preview_prints_dropped_dep_and_writes_nothing(world, srv, token_file, t
     assert rc == 0, out + errtxt
     assert "dropped dependency demo:P3 from demo:P1" in out
     assert "preview: nothing applied (dry run on the keeper)" in out
-    assert "applied " not in out
+    assert "applied 1 of" not in out
 
     ev_count_after = world.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
     assert ev_count_after == ev_count_before
