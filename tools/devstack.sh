@@ -183,7 +183,7 @@ ensure_temporal_cli() {
   fi
   url="${DEVSTACK_TEMPORAL_URL_BASE}/v${TEMPORAL_CLI_VERSION}/temporal_cli_${TEMPORAL_CLI_VERSION}_${os}_${arch}.tar.gz"
   mkdir -p "$DEVSTACK_STATE/bin"
-  tmp="$DEVSTACK_STATE/temporal_cli_download.tar.gz"
+  tmp="$(mktemp "$DEVSTACK_STATE/temporal_cli_download.XXXXXX")"
   echo "temporal: fetching CLI v$TEMPORAL_CLI_VERSION ($url)"
   if [ "$fetch" = curl ]; then
     if ! curl -fsSL "$url" -o "$tmp"; then
@@ -213,7 +213,7 @@ ensure_temporal_cli() {
     exit 1
   fi
   if ! tar -xzf "$tmp" -C "$DEVSTACK_STATE/bin" temporal; then
-    rm -f "$tmp"
+    rm -f "$tmp" "$DEVSTACK_STATE/bin/temporal"
     echo "temporal: archive did not contain a 'temporal' binary" >&2
     exit 1
   fi
