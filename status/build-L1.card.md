@@ -15,7 +15,7 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | TEMPORAL-CHECK (server) | in_review, D-1967 attached | router close |
 | VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
 | E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
-| DEV-PGDRILL-LOCAL | claimed ~10:46Z; rt-side [46b0bd] #80 head 2400465b, seats running | merge -> real coding.vm run (me) -> evidence |
+| DEV-PGDRILL-LOCAL (HIGH) | #80 head 0df12c06 seats mimo+gemini PASS; my coding.vm run ok rows=58 (evidence/pgdrill-codingvm-0df12c0-ok.log) | GO-REQ judge -> merge -> evidence + 2 verdicts |
 | FLOW-UNBLOCK (HIGH, D-1968) | claimed; rt-side lane F (brief 5dbd1f31) | after #80 |
 | FLEET-SID-REFRESH | in_review; seats FIX; routing fixing in routing repo (D-1971) | re-seat on routing's new sha |
 | PG-PUBLIC-READY | in_review until history cut (D-1966); options record republish/public-cut-options-20261018.md (A default) | operator after P1 |
