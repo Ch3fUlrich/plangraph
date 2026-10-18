@@ -14,7 +14,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | DEV-PGDRILL | - | DONE #89 d8c7b606 (judge GO, D-1988 closed; xiaomi+google). FLAKES for CI-GATE/DRILLS: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | EXEC A 0d03f9e + B 00290c2 (lane/rt-p1-exec-ownership), D1 Rust BLOCKED: Go 5h limit -> probe qwen/kimi/minimax once else wait reset; BATCH/CIG on leg 3+ |
-| GATE-WIRING | predeploy-5 [319b17] | WIP 24e34a9, new driver redo, PR ETA ~17:00Z; redo Claude-written parts (b11c60a) by non-Claude writer; GateInput = list of named checks (D-2002) |
+| GATE-WIRING | predeploy-5 [319b17] | PR #94 afae587 seats mimo+qwen PASS; Claude compile-fix hunks of 24e34a9 survive (activities.rs, workflow.rs) -> strip + leg-7 re-fix, new head + proof, then MR; HIGH -> judge GO |
 | OPENCODE-HARDEN / WF-VERSIONING | predeploy-5 | HARDEN lane/rt-p1-opencode-harden PR ETA ~18:00Z; VERSIONING queued (3-writer cap) ETA ~20:00Z |
 | PHASE-RUNNER | predeploy-5 | needs GATE-WIRING done -> I claim; Jev shadow call site lives here (D-2002) |
 | JEV-SHADOW | predeploy-5 | wt-jev WIP + main merged, new driver, PR ETA ~17:30Z; stub + per-axis records + kappa, one call site (routing activity) |
