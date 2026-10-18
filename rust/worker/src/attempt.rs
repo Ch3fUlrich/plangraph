@@ -579,13 +579,11 @@ mod tests {
     // Recorded `opencode run --format json` streams; tests must not edit them.
     const RATE_LIMITED_429: &str =
         include_str!("../tests/fixtures/opencode/real-429-big-pickle.jsonl");
-    const TRANSPORT_ERROR: &str = include_str!(
-        "../tests/fixtures/opencode/real-provider-transport-error.jsonl"
-    );
+    const TRANSPORT_ERROR: &str =
+        include_str!("../tests/fixtures/opencode/real-provider-transport-error.jsonl");
     const OK_TOOL_TOKENS: &str =
         include_str!("../tests/fixtures/opencode/real-ok-tool-tokens.jsonl");
-    const OK_TEXT: &str =
-        include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
+    const OK_TEXT: &str = include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
     /// A run that only announced its first step and then stopped.
     const STEP_ONLY: &str = r#"{"type":"step_start","part":{"type":"step-start"}}"#;
 
