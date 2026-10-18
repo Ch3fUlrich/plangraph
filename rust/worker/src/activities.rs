@@ -133,6 +133,30 @@ pub struct ProbeResult {
     pub branch: String,
 }
 
+/// Run a card's gate command (taken from the card) in a worktree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateInput {
+    /// Directory the command runs in.
+    pub workdir: String,
+    /// The gate command, run via `sh -c`.
+    pub cmd: String,
+    /// Kill after this many seconds; unset or larger than the configured
+    /// `start_to_close` = `start_to_close`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<u64>,
+}
+
+/// Outcome of a gate run: the `check::CheckResult` fields plus `passed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateResult {
+    pub passed: bool,
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    pub timed_out: bool,
+    pub tail: String,
+    pub output_hash: String,
+}
+
 /// The write set a merge re-checks under the lock.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConfineSpec {
@@ -282,6 +306,19 @@ fn activity_error(e: impl std::fmt::Display) -> ActivityError {
     anyhow::anyhow!(e.to_string()).into()
 }
 
+/// Invalid gate input (empty command, timeout 0, missing workdir) can never
+/// succeed on a retry, so it is reported as a non-retryable application
+/// failure; any other io error keeps the default retry behaviour.
+fn gate_error(e: std::io::Error) -> ActivityError {
+    if e.kind() == std::io::ErrorKind::InvalidInput {
+        ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(
+            e.to_string(),
+        ))
+    } else {
+        activity_error(e)
+    }
+}
+
 /// A wall-clock tick with fresh jitter. Nondeterminism stays in the activity so
 /// the workflow replaying the same call is not affected.
 pub(crate) fn tick_now() -> Tick {
@@ -348,6 +385,51 @@ pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
         cfg.check_tail_lines,
     );
     map_probe(outcome, id.branch())
+}
+
+/// Run the gate command of a card through the shared check runner. An empty
+/// command, a `timeout_s` of 0 and a workdir that is not an existing directory
+/// are invalid input, never a pass; they error before the check runner is
+/// entered, because `run_check` creates a sibling home dir and a bad workdir
+/// must not reach it. The deadline is honoured in here because the blocking
+/// thread cannot be cancelled from outside.
+pub(crate) fn do_gate(cfg: &Config, input: &GateInput) -> std::io::Result<GateResult> {
+    if input.cmd.trim().is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "gate command is empty",
+        ));
+    }
+    if input.timeout_s == Some(0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "gate timeout_s must be at least 1",
+        ));
+    }
+    if !Path::new(&input.workdir).is_dir() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "gate workdir is not a directory",
+        ));
+    }
+    let timeout = input
+        .timeout_s
+        .map(Duration::from_secs)
+        .map_or(cfg.start_to_close, |t| t.min(cfg.start_to_close));
+    let r = check::run_check(
+        &input.cmd,
+        Path::new(&input.workdir),
+        timeout,
+        cfg.check_tail_lines,
+    )?;
+    Ok(GateResult {
+        passed: r.passed(),
+        exit_code: r.exit_code,
+        signal: r.signal,
+        timed_out: r.timed_out,
+        tail: r.tail,
+        output_hash: r.output_hash,
+    })
 }
 
 fn merge_result(outcome: &str, main_head: String, detail: String) -> MergeResult {
@@ -648,6 +730,20 @@ impl CardActivities {
         tokio::task::spawn_blocking(move || do_probe(&cfg, &input))
             .await
             .map_err(activity_error)
+    }
+
+    /// Run a card's gate command in a worktree and report the outcome.
+    #[activity]
+    pub async fn gate(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: GateInput,
+    ) -> Result<GateResult, ActivityError> {
+        let cfg = self.deps.cfg.clone();
+        tokio::task::spawn_blocking(move || do_gate(&cfg, &input))
+            .await
+            .map_err(activity_error)?
+            .map_err(gate_error)
     }
 
     /// Fast-forward the attempt branch into main under the merge lock.
@@ -1521,5 +1617,136 @@ mod tests {
         // Commit beyond base but a failing check is `partial`, so it is removed.
         assert_eq!(do_janitor(&tiny(), &input).unwrap(), 1);
         assert!(!wt.path.exists());
+    }
+
+    fn gate_input(dir: &std::path::Path, cmd: &str, timeout_s: Option<u64>) -> GateInput {
+        GateInput {
+            workdir: dir.to_string_lossy().into_owned(),
+            cmd: cmd.to_string(),
+            timeout_s,
+        }
+    }
+
+    #[test]
+    fn gate_pass() {
+        let d = tempfile::tempdir().unwrap();
+        let r = do_gate(&tiny(), &gate_input(d.path(), "echo fine", None)).unwrap();
+        assert!(r.passed && !r.timed_out);
+        assert_eq!(r.exit_code, Some(0));
+        assert_eq!(r.tail, "fine");
+        assert!(!r.output_hash.is_empty());
+    }
+
+    #[test]
+    fn gate_fail_keeps_tail_and_a_stable_hash() {
+        let d = tempfile::tempdir().unwrap();
+        let a = do_gate(&tiny(), &gate_input(d.path(), "echo nope; exit 3", None)).unwrap();
+        let b = do_gate(&tiny(), &gate_input(d.path(), "echo nope; exit 3", None)).unwrap();
+        assert!(!a.passed && !a.timed_out);
+        assert_eq!(a.exit_code, Some(3));
+        assert!(a.tail.contains("nope"));
+        assert_eq!(a.output_hash, b.output_hash);
+    }
+
+    #[test]
+    fn gate_timeout_is_reported_and_capped_by_start_to_close() {
+        let d = tempfile::tempdir().unwrap();
+        let t = Instant::now();
+        let r = do_gate(
+            &tiny(),
+            &gate_input(d.path(), "echo start; sleep 30", Some(1)),
+        )
+        .unwrap();
+        assert!(r.timed_out && !r.passed);
+        assert!(r.tail.contains("start"));
+        assert!(t.elapsed() < Duration::from_secs(20));
+        // A requested timeout above start_to_close is capped to it.
+        let cfg = Config {
+            start_to_close: Duration::from_secs(1),
+            ..tiny()
+        };
+        let r = do_gate(&cfg, &gate_input(d.path(), "sleep 30", Some(3600))).unwrap();
+        assert!(r.timed_out && !r.passed);
+    }
+
+    #[test]
+    fn gate_empty_command_is_an_error_not_a_pass() {
+        let d = tempfile::tempdir().unwrap();
+        let e = do_gate(&tiny(), &gate_input(d.path(), "   ", None)).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        let ActivityError::Application(f) = gate_error(e) else {
+            panic!("expected an application failure")
+        };
+        assert!(f.is_non_retryable());
+    }
+
+    #[test]
+    fn gate_zero_timeout_is_invalid_input() {
+        let d = tempfile::tempdir().unwrap();
+        let e = do_gate(&tiny(), &gate_input(d.path(), "true", Some(0))).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        let ActivityError::Application(f) = gate_error(e) else {
+            panic!("expected an application failure")
+        };
+        assert!(f.is_non_retryable());
+    }
+
+    #[test]
+    fn gate_bad_workdir_is_invalid_input() {
+        let d = tempfile::tempdir().unwrap();
+        let missing = d.path().join("missing");
+        let e = do_gate(&tiny(), &gate_input(&missing, "true", None)).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        // run_check was never entered: it would have created this sibling dir.
+        assert!(!d.path().join("missing.home-check").exists());
+        let ActivityError::Application(f) = gate_error(e) else {
+            panic!("expected an application failure")
+        };
+        assert!(f.is_non_retryable());
+    }
+
+    #[test]
+    fn gate_runtime_io_error_stays_retryable() {
+        let ActivityError::Application(f) = gate_error(std::io::Error::other("boom")) else {
+            panic!("expected an application failure")
+        };
+        assert!(!f.is_non_retryable());
+    }
+
+    /// This test pins the generated activity names and the JSON shape of
+    /// GateInput/GateResult. The register_activities call only proves
+    /// registration does not panic: it cannot assert the registry contents,
+    /// because ActivityDefinitions::names/get are pub(crate) in temporalio-sdk
+    /// and there is no public accessor. Presence of `gate` in the registry is
+    /// covered by the e2e worker test only if that test calls it (not yet).
+    #[test]
+    fn gate_activity_name_and_payload_shapes_are_stable() {
+        assert_eq!(CardActivities::gate.name(), "CardActivities::gate");
+        assert_eq!(CardActivities::attempt.name(), "attempt");
+        assert_eq!(CardActivities::probe.name(), "CardActivities::probe");
+        assert_eq!(CardActivities::merge.name(), "CardActivities::merge");
+        let mut defs = temporalio_sdk::activities::ActivityDefinitions::default();
+        defs.register_activities(CardActivities::new(deps()));
+        // Input without the optional field (older or minimal recording) decodes.
+        let i: GateInput = serde_json::from_str(r#"{"workdir":"/w","cmd":"true"}"#).unwrap();
+        assert_eq!(i.timeout_s, None);
+        assert_eq!(
+            serde_json::to_string(&i).unwrap(),
+            r#"{"workdir":"/w","cmd":"true"}"#
+        );
+        let r = GateResult {
+            passed: true,
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+            tail: "t".into(),
+            output_hash: "h".into(),
+        };
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"passed":true,"exit_code":0,"signal":null,"timed_out":false,"tail":"t","output_hash":"h"}"#
+        );
+        let back: GateResult = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(back, r);
     }
 }

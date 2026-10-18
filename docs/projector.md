@@ -25,7 +25,7 @@ Language: Python (`temporalio` SDK, optional import; the keeper never imports it
   never sets `cancelled`, that is the keeper verb); `quarantined` -> `failed`. The specific word travels in the extra result
   field `detail` (ignored by the projector).
 * Activity type name is exactly `attempt` (activity name override; the other activities are
-  `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|ask_question|record_question_timeout`). `attempt` is scheduled with `maximum_attempts=1`.
+  `CardActivities::tick|probe|merge|report|park|complete|alarm|janitor|gate|ask_question|record_question_timeout`). `attempt` is scheduled with `maximum_attempts=1`.
 * Attempt result carries `exit_class` (always one of `EXIT_CLASSES`; worker `ExitClass` serialises to the same snake_case
   names) plus `harness` (harness name), `model` (leg model), `combo` (leg id), `class` (context window class `128k|256k|1m`),
   `started_at`/`ended_at` (ISO 8601 UTC, millisecond, `Z`). `tokens_in`/`tokens_out`/`cost`/`log_ref` are omitted until the
