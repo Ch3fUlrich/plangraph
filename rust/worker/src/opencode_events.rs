@@ -190,20 +190,20 @@ mod tests {
     use super::*;
 
     const RATE_LIMITED: [&str; 2] = [
-        include_str!("../tests/fixtures/opencode/fixtures-keep/real-429-big-pickle.jsonl"),
+        include_str!("../tests/fixtures/opencode/real-429-big-pickle.jsonl"),
         include_str!(
-            "../tests/fixtures/opencode/fixtures-keep/real-429-deepseek-v4.1-flash-free.jsonl"
+            "../tests/fixtures/opencode/real-429-deepseek-v4.1-flash-free.jsonl"
         ),
     ];
     const TRANSPORT: &str = include_str!(
-        "../tests/fixtures/opencode/fixtures-keep/real-provider-transport-error.jsonl"
+        "../tests/fixtures/opencode/real-provider-transport-error.jsonl"
     );
     const OK_TEXT: &str =
-        include_str!("../tests/fixtures/opencode/fixtures-keep/real-ok-text.jsonl");
+        include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
     const OK_TOOL_TOKENS: &str =
-        include_str!("../tests/fixtures/opencode/fixtures-keep/real-ok-tool-tokens.jsonl");
+        include_str!("../tests/fixtures/opencode/real-ok-tool-tokens.jsonl");
     const DENIED: &str = include_str!(
-        "../tests/fixtures/opencode/fixtures-keep/real-permission-denied-external.jsonl"
+        "../tests/fixtures/opencode/real-permission-denied-external.jsonl"
     );
 
     #[test]
