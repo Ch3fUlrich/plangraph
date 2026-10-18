@@ -4,7 +4,16 @@
 //! fast-forward the main branch onto its own attempt. The merge itself is safe
 //! to do in a throwaway worktree, but the branch ref must move atomically and
 //! the base the caller rebased onto must still be current, so the whole
-//! operation runs under a file lock shared through `<git-common-dir>/pg-merge.lock`.
+//! operation runs under a file lock shared through `<git-common-dir>/pg-merge.lock`
+//! plus a local compare-and-swap `update-ref`.
+//!
+//! That file lock and CAS are the real exclusion, and they are `flock` on a
+//! local file: the deployment model is a single worker host per repo; the lock
+//! does not coordinate hosts. The keeper lock and fencing token around a merge
+//! (see `admit_fence` and `activities::do_merge`) only earn cross-host value
+//! once a real keeper service implements the lock endpoint, which is a
+//! RELEASE-DEPLOY gap (docs/plan/rtp1-predeploy-gaps.md row 17); until then a
+//! second host would need a remote non-ff refusal on push to be held back.
 
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::git::{GitError, check_rev, git};
@@ -192,7 +201,10 @@ const FENCE_NAME: &str = "pg-merge.fence";
 /// Admit a fencing token under the held lock: refused (false) when a higher
 /// token was already admitted, otherwise recorded as the new high-water mark.
 /// A holder whose keeper lock expired and was re-granted carries a smaller
-/// token than the new holder, so its late merge cannot land.
+/// token than the new holder, so its late merge cannot land — but only if the
+/// keeper really issues strictly monotonic tokens; until a real keeper service
+/// implements the lock endpoint this guard is untested in deployment (see the
+/// module header).
 pub fn admit_fence(_lock: &MergeLock, repo: &Path, token: u64) -> Result<bool, MergeError> {
     let path = git_common_dir(repo)?.join(FENCE_NAME);
     // A missing file is a fresh repo (0). An unreadable or corrupt one is an

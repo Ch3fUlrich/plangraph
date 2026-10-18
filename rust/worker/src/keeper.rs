@@ -81,7 +81,10 @@ pub trait Keeper: Send + Sync {
     fn park(&self, p: &ParkPacket) -> Result<(), KeeperError>;
     fn complete(&self, card: &str, merged_sha: &str) -> Result<(), KeeperError>;
     fn alarm(&self, a: &Alarm) -> Result<(), KeeperError>;
-    /// Take the cross-worker merge lock for `repo`, valid for `ttl_s` seconds.
+    /// Ask the keeper for the merge lock for `repo`, valid for `ttl_s`
+    /// seconds. It is exclusive across hosts only insofar as a real keeper
+    /// service implements the lock endpoint (RELEASE-DEPLOY gap); the worker's
+    /// effective exclusion is the file lock in `mergelock`, single host.
     fn acquire_merge_lock(&self, repo: &str, owner: &str, ttl_s: u64)
     -> Result<Fence, KeeperError>;
     /// Give the lock back. A stale token is refused.

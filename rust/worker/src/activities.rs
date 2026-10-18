@@ -124,9 +124,12 @@ pub struct ConfineSpec {
     pub forbid: Vec<String>,
 }
 
-/// Fast-forward an attempt branch into main, guarded by the keeper lock, the
-/// fencing token and the file lock. Every field after `base_sha` is optional so
-/// a bare ff merge (and older recorded inputs) still deserialises.
+/// Fast-forward an attempt branch into main, guarded by the file lock and the
+/// local CAS (the effective exclusion on a single worker host per repo); the
+/// keeper lock and fencing token wrap it but only coordinate hosts once a real
+/// keeper implements the lock endpoint (see [`crate::mergelock`]'s header).
+/// Every field after `base_sha` is optional so a bare ff merge (and older
+/// recorded inputs) still deserialises.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MergeInput {
     pub repo: String,
@@ -308,7 +311,9 @@ fn merge_fenced(
     let head_of_main = || git(repo, &["rev-parse", &main_ref]);
 
     // Fencing: the repo side remembers the highest token it admitted, so a
-    // holder whose keeper lock expired cannot land a late merge. The token is
+    // holder whose keeper lock expired cannot land a late merge — provided the
+    // keeper itself issues strictly monotonic tokens (stub in tests; the real
+    // lock endpoint is a RELEASE-DEPLOY gap). The token is
     // always the one the keeper granted this merge; a caller cannot name one.
     let token = fence.token;
     if !mergelock::admit_fence(&lock, repo, token)? {
@@ -403,7 +408,10 @@ pub(crate) fn merge_owner_id() -> &'static str {
 /// then rebase / confinement / check as needed, then fast-forward. The keeper
 /// lock is released on every path; a keeper that cannot grant it means
 /// `retry_later`, never a merge without it. A refused release after the merge
-/// landed does not undo it (the repo-side fence already guarded the update).
+/// landed does not undo it (the repo-side fence and file lock guarded the
+/// update). Scope, stated honestly: the file lock plus the local CAS is the
+/// exclusion that holds today, over one worker host per repo; the keeper side
+/// only counts once a real keeper implements the lock endpoint.
 pub(crate) fn do_merge(
     keeper: &dyn Keeper,
     cfg: &Config,
