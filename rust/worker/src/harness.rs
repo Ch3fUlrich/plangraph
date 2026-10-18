@@ -484,7 +484,7 @@ pub fn check_version_pins(reg: &HarnessRegistry, spec: Option<&str>) -> Result<b
         }
         _ => DEFAULT_PINS
             .iter()
-            .filter(|(name, _)| reg.get(*name).is_some_and(|h| h.binary().is_some()))
+            .filter(|(name, _)| reg.get(name).is_some_and(|h| h.binary().is_some()))
             .map(|(name, version)| ((*name).to_string(), (*version).to_string()))
             .collect(),
     };

@@ -165,16 +165,15 @@ pub fn summarize(stream: &str) -> EventSummary {
                 tokens_in = tokens_in.saturating_add(ev.part.tokens.input);
                 tokens_out = tokens_out.saturating_add(ev.part.tokens.output);
             }
-            "error" => {
-                // The first error is the cause; anything after it is fallout.
-                if out.provider_error.is_none() {
-                    let err = ev.error.unwrap_or_default();
-                    out.provider_error = Some(ProviderError {
-                        kind: err.provider_kind(),
-                        status: err.status,
-                        message: err.message,
-                    });
-                }
+            // The first error is the cause; anything after it is fallout, so the
+            // guard keeps later "error" events falling through to `_`.
+            "error" if out.provider_error.is_none() => {
+                let err = ev.error.unwrap_or_default();
+                out.provider_error = Some(ProviderError {
+                    kind: err.provider_kind(),
+                    status: err.status,
+                    message: err.message,
+                });
             }
             _ => {}
         }
