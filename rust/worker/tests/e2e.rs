@@ -83,6 +83,11 @@ struct Env {
     workroot: PathBuf,
     keeper: Arc<StubKeeper>,
     client: Client,
+    /// The activities' dependencies, kept so a restarted worker can be built
+    /// with the same keeper, harnesses and config.
+    deps: Deps,
+    /// The `PG_TEMPORAL_ADDR` url, kept so a restarted worker can reconnect.
+    addr: String,
     task_queue: String,
     worker: std::cell::RefCell<Option<tokio::task::JoinHandle<()>>>,
     /// A built worker not yet polling, for tests that signal before any worker runs.
@@ -146,7 +151,7 @@ impl Env {
         let opts = WorkerOptions::new(task_queue.as_str())
             .register_workflow::<Card>()
             .expect("register card workflow")
-            .register_activities(CardActivities::new(deps))
+            .register_activities(CardActivities::new(deps.clone()))
             .build();
 
         // The worker holds its own connection so the test client stays free to
@@ -176,6 +181,8 @@ impl Env {
             workroot: workroot_path,
             keeper,
             client,
+            deps,
+            addr: addr.to_string(),
             task_queue,
             worker: std::cell::RefCell::new(worker),
             held: std::cell::RefCell::new(held),
@@ -260,6 +267,31 @@ impl Env {
             });
             *self.worker.borrow_mut() = Some(handle);
         }
+    }
+
+    /// Restarts the poll loop like a crash or a redeploy would: the old worker
+    /// is aborted and a fresh one, with no memory of anything the old one
+    /// held, starts polling the same task queue. The workflow server replays
+    /// the history onto it, so only state carried in the history survives.
+    async fn restart_worker(&self) {
+        self.stop();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let opts = WorkerOptions::new(self.task_queue.as_str())
+            .register_workflow::<Card>()
+            .expect("register card workflow")
+            .register_activities(CardActivities::new(self.deps.clone()))
+            .build();
+        let url = Url::from_str(&self.addr).expect("PG_TEMPORAL_ADDR parses as a url");
+        let conn = Connection::connect(ConnectionOptions::new(url).build())
+            .await
+            .expect("connect restart worker client");
+        let wclient =
+            Client::new(conn, ClientOptions::new("default").build()).expect("restart client");
+        let mut worker = Worker::new(&self._runtime, wclient, opts).expect("build restart worker");
+        let handle = tokio::task::spawn_local(async move {
+            let _ = worker.run().await;
+        });
+        *self.worker.borrow_mut() = Some(handle);
     }
 }
 
@@ -822,11 +854,95 @@ async fn needs_input_risk_tagged_never_defaults() {
             env.keeper
                 .alarms()
                 .iter()
-                .any(|a| a.reason == "question unanswered"),
+                .any(|a| a.reason == "question_timeout"),
             "{:?}",
             env.keeper.alarms()
         );
-        assert_eq!(env.keeper.parked().len(), 1);
+        let parked = env.keeper.parked();
+        assert_eq!(parked.len(), 1);
+        assert!(
+            parked
+                .iter()
+                .filter(|p| p.check_tail.starts_with("question_timeout: "))
+                .count()
+                == 1,
+            "{parked:?}"
+        );
+        env.stop();
+    })
+    .await;
+}
+
+/// A worker restart during the wait: the restart drops all in-memory worker
+/// state, so only the durable timer in the history can fire the park. The card
+/// parks on the question timeout and the keeper is never asked twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_restart_mid_wait_parks_question_timeout() {
+    in_local(async {
+        let script = r#"echo 'PG_QUESTION: {"text":"which db?"}'"#;
+        let Some(env) = env_or_skip("needs-input-restart-park", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.set_question_cap(6);
+        let claim = env.claim("e2e-restart-park", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-restart-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        wait_for_questions(&env, 1).await;
+        env.restart_worker().await;
+
+        let out = finish("needs_input_restart_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert!(
+            env.keeper
+                .alarms()
+                .iter()
+                .any(|a| a.reason == "question_timeout"),
+            "{:?}",
+            env.keeper.alarms()
+        );
+        let parked = env.keeper.parked();
+        assert_eq!(parked.len(), 1);
+        assert_eq!(parked[0].check_tail, "question_timeout: which db?");
+        assert_eq!(
+            env.keeper.questions().len(),
+            1,
+            "the question is not asked again after the restart"
+        );
+        assert!(env.keeper.question_timeouts().is_empty());
+        env.stop();
+    })
+    .await;
+}
+
+/// The same restart with a default on offer: the replayed history re-arms the
+/// durable timer, it fires on the restarted worker, and the card takes the
+/// default and merges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_restart_mid_wait_takes_the_default() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":6,"risk_tags":[]}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-restart-default", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-restart-default", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-restart-default-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        wait_for_questions(&env, 1).await;
+        env.restart_worker().await;
+
+        let out = finish("needs_input_restart_default", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(env.keeper.question_timeouts(), vec![1]);
+        assert_eq!(env.keeper.questions().len(), 1);
+        assert!(env.keeper.alarms().is_empty(), "{:?}", env.keeper.alarms());
         env.stop();
     })
     .await;
@@ -878,6 +994,7 @@ async fn needs_input_rounds_are_bounded() {
             env.keeper.alarms()
         );
         assert_eq!(env.keeper.parked().len(), 1);
+        assert_eq!(env.keeper.parked()[0].check_tail, "again?");
         env.stop();
     })
     .await;
@@ -1007,6 +1124,38 @@ async fn needs_input_ask_outage_parks_with_an_alarm() {
                 .any(|a| a.reason.starts_with("question not recorded")),
             "{alarms:?}"
         );
+        assert_eq!(env.keeper.parked().len(), 1);
+        assert_eq!(env.keeper.parked()[0].check_tail, "which db?");
+        env.stop();
+    })
+    .await;
+}
+
+/// A keeper that refuses the question outright (403: retrying cannot help)
+/// parks the card with the `question not recorded` alarm and the question text
+/// as the packet's check tail.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_ask_refused_parks_with_question_not_recorded() {
+    in_local(async {
+        let script = r#"echo 'PG_QUESTION: {"text":"which db?"}'"#;
+        let Some(env) = env_or_skip("needs-input-ask-refused", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.keeper.set_ask_status(Some(403));
+        let claim = env.claim("e2e-ask-refused", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-ask-refused-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("needs_input_ask_refused", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        let alarms = env.keeper.alarms();
+        assert!(
+            alarms.iter().any(|a| a.reason == "question not recorded"),
+            "{alarms:?}"
+        );
+        assert_eq!(env.keeper.parked().len(), 1);
+        assert_eq!(env.keeper.parked()[0].check_tail, "which db?");
         env.stop();
     })
     .await;

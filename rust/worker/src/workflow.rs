@@ -48,7 +48,7 @@ const MERGE_RETRY_CAP: u32 = 20;
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 
 /// Alarm reason when a question stayed unanswered until the wait cap.
-const QUESTION_PARK_REASON: &str = "question unanswered";
+const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
 
 /// Alarm reason when the keeper would not store the agent's question.
 const QUESTION_REFUSED_REASON: &str = "question not recorded";
@@ -338,8 +338,8 @@ impl Card {
                         &input,
                         &base_sha,
                         leg.tier,
-                        &q.normalized(),
                         QUESTION_ROUNDS_REASON,
+                        q.normalized().text.clone(),
                         n,
                     )
                     .await?
@@ -785,8 +785,8 @@ async fn question_step(
                 input,
                 base_sha,
                 tier,
-                &q,
                 QUESTION_ASK_FAILED_REASON,
+                q.text.clone(),
                 n,
             )
             .await;
@@ -799,8 +799,8 @@ async fn question_step(
             input,
             base_sha,
             tier,
-            &q,
             QUESTION_REFUSED_REASON,
+            q.text.clone(),
             n,
         )
         .await;
@@ -861,13 +861,25 @@ async fn question_step(
                 Ok(QuestionStep::Answer(text))
             }
             OnTimer::Park => {
-                park_question(ctx, cfg, input, base_sha, tier, &q, QUESTION_PARK_REASON, n).await
+                park_question(
+                    ctx,
+                    cfg,
+                    input,
+                    base_sha,
+                    tier,
+                    QUESTION_PARK_REASON,
+                    question::timeout_park_tail(&q.text),
+                    n,
+                )
+                .await
             }
         },
     }
 }
 
 /// End a card whose question cannot be answered: sweep, park and alarm.
+/// The reason travels to the keeper in `check_tail` (its `/v1/park` only
+/// accepts card/tier/exit_class/check_tail) and in the alarm.
 #[allow(clippy::too_many_arguments)]
 async fn park_question(
     ctx: &WorkflowContext<Card>,
@@ -875,11 +887,11 @@ async fn park_question(
     input: &CardInput,
     base_sha: &str,
     tier: Tier,
-    q: &Question,
     reason: &str,
+    check_tail: String,
     n: u32,
 ) -> WorkflowResult<QuestionStep> {
-    let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &q.text);
+    let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
     park_and_alarm(ctx, cfg, &packet, reason.to_string()).await?;
     Ok(QuestionStep::Finished(parked(n)))
