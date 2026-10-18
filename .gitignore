@@ -9,3 +9,4 @@ graphify-out/
 logs/
 .playwright-mcp/
 .venv-pg/
+.devstack/
