@@ -152,6 +152,15 @@ start_temporal() {
   echo "temporal: not healthy within ${DEVSTACK_HEALTH_TIMEOUT} s; last log lines:" >&2
   tail -n 20 "$DEVSTACK_STATE/temporal.log" >&2 || true
   kill "$pid" 2>/dev/null || true
+  local g=0
+  while kill -0 "$pid" 2>/dev/null && [ "$g" -lt 3 ]; do
+    sleep 1
+    g=$((g + 1))
+  done
+  # Escalate only while the pid is still alive after the grace period.
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
   rm -f "$DEVSTACK_STATE/temporal.pid"
   exit 1
 }
@@ -214,7 +223,7 @@ start_postgres() {
       if ! docker run -d --name "$DEVSTACK_PG_NAME" --memory 1g \
         -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=keeper \
         -p "127.0.0.1:$PG_PORT:5432" postgres:16 >/dev/null; then
-        docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+        docker rm -f -v "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
         echo "postgres: docker run failed; removed any partially created container" >&2
         exit 1
       fi
@@ -226,7 +235,7 @@ start_postgres() {
       echo "postgres: container $DEVSTACK_PG_NAME never became ready within ${DEVSTACK_HEALTH_TIMEOUT} s" >&2
       # Only a container this invocation created is destroyed; a reused one is stopped so its data survives.
       if [ "$created" = 1 ]; then
-        docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+        docker rm -f -v "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
       else
         docker stop "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
       fi
@@ -238,6 +247,7 @@ start_postgres() {
 }
 
 cmd_start() {
+  resolve_pg_mode >/dev/null # fail on a bad DEVSTACK_PG_MODE before anything is started
   start_temporal
   start_set_current
   start_postgres
@@ -271,7 +281,8 @@ cmd_stop() {
   stop_pidfile "$DEVSTACK_STATE/keeper.pid" plangraph.keeper.daemon
   if pg_docker_exists; then
     if [ "$purge" = 1 ]; then
-      docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+      # -v also removes the container's anonymous data volume so --purge does not leak it.
+      docker rm -f -v "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
     else
       # Stop only: the container (and its data) survives for the next start's docker reuse.
       docker stop "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
