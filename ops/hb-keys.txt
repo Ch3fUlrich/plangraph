@@ -1,7 +1,6 @@
 plangraph:UI-BROWSER-TESTS
 plangraph:UI-DEPLOY-AUTO
 plangraph:RT-P1-FLOW-UNBLOCK
-plangraph:DEV-PGDRILL-LOCAL
 plangraph:RT-GATE-WIRING
 plangraph:RT-P1-JEV-SHADOW
 plangraph:RT-P1-OPENCODE-HARDEN
