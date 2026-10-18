@@ -58,6 +58,7 @@ for a in "$@"; do
   esac
   prev="$a"
 done
+vsch="$sch"
 [ -n "$sch" ] || sch="${{FAKE_SCHEMA:-public}}"
 if [ -z "$query" ]; then
   IFS= read -r sql
@@ -81,6 +82,10 @@ case "$sql" in
     IFS="$old_ifs"
     exit 0 ;;
   *"count(*)"*)
+    # a count against a schema that holds no such table is an error, as in real psql
+    if [ "$vsch" != "${{FAKE_SCHEMA:-public}}" ]; then
+      printf 'ERROR: relation "%s.%s" does not exist\n' "$vsch" "$tbl" >&2; exit 1
+    fi
     if [ "$dsn" = postgresql://postgres@127.0.0.1:55998/keeper ]; then var=FAKE_COUNTS_SRC; else var=FAKE_COUNTS_RESTORE; fi
     for pair in ${{!var}}; do
       if [ "${{pair%%=*}}" = "$tbl" ]; then printf '%s\\n' "${{pair#*=}}"; exit 0; fi
@@ -198,14 +203,24 @@ def drill(tmp_path):
     return Drill(tmp_path)
 
 
+SYSTEM_TOOLS = ("bash", "env", "dirname", "mktemp", "rm", "date", "sleep", "grep", "id", "cat",
+                "touch", "chmod", "tr", "sed", "head", "tail", "mkdir", "basename", "printf")
+
+
 @pytest.fixture
 def drill_nohost(tmp_path):
     drill = Drill(tmp_path, host_tools=False)
-    # the fallback can only be exercised when the real clients are nowhere reachable
+    # PATH = fake docker + symlinks to only the plain system tools the script needs, so the
+    # real pg clients are unreachable even on a host (or CI runner) that has them installed
+    sysbin = tmp_path / "sysbin"
+    sysbin.mkdir()
+    for tool in SYSTEM_TOOLS:
+        real = shutil.which(tool)
+        if real:
+            (sysbin / tool).symlink_to(real)
+    drill.env["PATH"] = f"{tmp_path / 'bin'}:{sysbin}"
     for tool in CLIENT_TOOLS:
-        if shutil.which(tool, path=drill.env["PATH"]) or shutil.which(tool):
-            pytest.skip(f"{tool} is installed system-wide (possibly outside the drill PATH "
-                        f"{drill.env['PATH']}); the postgres:16 fallback cannot be exercised")
+        assert shutil.which(tool, path=drill.env["PATH"]) is None, tool
     return drill
 
 
@@ -433,7 +448,8 @@ def test_non_public_schema_tables_are_counted(drill):
     lines = r.stdout.splitlines()
     assert lines[:3] == ["table k_abc.t1 10", "table k_abc.t2 5", "table k_abc.t3 7"]
     assert re.fullmatch(r"PG-DRILL ok rto_s=\d+ rows=22", lines[-1]), lines
-    assert any("-v sch=k_abc" in l for l in drill.lines())
+    counts = [l for l in drill.lines() if COUNT_SQL in l]
+    assert len(counts) == 6 and all("-v sch=k_abc" in l for l in counts), counts
 
 
 @pytest.mark.skipif(shutil.which("shellcheck") is None, reason="shellcheck not installed")
