@@ -873,6 +873,81 @@ async fn needs_input_risk_tagged_never_defaults() {
     .await;
 }
 
+/// A worker restart during the wait: the restart drops all in-memory worker
+/// state, so only the durable timer in the history can fire the park. The card
+/// parks on the question timeout and the keeper is never asked twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_restart_mid_wait_parks_question_timeout() {
+    in_local(async {
+        let script = r#"echo 'PG_QUESTION: {"text":"which db?"}'"#;
+        let Some(env) = env_or_skip("needs-input-restart-park", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        env.set_question_cap(6);
+        let claim = env.claim("e2e-restart-park", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-restart-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        wait_for_questions(&env, 1).await;
+        env.restart_worker().await;
+
+        let out = finish("needs_input_restart_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert!(
+            env.keeper
+                .alarms()
+                .iter()
+                .any(|a| a.reason == "question_timeout"),
+            "{:?}",
+            env.keeper.alarms()
+        );
+        let parked = env.keeper.parked();
+        assert_eq!(parked.len(), 1);
+        assert_eq!(parked[0].check_tail, "question_timeout: which db?");
+        assert_eq!(
+            env.keeper.questions().len(),
+            1,
+            "the question is not asked again after the restart"
+        );
+        assert!(env.keeper.question_timeouts().is_empty());
+        env.stop();
+    })
+    .await;
+}
+
+/// The same restart with a default on offer: the replayed history re-arms the
+/// durable timer, it fires on the restarted worker, and the card takes the
+/// default and merges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn needs_input_restart_mid_wait_takes_the_default() {
+    in_local(async {
+        let script = ask_then_work(
+            r#"{"text":"which db?","default":"go with sqlite","deadline_s":6,"risk_tags":[]}"#,
+            "go with sqlite",
+        );
+        let Some(env) = env_or_skip("needs-input-restart-default", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-restart-default", &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-restart-default-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        wait_for_questions(&env, 1).await;
+        env.restart_worker().await;
+
+        let out = finish("needs_input_restart_default", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(env.keeper.question_timeouts(), vec![1]);
+        assert_eq!(env.keeper.questions().len(), 1);
+        assert!(env.keeper.alarms().is_empty(), "{:?}", env.keeper.alarms());
+        env.stop();
+    })
+    .await;
+}
+
 /// A card that keeps asking is bounded: with the limit at 2, the third
 /// `needs_input` parks it with alarm `question rounds exhausted` and the keeper
 /// is never asked a third question.
