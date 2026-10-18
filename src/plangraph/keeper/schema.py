@@ -13,9 +13,9 @@ from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
+           "METRICS_DDL", "LOCKS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -218,6 +218,19 @@ CREATE TABLE IF NOT EXISTS metrics (
     source      TEXT NOT NULL DEFAULT '',
     computed_at TEXT NOT NULL,
     PRIMARY KEY (day, metric)
+);
+"""
+
+#: keeper merge locks (schema v12): one row per repo, ``token`` monotonically increasing,
+#: ``owner`` '' meaning released, ``expires_at`` epoch seconds.  The row is kept after
+#: release/expiry so the fencing token stays monotonic (``schema_pg`` Migration 5 is
+#: the logical twin).
+LOCKS_DDL = """
+CREATE TABLE IF NOT EXISTS merge_locks (
+    repo       TEXT PRIMARY KEY,
+    token      INTEGER NOT NULL,
+    owner      TEXT NOT NULL DEFAULT '',
+    expires_at INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -452,4 +465,4 @@ CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
-          + DESIGN3_DDL + METRICS_DDL)
+          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL)

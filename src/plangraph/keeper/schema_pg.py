@@ -407,10 +407,23 @@ CREATE TABLE metrics (
 );
 """
 
+#: Logical twin of ``schema.LOCKS_DDL`` (SQLite schema v12).  ``repo`` carries no
+#: NOT NULL: SQLite PRAGMA reports notnull=0 for a non-INTEGER TEXT PRIMARY KEY,
+#: and the parity test compares against that.
+_V5 = """
+CREATE TABLE merge_locks (
+    repo       TEXT COLLATE "C" PRIMARY KEY,
+    token      BIGINT NOT NULL,
+    owner      TEXT COLLATE "C" NOT NULL DEFAULT '',
+    expires_at BIGINT NOT NULL DEFAULT 0
+);
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
-              Migration(4, "governor: metrics", _V4))
+              Migration(4, "governor: metrics", _V4),
+              Migration(5, "locks: merge_locks", _V5))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

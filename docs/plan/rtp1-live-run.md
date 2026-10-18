@@ -55,8 +55,10 @@ options before it can reach the cluster (live gap).
 - The worker on its WSL2 host, reaching the cluster and the keeper over the real network.
 - Real `opencode` / Claude legs instead of the stub, including a real usage-limit reroute.
 - Cluster behaviour: worker versioning on the managed service, namespace limits, history size.
-- The keeper has no door yet for `/v1/attempts|park|complete|alarms|locks`; the local test
-  answers them in a front process. A live run needs the real keeper verbs (or the same front).
+- The keeper serves `/v1/attempts|park|complete|alarms|locks` (RT-P1-KEEPER-WORKER-VERBS); the
+  local e2e and a live run use the same keeper doors. Remaining difference: `/v1/attempts` and
+  `/v1/complete` only audit (attempt rows come from the projector; done belongs to the keeper's
+  review path).
 
 ## Pass criteria
 Same asserts as locally, plus: no `unknown_shape` alarm, `answer_question` reports signal status

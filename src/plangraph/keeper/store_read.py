@@ -129,6 +129,12 @@ class ReadMixin:
                      "ref": record["ref"]} for record in self._evidence(key)]
         reviews = [{"reviewer": v.get("reviewer"), "family": v.get("family")}
                    for v in self._round_verdicts(item)]
+        attempts = [dict(row) for row in self.conn.execute(
+            "SELECT n, exit_class, harness, model, started_at, ended_at,"
+            " tokens_in, tokens_out, cost FROM attempts WHERE key=?"
+            " ORDER BY n", (key,)).fetchall()]
+        costs = [a["cost"] for a in attempts if a["cost"] is not None]
+        attempt_cost = round(sum(costs), 6) if costs else None
         info = {
             "key": key, "title": item["title"],
             "description": item["description"], "host": item["host"],
@@ -146,6 +152,7 @@ class ReadMixin:
             "delegate": item["delegate"], "lease_until": item["lease_until"],
             "reviewer": item["reviewer"], "done_criteria": item["done_criteria"],
             "review_waiver": item.get("review_waiver"), "reviews": reviews,
+            "attempts": attempts, "attempt_cost": attempt_cost,
             "corrects": item["corrects"], "fixes": item.get("fixes"),
             "fixed_by": sorted(o["key"] for o in index.values()
                                if o.get("fixes") == key),

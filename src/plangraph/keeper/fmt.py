@@ -78,6 +78,12 @@ def show_text(info: dict) -> str:
     if info.get("review_waiver"):
         reviews += f" | waiver {info['review_waiver']}"
     lines.append(f"reviews {reviews}")
+    if info.get("attempts"):
+        line = "attempts " + "; ".join(
+            f"{a['n']}:{a['exit_class']}" for a in info["attempts"])
+        if info.get("attempt_cost") is not None:
+            line += f" | cost {info['attempt_cost']}"
+        lines.append(line)
     return "\n".join(lines)
 
 
