@@ -4,12 +4,13 @@ plangraph is split in two (M2c):
 
 | repo | contains | history |
 |---|---|---|
-| **public** (`plangraph`) | code, tests with synthetic fixtures, vendored JS + licences, the docs listed in `tools/split/manifest.toml`, `examples/` | fresh: one commit by `plangraph contributors` |
+| **public** (`plangraph`) | code, tests with synthetic fixtures, vendored JS + licences, the docs listed in `tools/split/manifest.toml`, `examples/` | history cut pending (D-1966): the public history is not yet a fresh single commit; the cut and force-push are operator-only |
 | **private data** | the keeper DB, plan snapshots, decisions, questions/answers, batch files, the keeper config, the private word list and private scrub rules | its own, never published |
 
 Nothing site-specific lives in the public repo: no hostnames, IPs, e-mail addresses, keys, home
 paths, router or project names, plans or decisions. The code reads every such value from the
-keeper config (below), so the two repos only meet at run time.
+keeper config (below), so the two repos only meet at run time. Decision ids (D-NNN) may appear
+bare; decision titles or text are never quoted here.
 
 ## What the public repo contains
 

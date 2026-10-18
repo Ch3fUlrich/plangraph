@@ -1,6 +1,6 @@
 # Changelog
 
-Merged and pushed changes only (D-630 "plans follow reality", D-653). Newest first.
+Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## 2026-10-17
 
