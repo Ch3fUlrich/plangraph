@@ -284,7 +284,8 @@ def test_hostile_table_name_reaches_psql_only_via_dash_v(drill):
 
 
 def test_sigterm_during_run_removes_container(drill):
-    proc = drill.spawn()
+    # never-ready container keeps the drill in its health wait, so the signal cannot race a finished run
+    proc = drill.spawn(extra_env={"FAKE_NOTREADY": "1", "DRILL_HEALTH_TIMEOUT": "30"})
     try:
         assert drill.wait_for_line("docker run"), "drill never reached docker run"
         proc.send_signal(signal.SIGTERM)
