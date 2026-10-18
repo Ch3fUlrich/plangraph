@@ -3,9 +3,9 @@
 # container, and compare per-table row counts source vs restore. Loopback-only: every socket
 # and port binding is 127.0.0.1, and the container uses trust auth because it is destroyed
 # unconditionally on exit. The drill fails if any source table is missing from the restore,
-# if any count differs, or if the restore is vacuous (0 tables or 0 total rows) — an empty
-# restore matching an empty check is never a pass. Health waits are bounded by
-# DRILL_HEALTH_TIMEOUT (default 60 s).
+# if any table appears in the restore but not the source, if any count differs, or if the
+# restore is vacuous (0 tables or 0 total rows) — an empty restore matching an empty check
+# is never a pass. Health waits are bounded by DRILL_HEALTH_TIMEOUT (default 60 s).
 set -euo pipefail
 
 usage() {
@@ -47,6 +47,9 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+# EXIT alone does not fire on a signal kill; re-raise via exit so cleanup always runs.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 wait_for() { # wait_for <seconds> <cmd...> — poll once per second until the command succeeds
   local limit="$1"
@@ -64,8 +67,9 @@ list_tables() { # list_tables <dsn> — user (BASE TABLE) names in schema public
     "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name"
 }
 
-table_count() { # table_count <dsn> <table> — exact count(*); psql quotes the identifier via :"tbl"
-  psql "$1" -A -t -v "tbl=$2" -c 'SELECT count(*) FROM public.:"tbl"'
+table_count() { # table_count <dsn> <table> — exact count(*); psql quotes :"tbl" only via STDIN, not -c
+  printf '%s\n' 'SELECT count(*) FROM public.:"tbl"' |
+    psql "$1" -A -t -v ON_ERROR_STOP=1 -v "tbl=$2"
 }
 
 t0="$(date +%s)"
@@ -105,6 +109,12 @@ compare_counts() {
     echo "table $t $dc"
     TOTAL_ROWS=$((TOTAL_ROWS + dc))
   done <<<"$src_tables"
+
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    printf '%s\n' "$src_tables" | grep -Fxq -- "$t" ||
+      fail "unexpected table $t present in restore but not in source"
+  done <<<"$restored_tables"
 
   if [ "$TOTAL_ROWS" = 0 ]; then
     echo "PG-DRILL fail vacuous: restored database has 0 total rows"

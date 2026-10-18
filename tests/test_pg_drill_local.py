@@ -2,7 +2,9 @@
 import os
 import re
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -27,7 +29,7 @@ exit 0
 PSQL_FAKE = """\
 #!/bin/bash
 TMP="{tmp}"
-l=psql; for a in "$@"; do l="$l $a"; done; printf '%s\\n' "$l" >>"$TMP/calls.log"
+l=psql; for a in "$@"; do l="$l $a"; done
 dsn=""; query=""; tbl=""; prev=""
 for a in "$@"; do
   case "$prev" in
@@ -39,18 +41,29 @@ for a in "$@"; do
   esac
   prev="$a"
 done
-db="${{dsn##*/}}"
+if [ -z "$query" ]; then
+  IFS= read -r sql
+  # STDIN queries carry the raw SQL text: log it so tests can prove it is never rewritten
+  l="$l <<$sql"
+else
+  sql="$query"
+fi
+printf '%s\\n' "$l" >>"$TMP/calls.log"
+# Real psql does NOT expand :"var" inside -c; it is a bare syntax error there.
 case "$query" in
+  *':"'*) printf 'ERROR: syntax error at or near ":"\\n' >&2; exit 1 ;;
+esac
+case "$sql" in
   *"CREATE DATABASE"*) exit 0 ;;
   *information_schema*)
-    if [ "$db" = keeper ]; then var=FAKE_TABLES_SRC; else var=FAKE_TABLES_RESTORE; fi
+    if [ "$dsn" = postgresql://postgres@127.0.0.1:55998/keeper ]; then var=FAKE_TABLES_SRC; else var=FAKE_TABLES_RESTORE; fi
     tables="${{!var}}"
     old_ifs="$IFS"; IFS=' '
     for t in $tables; do printf '%s\\n' "$t"; done
     IFS="$old_ifs"
     exit 0 ;;
   *"count(*)"*)
-    if [ "$db" = keeper ]; then var=FAKE_COUNTS_SRC; else var=FAKE_COUNTS_RESTORE; fi
+    if [ "$dsn" = postgresql://postgres@127.0.0.1:55998/keeper ]; then var=FAKE_COUNTS_SRC; else var=FAKE_COUNTS_RESTORE; fi
     for pair in ${{!var}}; do
       if [ "${{pair%%=*}}" = "$tbl" ]; then printf '%s\\n' "${{pair#*=}}"; exit 0; fi
     done
@@ -127,9 +140,24 @@ class Drill:
         return subprocess.run([BASH, str(SCRIPT)], env=env,
                               capture_output=True, text=True, timeout=timeout)
 
+    def spawn(self, extra_env=None):
+        env = dict(self.env)
+        env.update(extra_env or {})
+        return subprocess.Popen([BASH, str(SCRIPT)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                text=True)
+
     def lines(self):
         log = self.tmp / "calls.log"
         return log.read_text().splitlines() if log.exists() else []
+
+    def wait_for_line(self, substr, timeout=15.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if any(substr in l for l in self.lines()):
+                return True
+            time.sleep(0.05)
+        return False
 
 
 @pytest.fixture
@@ -202,7 +230,69 @@ def test_zero_total_rows_fails_as_vacuous(drill):
 
 
 def test_container_removed_on_failure(drill):
-    drill.run(extra_env={"FAKE_COUNTS_RESTORE": "t1=10 t2=4 t3=7"})
+    r = drill.run(extra_env={"FAKE_COUNTS_RESTORE": "t1=10 t2=4 t3=7"})
+    assert r.returncode != 0
+    assert any(l.startswith("docker rm") and "drill-test" in l for l in drill.lines())
+    assert not (drill.tmp / "container").exists()
+
+
+def test_pg_dump_failure_fails_before_container_starts(drill):
+    r = drill.run(extra_env={"FAKE_PG_DUMP_FAIL": "1"})
+    assert r.returncode == 1
+    assert any(l.startswith("PG-DRILL fail") and "pg_dump" in l for l in r.stdout.splitlines())
+    assert not any(l.startswith("PG-DRILL ok") for l in r.stdout.splitlines())
+    assert not any(l.startswith("docker run") for l in drill.lines())
+    assert not (drill.tmp / "container").exists()
+
+
+def test_pg_restore_failure_removes_container(drill):
+    r = drill.run(extra_env={"FAKE_PG_RESTORE_FAIL": "1"})
+    assert r.returncode == 1
+    assert any(l.startswith("PG-DRILL fail") and "pg_restore" in l for l in r.stdout.splitlines())
+    assert any(l.startswith("docker rm") and "drill-test" in l for l in drill.lines())
+    assert not (drill.tmp / "container").exists()
+
+
+def test_extra_table_only_in_restore_fails(drill):
+    r = drill.run(extra_env={"FAKE_TABLES_RESTORE": "t1 t2 t3 t4"})
+    assert r.returncode == 1
+    assert any(l.startswith("PG-DRILL fail") and "t4" in l for l in r.stdout.splitlines())
+    assert not any(l.startswith("PG-DRILL ok") for l in r.stdout.splitlines())
+
+
+def test_hostile_table_name_reaches_psql_only_via_dash_v(drill):
+    hostile = 'a";DROP_TABLE_x;--'
+    tables = f'{hostile} t2'
+    counts = f'{hostile}=3 t2=5'
+    r = drill.run(extra_env={"FAKE_TABLES_SRC": tables, "FAKE_TABLES_RESTORE": tables,
+                             "FAKE_COUNTS_SRC": counts, "FAKE_COUNTS_RESTORE": counts})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f'table {hostile} 3' in r.stdout.splitlines()
+    sql = 'SELECT count(*) FROM public.:"tbl"'
+    lines = drill.lines()
+    count_calls = [l for l in lines if sql in l]
+    # the count query is sent on STDIN with the SQL text unchanged: the name is never
+    # concatenated into the statement, it travels only as the -v tbl= value
+    assert len(count_calls) == 4  # src+restore x 2 tables
+    for l in count_calls:
+        assert l.endswith(f'<<{sql}')
+        assert f'-v tbl={hostile}' in l or f'-v tbl=t2' in l
+        assert hostile not in l[l.index('<<'):]
+    joined = "\n".join(lines)
+    assert f'public."{hostile}"' not in joined
+    assert f'{sql}{hostile}' not in joined
+
+
+def test_sigterm_during_run_removes_container(drill):
+    proc = drill.spawn()
+    try:
+        assert drill.wait_for_line("docker run"), "drill never reached docker run"
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=30) == 143
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
     assert any(l.startswith("docker rm") and "drill-test" in l for l in drill.lines())
     assert not (drill.tmp / "container").exists()
 
