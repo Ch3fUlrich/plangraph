@@ -125,7 +125,7 @@ class SupportMixin:
         out = events.append_event(
             self.conn, iso(now), getattr(principal, "name", None),
             getattr(principal, "role", None), None, key, type, payload)
-        self._revoke_for_event(principal, key, type, now)
+        self._revoke_for_event(principal, key, type, now, payload)
         return out
 
     # -------------------------------------------------------------- reads

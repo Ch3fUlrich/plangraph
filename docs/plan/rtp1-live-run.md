@@ -58,7 +58,11 @@ options before it can reach the cluster (live gap).
 - The keeper serves `/v1/attempts|park|complete|alarms|locks` (RT-P1-KEEPER-WORKER-VERBS); the
   local e2e and a live run use the same keeper doors. Remaining difference: `/v1/attempts` and
   `/v1/complete` only audit (attempt rows come from the projector; done belongs to the keeper's
-  review path).
+  review path). `/v1/park` is bound to the card's claim (when a card carries one, the caller must be
+  its holder or delegate with an unexpired lease; an optional body `epoch` must match; router/system
+  principals are exempt); merge locks are lease locks, not store-side fencing, whose owner is stored as
+  `<principal>:<owner>`, and the acquire response returns that prefixed owner, which release must
+  send back verbatim.
 
 ## Pass criteria
 Same asserts as locally, plus: no `unknown_shape` alarm, `answer_question` reports signal status

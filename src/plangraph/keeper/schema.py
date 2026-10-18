@@ -223,7 +223,7 @@ CREATE TABLE IF NOT EXISTS metrics (
 
 #: keeper merge locks (schema v12): one row per repo, ``token`` monotonically increasing,
 #: ``owner`` '' meaning released, ``expires_at`` epoch seconds.  The row is kept after
-#: release/expiry so the fencing token stays monotonic (``schema_pg`` Migration 5 is
+#: release/expiry so the advisory generation token stays monotonic (``schema_pg`` Migration 5 is
 #: the logical twin).
 LOCKS_DDL = """
 CREATE TABLE IF NOT EXISTS merge_locks (
