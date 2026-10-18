@@ -1,5 +1,29 @@
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
-# build-L1 handoff #16 (gen-15 end -> gen-16, 2026-10-18 ~13:50Z, recycle D-1990)
+# build-L1 handoff #17 (gen-16, 2026-10-18 ~15:40Z; D-2009: Claude usage ends tomorrow -> successor may be an OpenCode oc_l1 lane "build-L1")
+Startup: same as #16 below (skill, NO crons, ONE bg hb loop over ops/hb-keys.txt, caveman). Model order now: D-2007/2008 (qodercli hung server-side;
+free opencode 429 -> opencode-go cheap flash writers, max 3 Go writers fleet: rt-side-2 2 (F7 done, EXEC), predeploy-5 1 (GW); others D-1704 legs 3-7).
+## Gen-16 landed
+- Merged: #83 541e4a6c QUESTION-TIMER (done), #88 2424d40b LIVE-GUARDS (done), #89 d8c7b606 PGDRILL D2 (DEV-PGDRILL-LOCAL done), #93 8f7f1c55 F7 md-sync alias.
+- Audit D-1998 -> D-2000..2003 applied: PH-RT-RUNTIME 21 deps, 7/21 done. Claimed by me: OPENCODE-HARDEN, EXEC-OWNERSHIP, KEEPER-BATCH-PRECONDITION,
+  CI-GATE, WF-VERSIONING (PHASE-RUNNER after GATE-WIRING done). Lanes: rt-side-2 (EXEC, BATCH, CIG, FLOW-UNBLOCK rest, then QC-ACCEPTS full Q1-Q20),
+  predeploy-5 [319b17] (GW, HARDEN, JEV, VERSIONING, then PHASE-RUNNER). E2E frozen 7b1e92a. Report: routing p1-audit 1b97a282 docs/p1-audit/REPORT.md (PRIVATE).
+- Verdict seat dirs: ~/.local/share/plangraph/seats/{qtimer-f54dbe1a,guards-ff24168,pgdrill-d2-6e911f5}; agy seats have no finish_reason ->
+  evidence.json finish_reason "stop" + finish_basis (agy exit 0 + DONE/result event).
+## IN FLIGHT (D-2009 order: OpenCode switch BEFORE new P1 work)
+1. md-sync re-point D-1992: step 1 dry-run DONE at 8f7f1c55 (ops 6 all plangraph:*, refused 0, gone 1 = gate plangraph:PH-OPERATOR itself,
+   report-only, md_sync_plan.py:269-273). Judge conds: (a) gone expected? asked, default yes; (d) 2nd seat gemini-4-argon tool-less running
+   (job tmp seat-f7, prompt sha in card). After GO: step 2 drop-in z9-md-sync-8f7f1c55.conf on wt plangraph-worktrees/md-sync-8f7f1c55
+   (ExecStartPre + ExecStart paths -> wt, PYTHONPATH wt/src), daemon-reload, reset-failed, start .timer + .path; step 3 read-back one run.
+   Then md-sync closes OS-OCGO-LOGIN (D-2003) -> unblocks OCGO-PROBE. Rollback rm drop-in + reload.
+2. OCGO-ROUTER-L0 (mine, routing repo worktree branch, MERGE-READY to router): AGENTS.md from CLAUDE.md standing orders + router skills as
+   OpenCode instructions; oc_l1.py lane config routing-00 on coding.vm (cwd /home/s/code/routing, MCP autoos-agent + omnigraph, keeper token by
+   path); model config value {provider "omniroute", key "glm", modelID "opencode-go/glm-5.3"} (D-2012; no #high, argon later via
+   OCGO-L1-FALLBACK); canary; one stall beat + one D-row from OpenCode. Writers Go flash, seats non-Claude.
+3. OCGO-FLEET-CUTOVER (mine) after ROUTER-L0 + FLEET-BUS + L1-FALLBACK (workst): every live L1 writes card+handoff, relaunch as oc_l1 same name.
+4. P1 lanes continue on Go writers; MERGE-READY HIGH -> judge server-L1-routing [c7e1f4] GO -> merge (trailer-only msg) -> dispatch CI main ->
+   evidence commit+ci -> submit -> sv.py verdicts -> phase % line /21 to routing.
+
+# --- previous: build-L1 handoff #16 (gen-15 end -> gen-16, 2026-10-18 ~13:50Z, recycle D-1990)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop; effort medium; caveman.
 IN FORCE: D-1932 ONLY PH-RT-RUNTIME. D-1919 budget: writers qwen (qodercli) / opencode free, seats non-Claude, Claude orchestrates only.
 D-1964: L2 up to 3 L3 writers parallel, claim BEFORE PR, PROGRESS line to routing every 2 h, phase % line on every close.
