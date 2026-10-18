@@ -11,7 +11,7 @@ Three checks, mirroring the D-list:
   D6    `PlanUI.DetailPanel.mount(ui, vm)` followed by `ui.set("sel", key)`
         renders a REAL fixture item's title (not "Not in this snapshot."),
         while an unknown key still falls back to that message;
-  D2/D5b/D7 statics: the template carries NO `<link>` tag (no favicon, so the
+  D2/D5b/D7 statics: the template carries ONE `<link>` (inline data: tab icon, so the
         self-containment guard stays as written) plus `id="sb-close"`,
         and page_boot.js wires `store: ui`.
 
@@ -324,11 +324,11 @@ def test_detail_panel_mount_renders_selected_item_title(tmp_path):
 # ---------------------- statics: D2 / D5b / D7 wiring ----------------------- #
 
 def test_template_has_no_link_tag_and_sidebar_close_control():
-    """T2c: the template carries NO <link> tag (self-containment guard stays,
-    hence no favicon at all) alongside the D5b phone-only #sb-close control."""
+    """T2c: the template carries only the inline data: icon <link> (self-containment stays,
+    no external fetch) alongside the D5b phone-only #sb-close control."""
     tpl = (WEB / "page_template.html").read_text(encoding="utf-8")
-    assert "<link" not in tpl.lower() and 'rel="icon"' not in tpl, (
-        "self-contained artifact: no <link> tag anywhere and no rel=\"icon\""
+    assert tpl.lower().count("<link") == 1 and 'rel="icon" type="image/svg+xml" href="data:' in tpl, (
+        "self-contained artifact: the only <link> is the inline data: tab icon"
     )
     assert 'id="sb-close"' in tpl
     assert '<button id="sb-close"' in tpl, "close control must be a real button"

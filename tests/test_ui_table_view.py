@@ -386,8 +386,8 @@ def test_preview_chip_text_comes_from_text_content(tmp_path):
 def test_phone_cards_have_labels_and_a_sort_select(tmp_path):
     out = run_node(tmp_path)
     assert out["labels"] == ["Project", "Phase", "Task", "State", "Agent", "Created / modified",
-                             "Previous", "Next", "Decisions & questions"]
-    assert out["sortOptions"] == 2 * 9
+                             "Previous", "Next", "Decisions & questions", "Prio", "Kind", "Op"]
+    assert out["sortOptions"] == 2 * 12
     assert out["sortAfter"] == {"col": "task", "dir": "desc"}
     assert out["firstTitleAfter"] == "big:B-999"   # natural sort, descending
 

@@ -172,11 +172,11 @@ mod tests {
             (CERT, write(dir.path(), "cert.pem", CERT_PEM)),
             (KEY, write(dir.path(), "key.pem", KEY_PEM)),
             (CA, write(dir.path(), "ca.pem", CA_PEM)),
-            (SERVER_NAME, "worker.internal".to_string()),
+            (SERVER_NAME, "worker.example.invalid".to_string()),
         ]);
 
         let tls = run(&map).unwrap().expect("tls options");
-        assert_eq!(tls.domain.as_deref(), Some("worker.internal"));
+        assert_eq!(tls.domain.as_deref(), Some("worker.example.invalid"));
         assert_eq!(tls.server_root_ca_cert.as_deref(), Some(CA_PEM.as_bytes()));
         let client = tls.client_tls_options.expect("client tls");
         assert_eq!(client.client_cert, CERT_PEM.as_bytes());
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn server_name_alone_is_refused() {
-        let map = map(&[(SERVER_NAME, "worker.internal".to_string())]);
+        let map = map(&[(SERVER_NAME, "worker.example.invalid".to_string())]);
         let err = run(&map).unwrap_err();
         assert!(err.contains(SERVER_NAME), "{err}");
         assert!(err.contains(CERT), "{err}");
@@ -234,8 +234,8 @@ mod tests {
 
     #[test]
     fn https_with_tls_is_accepted() {
-        assert!(require_https("https://temporal.internal:7234", &some_tls()).is_ok());
-        assert!(require_https("HTTPS://temporal.internal:7234", &some_tls()).is_ok());
+        assert!(require_https("https://temporal.example.invalid:7234", &some_tls()).is_ok());
+        assert!(require_https("HTTPS://temporal.example.invalid:7234", &some_tls()).is_ok());
     }
 
     #[test]

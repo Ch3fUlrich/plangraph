@@ -62,8 +62,10 @@ def test_self_contained_no_external_references():
     # every <script> is inline: none carries a src attribute
     for tag in re.findall(r"<script\b[^>]*>", html, re.IGNORECASE):
         assert "src" not in tag.lower(), tag
-    # no stylesheet or image tags at all
-    assert not re.search(r"<link\b", html, re.IGNORECASE)
+    # no stylesheet or image tags; the only <link> is the inline data: tab icon
+    assert re.findall(r"<link\b[^>]*>", html, re.IGNORECASE) == re.findall(
+        r'<link rel="icon"[^>]*href="data:[^"]*">', html)
+    assert "<title>plangraph" in html and "Plan graph" not in html.split("</title>")[0]
     assert not re.search(r"<img\b", html, re.IGNORECASE)
     # no http(s) reference in any src/href attribute
     assert not re.search(r'(?:src|href)\s*=\s*["\']https?://', html, re.IGNORECASE)

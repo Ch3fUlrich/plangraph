@@ -226,7 +226,7 @@ def archive_main(argv, out, err, write_status):
     parser.add_argument("--archive-answers", action="store_true")
     for name in ("questions-out", "token-file"):
         parser.add_argument("--" + name, required=True)
-    parser.add_argument("--url", default=apply_batch.DEFAULT_URL)
+    parser.add_argument("--url", default=None)
     parser.add_argument("--project", default="routing")
     parser.add_argument("--status-file")
     mode = parser.add_mutually_exclusive_group()
@@ -243,6 +243,15 @@ def archive_main(argv, out, err, write_status):
     def stop(rc, error):
         write_status(opts.status_file, status, error, err)
         return rc
+
+    # PG-REPUBLISH-FRESH: resolve the keeper URL at call time (no import-time
+    # default); refuse before reading the token or hitting the keeper.
+    opts.url = opts.url or os.environ.get("PG_URL")
+    if not opts.url:
+        msg = "error: no keeper URL: pass --url or set PG_URL"
+        err.write(msg + "\n")
+        err.write(USAGE)
+        return stop(2, msg)
 
     try:
         token = apply_batch.read_token(opts.token_file)

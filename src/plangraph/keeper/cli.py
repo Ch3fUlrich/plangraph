@@ -19,6 +19,8 @@ __all__ = ["main", "build_parser"]
 _COMMON = argparse.ArgumentParser(add_help=False)
 _COMMON.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
                      help="full JSON output instead of compact text")
+_COMMON.add_argument("--url", default=None,
+                     help="keeper API base URL (else PG_URL; no default)")
 
 
 def _p(sub, name, **kw):
@@ -284,7 +286,8 @@ def main(argv=None) -> int:
         return cli_admin.dispatch(args)
     if args.command == "sync":
         return _cmd_sync(args)
-    session = Session(json_mode=args.json, config_path=args.config)
+    session = Session(json_mode=args.json, config_path=args.config,
+                      url=getattr(args, "url", None))
     return HANDLERS[args.command](args, session)
 
 

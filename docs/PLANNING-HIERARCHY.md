@@ -10,6 +10,7 @@ copy it here; change the skill and link from here.
 |---|---|
 | Layers, per-layer model/effort, phases, one-agent-per-task, task-size contract, fix-tasks, reports | [`skills/plangraph-planning/SKILL.md`](../skills/plangraph-planning/SKILL.md) |
 | Brief templates | [`skills/plangraph-planning/references/task-contract.md`](../skills/plangraph-planning/references/task-contract.md) |
+| Small-fix rule D-1272 (L2 self-fix <= ~10 lines, never auth/access/secrets, `Writer: L2`, 2 seats + judge); L1/L2 briefs carry it. When the orchestration skills move into `plangraph/skills` (AO-SKILLS-TO-PLANGRAPH) the moved `unattended-orchestration` text keeps this clause | [`SKILL.md`](../skills/plangraph-planning/SKILL.md) "Small-fix rule", [`task-contract.md`](../skills/plangraph-planning/references/task-contract.md) "Orchestrator briefs" |
 | Report JSON schemas | [`skills/plangraph-planning/references/schemas.md`](../skills/plangraph-planning/references/schemas.md) |
 | Coding rules for implementers | AutoOS skill `coding-principles`: `AutoOS/.agents/skills/coding-principles/SKILL.md` |
 | Launching, watching, relaunching layers (levels L0-L3, rules R-orch-*, R-worker-*) | AutoOS skill `unattended-orchestration`: `AutoOS/.agents/skills/unattended-orchestration/SKILL.md` |
@@ -21,7 +22,7 @@ No benchmarked task size exists. Sources agree on principles rather than figures
 context with room to spare, one narrow objective per worker, independent siblings, fixed prompt
 chains when subtasks are known and orchestrator-workers only when they are not, route models by
 task nature rather than input size, keep fan-out modest. Hence the skill uses a checklist, not a
-token number. Sources: Codex CLI task decomposition guide (codex.danielvaughan.com, 2026-04-28),
+token number. Sources: Codex CLI task decomposition guide, 2026-04-28,
 "Runtime-Structured Task Decomposition for Agentic Coding Systems" (arXiv 2605.15425),
 Uno-Orchestra (arXiv 2605.05007), the aiwg subagent-scoping rule. Existing AutoOS rules agree:
 R-orch-02, R-orch-30, swarm-orchestration sections 2 and 5.

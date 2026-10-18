@@ -76,6 +76,11 @@ evidence_missing, evidence_unverified, same_principal, same_family, family_unkno
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
 | `audit_meta(p, project=None, stale_days=3)` | router (any project); l1 (own projects) | read-only plan-metadata audit: missing `description`/`estimate_h`/`done_criteria`/`owner` + stale claims. See "Plan metadata audit" |
+
+`python3 tools/names_backfill_dryrun.py SNAPSHOT.json [--json]` is the MODEL-NAMES dry run: it reads a plan snapshot
+JSON and only lists the active items whose `alerts` warnings are `title_is_id` / `no_description` (sorted line per
+finding: current title, a proposed title derived from the key, the head of the note's folded `description: ` line or
+`MISSING`, then `count:`) — the LIVE backfill remains the separate router step `pg migrate-descriptions`.
 **`under` (PG-L1-CREATE-WITH-EDGE, `create_items` only).** A definition may carry an optional
 `under: <key>` naming an *existing* gate/goal item G: the new item N is created and, in the SAME
 transaction, `edges(src=G, dst=N, rel='depends_on')` is inserted — G `depends_on` N — so N reaches the goal
@@ -106,12 +111,36 @@ overdue reviews, audit_findings, stall = no ready + nothing in flight + goal unr
 injected adapters so tests use fakes: `ctx.git`, `ctx.ci`, `ctx.runs`, `ctx.semaphore`, `ctx.decisions`, `ctx.now`.
 | kind | ref | passes when |
 |---|---|---|
-| `commit+ci` | `{commit, repo?, ci_url?}` | repo = registered path of the project (`repos` config, router-owned); commit exists and is an ancestor of `main`; commit message has trailer `Plan-Item: <key or id>`; commit time ≥ the claim time; CI check-runs for exactly that sha have conclusion `success` (adapter wraps `gh api repos/{o}/{r}/commits/{sha}/check-runs`; `ci: none` allowed only if the project config says it has no CI) |
+| `commit+ci` | `{commit, repo?, ci_url?}` | repo = registered path of the project (`repos` config, router-owned); commit exists and is an ancestor of `main`; commit message has trailer `Plan-Item: <key or id>`; commit time ≥ the claim time; CI check-runs for exactly that sha have conclusion `success` (adapter wraps `gh api repos/{o}/{r}/commits/{sha}/check-runs`; a `forgejo:<owner>/<repo>` value reads Forgejo commit statuses instead — see "Forgejo CI statuses" below; `ci: none` allowed only if the project config says it has no CI) |
 | `run-record` | `{run_id}` | file `<runs_dir>/<run_id>/job.json` exists, its `request.title` or `task` text contains the item id or key, and `<run_id>/exit.json` has `rc == 0` (format: `job.json` = `{id, run_id, request{card,title,model,…}, task}`, `exit.json` = `{rc, ended}`); runs_dir is config |
 | `semaphore-task` | `{task_id, project_id, template}` (all positive integers; `template` = template id, REQUIRED, a name is refused) | adapter `GET {base}/api/project/{project_id}/tasks/{task_id}` returns status `success`, `id`/`project_id` matching the ref, and `template_id` equal to `template` (a response without `template_id` fails); the project must be listed in env `PG_SEMAPHORE_PROJECTS` (comma-separated positive ints; unset/empty/malformed fails closed with "semaphore project allowlist not configured", otherwise "project not allowed", before any request); HTTP 401/403 report "semaphore auth refused (code)", other HTTP errors "semaphore request failed (HTTP code)"; real fetcher reads base URL from env `PG_SEMAPHORE_URL` and the token from the file named by env `PG_SEMAPHORE_TOKEN_FILE`; the token value is never logged or returned; endpoint `/api/project/{project_id}/tasks/{id}` (Semaphore UI API) |
 | `decision` | `{id: "D-209"}` | line `| D-209 |` exists in the configured DECISIONS.md |
 | `commit` (X7b, legacy) | `{commit}` | the sha exists **and** is an ancestor of `main` in the project's registered `repos` path — and *nothing* else: no `Plan-Item` trailer, no claim-time window, no CI. Router-only attachment (see below) |
 `evidence_kinds: [any]` = at least one verified evidence of any kind. Unknown kind → `validation`.
+
+### Forgejo CI statuses (PG-CI-FORGEJO)
+
+A `ci` value of `forgejo:<owner>/<repo>` routes `commit+ci` away from `gh` and into
+`src/plangraph/keeper/evidence_forgejo.py`, which reads Forgejo commit statuses: `GET
+{base}/api/v1/repos/{owner}/{repo}/commits/{sha}/statuses?page=N&limit=M` (operationId
+`repoListStatusesByRef`; `sort` is left default so newest-per-context is decided locally).
+`base` comes from the `forgejo_url` config key (`https` only, `http` accepted solely for
+`127.0.0.1` in tests, no embedded credentials); the token comes from `forgejo_token_file`,
+re-read on every call and refused when missing, empty, a symlink or not a single token. It
+is sent as `Authorization: token <T>` and never appears in argv, the URL, logs, a raised
+message or `repr`. Both keys are needed to build the adapter — with either missing the
+`forgejo:` value fails closed in `CIAdapter.check_runs`. stdlib `urllib.request` only (no
+subprocess, no redirect replay), hard timeout, body read in chunks under `max_bytes`, at
+most `max_pages` pages of `page_size`: a full page at the cap raises instead of returning
+a truncated list, and any HTTP error / non-JSON / non-list payload raises with the status
+code and `owner/repo` only. Each `CommitStatus` (`id`, `status`, `context`, `created_at`,
+`updated_at`) is normalised into the check-run shape the verifier already understands
+(`context` → `name`, `app.slug = forgejo-actions`, `head_sha` = the requested sha, `pending`
+→ `in_progress`/no conclusion, `success`→`success`, `failure`/`error`→`failure`,
+`warning`→`neutral`, `skipped`→`skipped`, an unknown status → `failure`), keeping only the
+newest status per `context` (`updated_at`, ties by higher `id`) so the stale failure of a
+rerun cannot block a green sha; no statuses is the verifier's existing "no CI check-runs"
+failure. Proposed, not applied: `docs/proposals/keeper-ci-config.md`.
 
 ## Legacy and decision closes
 
@@ -174,7 +203,8 @@ fail closed as unverified.
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, repos
-{project: path}, runs_dir, decisions_file, ci per project, bind, lease defaults. No config value that is a secret is ever printed.
+{project: path}, runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
+for `forgejo:` values), bind, lease defaults. No config value that is a secret is ever printed.
 
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,

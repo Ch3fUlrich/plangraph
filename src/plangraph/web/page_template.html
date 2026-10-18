@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <meta name="description" content="Read-only plan graph: dependencies, ready and blocked work, critical path.">
+<meta name="plangraph-build" content="@@BUILD_SHA@@">
 <title>@@PAGE_TITLE@@</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231f2937'/%3E%3Cpath d='M9 22l7-12 7 12M9 22h14' fill='none' stroke='%2360a5fa' stroke-width='2'/%3E%3Ccircle cx='9' cy='22' r='3' fill='%2360a5fa'/%3E%3Ccircle cx='16' cy='10' r='3' fill='%2360a5fa'/%3E%3Ccircle cx='23' cy='22' r='3' fill='%2360a5fa'/%3E%3C/svg%3E">
 <style>
 @@PAGE_CSS@@
 </style>
@@ -23,8 +25,7 @@
   <nav class="tabs" role="tablist" aria-label="Pages">
     <button id="tab-graph" data-page="graph" type="button" role="tab" aria-selected="true" aria-controls="panel-graph">Graph</button>
     <button id="tab-list" data-page="table" type="button" role="tab" aria-selected="false" aria-controls="panel-list">Table</button>
-    <button id="tab-qa" data-page="qa" type="button" role="tab" aria-selected="false" aria-controls="panel-qa"><span class="sb-label">Decisions &amp; Q&amp;A</span><span class="sb-count" id="sb-count-qa" hidden>0</span></button>
-    <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs You</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
+    <button id="tab-needs" data-page="needs" type="button" role="tab" aria-selected="false" aria-controls="panel-needs"><span class="sb-label">Needs you</span><span class="sb-count" id="sb-count-needs" hidden>0</span></button>
     <button id="tab-activity" data-page="activity" type="button" role="tab" aria-selected="false" aria-controls="panel-activity">Activity</button>
     <button id="tab-progress" data-page="progress" type="button" role="tab" aria-selected="false" aria-controls="panel-progress">Progress</button>
     <button id="tab-knowledge" data-page="knowledge" type="button" role="tab" aria-selected="false" aria-controls="panel-knowledge" hidden>Knowledge</button>
@@ -66,7 +67,7 @@
       <div id="list-content"></div>
     </section>
 
-    <section id="panel-qa" class="tabpanel pg" role="tabpanel" aria-labelledby="tab-qa" hidden>
+    <section id="panel-qa" class="tabpanel pg" role="tabpanel" aria-label="Decisions and Q&amp;A (shown in Needs you)" aria-hidden="true" hidden>
       <div id="sb-panel-qa" class="pg-body"></div>
       <div id="sb-panel-answers" class="pg-body"></div>
     </section>
@@ -95,8 +96,7 @@
 <nav id="tabbar" aria-label="Main sections">
   <button type="button" class="tab-btn" data-screen="graph" aria-current="page">Graph</button>
   <button type="button" class="tab-btn" data-screen="table">Table</button>
-  <button type="button" class="tab-btn" data-screen="qa">Q&amp;A</button>
-  <button type="button" class="tab-btn" data-screen="needs">Needs You<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
+  <button type="button" class="tab-btn" data-screen="needs">Needs you<span class="tab-badge" id="inbox-badge" hidden>0</span></button>
   <button type="button" class="tab-btn" data-screen="menu">Filter</button>
   <button type="button" class="tab-btn" data-screen="settings" aria-label="Settings">&#9881;</button>
 </nav>
