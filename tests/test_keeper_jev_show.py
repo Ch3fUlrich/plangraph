@@ -67,14 +67,14 @@ def test_show_carries_the_row_views_and_overall_agreement(w):
                        jev_answer="b"))
     record(router, row(key, kind="budget", attempt=3, rule_answer="a",
                        status="timeout", jev_answer=None, reason="slow"))
-    record(router, row(key, kind="qc_accept", rule_answer="a",
+    record(router, row(key, kind="review", rule_answer="a",
                        status="unavailable", jev_answer=None))
 
     info = w.store.show(w.p("router"), key)
     shadow = info["jev_shadow"]
     assert [r["id"] for r in shadow] == [1, 2, 3, 4]
     assert [r["kind"] for r in shadow] == ["harness", "window", "budget",
-                                           "qc_accept"]
+                                           "review"]
     assert [r["agree"] for r in shadow] == [True, False, None, None]
     assert shadow[0]["jev_probabilities"] == {"x": 0.5}
     assert shadow[1]["jev_probabilities"] is None
@@ -96,7 +96,7 @@ def test_show_carries_the_row_views_and_overall_agreement(w):
     assert "jev harness [a1] rule=a jev=a agree ok outcome=-" in text
     assert "jev window [a2] rule=a jev=b differ ok outcome=-" in text
     assert "jev budget [a3] rule=a jev=- - timeout outcome=- (slow)" in text
-    assert "jev qc_accept rule=a jev=- - unavailable outcome=-" in text
+    assert "jev review rule=a jev=- - unavailable outcome=-" in text
 
     # the outcome is filled later and then shows up in the row and its line
     assert w.store.jev_outcome(

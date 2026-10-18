@@ -196,8 +196,10 @@ def _ask_guarded(state, questions, cfg, env):
     kind.  One request for all four routing questions means the total delay is
     bounded once, not once per question.
     """
-    return guarded(lambda: jev_client.ask(state, questions, cfg, env=env),
-                   _positive_wait(getattr(cfg, "timeout_s", 0.0)) + 0.5)
+    # Total wait never exceeds MAX_TIMEOUT_S + 0.5 grace: Jev must never block longer.
+    wait = min(_positive_wait(getattr(cfg, "timeout_s", 0.0)) + 0.5,
+               jev_client.MAX_TIMEOUT_S + 0.5)
+    return guarded(lambda: jev_client.ask(state, questions, cfg, env=env), wait)
 
 
 def _deliver(rows, sink) -> None:

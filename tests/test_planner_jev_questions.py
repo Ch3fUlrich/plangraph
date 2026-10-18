@@ -5,14 +5,10 @@ strings, dicts and attribute objects.  Nothing here touches the store or Jev its
 """
 from __future__ import annotations
 
-import types
-
 from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.planner import jev_questions as jq
 from plangraph.planner import routing
 from plangraph.planner.legs import HARNESSES
-from plangraph.review import actions
-from plangraph.review.verdict import Verdict
 
 
 def card(**kw):
@@ -62,17 +58,12 @@ def test_every_question_has_one_line_instructions_and_descriptions():
         for description in question["criteria"].values():
             assert isinstance(description, str) and description.strip()
             assert "\n" not in description
-    qc = jq.qc_question()
-    assert qc["type"] == "choice"
-    assert set(qc["criteria"]) == set(jq.QC_OPTIONS)
-    assert all(isinstance(d, str) and d for d in qc["criteria"].values())
 
 
 # --- validation --------------------------------------------------------------------
 
 def test_validate_accepts_builder_output():
     assert jq.validate_questions(jq.routing_questions(card())) == []
-    assert jq.validate_questions({"qc_accept": jq.qc_question()}) == []
 
 
 def test_validate_rejects_malformed_questions():
@@ -175,94 +166,3 @@ def test_redact_never_raises_on_odd_input():
     assert isinstance(jq.redact(object(), 100), str)
 
 
-# --- qc state ----------------------------------------------------------------------
-
-def test_qc_state_for_a_plain_pass():
-    state = jq.qc_state(card(key="A"), "pass", phase="qc")
-    assert "verdict: pass" in state
-    assert "phase: qc" in state
-    assert len(state) <= 4000
-
-
-def test_qc_state_counts_findings_and_files_without_names():
-    verdict = {"verdict": "fix", "reason": "nope",
-               "findings": [{"title": "T1"}, "SECOND line\nmore"],
-               "files": ["a.py", "b.py", "c.py"]}
-    state = jq.qc_state(card(key="A"), verdict)
-    assert "verdict: fix" in state
-    assert "findings: 2" in state
-    assert "T1" in state
-    assert "SECOND line" in state
-    assert "files: 3" in state
-    for name in ("a.py", "b.py", "c.py"):
-        assert name not in state
-    assert "\nmore" not in state
-
-
-def test_qc_state_accepts_an_attribute_verdict():
-    verdict = types.SimpleNamespace(verdict="halt", reason="bad")
-    state = jq.qc_state(card(key="A"), verdict)
-    assert "verdict: halt" in state
-    assert "bad" in state
-
-
-def test_qc_state_maps_garbage_verdicts_to_unknown():
-    assert "verdict: unknown" in jq.qc_state(card(), "nonsense")
-    assert "verdict: unknown" in jq.qc_state(card(), None)
-    assert "verdict: unknown" in jq.qc_state(card(), 7)
-
-
-def test_qc_state_clips_findings_and_reason():
-    findings = [{"title": f"TITLE-{i:02d}"} for i in range(20)]
-    verdict = {"verdict": "fix", "reason": "r" * 5000, "findings": findings}
-    state = jq.qc_state(card(), verdict)
-    assert "TITLE-09" in state
-    assert "TITLE-10" not in state
-    assert len(state) <= 4000
-
-
-def test_qc_state_carries_no_rule_decision():
-    state = jq.qc_state(card(key="A"), {"verdict": "pass"}, phase="qc")
-    assert "decision:" not in state
-
-
-# --- rule qc answer ----------------------------------------------------------------
-
-def test_rule_qc_answer_accepts_only_allowed_pass():
-    assert jq.rule_qc_answer("pass") == "accept"
-    assert jq.rule_qc_answer({"verdict": "pass"}) == "accept"
-    assert jq.rule_qc_answer({"verdict": "pass", "pass_allowed": True}) == "accept"
-    assert jq.rule_qc_answer(types.SimpleNamespace(verdict="pass")) == "accept"
-    assert jq.rule_qc_answer({"verdict": "pass", "pass_allowed": False}) == "reject"
-    assert jq.rule_qc_answer({"verdict": "fix"}) == "reject"
-    assert jq.rule_qc_answer({"verdict": "halt"}) == "reject"
-    assert jq.rule_qc_answer(None) == "reject"
-    assert jq.rule_qc_answer("garbage") == "reject"
-    assert jq.rule_qc_answer(7) == "reject"
-
-
-def test_rule_qc_answer_reads_the_verdict_dataclass():
-    allowed = Verdict(verdict="pass", finish_reason="stop", test_gaming="no",
-                      test_gaming_quote=None, empty=False)
-    blocked = Verdict(verdict="pass", finish_reason="length", test_gaming="no",
-                      test_gaming_quote=None, empty=False)
-    assert jq.rule_qc_answer(allowed) == "accept"
-    assert jq.rule_qc_answer(blocked) == "reject"
-
-
-def test_rule_qc_answer_agrees_with_plan_actions():
-    cases = [
-        "pass",
-        {"verdict": "pass"},
-        {"verdict": "pass", "pass_allowed": True},
-        {"verdict": "pass", "pass_allowed": False},
-        {"verdict": "fix", "reason": "x"},
-        {"verdict": "halt", "reason": "x"},
-        None,
-        "garbage",
-        types.SimpleNamespace(verdict="pass"),
-        types.SimpleNamespace(verdict="fix"),
-    ]
-    for verdict in cases:
-        planned = actions.plan_actions(verdict, "qc", key="A")["pass"]
-        assert (jq.rule_qc_answer(verdict) == "accept") is bool(planned)

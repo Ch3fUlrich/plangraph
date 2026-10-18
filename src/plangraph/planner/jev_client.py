@@ -52,7 +52,7 @@ from dataclasses import dataclass, replace
 
 __all__ = ["ENV_MODE", "ENV_URL", "ENV_MODEL", "ENV_TIMEOUT", "ENV_PROFILE",
            "ENV_KEY_SOURCE", "ENV_AUTH_PATH", "ENV_AUTH_DB", "DEFAULT_URL",
-           "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S", "MAX_STATE_CHARS",
+           "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S", "MAX_TIMEOUT_S", "MAX_STATE_CHARS",
            "MAX_RESPONSE_BYTES", "MODES", "PROFILES", "DEFAULT_PROFILE",
            "JevConfig", "JevAnswer", "config_from_env", "enabled", "resolve_key",
            "ask", "stub_answer", "parse_answer", "mask"]
@@ -63,7 +63,7 @@ ENV_MODE = "PLANGRAPH_JEV"
 ENV_URL = "PLANGRAPH_JEV_URL"
 #: Model-name override.
 ENV_MODEL = "PLANGRAPH_JEV_MODEL"
-#: Request timeout in seconds (float, clamped to <= 60).
+#: Request timeout in seconds (float, clamped to <= 10).
 ENV_TIMEOUT = "PLANGRAPH_JEV_TIMEOUT_S"
 #: Profile selector: ``zen`` (default) or ``typesafe``; unknown -> zen.
 ENV_PROFILE = "PLANGRAPH_JEV_PROFILE"
@@ -80,6 +80,8 @@ DEFAULT_URL = "https://opencode.ai/zen/v1/systemone"
 DEFAULT_MODEL = "jev-1.13-free"
 #: Default request timeout in seconds.
 DEFAULT_TIMEOUT_S = 8.0
+#: Hard upper bound for request timeouts in seconds (Jev must never block longer).
+MAX_TIMEOUT_S = 10.0
 #: ``state`` is truncated to this many characters before it is sent.
 MAX_STATE_CHARS = 12000
 #: Response bodies larger than this many bytes are an error.
@@ -151,7 +153,7 @@ def _timeout(raw) -> float:
         return DEFAULT_TIMEOUT_S
     if not value > 0 or value == float("inf"):
         return DEFAULT_TIMEOUT_S
-    return min(value, 60.0)
+    return min(value, MAX_TIMEOUT_S)
 
 
 @dataclass(frozen=True)

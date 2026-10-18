@@ -34,7 +34,7 @@ RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-s
 
 #: Jev shadow (schema v13): the kind of decision Jev shadowed and how its free
 #: model answered.  ``outcome`` records the rules-router's later verdict.
-JEV_KINDS = ("harness", "window", "budget", "review", "qc_accept")
+JEV_KINDS = ("harness", "window", "budget", "review")
 JEV_STATUSES = ("ok", "timeout", "unavailable", "error")
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")

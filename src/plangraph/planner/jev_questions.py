@@ -1,8 +1,8 @@
-"""Jev shadow questions: build the five ``choice`` questions the rules already answer.
+"""Jev shadow questions: build the four ``choice`` questions the rules already answer.
 
 Jev (a free decision model) answers a ``choice`` question over a ``state`` text and
 returns its top option (the criterion KEY).  We ask it the SAME questions the rules
-answer -- ``harness``, ``window``, ``budget``, ``review`` and ``qc_accept`` -- in
+answer -- ``harness``, ``window``, ``budget`` and ``review`` -- in
 SHADOW (RT-P1-JEV-SHADOW), so the two answers can be compared and Jev never decides.
 
 Every question is a plain dict, so this module never imports ``jev_client`` and stays a
@@ -28,10 +28,9 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 from .legs import HARNESSES
 
 __all__ = [
-    "ROUTING_KINDS", "REVIEW_LEVELS", "BUDGET_OPTIONS", "QC_OPTIONS",
+    "ROUTING_KINDS", "REVIEW_LEVELS", "BUDGET_OPTIONS",
     "MAX_STATE_CHARS", "redact", "routing_state", "routing_questions",
-    "rule_answers", "qc_state", "qc_question", "rule_qc_answer",
-    "validate_questions",
+    "rule_answers", "validate_questions",
 ]
 
 #: The routing decision kinds Jev shadows, == the decision kind names.
@@ -42,14 +41,8 @@ REVIEW_LEVELS = ("standard", "risky")
 #: Attempt budget as the strings Jev compares: the rule default is
 #: ``str(routing.ATTEMPT_BUDGET)`` == "3".
 BUDGET_OPTIONS = ("1", "2", "3", "4", "5")
-#: The accept/reject QC decision.
-QC_OPTIONS = ("accept", "reject")
 #: Hard cap on the routing state handed to Jev (far below its 64k-token limit).
 MAX_STATE_CHARS = 6000
-#: Hard cap on the QC state.
-_QC_STATE_CHARS = 4000
-#: Verdict words a reviewer can produce (see ``review.verdict.VERDICTS``).
-_VERDICT_WORDS = ("pass", "fix", "halt")
 
 _REDACTED = "[redacted]"
 
@@ -92,44 +85,6 @@ def redact(text: Any, cap: int) -> str:
         return ""
 
 
-# ------------------------------------------------------------------ verdict helpers
-def _get(obj: Any, name: str, default: Any = None) -> Any:
-    """Field from a dict or an attribute-style verdict (twin of ``review.actions._get``)."""
-    if isinstance(obj, dict):
-        return obj.get(name, default)
-    return getattr(obj, name, default)
-
-
-def _word(verdict: Any) -> str:
-    """The verdict word (pass/fix/halt), or ``"unknown"`` (twin of ``_word`` in verdict.py)."""
-    word = verdict if isinstance(verdict, str) else _get(verdict, "verdict")
-    return word if word in _VERDICT_WORDS else "unknown"
-
-
-def _files(value: Any) -> list[str]:
-    """File list from a list/tuple/set or ONE bare string (twin of ``review.actions._files``)."""
-    if not value:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return [str(f) for f in value]
-    return [str(value)]
-
-
-def _finding_first_line(item: Any) -> str:
-    """A finding's title, else its first line (mirrors ``review.actions._finding``)."""
-    if isinstance(item, dict):
-        title = item.get("title")
-        if isinstance(title, str) and title.strip():
-            return title.strip()
-        text = item.get("finding") or item.get("text") or ""
-    else:
-        text = item if item is not None else ""
-    text = str(text).strip()
-    return text.splitlines()[0] if text else ""
-
-
 # ------------------------------------------------------------------ option copy
 _HARNESS_DESCRIPTIONS = {
     "qodercli": "qoder CLI harness, free tier while credits remain",
@@ -146,10 +101,6 @@ _BUDGET_DESCRIPTIONS = {n: f"{n} attempts on one tier before promotion or parkin
 _REVIEW_DESCRIPTIONS = {
     "standard": "one cross-family reviewer, no risk tags",
     "risky": "two reviewers, card carries risk tags",
-}
-_QC_DESCRIPTIONS = {
-    "accept": "the review inputs pass: merge the card as done",
-    "reject": "send the card back for a fix, or halt it",
 }
 
 
@@ -236,61 +187,6 @@ def rule_answers(route: Any) -> dict[str, str]:
         "budget": str(route.attempt_budget),
         "review": route.review_level,
     }
-
-
-# ------------------------------------------------------------------ QC side
-def qc_state(card: Mapping, verdict: Any, phase: str | None = None) -> str:
-    """Compact, non-secret review-input state for the QC question, <= 4000 characters.
-
-    Carries the card key/title/outcome, the review ``phase``, the reviewer's verdict word
-    (pass/fix/halt else ``unknown``), reason, finding count and each finding's title or
-    first line, the file COUNT (never names) and the card's ``risk_tags``.  Never the
-    rules' own QC decision.
-    """
-    card = card if isinstance(card, Mapping) else {}
-    reason = _get(verdict, "reason") or ""
-    findings = _get(verdict, "findings") or []
-    if not isinstance(findings, (list, tuple)):
-        findings = [findings]
-    lines = [
-        f"card: {redact(card.get('key'), 200)}",
-        f"title: {redact(card.get('title'), 400)}",
-        f"outcome: {redact(card.get('outcome'), 400)}",
-        f"phase: {redact(phase, 100)}",
-        f"verdict: {_word(verdict)}",
-        f"reason: {redact(reason, 500)}",
-        f"findings: {len(findings)}",
-    ]
-    for n, item in enumerate(list(findings)[:10], 1):
-        lines.append(f"finding {n}: {redact(_finding_first_line(item), 160)}")
-    lines.append(f"files: {len(_files(_get(verdict, 'files')))}")
-    tags = card.get("risk_tags")
-    if isinstance(tags, (list, tuple)):
-        lines.append("risk_tags: " + ", ".join(redact(t, 50) for t in tags))
-    return "\n".join(lines)[:_QC_STATE_CHARS]
-
-
-def qc_question() -> dict:
-    """The single QC ``choice`` question: accept the work or reject it."""
-    return {
-        "type": "choice",
-        "instructions": "Given the review inputs, should this card's work be accepted"
-                        " (merged as done) or rejected (sent back for a fix or halted)?",
-        "criteria": {opt: _QC_DESCRIPTIONS[opt] for opt in QC_OPTIONS},
-    }
-
-
-def rule_qc_answer(verdict: Any) -> str:
-    """``"accept"`` iff the verdict is ``pass`` AND ``pass_allowed`` is not ``False``.
-
-    ``pass_allowed`` is read like ``review.actions.plan_actions`` (dict key or attribute,
-    default ``True``); fix, halt, unknown and ``None`` all reject.
-    """
-    word = verdict if isinstance(verdict, str) else _get(verdict, "verdict")
-    if word != "pass":
-        return "reject"
-    allowed = _get(verdict, "pass_allowed", True)
-    return "accept" if allowed is not False else "reject"
 
 
 # ------------------------------------------------------------------ validation

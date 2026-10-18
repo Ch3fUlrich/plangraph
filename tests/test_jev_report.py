@@ -22,7 +22,7 @@ def _row(**over):
 
 
 def _mixed_rows():
-    """harness: 3 ok (2 agree), 1 timeout, 1 unavailable; qc_accept: 1 ok, 1 error."""
+    """harness: 3 ok (2 agree), 1 timeout, 1 unavailable; review: 1 ok, 1 error."""
     return [
         _row(id=1, kind="harness", status="ok", rule_answer="hold",
              jev_answer="hold", outcome="agreed"),
@@ -32,9 +32,9 @@ def _mixed_rows():
              jev_answer="run"),
         _row(id=4, kind="harness", status="timeout", jev_answer=None),
         _row(id=5, kind="harness", status="unavailable", jev_answer=None),
-        _row(id=6, kind="qc_accept", status="ok", rule_answer="accept",
+        _row(id=6, kind="review", status="ok", rule_answer="accept",
              jev_answer="accept", outcome="accepted"),
-        _row(id=7, kind="qc_accept", status="error", jev_answer=None),
+        _row(id=7, kind="review", status="error", jev_answer=None),
     ]
 
 
@@ -106,8 +106,7 @@ def test_row_view_agree_false_and_none():
 
 def test_report_all_kinds_always_present_even_when_empty():
     rep = jr.agreement_report([])
-    assert set(rep["kinds"]) == {"harness", "window", "budget", "review",
-                                 "qc_accept"}
+    assert set(rep["kinds"]) == {"harness", "window", "budget", "review"}
     for stats in rep["kinds"].values():
         assert stats["total"] == 0
         assert stats["agreement_rate"] is None
@@ -131,7 +130,7 @@ def test_report_mixed_counts_and_rates():
         "with_outcome": 1, "no_answer": 2, "kappa": 0.0,
         "confusion": {"hold": {"hold": 2, "run": 1}, "run": {"hold": 0, "run": 0}},
         "labels": ["hold", "run"]}
-    assert rep["kinds"]["qc_accept"] == {
+    assert rep["kinds"]["review"] == {
         "total": 2, "ok": 1, "agree": 1, "disagree": 0, "timeout": 0,
         "unavailable": 0, "error": 1, "agreement_rate": 1.0,
         "with_outcome": 1, "no_answer": 1, "kappa": None,
@@ -216,7 +215,7 @@ def test_render_empty():
 
 def test_render_mixed_kinds_in_order():
     lines = jr.render(jr.agreement_report(_mixed_rows())).splitlines()
-    assert [line.split()[0] for line in lines] == ["harness", "qc_accept",
+    assert [line.split()[0] for line in lines] == ["harness", "review",
                                                    "overall"]
     harness = lines[0]
     assert "agree 2/3" in harness
@@ -225,10 +224,10 @@ def test_render_mixed_kinds_in_order():
     assert "unavailable 1" in harness
     assert "error 0" in harness
     assert "outcomes 1" in harness
-    qc = lines[1]
-    assert qc.startswith("qc_accept")
-    assert "agree 1/1" in qc
-    assert "error 1" in qc
+    review = lines[1]
+    assert review.startswith("review")
+    assert "agree 1/1" in review
+    assert "error 1" in review
     overall = lines[2]
     assert overall.startswith("overall")
     assert "agree 3/4" in overall
@@ -348,12 +347,12 @@ def test_report_no_answer_rows_excluded_from_kappa_and_matrix():
 def test_report_deterministic_confusion_ordering():
     # Add rows with labels in arbitrary order: "z", "a", "m"
     rows = [
-        _row(kind="qc_accept", status="ok", rule_answer="z", jev_answer="m"),
-        _row(kind="qc_accept", status="ok", rule_answer="a", jev_answer="z"),
-        _row(kind="qc_accept", status="ok", rule_answer="m", jev_answer="a"),
+        _row(kind="review", status="ok", rule_answer="z", jev_answer="m"),
+        _row(kind="review", status="ok", rule_answer="a", jev_answer="z"),
+        _row(kind="review", status="ok", rule_answer="m", jev_answer="a"),
     ]
     rep = jr.agreement_report(rows)
-    stats = rep["kinds"]["qc_accept"]
+    stats = rep["kinds"]["review"]
     # Labels must be sorted
     assert stats["labels"] == ["a", "m", "z"]
     # Outer dict keys must be in sorted order

@@ -212,6 +212,24 @@ def test_a_non_positive_timeout_is_a_tiny_positive_wait():
     assert jev_shadow._positive_wait(0.2) == 0.2
 
 
+def test_ask_guarded_wait_capped_at_max_timeout_plus_grace(monkeypatch):
+    waits = []
+
+    def fake_guarded(fn, timeout_s):
+        waits.append(timeout_s)
+        return ("ok", {}, "")
+
+    monkeypatch.setattr(jev_shadow, "guarded", fake_guarded)
+    cfg_capped = jev_client.JevConfig(mode="stub", timeout_s=999.0)
+    jev_shadow._ask_guarded("state", {}, cfg_capped, env={})
+    assert waits == [jev_client.MAX_TIMEOUT_S + 0.5]
+
+    waits.clear()
+    cfg_normal = jev_client.JevConfig(mode="stub", timeout_s=2.0)
+    jev_shadow._ask_guarded("state", {}, cfg_normal, env={})
+    assert waits == [2.5]
+
+
 def test_timeout_is_bounded_and_reported_for_every_kind(monkeypatch):
     monkeypatch.setattr(jev_client, "ask", slow_ask)
     c = card()

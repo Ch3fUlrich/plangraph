@@ -85,7 +85,7 @@ rules = ["credential-shape"]
 [[scrub.allow]]
 path = "tools/split/gitleaks.toml"
 rules = ["credential-shape"]
-# RT-P1-JEV-SHADOW: reviewed synthetic fixtures
+# RT-P1-JEV-SHADOW: reviewed synthetic fixtures / the word credential in a docstring
 [[scrub.allow]]
 path = "src/plangraph/planner/jev_client.py"
 rules = ["credential-shape"]

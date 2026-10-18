@@ -21,7 +21,7 @@ import pytest
 from door_util import Doors
 from keeper_util import World, seed
 
-FIVE_KINDS = {"harness", "window", "budget", "review", "qc_accept"}
+FOUR_KINDS = {"harness", "window", "budget", "review"}
 
 
 @pytest.fixture
@@ -126,7 +126,7 @@ def test_jev_report_json_counts_project_filter_and_text(doors, w):
     status, report = doors.http(router, "GET", "/v1/jev_report")
     assert status == 200
     assert set(report) == {"kinds", "overall"}
-    assert set(report["kinds"]) == FIVE_KINDS           # every kind, even empty
+    assert set(report["kinds"]) == FOUR_KINDS           # every kind, even empty
     overall = report["overall"]
     assert (overall["total"], overall["ok"], overall["agree"],
             overall["disagree"], overall["timeout"]) == (3, 2, 1, 1, 1)
@@ -147,7 +147,7 @@ def test_jev_report_json_counts_project_filter_and_text(doors, w):
 
 def test_jev_report_is_json_by_default_and_empty_when_no_rows(doors, w):
     status, report = doors.http("router", "GET", "/v1/jev_report")
-    assert status == 200 and set(report["kinds"]) == FIVE_KINDS
+    assert status == 200 and set(report["kinds"]) == FOUR_KINDS
     assert report["overall"]["total"] == 0
     assert report["overall"]["agreement_rate"] is None
 
@@ -156,7 +156,7 @@ def test_jev_report_is_json_by_default_and_empty_when_no_rows(doors, w):
 def test_a_reader_may_read_the_report_but_not_write(doors, w):
     key, = seed(w, [("A", [])])
     status, report = doors.http("reader", "GET", "/v1/jev_report")
-    assert status == 200 and set(report["kinds"]) == FIVE_KINDS
+    assert status == 200 and set(report["kinds"]) == FOUR_KINDS
 
     status, body = doors.http("reader", "POST", "/v1/jev_shadow", rec(key))
     assert (status, body["error"]) == (403, "forbidden")

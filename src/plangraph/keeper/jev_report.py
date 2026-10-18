@@ -1,6 +1,6 @@
 """Read-only agreement report over the Jev shadow rows (RT-P1-JEV-SHADOW).
 
-Jev answers the same routing / QC-accept questions as the rules, in shadow, and
+Jev answers the same routing questions as the rules, in shadow, and
 its rows land in the keeper table ``jev_shadow``.  This module turns those raw
 rows into the two public surfaces the show/API doors need: ``row_view`` for one
 row and ``agreement_report`` for the per-kind summary.  It is deliberately pure
@@ -17,7 +17,7 @@ __all__ = ["agrees", "row_view", "agreement_report", "render"]
 # These mirror plangraph.keeper.schema.JEV_KINDS / JEV_STATUSES.  The schema
 # names are added by a parallel writer, so we cannot import them yet; a test
 # elsewhere asserts these tuples stay equal to the schema constants.
-_KINDS = ("harness", "window", "budget", "review", "qc_accept")
+_KINDS = ("harness", "window", "budget", "review")
 _STATUSES = ("ok", "timeout", "unavailable", "error")
 
 # Fields of the public row view, in display order.  ``key`` is internal routing

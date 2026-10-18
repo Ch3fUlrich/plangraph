@@ -189,7 +189,12 @@ def test_config_timeout_parsing_and_clamp():
             == jev.DEFAULT_TIMEOUT_S)
     assert (jev.config_from_env({"PLANGRAPH_JEV_TIMEOUT_S": "nan"}).timeout_s
             == jev.DEFAULT_TIMEOUT_S)
-    assert jev.config_from_env({"PLANGRAPH_JEV_TIMEOUT_S": "999"}).timeout_s == 60.0
+    assert (jev.config_from_env({"PLANGRAPH_JEV_TIMEOUT_S": "999"}).timeout_s
+            == jev.MAX_TIMEOUT_S)
+    assert jev.config_from_env({"PLANGRAPH_JEV_TIMEOUT_S": "10"}).timeout_s == 10.0
+    assert jev.config_from_env({"PLANGRAPH_JEV_TIMEOUT_S": "10.5"}).timeout_s == 10.0
+    assert jev.config_from_env({"PLANGRAPH_JEV_TIMEOUT_S": "0.5"}).timeout_s == 0.5
+    assert jev.DEFAULT_TIMEOUT_S <= jev.MAX_TIMEOUT_S
 
 
 # --------------------------------------------------------------------------- #
