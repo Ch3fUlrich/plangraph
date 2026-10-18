@@ -1,4 +1,4 @@
-# build-L1 card · gen-16 · HANDOFF #16 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
+# build-L1 card · gen-16 live · HANDOFF #16 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
@@ -12,7 +12,7 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | P1 item | State | Next |
 |---|---|---|
 | DONE today | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW, VERBS-FOLLOWUP (#85 4b2f3591) | phase 4/13 direct deps |
-| TEMPORAL-CHECK (server) | in_review, tier none: router close_on_decision D-1967 asked (qwen seat PASS seats/temporal-check) | router close -> drop hb key |
+| TEMPORAL-CHECK (server) | DONE (router close D-1967+D-1993) | hb key dropped |
 | md-sync (D-1990 blocker) | FAILED since 08:48Z: routing:PH-OPERATOR rehomed; F7 at rt-side-2 | F7 merge -> GO D-1992 steps (handoff #16 IN FLIGHT 1) |
 | VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
 | E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
@@ -28,7 +28,7 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | UI-BROWSER-TESTS (U2) | PARKED 2026-10-17: WIP lane/ui-browser-tests @6fd8de39 (pushed, no PR) (41 pass/18 skip/100 xfail), verify + W4 hardening + 2nd seat pending; L2 stopped (RAM <12 GB, budget) | relaunch when RAM ok + P1 done; gemini seat from coding.vm |
 | PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
 | republish GO | D-1898: step plan 588d6838 shape accepted, NO exec GO; L2 relaunch WAIT until Claude budget recovers (D-1916); scope confirmed rust+deploy public, 8 docs/plan private. Before GO request: P1+P2 CLOSED (#72); P3 T2 manifest + P4 words list open, R1 timer pause step, R2 mirror path D-row, R3 lane-branch merged/parked list to routing | wait operator |
-Leases: ops/hb-keys.txt (8 keys); bg loop dies with clear → restart FIRST (handoff #13).
+Leases: ops/hb-keys.txt (8 keys, gen-16 loop b06ndrncd); bg loop dies with clear → restart FIRST (handoff #13).
 
 ## Traps
 - Never push site strings / seat prompts to any GitHub branch (repo public). Private evidence: ~/.local/share/plangraph/{seats,republish,temporal-check}.
