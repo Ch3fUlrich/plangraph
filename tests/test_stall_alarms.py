@@ -18,10 +18,9 @@ from keeper_util import World, defn, to_claimed, to_done
 from plangraph.keeper.store import Store
 from plangraph.keeper.stall import stall_alarms
 from plangraph.inbox import routes
+from plangraph.keeper.events import append_event
 
 HOUR = 3600.0
-INSERT_EVENT = ("INSERT INTO events(ts,actor,role,model,key,type,payload,prev_hash,hash)"
-                " VALUES(?,'router','router',NULL,?,'heartbeat','{}','','h')")
 
 
 @pytest.fixture
@@ -35,7 +34,8 @@ def w(tmp_path):
 
 def event(w, key, ts=None):
     """A heartbeat for *key* stamped *ts* (default: the current clock)."""
-    w.conn.execute(INSERT_EVENT, (w.store._iso(w.clock() if ts is None else ts), key))
+    append_event(w.conn, w.store._iso(w.clock() if ts is None else ts),
+                 "router", "router", None, key, "heartbeat", {})
     w.conn.commit()
 
 
