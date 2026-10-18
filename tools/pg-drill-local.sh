@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# pg-drill-local.sh — dump the dev keeper database, restore it into a throwaway postgres:16
-# container, and compare per-table row counts source vs restore. Loopback-only: every socket
+# pg-drill-local.sh — dev keeper ONLY: dump the dev keeper database, restore it into a
+# throwaway postgres:16 container, and compare per-table row counts source vs restore.
+# Loopback-only: every socket
 # and port binding is 127.0.0.1, and the container uses trust auth because it is destroyed
-# unconditionally on exit. The drill fails if any source table is missing from the restore,
+# unconditionally on exit. The restored copy is trust-auth on 127.0.0.1, so it is readable
+# by any local user — never point this script at a non-dev database. The drill fails if any source table is missing from the restore,
 # if any table appears in the restore but not the source, if any count differs, or if the
 # restore is vacuous (0 tables or 0 total rows) — an empty restore matching an empty check
 # is never a pass. Health waits are bounded by DRILL_HEALTH_TIMEOUT (default 60 s).
@@ -25,7 +27,9 @@ set -euo pipefail
 usage() {
   printf '%s\n' \
     "usage: pg-drill-local.sh" \
-    "env: SRC_DSN PG_PORT DRILL_PORT DRILL_NAME DRILL_MEMORY DRILL_DUMP_DIR DRILL_HEALTH_TIMEOUT"
+    "env: SRC_DSN PG_PORT DRILL_PORT DRILL_NAME DRILL_MEMORY DRILL_DUMP_DIR DRILL_HEALTH_TIMEOUT" \
+    "dev keeper only: SRC_DSN must be postgresql://[user[:pw]@]127.0.0.1|localhost:<PG_PORT>/db" \
+    "the restored copy is trust-auth on 127.0.0.1 and readable by any local user"
 }
 
 case "${1:-}" in
@@ -35,6 +39,43 @@ case "${1:-}" in
 esac
 
 SRC_DSN="${SRC_DSN:-postgresql://postgres@127.0.0.1:${PG_PORT:-55432}/keeper}"
+
+# Dev-target guard: the restored copy is trust-auth on 127.0.0.1 and this script dumps
+# real data, so any SRC_DSN that is not the loopback dev-keeper port is refused before
+# anything runs. The DSN is parsed with bash expansions only — never eval'd, never shown.
+assert_dev_target() { # assert_dev_target <dsn> — 0 if the DSN is the dev target, 1 otherwise
+  local dsn="$1" rest authority hostport host port
+  case "$dsn" in
+    postgresql://*) rest="${dsn#postgresql://}" ;;
+    postgres://*) rest="${dsn#postgres://}" ;;
+    *) return 1 ;;
+  esac
+  # a query string can override host/port/hostaddr in libpq, so any query is refused
+  case "$rest" in *\?*) return 1 ;; esac
+  authority="${rest%%/*}"
+  hostport="${authority##*@}"
+  case "$hostport" in
+    *:*) ;;
+    *) return 1 ;;
+  esac
+  port="${hostport##*:}"
+  host="${hostport%:*}"
+  [ -n "$host" ] || return 1
+  case "$port" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  [ "$port" = "${PG_PORT:-55432}" ] || return 1
+  case "$host" in
+    127.0.0.1 | localhost) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+if ! assert_dev_target "$SRC_DSN"; then
+  echo "PG-DRILL refused: non-dev target; a LIVE drill needs a separate GO and a password-auth drill container"
+  exit 2
+fi
+
 DRILL_PORT="${DRILL_PORT:-55433}"
 DRILL_NAME="${DRILL_NAME:-plangraph-pgdrill}"
 DRILL_MEMORY="${DRILL_MEMORY:-1g}"
@@ -62,7 +103,7 @@ pgtool() { # pgtool <tool> args... : host tool if on PATH, else the same tool fr
   # identical path so -f / pg_restore file args resolve the same way in container and host.
   # -i: passes stdin through, so table_count's piped query works.  --user: the container
   # writes into the host-owned 0700 mktemp dir, so it must run as the host uid/gid.
-  docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$DRILL_DUMP_DIR:$DRILL_DUMP_DIR" postgres:16 "$tool" "$@"
+  docker run --rm -i --memory "$DRILL_MEMORY" --network host --user "$(id -u):$(id -g)" -v "$DRILL_DUMP_DIR:$DRILL_DUMP_DIR" postgres:16 "$tool" "$@"
 }
 
 cleanup() {
