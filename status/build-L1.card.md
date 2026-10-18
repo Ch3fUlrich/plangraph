@@ -13,10 +13,10 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | DEV-PGDRILL | - | DONE #89 d8c7b606 (judge GO, D-1988 closed; xiaomi+google). FLAKES for CI-GATE/DRILLS: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | claimed 14:36Z, briefed inline |
-| GATE-WIRING | predeploy-4->5 (RECYCLE, L2-LAUNCH asked) | redo Claude-written parts (b11c60a) by non-Claude writer; GateInput = list of named checks (D-2002) |
-| OPENCODE-HARDEN / WF-VERSIONING | predeploy-4 | claimed 14:36Z, briefed inline |
-| PHASE-RUNNER | predeploy-4 | needs GATE-WIRING done -> I claim; Jev shadow call site lives here (D-2002) |
-| JEV-SHADOW | predeploy-4 | stub + per-axis records + kappa, one call site (routing activity) |
+| GATE-WIRING | predeploy-5 [319b17] (LAUNCHED by workst D-2005) | redo Claude-written parts (b11c60a) by non-Claude writer; GateInput = list of named checks (D-2002) |
+| OPENCODE-HARDEN / WF-VERSIONING | predeploy-5 | claimed 14:36Z, briefed inline |
+| PHASE-RUNNER | predeploy-5 | needs GATE-WIRING done -> I claim; Jev shadow call site lives here (D-2002) |
+| JEV-SHADOW | predeploy-5 | stub + per-axis records + kappa, one call site (routing activity) |
 | E2E | frozen 7b1e92a | new criteria: phase runner, >=2 cards, pinned opencode Go/free leg, phase PR + ci-gate; driver = FAILURE-DRILLS harness |
 | FAILURE-DRILLS / CARD-CHECKS | dogfood (Q-3) | phase runner builds them after PHASE-RUNNER+HARDEN+OWNERSHIP merge; I plan/judge only |
 | RT-P0 / FLEET-SID-REFRESH / CLASS-COMBOS / AO-QC-SPAWNER | router / workst | not mine; CLASS-COMBOS D-1991 |
