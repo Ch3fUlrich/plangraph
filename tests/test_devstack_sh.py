@@ -16,10 +16,12 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="devstack.sh is a pos
 TEMPORAL_FAKE = """\
 #!/bin/bash
 TMP="{tmp}"
-{{ printf 'temporal'; for a in "$@"; do printf ' %s' "$a"; done; printf '\\n'; }} >>"$TMP/calls.log"
+l=temporal; for a in "$@"; do l="$l $a"; done; printf '%s\n' "$l" >>"$TMP/calls.log"
 case "${{1:-}}" in
-  server) exec sleep 300 ;;
-  operator) exit 0 ;;
+  server) printf '%s\\n' "$$" >"$TMP/temporal_child.pid"; exec sleep 300 ;;
+  operator)
+    if [ "${{FAKE_HEALTH_FAIL:-}}" = 1 ]; then exit 1; fi
+    exit 0 ;;
   worker)
     if [ "${{FAKE_SETCUR_FAIL:-}}" = 1 ]; then exit 1; fi
     exit 0 ;;
@@ -30,13 +32,20 @@ exit 0
 DOCKER_FAKE = """\
 #!/bin/bash
 TMP="{tmp}"
-{{ printf 'docker'; for a in "$@"; do printf ' %s' "$a"; done; printf '\\n'; }} >>"$TMP/calls.log"
+l=docker; for a in "$@"; do l="$l $a"; done; printf '%s\n' "$l" >>"$TMP/calls.log"
 case "${{1:-}}" in
   info) exit 0 ;;
-  ps) if [ -e "$TMP/container" ]; then printf 'abc123\\n'; fi; exit 0 ;;
-  run) touch "$TMP/container"; exit 0 ;;
-  start|exec) exit 0 ;;
-  rm) rm -f "$TMP/container"; exit 0 ;;
+  ps)
+    case "${{2:-}}" in
+      -q) [ -e "$TMP/running" ] && printf 'abc123\\n' ;;
+      -aq) [ -e "$TMP/container" ] && printf 'abc123\\n' ;;
+    esac
+    exit 0 ;;
+  run) touch "$TMP/container" "$TMP/running"; exit 0 ;;
+  start) touch "$TMP/running"; exit 0 ;;
+  stop) rm -f "$TMP/running"; exit 0 ;;
+  rm) rm -f "$TMP/container" "$TMP/running"; exit 0 ;;
+  exec) exit 0 ;;
 esac
 exit 0
 """
@@ -136,7 +145,7 @@ def test_status_reports_running_then_stopped_after_stop(stack):
     assert "temporal: stopped" in r.stdout
 
 
-def test_stop_kills_temporal_and_removes_container_but_keeps_state(stack):
+def test_stop_kills_temporal_and_stops_container_but_keeps_state(stack):
     stack.state.mkdir(parents=True)
     (stack.state / "temporal.db").write_text("SENTINEL\n")
     assert stack.run("start").returncode == 0
@@ -144,9 +153,41 @@ def test_stop_kills_temporal_and_removes_container_but_keeps_state(stack):
     assert alive(pid)
     assert stack.run("stop").returncode == 0
     assert not alive(pid)
-    assert "docker rm -f devstack-test-pg" in stack.lines()
+    lines = stack.lines()
+    assert "docker stop devstack-test-pg" in lines
+    assert not any(l.startswith("docker rm") for l in lines)
+    assert (stack.tmp / "container").exists()
+    assert not (stack.tmp / "running").exists()
     assert (stack.state / "temporal.db").read_text() == "SENTINEL\n"
     assert stack.run("stop").returncode == 0
+
+
+def test_stop_purge_removes_the_container(stack):
+    assert stack.run("start").returncode == 0
+    assert stack.run("stop", "--purge").returncode == 0
+    assert "docker rm -f devstack-test-pg" in stack.lines()
+    assert not (stack.tmp / "container").exists()
+    assert not (stack.tmp / "running").exists()
+
+
+def test_start_after_plain_stop_reuses_the_container(stack):
+    assert stack.run("start").returncode == 0
+    assert stack.run("stop").returncode == 0
+    first = len(stack.lines())
+    assert stack.run("start").returncode == 0
+    second = stack.lines()[first:]
+    assert "docker start devstack-test-pg" in second
+    assert not any(l.startswith("docker run") for l in second)
+
+
+def test_temporal_health_failure_kills_process_and_exits_1(stack):
+    # wait_for polls health for the script's full 60 s before giving up
+    r = stack.run("start", timeout=90, extra_env={"FAKE_HEALTH_FAIL": "1"})
+    assert r.returncode == 1
+    assert "not healthy within 60 s" in r.stderr
+    assert not (stack.state / "temporal.pid").exists()
+    pid = int((stack.tmp / "temporal_child.pid").read_text().strip())
+    assert not alive(pid)
 
 
 def test_set_current_failure_does_not_fail_start(stack):

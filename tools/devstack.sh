@@ -7,7 +7,8 @@
 # picks up where the last session left off.
 #
 #   devstack.sh start          # temporal + set-current-version + postgres
-#   devstack.sh stop           # kill temporal/keeper, stop/remove postgres; state files kept
+#   devstack.sh stop           # stop kills temporal/keeper and stops postgres; --purge removes
+#                              # the postgres container and its data; state files kept
 #   devstack.sh status         # one line per component + the exports a driver needs
 #   devstack.sh keeper         # migrate + run keeper in the foreground (needs postgres up)
 #   devstack.sh set-current    # re-run just the worker deployment set-current-version step
@@ -15,7 +16,7 @@ set -euo pipefail
 
 usage() {
   printf '%s\n' \
-    "usage: devstack.sh start|stop|status|keeper|set-current" \
+    "usage: devstack.sh start|stop [--purge]|status|keeper|set-current" \
     "env: DEVSTACK_STATE TEMPORAL_CLI TEMPORAL_PORT TEMPORAL_UI_PORT DEVSTACK_DEPLOYMENT" \
     "     DEVSTACK_BUILD_ID PG_PORT DEVSTACK_PG_NAME KEEPER_PORT DEVSTACK_PG_MODE PG_BIN"
 }
@@ -124,6 +125,8 @@ start_temporal() {
   else
     echo "temporal: not healthy within 60 s; last log lines:" >&2
     tail -n 20 "$DEVSTACK_STATE/temporal.log" >&2 || true
+    kill "$pid" 2>/dev/null || true
+    rm -f "$DEVSTACK_STATE/temporal.pid"
     exit 1
   fi
 }
@@ -180,14 +183,21 @@ start_postgres() {
       docker start "$DEVSTACK_PG_NAME" >/dev/null
     else
       # trust auth + 127.0.0.1-only port publish: dev state, safe because nothing binds outward.
-      docker run -d --name "$DEVSTACK_PG_NAME" --memory 1g \
+      # A failed run can leave a created container behind; remove it so the next start doesn't
+      # wrongly docker start it.
+      if ! docker run -d --name "$DEVSTACK_PG_NAME" --memory 1g \
         -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_DB=keeper \
-        -p "127.0.0.1:$PG_PORT:5432" postgres:16 >/dev/null
+        -p "127.0.0.1:$PG_PORT:5432" postgres:16 >/dev/null; then
+        docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+        echo "postgres: docker run failed; removed any partially created container" >&2
+        exit 1
+      fi
     fi
     if wait_for 60 docker exec "$DEVSTACK_PG_NAME" pg_isready -U postgres -d keeper; then
       echo "postgres: running (docker $DEVSTACK_PG_NAME) 127.0.0.1:$PG_PORT"
     else
       echo "postgres: container $DEVSTACK_PG_NAME never became ready within 60 s" >&2
+      docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
       exit 1
     fi
   else
@@ -214,15 +224,25 @@ stop_pidfile() { # TERM, grace 10 s, then KILL; the pid file goes away either wa
     sleep 1
     i=$((i + 1))
   done
-  kill -9 "$pid" 2>/dev/null || true
+  # Only escalate when the pid is still alive: it may have exited and been reused.
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
   rm -f "$file"
 }
 
 cmd_stop() {
+  local purge=0
+  [ "${1:-}" = "--purge" ] && purge=1
   stop_pidfile "$DEVSTACK_STATE/temporal.pid"
   stop_pidfile "$DEVSTACK_STATE/keeper.pid"
   if pg_docker_exists; then
-    docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+    if [ "$purge" = 1 ]; then
+      docker rm -f "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+    else
+      # Stop only: the container (and its data) survives for the next start's docker reuse.
+      docker stop "$DEVSTACK_PG_NAME" >/dev/null 2>&1 || true
+    fi
   fi
   if pg_local_up; then
     local bin
@@ -294,7 +314,7 @@ PY
 
 case "${1:-}" in
   start) cmd_start ;;
-  stop) cmd_stop ;;
+  stop) shift; cmd_stop "$@" ;;
   status) cmd_status ;;
   keeper) cmd_keeper ;;
   set-current) set_current_version ;;
