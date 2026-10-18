@@ -1,4 +1,5 @@
 # build-L1 card · gen-16 live · HANDOFF #16 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
+HOLD D-1998 (P1 plan audit, p1-audit-L1 read-only, never msg): in-flight lanes -> MERGE-READY/merge OK; NO new claims/E2E/L2 launches/P1 live GO-REQs. GATE-WIRING+FLOW-UNBLOCK continue = default A (asked routing); E2E frozen f9978ad.
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
@@ -7,7 +8,6 @@ D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts 
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 
-Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git log of this branch.
 ## GEN-15 (D-1932 ONLY PH-RT-RUNTIME; D-1919 budget; D-1933 TEMPORAL-CHECK -> dev start-dev, cloud parts -> RELEASE-DEPLOY)
 | P1 item | State | Next |
 |---|---|---|
