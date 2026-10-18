@@ -361,3 +361,61 @@ def test_sync_md_import_new_rows_get_model_kinds():
     kinds = {o["item"]["id"]: (o["item"]["kind"], o["item"].get("wait"))
              for o in p.ops if o["op"] == "create" and o["item"]["id"] != "PH-OPERATOR"}
     assert kinds == {"Q-N1": ("question", "answer"), "OS-77": ("operator_task", "task")}
+
+
+# Rehomed gate: the old key is cancelled and an alias old -> new exists, so the
+# import target resolves to the new project instead of failing on the old key.
+
+def _rehomed_items():
+    return [
+        live("routing", "PH-OPERATOR", state="cancelled", kind="gate"),
+        live("plangraph", "PH-OPERATOR", kind="gate", depends_on=[]),
+        live("plangraph", "GOAL", kind="goal"),
+    ]
+
+
+def test_rehome_alias_moves_the_import_target():
+    p = plan.build_plan(q("- Q-N1 **New**\n"), [], [], DEC, _rehomed_items(),
+                        aliases={"routing:PH-OPERATOR": "plangraph:PH-OPERATOR"})
+    creates = [o["item"] for o in p.ops if o["op"] == "create"]
+    assert len(creates) == 1 and creates[0]["project"] == "plangraph"
+    assert [o for o in p.ops if o["op"] == "edit"] == [
+        {"op": "edit", "key": "plangraph:PH-OPERATOR",
+         "fields": {"depends_on": ["plangraph:Q-N1"]}}]
+    assert not any(o.get("key") == "routing:PH-OPERATOR" for o in p.ops)
+
+
+def test_gate_override_without_alias_targets_that_gate():
+    p = plan.build_plan(q("- Q-N1 **New**\n"), [], [], DEC, _rehomed_items(),
+                        gate="plangraph:PH-OPERATOR")
+    creates = [o["item"] for o in p.ops if o["op"] == "create"]
+    assert len(creates) == 1 and creates[0]["project"] == "plangraph"
+    assert [o for o in p.ops if o["op"] == "edit"] == [
+        {"op": "edit", "key": "plangraph:PH-OPERATOR",
+         "fields": {"depends_on": ["plangraph:Q-N1"]}}]
+
+
+def test_gate_override_to_another_project_creates_lanes_there():
+    items = [live("server", "GATE-2", kind="gate"),
+             live("server", "GOAL", kind="goal")]
+    p = plan.build_plan(q("- Q-N1 **New**\n"), [], [], DEC, items,
+                        gate="server:GATE-2")
+    creates = [o["item"] for o in p.ops if o["op"] == "create"]
+    assert len(creates) == 1 and creates[0]["project"] == "server"
+    assert [o for o in p.ops if o["op"] == "edit"] == [
+        {"op": "edit", "key": "server:GATE-2",
+         "fields": {"depends_on": ["server:Q-N1"]}}]
+
+
+def test_cancelled_gate_without_alias_fails_closed():
+    gate = live("routing", "PH-OPERATOR", state="cancelled", kind="gate")
+    with pytest.raises(plan.PlanError, match="cancelled"):
+        plan.build_plan(q("- Q-N1 **New**\n"), [], [], DEC, [gate, GOAL],
+                        aliases={})
+
+
+def test_done_gate_without_alias_fails_closed():
+    gate = live("routing", "PH-OPERATOR", state="done", kind="gate")
+    with pytest.raises(plan.PlanError, match="done"):
+        plan.build_plan(q("- Q-N1 **New**\n"), [], [], DEC, [gate, GOAL],
+                        aliases={})
