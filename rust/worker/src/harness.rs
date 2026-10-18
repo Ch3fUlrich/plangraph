@@ -284,8 +284,8 @@ impl HarnessRegistry {
 /// toolchain locations), whatever the harness set on its command itself, and
 /// `home` as `HOME`. `PG_*`, `TEMPORAL_*`, provider keys and the agent CLIs'
 /// own credentials therefore stay with the worker: harness auth is staged
-/// into `home` as files (`sandbox_env::stage_harness_auth`), never passed by
-/// env.
+/// into `home` as files (`sandbox_env::HomeGuard::stage_harness_auth`),
+/// never passed by env.
 ///
 /// `cancelled` is polled while the child runs so a cancel kills the process
 /// group promptly instead of waiting for stall, timeout or natural exit.
@@ -388,14 +388,15 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
             name: name.clone(),
             why: format!("private HOME: {e}"),
         })?;
-        let mut cmd = Command::new(&bin);
-        cmd.arg("--version").stdin(Stdio::null());
-        pg_worker_core::sandbox_env::confine_harness(&mut cmd, home.path());
         let opts = Opts {
             timeout: Some(std::time::Duration::from_secs(15)),
             grace: std::time::Duration::from_secs(1),
             ..Opts::default()
         };
+        // `supervise` retries a spawn that hits ETXTBSY (see `stall`).
+        let mut cmd = Command::new(&bin);
+        cmd.arg("--version").stdin(Stdio::null());
+        pg_worker_core::sandbox_env::confine_harness(&mut cmd, home.path());
         let r = pg_worker_core::stall::supervise(cmd, &opts).map_err(|e| PinError::Unrunnable {
             name: name.clone(),
             why: e.to_string(),
@@ -840,11 +841,13 @@ mod tests {
 
     /// A fake CLI that answers `--version` with `out` and the given exit code.
     fn fake_bin(dir: &Path, name: &str, out: &str, code: i32) -> String {
-        use std::os::unix::fs::PermissionsExt;
-        let p = dir.join(name);
-        std::fs::write(&p, format!("#!/bin/sh\necho '{out}'\nexit {code}\n")).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
-        p.to_string_lossy().into_owned()
+        crate::testutil::write_script(
+            dir,
+            name,
+            &format!("#!/bin/sh\necho '{out}'\nexit {code}\n"),
+        )
+        .to_string_lossy()
+        .into_owned()
     }
 
     fn registry_with(bin: String) -> HarnessRegistry {
@@ -868,17 +871,14 @@ mod tests {
 
     #[test]
     fn version_probe_child_sees_no_worker_secrets() {
-        use std::os::unix::fs::PermissionsExt;
         let d = tempfile::tempdir().unwrap();
         // The fake CLI prints its environment; the pin matches on a token that
         // is present only if PG_/TEMPORAL_ variables are absent.
-        let p = d.path().join("envdump");
-        std::fs::write(
-            &p,
+        let p = crate::testutil::write_script(
+            d.path(),
+            "envdump",
             "#!/bin/sh\nif env | grep -q '^PG_PROBE_SENTINEL=\\|^TEMPORAL_PROBE_SENTINEL='; then echo leaked; else echo clean-1.0; fi\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         // Unique names; no other test reads or sets them.
         unsafe { std::env::set_var("PG_PROBE_SENTINEL", "x") };
         unsafe { std::env::set_var("TEMPORAL_PROBE_SENTINEL", "x") };

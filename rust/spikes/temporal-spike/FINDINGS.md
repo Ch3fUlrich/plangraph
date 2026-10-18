@@ -113,4 +113,13 @@ SPIKE_ADDR=http://127.0.0.1:17233 cargo run --bin driver -- all tests/fixtures
 cargo test --test replay      # offline, no server
 ```
 
+Notes (workstation dev check, 2026-10-18):
+- The `set-current-version` step is required: the worker runs with versioning on, so without it
+  the driver blocks and workflows stay `Running`. Add `--yes` when scripting it.
+- Pick free ports for `--port` / `--ui-port` if 7233/8233 are taken on the host; the examples
+  above use 17233. `driver all` rewrites the recorded fixtures in `tests/fixtures`: run
+  `git checkout` on them after a driver run.
+- Reference numbers: temporal CLI 1.9.1 / server 1.32.0, start-dev RSS 166 MB idle, 205 MB after
+  the seven spike scenarios.
+
 Outcome: recorded as decision D-1321 (adopt with workarounds, pending the live Temporal check).

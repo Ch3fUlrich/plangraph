@@ -7,17 +7,20 @@
 //! an `ok` result or asks the budget for the next move: retry, re-route, wait,
 //! promote, upgrade the context class, quarantine or park.
 
+use crate::activities::AskInput;
 use crate::activities::{
     CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, JanitorInput, MergeInput,
     MergeResult, ProbeInput, ProbeResult, Tick,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
+use crate::question::{self, OnTimer, Question};
 use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
 use pg_worker_core::worktree::AttemptId;
+use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use temporalio_common::RetryPolicy;
 use temporalio_macros::{workflow, workflow_methods};
@@ -44,6 +47,62 @@ const MERGE_RETRY_CAP: u32 = 20;
 /// Alarm reason when the keeper merge lock stayed unavailable.
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 
+/// Alarm reason when a question stayed unanswered until the wait cap.
+const QUESTION_PARK_REASON: &str = "question unanswered";
+
+/// Alarm reason when the keeper would not store the agent's question.
+const QUESTION_REFUSED_REASON: &str = "question not recorded";
+
+/// Alarm reason when the `ask_question` activity failed even after its retries.
+const QUESTION_ASK_FAILED_REASON: &str = "question not recorded (keeper unreachable)";
+
+/// Alarm reason when the default was taken but the keeper refused to record it.
+const QUESTION_TIMEOUT_REFUSED_REASON: &str = "question_timeout not recorded";
+
+/// Alarm reason when a card asked more questions than `max_question_rounds`.
+const QUESTION_ROUNDS_REASON: &str = "question rounds exhausted";
+
+/// Answer signals kept per card; a flood beyond this is dropped.
+const MAX_STORED_ANSWERS: usize = 256;
+
+/// The `answer` signal, as the inbox sends it
+/// (`src/plangraph/inbox/temporal_signal.py`): `{question_id, key, text, source}`.
+/// Unknown fields are ignored and `key` and `source` may be missing; the id and
+/// the text are required.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AnswerSignal {
+    #[serde(deserialize_with = "id_from_int_or_string")]
+    pub question_id: i64,
+    #[serde(default)]
+    pub key: String,
+    pub text: String,
+    #[serde(default)]
+    pub source: String,
+}
+
+/// A question id sent as a JSON integer or as a decimal string.
+fn id_from_int_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+    use serde::de::Error;
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .ok_or_else(|| D::Error::custom("question_id is not an integer")),
+        serde_json::Value::String(s) => s
+            .trim()
+            .parse()
+            .map_err(|_| D::Error::custom("question_id is not a number")),
+        _ => Err(D::Error::custom("question_id must be a number")),
+    }
+}
+
+/// How a question ended.
+enum QuestionStep {
+    /// The text the next attempt gets in its prompt.
+    Answer(String),
+    /// The card is over (parked or cancelled) and the janitor has run.
+    Finished(CardOutput),
+}
+
 /// What the merge step produced.
 #[derive(Debug)]
 enum MergeStep {
@@ -66,6 +125,40 @@ pub struct Card {
     cancel_requested: bool,
     /// Token handed to `attempt`; the `cancel` signal fires it.
     op: Option<WorkflowCancellationToken>,
+    /// Every `answer` signal received, in arrival order.
+    answers: Vec<AnswerSignal>,
+}
+
+impl Card {
+    /// The human answer to question `id`, if one arrived. A `question_timeout`
+    /// signal is not an answer: the workflow takes its own default.
+    fn answer_text(&self, id: i64) -> Option<String> {
+        self.answers
+            .iter()
+            .find(|a| a.question_id == id && a.source != "question_timeout")
+            .map(|a| a.text.clone())
+    }
+
+    /// Store a raw `answer` payload. One that does not parse is dropped with a
+    /// log line: a bad signal must never fail the workflow task and wedge the
+    /// card. An answer for another question is stored but never matches the
+    /// wait, so it is not consumed.
+    fn accept_answer(&mut self, raw: serde_json::Value) {
+        match serde_json::from_value::<AnswerSignal>(raw) {
+            Ok(mut a) => {
+                // Cap before it enters workflow state and history, not only
+                // where it is injected into a prompt.
+                a.text = question::cap_text(&a.text);
+                if self.answers.len() >= MAX_STORED_ANSWERS {
+                    // Keep the newest: the oldest answer is long consumed.
+                    eprintln!("answer signal buffer full: dropping the oldest answer");
+                    self.answers.remove(0);
+                }
+                self.answers.push(a);
+            }
+            Err(e) => eprintln!("answer signal ignored: {e}"),
+        }
+    }
 }
 
 #[workflow_methods]
@@ -95,6 +188,11 @@ impl Card {
         let mut context = ContextClass::K128;
         let mut limited: Vec<String> = Vec::new();
         let mut leg: LegSpec = input.legs[0].clone();
+        // Answers to the agent's questions; each rides in the next prompt.
+        let mut answers: Vec<String> = Vec::new();
+        // Questions answered so far; at the limit the next one parks the card.
+        let mut question_rounds: u32 = 0;
+        let max_question_rounds = input.max_question_rounds.unwrap_or(cfg.max_question_rounds);
 
         loop {
             // A cancel that landed between attempts must not start another one.
@@ -136,6 +234,7 @@ impl Card {
                 leg: leg.clone(),
                 workroot: input.workroot.clone(),
                 class: context_class_name(context).to_string(),
+                answers: answers.clone(),
             };
 
             let result: AttemptResult = match ctx
@@ -189,6 +288,7 @@ impl Card {
                         tokens_out: None,
                         cost: None,
                         log_ref: None,
+                        question: None,
                     }
                 }
             };
@@ -222,6 +322,41 @@ impl Card {
             };
             ctx.execute_activity(CardActivities::report, report, activity_options(&cfg))
                 .await?;
+
+            // A question is not a failure: it takes no retry budget, so the
+            // attempt stays out of the history. The next attempt reruns the
+            // same leg with the answer in its prompt.
+            if result.exit_class == ExitClass::NeedsInput
+                && let Some(q) = &result.question
+            {
+                if question_rounds >= max_question_rounds {
+                    // Park without asking: the keeper would only hold one more
+                    // question nobody is meant to answer.
+                    return match park_question(
+                        ctx,
+                        &cfg,
+                        &input,
+                        &base_sha,
+                        leg.tier,
+                        &q.normalized(),
+                        QUESTION_ROUNDS_REASON,
+                        n,
+                    )
+                    .await?
+                    {
+                        QuestionStep::Finished(out) => Ok(out),
+                        QuestionStep::Answer(_) => unreachable!("park_question always finishes"),
+                    };
+                }
+                match question_step(ctx, &cfg, &input, &base_sha, leg.tier, q, n).await? {
+                    QuestionStep::Answer(text) => {
+                        question_rounds += 1;
+                        answers.push(text);
+                        continue;
+                    }
+                    QuestionStep::Finished(out) => return Ok(out),
+                }
+            }
             history.push(to_budget_attempt(&result, &leg));
 
             let mut probed = false;
@@ -522,6 +657,12 @@ impl Card {
         }
     }
 
+    /// The inbox answer to a question the card asked.
+    #[signal]
+    pub fn answer(&mut self, _ctx: &mut SyncWorkflowContext<Self>, a: serde_json::Value) {
+        self.accept_answer(a);
+    }
+
     #[signal]
     pub fn cancel(&mut self, _ctx: &mut SyncWorkflowContext<Self>, reason: String) {
         self.cancel_requested = true;
@@ -598,6 +739,150 @@ async fn wait_for(ctx: &WorkflowContext<Card>, d: Duration) -> WorkflowResult<bo
         _ = ctx.timer(d) => false,
     };
     Ok(cancelled)
+}
+
+/// Ask the keeper `q`, then wait for the answer signal, a cancel, or the timer.
+///
+/// Waiting is durable workflow time, so a replay never sleeps. The timer is the
+/// question deadline when a default may be taken, else the wait cap.
+async fn question_step(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    base_sha: &str,
+    tier: Tier,
+    q: &Question,
+    n: u32,
+) -> WorkflowResult<QuestionStep> {
+    let card = &input.claim.card;
+    let cap = input
+        .question_wait_cap_s
+        .map_or(cfg.wait_cap, Duration::from_secs);
+    // Clamped before it is sent: the keeper must not hold a default whose
+    // deadline lies beyond the cap this workflow will park at.
+    let q = q.normalized().clamped_to(cap);
+    let plan = question::plan_wait(&q, cap);
+
+    // An activity error here (after its transient retries) parks the card with
+    // an alarm: the question could not be stored, so nobody can answer it.
+    let asked: Result<Option<i64>, _> = ctx
+        .execute_activity(
+            CardActivities::ask_question,
+            AskInput {
+                card: card.clone(),
+                question: q.clone(),
+            },
+            activity_options(cfg),
+        )
+        .await;
+    let asked = match asked {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ask_question failed: {e}");
+            return park_question(
+                ctx,
+                cfg,
+                input,
+                base_sha,
+                tier,
+                &q,
+                QUESTION_ASK_FAILED_REASON,
+                n,
+            )
+            .await;
+        }
+    };
+    let Some(qid) = asked else {
+        return park_question(
+            ctx,
+            cfg,
+            input,
+            base_sha,
+            tier,
+            &q,
+            QUESTION_REFUSED_REASON,
+            n,
+        )
+        .await;
+    };
+
+    enum Woke {
+        Answer,
+        Cancel,
+        Timer,
+    }
+    let woke = temporalio_sdk::workflows::select! {
+        r = ctx.wait_condition(move |s: &Card| s.answer_text(qid).is_some()) => { r?; Woke::Answer }
+        r = ctx.wait_condition(|s: &Card| s.cancel_requested) => { r?; Woke::Cancel }
+        _ = ctx.timer(plan.wait) => Woke::Timer,
+    };
+    match woke {
+        Woke::Answer => {
+            let text = ctx
+                .state(|s| s.answer_text(qid))
+                .expect("the wait ended on an answer");
+            Ok(QuestionStep::Answer(text))
+        }
+        Woke::Cancel => {
+            run_janitor(ctx, cfg, input, base_sha).await?;
+            Ok(QuestionStep::Finished(cancelled(n)))
+        }
+        Woke::Timer => match plan.on_timer {
+            OnTimer::UseDefault(text) => {
+                // Best effort: an activity error or timeout (after its retries)
+                // counts as "not recorded". No `?` on this path: the window is
+                // over and the card continues with the default regardless.
+                let recorded: bool = match ctx
+                    .execute_activity(
+                        CardActivities::record_question_timeout,
+                        qid,
+                        activity_options(cfg),
+                    )
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("record_question_timeout activity failed: {e}");
+                        false
+                    }
+                };
+                if !recorded {
+                    // The default is still taken: the question window is over.
+                    raise_alarm(
+                        ctx,
+                        cfg,
+                        Alarm {
+                            card: card.clone(),
+                            reason: QUESTION_TIMEOUT_REFUSED_REASON.to_string(),
+                        },
+                    )
+                    .await;
+                }
+                Ok(QuestionStep::Answer(text))
+            }
+            OnTimer::Park => {
+                park_question(ctx, cfg, input, base_sha, tier, &q, QUESTION_PARK_REASON, n).await
+            }
+        },
+    }
+}
+
+/// End a card whose question cannot be answered: sweep, park and alarm.
+#[allow(clippy::too_many_arguments)]
+async fn park_question(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    base_sha: &str,
+    tier: Tier,
+    q: &Question,
+    reason: &str,
+    n: u32,
+) -> WorkflowResult<QuestionStep> {
+    let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &q.text);
+    run_janitor(ctx, cfg, input, base_sha).await?;
+    park_and_alarm(ctx, cfg, &packet, reason.to_string()).await?;
+    Ok(QuestionStep::Finished(parked(n)))
 }
 
 /// Merge `branch` into main, mapping the outcome to a value the run loop can act on.
@@ -778,16 +1063,32 @@ async fn park_and_alarm(
         activity_options(cfg),
     )
     .await?;
-    ctx.execute_activity(
-        CardActivities::alarm,
+    raise_alarm(
+        ctx,
+        cfg,
         Alarm {
             card: packet.card.clone(),
             reason,
         },
-        activity_options(cfg),
     )
-    .await?;
+    .await;
     Ok(())
+}
+
+/// Raise `alarm`, best effort: a short bounded retry, and a failure is dropped.
+/// The alarm is a notification; losing it must not fail or hang a card whose
+/// state is already recorded (parked, or continuing with a default).
+async fn raise_alarm(ctx: &WorkflowContext<Card>, cfg: &Config, alarm: Alarm) {
+    let retry = RetryPolicy::builder()
+        .initial_interval(Duration::from_secs(1))
+        .maximum_attempts(3)
+        .build();
+    let opts = ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+        .retry_policy(retry)
+        .build();
+    let _ = ctx
+        .execute_activity(CardActivities::alarm, alarm, opts)
+        .await;
 }
 
 /// The budget's view of the card's legs, marking the ones currently waited on.
@@ -909,8 +1210,93 @@ mod tests {
             legs,
             workroot: root.path().to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
+            question_wait_cap_s: None,
+            max_question_rounds: None,
         };
         (root, input)
+    }
+
+    #[test]
+    fn answer_signal_tolerates_extra_and_missing_optional_fields() {
+        let a: AnswerSignal = serde_json::from_value(serde_json::json!({
+            "question_id": 7, "text": "yes", "extra": {"a": 1}, "more": null,
+        }))
+        .unwrap();
+        assert_eq!(
+            a,
+            AnswerSignal {
+                question_id: 7,
+                key: String::new(),
+                text: "yes".into(),
+                source: String::new(),
+            }
+        );
+        let full: AnswerSignal = serde_json::from_value(serde_json::json!({
+            "question_id": "12", "key": "k", "text": "t", "source": "answer",
+        }))
+        .unwrap();
+        assert_eq!((full.question_id, full.key.as_str()), (12, "k"));
+    }
+
+    #[test]
+    fn an_answer_for_another_question_is_not_consumed() {
+        let mut card = Card::default();
+        card.accept_answer(serde_json::json!({"question_id": 2, "text": "for two"}));
+        assert_eq!(card.answer_text(1), None);
+        card.accept_answer(serde_json::json!({"question_id": 1, "text": "for one"}));
+        assert_eq!(card.answer_text(1).as_deref(), Some("for one"));
+        // The other one is still there for its own question.
+        assert_eq!(card.answer_text(2).as_deref(), Some("for two"));
+    }
+
+    #[test]
+    fn unparsable_answers_are_ignored_not_fatal() {
+        let mut card = Card::default();
+        for bad in [
+            serde_json::json!("text"),
+            serde_json::json!(null),
+            serde_json::json!({"text": "no id"}),
+            serde_json::json!({"question_id": 1}),
+            serde_json::json!({"question_id": 1.5, "text": "t"}),
+            serde_json::json!({"question_id": [1], "text": "t"}),
+            serde_json::json!({"question_id": 1, "text": 9}),
+        ] {
+            card.accept_answer(bad);
+        }
+        assert!(card.answers.is_empty());
+        // A question_timeout signal is stored but is never an answer.
+        card.accept_answer(
+            serde_json::json!({"question_id": 3, "text": "d", "source": "question_timeout"}),
+        );
+        assert_eq!(card.answer_text(3), None);
+    }
+
+    #[test]
+    fn stored_answers_are_bounded() {
+        let mut card = Card::default();
+        for i in 0..(MAX_STORED_ANSWERS as i64 + 10) {
+            card.accept_answer(serde_json::json!({"question_id": i, "text": "t"}));
+        }
+        assert_eq!(card.answers.len(), MAX_STORED_ANSWERS);
+        // The newest are kept, the oldest dropped.
+        assert_eq!(
+            card.answers.last().unwrap().question_id,
+            MAX_STORED_ANSWERS as i64 + 9
+        );
+        assert_eq!(card.answers[0].question_id, 10);
+    }
+
+    #[test]
+    fn stored_answer_text_is_capped() {
+        let mut card = Card::default();
+        let long = "x".repeat(question::MAX_TEXT_CHARS + 500);
+        card.accept_answer(serde_json::json!({"question_id": 1, "text": long}));
+        let got = card.answer_text(1).unwrap();
+        assert!(got.ends_with(question::TRUNCATION_MARKER));
+        assert_eq!(
+            got.chars().count(),
+            question::MAX_TEXT_CHARS + question::TRUNCATION_MARKER.chars().count()
+        );
     }
 
     #[test]

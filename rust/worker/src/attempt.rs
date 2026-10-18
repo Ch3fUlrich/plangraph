@@ -9,6 +9,7 @@
 
 use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
+use crate::question::{self, Question, Scan};
 use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::confine::{self, ConfineError, Violation};
@@ -49,6 +50,10 @@ pub struct AttemptInput {
     /// Context window class text ("128k" | "256k" | "1m"); empty = unknown.
     #[serde(default)]
     pub class: String,
+    /// Answers to earlier questions of this card, oldest first; appended to the
+    /// prompt. Absent in old histories and while nothing was asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<String>,
 }
 
 /// What one attempt produced.
@@ -84,6 +89,9 @@ pub struct AttemptResult {
     pub cost: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub log_ref: Option<String>,
+    /// The agent's question when the attempt ended `needs_input`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<Question>,
 }
 
 /// Everything that can go wrong running an attempt.
@@ -190,10 +198,11 @@ fn run_attempt_inner(
         );
     };
 
+    let prompt = question::prompt_with_answers(&claim.prompt, &inp.answers);
     let run = HarnessRun {
         workdir: dest.as_path(),
         model: inp.leg.model.as_str(),
-        prompt: claim.prompt.as_str(),
+        prompt: prompt.as_str(),
     };
     if let Err(why) = h.validate(&run) {
         return defect_result(&dest, &claim.base_sha, &branch, &wt.head, why);
@@ -207,10 +216,11 @@ fn run_attempt_inner(
     // The agent's private HOME lives beside the worktree (never in its diff) and
     // goes away with the attempt. The check below gets its own HOME, so a login
     // the harness persisted here never reaches the check child.
-    let home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
+    let mut home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
     // Harness auth travels as staged files in this HOME, never by env (the
-    // confined env carries no credential names; see sandbox_env).
-    pg_worker_core::sandbox_env::stage_harness_auth(home.path())?;
+    // confined env carries no credential names; see sandbox_env). The guard
+    // removes what it staged when the attempt ends.
+    home.stage_harness_auth()?;
     let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
@@ -223,6 +233,18 @@ fn run_attempt_inner(
     }
 
     let clean = sup.code == Some(0) && !sup.stalled && !sup.timed_out;
+
+    // A question packet on a run that was not killed is a request for input; an
+    // unusable packet is a defect of the harness contract, not something to retry.
+    let (question, malformed) = if sup.stalled || sup.timed_out {
+        (None, None)
+    } else {
+        match question::scan_output(&output) {
+            Scan::None => (None, None),
+            Scan::Asked(q) => (Some(q), None),
+            Scan::Malformed(why) => (None, Some(why)),
+        }
+    };
 
     // The harness itself must not have left an escaping link behind.
     if let Some(paths) = sandbox_escape(&dest)? {
@@ -262,14 +284,16 @@ fn run_attempt_inner(
     // skipped entirely.
     let violations =
         confine::check_confinement(&dest, &claim.base_sha, &claim.allow, &claim.forbid)?;
-    let contract = !violations.is_empty();
+    let contract = !violations.is_empty() || malformed.is_some();
 
     // Hashed before the check so a check's own scratch files never pollute the
     // diff of what the attempt changed.
     let diff_hash = confine::diff_hash(&dest, &claim.base_sha)?;
-    let (outcome, check_hash, check_tail) = if clean && !contract {
+    let (outcome, check_hash, check_tail) = if clean && !contract && question.is_none() {
         let (o, last) = check_with_rerun(&claim.check_cmd, &dest, cfg)?;
         (Some(o), last.output_hash, last.tail)
+    } else if let Some(why) = &malformed {
+        (None, String::new(), why.clone())
     } else {
         (None, String::new(), violations_tail(&violations))
     };
@@ -281,6 +305,7 @@ fn run_attempt_inner(
         timed_out: sup.timed_out,
         stalled: sup.stalled,
         contract_defect: contract,
+        needs_input: question.is_some(),
         stderr: output,
         cancelled: sup.cancelled,
         ..Signals::default()
@@ -305,6 +330,7 @@ fn run_attempt_inner(
         tokens_out: None,
         cost: None,
         log_ref: None,
+        question: question.filter(|_| classification.class == ExitClass::NeedsInput),
     })
 }
 
@@ -399,6 +425,7 @@ fn cancelled_result(branch: &str, head: &str, output_tail: String) -> AttemptRes
         tokens_out: None,
         cost: None,
         log_ref: None,
+        question: None,
     }
 }
 
@@ -430,6 +457,7 @@ fn defect_result(
         tokens_out: None,
         cost: None,
         log_ref: None,
+        question: None,
     })
 }
 
@@ -598,6 +626,7 @@ mod tests {
             },
             workroot: workroot.to_string_lossy().into_owned(),
             class: String::new(),
+            answers: Vec::new(),
         }
     }
 
@@ -776,6 +805,7 @@ mod tests {
             tokens_out: None,
             cost: None,
             log_ref: None,
+            question: None,
         };
         let leg = LegSpec {
             id: "leg-9".to_string(),
@@ -837,6 +867,7 @@ mod tests {
             tokens_out: None,
             cost: None,
             log_ref: None,
+            question: None,
         };
         let v = serde_json::to_value(&r).unwrap();
         let obj = v.as_object().unwrap();
@@ -860,6 +891,73 @@ mod tests {
             serde_json::from_str(r#"{"id":"l","tier":"free","model":"m","harness":"claude"}"#)
                 .unwrap();
         assert_eq!(leg.harness, "claude");
+    }
+
+    #[test]
+    fn question_line_ends_needs_input_with_the_parsed_question() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(claim(&repo_s, &base, &["out.txt"], "false"), 1, root.path());
+        let h = Fake::new(
+            r#"echo 'PG_QUESTION: {"text":"which db?","default":"sqlite","deadline_s":7,"risk_tags":[]}'"#,
+        );
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::NeedsInput);
+        let q = res.question.expect("the question rides on the result");
+        assert_eq!(q.text, "which db?");
+        assert_eq!(q.default.as_deref(), Some("sqlite"));
+        assert_eq!(q.deadline_s, Some(7));
+    }
+
+    #[test]
+    fn malformed_question_is_a_contract_defect() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(claim(&repo_s, &base, &["out.txt"], "true"), 1, root.path());
+        let h = Fake::new("echo 'PG_QUESTION: not json'");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::ContractDefect);
+        assert!(res.question.is_none());
+        assert!(res.check_tail.contains("PG_QUESTION"), "{}", res.check_tail);
+    }
+
+    #[test]
+    fn answers_reach_the_harness_prompt() {
+        struct Echo;
+        impl Harness for Echo {
+            fn name(&self) -> &str {
+                "echo"
+            }
+            fn command(&self, run: &HarnessRun) -> Command {
+                let mut c = Command::new("sh");
+                c.arg("-c")
+                    .arg("printf %s \"$0\" > out.txt")
+                    .arg(run.prompt)
+                    .current_dir(run.workdir);
+                c
+            }
+        }
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let mut inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            2,
+            root.path(),
+        );
+        inp.answers = vec!["use sqlite".to_string()];
+        let res = run_attempt(&Echo, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        let written = std::fs::read_to_string(
+            root.path()
+                .join(AttemptId::new("c1", 2).dir_name())
+                .join("out.txt"),
+        )
+        .unwrap();
+        assert!(written.starts_with("do the thing"), "{written}");
+        assert!(written.ends_with("use sqlite"), "{written}");
     }
 
     #[test]

@@ -200,6 +200,18 @@ pub fn list(repo: &Path) -> Result<Vec<AttemptWorktree>, GitError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn keeper_style_card_ids_make_valid_branches() {
+        let id = super::AttemptId::new("demo:E2E-1", 2);
+        let branch = id.branch();
+        assert!(branch.starts_with("attempt/demo_E2E-1-"), "{branch}");
+        assert!(!branch.contains(':'));
+        assert_eq!(
+            super::AttemptId::parse_branch(&branch).map(|a| a.branch()),
+            Some(branch)
+        );
+    }
+
     use super::*;
     use crate::testutil::{commit_all, repo, write};
 

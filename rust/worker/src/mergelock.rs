@@ -597,16 +597,13 @@ mod tests {
     /// directory survives inside git; only the guard removes it.
     #[test]
     fn failed_worktree_add_removes_scratch_dir() {
-        use std::os::unix::fs::PermissionsExt;
-
         let (r, base) = repo();
         let p = r.path();
         attempt_branch(p, "attempt/x/1", "x.txt", "x", &base);
 
-        let hook = p.join(".git/hooks/post-checkout");
-        std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
-        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let hooks = p.join(".git/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        crate::testutil::write_script(&hooks, "post-checkout", "#!/bin/sh\nexit 1\n");
 
         // The add fails partway through, after the working tree exists.
         let err =

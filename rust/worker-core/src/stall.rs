@@ -94,7 +94,7 @@ pub fn supervise_with_cancel(
         .stdout(writer.try_clone()?)
         .stderr(writer)
         .process_group(0);
-    let mut child = cmd.spawn()?;
+    let mut child = spawn_retrying(&mut cmd)?;
     drop(cmd); // closes our copies of the write end so the reader sees EOF
     let pgid = child.id() as i32;
     let start = Instant::now();
@@ -148,10 +148,57 @@ pub fn supervise_with_cancel(
     })
 }
 
+/// True for "Text file busy" (ETXTBSY): the program to exec is still open for
+/// writing somewhere, typically a script written a moment ago while a sibling
+/// thread forked.
+pub fn is_text_busy(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::ExecutableFileBusy || e.raw_os_error() == Some(26)
+}
+
+/// Spawns tried on ETXTBSY before giving up (the first try included).
+const SPAWN_TRIES: u32 = 6;
+
+/// `cmd.spawn()`, retried with a short growing pause while it fails with
+/// ETXTBSY. That condition clears in milliseconds once the writer closes its
+/// fd; any other error is returned at once. The one spawn point for every
+/// supervised child, so user scripts need no retry of their own.
+fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
+    let mut tries = 1;
+    loop {
+        match cmd.spawn() {
+            Err(e) if is_text_busy(&e) && tries < SPAWN_TRIES => {
+                thread::sleep(Duration::from_millis(20 * u64::from(tries)));
+                tries += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn spawn_survives_a_script_still_open_for_writing() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("busy.sh");
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(b"#!/bin/sh\necho up\n").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // Closes the write fd after a moment; until then exec gives ETXTBSY.
+        let closer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(70));
+            drop(f);
+        });
+        let r = supervise(Command::new(&p), &quick()).unwrap();
+        closer.join().unwrap();
+        assert_eq!(r.code, Some(0));
+        assert!(String::from_utf8_lossy(&r.output).contains("up"));
+    }
 
     fn sh(script: &str) -> Command {
         let mut c = Command::new("sh");

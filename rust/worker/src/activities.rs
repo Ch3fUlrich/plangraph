@@ -11,6 +11,7 @@ use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
 use crate::keeper::{Alarm, AttemptReport, Claim, Fence, Keeper};
 use crate::mergelock::{self, MergeOutcome};
+use crate::question::Question;
 use pg_worker_core::budget;
 use pg_worker_core::check;
 use pg_worker_core::config::Config;
@@ -75,6 +76,21 @@ pub struct CardInput {
     pub legs: Vec<LegSpec>,
     pub workroot: String,
     pub main_branch: String,
+    /// Longest the card waits for an answer to a question, in seconds. Unset =
+    /// the configured wait cap (24 h). Exists so a test need not wait a day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_wait_cap_s: Option<u64>,
+    /// Questions answered before the next one parks the card. Unset = the
+    /// configured `max_question_rounds` (3). Injectable so a test is quick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_question_rounds: Option<u32>,
+}
+
+/// Ask the keeper to store an agent question for a card.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AskInput {
+    pub card: String,
+    pub question: Question,
 }
 
 /// Result of the `card` workflow.
@@ -199,6 +215,69 @@ impl CardActivities {
 
 /// The process-local fallback when heartbeats or cancellation cannot be spelled
 /// into an `ActivityError` directly: stringify and wrap.
+/// How a keeper failure should be treated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Failure {
+    /// The keeper said no and asking again cannot change that: 401, 403, 409, 422.
+    Refused,
+    /// Plausibly gone in a moment: a transport error, 408, 429 or any 5xx.
+    Transient,
+    /// Anything else (another 4xx, an undecodable reply): not retried here.
+    Other,
+}
+
+fn classify(e: &crate::keeper::KeeperError) -> Failure {
+    use crate::keeper::KeeperError;
+    match e {
+        KeeperError::Http(_) => Failure::Transient,
+        KeeperError::Status(401 | 403 | 409 | 422) => Failure::Refused,
+        KeeperError::Status(408 | 429 | 500..=599) => Failure::Transient,
+        KeeperError::Status(_) | KeeperError::Decode(_) => Failure::Other,
+    }
+}
+
+/// Pauses between the tries of a keeper call that failed transiently, so a call
+/// is made at most `1 + len` times.
+const TRANSIENT_BACKOFF: [Duration; 3] = [
+    Duration::from_millis(250),
+    Duration::from_secs(1),
+    Duration::from_secs(3),
+];
+
+/// Run `f`; while it fails transiently sleep through `backoff` and run it
+/// again. Blocking: call from `spawn_blocking`.
+fn retry_transient<T>(
+    backoff: &[Duration],
+    mut f: impl FnMut() -> Result<T, crate::keeper::KeeperError>,
+) -> Result<T, crate::keeper::KeeperError> {
+    let mut pauses = backoff.iter();
+    loop {
+        match f() {
+            Err(e) if classify(&e) == Failure::Transient => match pauses.next() {
+                Some(d) => std::thread::sleep(*d),
+                None => return Err(e),
+            },
+            other => return other,
+        }
+    }
+}
+
+/// A permanent refusal (see [`Failure::Refused`]) is logged and reported as
+/// `None`; any other failure is an error the activity retry policy handles.
+fn settle_refusal<T>(
+    res: Result<T, crate::keeper::KeeperError>,
+    verb: &str,
+) -> Result<Option<T>, ActivityError> {
+    match res {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if classify(&e) == Failure::Refused => {
+            eprintln!("keeper refused {verb}: {e}");
+            Ok(None)
+        }
+        Err(e) => Err(activity_error(e)),
+    }
+}
+
 fn activity_error(e: impl std::fmt::Display) -> ActivityError {
     anyhow::anyhow!(e.to_string()).into()
 }
@@ -645,6 +724,63 @@ impl CardActivities {
             .map_err(activity_error)
     }
 
+    /// Store the agent's question. `Some(id)` on success, `None` when the
+    /// keeper refused it (401, 403, 409 or 422: retrying cannot help, the
+    /// workflow parks). A transient failure (transport, 408, 429, 5xx) is
+    /// retried here with a backoff, then becomes an activity error that the
+    /// activity retry policy handles.
+    #[activity]
+    pub async fn ask_question(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: AskInput,
+    ) -> Result<Option<i64>, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            retry_transient(&TRANSIENT_BACKOFF, || {
+                keeper.ask_question(&input.card, &input.question)
+            })
+        })
+        .await
+        .map_err(activity_error)?;
+        settle_refusal(res, "ask_question")
+    }
+
+    /// Record `question_timeout` for a question whose default was taken.
+    /// `true` when recorded; `false` on any failure that outlasts the transient
+    /// retries here or is a refusal (for example the worker token lacks the
+    /// router or system role): it is logged and the workflow raises an alarm
+    /// but still continues with the default. This activity never errors, so a
+    /// keeper outage cannot fail the card.
+    #[activity]
+    pub async fn record_question_timeout(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        question_id: i64,
+    ) -> Result<bool, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            retry_transient(&TRANSIENT_BACKOFF, || {
+                keeper.record_question_timeout(question_id)
+            })
+        })
+        .await;
+        // A keeper error and a dead blocking task are the same thing here:
+        // not recorded. Never an activity error (that would be retried and then
+        // fail the card).
+        match res {
+            Ok(Ok(())) => Ok(true),
+            Ok(Err(e)) => {
+                eprintln!("record_question_timeout not recorded: {e}");
+                Ok(false)
+            }
+            Err(e) => {
+                eprintln!("record_question_timeout task failed: {e}");
+                Ok(false)
+            }
+        }
+    }
+
     /// Sweep dead attempts and report how many were removed.
     #[activity]
     pub async fn janitor(
@@ -669,6 +805,69 @@ mod tests {
     use pg_worker_core::worktree;
     use std::process::{Command, Stdio};
     use tempfile::TempDir;
+
+    use crate::keeper::KeeperError;
+
+    #[test]
+    fn keeper_failures_are_classified() {
+        for code in [401, 403, 409, 422] {
+            assert_eq!(classify(&KeeperError::Status(code)), Failure::Refused);
+        }
+        for code in [408, 429, 500, 502, 503, 599] {
+            assert_eq!(classify(&KeeperError::Status(code)), Failure::Transient);
+        }
+        assert_eq!(classify(&KeeperError::Http("x".into())), Failure::Transient);
+        for code in [400, 404, 410] {
+            assert_eq!(classify(&KeeperError::Status(code)), Failure::Other);
+        }
+        assert_eq!(classify(&KeeperError::Decode("x".into())), Failure::Other);
+    }
+
+    #[test]
+    fn transient_failures_are_retried_then_succeed() {
+        let mut calls = 0;
+        let r = retry_transient(&[Duration::ZERO; 3], || {
+            calls += 1;
+            if calls < 3 {
+                Err(KeeperError::Status(429))
+            } else {
+                Ok(7)
+            }
+        });
+        assert_eq!((r, calls), (Ok(7), 3));
+    }
+
+    #[test]
+    fn transient_failures_are_bounded_and_permanent_ones_are_not_retried() {
+        let mut calls = 0;
+        let r: Result<(), _> = retry_transient(&[Duration::ZERO; 3], || {
+            calls += 1;
+            Err(KeeperError::Status(503))
+        });
+        assert_eq!((r, calls), (Err(KeeperError::Status(503)), 4));
+        for code in [401, 403, 409, 422, 400] {
+            let mut calls = 0;
+            let r: Result<(), _> = retry_transient(&[Duration::ZERO; 3], || {
+                calls += 1;
+                Err(KeeperError::Status(code))
+            });
+            assert_eq!((r, calls), (Err(KeeperError::Status(code)), 1), "{code}");
+        }
+    }
+
+    #[test]
+    fn only_a_permanent_refusal_settles_to_none() {
+        for code in [401, 403, 409, 422] {
+            assert!(matches!(
+                settle_refusal::<i64>(Err(KeeperError::Status(code)), "v"),
+                Ok(None)
+            ));
+        }
+        for code in [408, 429, 500, 503, 400] {
+            assert!(settle_refusal::<i64>(Err(KeeperError::Status(code)), "v").is_err());
+        }
+        assert!(matches!(settle_refusal(Ok(3), "v"), Ok(Some(3))));
+    }
 
     /// A harness that is never run by these tests; it only satisfies `Deps`.
     struct Fake;
@@ -724,6 +923,8 @@ mod tests {
             }],
             workroot: "/w".to_string(),
             main_branch: "main".to_string(),
+            question_wait_cap_s: None,
+            max_question_rounds: None,
         }
     }
 

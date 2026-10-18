@@ -2,14 +2,15 @@
 //!
 //! Wiring is env-driven so the same binary runs against a local stub or the
 //! real keeper without a rebuild: `PG_TEMPORAL_ADDR`, `PG_NAMESPACE`,
-//! `PG_KEEPER_URL`, `PG_HARNESS_BIN`.
+//! `PG_KEEPER_URL`, `PG_KEEPER_TOKEN`, `PG_HARNESS_BIN`.
 //!
 //! The keeper is required: with `PG_KEEPER_URL` unset or empty the worker exits
 //! with an error rather than running against an in-memory stand-in that would
 //! claim nothing and silently drop every report, park and merge lock. Local
 //! tests and examples opt in to the stand-in explicitly with `PG_KEEPER_STUB=1`
 //! (ignored when `PG_KEEPER_URL` is set); it is local-only and must never be
-//! set on a live deployment.
+//! set on a live deployment. With a keeper URL, `PG_KEEPER_TOKEN` (the worker
+//! role bearer token) must be set and non-empty.
 //!
 //! `PG_HARNESS_VERSIONS` (`name=version,...`) pins the agent CLIs. Unset is only
 //! a startup warning, not an error, so live deployments MUST set it: without it
@@ -92,9 +93,22 @@ fn binary_on_path(bin: &str) -> bool {
 
 /// Choose the keeper: the HTTP one when `url` is set and non-empty; otherwise
 /// the in-memory stub only if `stub` is exactly `1`; otherwise an error.
-fn select_keeper(url: Option<&str>, stub: Option<&str>) -> anyhow::Result<Arc<dyn Keeper>> {
+///
+/// The keeper authenticates every verb with the worker role's bearer token, so
+/// an HTTP keeper requires `PG_KEEPER_TOKEN` to be set and non-empty: a blank
+/// token would only surface later as an opaque 401 on the first report.
+fn select_keeper(
+    url: Option<&str>,
+    stub: Option<&str>,
+    token: Option<&str>,
+) -> anyhow::Result<Arc<dyn Keeper>> {
     match url {
-        Some(u) if !u.is_empty() => Ok(Arc::new(HttpKeeper::new(u))),
+        Some(u) if !u.is_empty() => match token {
+            Some(t) if !t.is_empty() => Ok(Arc::new(HttpKeeper::new(u).with_token(t))),
+            _ => anyhow::bail!(
+                "PG_KEEPER_TOKEN is unset or empty; the keeper needs the worker role token"
+            ),
+        },
         _ if stub == Some("1") => {
             eprintln!("warning: PG_KEEPER_STUB=1; using the in-memory stub keeper (tests only)");
             Ok(Arc::new(StubKeeper::default()))
@@ -114,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
     let keeper = select_keeper(
         std::env::var("PG_KEEPER_URL").ok().as_deref(),
         std::env::var("PG_KEEPER_STUB").ok().as_deref(),
+        std::env::var("PG_KEEPER_TOKEN").ok().as_deref(),
     )?;
     let harnesses = build_registry();
     println!("harnesses: {}", harnesses.names().join(", "));
@@ -200,12 +215,20 @@ mod tests {
 
     #[test]
     fn missing_keeper_url_fails_closed_unless_the_stub_is_explicit() {
-        assert!(select_keeper(None, None).is_err());
-        assert!(select_keeper(Some(""), None).is_err());
+        assert!(select_keeper(None, None, None).is_err());
+        assert!(select_keeper(Some(""), None, None).is_err());
         // Only an exact `1` opts in.
-        assert!(select_keeper(None, Some("0")).is_err());
-        assert!(select_keeper(None, Some("true")).is_err());
-        assert!(select_keeper(None, Some("1")).is_ok());
-        assert!(select_keeper(Some("http://127.0.0.1:1"), None).is_ok());
+        assert!(select_keeper(None, Some("0"), None).is_err());
+        assert!(select_keeper(None, Some("true"), None).is_err());
+        assert!(select_keeper(None, Some("1"), None).is_ok());
+        assert!(select_keeper(Some("http://127.0.0.1:1"), None, Some("t")).is_ok());
+    }
+
+    #[test]
+    fn http_keeper_requires_a_non_empty_token() {
+        let u = Some("http://127.0.0.1:1");
+        assert!(select_keeper(u, None, None).is_err());
+        assert!(select_keeper(u, None, Some("")).is_err());
+        assert!(select_keeper(u, Some("1"), Some("")).is_err());
     }
 }
