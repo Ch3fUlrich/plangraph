@@ -1,5 +1,5 @@
 # build-L1 card · gen-16 live · HANDOFF #16 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
-HOLD D-1998 (P1 plan audit, p1-audit-L1 read-only, never msg): in-flight lanes -> MERGE-READY/merge OK; NO new claims/E2E/L2 launches/P1 live GO-REQs. GATE-WIRING+FLOW-UNBLOCK continue = default A (asked routing); E2E frozen f9978ad.
+HOLD D-1998 (P1 plan audit, p1-audit-L1 read-only, never msg): in-flight lanes -> MERGE-READY/merge OK; NO new claims/E2E/L2 launches/P1 live GO-REQs. A CONFIRMED by router: GATE-WIRING C1-C4 + FLOW-UNBLOCK F1-F7 -> MERGE-READY; E2E frozen.
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
@@ -15,7 +15,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | TEMPORAL-CHECK (server) | DONE (router close D-1967+D-1993) | hb key dropped |
 | md-sync (D-1990 blocker) | FAILED since 08:48Z: routing:PH-OPERATOR rehomed; F7 at rt-side-2 | F7 merge -> GO D-1992 steps (handoff #16 IN FLIGHT 1) |
 | VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
-| E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
+| E2E (FROZEN D-1998) | head f9978ad: stub leg vs real verbs exit 0 E2E-DEVSTACK-OK; seat A FIX (7233 default not refused, required verbs, claim-before-park per G1, exact attempts); fix round finishing its commit, opencode leg unverifiable from WSL shim | no runs/PR until audit; new head -> card |
 | DEV-PGDRILL-LOCAL (HIGH) | #80 merged cdd0655d (GO D-1988), commit+ci attached; run record evidence/pgdrill-codingvm-0df12c0-ok.log; seats seats/pgdrill-0df12c0 | rt-side-2 lane D2 dev-guard (D-1988) -> merge -> evidence + D-1988 -> submit -> verdicts xiaomi+google |
 | FLOW-UNBLOCK (HIGH, D-1968) | claimed; rt-side lane F (brief 5dbd1f31) | after #80 |
 | FLEET-SID-REFRESH | in_review; seats FIX; routing fixing in routing repo (D-1971) | re-seat on routing's new sha |
