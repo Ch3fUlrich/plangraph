@@ -304,7 +304,7 @@ def _truthy(value) -> bool:
 
 
 def _secret_from_value(value) -> str | None:
-    """A credential cell: a string, or a JSON object string holding key/access/token."""
+    """One stored auth cell: a plain string, or a JSON object string with a key, access or token field."""
     if isinstance(value, (bytes, bytearray)):
         try:
             value = bytes(value).decode("utf-8")

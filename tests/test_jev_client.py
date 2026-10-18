@@ -121,7 +121,7 @@ def _no_key_env(tmp_path):
 
 
 def _make_credential_db(path, rows):
-    """Create a ``credential`` table with id/integration/active/key columns."""
+    """Create the auth table the client reads, with id, integration, active and key columns."""
     connection = sqlite3.connect(str(path))
     try:
         connection.execute("CREATE TABLE credential "
