@@ -14,7 +14,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | md-sync (D-1990 blocker) | FAILED since 08:48Z: routing:PH-OPERATOR rehomed; F7 at rt-side-2 | F7 merge -> GO D-1992 steps (handoff #16 IN FLIGHT 1) |
 | VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
 | E2E (FROZEN D-1998) | head 7b1e92a (lane/rt-p1-e2e-devstack, no PR): seat-A fixes in (port refusals, claim-before-workflow 1800s, exact stub verbs+attempts, new --leg stub-fail), 96 pass hermetic; NOT re-run on real stack; writer deepseek-free (qwen hung) -> seats gemini+mimo | after audit: real-stack both legs + run record, round-2 seats, PR |
-| QUESTION-TIMER #83 (HIGH) | head f54dbe1a CI green, seats gemini+mimo PASS | GO-REQ judge sent -> merge |
+| QUESTION-TIMER #83 (HIGH) | MERGED 541e4a6c (judge GO); DEPLOY GATE: (1) drain or replay-test pre-change histories (park args changed) (2) restart e2e needs real SDK shutdown + worker-identity assert before durability = evidence | CI main -> evidence -> submit -> verdicts gemini+mimo |
 | DEV-PGDRILL-LOCAL (HIGH) | #80 merged cdd0655d (GO D-1988), commit+ci attached; run record evidence/pgdrill-codingvm-0df12c0-ok.log; seats seats/pgdrill-0df12c0 | rt-side-2 lane D2 dev-guard (D-1988) -> merge -> evidence + D-1988 -> submit -> verdicts xiaomi+google |
 | FLOW-UNBLOCK (HIGH, D-1968) | claimed; rt-side lane F (brief 5dbd1f31) | after #80 |
 | FLEET-SID-REFRESH | in_review; seats FIX; routing fixing in routing repo (D-1971) | re-seat on routing's new sha |
