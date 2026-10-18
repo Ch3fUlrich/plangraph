@@ -57,7 +57,9 @@ def base_commit(remote_sha, local_sha):
 def scan_blob(rel, local_sha, cfg, find_shapes, hits):
     skip = sc._allowed(rel, cfg)
     if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
-        hits.append(sc.Hit(rel, 0, "private-word"))
+        pending = sc.pending_value_shas(rel, "private-word", [rel], cfg)
+        if pending:
+            hits.append(sc.Hit(rel, 0, "private-word", pending[0]))
     entry = git_out("ls-tree", local_sha, "--", rel)
     if entry.startswith("120000 "):  # a link target is a path leak, never allow-listable
         hits.append(sc.Hit(rel, 0, "symlink"))

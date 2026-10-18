@@ -231,6 +231,32 @@ def test_hook_allow_value_is_bound_to_its_path(repo, tmp_path):
     assert fake_ip() not in out
 
 
+def test_hook_value_allows_a_path_level_private_word_hit(repo, tmp_path):
+    """A path-level private-word hit carries the relative path as its value, so the
+    same [[scrub.allow_value]] entry that lets CI's scan_tree pass lets the push pass."""
+    r, base = repo
+    rel = "app/" + fake_word() + "-plan.txt"
+    words = tmp_path / "words.txt"
+    words.write_text(fake_word() + "\n")
+    head = commit_file(r, rel, "clean\n")
+    lines = [push_line("main", head, base)]
+
+    res = run_hook(r, lines, env_extra={"PLANGRAPH_SCRUB_WORDS": str(words)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 1, out
+    assert "<path-hash:" in out
+    for leak in (fake_word(), rel):
+        assert leak not in out, "the hitting path is itself the leak"
+
+    rules = tmp_path / "rules.toml"
+    rules.write_text(value_rules(rel, "private-word", rel))
+    res = run_hook(r, lines, env_extra={"PLANGRAPH_SCRUB_WORDS": str(words),
+                                        "PLANGRAPH_SCRUB_RULES": str(rules)})
+    out = res.stdout + res.stderr
+    assert res.returncode == 0, out
+    assert "<path-hash:" not in out and fake_word() not in out
+
+
 def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():
     wf = yaml.safe_load(WORKFLOWS.read_text(encoding="utf-8"))
     jobs = wf["jobs"]
