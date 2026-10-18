@@ -9,7 +9,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | Item | Owner | State / next |
 |---|---|---|
 | DONE | - | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW (+FOLLOWUP, TEMPORAL-CHECK server); QUESTION-TIMER 541e4a6c (deploy conds -> WF-VERSIONING); LIVE-GUARDS 2424d40b (live cond -> EXEC-OWNERSHIP) |
-| md-sync F7 | rt-side-2 | FAILED since 08:48Z; F7 merge -> D-1992 steps 1-3 (handoff IN FLIGHT 1); OS-OCGO-LOGIN closes via D-2003 after |
+| md-sync F7 | rt-side-2 | #93 e7ac89a3 CI green, mimo PASS -> GO-REQ judge; FAILED since 08:48Z; F7 merge -> D-1992 steps 1-3 (handoff IN FLIGHT 1); OS-OCGO-LOGIN closes via D-2003 after |
 | DEV-PGDRILL | - | DONE #89 d8c7b606 (judge GO, D-1988 closed; xiaomi+google). FLAKES for CI-GATE/DRILLS: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | claimed 14:36Z, briefed inline |
