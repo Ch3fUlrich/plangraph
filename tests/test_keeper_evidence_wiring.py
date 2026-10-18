@@ -151,3 +151,26 @@ def test_decision_item_end_to_end(w):
     assert w.store._item(key)["state"] == "in_review"
     w.store.verdict(w.p("reviewer2"), key, True, "second family")
     assert w.store._item(key)["state"] == "done"
+
+
+def test_unreadable_event_stamp_fails_closed(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    epoch = to_claimed(w, key)
+    w.clock.advance(300)
+    w.store.release(w.p("l1main"), key, epoch)
+    epoch2 = to_claimed(w, key, who="workerA")
+    item = dict(w.store._item(key))
+    real = w.conn.execute
+    class Conn:
+        def __getattr__(self, name):
+            return getattr(w.conn, name)
+        def execute(self, sql, params=()):
+            cur = real(sql, params)
+            if "type='released'" in sql:
+                return type("C", (), {"fetchone": lambda s: {"ts": "garbage"}})()
+            return cur
+    w.store.conn = Conn()
+    try:
+        assert w.store._bind_floor_time(item) == float("inf")
+    finally:
+        del w.store.conn

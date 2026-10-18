@@ -16,6 +16,8 @@ an invalid ref, or any git failure simply yields no ``merged_open`` rows.
 """
 from __future__ import annotations
 
+import time
+
 #: A claimed item with no event in this many seconds is considered stalled.
 STALL_S = 2 * 3600.0
 _CLOSED = ("done", "closed")
@@ -55,12 +57,27 @@ def _fetcher(git, entry):
     return cli_check.plan_item_trailers
 
 
+#: ``git log`` runs per repo at most this often: GET /v1/alarms is polled, and
+#: an uncached read would spawn git on every request.
+_CACHE_TTL_S = 15.0
+_cache: dict = {}
+
+
 def _trailers(fetch, repo, ref):
+    cacheable = fetch is cli_check.plan_item_trailers and _CACHE_TTL_S > 0
+    stamp = time.monotonic()
+    if cacheable:
+        hit = _cache.get((repo, ref))
+        if hit is not None and stamp - hit[0] < _CACHE_TTL_S:
+            return hit[1]
     try:
         result = fetch(repo, ref)
     except Exception:  # noqa: BLE001 - a failing git never fails the read
         return []
-    return result if isinstance(result, list) else []
+    result = result if isinstance(result, list) else []
+    if cacheable:
+        _cache[(repo, ref)] = (stamp, result)
+    return result
 
 
 def stall_alarms(conn, now, git=None):
@@ -83,12 +100,14 @@ def stall_alarms(conn, now, git=None):
                                     if age is not None else "claimed, no events"),
                          "raised_at": last or iso(now)})
     if open_keys:
-        entries = [git] if callable(git) else list(_repos_of(git).values())
+        entries = ([(None, git)] if callable(git)
+                   else list(_repos_of(git).items()))
         seen = set()
-        for entry in entries:
+        for project, entry in entries:
             repo, ref = cli_check._repo_path(entry)
             for sha, value in _trailers(_fetcher(git, entry), repo, ref):
-                if value in open_keys and (value, sha) not in seen:
+                if (value in open_keys and (value, sha) not in seen
+                        and project in (None, open_keys[value])):   # a repo only speaks for its own project
                     seen.add((value, sha))
                     rows.append({"id": None, "key": value, "kind": "merged_open",
                                  "workflow_id": None,

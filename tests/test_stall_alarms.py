@@ -23,6 +23,13 @@ from plangraph.keeper.events import append_event
 HOUR = 3600.0
 
 
+@pytest.fixture(autouse=True)
+def _no_cache(monkeypatch):
+    from plangraph.keeper import stall
+    monkeypatch.setattr(stall, "_CACHE_TTL_S", 0.0)
+    stall._cache.clear()
+
+
 @pytest.fixture
 def w(tmp_path):
     world = World(tmp_path)
@@ -197,3 +204,20 @@ def git_repo(tmp_path, w):
     repo = tmp_path / "repo"
     make_commit(repo, keys[0])
     return repo, keys[0]
+
+
+def test_git_is_cached_between_reads_and_scoped_to_its_project(w, git_repo, monkeypatch):
+    from plangraph.keeper import stall
+    repo, key = git_repo
+    monkeypatch.setattr(stall, "_CACHE_TTL_S", 60.0)
+    calls = []
+    real = stall.cli_check.plan_item_trailers
+    monkeypatch.setattr(stall.cli_check, "plan_item_trailers",
+                        lambda r, ref: calls.append(r) or real(r, ref))
+    git = SimpleNamespace(repos={"demo": str(repo)})
+    assert len(stall_alarms(w.conn, w.clock(), git=git)) == 1
+    assert len(stall_alarms(w.conn, w.clock(), git=git)) == 1
+    assert len(calls) == 1                        # second read served from the cache
+    stall._cache.clear()
+    other = SimpleNamespace(repos={"other": str(repo)})   # repo of another project
+    assert stall_alarms(w.conn, w.clock(), git=other) == []

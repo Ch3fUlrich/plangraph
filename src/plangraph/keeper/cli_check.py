@@ -84,6 +84,8 @@ def order_only_edges(items):
             dst = by_key.get(dst_key)
             if dst is None or _paths_touch(src, dst) or _mentions(dst, src_key):
                 continue
+            if not (_paths_of(src) and _paths_of(dst)):
+                continue    # undeclared paths: unknown, never claim order-only
             findings.append((src_key, dst_key))
     return sorted(findings)
 
@@ -115,11 +117,14 @@ def plan_item_trailers(repo, ref):
     if proc.returncode != 0:
         return []
     out = []
+    sha = ""
     for line in proc.stdout.splitlines():
-        sha, _, value = line.partition("\x00")
-        value = value.strip()
-        if value:
-            out.append((sha.strip(), value))
+        if "\x00" in line:      # commit line; later lines are its further trailers
+            sha, _, line = line.partition("\x00")
+            sha = sha.strip()
+        value = line.strip()
+        if value and sha:
+            out.append((sha, value))
     return out
 
 

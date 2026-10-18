@@ -81,7 +81,7 @@ def test_check_is_registered_in_the_cli():
 
 
 def test_order_only_edge_is_reported(world, tmp_path, monkeypatch, capsys):
-    create(world, defn("A", []), defn("B", ["A"]),
+    create(world, defn("A", [], paths=["src/a/x.py"]), defn("B", ["A"], paths=["docs/b.md"]),
            defn("D", ["A"], paths=["docs/notes.md"]))
     assert run_main(world, tmp_path, monkeypatch) == 0
     out = capsys.readouterr().out
@@ -90,14 +90,14 @@ def test_order_only_edge_is_reported(world, tmp_path, monkeypatch, capsys):
 
 
 def test_strict_exits_1_on_findings_but_plain_exits_0(world, tmp_path, monkeypatch, capsys):
-    create(world, defn("A", []), defn("B", ["A"]))
+    create(world, defn("A", [], paths=["src/a/x.py"]), defn("B", ["A"], paths=["docs/b.md"]))
     assert run_main(world, tmp_path, monkeypatch, ["--strict"]) == 1
     capsys.readouterr()
     assert run_main(world, tmp_path, monkeypatch) == 0
 
 
 def test_json_mode_emits_findings(world, tmp_path, monkeypatch, capsys):
-    create(world, defn("A", []), defn("B", ["A"]))
+    create(world, defn("A", [], paths=["src/a/x.py"]), defn("B", ["A"], paths=["docs/b.md"]))
     assert run_main(world, tmp_path, monkeypatch, ["--json"]) == 0
     data = json.loads(capsys.readouterr().out)
     assert {"src": "demo:B", "dst": "demo:A"} in data["order_only"]
@@ -108,7 +108,7 @@ def test_mention_or_shared_paths_is_not_order_only(world, capsys):
     create(world,
            defn("A", [], done_criteria="lands the parser demo:B adds",
                 paths=["src/plangraph/keeper"]),
-           defn("B", ["A"]),
+           defn("B", ["A"], paths=["docs/b.md"]),
            defn("C", ["A"], paths=["src/plangraph/keeper/cli_check.py"]))
     assert run_check(world) == 0
     out = capsys.readouterr().out
@@ -159,3 +159,19 @@ def test_missing_repo_is_not_a_finding(world, tmp_path, capsys):
            defn("GOAL", ["B"], kind="goal"))
     assert run_check(world, {"demo": str(tmp_path / "nope")}, strict=True) == 0
     assert "MERGED-OPEN" not in capsys.readouterr().out
+
+
+def test_edge_with_undeclared_paths_is_not_called_order_only(world, tmp_path, monkeypatch, capsys):
+    create(world, defn("A", []), defn("B", ["A"]))
+    assert run_main(world, tmp_path, monkeypatch, ["--strict"]) == 0
+    assert "ORDER-ONLY" not in capsys.readouterr().out
+
+
+def test_every_plan_item_trailer_of_a_commit_is_found(tmp_path):
+    repo = tmp_path / "multi"
+    repo.mkdir()
+    for args in (("init", "-b", "main"), ("config", "user.name", "t"),
+                 ("config", "user.email", "t@example.invalid"),
+                 ("commit", "--allow-empty", "-m", "x\n\nPlan-Item: demo:A\nPlan-Item: demo:B")):
+        subprocess.run(("git", *args), cwd=str(repo), check=True, capture_output=True)
+    assert sorted(v for _, v in cli_check.plan_item_trailers(repo, "main")) == ["demo:A", "demo:B"]

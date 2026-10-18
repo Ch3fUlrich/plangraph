@@ -111,8 +111,8 @@ class SupportMixin:
             if row is None:
                 continue
             parsed = parse_iso(row["ts"])
-            if parsed is not None:
-                epochs.append(parsed.timestamp())
+            # an unreadable stamp fails closed: no commit can be newer than it
+            epochs.append(parsed.timestamp() if parsed is not None else float("inf"))
         return max(epochs) if epochs else None
 
     def verify_chain(self):

@@ -448,13 +448,14 @@ class CreateMixin:
         # active item's definition, so the event says what every changed field
         # was and became.  ``depends_on`` reports the final (qualified,
         # cancelled-dropped) edge list, not the caller's raw input.
-        audit_before = {name: item.get(name) for name in edit_fields}
         audit_after = {name: (me["depends_on"] if name == "depends_on"
                               else edit_fields[name]) for name in edit_fields}
         with self._write():
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
             fresh = self._get_or_refuse(key)
+            audit_before = {name: fresh.get(name) if name != "depends_on"
+                            else item.get(name) for name in edit_fields}   # F4: in-txn read
             self._assert_unlocked(fresh)
             # ``tier_edit`` implies router; guard the write on the states the read passed.
             states = ("claimed", "in_review") if tier_edit else ("open",)
