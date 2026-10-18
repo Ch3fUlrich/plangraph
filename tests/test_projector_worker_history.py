@@ -1,6 +1,6 @@
 """Recorded ``rust/worker`` Card histories project cleanly and apply to the keeper.
 
-The four fixtures are proto-JSON ``temporal workflow show --output json`` captures of real
+The five fixtures are proto-JSON ``temporal workflow show --output json`` captures of real
 ``Card`` runs; the projector must read them without coercing an attempt to ``worker_crash`` or
 an unknown shape (docs/projector.md, "Contract with the Card workflow (v1)").  Runs on whichever
 backend ``PG_KEEPER_BACKEND`` selects (``keeper_util.World``), same code path.
@@ -16,7 +16,7 @@ from plangraph.projector.models import ATTEMPT_ACTIVITY_TYPES, EXIT_CLASSES
 from keeper_util import World, seed
 
 FIXTURES = Path(__file__).parents[1] / "rust" / "worker" / "tests" / "fixtures" / "projector"
-NAMES = ("happy", "contract_defect", "check_fails", "cancel")
+NAMES = ("happy", "contract_defect", "check_fails", "cancel", "usage_limit_reroute")
 KEY = "demo:A"          # the seeded item's key; a run's plan key must equal it to apply
 
 #: Hand-verified projections: status, outcome, attempts' exit classes, states in order, and, for
@@ -36,6 +36,12 @@ EXPECTED = {
     },
     "cancel": {
         "status": "completed", "outcome": "parked", "exits": [], "states": ["running", "parked"],
+    },
+    # D-1533: a Claude-family leg hits its window, the card continues on an opencode leg.
+    "usage_limit_reroute": {
+        "status": "completed", "outcome": "done", "exits": ["usage_limit", "ok"],
+        "states": ["running", "waiting", "running"],
+        "attempt": {"harness": "shell", "model": "claude-ish/model", "combo": "claude-leg", "class_": "128k"},
     },
 }
 

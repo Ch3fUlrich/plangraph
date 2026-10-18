@@ -1,0 +1,415 @@
+//! A secret-free child environment for everything the worker spawns on an
+//! agent's behalf: the harness and the card's check command.
+//!
+//! The worker process holds credentials (`PG_*`, `TEMPORAL_*`, keeper and TLS
+//! settings, provider keys). A coding agent or a check script running in an
+//! attempt worktree must not inherit them, so the confine helpers below clear
+//! the child's environment and re-add only an exact-name allowlist ([`PASS`],
+//! never a prefix: a `CLAUDE_CODE_` prefix once forwarded
+//! `CLAUDE_CODE_OAUTH_TOKEN`), plus a private per-attempt `HOME` so tools
+//! cannot read the operator's dotfiles. Both the harness ([`confine_harness`])
+//! and the card's check command ([`confine_check`]) get [`PASS`] only: harness
+//! auth never travels by environment — [`stage_harness_auth`] copies it into
+//! the harness's private HOME as files.
+
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Names copied from the worker's environment, when set. Exact names only:
+/// a prefix would forward whatever secret the CLI happens to store under it
+/// (`CLAUDE_CODE_OAUTH_TOKEN`, `OPENCODE_API_KEY`, ...).
+///
+/// `PATH`, `LANG` and `TERM` are what any tool needs to run at all.
+/// `CARGO_HOME` and `RUSTUP_HOME` are toolchain *locations* (not secrets): with
+/// `HOME` private, a Rust check could not find its toolchain without them.
+pub const PASS: &[&str] = &["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"];
+
+/// True when `name` may reach the harness from the worker's environment:
+/// [`PASS`] only, exact names, no prefixes.
+pub fn is_passed(name: &str) -> bool {
+    PASS.contains(&name)
+}
+
+/// True when `name` may reach a check child: [`PASS`] only.
+pub fn is_passed_check(name: &str) -> bool {
+    PASS.contains(&name)
+}
+
+/// Confine a harness child (and its `--version` probe): [`PASS`], a private
+/// `HOME`, and what the caller set on `cmd`. Harness auth is staged into
+/// `home` as files ([`stage_harness_auth`]), never passed by environment.
+pub fn confine_harness(cmd: &mut Command, home: &Path) {
+    confine_with(cmd, home, is_passed);
+}
+
+/// Confine a card check child: [`PASS`] only, a private `HOME`, and what the
+/// caller set on `cmd`. Agent credentials never reach it.
+pub fn confine_check(cmd: &mut Command, home: &Path) {
+    confine_with(cmd, home, is_passed_check);
+}
+
+/// Replace `cmd`'s environment with the names `pass` accepts, a private `HOME`,
+/// and the variables the caller set on `cmd` explicitly (the caller's own by
+/// construction, for example `OPENCODE_DISABLE_AUTOUPDATE` or a test's marker).
+fn confine_with(cmd: &mut Command, home: &Path, pass: fn(&str) -> bool) {
+    let explicit: Vec<(OsString, OsString)> = cmd
+        .get_envs()
+        .filter_map(|(k, v)| v.map(|v| (k.to_os_string(), v.to_os_string())))
+        .collect();
+    cmd.env_clear();
+    for (k, v) in std::env::vars_os() {
+        if k.to_str().is_some_and(pass) {
+            cmd.env(k, v);
+        }
+    }
+    for (k, v) in explicit {
+        cmd.env(k, v);
+    }
+    cmd.env("HOME", home);
+}
+
+/// The private `HOME` of the attempt slot `dir`: a sibling named `<dir>.home`,
+/// next to the worktree rather than in it so it never shows up as an
+/// untracked change in the attempt's diff.
+pub fn home_for(dir: &Path) -> PathBuf {
+    home_with_suffix(dir, ".home")
+}
+
+/// The private `HOME` of the card check child of slot `dir`: `<dir>.home-check`.
+/// Never the harness HOME: a harness may persist a login there.
+pub fn check_home_for(dir: &Path) -> PathBuf {
+    home_with_suffix(dir, ".home-check")
+}
+
+fn home_with_suffix(dir: &Path, suffix: &str) -> PathBuf {
+    let mut name = dir
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| OsString::from("attempt"));
+    name.push(suffix);
+    dir.with_file_name(name)
+}
+
+/// Creates a private `HOME` and removes it on drop, unless it already existed
+/// (an enclosing attempt owns it then).
+pub struct HomeGuard {
+    path: PathBuf,
+    owned: bool,
+}
+
+impl HomeGuard {
+    pub fn for_dir(dir: &Path) -> std::io::Result<HomeGuard> {
+        Self::at(home_for(dir))
+    }
+
+    /// The check child gets its own HOME (see [`check_home_for`]).
+    pub fn for_check(dir: &Path) -> std::io::Result<HomeGuard> {
+        Self::at(check_home_for(dir))
+    }
+
+    fn at(path: PathBuf) -> std::io::Result<HomeGuard> {
+        let owned = !path.exists();
+        std::fs::create_dir_all(&path)?;
+        Ok(HomeGuard { path, owned })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for HomeGuard {
+    fn drop(&mut self) {
+        if self.owned {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Env var naming a directory of harness auth files (agent CLI login state and
+/// config) that the worker stages into each attempt's private HOME. A `PG_*`
+/// name, so it never reaches a child; the harness reads its credentials from
+/// the staged files, never from the environment.
+pub const HARNESS_AUTH_DIR_ENV: &str = "PG_HARNESS_AUTH_DIR";
+
+/// Copy the auth files named by [`HARNESS_AUTH_DIR_ENV`] into `home`,
+/// preserving relative paths. Regular files land mode 0600, created
+/// directories mode 0700 (unix). One level of subdirectories is copied; the
+/// walk is never recursive and never follows a symlink — a symlink in the
+/// source is refused outright, so an auth tree is plain files or nothing is
+/// staged. Unset or a missing directory is a no-op: an auth-less harness run
+/// (a test) is normal. The files go away with the [`HomeGuard`] of `home`.
+pub fn stage_harness_auth(home: &Path) -> std::io::Result<()> {
+    let Some(dir) = std::env::var_os(HARNESS_AUTH_DIR_ENV) else {
+        return Ok(());
+    };
+    let src = PathBuf::from(dir);
+    if !src.is_dir() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(&src)? {
+        let entry = entry?;
+        // file_type comes from symlink_metadata: it never follows the link.
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            return Err(symlink_refused(&entry.path()));
+        }
+        if ft.is_file() {
+            stage_file(&entry.path(), &home.join(entry.file_name()))?;
+        } else if ft.is_dir() {
+            // One level of subdirectories, no deeper: everything below is
+            // skipped rather than recursed into.
+            let dest = home.join(entry.file_name());
+            std::fs::create_dir_all(&dest)?;
+            set_mode(&dest, 0o700)?;
+            for sub in std::fs::read_dir(entry.path())? {
+                let sub = sub?;
+                let sft = sub.file_type()?;
+                if sft.is_symlink() {
+                    return Err(symlink_refused(&sub.path()));
+                }
+                if sft.is_file() {
+                    stage_file(&sub.path(), &dest.join(sub.file_name()))?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn symlink_refused(path: &Path) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!(
+            "{}: harness auth entries must not be symlinks",
+            path.display()
+        ),
+    )
+}
+
+fn stage_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::copy(from, to)?;
+    // fs::copy preserves the source permissions; auth files are private here
+    // no matter how they were stored in the source tree.
+    set_mode(to, 0o600)
+}
+
+/// Set unix permissions; a no-op elsewhere (the staging tests are unix-only).
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// Run `env` through `confine` and return the child's variables.
+    fn child_env(prep: impl FnOnce(&mut Command), home: &Path) -> Vec<String> {
+        child_env_with(confine_harness, prep, home)
+    }
+
+    fn child_env_with(
+        confine: fn(&mut Command, &Path),
+        prep: impl FnOnce(&mut Command),
+        home: &Path,
+    ) -> Vec<String> {
+        let mut c = Command::new("env");
+        prep(&mut c);
+        confine(&mut c, home);
+        let out = c.output().expect("env runs");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn allowlist_is_exact_names_only() {
+        for n in ["PATH", "LANG", "TERM", "CARGO_HOME", "RUSTUP_HOME"] {
+            assert!(is_passed(n) && is_passed_check(n), "{n} must pass");
+        }
+        for n in [
+            // The harness sets this on its own Command; it survives via
+            // `explicit`, it is not forwarded from the worker env.
+            "OPENCODE_DISABLE_AUTOUPDATE",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "OPENCODE_API_KEY",
+            "PG_KEEPER_URL",
+            "TEMPORAL_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "HOME",
+        ] {
+            assert!(!is_passed(n), "{n} must not pass");
+            assert!(!is_passed_check(n), "{n} must not reach a check child");
+        }
+    }
+
+    #[test]
+    fn allowlist_never_names_a_secret() {
+        // The allowlist is an env-forwarding policy: one TOKEN/KEY/... name in
+        // PASS and the whole confinement story collapses.
+        for n in PASS {
+            let upper = n.to_ascii_uppercase();
+            for word in ["TOKEN", "KEY", "SECRET", "PASSWORD", "CREDENTIAL"] {
+                assert!(!upper.contains(word), "PASS entry {n} names a secret");
+            }
+        }
+    }
+
+    #[test]
+    fn child_sees_allowlist_explicit_vars_and_private_home_only() {
+        let home = tempfile::tempdir().unwrap();
+        // A secret-looking variable in the worker's own environment. The name
+        // is unique to this test, so no other test reads or sets it.
+        std::env::set_var("PG_SENTINEL_SECRET_SANDBOX_ENV", "hunter2");
+        let lines = child_env(
+            |c| {
+                c.env("PG_MARK", "explicit");
+            },
+            home.path(),
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("PG_SENTINEL_SECRET_SANDBOX_ENV") || l.contains("hunter2")),
+            "worker secret leaked into the child: {lines:?}"
+        );
+        assert!(lines.contains(&"PG_MARK=explicit".to_string()), "{lines:?}");
+        assert!(
+            lines.contains(&format!("HOME={}", home.path().display())),
+            "{lines:?}"
+        );
+        assert!(lines.iter().any(|l| l.starts_with("PATH=")), "{lines:?}");
+        // Nothing outside the allowlist survives: every name is passed,
+        // explicit or HOME.
+        for l in &lines {
+            let name = l.split('=').next().unwrap();
+            assert!(
+                is_passed(name) || name == "HOME" || name == "PG_MARK",
+                "unexpected {name} in child env"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_credentials_reach_neither_harness_nor_check_child() {
+        let home = tempfile::tempdir().unwrap();
+        // Sentinel values unique to this test; no other test reads them.
+        let secrets: [(&str, &str); 6] = [
+            ("CLAUDE_CODE_OAUTH_TOKEN", "sentinel-wf8-oauth"),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", "sentinel-wf8-messaging"),
+            ("OPENCODE_API_KEY", "sentinel-wf8-opkey"),
+            ("OPENCODE_FOO_SECRET", "sentinel-wf8-foosec"),
+            ("ANTHROPIC_API_KEY", "sentinel-wf8-anth"),
+            ("MY_PASSWORD", "sentinel-wf8-pw"),
+        ];
+        for (name, value) in &secrets {
+            std::env::set_var(name, value);
+        }
+        for confine in [confine_harness, confine_check] {
+            let lines = child_env_with(confine, |_| {}, home.path());
+            for (name, value) in &secrets {
+                assert!(
+                    !lines.iter().any(|l| {
+                        l.starts_with(format!("{name}=").as_str()) || l.contains(*value)
+                    }),
+                    "{name} leaked into a confined child: {lines:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn home_guard_creates_and_removes_only_what_it_owns() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("c1-1");
+        assert_eq!(home_for(&dir), root.path().join("c1-1.home"));
+        {
+            let g = HomeGuard::for_dir(&dir).unwrap();
+            assert!(g.path().is_dir());
+            // A nested guard (a check inside an attempt) must not remove it.
+            drop(HomeGuard::for_dir(&dir).unwrap());
+            assert!(g.path().is_dir());
+        }
+        assert!(!home_for(&dir).exists());
+    }
+
+    #[test]
+    fn check_home_is_separate_from_the_harness_home() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("c1-1");
+        let h = HomeGuard::for_dir(&dir).unwrap();
+        std::fs::write(h.path().join("login-token"), "secret").unwrap();
+        let c = HomeGuard::for_check(&dir).unwrap();
+        assert_ne!(h.path(), c.path());
+        assert_eq!(c.path(), root.path().join("c1-1.home-check"));
+        assert!(!c.path().join("login-token").exists());
+        drop(c);
+        assert!(!check_home_for(&dir).exists());
+        assert!(h.path().join("login-token").exists());
+    }
+
+    #[test]
+    fn stage_harness_auth_stages_plain_files_and_refuses_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let src = root.path().join("auth");
+        let dir = root.path().join("c1-3");
+        // Unset is a no-op: an auth-less harness run stays empty.
+        std::env::remove_var(HARNESS_AUTH_DIR_ENV);
+        let g = HomeGuard::for_dir(&dir).unwrap();
+        stage_harness_auth(g.path()).unwrap();
+        assert_eq!(std::fs::read_dir(g.path()).unwrap().count(), 0);
+        drop(g);
+
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("credentials.json"), "sentinel-wf8-auth").unwrap();
+        std::fs::write(src.join("sub").join("login"), "x").unwrap();
+        std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
+        {
+            let g = HomeGuard::for_dir(&dir).unwrap();
+            stage_harness_auth(g.path()).unwrap();
+            let f = g.path().join("credentials.json");
+            assert_eq!(std::fs::read_to_string(&f).unwrap(), "sentinel-wf8-auth");
+            assert_eq!(
+                std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            let d = g.path().join("sub");
+            assert_eq!(
+                std::fs::metadata(&d).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert!(d.join("login").exists());
+            // A confined child sees the staged file through its private HOME.
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(r#"cat "$HOME/credentials.json""#);
+            confine_harness(&mut c, g.path());
+            let out = c.output().expect("sh runs");
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "sentinel-wf8-auth");
+            // Dropping the guard below takes the staged auth with the home.
+            drop(g);
+            assert!(!home_for(&dir).exists());
+            assert!(!home_for(&dir).join("credentials.json").exists());
+        }
+
+        // A symlink anywhere in the source tree is refused outright: staging
+        // must not hand the agent a path outside the auth dir.
+        std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
+        std::os::unix::fs::symlink("/etc/passwd", src.join("evil")).unwrap();
+        let g = HomeGuard::for_dir(&dir).unwrap();
+        assert!(stage_harness_auth(g.path()).is_err());
+        std::env::remove_var(HARNESS_AUTH_DIR_ENV);
+    }
+}

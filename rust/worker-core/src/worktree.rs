@@ -7,10 +7,46 @@ use std::path::{Path, PathBuf};
 const PREFIX: &str = "attempt/";
 
 /// Identity of an attempt: a card and a 1-based attempt number.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// `segment` is only set on ids parsed back from a branch name, where the card
+/// is no longer known (the segment carries a one-way hash). Identity (`Eq`,
+/// `Hash`, `Ord`) is the segment plus the number, so a parsed id equals the id
+/// that produced the branch.
+#[derive(Debug, Clone)]
 pub struct AttemptId {
     pub card: String,
     pub n: u32,
+    segment: Option<String>,
+}
+
+impl AttemptId {
+    fn segment(&self) -> String {
+        self.segment
+            .clone()
+            .unwrap_or_else(|| safe_segment(&self.card))
+    }
+}
+
+impl PartialEq for AttemptId {
+    fn eq(&self, o: &Self) -> bool {
+        (self.n, self.segment()) == (o.n, o.segment())
+    }
+}
+impl Eq for AttemptId {}
+impl std::hash::Hash for AttemptId {
+    fn hash<H: std::hash::Hasher>(&self, h: &mut H) {
+        (self.segment(), self.n).hash(h);
+    }
+}
+impl PartialOrd for AttemptId {
+    fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(o))
+    }
+}
+impl Ord for AttemptId {
+    fn cmp(&self, o: &Self) -> std::cmp::Ordering {
+        (self.segment(), self.n).cmp(&(o.segment(), o.n))
+    }
 }
 
 impl AttemptId {
@@ -18,11 +54,20 @@ impl AttemptId {
         AttemptId {
             card: card.into(),
             n,
+            segment: None,
         }
     }
 
+    /// The branch `attempt/<segment>/<n>`; `<segment>` is [`safe_segment`] of
+    /// the card, so a hostile key cannot reach outside `attempt/`.
     pub fn branch(&self) -> String {
-        format!("{PREFIX}{}/{}", self.card, self.n)
+        format!("{PREFIX}{}/{}", self.segment(), self.n)
+    }
+
+    /// The directory name of this attempt's worktree under the workroot:
+    /// `<segment>-<n>`. The one place that name is built.
+    pub fn dir_name(&self) -> String {
+        format!("{}-{}", self.segment(), self.n)
     }
 
     /// Parse a short branch name (`attempt/<card>/<n>`); `None` for anything else.
@@ -32,8 +77,49 @@ impl AttemptId {
         if card.is_empty() {
             return None;
         }
-        Some(AttemptId::new(card, n.parse().ok()?))
+        Some(AttemptId {
+            card: card.to_string(),
+            n: n.parse().ok()?,
+            segment: Some(card.to_string()),
+        })
     }
+}
+
+/// Longest readable part of a segment (a `-<hash>` of [`HASH_LEN`] hex digits
+/// always follows).
+const SEGMENT_MAX: usize = 48;
+
+/// Hex digits of the 64-bit key hash appended to every segment (the whole
+/// FNV-1a 64 value, so accidental collisions between distinct keys are out of reach).
+const HASH_LEN: usize = 16;
+
+/// `key` as one safe path/ref segment: non-empty, only `[A-Za-z0-9_-]`, no
+/// `..`, no leading `-` or `.`, no trailing `.` or `.lock`. The readable part is
+/// the key with every other character rewritten, and a stable 64-bit hash of the
+/// ORIGINAL key is ALWAYS appended, even when nothing was rewritten. That makes
+/// the mapping injective in practice: a key that equals another key's rewritten
+/// form (`a/b` -> `a_b-<h>`, literal `a_b-<h>`) still gets its own suffix, so two
+/// distinct keys never share a worktree or branch. NOT idempotent by design;
+/// ids parsed from a branch keep their segment verbatim instead.
+pub fn safe_segment(key: &str) -> String {
+    let mut clean: String = key
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(SEGMENT_MAX)
+        .collect();
+    if clean.is_empty() || clean.starts_with('-') {
+        clean.insert(0, '_');
+    }
+    format!(
+        "{clean}-{}",
+        &crate::hash::hash_bytes(key.as_bytes())[..HASH_LEN]
+    )
 }
 
 impl fmt::Display for AttemptId {
@@ -120,8 +206,14 @@ mod tests {
     #[test]
     fn branch_roundtrip() {
         let id = AttemptId::new("card-1", 2);
-        assert_eq!(id.branch(), "attempt/card-1/2");
-        assert_eq!(AttemptId::parse_branch("attempt/card-1/2"), Some(id));
+        let seg = safe_segment("card-1");
+        assert!(seg.starts_with("card-1-"), "{seg}");
+        assert_eq!(id.branch(), format!("attempt/{seg}/2"));
+        // A parsed id equals the id that produced the branch, and re-renders
+        // the very same branch (the segment is kept verbatim, never re-hashed).
+        let back = AttemptId::parse_branch(&id.branch()).unwrap();
+        assert_eq!(back, id);
+        assert_eq!(back.branch(), id.branch());
         let nested = AttemptId::parse_branch("attempt/a/b/7").unwrap();
         assert_eq!((nested.card.as_str(), nested.n), ("a/b", 7));
         for bad in [
@@ -136,6 +228,91 @@ mod tests {
     }
 
     #[test]
+    fn every_key_gets_a_hash_suffix_and_one_safe_segment() {
+        for key in [
+            "c1",
+            "card-1",
+            "A_b.c",
+            "x.y-z",
+            "",
+            "a/b",
+            "../x",
+            "..",
+            "-rf",
+            "a b",
+            ".hidden",
+            "x..y",
+            "a.lock",
+            "tr.",
+            "/abs",
+            "e\u{301}",
+            "a\nb",
+            "x".repeat(200).as_str(),
+        ] {
+            let s = safe_segment(key);
+            let (head, h) = s.rsplit_once('-').unwrap();
+            assert_eq!(h.len(), HASH_LEN, "{s}");
+            assert!(h.chars().all(|c| c.is_ascii_hexdigit()), "{s}");
+            assert!(!head.is_empty(), "{s}");
+            assert!(
+                s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')),
+                "{key:?} -> {s}"
+            );
+            assert!(!s.contains("..") && !s.starts_with(['-', '.']), "{s}");
+            assert!(!s.ends_with('.') && !s.ends_with(".lock"), "{s}");
+            assert!(s.len() <= SEGMENT_MAX + HASH_LEN + 1, "{s}");
+            assert_ne!(s, key, "{key:?} must always be suffixed");
+        }
+    }
+
+    #[test]
+    fn a_key_equal_to_anothers_rewritten_form_does_not_collide() {
+        let rewritten = safe_segment("a/b");
+        // The literal key that equals the rewritten form of "a/b".
+        assert_ne!(safe_segment(&rewritten), rewritten);
+        assert_ne!(
+            AttemptId::new("a/b", 1).branch(),
+            AttemptId::new(rewritten.clone(), 1).branch()
+        );
+        assert_ne!(
+            AttemptId::new("a/b", 1).dir_name(),
+            AttemptId::new(rewritten, 1).dir_name()
+        );
+    }
+
+    #[test]
+    fn distinct_keys_never_share_a_segment() {
+        let keys = ["a/b", "a_b", "a b", "a\\b", "../a", "..a", "a/b/"];
+        let segs: std::collections::HashSet<String> =
+            keys.iter().map(|k| safe_segment(k)).collect();
+        assert_eq!(segs.len(), keys.len(), "{segs:?}");
+        let (x, y) = (AttemptId::new("a/b", 1), AttemptId::new("a_b", 1));
+        assert_ne!(x.branch(), y.branch());
+        assert_ne!(x.dir_name(), y.dir_name());
+    }
+
+    #[test]
+    fn traversal_card_stays_inside_workroot_and_attempt_namespace() {
+        let (repo_dir, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let id = AttemptId::new("../../evil", 1);
+        assert!(id.branch().starts_with("attempt/") && !id.branch().contains(".."));
+        let dest = root.path().join(id.dir_name());
+        assert_eq!(dest.parent().unwrap(), root.path());
+        let w = create(repo_dir.path(), &base, &dest, &id).unwrap();
+        assert_eq!(
+            git(&w.path, &["branch", "--show-current"]).unwrap(),
+            id.branch()
+        );
+        // The branch parses back to the same segment, so the janitor and the
+        // probe address the same worktree.
+        let back = AttemptId::parse_branch(&id.branch()).unwrap();
+        assert_eq!(back.branch(), id.branch());
+        assert_eq!(back.dir_name(), id.dir_name());
+    }
+
+    #[test]
     fn create_list_remove() {
         let (repo_dir, base) = repo();
         let wt_root = tempfile::tempdir().unwrap();
@@ -146,7 +323,7 @@ mod tests {
         assert_eq!(w1.head, base);
         assert_eq!(
             git(&w1.path, &["branch", "--show-current"]).unwrap(),
-            "attempt/c1/1"
+            id1.branch()
         );
 
         let mut listed = list(repo_dir.path()).unwrap();
@@ -161,8 +338,8 @@ mod tests {
         assert!(!w1.path.exists());
         assert_eq!(list(repo_dir.path()).unwrap().len(), 1);
         // branch survives removal
-        let br = git(repo_dir.path(), &["branch", "--list", "attempt/c1/1"]).unwrap();
-        assert!(br.contains("attempt/c1/1"));
+        let br = git(repo_dir.path(), &["branch", "--list", &id1.branch()]).unwrap();
+        assert!(br.contains(&id1.branch()));
     }
 
     #[test]
@@ -184,7 +361,7 @@ mod tests {
         let id = AttemptId::new("c", 1);
         assert!(create(repo_dir.path(), "-f", &dest, &id).is_err());
         assert!(!dest.exists());
-        assert!(git(repo_dir.path(), &["branch", "--list", "attempt/c/1"])
+        assert!(git(repo_dir.path(), &["branch", "--list", &id.branch()])
             .unwrap()
             .is_empty());
     }

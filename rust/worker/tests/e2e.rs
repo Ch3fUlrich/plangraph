@@ -11,6 +11,9 @@
 //! cancel signal. If `PG_RECORD_DIR` is set the fetched history is written
 //! there as a fixture for the offline replay tests.
 
+#![cfg(unix)]
+
+use pg_worker_core::exit_class::ExitClass;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -19,7 +22,7 @@ use std::time::Duration;
 
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QUEUE};
 use pg_worker::attempt::LegSpec;
-use pg_worker::harness::{Harness, HarnessRun};
+use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
 use pg_worker::workflow::Card;
 use pg_worker_core::config::{Config, Tier};
@@ -46,7 +49,9 @@ const CANCEL_BUDGET: Duration = Duration::from_secs(150);
 type Handle = WorkflowHandle<Client, Card>;
 
 /// Runs `sh -c <script>` inside the attempt's worktree, standing in for a real
-/// agent CLI so a test can dictate exactly what the attempt does.
+/// agent CLI so a test can dictate exactly what the attempt does. The leg's
+/// model reaches the script as `$PG_MODEL`, so one script can behave
+/// differently per leg (for example, hit a limit on one model only).
 struct ShellHarness {
     script: String,
 }
@@ -58,7 +63,10 @@ impl Harness for ShellHarness {
 
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new("sh");
-        cmd.arg("-c").arg(&self.script).current_dir(run.workdir);
+        cmd.arg("-c")
+            .arg(&self.script)
+            .env("PG_MODEL", run.model)
+            .current_dir(run.workdir);
         cmd
     }
 }
@@ -90,9 +98,14 @@ impl Env {
         let workroot_path = workroot.path().to_path_buf();
 
         let keeper = Arc::new(StubKeeper::default());
-        let harness: Arc<dyn Harness> = Arc::new(ShellHarness {
+        // The shell stands in for every harness name a leg may use, so a test
+        // picks the "family" of a leg purely by its `harness` field.
+        let shell: Arc<dyn Harness> = Arc::new(ShellHarness {
             script: script.to_string(),
         });
+        let harnesses = HarnessRegistry::new()
+            .with("opencode", shell.clone())
+            .with("claude", shell);
         // These timeouts are the activities' (heartbeat cadence, stall kill).
         // The long timeouts keep a starved host from ending an attempt by
         // timeout, so a cancel test can only pass via the cancel path; the
@@ -111,7 +124,7 @@ impl Env {
         let dyn_keeper: Arc<dyn Keeper> = keeper.clone();
         let deps = Deps {
             keeper: dyn_keeper,
-            harness,
+            harnesses,
             cfg,
             patterns: Patterns::default(),
         };
@@ -186,13 +199,20 @@ impl Env {
     /// `plan_key` from the workflow id; the caller passes the bare `id` around
     /// and `workflow_id` owns the prefix.
     async fn start(&self, id: &str, claim: Claim) -> Handle {
+        let legs = vec![LegSpec {
+            id: "leg-1".to_string(),
+            tier: Tier::Free,
+            model: "some/model".to_string(),
+            harness: "opencode".to_string(),
+        }];
+        self.start_with_legs(id, claim, legs).await
+    }
+
+    /// Like [`start`](Self::start), with the card's legs given by the caller.
+    async fn start_with_legs(&self, id: &str, claim: Claim, legs: Vec<LegSpec>) -> Handle {
         let input = CardInput {
             claim,
-            legs: vec![LegSpec {
-                id: "leg-1".to_string(),
-                tier: Tier::Free,
-                model: "some/model".to_string(),
-            }],
+            legs,
             workroot: self.workroot.to_string_lossy().into_owned(),
             main_branch: "main".to_string(),
         };
@@ -260,6 +280,60 @@ async fn finish(name: &str, id: &str, handle: &Handle) -> CardOutput {
     .expect("card result within 120s")
     .expect("card workflow returns a result");
     record(name, id, handle).await;
+    out
+}
+
+/// `(combo, exit_class)` of every finished `attempt` activity, in order, read
+/// from the workflow history. This is the same payload the projector reads.
+async fn attempt_outcomes(handle: &Handle) -> Vec<(String, String)> {
+    let bytes = handle
+        .fetch_history(WorkflowFetchHistoryOptions::default())
+        .to_json()
+        .await
+        .expect("fetch history json");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("history is json");
+    let mut out = Vec::new();
+    for ev in value["events"].as_array().expect("events array") {
+        let Some(data) = ev["attributes"]["ActivityTaskCompletedEventAttributes"]["result"]
+            ["payloads"][0]["data"]
+            .as_str()
+        else {
+            continue;
+        };
+        let Ok(result) = serde_json::from_slice::<serde_json::Value>(&b64_decode(data)) else {
+            continue;
+        };
+        if let (Some(combo), Some(class)) =
+            (result["combo"].as_str(), result["exit_class"].as_str())
+        {
+            out.push((combo.to_string(), class.to_string()));
+        }
+    }
+    out
+}
+
+/// Standard base64 (padding optional); enough to read history payloads
+/// without a crate. Invalid characters are skipped.
+fn b64_decode(s: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => continue,
+        };
+        acc = (acc << 6) | v as u32;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
     out
 }
 
@@ -452,6 +526,219 @@ async fn happy_attempt_merges_into_main() {
             "keeper completed: {:?}",
             env.keeper.completed()
         );
+        env.stop();
+    })
+    .await;
+}
+
+/// D-1533: no hard Claude dependency. The first leg is a Claude-family leg that
+/// hits its usage window; the card must continue on the other family's leg
+/// without counting that as an attempt, and still merge.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn usage_limit_reroutes_to_non_claude_leg() {
+    in_local(async {
+        let script = r#"if [ "$PG_MODEL" = "claude-ish/model" ]; then echo "5-hour limit reached"; exit 1; fi; echo ok > out.txt"#;
+        let Some(env) = env_or_skip("usage-limit", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-usage-limit";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-usage-limit-{}", unique());
+        let legs = vec![
+            LegSpec {
+                id: "claude-leg".to_string(),
+                tier: Tier::Free,
+                model: "claude-ish/model".to_string(),
+                harness: "claude".to_string(),
+            },
+            LegSpec {
+                id: "open-leg".to_string(),
+                tier: Tier::Free,
+                model: "open/model".to_string(),
+                harness: "opencode".to_string(),
+            },
+        ];
+        let handle = env.start_with_legs(&id, claim, legs).await;
+
+        let out = finish("usage_limit_reroute", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(
+            attempt_outcomes(&handle).await,
+            vec![
+                ("claude-leg".to_string(), "usage_limit".to_string()),
+                ("open-leg".to_string(), "ok".to_string()),
+            ]
+        );
+        // The provider-limited attempt did not consume budget: the keeper saw
+        // it as `usage_limit` (a class the budget never counts), and the very
+        // next attempt ran as an ordinary first try on the other leg, with no
+        // retry, promotion or wait in between.
+        let reports = env.keeper.attempts();
+        let seen: Vec<(u32, String, ExitClass)> = reports
+            .iter()
+            .map(|r| (r.n, r.leg.clone(), r.exit_class))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (1, "claude-leg".to_string(), ExitClass::UsageLimit),
+                (2, "open-leg".to_string(), ExitClass::Ok),
+            ],
+            "{reports:?}"
+        );
+        assert_eq!(out.attempts, 2, "{out:?}");
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        env.stop();
+    })
+    .await;
+}
+
+/// Shell preamble that finds the shared repo from inside an attempt worktree
+/// (the common git dir is absolute there) and lands a commit on `main` while
+/// the attempt is still running, so the merge sees a moved base.
+const MOVE_MAIN: &str = r#"R=$(dirname "$(git rev-parse --git-common-dir)")
+if [ ! -f "$R/moved.txt" ]; then
+  echo m > "$R/moved.txt"
+  git -C "$R" add moved.txt
+  git -C "$R" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m moved
+fi
+"#;
+
+/// Main advances (a different file) between the attempt's base and its merge:
+/// the worker rebases the attempt onto the new main, re-runs the check once and
+/// fast-forwards, all in the same attempt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_base_moved_rebases_and_merges() {
+    in_local(async {
+        let script = format!("{MOVE_MAIN}echo ok > out.txt");
+        let Some(env) = env_or_skip("base-moved", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-base-moved";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-base-moved-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("base_moved_rebase", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        // One attempt: the move was absorbed by the rebase, not a new attempt.
+        assert_eq!(attempt_outcomes(&handle).await.len(), 1);
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        // Both the moved commit and the attempt's file are on main.
+        assert_eq!(git(&env.repo, &["show", "main:moved.txt"]), "m");
+        assert_eq!(git(&env.repo, &["show", "main:out.txt"]), "ok");
+        assert_eq!(git(&env.repo, &["rev-parse", "main~1"]).len(), 40);
+        // The keeper merge lock was taken and returned.
+        assert!(!env.keeper.merge_lock_held());
+        assert_eq!(env.keeper.lock_calls().len(), 2);
+        env.stop();
+    })
+    .await;
+}
+
+/// Main edits the very line the attempt edits: the rebase conflicts, nothing is
+/// merged from that attempt, and the card requeues a fresh attempt on the new
+/// base, which then merges.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_rebase_conflict_requeues() {
+    in_local(async {
+        let script = r#"R=$(dirname "$(git rev-parse --git-common-dir)")
+if ! grep -q '^m$' "$R/seed.txt"; then
+  echo m > "$R/seed.txt"
+  git -C "$R" add seed.txt
+  git -C "$R" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m moved
+fi
+echo attempt > seed.txt"#;
+        let Some(env) = env_or_skip("rebase-conflict", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-rebase-conflict";
+        let claim = env.claim(card, &["seed.txt"], "test -f seed.txt");
+        let id = format!("e2e-rebase-conflict-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("rebase_conflict_requeue", &id, &handle).await;
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        assert_eq!(
+            attempt_outcomes(&handle).await.len(),
+            2,
+            "a conflicting rebase requeues one more attempt"
+        );
+        let sha = out.merged_sha.clone().expect("a merged card has a sha");
+        assert_eq!(git(&env.repo, &["rev-parse", "refs/heads/main"]), sha);
+        assert_eq!(git(&env.repo, &["show", "main:seed.txt"]), "attempt");
+        env.stop();
+    })
+    .await;
+}
+
+/// A check that passes in the attempt's worktree but fails once the attempt is
+/// rebased onto the moved main: the merge-time verdict replaces the attempt in
+/// workflow history, and the keeper must be told the same (attempt 1 reported
+/// `ok`, then re-reported `check_fail`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn merge_time_check_fail_is_re_reported_to_the_keeper() {
+    in_local(async {
+        let script = format!("{MOVE_MAIN}echo ok > out.txt");
+        let Some(env) = env_or_skip("merge-check-fail", &script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-merge-check-fail";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt && ! test -f moved.txt");
+        let id = format!("e2e-merge-check-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("merge_check_fail", &id, &handle).await;
+        assert_ne!(out.detail, "merged", "{out:?}");
+        let first: Vec<ExitClass> = env
+            .keeper
+            .attempts()
+            .iter()
+            .filter(|r| r.n == 1)
+            .map(|r| r.exit_class)
+            .collect();
+        assert_eq!(
+            first,
+            vec![ExitClass::Ok, ExitClass::CheckFail],
+            "attempt 1 is reported ok, then corrected to the merge-time verdict"
+        );
+        env.stop();
+    })
+    .await;
+}
+
+/// A leg naming a harness this worker never registered is the plan's fault:
+/// the card goes back to the planner instead of crashing or retrying.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn unknown_harness_goes_to_planner() {
+    in_local(async {
+        let Some(env) = env_or_skip("unknown-harness", "echo ok > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-unknown-harness";
+        let claim = env.claim(card, &["out.txt"], "test -f out.txt");
+        let id = format!("e2e-unknown-harness-{}", unique());
+        let legs = vec![LegSpec {
+            id: "ghost-leg".to_string(),
+            tier: Tier::Free,
+            model: "some/model".to_string(),
+            harness: "no-such-harness".to_string(),
+        }];
+        let handle = env.start_with_legs(&id, claim, legs).await;
+
+        let out = finish("unknown_harness", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "planner", "{out:?}");
         env.stop();
     })
     .await;

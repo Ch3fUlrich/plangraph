@@ -21,9 +21,14 @@ fn varied(mut a: Attempt, n: u32) -> Attempt {
 }
 
 fn leg(id: &str, tier: Tier, limited: bool) -> Leg {
+    leg_on(id, tier, "opencode", limited)
+}
+
+fn leg_on(id: &str, tier: Tier, harness: &str, limited: bool) -> Leg {
     Leg {
         id: id.into(),
         tier,
+        harness: harness.into(),
         limited,
     }
 }
@@ -345,4 +350,114 @@ fn random_jitter_in_unit_interval() {
         let j = random_jitter();
         assert!((0.0..1.0).contains(&j));
     }
+}
+
+#[test]
+fn limit_falls_back_across_tiers_to_another_harness_lowest_tier_first() {
+    // the only Claude leg is limited; the other families sit in higher tiers
+    let legs = [
+        leg_on("claude-paid", Tier::Paid, "claude", true),
+        leg_on("sub", Tier::Subscription, "opencode", false),
+        leg_on("free", Tier::Free, "opencode-server", false),
+    ];
+    for class in [UsageLimit, Outage] {
+        let h = [at(class, "claude-paid", Tier::Paid)];
+        // lowest tier index wins, regardless of leg order
+        assert_eq!(
+            run(&h, &legs, ContextClass::K128, 0, 0.0),
+            Action::Reroute { leg: "free".into() }
+        );
+    }
+}
+
+#[test]
+fn same_tier_leg_is_preferred_over_cross_tier_fallback() {
+    let legs = [
+        leg_on("c1", Tier::Subscription, "claude", true),
+        leg_on("c2", Tier::Subscription, "claude", false),
+        leg_on("o", Tier::Trial, "opencode", false),
+    ];
+    let h = [at(UsageLimit, "c1", Tier::Subscription)];
+    assert_eq!(
+        run(&h, &legs, ContextClass::K128, 0, 0.0),
+        Action::Reroute { leg: "c2".into() }
+    );
+}
+
+#[test]
+fn both_legs_limited_waits_and_cross_tier_needs_the_same_tier_exhausted() {
+    // A two-leg card, one family each, both limited: nothing to reroute to.
+    let h = [at(UsageLimit, "c", Tier::Free)];
+    let both = [
+        leg_on("c", Tier::Free, "claude", true),
+        leg_on("o", Tier::Free, "opencode", true),
+    ];
+    assert!(matches!(
+        run(&h, &both, ContextClass::K128, 0, 0.5),
+        Action::Wait { .. }
+    ));
+    // A free same-tier leg of ANY harness beats a cross-tier other-harness one.
+    let same_tier = [
+        leg_on("c", Tier::Free, "claude", true),
+        leg_on("c2", Tier::Free, "claude", false),
+        leg_on("o", Tier::Paid, "opencode", false),
+    ];
+    assert_eq!(
+        run(&h, &same_tier, ContextClass::K128, 0, 0.5),
+        Action::Reroute { leg: "c2".into() }
+    );
+    // Only once every leg of the tier is limited does the other harness in
+    // another tier get picked.
+    let exhausted = [
+        leg_on("c", Tier::Free, "claude", true),
+        leg_on("c2", Tier::Free, "claude", true),
+        leg_on("o", Tier::Paid, "opencode", false),
+    ];
+    assert_eq!(
+        run(&h, &exhausted, ContextClass::K128, 0, 0.5),
+        Action::Reroute { leg: "o".into() }
+    );
+}
+
+#[test]
+fn usage_limit_attempts_do_not_consume_the_attempt_budget() {
+    let legs = [
+        leg_on("c", Tier::Free, "claude", false),
+        leg_on("o", Tier::Free, "opencode", false),
+    ];
+    // After any number of provider-limit attempts, the first real failure is
+    // treated as the first one (a plain retry), never as an exhausted budget.
+    let mut h: Vec<Attempt> = (0..6).map(|_| at(UsageLimit, "c", Tier::Free)).collect();
+    h.push(at(CheckFail, "o", Tier::Free));
+    assert!(h.iter().take(6).all(|a| !a.consumes_attempt()));
+    let alone = [at(CheckFail, "o", Tier::Free)];
+    assert_eq!(
+        run(&h, &legs, ContextClass::K128, 0, 0.0),
+        run(&alone, &legs, ContextClass::K128, 0, 0.0)
+    );
+}
+
+#[test]
+fn cross_tier_fallback_skips_limited_legs_and_the_same_harness() {
+    // other-tier legs of the same harness share the limit; limited legs are out
+    let legs = [
+        leg_on("c1", Tier::Free, "claude", true),
+        leg_on("c2", Tier::Paid, "claude", false),
+        leg_on("o1", Tier::Trial, "opencode", true),
+    ];
+    let h = [at(UsageLimit, "c1", Tier::Free)];
+    assert!(matches!(
+        run(&h, &legs, ContextClass::K128, 0, 0.5),
+        Action::Wait { .. }
+    ));
+    // once an unlimited leg of another harness exists, it is taken
+    let legs = [
+        leg_on("c1", Tier::Free, "claude", true),
+        leg_on("c2", Tier::Paid, "claude", false),
+        leg_on("o2", Tier::Subscription, "opencode", false),
+    ];
+    assert_eq!(
+        run(&h, &legs, ContextClass::K128, 0, 0.5),
+        Action::Reroute { leg: "o2".into() }
+    );
 }

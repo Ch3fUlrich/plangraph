@@ -88,6 +88,10 @@ impl Default for Patterns {
                 r"(?i)quota",
                 r"(?i)usage limit",
                 r"(?i)too many requests",
+                // Claude CLI: subscription window and prepaid credit exhaustion.
+                r"(?i)5-hour limit reached",
+                r"(?i)usage limit reached",
+                r"(?i)credit balance is too low",
             ],
             &[
                 r"\b5\d\d\b.*(error|unavailable|gateway|overloaded)",
@@ -95,6 +99,7 @@ impl Default for Patterns {
                 r"(?i)connection (refused|reset)",
                 r"(?i)service unavailable",
                 r"(?i)overloaded",
+                r"(?i)overloaded_error",
                 r"(?i)econnrefused|econnreset",
             ],
             &[
@@ -196,6 +201,27 @@ mod tests {
         );
     }
 
+    /// The Claude limit patterns are phrases, not the bare word "usage": CLI
+    /// usage text and a check whose output merely mentions usage stay what
+    /// they are.
+    #[test]
+    fn the_word_usage_alone_is_not_a_limit() {
+        let p = Patterns::default();
+        // A failing check (harness exit 0) whose output says "usage".
+        let mut s = base();
+        s.check = Some(CheckOutcome::Fail);
+        s.stderr = "usage: tool [options]\nerror: bad flag; usage of memory high".into();
+        assert_eq!(p.classify(&s).class, ExitClass::CheckFail);
+        // A crashing harness printing its own usage banner is a crash.
+        let mut s = base();
+        s.exit_code = Some(2);
+        s.stderr = "Usage: claude [options] [prompt]\nerror: unknown option".into();
+        assert_eq!(p.classify(&s).class, ExitClass::WorkerCrash);
+        // The real thing still matches.
+        s.stderr = "Claude usage limit reached. Try again later".into();
+        assert_eq!(p.classify(&s).class, ExitClass::UsageLimit);
+    }
+
     #[test]
     fn classification_table() {
         use ExitClass::*;
@@ -230,6 +256,26 @@ mod tests {
             ("502", crash("upstream returned status 502"), Outage),
             ("refused", crash("connect: Connection refused"), Outage),
             ("overloaded", crash("API is overloaded"), Outage),
+            (
+                "claude 5-hour limit",
+                crash("Claude AI usage limit: 5-hour limit reached, resets 3am"),
+                UsageLimit,
+            ),
+            (
+                "claude usage limit",
+                crash("Claude usage limit reached. Try again later"),
+                UsageLimit,
+            ),
+            (
+                "claude overloaded_error",
+                crash(r#"{"type":"error","error":{"type":"overloaded_error"}}"#),
+                Outage,
+            ),
+            (
+                "claude credit balance",
+                crash("Credit balance is too low to access the API"),
+                UsageLimit,
+            ),
             ("unknown crash", crash("segfault"), WorkerCrash),
             (
                 "500 lines is not an outage",

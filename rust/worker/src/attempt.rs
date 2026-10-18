@@ -26,6 +26,16 @@ pub struct LegSpec {
     pub id: String,
     pub tier: Tier,
     pub model: String,
+    /// Which agent CLI runs this leg: `opencode`, `claude` or `opencode-server`.
+    /// Any model family can be a leg; Claude is one harness among several. Old
+    /// histories without the field replay as `opencode`.
+    #[serde(default = "default_harness")]
+    pub harness: String,
+}
+
+/// The harness a leg uses when its spec does not name one.
+pub fn default_harness() -> String {
+    "opencode".to_string()
 }
 
 /// Everything one attempt needs to run.
@@ -100,11 +110,25 @@ pub fn run_attempt(
     inp: &AttemptInput,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<AttemptResult, AttemptError> {
+    run_attempt_with(Some(h), cfg, patterns, inp, cancelled)
+}
+
+/// [`run_attempt`] with the harness already looked up. `None` means the leg
+/// names a harness this worker never registered: the attempt gets its worktree
+/// (the probe after it expects one) and ends as a contract defect, because the
+/// plan, not the provider, is wrong. The agent is never run.
+pub fn run_attempt_with(
+    h: Option<&dyn Harness>,
+    cfg: &Config,
+    patterns: &Patterns,
+    inp: &AttemptInput,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<AttemptResult, AttemptError> {
     // Stamped in one place so every caller's result carries the projector
     // keys, whether the attempt succeeded, was cancelled or was a defect.
     let started = std::time::SystemTime::now();
     let mut r = run_attempt_inner(h, cfg, patterns, inp, cancelled)?;
-    r.harness = Some(h.name().to_string());
+    r.harness = Some(h.map_or_else(|| inp.leg.harness.clone(), |h| h.name().to_string()));
     r.model = Some(inp.leg.model.clone());
     r.combo = Some(inp.leg.id.clone());
     r.class = if inp.class.is_empty() {
@@ -120,7 +144,7 @@ pub fn run_attempt(
 /// The attempt body: worktree, sandbox, harness, commit, confinement, check,
 /// classification. `run_attempt` wraps this to stamp the result metadata.
 fn run_attempt_inner(
-    h: &dyn Harness,
+    h: Option<&dyn Harness>,
     cfg: &Config,
     patterns: &Patterns,
     inp: &AttemptInput,
@@ -130,7 +154,7 @@ fn run_attempt_inner(
     let id = AttemptId::new(claim.card.clone(), inp.n);
     let branch = id.branch();
     let repo = Path::new(&claim.repo);
-    let dest = Path::new(&inp.workroot).join(format!("{}-{}", claim.card, inp.n));
+    let dest = Path::new(&inp.workroot).join(id.dir_name());
 
     // A retry or a promotion always starts from a fresh tree; an old one is
     // never reused.
@@ -153,18 +177,41 @@ fn run_attempt_inner(
         );
     }
 
+    let Some(h) = h else {
+        return defect_result(
+            &dest,
+            &claim.base_sha,
+            &branch,
+            &wt.head,
+            format!(
+                "unknown harness {:?} on leg {}: not registered with this worker",
+                inp.leg.harness, inp.leg.id
+            ),
+        );
+    };
+
     let run = HarnessRun {
         workdir: dest.as_path(),
         model: inp.leg.model.as_str(),
         prompt: claim.prompt.as_str(),
     };
+    if let Err(why) = h.validate(&run) {
+        return defect_result(&dest, &claim.base_sha, &branch, &wt.head, why);
+    }
     let opts = Opts {
         stall: Some(cfg.stall),
         timeout: Some(cfg.start_to_close),
         grace: cfg.kill_grace,
         max_output: 1 << 20,
     };
-    let sup = run_harness(h, &run, &opts, cancelled)?;
+    // The agent's private HOME lives beside the worktree (never in its diff) and
+    // goes away with the attempt. The check below gets its own HOME, so a login
+    // the harness persisted here never reaches the check child.
+    let home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
+    // Harness auth travels as staged files in this HOME, never by env (the
+    // confined env carries no credential names; see sandbox_env).
+    pg_worker_core::sandbox_env::stage_harness_auth(home.path())?;
+    let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
 
@@ -547,6 +594,7 @@ mod tests {
                 id: "leg-1".to_string(),
                 tier: Tier::Free,
                 model: "some/model".to_string(),
+                harness: "opencode".to_string(),
             },
             workroot: workroot.to_string_lossy().into_owned(),
             class: String::new(),
@@ -566,7 +614,7 @@ mod tests {
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::Ok);
-        assert_eq!(res.branch, "attempt/c1/1");
+        assert_eq!(res.branch, AttemptId::new("c1", 1).branch());
         assert_ne!(res.head, base);
         assert!(!res.diff_hash.is_empty());
         assert_eq!(h.runs(), 1);
@@ -701,8 +749,8 @@ mod tests {
             let res = run_attempt(&h, &cfg, &Patterns::default(), &inp, &|| false).unwrap();
             assert_eq!(res.exit_class, ExitClass::Ok);
         }
-        let d1 = root.path().join("c1-1");
-        let d2 = root.path().join("c1-2");
+        let d1 = root.path().join(AttemptId::new("c1", 1).dir_name());
+        let d2 = root.path().join(AttemptId::new("c1", 2).dir_name());
         assert!(d1.exists() && d2.exists());
         assert_ne!(d1, d2);
     }
@@ -733,6 +781,7 @@ mod tests {
             id: "leg-9".to_string(),
             tier: Tier::Paid,
             model: "m".to_string(),
+            harness: "opencode".to_string(),
         };
         let b = to_budget_attempt(&r, &leg);
         assert_eq!(b.exit_class, ExitClass::CheckFail);
@@ -801,6 +850,36 @@ mod tests {
         assert_eq!(back.exit_class, ExitClass::Ok);
         assert_eq!(back.harness, None);
         assert_eq!(back.tokens_in, None);
+    }
+
+    #[test]
+    fn leg_without_harness_reads_as_opencode() {
+        let leg: LegSpec = serde_json::from_str(r#"{"id":"l","tier":"free","model":"m"}"#).unwrap();
+        assert_eq!(leg.harness, "opencode");
+        let leg: LegSpec =
+            serde_json::from_str(r#"{"id":"l","tier":"free","model":"m","harness":"claude"}"#)
+                .unwrap();
+        assert_eq!(leg.harness, "claude");
+    }
+
+    #[test]
+    fn unknown_harness_is_a_contract_defect_with_a_worktree() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let mut inp = input(claim(&repo_s, &base, &["x"], "true"), 3, root.path());
+        inp.leg.harness = "no-such".to_string();
+        let res = run_attempt_with(None, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::ContractDefect);
+        assert!(res.output_tail.contains("no-such"), "{}", res.output_tail);
+        assert_eq!(res.harness.as_deref(), Some("no-such"));
+        assert_eq!(res.combo.as_deref(), Some("leg-1"));
+        // The worktree exists so the probe that follows has something to look at.
+        assert!(
+            root.path()
+                .join(AttemptId::new("c1", 3).dir_name())
+                .is_dir()
+        );
     }
 
     #[test]

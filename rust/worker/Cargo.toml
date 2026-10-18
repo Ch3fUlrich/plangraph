@@ -32,6 +32,7 @@ anyhow = "1"
 thiserror = "2"
 libc = "0.2"
 ureq = { version = "2", features = ["json"] }
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"
