@@ -14,7 +14,7 @@ from urllib.parse import quote
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed
+from keeper_util import World, seed, to_claimed
 from plangraph.keeper.errors import Refused
 
 
@@ -43,6 +43,13 @@ def lock_path(repo, action):
 def attempt(card, n=1):
     return {"card": card, "n": n, "leg": "free", "exit_class": "ok",
             "diff_hash": "deadbeef", "check_tail": "boom"}
+
+
+def park(card, **extra):
+    body = {"card": card, "tier": "free", "exit_class": "check_fail",
+            "check_tail": "boom"}
+    body.update(extra)
+    return body
 
 
 def state(w, key):
@@ -159,33 +166,35 @@ def test_lock_acquire_release_chain_with_fence_tokens(doors, w):
     repo = "org/repo name"
     held = {"owner": "w1", "ttl_s": 60}
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"), held) \
-        == (200, {"token": 1, "owner": "w1"})
+        == (200, {"token": 1, "owner": "workerA:w1"})
     status, body = doors.http("workerA", "POST", lock_path(repo, "acquire"),
                               {"owner": "w2", "ttl_s": 60})
     assert (status, body["error"]) == (409, "conflict")
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"), held) \
-        == (200, {"token": 1, "owner": "w1"})                # same owner: same token
+        == (200, {"token": 1, "owner": "workerA:w1"})    # same owner: same token
     assert doors.http("workerA", "POST", lock_path(repo, "release"),
-                      {"token": 1, "owner": "w1"}) == (204, "")
+                      {"token": 1, "owner": "workerA:w1"}) == (204, "")
     status, body = doors.http("workerA", "POST", lock_path(repo, "release"),
-                              {"token": 1, "owner": "w1"})   # no longer held
+                              {"token": 1, "owner": "workerA:w1"})   # no longer held
     assert (status, body["error"]) == (409, "conflict")
     assert doors.http("workerA", "POST", lock_path(repo, "acquire"),
                       {"owner": "w2", "ttl_s": 60}) \
-        == (200, {"token": 2, "owner": "w2"})                # tokens only grow
+        == (200, {"token": 2, "owner": "workerA:w2"})    # tokens only grow
     status, body = doors.http("workerA", "POST", lock_path(repo, "release"),
-                              {"token": 1, "owner": "w1"})   # stale token
+                              {"token": 1, "owner": "workerA:w1"})   # stale token
     assert (status, body["error"]) == (409, "conflict")
 
 
 def test_an_expired_lock_is_regranted_and_the_old_release_fails(doors, w):
     assert doors.http("workerA", "POST", lock_path("r", "acquire"),
-                      {"owner": "w1", "ttl_s": 10}) == (200, {"token": 1, "owner": "w1"})
+                      {"owner": "w1", "ttl_s": 10}) \
+        == (200, {"token": 1, "owner": "workerA:w1"})
     w.clock.advance(11)
     assert doors.http("workerA", "POST", lock_path("r", "acquire"),
-                      {"owner": "w2", "ttl_s": 10}) == (200, {"token": 2, "owner": "w2"})
+                      {"owner": "w2", "ttl_s": 10}) \
+        == (200, {"token": 2, "owner": "workerA:w2"})
     status, body = doors.http("workerA", "POST", lock_path("r", "release"),
-                              {"token": 1, "owner": "w1"})
+                              {"token": 1, "owner": "workerA:w1"})
     assert (status, body["error"]) == (409, "conflict")
 
 
@@ -237,3 +246,84 @@ def test_store_lock_acquire_as_reader_raises_forbidden(w):
     with pytest.raises(Refused) as exc:
         w.store.lock_acquire(w.p("reader"), "r", {"owner": "o", "ttl_s": 5})
     assert exc.value.code == "forbidden"
+
+
+# -------------------------------------- park guards a claimed card
+def test_park_by_a_stale_worker_after_reclaim_is_refused(doors, w):
+    key, = seed(w, [("A", [])])
+    epoch = to_claimed(w, key, "workerA", lease_s=60)
+    w.store.release(w.p("workerA"), key, epoch)
+    to_claimed(w, key, "workerB", lease_s=60)
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key))
+    assert (status, body["error"]) == (403, "forbidden")
+    assert state(w, key) == "claimed"
+
+
+# ------------------------------------------- park checks the epoch
+def test_park_with_a_stale_epoch_is_refused_and_current_epoch_is_ok(doors, w):
+    key, = seed(w, [("A", [])])
+    e1 = to_claimed(w, key, "workerA")
+    w.store.release(w.p("workerA"), key, e1)
+    e2 = to_claimed(w, key, "workerA")
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key, epoch=e1))
+    assert (status, body["error"]) == (409, "epoch_stale")
+    assert doors.http("workerA", "POST", "/v1/park", park(key, epoch=e2)) == (204, "")
+    assert state(w, key) == "parked"
+
+
+# ------------------------------- the holder parks without an epoch
+def test_the_current_holder_parks_a_claimed_card_without_an_epoch(doors, w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    assert doors.http("workerA", "POST", "/v1/park", park(key)) == (204, "")
+    assert state(w, key) == "parked"
+    row = w.conn.execute(
+        "SELECT claimed_by, lease_until FROM items WHERE key=?", (key,)).fetchone()
+    assert row[0] is None and row[1] is None
+    assert doors.http("workerA", "POST", "/v1/park", park(key)) == (204, "")
+
+
+# ------------------------------------------ park refuses an expired lease
+def test_park_with_an_expired_lease_is_refused(doors, w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA", lease_s=60)
+    w.clock.advance(61)
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key))
+    assert (status, body["error"]) == (409, "epoch_stale")
+    assert state(w, key) == "claimed"
+
+
+# ------------------------- a delegate and the router may park a claimed card
+def test_a_delegate_and_the_router_may_park_a_claimed_card(doors, w):
+    delegated, routed = seed(w, [("A", []), ("B", [])])
+    to_claimed(w, delegated, "l1main")
+    w.store.delegate(w.p("l1main"), delegated, "workerB")
+    assert doors.http("workerB", "POST", "/v1/park", park(delegated)) == (204, "")
+    to_claimed(w, routed, "l1main")
+    assert doors.http("router", "POST", "/v1/park", park(routed)) == (204, "")
+    assert state(w, delegated) == "parked" and state(w, routed) == "parked"
+
+
+# ------------------------------------ the lock owner binds to the principal
+def test_lock_owner_is_bound_to_the_principal(doors, w):
+    held = {"owner": "run1", "ttl_s": 60}
+    assert doors.http("workerA", "POST", lock_path("r", "acquire"), held) \
+        == (200, {"token": 1, "owner": "workerA:run1"})
+    status, body = doors.http("workerB", "POST", lock_path("r", "acquire"), held)
+    assert (status, body["error"]) == (409, "conflict")
+    status, body = doors.http("workerB", "POST", lock_path("r", "acquire"),
+                              {"owner": "workerA:run1", "ttl_s": 60})
+    assert (status, body["error"]) == (409, "conflict")
+    assert doors.http("workerA", "POST", lock_path("r", "acquire"), held) \
+        == (200, {"token": 1, "owner": "workerA:run1"})  # same owner: same token
+    status, body = doors.http("workerB", "POST", lock_path("r", "release"),
+                              {"token": 1, "owner": "workerA:run1"})
+    assert (status, body["error"]) == (409, "conflict")
+    assert doors.http("workerB", "POST", lock_path("r", "release"),
+                      {"token": 1, "owner": "run1"})[0] == 409
+    assert doors.http("workerA", "POST", lock_path("r", "release"),
+                      {"token": 1, "owner": "run1"})[0] == 409
+    assert doors.http("workerA", "POST", lock_path("r", "release"),
+                      {"token": 1, "owner": "workerA:run1"}) == (204, "")
+    assert doors.http("workerB", "POST", lock_path("r", "acquire"), held) \
+        == (200, {"token": 2, "owner": "workerB:run1"})

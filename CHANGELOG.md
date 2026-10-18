@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-18
+
+- **RT-P1-VERBS-LIVE-GUARDS:** `/v1/park` now checks the claim holder/delegate, an unexpired lease and an optional body `epoch` like heartbeat/submit (a stale worker cannot park a re-claimed card; router/system exempt; a holder's park of a `claimed` card releases the claim); merge locks are lease locks whose owner is bound to the calling principal (`<principal>:<owner>`, echoed by acquire and required verbatim by release; cross-principal acquire and release are 409). Tests in `tests/test_keeper_worker_verbs.py`.
+
 ## 2026-10-17
 
 - **MODEL-NAMES:** `tools/names_backfill_dryrun.py SNAPSHOT.json [--json]` lists (never applies) the name backfill
