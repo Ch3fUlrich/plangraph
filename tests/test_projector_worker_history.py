@@ -1,23 +1,24 @@
 """Recorded ``rust/worker`` Card histories project cleanly and apply to the keeper.
 
-The seven fixtures are proto-JSON ``temporal workflow show --output json`` captures of real
+The eight fixtures are proto-JSON ``temporal workflow show --output json`` captures of real
 ``Card`` runs; the projector must read them without coercing an attempt to ``worker_crash`` or
 an unknown shape (docs/projector.md, "Contract with the Card workflow (v1)").  Runs on whichever
 backend ``PG_KEEPER_BACKEND`` selects (``keeper_util.World``), same code path.
 """
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from plangraph.projector.apply import Projector
-from plangraph.projector.history import project_history
+from plangraph.projector.history import decode_payload, project_history
 from plangraph.projector.models import ATTEMPT_ACTIVITY_TYPES, EXIT_CLASSES
 from keeper_util import World, seed
 
 FIXTURES = Path(__file__).parents[1] / "rust" / "worker" / "tests" / "fixtures" / "projector"
 NAMES = ("happy", "contract_defect", "check_fails", "cancel", "usage_limit_reroute",
-         "needs_input_answered", "needs_input_timeout")
+         "needs_input_answered", "needs_input_timeout", "gate_blocks")
 KEY = "demo:A"          # the seeded item's key; a run's plan key must equal it to apply
 
 #: Hand-verified projections: status, outcome, attempts' exit classes, states in order, and, for
@@ -55,6 +56,16 @@ EXPECTED = {
     "needs_input_timeout": {
         "status": "completed", "outcome": "done", "exits": ["needs_input", "ok"],
         "states": ["running", "needs_input", "running"],
+        "attempt": {"harness": "shell", "model": "some/model", "combo": "leg-1", "class_": "128k"},
+    },
+    # RT-GATE-WIRING: attempt 1 passes the shell harness, but the pre-merge gate blocks it.
+    # The exits are ["ok", "ok"] because the projector reads each attempt's exit_class from
+    # the attempt activity result; the pre-merge gate (RT-GATE-WIRING) blocks attempt 1
+    # AFTER that activity succeeded, and the correction (check_fail) goes to the keeper
+    # through the report activity, not into an attempt result. Known gap, projector view
+    # differs from keeper view; fixing it is a projector (HIGH) change out of scope here.
+    "gate_blocks": {
+        "status": "completed", "outcome": "done", "exits": ["ok", "ok"], "states": ["running"],
         "attempt": {"harness": "shell", "model": "some/model", "combo": "leg-1", "class_": "128k"},
     },
 }
@@ -104,6 +115,56 @@ def test_activity_types_are_known(name):
     assert all(a["retryPolicy"]["maximumAttempts"] == 1 for a in attempt_acts)
 
 
+def _gate_results(name="gate_blocks"):
+    """Decoded results of completed CardActivities::gate activities in fixture ``name``."""
+    events = load(name)["events"]
+    sched = {ev["eventId"]: ev["activityTaskScheduledEventAttributes"]
+             for ev in events if ev["eventType"] == "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED"}
+    results = []
+    for ev in events:
+        if ev["eventType"] == "EVENT_TYPE_ACTIVITY_TASK_COMPLETED":
+            attrs = ev["activityTaskCompletedEventAttributes"]
+            sched_attr = sched.get(attrs.get("scheduledEventId"))
+            if sched_attr and sched_attr["activityType"]["name"] == "CardActivities::gate":
+                payloads = attrs.get("result", {}).get("payloads", [])
+                if payloads:
+                    results.append(decode_payload(payloads[0]))
+    return results
+
+
+def test_gate_blocks_schedules_the_gate_before_every_merge():
+    names = [a["activityType"]["name"] for a in scheduled("gate_blocks")]
+    assert names.count("CardActivities::gate") == 2
+    merges = [i for i, n in enumerate(names) if n == "CardActivities::merge"]
+    assert len(merges) == 1
+    for i in merges:
+        assert i > 0 and names[i - 1] == "CardActivities::gate"
+
+
+def test_gate_blocks_first_gate_failed_second_passed():
+    results = _gate_results("gate_blocks")
+    assert len(results) == 2
+    first, second = results[0], results[1]
+    assert first["passed"] is False
+    assert second["passed"] is True
+    for res in (first, second):
+        assert res["checks"]
+        assert all(c["name"] == "card-check" for c in res["checks"])
+    assert "tail" in first["checks"][0]
+    assert first["checks"][0]["tail"] is not None
+
+
+def test_gate_tail_in_history_is_redacted_shape():
+    results = _gate_results("gate_blocks")
+    assert results
+    hex_40 = re.compile(r"[0-9a-fA-F]{40,}")
+    for res in results:
+        for check in res.get("checks", []):
+            tail = check.get("tail", "")
+            assert not hex_40.search(tail)
+            assert "API_TOKEN=" not in tail
+
+
 @pytest.fixture
 def world(tmp_path):
     w = World(tmp_path)
@@ -137,7 +198,7 @@ def test_needs_input_fixtures_raise_no_unknown_shape_alarm(world, projector, nam
 
 
 @pytest.mark.parametrize("name", ["happy", "check_fails", "needs_input_answered",
-                                  "needs_input_timeout"])
+                                  "needs_input_timeout", "gate_blocks"])
 def test_apply_writes_attempt_rows(world, projector, name):
     # The seeded item is ``demo:A``, so the run applies under the id that yields that plan key.
     p = project(name, workflow_id=f"card:{KEY}")
