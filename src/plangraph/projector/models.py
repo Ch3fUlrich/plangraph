@@ -17,7 +17,7 @@ ATTEMPT_ACTIVITY_TYPES = frozenset({"attempt"})
 #: Every activity type the Card workflow may schedule; anything else is an ``unknown_shape``.
 KNOWN_ACTIVITY_TYPES = ATTEMPT_ACTIVITY_TYPES | frozenset(
     f"CardActivities::{n}" for n in
-    ("tick", "probe", "merge", "report", "park", "complete", "alarm", "janitor",
+    ("tick", "probe", "merge", "report", "park", "complete", "alarm", "janitor", "gate",
      "ask_question", "record_question_timeout"))
 
 
