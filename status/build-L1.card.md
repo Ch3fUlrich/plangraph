@@ -1,6 +1,6 @@
 # build-L1 card · gen-16 live · HANDOFF #16 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
-Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes). D-2007 qodercli hung + free 429: D-2008 max 3 Go writers fleet (rt-side-2 2: F7,EXEC; predeploy-5 1: GW), cheap Go models, Go 429 -> legs 3-7, free retry hourly 1 bg wait, seats sequential.
+Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes). D-2019: NO Go writers/seats (Go window = orchestrators); writers D-1704 legs 6-7 (mimo API, deepseek API 7.75 USD) via omniroute baseURL (workst adding); seats tool-less qwen or agy gemini.
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 ## Main = 8f7f1c55 (#93 F7, #89 PGDRILL D2, #88 LIVE-GUARDS, #83 QUESTION-TIMER, #80, #85, #86 34806368 main-red fix, #82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
@@ -9,7 +9,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | Item | Owner | State / next |
 |---|---|---|
 | DONE | - | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW (+FOLLOWUP, TEMPORAL-CHECK server); QUESTION-TIMER 541e4a6c (deploy conds -> WF-VERSIONING); LIVE-GUARDS 2424d40b (live cond -> EXEC-OWNERSHIP) |
-| md-sync | - | LIVE 15:28Z on wt md-sync-8f7f1c55 (drop-in z9, judge GO, 2 seats mimo+gemini); OS-OCGO-LOGIN NOT closed (D-2003 not read, D-1987 dot token) -> BLOCKED to router *A fix D-rows; follow-up: exclude kind=gate from gone |
+| md-sync | - | LIVE 15:28Z on wt md-sync-8f7f1c55 (drop-in z9, judge GO, 2 seats mimo+gemini); OS-OCGO-LOGIN DONE 15:30Z (router fixed D-rows, D-2016); follow-up: exclude kind=gate from gone |
 | DEV-PGDRILL | - | DONE #89 d8c7b606 (judge GO, D-1988 closed; xiaomi+google). FLAKES for CI-GATE/DRILLS: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) |
 | FLOW-UNBLOCK | rt-side-2 | F1-F6 local; +D-2002 trailer via merged PR/ancestry; +Q-2 criteria edit bumps epoch (pt 4). Then claim QC-ACCEPTS (full Q1-Q20, Q-1) |
 | EXEC-OWNERSHIP / BATCH-PRECONDITION / CI-GATE | rt-side-2 | EXEC A 0d03f9e + B 00290c2 (lane/rt-p1-exec-ownership), D1 Rust BLOCKED: Go 5h limit -> probe qwen/kimi/minimax once else wait reset; BATCH/CIG on leg 3+ |
