@@ -371,6 +371,19 @@ def test_lock_owner_binding_survives_a_colon_in_the_principal_name(w):
     assert exc.value.code == "conflict"
 
 
+# ------------------- a stored lock owner is always releasable
+def test_a_stored_lock_owner_is_always_releasable(w):
+    long_name = ":" * 100                      # escapes to 300 characters
+    token = auth.add_principal(w.conn, long_name, "worker", ["demo"], family="famL")
+    pl = auth.authenticate(w.conn, token)
+    with pytest.raises(Refused) as exc:
+        w.store.lock_acquire(pl, "r", {"owner": "o" * 256, "ttl_s": 60})
+    assert exc.value.code == "validation"
+    held = w.store.lock_acquire(pl, "r", {"owner": "o" * 100, "ttl_s": 60})
+    assert held["token"] == 1
+    assert w.store.lock_release(pl, "r", held) == {}
+
+
 # ------------------- park of a claimed card revokes its run tokens
 class _Runs:
     """Minimal run record: run ids wa/wb name demo:A / demo:B."""

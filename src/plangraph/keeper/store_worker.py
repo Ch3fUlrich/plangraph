@@ -41,6 +41,7 @@ _ACQUIRE_KEYS = frozenset(("owner", "ttl_s"))
 _RELEASE_KEYS = frozenset(("token", "owner"))
 _SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}\Z")
 _LOCK_ROLES = ("router", "system", "l1", "worker", "spawner")
+_OWNER_MAX = 512
 
 
 def _check_body(body, allowed, name):
@@ -223,6 +224,9 @@ class WorkerMixin:
         _check_body(body, _ACQUIRE_KEYS, "lock_acquire")
         owner = _text("owner", body.get("owner"), required=True, cap=256)
         owner = _lock_owner(principal, owner)
+        if len(owner) > _OWNER_MAX:
+            raise Refused("validation",
+                          f"owner (with the principal prefix) exceeds {_OWNER_MAX} characters")
         ttl = body.get("ttl_s")
         if (isinstance(ttl, bool) or not isinstance(ttl, int)
                 or not 1 <= ttl <= 86400):
@@ -264,7 +268,8 @@ class WorkerMixin:
         self._require_role(principal, *_LOCK_ROLES)
         repo = _text("repo", repo, required=True, cap=512)
         _check_body(body, _RELEASE_KEYS, "lock_release")
-        owner = _text("owner", body.get("owner"), required=True, cap=512)
+        owner = _text("owner", body.get("owner"), required=True,
+                      cap=_OWNER_MAX)
         segment, sep, _rest = owner.partition(":")
         if not sep or segment != _escape_principal_name(principal.name):
             raise Refused("conflict", "merge lock is held by another principal")
