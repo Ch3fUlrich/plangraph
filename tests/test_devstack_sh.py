@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,11 @@ TEMPORAL_FAKE = """\
 TMP="{tmp}"
 l=temporal; for a in "$@"; do l="$l $a"; done; printf '%s\n' "$l" >>"$TMP/calls.log"
 case "${{1:-}}" in
-  server) printf '%s\\n' "$$" >"$TMP/temporal_child.pid"; exec sleep 300 ;;
+  server)
+    printf '%s\\n' "$$" >"$TMP/temporal_child.pid"
+    if [ "${{FAKE_SERVER_DIE:-}}" = 1 ]; then exit 1; fi
+    # -a makes /proc/<pid>/cmdline contain "start-dev" so the script trusts the pid file
+    exec -a "temporal server start-dev" sleep 300 ;;
   operator)
     if [ "${{FAKE_HEALTH_FAIL:-}}" = 1 ]; then exit 1; fi
     exit 0 ;;
@@ -45,7 +50,9 @@ case "${{1:-}}" in
   start) touch "$TMP/running"; exit 0 ;;
   stop) rm -f "$TMP/running"; exit 0 ;;
   rm) rm -f "$TMP/container" "$TMP/running"; exit 0 ;;
-  exec) exit 0 ;;
+  exec)
+    if [ "${{FAKE_PG_NOTREADY:-}}" = 1 ]; then exit 1; fi
+    exit 0 ;;
 esac
 exit 0
 """
@@ -79,6 +86,7 @@ class Stack:
             "PG_PORT": "55999",
             "DEVSTACK_PG_NAME": "devstack-test-pg",
             "DEVSTACK_PG_MODE": "docker",
+            "DEVSTACK_HEALTH_TIMEOUT": "3",
         }
 
     def run(self, *cmds, timeout=90, extra_env=None):
@@ -107,7 +115,7 @@ def test_start_launches_temporal_set_current_and_one_docker_pg(stack):
     lines = stack.lines()
     dev = [l for l in lines if l.startswith("temporal server start-dev")]
     assert dev == [f"temporal server start-dev --ip 127.0.0.1 --port 17999 --ui-port 18999 "
-                   f"--headless --db-filename {stack.state}/temporal.db"]
+                   f"--db-filename {stack.state}/temporal.db"]
     setcur = [l for l in lines if l.startswith("temporal worker deployment set-current-version")]
     assert len(setcur) == 1
     assert "--address 127.0.0.1:17999 --deployment-name d --build-id v1" in setcur[0]
@@ -181,13 +189,50 @@ def test_start_after_plain_stop_reuses_the_container(stack):
 
 
 def test_temporal_health_failure_kills_process_and_exits_1(stack):
-    # wait_for polls health for the script's full 60 s before giving up
-    r = stack.run("start", timeout=90, extra_env={"FAKE_HEALTH_FAIL": "1"})
+    # DEVSTACK_HEALTH_TIMEOUT=3 bounds the poll; subprocess timeout 30 s is headroom
+    r = stack.run("start", timeout=30, extra_env={"FAKE_HEALTH_FAIL": "1"})
     assert r.returncode == 1
-    assert "not healthy within 60 s" in r.stderr
+    assert "not healthy within 3 s" in r.stderr
     assert not (stack.state / "temporal.pid").exists()
     pid = int((stack.tmp / "temporal_child.pid").read_text().strip())
     assert not alive(pid)
+
+
+def test_dying_start_dev_child_fails_fast(stack):
+    # start_temporal watches the child pid: a crash exits in ~1 poll, not after the 30 s timeout
+    started = time.monotonic()
+    r = stack.run("start", timeout=30, extra_env={
+        "FAKE_SERVER_DIE": "1", "FAKE_HEALTH_FAIL": "1", "DEVSTACK_HEALTH_TIMEOUT": "30"})
+    elapsed = time.monotonic() - started
+    assert r.returncode == 1
+    assert elapsed < 2.5, elapsed
+    assert not (stack.state / "temporal.pid").exists()
+
+
+def test_stale_pid_file_for_unrelated_process_is_not_trusted(stack):
+    # temporal.pid holding a live but unrelated pid must not make stop kill that process
+    stack.state.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(["sleep", "200"])
+    try:
+        (stack.state / "temporal.pid").write_text(f"{proc.pid}\n")
+        assert stack.run("stop").returncode == 0
+        assert proc.poll() is None
+        assert not (stack.state / "temporal.pid").exists()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_reused_container_that_never_becomes_ready_is_stopped_not_removed(stack):
+    assert stack.run("start").returncode == 0
+    assert stack.run("stop").returncode == 0
+    first = len(stack.lines())
+    r = stack.run("start", timeout=30, extra_env={"FAKE_PG_NOTREADY": "1"})
+    assert r.returncode == 1
+    second = stack.lines()[first:]
+    assert "docker start devstack-test-pg" in second
+    assert "docker stop devstack-test-pg" in second
+    assert not any(l.startswith("docker rm") for l in second)
 
 
 def test_set_current_failure_does_not_fail_start(stack):
