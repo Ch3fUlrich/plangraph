@@ -32,11 +32,7 @@ from .. import views
 from . import events
 from . import db_errors
 from .errors import Refused
-
-try:
-    from .store_create import _MAX_DEPS
-except (ImportError, AttributeError):
-    _MAX_DEPS = 100
+from .store_create import _MAX_DEPS
 
 MAX_OPS = 500
 _OPS = {
