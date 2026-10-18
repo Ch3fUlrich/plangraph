@@ -275,6 +275,22 @@ def test_semaphore_project_not_in_allowlist(monkeypatch, tmp_path):
     assert seen == ["https://semaphore.invalid/api/project/3/tasks/5"]
 
 
+def test_semaphore_reports_publicly_readable_projects(monkeypatch, tmp_path):
+    _env(monkeypatch, tmp_path, "1, 3")
+    adapter = SemaphoreAdapter(fetch=lambda t, p: {})
+    assert adapter.readable(1) is True
+    assert adapter.readable("3") is True
+    assert adapter.readable(2) is False
+    assert adapter.readable("abc") is False
+    assert adapter.readable(None) is False
+
+
+@pytest.mark.parametrize("value", [None, "", "abc", "1,x"])
+def test_semaphore_readable_fails_closed_without_allowlist(monkeypatch, tmp_path, value):
+    _env(monkeypatch, tmp_path, value)
+    assert SemaphoreAdapter(fetch=lambda t, p: {}).readable(1) is False
+
+
 @pytest.mark.parametrize("code,msg", [
     (401, "semaphore auth refused (401)"), (403, "semaphore auth refused (403)"),
     (500, "semaphore request failed (HTTP 500)"), (404, "semaphore request failed (HTTP 404)"),

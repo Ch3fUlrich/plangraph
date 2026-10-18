@@ -503,6 +503,15 @@ class SemaphoreTaskVerifier:
             return _fail("template name check unsupported; pass the template id", ref)
         if ctx.semaphore is None:
             return _fail("no semaphore adapter available", ref)
+        if not (
+            self._has_readable_copy(ref)
+            or self._adapter_reports_readable(ctx.semaphore, project_id)
+        ):
+            return _fail(
+                "semaphore-task evidence not readable by the reviewer host: "
+                "attach ref.readable (reviewer-readable copy)",
+                ref,
+            )
 
         try:
             data = ctx.semaphore.get(task_id, project_id)
@@ -527,6 +536,32 @@ class SemaphoreTaskVerifier:
         if positive_int(data.get("template_id")) != want_template:
             return _fail(f"semaphore task {task_id} used a different template", ref)
         return Result(True, f"semaphore task {task_id} succeeded", ref)
+
+    @staticmethod
+    def _has_readable_copy(ref: dict) -> bool:
+        """``ref['readable']``: a non-empty http(s) URL or a bare artifact id."""
+        value = ref.get("readable")
+        if not isinstance(value, str):
+            return False
+        copy = value.strip()
+        if not copy or any(ch.isspace() for ch in copy):
+            return False
+        for prefix in ("http://", "https://"):
+            if copy.startswith(prefix):
+                # URL: must have a netloc; the reviewer host follows it itself.
+                return bool(copy[len(prefix):].split("/", 1)[0])
+        # Artifact id: a bare token, never a path of any kind.
+        return "/" not in copy and "\\" not in copy
+
+    @staticmethod
+    def _adapter_reports_readable(adapter: Any, project_id: int) -> bool:
+        probe = getattr(adapter, "readable", None)
+        if probe is None:
+            return False
+        try:
+            return bool(probe(project_id)) if callable(probe) else bool(probe)
+        except Exception:  # noqa: BLE001 - fail closed, never surface the error
+            return False
 
 
 # --------------------------------------------------------------------------- #

@@ -201,6 +201,40 @@ def test_semaphore_missing_task_id():
     assert "task_id" in res.detail
 
 
+def test_semaphore_gated_without_readable_refused():
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", REF, ctx)
+    assert res.ok is False
+    assert "semaphore-task" in res.detail
+    assert "readable" in res.detail
+
+
+def test_semaphore_gated_with_readable_url_ok():
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", {**REF, "readable": "https://art.example/5/copy.json"}, ctx)
+    assert res.ok is True
+
+
+def test_semaphore_gated_with_artifact_id_ok():
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", {**REF, "readable": "artifact-dp-913f"}, ctx)
+    assert res.ok is True
+
+
+@pytest.mark.parametrize("bad", [
+    "", "   ", "has spaces", "/abs/path/copy.json", "ftp://host/copy",
+    "https://", "C:\\copy.exe", "relative/path.json", 7, None, True,
+])
+def test_semaphore_readable_copy_must_be_url_or_bare_id(bad):
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    assert verify("semaphore-task", {**REF, "readable": bad}, ctx).ok is False
+
+
+def test_semaphore_non_gated_project_ok():
+    ctx = make_ctx()
+    assert verify("semaphore-task", REF, ctx).ok is True
+
+
 # --------------------------------------------------------------------------- #
 # decision
 # --------------------------------------------------------------------------- #
