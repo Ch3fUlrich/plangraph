@@ -59,6 +59,17 @@ async fn replays_check_fails() {
         .expect("check_fails history replays");
 }
 
+/// The gate-block run (a first attempt blocked on the card's check, main left
+/// untouched, then a retry that passes and merges) must replay
+/// deterministically like any other recorded run.
+#[tokio::test]
+async fn replays_gate_blocks() {
+    replayer()
+        .replay_workflow(history("gate_blocks"))
+        .await
+        .expect("gate_blocks history replays");
+}
+
 #[tokio::test]
 async fn replays_usage_limit_reroute() {
     replayer()
