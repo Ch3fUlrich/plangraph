@@ -8,6 +8,8 @@ bearer token — any ``actor``/``role`` in the body is ignored.
 Routes (contract):
 
 * ``POST /v1/<write-verb>``   JSON body in, JSON out
+* ``POST /v1/{attempts,park,complete,alarms}`` and ``/v1/locks/<repo>/release``
+  answer **204 with no body**; ``/v1/locks/<repo>/acquire`` is 200 ``{token, owner}``
 * ``GET  /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,
   snapshot,whoami,health}`` and ``/v1/audit-meta`` (router/L1)
 * ``GET /v1/health`` is open; everything else needs ``Authorization: Bearer``.
@@ -118,9 +120,12 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
                 else:
-                    payload = self._write(name, body or {}, principal)
+                    payload = self._write(name, body or {}, principal, extra)
                     as_text = query.get("fmt", ["json"])[0] == "text"
                     self._snapshot(principal)
+                    if payload is None:   # worker verbs: 204, no body
+                        self._empty(204)
+                        return
                 if as_text:
                     self._text(200, payload if isinstance(payload, str)
                                else fmt.result_text(name, payload))
@@ -186,6 +191,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if not isinstance(text, str):
             text = json.dumps(text)
         self._send(status, text.encode("utf-8"), "text/plain; charset=utf-8")
+
+    def _empty(self, status):
+        """No body, no Content-Length/Content-Type (HTTP 204 must not carry one)."""
+        self.send_response(status)
+        self.end_headers()
 
     def _inbox(self):
         """GET /inbox: the static, unauthenticated question form."""
@@ -276,13 +286,15 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return (text(data), True) if as_text else (data, False)
         raise Refused("not_found", f"no read verb {name!r}")
     # --------------------------------------------------------------- writes
-    def _write(self, name, body, principal):
+    def _write(self, name, body, principal, extra=""):
         store = self.server.store
         if not isinstance(body, dict):
             if name in ("create_items", "import_items") and isinstance(body, list):
                 body = {"items": body}
             else:
                 raise Refused("validation", "body must be a JSON object")
+        if name in api_routes.WORKER_VERBS:   # RT-P1-KEEPER: the store resolves the card
+            return api_routes.worker_write(store, principal, name, extra, body)
         if isinstance(body.get("key"), str):  # old (rehomed) keys resolve
             body["key"] = store.resolve_key(body["key"])
         if name in inbox.routes.WRITE_VERBS:
