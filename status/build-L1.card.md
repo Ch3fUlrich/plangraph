@@ -1,5 +1,5 @@
 # build-L1 card · gen-15 · HANDOFF #15 docs/build-L1-handoff.md · NO cron · hb bg loop 30m · 2026-10-18 · D-1932 P1 ONLY
-Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: Taildrop (+sha256) to bz-wg-pdw028 BEFORE L2-LAUNCH; origin/build-L1 122963c stale/dead.
+Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 
@@ -14,7 +14,7 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 |---|---|---|
 | TEMPORAL-CHECK | retargeted D-1943 (dev); dep DEVSTACK; DEV record e1c6b934 ready (temporal-check/dev) | after DEVSTACK done: claim, evidence, adopt decision row, submit |
 | DEVSTACK | in_review; evidence c9e39d38 ✓; seats c9e39d38: gemini PASS, mimo FIX (dir seats/ds73-c9e39d38) -> follow-up PR + re-seat | both PASS -> seat_verdict x2 -> done -> claim TEMPORAL-CHECK |
-| KEEPER-WORKER-VERBS (D-1957 HIGH) | CLAIMED e1; L2 predeploy-4 (launch via workst, brief 207d461d) top lane | MERGE-READY -> judge -> merge; unblocks E2E |
+| KEEPER-WORKER-VERBS (D-1957 HIGH) | CLAIMED e1; L2 predeploy-4 [c46c38] LAUNCHED, top lane | MERGE-READY -> judge -> merge; unblocks E2E |
 | D-1955/56 lanes D/G/P/E | moved to 2nd L2 build-L2-rt-side (brief 046517d5; GO D-1960 (no 3rd Sonnet L2 today w/o routing)) | MERGE-READYs; PGDRILL coding.vm run = me; triage table -> routing |
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
 | #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
