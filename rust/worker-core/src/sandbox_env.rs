@@ -210,7 +210,9 @@ fn symlink_refused(path: &Path) -> std::io::Error {
 }
 
 /// Create a staged directory at its final mode 0700 (unix) up front, so no
-/// window exists between creation and the private mode taking effect.
+/// window exists between creation and the private mode taking effect. A
+/// pre-existing directory is forced to 0700 as well, since `mode(0o700)` only
+/// applies to a directory `create` actually makes.
 fn create_staged_dir(path: &Path) -> std::io::Result<()> {
     let mut b = std::fs::DirBuilder::new();
     b.recursive(true);
@@ -219,7 +221,13 @@ fn create_staged_dir(path: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::DirBuilderExt;
         b.mode(0o700);
     }
-    b.create(path)
+    b.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
 }
 
 /// Copy `from` into a freshly created `to` opened at mode 0600 (unix) before
@@ -234,9 +242,11 @@ fn stage_file(from: &Path, to: &Path, staged: &mut Vec<PathBuf>) -> std::io::Res
         opts.mode(0o600);
     }
     let mut dest = opts.open(to)?;
+    // Recorded before the copy: create_new succeeded, so the file is ours and
+    // the guard must remove it even if the copy below fails half-way.
+    staged.push(to.to_path_buf());
     let mut src = std::fs::File::open(from)?;
     std::io::copy(&mut src, &mut dest)?;
-    staged.push(to.to_path_buf());
     Ok(())
 }
 
@@ -445,6 +455,32 @@ mod tests {
         let mut g = HomeGuard::for_dir(&dir).unwrap();
         assert!(g.stage_harness_auth().is_err());
         std::env::remove_var(HARNESS_AUTH_DIR_ENV);
+    }
+
+    #[test]
+    fn stage_file_records_the_file_when_the_copy_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("credentials.json");
+        let mut staged = Vec::new();
+        // A missing source fails the copy, but the opened dest is already ours.
+        assert!(stage_file(&root.path().join("nonexistent"), &dest, &mut staged).is_err());
+        assert_eq!(staged, vec![dest.clone()]);
+        assert!(dest.exists());
+        assert_eq!(std::fs::metadata(&dest).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn create_staged_dir_forces_0700_on_a_preexisting_dir() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("sub");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        create_staged_dir(&dir).unwrap();
+        assert_eq!(
+            std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]
