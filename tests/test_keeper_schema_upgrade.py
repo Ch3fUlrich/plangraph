@@ -65,8 +65,8 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
-def test_schema_version_is_twelve():
-    assert schema.SCHEMA_VERSION == 12
+def test_schema_version_is_thirteen():
+    assert schema.SCHEMA_VERSION == 13
 
 
 def test_open_without_create_still_refuses_a_non_keeper_file(tmp_path):

@@ -419,11 +419,21 @@ CREATE TABLE merge_locks (
 );
 """
 
+#: RT-P1-EXEC-OWNERSHIP: exec-ownership columns on ``items`` (SQLite schema v13).
+#: The store records them when a set-state move carries a
+#: ``(workflow_id, run_id, attempt)`` run; see ``store_cards._exec_check``.
+_V6 = """
+ALTER TABLE items ADD COLUMN exec_workflow_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN exec_run_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN exec_attempt BIGINT;
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
               Migration(4, "governor: metrics", _V4),
-              Migration(5, "locks: merge_locks", _V5))
+              Migration(5, "locks: merge_locks", _V5),
+              Migration(6, "exec ownership: items exec_workflow_id/exec_run_id/exec_attempt", _V6))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

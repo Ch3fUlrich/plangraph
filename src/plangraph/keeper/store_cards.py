@@ -15,6 +15,10 @@ trigger).
 * ``set_budget``: absolute tokens/cost/meter for one provider and day.
 * ``set_state``: move an item among the non-claim states (open, ready, running,
   needs_input, waiting, failed, parked); claim, review, done and cancel keep their verbs.
+  RT-P1-EXEC-OWNERSHIP: a move that carries ``run=(workflow_id, run_id, attempt)`` is
+  exec-owned -- it must stay forward per ``TRANSITIONS`` (a back-move needs
+  ``new_run=True`` with a fresh run, which takes over ownership), and the recorded
+  owner refuses a stale run or an attempt that would go backwards.
 """
 from __future__ import annotations
 
@@ -27,11 +31,29 @@ from .credential_guard import guard
 from .errors import Refused
 from .schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 
-__all__ = ["CardsMixin", "SETTABLE_STATES", "NO_DEFAULT_TAGS"]
+__all__ = ["CardsMixin", "SETTABLE_STATES", "TRANSITIONS", "NO_DEFAULT_TAGS"]
 
 #: States ``set_state`` moves between (none of them carries a claim, lease or epoch).
 SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed",
                    "parked")
+
+#: RT-P1-EXEC-OWNERSHIP: direct successors of each settable state (same-state always
+#: allowed; reachability is the transitive closure).  A set-state move that carries a
+#: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
+#: back to ``open``/``ready``) are refused unless the caller passes ``new_run=True``
+#: with a fresh ``run_id``, which records the new owner.  Moves without a ``run``
+#: keep their historical, unchecked behaviour so routers and worker verbs (which
+#: never carry one) are unaffected.
+TRANSITIONS: dict[str, frozenset[str]] = {
+    "open":        frozenset({"open", "ready"}),
+    "ready":       frozenset({"ready", "running"}),
+    "running":     frozenset({"running", "needs_input", "waiting"}),
+    "needs_input": frozenset({"needs_input", "waiting", "parked", "failed"}),
+    "waiting":     frozenset({"waiting", "needs_input", "parked", "failed"}),
+    "failed":      frozenset({"failed", "parked"}),
+    "parked":      frozenset({"parked", "failed"}),
+}
+
 #: Question tags: the card tags plus the design's "public release".
 QUESTION_TAGS = RISK_TAGS + ("public-release",)
 #: design 4.8: a question carrying one of these has no default and is never timed out.
@@ -114,6 +136,37 @@ def _number(name, value, nullable=True):
         raise Refused("validation", f"{name} must be a non-negative number"
                       + (" or null" if nullable else ""))
     return float(value)
+
+
+def _exec_parts(key, run):
+    """Validate a ``run=(workflow_id, run_id, attempt)``; return the three parts.
+
+    Every part must be present and well-formed whether or not the item already
+    has a recorded owner: recording a malformed owner would poison the card.
+    """
+    if not isinstance(run, (tuple, list)) or len(run) != 3:
+        raise Refused("validation",
+                      "run must be a (workflow_id, run_id, attempt) tuple")
+    wf, run_id, attempt = run
+    wf = _text("workflow_id", wf, required=True, cap=200, key=key)
+    run_id = _text("run_id", run_id, required=True, cap=200, key=key)
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+        raise Refused("validation", "attempt must be a positive integer")
+    return wf, run_id, attempt
+
+
+def _forward(was, state):
+    """True when *state* is *was* or forward-reachable from it per TRANSITIONS."""
+    todo, seen = [was], set()
+    while todo:
+        here = todo.pop()
+        if here == state:
+            return True
+        for nxt in TRANSITIONS.get(here, frozenset()):
+            if nxt not in seen:
+                seen.add(nxt)
+                todo.append(nxt)
+    return False
 
 
 class CardsMixin:
@@ -379,11 +432,12 @@ class CardsMixin:
                 "meter": reading}
 
     # ---------------------------------------------------------------- state
-    def set_state(self, principal, key, state, reason=""):
+    def set_state(self, principal, key, state, reason="", run=None, new_run=False):
         return self._run(principal, "set_state", key,
-                         lambda now: self._set_state(principal, key, state, reason, now))
+                         lambda now: self._set_state(principal, key, state, reason,
+                                                     now, run=run, new_run=new_run))
 
-    def _set_state(self, principal, key, state, reason, now):
+    def _set_state(self, principal, key, state, reason, now, run=None, new_run=False):
         self._require_role(principal, "router", "l1", "system")
         if state not in SETTABLE_STATES:
             raise Refused("validation",
@@ -392,16 +446,54 @@ class CardsMixin:
         why = _text("reason", reason or "", cap=500, key=key)
         return self._apply_state(principal, key, state, why, now,
                                  lambda project: self._may_write_for(principal,
-                                                                     project))
+                                                                     project),
+                                 run=run, new_run=new_run)
+
+    def _exec_record(self, conn, item_id, wf, run, attempt):
+        """(Re)record the exec owner of *item_id*: a first owner or a new run."""
+        wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
+        conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?,"
+                     " exec_attempt=? WHERE key=?", (wf, run, attempt, item_id))
+
+    def _exec_check(self, conn, item_id, wf, run, attempt):
+        """RT-P1-EXEC-OWNERSHIP: enforce the recorded exec owner of *item_id*.
+
+        An unowned card records ``(wf, run, attempt)``; the same run may only
+        move its attempt forward (never backwards); a different run is stale.
+        Runs inside the caller's write lock; callers pass ``conn`` (== ``self.conn``)
+        so the helper reads as a pure check against one connection.
+        """
+        wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
+        row = conn.execute("SELECT exec_run_id, exec_attempt FROM items WHERE key=?",
+                           (item_id,)).fetchone()
+        recorded = row["exec_run_id"] if row is not None else None
+        if recorded is None:
+            self._exec_record(conn, item_id, wf, run, attempt)
+            return
+        if run != recorded:
+            raise Refused("exec_stale",
+                          f"{item_id} is owned by run {recorded!r}, not {run!r}")
+        at = row["exec_attempt"] or 0
+        if attempt < at:
+            raise Refused("exec_stale",
+                          f"{item_id} is at attempt {at}; {attempt} would go backwards")
+        if attempt > at:
+            conn.execute("UPDATE items SET exec_attempt=? WHERE key=?",
+                         (attempt, item_id))
 
     def _apply_state(self, principal, key, state, why, now, scope,
-                     guard=None, release_claim=False):
+                     guard=None, release_claim=False, run=None, new_run=False):
         """Move *key* to *state*; *scope(project)* does the authorisation check.
 
         Idempotent: re-applying the state the item already has changes nothing.
         `guard(item)`, if given, runs inside the write lock after the scope and
         lock checks and may raise; `release_claim` lets a `claimed` item move to
-        *state* and clears its claim.
+        *state* and clears its claim.  RT-P1-EXEC-OWNERSHIP: a move carrying
+        ``run=(workflow_id, run_id, attempt)`` is exec-owned -- it must be
+        forward per ``TRANSITIONS`` (a back-move only with ``new_run=True`` and
+        a run_id differing from the recorded one, which takes over ownership),
+        and the recorded owner refuses a stale run or a backwards attempt.
+        Callers that pass neither kwarg keep the historical, unchecked behaviour.
         """
         with self._write():
             item = self._get_or_refuse(key)
@@ -413,6 +505,16 @@ class CardsMixin:
             if was not in SETTABLE_STATES and not (release_claim and was == "claimed"):
                 raise Refused("bad_state", f"{key} is {was}; set_state moves only"
                               f" {list(SETTABLE_STATES)}")
+            if run is not None:
+                wf, run_id, attempt_no = _exec_parts(key, run)
+                if _forward(was, state):
+                    self._exec_check(self.conn, key, wf, run_id, attempt_no)
+                elif new_run and run_id != item["exec_run_id"]:
+                    self._exec_record(self.conn, key, wf, run_id, attempt_no)
+                else:
+                    raise Refused("bad_transition",
+                                  f"{key}: {was} -> {state} is not a forward move;"
+                                  " only a new run (new_run=True) may go back")
             if was == state:
                 return {"key": key, "state": state, "changed": False}
             payload = {"state": state, "was": was, "reason": why}

@@ -55,7 +55,8 @@ def run_gate(principal, name):
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
           "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
-          "same_family": 409, "unavailable": 503}
+          "same_family": 409, "unavailable": 503, "exec_stale": 409,
+          "bad_transition": 409}
 
 
 #: RT-P1-KEEPER: the Rust worker's verbs (rust/worker/src/keeper.rs).
