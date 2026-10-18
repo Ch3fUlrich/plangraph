@@ -23,6 +23,9 @@ case "${{1:-}}" in
     printf '%s\\n' "$$" >"$TMP/temporal_child.pid"
     if [ "${{FAKE_SERVER_DIE:-}}" = 1 ]; then exit 1; fi
     # -a makes /proc/<pid>/cmdline contain "start-dev" so the script trusts the pid file
+    if [ "${{FAKE_IGNORE_TERM:-}}" = 1 ]; then
+      exec -a "temporal server start-dev" bash -c 'trap "" TERM; while :; do sleep 1; done'
+    fi
     exec -a "temporal server start-dev" sleep 300 ;;
   operator)
     if [ "${{FAKE_HEALTH_FAIL:-}}" = 1 ]; then exit 1; fi
@@ -173,7 +176,7 @@ def test_stop_kills_temporal_and_stops_container_but_keeps_state(stack):
 def test_stop_purge_removes_the_container(stack):
     assert stack.run("start").returncode == 0
     assert stack.run("stop", "--purge").returncode == 0
-    assert "docker rm -f devstack-test-pg" in stack.lines()
+    assert "docker rm -f -v devstack-test-pg" in stack.lines()
     assert not (stack.tmp / "container").exists()
     assert not (stack.tmp / "running").exists()
 
@@ -195,6 +198,20 @@ def test_temporal_health_failure_kills_process_and_exits_1(stack):
     assert "not healthy within 3 s" in r.stderr
     assert not (stack.state / "temporal.pid").exists()
     pid = int((stack.tmp / "temporal_child.pid").read_text().strip())
+    assert not alive(pid)
+
+
+def test_health_timeout_escalates_to_kill_for_term_ignoring_server(stack):
+    # the fake ignores TERM; the script must escalate to KILL after its short grace
+    r = stack.run("start", timeout=30, extra_env={
+        "FAKE_HEALTH_FAIL": "1", "FAKE_IGNORE_TERM": "1"})
+    assert r.returncode == 1
+    assert "not healthy within 3 s" in r.stderr
+    assert not (stack.state / "temporal.pid").exists()
+    pid = int((stack.tmp / "temporal_child.pid").read_text().strip())
+    deadline = time.monotonic() + 3
+    while alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert not alive(pid)
 
 
@@ -246,6 +263,13 @@ def test_bogus_pg_mode_exits_2(stack):
     r = stack.run("start", extra_env={"DEVSTACK_PG_MODE": "bogus"})
     assert r.returncode == 2
     assert "DEVSTACK_PG_MODE" in r.stderr
+
+
+def test_bogus_pg_mode_is_rejected_before_temporal_starts(stack):
+    r = stack.run("start", extra_env={"DEVSTACK_PG_MODE": "bogus"})
+    assert r.returncode == 2
+    assert not any("start-dev" in l for l in stack.lines())
+    assert not (stack.state / "temporal.pid").exists()
 
 
 def test_missing_temporal_cli_exits_1_with_hint(stack):
