@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import urllib.error
 import urllib.request
@@ -527,3 +528,78 @@ def test_ci_adapter_gh_failure_on_second_call_raises(monkeypatch):
     with pytest.raises(RuntimeError, match="gh api exited 2"):
         CIAdapter().check_runs("owner/repo", _SHA)
     assert len(paths) == 2  # the failure came from the workflow-runs call
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not available")
+def test_git_adapter_merge_commit_of_real_repo(tmp_path: Path) -> None:
+    repo = tmp_path
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+    _git(repo, "config", "user.name", "Test User")
+    _git(repo, "config", "user.email", "test@example.invalid")
+
+    _git(repo, "commit", "--allow-empty", "-m", "c0")
+    c0 = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "-c", "feat")
+    _git(repo, "commit", "--allow-empty", "-m", "f1")
+    f1 = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "commit", "--allow-empty", "-m", "f2")
+    f2 = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "main")
+    _git(repo, "config", "user.email", "merger@example.invalid")
+    _git(repo, "merge", "--no-ff", "-m", "Merge feat", "feat")
+    M1 = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "config", "user.email", "test@example.invalid")
+
+    _git(repo, "commit", "--allow-empty", "-m", "d1")
+    d1 = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "-c", "feat2", d1)
+    _git(repo, "commit", "--allow-empty", "-m", "g1")
+    g1 = _git(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "main")
+    _git(repo, "config", "user.email", "merger@example.invalid")
+    _git(repo, "merge", "--no-ff", "-m", "Merge feat2", "feat2")
+    M2 = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "config", "user.email", "test@example.invalid")
+
+    _git(repo, "switch", "-c", "wip", "main")
+    _git(repo, "commit", "--allow-empty", "-m", "w1")
+    w1 = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "switch", "main")
+
+    adapter = GitAdapter()
+    email = "merger@example.invalid"
+
+    assert adapter.merge_commit_of(repo, f1, "main") == (M1, "merger@example.invalid")
+    assert adapter.merge_commit_of(repo, f2, "main") == (M1, "merger@example.invalid")
+    assert adapter.merge_commit_of(repo, M1, "main") == (M1, email)
+    assert adapter.merge_commit_of(repo, d1, "main") is None
+    assert adapter.merge_commit_of(repo, c0, "main") is None
+    assert adapter.merge_commit_of(repo, w1, "main") is None
+    assert adapter.merge_commit_of(repo, g1, "main") == (M2, email)
+    assert adapter.merge_commit_of(repo, "abc", "main") is None
+    assert adapter.merge_commit_of(repo, f1, "-x") is None
+    assert adapter.head_sha(repo, "main") == M2
+    assert adapter.head_sha(repo, "nope") is None
+    assert adapter.head_sha(repo, "-x") is None
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        RuntimeError("x"),
+        ValueError("y"),
+        SemaphoreError("z"),
+    ],
+)
+def test_semaphore_readable_fails_closed_on_unexpected_exception(monkeypatch, exc):
+    from plangraph.keeper import evidence_semaphore as sem_mod
+
+    def _raise(*args, **kwargs):
+        raise exc
+
+    monkeypatch.setattr(sem_mod, "_allowed_projects", _raise)
+    assert SemaphoreAdapter(fetch=lambda t, p: {}).readable(1) is False

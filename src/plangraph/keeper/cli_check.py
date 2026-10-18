@@ -9,7 +9,8 @@ Two findings, printed as one line each:
 * ``MERGED-OPEN <key> <sha>`` — a commit on the project repo's main already
   carries ``Plan-Item: <key>`` while the item is still open.
 
-Exit 0 unless ``--strict`` is passed and something was found.
+Exit 0 ok; 1 with ``--strict`` and findings; 3 (``EXIT_UNREACHABLE``) when the
+plan snapshot or keeper is unreachable (nothing is checked).
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ import re
 import subprocess
 import sys
 
-from .cli_verbs import EXIT_OK, Unreachable
+from .cli_verbs import EXIT_OK, EXIT_UNREACHABLE, Unreachable
 
 #: A key or path-list mention is case-insensitive.
 _TRAILER = "Plan-Item"
@@ -111,14 +112,14 @@ def plan_item_trailers(repo, ref):
            ref]
     try:
         proc = subprocess.run(cmd, cwd=str(repo), capture_output=True,
-                              text=True, timeout=_GIT_TIMEOUT)
+                              timeout=_GIT_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
         return []
     if proc.returncode != 0:
         return []
     out = []
     sha = ""
-    for line in proc.stdout.splitlines():
+    for line in proc.stdout.decode("utf-8", errors="replace").splitlines():
         if "\x00" in line:      # commit line; later lines are its further trailers
             sha, _, line = line.partition("\x00")
             sha = sha.strip()
@@ -150,7 +151,7 @@ def cmd_check(args, session):
         items = session.local_items()
     except Unreachable as exc:
         print(f"check needs a readable plan snapshot: {exc}", file=sys.stderr)
-        return 3
+        return EXIT_UNREACHABLE
     config = getattr(session, "config", None)
     order_only, merged_open = findings(items, getattr(config, "repos", None))
     if session.json_mode:

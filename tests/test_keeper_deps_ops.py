@@ -178,8 +178,8 @@ def test_add_dep_on_a_claimed_item_is_a_router_edit(w):
     assert results["results"][0]["key"] == "demo:A"
     assert ("demo:A", "demo:B") in _edges(w)
     item = w.store._item("demo:A")
-    assert (item["state"], item["epoch"]) == ("claimed", epoch)
-    assert item["round"] == 1          # the active-edit bump (D-434/F4)
+    assert (item["state"], item["epoch"]) == ("claimed", epoch + 1)
+    assert item["round"] == 1          # the active-edit bump (D-434/F4; epoch bumped too)
     assert _integrity(w) == []
 
 # --------------------------------------------------------------- batch door

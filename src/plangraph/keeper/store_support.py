@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from .. import views
 from . import events
 from .errors import Refused
-from .evidence_types import Context
+from .evidence_types import Context, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
@@ -62,23 +62,72 @@ class SupportMixin:
         The injected ``ctx`` supplies the adapters; the store always overrides
         ``now`` and derives ``claim_time`` from the item's latest ``claimed``
         event, so the real verifiers compare a commit against the actual claim
-        instant rather than a caller-supplied one.  ``bind_floor_time`` is the
-        F1 floor for trailer-bound commits (see :meth:`_bind_floor_time`).
+        instant rather than a caller-supplied one.  ``bind_floor_sha`` and
+        ``bind_floor_required`` supply the ancestry floor for trailer-bound
+        commits (see :meth:`_bind_floor`).  ``merge_principals`` passes through
+        the trusted merge actor principals from ``ctx``.
         """
-        base = self.ctx
-
-        def adapter(name):
-            if base is None:
-                return None
-            if isinstance(base, dict):
-                return base.get(name)
-            return getattr(base, name, None)
+        floor_sha, floor_required = self._bind_floor(item)
+        raw_principals = self._adapter("merge_principals")
+        if raw_principals is None:
+            merge_principals: tuple[str, ...] = ()
+        elif isinstance(raw_principals, (list, tuple, set, frozenset)):
+            merge_principals = tuple(str(p) for p in raw_principals)
+        elif isinstance(raw_principals, str):
+            merge_principals = (raw_principals,)
+        else:
+            try:
+                merge_principals = tuple(str(p) for p in raw_principals)
+            except TypeError:
+                merge_principals = (str(raw_principals),)
 
         return Context(
-            git=adapter("git"), ci=adapter("ci"), runs=adapter("runs"),
-            semaphore=adapter("semaphore"), decisions=adapter("decisions"),
-            now=now, claim_time=self._claim_time(item),
-            bind_floor_time=self._bind_floor_time(item))
+            git=self._adapter("git"),
+            ci=self._adapter("ci"),
+            runs=self._adapter("runs"),
+            semaphore=self._adapter("semaphore"),
+            decisions=self._adapter("decisions"),
+            now=now,
+            claim_time=self._claim_time(item),
+            bind_floor_sha=floor_sha,
+            bind_floor_required=floor_required,
+            merge_principals=merge_principals,
+        )
+
+    def _adapter(self, name: str):
+        """Look up an adapter by *name* from the injected ``ctx``."""
+        base = self.ctx
+        if base is None:
+            return None
+        if isinstance(base, dict):
+            return base.get(name)
+        return getattr(base, name, None)
+
+    def _ref_head(self, project: str) -> str | None:
+        """Best-effort head SHA of *project*'s target ref, or ``None``."""
+        try:
+            git = self._adapter("git")
+            if git is None:
+                return None
+            head_sha_fn = getattr(git, "head_sha", None)
+            if not callable(head_sha_fn):
+                return None
+            repo_path_fn = getattr(git, "repo_path", None)
+            if not callable(repo_path_fn):
+                return None
+            repo = repo_path_fn(project)
+            if not repo:
+                return None
+            repo_ref_fn = getattr(git, "repo_ref", None)
+            ref = repo_ref_fn(project) if callable(repo_ref_fn) else "main"
+            if not ref:
+                ref = "main"
+            sha = head_sha_fn(repo, ref)
+            if isinstance(sha, str) and valid_commit_ref(sha) and sha == sha.lower():
+                return sha
+            return None
+        except Exception:
+            return None
 
     def _claim_time(self, item):
         """The epoch of the item's current claim, or ``None`` if never claimed."""
@@ -90,30 +139,29 @@ class SupportMixin:
         parsed = parse_iso(row["ts"])
         return parsed.timestamp() if parsed is not None else None
 
-    def _bind_floor_time(self, item):
-        """The F1 commit-time floor for this item's ``Plan-Item`` trailer.
+    def _bind_floor(self, item: dict) -> tuple[str | None, bool]:
+        """The floor commit SHA and requirement flag for *item*.
 
-        The later of the latest ``released`` event and the latest ``claimed``
-        event by a principal other than the current claimant; ``None`` when
-        neither exists, which binds a trailer-carrying commit with no lower
-        bound (a first claim never invalidates commits that preceded it).
+        Returns ``(floor_sha, required)``.  A first claim has no floor event
+        and returns ``(None, False)``.  When a floor event exists (a prior
+        release or claim by another principal), its recorded ``base`` commit
+        is returned as ``(base, True)``, or ``(None, True)`` if unrecorded
+        or invalid (failing closed).
         """
-        released = self.conn.execute(
-            "SELECT ts FROM events WHERE key=? AND type='released'"
-            " ORDER BY seq DESC LIMIT 1", (item["key"],)).fetchone()
         claimant = item.get("claimed_by") or ""
-        foreign_claim = self.conn.execute(
-            "SELECT ts FROM events WHERE key=? AND type='claimed'"
-            " AND COALESCE(actor, '') != ? ORDER BY seq DESC LIMIT 1",
-            (item["key"], claimant)).fetchone()
-        epochs = []
-        for row in (released, foreign_claim):
-            if row is None:
-                continue
-            parsed = parse_iso(row["ts"])
-            # an unreadable stamp fails closed: no commit can be newer than it
-            epochs.append(parsed.timestamp() if parsed is not None else float("inf"))
-        return max(epochs) if epochs else None
+        row = self.conn.execute(
+            "SELECT payload FROM events WHERE key=? AND ("
+            "type='released' OR (type='claimed' AND COALESCE(actor, '') != ?))"
+            " ORDER BY seq DESC LIMIT 1",
+            (item["key"], claimant),
+        ).fetchone()
+        if row is None:
+            return (None, False)
+        payload = _json_dict(row["payload"])
+        base = payload.get("base") if isinstance(payload, dict) else None
+        if isinstance(base, str) and valid_commit_ref(base) and base == base.lower():
+            return (base, True)
+        return (None, True)
 
     def verify_chain(self):
         return events.verify_chain(self.conn)

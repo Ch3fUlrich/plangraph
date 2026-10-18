@@ -3,17 +3,17 @@
 Four kinds, one registry, one factory for the real adapters. Every verifier has
 the same shape ``verify(item, ref, ctx) -> Result`` and reads all I/O through the
 adapters on ``ctx`` (``git``, ``ci``, ``runs``, ``semaphore``, ``decisions``),
-which is what lets the tests run with fakes and no network. ``ctx.claim_time`` is
-the claim instant used for the "commit newer than the claim" rule; when it is
-missing the verifier fails closed.
+which is what lets the tests run with fakes and no network.
 
 A ``commit+ci`` ref must be a full lowercase hex sha (40 for sha1, 64 for
 sha256); anything else is rejected *before* any git or gh call, so a ref can
-never become a git option. Both the author (``%at``) and committer (``%ct``)
-dates must be at or after ``claim_time`` minus ``ctx.skew`` (default 120 s).
-Those dates are **advisory**: git lets an author forge both timestamps, so the
-binding evidence is the ``Plan-Item`` trailer, the commit being an ancestor of
-``main`` and a green CI result on that exact sha.
+never become a git option. Commit dates are never used for binding (git lets an
+author forge them). Binding is by ancestry: the commit must reach the target ref
+through a merged PR (a first-parent merge commit, optionally by an allowed
+``merge_principals`` committer), carry the item's ``Plan-Item`` trailer, descend
+from the ancestry floor (the ref head sha recorded at the item's last release or
+re-claim by another principal; ``bind_floor_required`` defaults to True) and
+have a green CI result on that exact sha.
 
 Every verifier is wrapped by :func:`_guarded`: an unexpected exception (a
 subprocess timeout, an ``OSError``, a JSON error) becomes
@@ -94,26 +94,6 @@ def _guarded(fn):
             return Result(False, type(exc).__name__, safe_ref)
 
     return wrapper
-
-
-def _skew(ctx: Any) -> float:
-    """The configured date tolerance, defaulting to :data:`DEFAULT_SKEW_S`."""
-    try:
-        value = float(getattr(ctx, "skew", DEFAULT_SKEW_S))
-    except (TypeError, ValueError):
-        return DEFAULT_SKEW_S
-    return value if value >= 0 else DEFAULT_SKEW_S
-
-
-def _commit_times(git: Any, repo: str, commit: str) -> tuple[float | None, float | None]:
-    """(author, committer) epochs; falls back to a single ``commit_time``."""
-    fn = getattr(git, "commit_times", None)
-    if fn is not None:
-        result = fn(repo, commit)
-        if isinstance(result, (tuple, list)) and len(result) == 2:
-            return result[0], result[1]
-    single = git.commit_time(repo, commit)
-    return single, single
 
 
 # --------------------------------------------------------------------------- #
@@ -323,7 +303,7 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
 
 
 class CommitCiVerifier:
-    """A commit on ``main`` made for this item, dated after the claim, CI green."""
+    """A commit on the target ref merged via PR for this item, descending from ancestry floor, CI green."""
 
     kind = "commit+ci"
 
@@ -352,8 +332,10 @@ class CommitCiVerifier:
         except Exception as exc:  # noqa: BLE001
             return _fail(f"git error checking the commit ({type(exc).__name__})", ref)
 
+        target_ref = "main"
         try:
-            target_ref = ctx.git.repo_ref(project) if hasattr(ctx.git, "repo_ref") else "main"
+            if hasattr(ctx.git, "repo_ref"):
+                target_ref = ctx.git.repo_ref(project)
             if hasattr(ctx.git, "is_ancestor"):
                 is_anc = ctx.git.is_ancestor(repo, commit, target_ref)
             else:
@@ -375,22 +357,56 @@ class CommitCiVerifier:
                 f"commit {commit} does not carry trailer 'Plan-Item: {label}'", ref
             )
 
-        # F1: the matching Plan-Item trailer binds this commit to the item, so
-        # the time threshold is the last release/re-claim floor, not the
-        # current claim.  No floor (never released, never claimed by someone
-        # else) means no lower bound at all.
-        floor_epoch = as_epoch(getattr(ctx, "bind_floor_time", None))
-        if floor_epoch is not None:
+        fn = getattr(ctx.git, "merge_commit_of", None)
+        if fn is None:
+            return _fail("git adapter cannot prove a merged PR; failing closed", ref)
+        try:
+            merge_info = fn(repo, commit, target_ref)
+        except Exception as exc:  # noqa: BLE001
+            return _fail(f"git error checking the merged PR ({type(exc).__name__})", ref)
+        if (
+            not isinstance(merge_info, tuple)
+            or len(merge_info) != 2
+            or not isinstance(merge_info[0], str)
+            or not isinstance(merge_info[1], str)
+        ):
+            return _fail(
+                f"commit {commit} is not reachable from {target_ref} through a merged PR (direct push or unmerged)",
+                ref,
+            )
+        _merge_sha, email = merge_info
+        principals = getattr(ctx, "merge_principals", ())
+        if principals:
+            allowed = {p.lower() for p in principals if isinstance(p, str)}
+            if email.lower() not in allowed:
+                return _fail(
+                    f"merge commit committer {email!r} is not an allowed merge principal",
+                    ref,
+                )
+
+        required = getattr(ctx, "bind_floor_required", True)
+        if required:
+            floor = getattr(ctx, "bind_floor_sha", None)
+            if not isinstance(floor, str) or not valid_commit_ref(floor):
+                return _fail(
+                    "no ancestry floor recorded for this item's last release/re-claim; refusing",
+                    ref,
+                )
+            is_ancestor_fn = getattr(ctx.git, "is_ancestor", None)
+            if is_ancestor_fn is None:
+                return _fail("git adapter cannot check ancestry floor; failing closed", ref)
             try:
-                author_epoch, committer_epoch = _commit_times(ctx.git, repo, commit)
+                is_floor_anc = is_ancestor_fn(repo, floor, commit)
             except Exception as exc:  # noqa: BLE001
-                return _fail(f"git error reading the commit time ({type(exc).__name__})", ref)
-            if author_epoch is None or committer_epoch is None:
-                return _fail(f"could not read the commit time of {commit}", ref)
-            threshold = floor_epoch - _skew(ctx)
-            if author_epoch < threshold or committer_epoch < threshold:
-                return _fail(f"commit {commit} predates the item's last "
-                             "release/re-claim", ref)
+                return _fail(
+                    f"git error checking the ancestry floor ({type(exc).__name__})",
+                    ref,
+                )
+            if not is_floor_anc:
+                return _fail(
+                    f"commit {commit} does not descend from the item's last release/re-claim ({floor[:12]})",
+                    ref,
+                )
 
         try:
             ci_mode = ctx.ci.mode(project) if ctx.ci is not None else None
@@ -449,8 +465,12 @@ class RunRecordVerifier:
 
         needles = [n for n in (item.get("key"), item.get("id")) if isinstance(n, str) and n]
         request = job.get("request") if isinstance(job.get("request"), dict) else {}
-        item_key = request.get("item_key")
-        if isinstance(item_key, str) and item_key:
+        legacy = "item_key" not in request
+        if not legacy:
+            item_key = request["item_key"]
+            if not isinstance(item_key, str) or not item_key.strip():
+                return _fail(f"run {run_id} request.item_key is present but "
+                             "not a usable string", ref)
             if item_key not in needles:
                 wanted = item.get("key") or item.get("id")
                 return _fail(f"run {run_id} item_key={item_key!r} is not {wanted}", ref)
@@ -468,7 +488,7 @@ class RunRecordVerifier:
         if exit_record.get("rc") != 0:
             return _fail(f"run {run_id} exited rc={exit_record.get('rc')!r}", ref)
         detail = f"run {run_id} for {item.get('key') or item.get('id')} rc=0"
-        if not (isinstance(item_key, str) and item_key):
+        if legacy:
             detail += " (legacy title match)"
         return Result(True, detail, ref)
 
@@ -478,7 +498,11 @@ class RunRecordVerifier:
 # --------------------------------------------------------------------------- #
 
 class SemaphoreTaskVerifier:
-    """The Semaphore task finished ``success`` (and is the expected template)."""
+    """The Semaphore task finished ``success`` (and is the expected template).
+
+    ``ref.readable`` is attested by the attacher and is not fetched or checked
+    by the keeper; only the adapter allow list is a keeper-side fact.
+    """
 
     kind = "semaphore-task"
 
@@ -509,7 +533,9 @@ class SemaphoreTaskVerifier:
         ):
             return _fail(
                 "semaphore-task evidence not readable by the reviewer host: "
-                "attach ref.readable (reviewer-readable copy)",
+                "attach ref.readable (an attested reviewer-readable copy; "
+                "the keeper does not fetch it) or use a project on the keeper "
+                "allow list",
                 ref,
             )
 
@@ -626,11 +652,28 @@ def _cfg(config: Any, key: str, default: Any = None) -> Any:
     return getattr(config, key, default)
 
 
+def _principals(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        return ()
+    result: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            cleaned = item.strip()
+            if cleaned:
+                result.append(cleaned)
+    return tuple(result)
+
+
 def default_context(config: Any, *, now: float | None = None) -> Context:
     """Build the real adapters from a keeper config mapping.
 
     Expected keys: ``repos`` (project → path), ``ci`` (project → slug/path/
-    ``none``/``forgejo:owner/repo``), ``runs_dir``, ``decisions_file`` and
+    ``none``/``forgejo:owner/repo``), ``runs_dir``, ``decisions_file``,
+    optional ``merge_principals`` (allowed merge-commit committer emails) and
     optional ``skew`` seconds. ``forgejo_url`` **and** ``forgejo_token_file``
     together build the Forgejo status adapter a ``forgejo:`` ci value needs;
     with either missing, no adapter is built and such a value fails closed in
@@ -650,5 +693,6 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         decisions=DecisionsAdapter(_cfg(config, "decisions_file")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
+        merge_principals=_principals(_cfg(config, "merge_principals")),
         skew=float(_cfg(config, "skew", DEFAULT_SKEW_S)),
     )

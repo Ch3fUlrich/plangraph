@@ -8,6 +8,7 @@ import pytest
 
 from keeper_util import World, defn, to_done
 from plangraph.keeper import cli, cli_check
+from plangraph.keeper.cli_verbs import Unreachable
 
 
 @pytest.fixture
@@ -175,3 +176,51 @@ def test_every_plan_item_trailer_of_a_commit_is_found(tmp_path):
                  ("commit", "--allow-empty", "-m", "x\n\nPlan-Item: demo:A\nPlan-Item: demo:B")):
         subprocess.run(("git", *args), cwd=str(repo), check=True, capture_output=True)
     assert sorted(v for _, v in cli_check.plan_item_trailers(repo, "main")) == ["demo:A", "demo:B"]
+
+
+def test_plan_item_trailers_survive_non_utf8_git_output(tmp_path):
+    """A raw commit (no encoding header) keeps its bytes in ``git log`` output."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args, data=None):
+        return subprocess.run(("git", *args), cwd=str(repo), check=True,
+                              capture_output=True, input=data).stdout.strip()
+
+    git("init", "-b", "main")
+    tree = git("write-tree").decode()
+    raw = (f"tree {tree}\nauthor t <t@example.invalid> 1 +0000\n"
+           f"committer t <t@example.invalid> 1 +0000\n\n").encode()
+    raw += b"work\n\nPlan-Item: demo:A\nPlan-Item: demo:caf\xe9\n"   # \xe9: not UTF-8
+    sha = git("hash-object", "-t", "commit", "-w", "--literally", "--stdin",
+              data=raw).decode()
+    git("update-ref", "refs/heads/main", sha)
+    found = cli_check.plan_item_trailers(repo, "main")
+    assert (sha, "demo:A") in found
+
+
+def test_cmd_check_unreachable_session_strict_false(capsys):
+    class _FakeSession:
+        def local_items(self):
+            raise Unreachable("x")
+
+    session = _FakeSession()
+    assert cli_check.cmd_check(SimpleNamespace(strict=False), session) == 3
+    assert "check needs a readable plan snapshot" in capsys.readouterr().err
+
+
+def test_cmd_check_unreachable_session_strict_true(capsys):
+    class _FakeSession:
+        def local_items(self):
+            raise Unreachable("x")
+
+    session = _FakeSession()
+    assert cli_check.cmd_check(SimpleNamespace(strict=True), session) == 3
+    assert "check needs a readable plan snapshot" in capsys.readouterr().err
+
+
+def test_cmd_check_unreachable_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PG_CONFIG", raising=False)
+    assert cli.main(["check"]) == 3
+    assert "check needs a readable plan snapshot" in capsys.readouterr().err

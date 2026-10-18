@@ -221,3 +221,127 @@ def test_git_is_cached_between_reads_and_scoped_to_its_project(w, git_repo, monk
     stall._cache.clear()
     other = SimpleNamespace(repos={"other": str(repo)})   # repo of another project
     assert stall_alarms(w.conn, w.clock(), git=other) == []
+
+
+def test_failing_repo_cached_for_ttl(w, monkeypatch):
+    from plangraph.keeper import stall
+
+    monkeypatch.setattr(stall, "_CACHE_TTL_S", 60.0)
+    stall._cache.clear()
+
+    calls = 0
+
+    def counting_failing_trailers(repo, ref):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("git execution failed")
+
+    monkeypatch.setattr(stall.cli_check, "plan_item_trailers", counting_failing_trailers)
+    _seed(w, [("A", ())])
+    git = SimpleNamespace(repos={"demo": "somewhere"})
+
+    res1 = stall_alarms(w.conn, w.clock(), git=git)
+    res2 = stall_alarms(w.conn, w.clock(), git=git)
+
+    assert calls == 1
+    assert res1 == []
+    assert res2 == []
+
+
+@pytest.mark.parametrize("entry", [5, ["x"], None, {"path": 3}])
+def test_malformed_repos_entries_do_not_raise(w, entry):
+    _seed(w, [("A", ())])
+    res = stall_alarms(w.conn, w.clock(), git=SimpleNamespace(repos={"demo": entry}))
+    assert isinstance(res, list)
+
+
+def test_repo_path_raising_typeerror_does_not_raise(w, monkeypatch):
+    from plangraph.keeper import stall
+
+    def boom(entry):
+        raise TypeError("malformed entry")
+
+    monkeypatch.setattr(stall.cli_check, "_repo_path", boom)
+    _seed(w, [("A", ())])
+    res = stall_alarms(w.conn, w.clock(), git=SimpleNamespace(repos={"demo": "somewhere"}))
+    assert res == []
+
+
+def test_eventless_claimed_item_alarms_from_item_timestamp(w, monkeypatch):
+    from plangraph.keeper import stall
+    monkeypatch.setattr(stall, "_events_last", lambda conn: {})   # no event rows at all
+    key = _seed(w, [("A", ())])[0]
+    stamp0 = w.store._iso(w.clock())
+    w.conn.execute(
+        "UPDATE items SET state='claimed', updated_at=? WHERE key=?",
+        (stamp0, key),
+    )
+    w.conn.commit()
+
+    assert stall_alarms(w.conn, w.clock()) == []
+
+    w.clock.advance(2 * HOUR + 1)
+    alarms = stall_alarms(w.conn, w.clock())
+    assert len(alarms) == 1
+    assert alarms[0]["key"] == key
+    assert alarms[0]["kind"] == "stall_no_event"
+    assert alarms[0]["raised_at"] == stamp0
+    assert alarms[0]["detail"] == "claimed, no event for 7201s (last 2h)"
+
+    w.conn.execute(
+        "UPDATE items SET updated_at=NULL, created_at=NULL WHERE key=?",
+        (key,),
+    )
+    w.conn.commit()
+    w.clock.advance(10 * HOUR)
+    assert stall_alarms(w.conn, w.clock()) == []
+
+
+def test_stall_alarm_boundary_and_closed_states(w, monkeypatch):
+    from plangraph.keeper import stall
+    key = claimed_demo(w, "A")
+    event(w, key)
+
+    w.clock.advance(7200)
+    assert stall_alarms(w.conn, w.clock()) == []
+
+    w.clock.advance(1)
+    alarms = stall_alarms(w.conn, w.clock())
+    assert len(alarms) == 1
+    assert alarms[0]["key"] == key
+    assert alarms[0]["kind"] == "stall_no_event"
+    assert alarms[0]["detail"] == "claimed, no event for 7201s (last 2h)"
+
+    w.conn.execute("UPDATE items SET state='done' WHERE key=?", (key,))
+    w.conn.commit()
+    assert stall_alarms(w.conn, w.clock()) == []
+
+    # Eventless variant (measured from updated_at stamp)
+    monkeypatch.setattr(stall, "_events_last", lambda conn: {})   # no event rows at all
+    key2 = _seed(w, [("C", ())], project="other")[0]
+    stamp = w.store._iso(w.clock())
+    w.conn.execute(
+        "UPDATE items SET state='claimed', updated_at=? WHERE key=?",
+        (stamp, key2),
+    )
+    w.conn.commit()
+
+    w.clock.advance(7200)
+    assert stall_alarms(w.conn, w.clock()) == []
+
+    w.clock.advance(1)
+    alarms2 = stall_alarms(w.conn, w.clock())
+    assert len(alarms2) == 1
+    assert alarms2[0]["key"] == key2
+    assert alarms2[0]["kind"] == "stall_no_event"
+    assert alarms2[0]["detail"] == "claimed, no event for 7201s (last 2h)"
+
+    # State 'closed' claimed-looking old item never alarms
+    w.conn.execute("UPDATE items SET state='closed' WHERE key=?", (key2,))
+    w.conn.commit()
+    assert stall_alarms(w.conn, w.clock()) == []
+
+    # State 'done' claimed-looking old item never alarms
+    w.conn.execute("UPDATE items SET state='done' WHERE key=?", (key2,))
+    w.conn.commit()
+    assert stall_alarms(w.conn, w.clock()) == []

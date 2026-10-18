@@ -85,15 +85,15 @@ class SemaphoreAdapter:
     def readable(self, project_id: Any) -> bool:
         """True when the project is publicly readable (on the allow list).
 
-        Fail closed: an unconfigured allow list or an invalid id is not
-        readable, never an exception.
+        Fail closed: an unconfigured allow list, an invalid id or any
+        unexpected error is not readable, never an exception.
         """
         project = positive_int(project_id)
         if project is None:
             return False
         try:
             allowed = _allowed_projects()
-        except SemaphoreError:
+        except Exception:  # noqa: BLE001 - fail closed on anything unexpected
             return False
         return project in allowed
 

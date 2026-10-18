@@ -308,6 +308,14 @@ class CreateMixin:
 
     # ------------------------------------------------------ edit/priority
     def edit_definition(self, principal, key, fields):
+        """Edit an item's definition (router-only on a claimed/in-review item).
+
+        A done_criteria/depends_on edit on an active item BUMPS ``epoch`` (old
+        evidence and verdicts stop counting; tier-only edits just bump
+        ``round``).  The result then carries the new ``epoch``: the claimant's
+        old epoch token fails ``_epoch_ok``, so it must re-read the item;
+        lease and claimed_by stay.
+        """
         return self._run(principal, "edit_definition", key,
                          lambda now: self._edit(principal, key, fields, now))
 
@@ -463,6 +471,7 @@ class CreateMixin:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
             self._may_manage(principal, fresh["project"])
+            bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             if tier_edit:
                 # Re-check the resulting (tier, kinds) pair under the lock:
                 # evidence_kinds may have been edited under us since the read.
@@ -472,12 +481,21 @@ class CreateMixin:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
                 round_no = int(fresh.get("round") or 0) + 1
+                if bump_epoch:
+                    # An epoch bump voids old evidence (evidence.epoch == items.epoch)
+                    # and verdicts keyed (epoch, round); the claimant's old epoch token
+                    # then fails _epoch_ok, the claimant must re-read the item;
+                    # lease and claimed_by stay.
+                    new_epoch = int(item["epoch"]) + 1
             if assignments:
                 sets = ", ".join(f"{field}=?" for field in assignments)
                 values = [self._stored(field, edit_fields[field]) for field in assignments]
                 if tier_edit:
                     sets += ", round=?"
                     values.append(round_no)
+                    if bump_epoch:
+                        sets += ", epoch=?"
+                        values.append(new_epoch)
                 guard = "/".join(states)
                 cursor = self.conn.execute(
                     f"UPDATE items SET {sets}, updated_at=?"
@@ -491,10 +509,10 @@ class CreateMixin:
                 # bumped exactly like the assignments branch does.
                 guard = "/".join(states)
                 cursor = self.conn.execute(
-                    "UPDATE items SET round=?, updated_at=?"
+                    "UPDATE items SET round=?, epoch=?, updated_at=?"
                     f" WHERE key=? AND state IN ({','.join('?' for _ in states)})"
                     " AND epoch=?",
-                    (round_no, self._iso(now), key, *states, item["epoch"]))
+                    (round_no, new_epoch, self._iso(now), key, *states, item["epoch"]))
                 self._race_guard(cursor, key, guard, item["epoch"])
             else:
                 self._guarded_touch(key, ("open",), item["epoch"])
@@ -513,6 +531,8 @@ class CreateMixin:
                 # D-434 marker: the state the router edited through; the fold
                 # reads it to replay the round bump that voids verdicts.
                 payload["while"] = fresh["state"]
+                if bump_epoch:
+                    payload["new_epoch"] = new_epoch
                 # F4 audit keys: ``fold`` ignores names it does not compare.
                 payload["who"] = principal.name
                 payload["before"] = audit_before
@@ -521,6 +541,8 @@ class CreateMixin:
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
         result = {"key": key}
+        if bump_epoch:
+            result["epoch"] = new_epoch
         if dropped:
             # Only when something was actually dropped: every caller (the HTTP
             # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.

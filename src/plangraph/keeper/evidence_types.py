@@ -47,11 +47,11 @@ class Context:
 
     Tests build this (or any duck-typed stand-in) with fakes; production builds
     it with :func:`plangraph.keeper.evidence.default_context`. ``claim_time`` is
-    the moment the item was claimed. ``bind_floor_time`` is the lower commit-
-    time bound for a trailer-bound commit: the later of the item's last
-    ``released`` event and its last ``claimed`` event by a principal other than
-    the current claimant (``None`` when neither exists, which puts commits that
-    carry the item's ``Plan-Item`` trailer under no time bound at all).
+    the moment the item was claimed. The floor is the ref head sha ("base")
+    recorded at the item's latest release or latest claim by a different
+    principal; ``bind_floor_required=False`` only when no such event exists
+    (first claim). ``merge_principals`` lists allowed merge-commit committer
+    emails (empty permits any committer).
     """
 
     git: Any = None
@@ -61,7 +61,9 @@ class Context:
     decisions: Any = None
     now: float = 0.0
     claim_time: float | None = None
-    bind_floor_time: float | None = None
+    merge_principals: tuple[str, ...] = ()
+    bind_floor_sha: str | None = None
+    bind_floor_required: bool = True
     skew: float = DEFAULT_SKEW_S
 
 

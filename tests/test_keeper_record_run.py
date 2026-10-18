@@ -145,6 +145,30 @@ def test_record_run_accepts_item_key(w):
     assert verify_integrity(w.conn) == []
 
 
+def test_record_run_item_key_roundtrip_with_real_run_record(w, tmp_path):
+    to_claimed(w, "demo:A")
+    w.store.record_run(sp(w), "demo:A", started(item_key="demo:A"))
+
+    row = w.conn.execute(
+        "SELECT payload FROM events WHERE key='demo:A' AND type='run_recorded'"
+    ).fetchone()
+    assert json.loads(row["payload"])["item_key"] == "demo:A"
+
+    # record_run's payload is the keeper's event record while job.json is written by the spawner.
+    from plangraph.keeper.evidence_runs import RunRecordAdapter
+
+    runs = tmp_path / "runs"
+    (runs / "w1").mkdir(parents=True)
+    job_content = json.dumps(
+        {"request": {"item_key": "demo:A", "title": "t"}, "task": ""}
+    )
+    (runs / "w1" / "job.json").write_text(job_content, encoding="utf-8")
+
+    w.store.ctx = {"runs": RunRecordAdapter(runs)}
+    res = w.store.mint_run_token(w.p("l1main"), "demo:A", "writer", "w1")
+    assert res["token"]
+
+
 def test_unknown_key_not_found(w):
     with pytest.raises(Refused) as exc:
         w.store.record_run(sp(w), "demo:NOPE", started())

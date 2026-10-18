@@ -322,9 +322,9 @@ def test_router_edits_done_criteria_of_claimed_item(w):
     epoch = to_claimed(w, KEY)
     out = w.store.edit_definition(w.p("router"), KEY,
                                   {"done_criteria": "tighter criteria"})
-    assert out == {"key": KEY}
+    assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)
-    assert (item["state"], item["epoch"]) == ("claimed", epoch)
+    assert (item["state"], item["epoch"]) == ("claimed", epoch + 1)
     assert item["done_criteria"] == "tighter criteria"
     assert item["round"] == 1          # the same bump the tier edit gets
     event = last_defined(w)
@@ -332,8 +332,10 @@ def test_router_edits_done_criteria_of_claimed_item(w):
     assert event["payload"] == {"fields": ["done_criteria"],
                                 "while": "claimed", "who": "router",
                                 "before": {"done_criteria": "criteria"},
-                                "after": {"done_criteria": "tighter criteria"}}
+                                "after": {"done_criteria": "tighter criteria"},
+                                "new_epoch": epoch + 1}
     assert folded(w)["round"] == item["round"]
+    assert folded(w)["epoch"] == item["epoch"]
     assert w.store.verify_integrity() == []
     assert w.store.verify_chain() == []
 
@@ -344,9 +346,9 @@ def test_router_edits_depends_on_of_claimed_item(tmp_path):
     seed(w, [("A", []), ("B", [])])
     epoch = to_claimed(w, KEY)
     out = w.store.edit_definition(w.p("router"), KEY, {"depends_on": ["demo:B"]})
-    assert out == {"key": KEY}
+    assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)
-    assert (item["state"], item["epoch"]) == ("claimed", epoch)
+    assert (item["state"], item["epoch"]) == ("claimed", epoch + 1)
     assert item["depends_on"] == ["demo:B"]
     edges = {(r["src"], r["dst"]) for r in
              w.conn.execute("SELECT src,dst FROM edges WHERE rel='depends_on'")}
@@ -357,8 +359,10 @@ def test_router_edits_depends_on_of_claimed_item(tmp_path):
     assert event["payload"] == {"fields": ["depends_on"],
                                 "while": "claimed", "who": "router",
                                 "before": {"depends_on": []},
-                                "after": {"depends_on": ["demo:B"]}}
+                                "after": {"depends_on": ["demo:B"]},
+                                "new_epoch": epoch + 1}
     assert folded(w)["round"] == item["round"]
+    assert folded(w)["epoch"] == item["epoch"]
     assert w.store.verify_integrity() == []
     assert w.store.verify_chain() == []
     w.close()
@@ -395,9 +399,9 @@ def test_router_active_edit_event_carries_before_and_after(tmp_path):
     out = w.store.edit_definition(w.p("router"), KEY,
                                   {"done_criteria": "revised",
                                    "depends_on": ["demo:B"]})
-    assert out == {"key": KEY}
+    assert out == {"key": KEY, "epoch": epoch + 1}
     item = w.store._item(KEY)
-    assert (item["state"], item["epoch"]) == ("in_review", epoch)
+    assert (item["state"], item["epoch"]) == ("in_review", epoch + 1)
     assert item["done_criteria"] == "revised"
     assert item["depends_on"] == ["demo:B"]
     assert item["round"] == 2
@@ -407,8 +411,10 @@ def test_router_active_edit_event_carries_before_and_after(tmp_path):
                                 "before": {"done_criteria": "criteria",
                                            "depends_on": []},
                                 "after": {"done_criteria": "revised",
-                                          "depends_on": ["demo:B"]}}
+                                          "depends_on": ["demo:B"]},
+                                "new_epoch": epoch + 1}
     assert folded(w)["round"] == item["round"]
+    assert folded(w)["epoch"] == item["epoch"]
     assert w.store.verify_integrity() == []
     assert w.store.verify_chain() == []
     w.close()

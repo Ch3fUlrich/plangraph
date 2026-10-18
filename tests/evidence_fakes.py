@@ -14,6 +14,9 @@ SHA = "a" * 40
 OTHER_SHA = "b" * 40
 CLAIM = 1_700_000_000.0
 ITEM = {"project": "routing", "id": "T2-ONEPATH", "key": "routing:T2-ONEPATH"}
+HEAD_SHA = "c" * 40
+MERGE_SHA = "d" * 40
+MERGE_EMAIL = "merger@example.invalid"
 
 
 class FakeGit:
@@ -27,6 +30,12 @@ class FakeGit:
         error: Exception | None = None,
         author_time: float | None = None,
         commit_time_error: Exception | None = None,
+        head: str | None = HEAD_SHA,
+        head_error: Exception | None = None,
+        merge: tuple[str, str] | None = (MERGE_SHA, MERGE_EMAIL),
+        merge_error: Exception | None = None,
+        descends: bool = True,
+        floor_error: Exception | None = None,
     ):
         self.repo = repo
         self.exists = exists
@@ -36,6 +45,12 @@ class FakeGit:
         self.atime = commit_time if author_time is None else author_time
         self.error = error
         self.commit_time_error = commit_time_error
+        self.head = head
+        self.head_error = head_error
+        self.merge = merge
+        self.merge_error = merge_error
+        self.descends = descends
+        self.floor_error = floor_error
         self.repo_path_calls: list[str] = []
 
     def repo_path(self, project):
@@ -44,8 +59,18 @@ class FakeGit:
             raise self.error
         return self.repo
 
+    def repo_ref(self, project=None, *args, **kwargs):
+        return "main"
+
     def commit_exists(self, repo, sha):
         return self.exists
+
+    def is_ancestor(self, repo, sha, ref):
+        if isinstance(ref, str) and len(ref) == 40 and all(c in "0123456789abcdefABCDEF" for c in ref):
+            if self.floor_error:
+                raise self.floor_error
+            return self.descends
+        return self.ancestor
 
     def is_ancestor_of_main(self, repo, sha):
         return self.ancestor
@@ -62,6 +87,16 @@ class FakeGit:
         if self.commit_time_error:
             raise self.commit_time_error
         return self.ctime
+
+    def head_sha(self, repo, ref="main"):
+        if self.head_error:
+            raise self.head_error
+        return self.head
+
+    def merge_commit_of(self, repo, sha, ref="main"):
+        if self.merge_error:
+            raise self.merge_error
+        return self.merge
 
 
 class FakeCI:
@@ -150,6 +185,9 @@ def make_ctx(**over):
         decisions=FakeDecisions(),
         now=CLAIM + 50,
         claim_time=CLAIM,
+        merge_principals=(),
+        bind_floor_sha=None,
+        bind_floor_required=False,
     )
     base.update(over)
     return SimpleNamespace(**base)

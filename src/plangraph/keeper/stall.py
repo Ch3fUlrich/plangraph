@@ -3,8 +3,9 @@
 Two kinds, shaped like ``projector_alarms`` rows but with ``id`` and
 ``workflow_id`` set to ``None`` (nothing to acknowledge):
 
-* ``stall_no_event`` — an item in ``claimed`` whose newest ``events`` row is
-  older than :data:`STALL_S` (an item with no events at all counts as stalled).
+* ``stall_no_event`` — an item in ``claimed`` whose newest ``events`` row (or,
+  if none, its ``updated_at``/``created_at`` timestamp) is older than
+  :data:`STALL_S`.
 * ``merged_open`` — an open (not ``done``/``closed``) item whose key appears as
   a ``Plan-Item`` trailer on a commit of its project's configured repo main.
 
@@ -28,7 +29,12 @@ from .store_support import iso, parse_iso
 
 def _age_s(parse_iso, stamp, moment):
     """Whole seconds from *stamp* to *moment*; ``None`` if unparsable."""
-    when = parse_iso(stamp)
+    if not stamp:
+        return None
+    try:
+        when = parse_iso(stamp)
+    except Exception:
+        return None
     return None if when is None else int(moment - when.timestamp())
 
 
@@ -47,7 +53,8 @@ def _repos_of(git):
         return {}
     if isinstance(git, dict):
         return git
-    return getattr(git, "repos", None) or {}
+    repos = getattr(git, "repos", None)
+    return repos if isinstance(repos, dict) else {}
 
 
 def _fetcher(git, entry):
@@ -61,30 +68,42 @@ def _fetcher(git, entry):
 #: an uncached read would spawn git on every request.
 _CACHE_TTL_S = 15.0
 _cache: dict = {}
+_UNSET = object()
 
 
-def _trailers(fetch, repo, ref):
-    cacheable = fetch is cli_check.plan_item_trailers and _CACHE_TTL_S > 0
-    stamp = time.monotonic()
-    if cacheable:
-        hit = _cache.get((repo, ref))
-        if hit is not None and stamp - hit[0] < _CACHE_TTL_S:
-            return hit[1]
+def _trailers(git, entry, ref=_UNSET):
     try:
-        result = fetch(repo, ref)
-    except Exception:  # noqa: BLE001 - a failing git never fails the read
+        if ref is not _UNSET:
+            fetch, repo = git, entry
+        else:
+            repo, ref = cli_check._repo_path(entry)
+            fetch = _fetcher(git, entry)
+        cacheable = fetch is cli_check.plan_item_trailers and _CACHE_TTL_S > 0
+        stamp = time.monotonic()
+        if cacheable:
+            hit = _cache.get((repo, ref))
+            if hit is not None and stamp - hit[0] < _CACHE_TTL_S:
+                return hit[1]
+        try:
+            result = fetch(repo, ref)
+        except Exception:  # noqa: BLE001 - a failing git never fails the read
+            result = []
+        result = result if isinstance(result, list) else []
+        if cacheable:
+            _cache[(repo, ref)] = (stamp, result)
+        return result
+    except Exception:  # noqa: BLE001 - a malformed repos entry never raises
         return []
-    result = result if isinstance(result, list) else []
-    if cacheable:
-        _cache[(repo, ref)] = (stamp, result)
-    return result
 
 
 def stall_alarms(conn, now, git=None):
     """``stall_no_event`` + ``merged_open`` rows over *conn* at epoch *now*."""
     events_last = _events_last(conn)
     rows, open_keys = [], {}
-    for item in conn.execute("SELECT key, project, state FROM items ORDER BY key"):
+    for item in conn.execute(
+        "SELECT key, project, state, updated_at, created_at, "
+        "COALESCE(updated_at, created_at) AS ref_stamp FROM items ORDER BY key"
+    ):
         key, state = item["key"], item["state"]
         if state in _CLOSED:
             continue
@@ -92,20 +111,19 @@ def stall_alarms(conn, now, git=None):
         if state != "claimed":
             continue
         last = events_last.get(key)
-        age = _age_s(parse_iso, last, now) if last else None
-        if last is None or (age is not None and age > STALL_S):
+        ref_stamp = last if last is not None else item["ref_stamp"]
+        age = _age_s(parse_iso, ref_stamp, now)
+        if age is not None and age > STALL_S:
             rows.append({"id": None, "key": key, "kind": "stall_no_event",
                          "workflow_id": None,
-                         "detail": (f"claimed, no event for {age}s (last {int(age // 3600)}h)"
-                                    if age is not None else "claimed, no events"),
-                         "raised_at": last or iso(now)})
+                         "detail": f"claimed, no event for {age}s (last {int(age // 3600)}h)",
+                         "raised_at": ref_stamp})
     if open_keys:
         entries = ([(None, git)] if callable(git)
                    else list(_repos_of(git).items()))
         seen = set()
         for project, entry in entries:
-            repo, ref = cli_check._repo_path(entry)
-            for sha, value in _trailers(_fetcher(git, entry), repo, ref):
+            for sha, value in _trailers(git, entry):
                 if (value in open_keys and (value, sha) not in seen
                         and project in (None, open_keys[value])):   # a repo only speaks for its own project
                     seen.add((value, sha))

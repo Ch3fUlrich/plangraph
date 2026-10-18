@@ -104,6 +104,22 @@ def test_run_record_absent_item_key_is_legacy_fail():
     assert "legacy title match" in res.detail
 
 
+@pytest.mark.parametrize("value", [None, 7, ["x"], "", "  "])
+def test_run_record_present_unusable_item_key_refused(value):
+    ctx = make_ctx(
+        runs=FakeRuns(
+            job={
+                "request": {"title": "x " + ITEM["key"], "item_key": value},
+                "task": "",
+            }
+        )
+    )
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is False
+    assert "item_key" in res.detail
+    assert "usable string" in res.detail
+
+
 # --------------------------------------------------------------------------- #
 # semaphore-task
 # --------------------------------------------------------------------------- #
@@ -300,3 +316,17 @@ def test_semaphore_template_required():
 def test_semaphore_response_without_template_id_fails():
     ctx = make_ctx(semaphore=FakeSemaphore({"status": "success", "id": 5, "project_id": 1}))
     assert verify("semaphore-task", REF, ctx).ok is False
+
+
+def test_semaphore_gated_refusal_says_readable_is_attested():
+    from plangraph.keeper import evidence as ev
+
+    doc = ev.SemaphoreTaskVerifier.__doc__ or ""
+    assert "attested" in doc
+    assert "not fetched" in doc
+
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", REF, ctx)
+    assert res.ok is False
+    assert "readable" in res.detail
+    assert "attested" in res.detail
