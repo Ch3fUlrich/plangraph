@@ -21,7 +21,7 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | FLEET-SID-REFRESH | in_review; seats FIX; routing fixing in routing repo (D-1971) | re-seat on routing's new sha |
 | PG-PUBLIC-READY | in_review until history cut (D-1966); options record republish/public-cut-options-20261018.md (A default) | operator after P1 |
 | CLASS-COMBOS | workst-L1-autoos | MERGE-READY + probe |
-## Open
+## Open (parked D-1932: republish, UI, u1-stamp, #71)
 | Item | State | Next |
 |---|---|---|
 | UI-DEPLOY-AUTO (HIGH) | LIVE 19:25Z (GO D-1850): z8 drop-in, tree live-render, render.env, token gh-live-follow.env (gh auth, rw scopes; OS-GH-RO-TOKEN). Record ~/.local/share/plangraph/deploy-auto/RUN-RECORD-install-539ef09d.md. submit REFUSED: run-record kind wants autoos run dir | BLOCKED to routing: *set_kind decision D-1850 / waive -> submit -> verdicts google+xiaomi |
