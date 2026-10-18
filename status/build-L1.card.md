@@ -3,7 +3,7 @@ Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Wor
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes).
 D-1442 judge = server-L1-routing (HIGH only); judge never posts keeper verdicts (D-1754); seats post via seat_verdict.py.
 
-## Main = 67e5aa31+ (#82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
+## Main = 4b2f3591 (#85, #86 34806368 main-red fix, #82 VERBS 1449b01e, #81, #79, #78, #77, #76 DEVSTACK-FU, #75 records, #74). Older: git log.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
 
@@ -11,10 +11,9 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 ## GEN-15 (D-1932 ONLY PH-RT-RUNTIME; D-1919 budget; D-1933 TEMPORAL-CHECK -> dev start-dev, cloud parts -> RELEASE-DEPLOY)
 | P1 item | State | Next |
 |---|---|---|
-| DONE today | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX (close seats dir seats/close-20261018) | phase 3/8 direct deps |
-| REVIEW | in_review; close seats FIX: no gate activity (real gap) | predeploy-4 lane R -> MERGE-READY -> new evidence + seats |
+| DONE today | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW, VERBS-FOLLOWUP (#85 4b2f3591) | phase 4/13 direct deps |
 | TEMPORAL-CHECK (server) | in_review, D-1967 attached | router close |
-| VERBS-LIVE-GUARDS (HIGH) / VERBS-FOLLOWUP | claimed; predeploy-4 [c46c38] G1/G2 + (a) python cost tests (D-1973 cite at submit) | MERGE-READY -> judge (guards) |
+| VERBS-LIVE-GUARDS (HIGH) | claimed; predeploy-4 G1/G2 | MERGE-READY -> judge |
 | E2E | predeploy-4 lane 3 driver on real verbs | after FOLLOWUP |
 | DEV-PGDRILL-LOCAL | claimed ~10:46Z; rt-side [46b0bd] #80 head 2400465b, seats running | merge -> real coding.vm run (me) -> evidence |
 | FLOW-UNBLOCK (HIGH, D-1968) | claimed; rt-side lane F (brief 5dbd1f31) | after #80 |
