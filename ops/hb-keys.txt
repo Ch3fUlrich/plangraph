@@ -1,4 +1,9 @@
-plangraph:RT-P1-DEVSTACK
 plangraph:RT-P1-KEEPER-WORKER-VERBS
 plangraph:UI-BROWSER-TESTS
 plangraph:UI-DEPLOY-AUTO
+plangraph:RT-P1-WORKER
+plangraph:RT-P1-PROJECTOR
+plangraph:RT-P1-REVIEW
+plangraph:RT-P1-INBOX
+server:RT-P1-TEMPORAL-CHECK
+plangraph:RT-P1-FLOW-UNBLOCK
