@@ -13,8 +13,8 @@ Parked (D-1932): republish, UI, u1-stamp, #71. Gen-14 history: handoff #15 + git
 | P1 lane | State | Next |
 |---|---|---|
 | TEMPORAL-CHECK | retargeted D-1943 (dev); dep DEVSTACK; DEV record e1c6b934 ready (temporal-check/dev) | after DEVSTACK done: claim, evidence, adopt decision row, submit |
-| DEVSTACK | in_review; evidence c9e39d38 ✓ (PR head); gemini seat PASS, mimo seat ordered (qwen=writer fam) | seat_verdict gemini+mimo -> done -> claim TEMPORAL-CHECK |
-| KEEPER-WORKER-VERBS (D-1957 HIGH) | CLAIMED e1; predeploy-3 top lane | MERGE-READY -> judge -> merge; unblocks E2E |
+| DEVSTACK | in_review; evidence c9e39d38 ✓; seats c9e39d38: gemini PASS, mimo FIX (dir seats/ds73-c9e39d38) -> follow-up PR + re-seat | both PASS -> seat_verdict x2 -> done -> claim TEMPORAL-CHECK |
+| KEEPER-WORKER-VERBS (D-1957 HIGH) | CLAIMED e1; L2 predeploy-4 (launch via workst, brief 207d461d) top lane | MERGE-READY -> judge -> merge; unblocks E2E |
 | D-1955/56 lanes | predeploy-3: D PGDRILL(+devstack host-agnostic), G gitleaks allow (1 hit sandbox_env.rs:312), P PUBLIC-READY seats, E branch triage | PGDRILL real run on coding.vm = me; triage table+ETA -> routing |
 | #48 REVIEW | MERGED b9a5d84e (3 seats PASS, dir seats/rtp1-46-49) | evidence when item claimable |
 | #47 PROJECTOR | MERGED 76e7bffc (GO D-1934, CI 39106828767 main+head) | evidence when claimable |
