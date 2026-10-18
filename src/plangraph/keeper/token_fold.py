@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 
 __all__ = ["fold_tokens", "verify_tokens"]
 
-#: Must equal store_tokens._REVOKE_ALL (a test pins the two together).
+#: Must equal store_tokens._REVOKE_ALL (a test pins the two together).  Neither
+#: set contains "state_set": only state_set events whose payload carries
+#: ``released: True`` revoke all, and fold_tokens handles that rule separately.
 REVOKE_ALL = frozenset({
     "claimed", "released", "lease_expired", "cancelled", "review_passed",
     "closed_on_decision", "answered", "changes_requested", "legacy_state_set",
@@ -59,6 +61,9 @@ def fold_tokens(events):
                                                "token_sha256": payload.get("token_sha256"),
                                                "expires_at": payload.get("expires_at"), "grace_s": 0}
         elif kind in REVOKE_ALL:
+            revoke(lambda t: t["key"] == key, ts)
+        elif kind == "state_set" and payload.get("released") is True:
+            # a park of a claimed card releases the claim: same as _REVOKE_ALL
             revoke(lambda t: t["key"] == key, ts)
         elif kind == "submitted":
             revoke(lambda t: t["key"] == key and t["role"] == "writer", ts)
