@@ -28,6 +28,18 @@ except ImportError:
 
 DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     {
+        "id": "opencode-go/gemini-4-argon-contributor",
+        "family": "gemini",
+        "aa_intelligence": 53.0,
+        "verified_tok_per_s": 115.0,
+        "cost_per_task_usd": 0.50,
+        "pool_burn_weight": 1.0,
+        "tier": "subscription",
+        "available": 1,
+        "context_window": 1000000,
+        "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer", "l3-driver"],
+    },
+    {
         "id": "mimo/mimo-v2.6-pro",
         "family": "mimo",
         "aa_intelligence": 46.0,
@@ -167,7 +179,7 @@ def detect_model_family(model_id: str) -> str:
     mid = (model_id or "").lower()
     if any(tok in mid for tok in ("claude", "sonnet", "haiku", "opus")):
         return "claude"
-    if "gemini" in mid:
+    if any(tok in mid for tok in ("gemini", "argon")):
         return "gemini"
     if any(tok in mid for tok in ("luna", "astra", "sol", "gpt", "openai", "codex")):
         return "gpt"
@@ -223,19 +235,20 @@ def score_model(
     risk: str = "normal",
     need_tokens: int = 32000,
 ) -> float:
-    """Compute utility score for a model candidate.
+    """Compute utility score for a model candidate under the single optimal routing algorithm.
 
     Combines:
-      - aa_intelligence (higher is better)
-      - verified_tok_per_s (higher is better)
-      - cost_per_task_usd (lower is better)
-      - pool_burn_weight (lower burn is better)
+      - aa_intelligence (higher is better, amplified on high/critical risk)
+      - verified_tok_per_s (higher is better, especially for drivers and low risk)
+      - cost_per_task_usd (lower is better; heavily penalized on low risk to prioritize cheap models)
+      - pool_burn_weight (lower quota burn is better)
       - cache_hit_discount / cache_hit_rate (higher cache discount is better)
       - TIER_RUNG: trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
 
     Guarantees:
       - mimo/mimo-v2.6-pro scores above opencode-go/qwen3.8-max
       - subscription strictly prioritized over paid
+      - cost is dynamically weighted by risk (cheap models prioritized on low-risk tasks)
     """
     intel = float(model.get("aa_intelligence") or 40.0)
     tok_s = float(model.get("verified_tok_per_s") or 50.0)
@@ -246,27 +259,48 @@ def score_model(
 
     # Fail-closed unknown tier -> 99
     tier_rung = TIER_RUNG.get(tier, 99)
-    tier_bonus = (4 - tier_rung) * 3.0 if tier_rung <= 4 else -30.0
+    tier_bonus = (4 - tier_rung) * 3.5 if tier_rung <= 4 else -35.0
 
-    if role in ("l1-orchestrator", "orchestrate"):
-        role_multiplier = 3.0
-        tok_weight = 0.015
-    elif role in ("l2-reviewer", "review"):
-        role_multiplier = 2.8
+    # Risk-adaptive weights and target intelligence thresholds
+    if risk == "low":
+        target_intel = 37.5
+        role_multiplier = 1.8 if role in ("implement", "driver", "l3-driver") else 2.2
+        excess_multiplier = 0.2
+        tok_weight = 0.020
+        cost_multiplier = 15.0
+        burn_weight = 1.0
+    elif risk == "normal":
+        target_intel = 44.0
+        role_multiplier = 2.5 if role in ("implement", "driver", "l3-driver") else 2.8
+        excess_multiplier = 0.4
         tok_weight = 0.012
-    else:
-        role_multiplier = 2.5
-        tok_weight = 0.012
+        cost_multiplier = 10.0
+        burn_weight = 1.5
+    elif risk == "high":
+        target_intel = 46.0
+        role_multiplier = 3.0 if role in ("implement", "driver", "l3-driver") else 3.2
+        excess_multiplier = 2.0
+        tok_weight = 0.010
+        cost_multiplier = 4.0
+        burn_weight = 1.0
+    else:  # critical
+        target_intel = 50.0
+        role_multiplier = 3.4 if role in ("implement", "driver", "l3-driver") else 3.6
+        excess_multiplier = 2.5
+        tok_weight = 0.008
+        cost_multiplier = 3.0
+        burn_weight = 1.0
 
-    if risk in ("high", "critical"):
-        role_multiplier += 0.3
+    base_intel = min(intel, target_intel) * role_multiplier
+    excess_intel = max(0.0, intel - target_intel) * excess_multiplier
+    effective_intel = base_intel + excess_intel
 
     score = (
-        (intel * role_multiplier)
+        effective_intel
         + (tok_s * tok_weight)
-        - (cost * 4.5)
-        - (burn * 0.8)
-        + (cache_disc * 1.5)
+        - (cost * cost_multiplier)
+        - (burn * burn_weight)
+        + (cache_disc * 2.0)
         + tier_bonus
     )
     return round(score, 4)
@@ -331,16 +365,26 @@ def resolve_review_plan(
     all_models = get_catalog_models(db)
 
     # Filter candidate models
+    target_db = db if db is not None else _get_default_catalog_db()
+    combo_priority_legs = False
     candidates: list[dict[str, Any]] = []
-    for m in all_models:
-        if not is_model_available(m):
-            continue
-        combos = m.get("combos")
-        if combos and combo_name not in combos:
-            continue
-        if not _passes_context_and_cliff(m, need_tokens):
-            continue
-        candidates.append(m)
+
+    if target_db is not None and hasattr(target_db, "get_route_legs") and combo_name:
+        route_legs = target_db.get_route_legs(combo_name, active_only=True)
+        if route_legs:
+            candidates = [_normalize_catalog_row(r) for r in route_legs if _passes_context_and_cliff(r, need_tokens)]
+            combo_priority_legs = True
+
+    if not candidates:
+        for m in all_models:
+            if not is_model_available(m):
+                continue
+            combos = m.get("combos")
+            if combos and combo_name not in combos:
+                continue
+            if not _passes_context_and_cliff(m, need_tokens):
+                continue
+            candidates.append(m)
 
     min_intelligence = RISK_MIN_INTELLIGENCE.get(risk, 44.0)
 
@@ -358,17 +402,24 @@ def resolve_review_plan(
             and detect_model_family(c["id"]) != writer_family
         ]
 
-    rev1_candidates.sort(key=lambda c: score_model(c, role="review", risk=risk, need_tokens=need_tokens), reverse=True)
-    reviewer_1 = rev1_candidates[0] if rev1_candidates else {
-        "id": "mimo/mimo-v2.6-pro",
-        "family": "mimo",
-        "aa_intelligence": 46.0,
-        "verified_tok_per_s": 51.0,
-        "cost_per_task_usd": 0.13,
-        "pool_burn_weight": 0.5,
-        "tier": "subscription",
-        "context_window": 1000000,
-    }
+    if combo_priority_legs:
+        qual_rev1 = [c for c in rev1_candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
+        reviewer_1 = qual_rev1[0] if qual_rev1 else (rev1_candidates[0] if rev1_candidates else None)
+    else:
+        rev1_candidates.sort(key=lambda c: score_model(c, role="review", risk=risk, need_tokens=need_tokens), reverse=True)
+        reviewer_1 = rev1_candidates[0] if rev1_candidates else None
+
+    if not reviewer_1:
+        reviewer_1 = {
+            "id": "mimo/mimo-v2.6-pro",
+            "family": "mimo",
+            "aa_intelligence": 46.0,
+            "verified_tok_per_s": 51.0,
+            "cost_per_task_usd": 0.13,
+            "pool_burn_weight": 0.5,
+            "tier": "subscription",
+            "context_window": 1000000,
+        }
     family_1 = detect_model_family(reviewer_1["id"])
 
     headers_1 = build_routing_envelope_headers(
@@ -405,17 +456,24 @@ def resolve_review_plan(
                 and detect_model_family(c["id"]) not in (writer_family, family_1)
             ]
 
-        rev2_candidates.sort(key=lambda c: score_model(c, role="review", risk=risk, need_tokens=need_tokens), reverse=True)
-        reviewer_2 = rev2_candidates[0] if rev2_candidates else {
-            "id": "opencode-go/muse-spark-1.3-contributor",
-            "family": "muse",
-            "aa_intelligence": 45.0,
-            "verified_tok_per_s": 287.0,
-            "cost_per_task_usd": 1.37,
-            "pool_burn_weight": 1.0,
-            "tier": "subscription",
-            "context_window": 200000,
-        }
+        if combo_priority_legs:
+            qual_rev2 = [c for c in rev2_candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
+            reviewer_2 = qual_rev2[0] if qual_rev2 else (rev2_candidates[0] if rev2_candidates else None)
+        else:
+            rev2_candidates.sort(key=lambda c: score_model(c, role="review", risk=risk, need_tokens=need_tokens), reverse=True)
+            reviewer_2 = rev2_candidates[0] if rev2_candidates else None
+
+        if not reviewer_2:
+            reviewer_2 = {
+                "id": "opencode-go/muse-spark-1.3-contributor",
+                "family": "muse",
+                "aa_intelligence": 45.0,
+                "verified_tok_per_s": 287.0,
+                "cost_per_task_usd": 1.37,
+                "pool_burn_weight": 1.0,
+                "tier": "subscription",
+                "context_window": 200000,
+            }
         family_2 = detect_model_family(reviewer_2["id"])
 
         headers_2 = build_routing_envelope_headers(

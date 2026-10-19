@@ -515,8 +515,8 @@ def test_production_e2e_high_risk_dual_cross_family_review(live_gateway: Gateway
     assert writer_family != rev2_served_family, f"writer ({writer_family}) matches rev2 ({rev2_served_family})"
     assert rev1_served_family != rev2_served_family, f"rev1 ({rev1_served_family}) matches rev2 ({rev2_served_family})"
 
-    # Reviewer 2 should land on a 3rd distinct family (such as qwen or muse)
-    assert rev2_served_family in ("qwen", "muse", "glm", "deepseek")
+    # Reviewer 2 should land on a 3rd distinct family (such as gemini, qwen, or muse)
+    assert rev2_served_family in ("gemini", "qwen", "muse", "glm", "deepseek")
 
 
 # ==============================================================================
