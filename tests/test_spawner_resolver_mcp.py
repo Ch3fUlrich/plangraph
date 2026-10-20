@@ -27,16 +27,22 @@ from plangraph.spawner.measure import (
     estimate_tokens,
     is_doc_file,
     is_docs_only,
+    is_ubiquitous_symbol,
     measure,
 )
 from plangraph.spawner.resolver import (
+    ROLE_ALPHA,
+    ROLE_TRAJECTORY_FACTORS,
     TIER_RUNG,
+    _passes_context_and_cliff,
     clamp_effort,
     detect_model_family,
     get_catalog_models,
     is_model_available,
+    rank_candidates,
     resolve_review_plan,
     score_model,
+    select_top_candidate,
 )
 from plangraph.spawner.risk import (
     RISK_MIN_INTELLIGENCE,
@@ -517,3 +523,147 @@ def test_mcp_tools_and_rpc_dispatch():
         assert "healthy" in health_resp["result"]["content"][0]["text"]
 
     asyncio.run(_run())
+
+
+# ==============================================================================
+# 5. EQUATION & MATHEMATICAL DISTORTION REFACTOR TESTS
+# ==============================================================================
+
+def test_alpha_role_decoupled_scaling_and_review_amplification():
+    """Verify alpha_role strictly amplifies reviewer utility over worker utility above I_min.
+
+    Fixes the dead-variable bug where I_min == I_target muted alpha_role entirely.
+    """
+    candidate = {
+        "id": "test/candidate-high-intel",
+        "aa_intelligence": 48.0,
+        "verified_tok_per_s": 100.0,
+        "cost_per_task_usd": 0.20,
+        "pool_burn_weight": 1.0,
+        "tier": "subscription",
+    }
+    # For normal risk: I_min = 44.0, I_target = 47.0
+    # Worker: alpha = 1.0 -> u_intel = 1.0 * (3.0 + 1.0 * 0.4) = 3.4
+    # Reviewer: alpha = 1.2 -> u_intel = 1.2 * (3.0 + 1.0 * 0.4) = 4.08
+    score_worker = score_model(candidate, role="worker", risk="normal")
+    score_reviewer = score_model(candidate, role="reviewer", risk="normal")
+    score_driver = score_model(candidate, role="driver", risk="normal")
+
+    assert score_reviewer > score_driver > score_worker
+    diff = round(score_reviewer - score_worker, 2)
+    assert diff == 0.68  # Exactly (1.2 - 1.0) * 3.4 = 0.68 utility points
+
+
+def test_two_stage_tie_breaker_speed_within_epsilon_band():
+    """Verify Speed(M) resolves ties strictly within the epsilon band (<= 0.5 points).
+
+    Models with significantly lower core utility (> 0.5 points lower) can NEVER
+    win solely due to high throughput.
+    """
+    model_a = {
+        "id": "model-a-smart",
+        "aa_intelligence": 46.0,
+        "verified_tok_per_s": 50.0,
+        "cost_per_task_usd": 0.13,
+        "pool_burn_weight": 0.5,
+        "tier": "subscription",
+    }
+    # Model B: slightly lower utility (within 0.5), but much faster
+    model_b = {
+        "id": "model-b-fast-tie",
+        "aa_intelligence": 45.8,
+        "verified_tok_per_s": 250.0,
+        "cost_per_task_usd": 0.13,
+        "pool_burn_weight": 0.5,
+        "tier": "subscription",
+    }
+    # Model C: noticeably worse utility (> 0.5 points worse), ultra-fast
+    model_c = {
+        "id": "model-c-too-weak",
+        "aa_intelligence": 44.0,
+        "verified_tok_per_s": 500.0,
+        "cost_per_task_usd": 0.25,
+        "pool_burn_weight": 1.0,
+        "tier": "subscription",
+    }
+
+    score_a = score_model(model_a, role="implement", risk="normal")
+    score_b = score_model(model_b, role="implement", risk="normal")
+    score_c = score_model(model_c, role="implement", risk="normal")
+
+    assert 0 < (score_a - score_b) <= 0.5, "Model B must be within the 0.5 epsilon band of Model A"
+    assert (score_a - score_c) > 0.5, "Model C must be outside the 0.5 epsilon band"
+
+    top = select_top_candidate([model_a, model_b, model_c], role="implement", risk="normal")
+    assert top is not None
+    # Model B wins tie with Model A because Speed(B) 250 > Speed(A) 50
+    assert top["id"] == "model-b-fast-tie"
+
+    ranked = rank_candidates([model_a, model_b, model_c], role="implement", risk="normal")
+    # Ranked order: Model B (fast within band), Model A, Model C (outside band)
+    assert [m["id"] for m in ranked] == ["model-b-fast-tie", "model-a-smart", "model-c-too-weak"]
+
+
+def test_role_trajectory_factor_price_cliff():
+    """Verify Phase 1 price cliff trajectory multiplier (1.5x worker vs 1.1x reviewer).
+
+    At 70,000 tokens:
+      - Worker trajectory: 70k * 1.5 = 105k > 100k cliff -> REJECTED
+      - Reviewer trajectory: 70k * 1.1 = 77k <= 100k cliff -> ACCEPTED
+    """
+    haiku = {
+        "id": "claude/claude-haiku-4-5",
+        "context_tokens": 200000,
+        "price_cliff_tokens": 100000,
+    }
+    assert _passes_context_and_cliff(haiku, need_tokens=70000, role="worker") is False
+    assert _passes_context_and_cliff(haiku, need_tokens=70000, role="implement") is False
+    assert _passes_context_and_cliff(haiku, need_tokens=70000, role="reviewer") is True
+    assert _passes_context_and_cliff(haiku, need_tokens=70000, role="review") is True
+
+
+def test_ubiquitous_symbol_fanout_blocklist():
+    """Verify common method names are blocked from falsely escalating risk fanout."""
+    for sym in ["run", "get", "resolve", "validate", "to_dict", "__init__", "items", "update"]:
+        assert is_ubiquitous_symbol(sym) is True
+
+    # Domain specific or architectural symbols should not be blocked
+    for sym in ["CatalogDB", "evaluate_risk", "score_model", "SpawnerRunner"]:
+        assert is_ubiquitous_symbol(sym) is False
+
+    # Calling measure with ubiquitous symbols falls back to ast_imports or safe fanout
+    meas = measure(
+        paths=["src/plangraph/spawner/resolver.py"],
+        symbols=["run", "get", "resolve"],
+        has_tests=True,
+    )
+    # Fanout must not be inflated by common words like 'get' or 'run'
+    assert meas.bucket in ("S0", "S1", "S2")
+    assert meas.should_decompose is False
+
+
+def test_deepseek_flash_cost_and_tier_ranking():
+    """Verify DeepSeek Flash v1017: intelligence 45.0, cost $0.26, subscription prioritized over paid."""
+    models = {m["id"]: m for m in get_catalog_models()}
+    ds_sub = models["opencode-go/deepseek-v4-flash-max"]
+    ds_paid = models["deepseek/deepseek-v4-flash-max"]
+
+    assert ds_sub["aa_intelligence"] == 45.0
+    assert ds_sub["cost_per_task_usd"] == 0.26
+    assert ds_sub["tier"] == "subscription"
+
+    assert ds_paid["aa_intelligence"] == 45.0
+    assert ds_paid["cost_per_task_usd"] == 0.26
+    assert ds_paid["tier"] == "paid"
+
+    score_sub = score_model(ds_sub, role="implement", risk="normal")
+    score_paid = score_model(ds_paid, role="implement", risk="normal")
+
+    # Subscription beats paid by 3.5 tier bonus points
+    assert round(score_sub - score_paid, 2) == 3.50
+
+    # Subscription DeepSeek ($0.26, 45.0 intel) beats Qwen Max ($0.45, 45.4 intel) on cost efficiency
+    qwen = models["opencode-go/qwen3.8-max"]
+    score_qwen = score_model(qwen, role="implement", risk="normal")
+    assert score_sub > score_qwen
+

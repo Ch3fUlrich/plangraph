@@ -22,6 +22,30 @@ RISK_MIN_INTELLIGENCE: dict[str, float] = {
     "critical": 50.0,
 }
 
+# Target AA Intelligence threshold per risk band (competency ramp decoupled from I_min)
+RISK_TARGET_INTELLIGENCE: dict[str, float] = {
+    "low": 41.0,
+    "normal": 47.0,
+    "high": 50.0,
+    "critical": 54.0,
+}
+
+# Cost penalty weight per risk band (heavier on low/normal to prioritize cheap models)
+RISK_GAMMA_COST: dict[str, float] = {
+    "low": 15.0,
+    "normal": 10.0,
+    "high": 4.0,
+    "critical": 1.5,
+}
+
+# Excess intelligence multiplier above I_target
+RISK_BETA_EXCESS: dict[str, float] = {
+    "low": 0.2,
+    "normal": 0.4,
+    "high": 2.0,
+    "critical": 2.5,
+}
+
 # Required cross-family reviewer count per risk band (0 for pure doc S0)
 RISK_REVIEWER_COUNT: dict[str, int] = {
     "low": 1,
@@ -74,6 +98,9 @@ class RiskAssessment:
     risk: str  # "low" | "normal" | "high" | "critical"
     min_intelligence: float
     reviewer_count: int
+    target_intelligence: float = 44.0
+    gamma_cost: float = 10.0
+    beta_excess: float = 0.4
     reasons: list[str] = field(default_factory=list)
     critical_paths: list[str] = field(default_factory=list)
     high_risk_paths: list[str] = field(default_factory=list)
@@ -134,6 +161,9 @@ def evaluate_risk(
         reasons.append(f"Standard {bucket} change with test coverage")
 
     min_intel = RISK_MIN_INTELLIGENCE[risk_band]
+    target_intel = RISK_TARGET_INTELLIGENCE[risk_band]
+    gamma_cost = RISK_GAMMA_COST[risk_band]
+    beta_excess = RISK_BETA_EXCESS[risk_band]
 
     # Reviewer count: 0 for pure doc S0, otherwise mapped from band
     if bucket == "S0" and (is_docs_only or is_pure_doc):
@@ -146,6 +176,9 @@ def evaluate_risk(
         risk=risk_band,
         min_intelligence=min_intel,
         reviewer_count=reviewer_count,
+        target_intelligence=target_intel,
+        gamma_cost=gamma_cost,
+        beta_excess=beta_excess,
         reasons=reasons,
         critical_paths=crit_paths,
         high_risk_paths=hr_paths,

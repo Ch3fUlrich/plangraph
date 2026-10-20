@@ -18,7 +18,41 @@ from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.catalog_seed import TIER_RUNG
 from plangraph.spawner.clients import build_routing_envelope_headers
-from plangraph.spawner.risk import RISK_MIN_INTELLIGENCE, evaluate_risk
+from plangraph.spawner.risk import (
+    RISK_BETA_EXCESS,
+    RISK_GAMMA_COST,
+    RISK_MIN_INTELLIGENCE,
+    RISK_TARGET_INTELLIGENCE,
+    evaluate_risk,
+)
+
+# Role multiplier for intelligence gain above I_min
+ROLE_ALPHA: dict[str, float] = {
+    "implement": 1.0,
+    "worker": 1.0,
+    "l2-worker": 1.0,
+    "driver": 1.1,
+    "l3-driver": 1.1,
+    "orchestrate": 1.1,
+    "l1-orchestrator": 1.1,
+    "review": 1.2,
+    "reviewer": 1.2,
+    "l2-reviewer": 1.2,
+}
+
+# Role trajectory factor: buffers multi-turn conversation growth before price cliff
+ROLE_TRAJECTORY_FACTORS: dict[str, float] = {
+    "implement": 1.5,
+    "worker": 1.5,
+    "l2-worker": 1.5,
+    "driver": 1.3,
+    "l3-driver": 1.3,
+    "orchestrate": 1.3,
+    "l1-orchestrator": 1.3,
+    "review": 1.1,
+    "reviewer": 1.1,
+    "l2-reviewer": 1.1,
+}
 
 # Try importing CatalogDB from catalog_db; fallback gracefully if unavailable.
 try:
@@ -137,11 +171,23 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "combos": ["l2-worker"],
     },
     {
+        "id": "opencode-go/deepseek-v4-flash-max",
+        "family": "deepseek",
+        "aa_intelligence": 45.0,
+        "verified_tok_per_s": 231.0,
+        "cost_per_task_usd": 0.26,
+        "pool_burn_weight": 1.0,
+        "tier": "subscription",
+        "available": 1,
+        "context_window": 128000,
+        "combos": ["l2-worker", "l3-driver"],
+    },
+    {
         "id": "deepseek/deepseek-v4-flash-max",
         "family": "deepseek",
         "aa_intelligence": 45.0,
         "verified_tok_per_s": 231.0,
-        "cost_per_task_usd": 0.37,
+        "cost_per_task_usd": 0.26,
         "pool_burn_weight": 1.0,
         "tier": "paid",
         "available": 1,
@@ -235,75 +281,106 @@ def score_model(
     risk: str = "normal",
     need_tokens: int = 32000,
 ) -> float:
-    """Compute utility score for a model candidate under the single optimal routing algorithm.
+    """Compute primary utility score U_core(M) for a candidate model.
 
-    Combines:
-      - aa_intelligence (higher is better, amplified on high/critical risk)
-      - verified_tok_per_s (higher is better, especially for drivers and low risk)
-      - cost_per_task_usd (lower is better; heavily penalized on low risk to prioritize cheap models)
-      - pool_burn_weight (lower quota burn is better)
-      - cache_hit_discount / cache_hit_rate (higher cache discount is better)
-      - TIER_RUNG: trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
+    Formula:
+      U_intel(M) = alpha_role * (min(I(M) - I_min, I_target - I_min) + max(0.0, I(M) - I_target) * beta_excess)
+      U_core(M) = U_intel(M) - Cost(M) * gamma_cost - Burn(M) * 1.0 + W_tier(M)
 
-    Guarantees:
-      - mimo/mimo-v2.6-pro scores above opencode-go/qwen3.8-max
-      - subscription strictly prioritized over paid
-      - cost is dynamically weighted by risk (cheap models prioritized on low-risk tasks)
+    Decoupled risk parameters:
+      - low:      I_min = 37.5, I_target = 41.0, gamma_cost = 15.0, beta_excess = 0.2
+      - normal:   I_min = 44.0, I_target = 47.0, gamma_cost = 10.0, beta_excess = 0.4
+      - high:     I_min = 46.0, I_target = 50.0, gamma_cost = 4.0,  beta_excess = 2.0
+      - critical: I_min = 50.0, I_target = 54.0, gamma_cost = 1.5,  beta_excess = 2.5
+
+    Role multipliers (alpha_role):
+      - implement / worker: 1.0
+      - driver / orchestrator: 1.1
+      - review / reviewer: 1.2
+
+    Tier weights (W_tier):
+      trial (0): +14.0, free (1): +10.5, credit (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
     """
     intel = float(model.get("aa_intelligence") or 40.0)
-    tok_s = float(model.get("verified_tok_per_s") or 50.0)
     cost = float(model.get("cost_per_task_usd") if model.get("cost_per_task_usd") is not None else 0.20)
     burn = float(model.get("pool_burn_weight") or 1.0)
-    cache_disc = float(model.get("cache_hit_discount") or model.get("cache_hit_rate") or 0.0)
     tier = str(model.get("tier") or "paid").lower()
 
     # Fail-closed unknown tier -> 99
     tier_rung = TIER_RUNG.get(tier, 99)
     tier_bonus = (4 - tier_rung) * 3.5 if tier_rung <= 4 else -35.0
 
-    # Risk-adaptive weights and target intelligence thresholds
-    if risk == "low":
-        target_intel = 37.5
-        role_multiplier = 1.8 if role in ("implement", "driver", "l3-driver") else 2.2
-        excess_multiplier = 0.2
-        tok_weight = 0.020
-        cost_multiplier = 15.0
-        burn_weight = 1.0
-    elif risk == "normal":
-        target_intel = 44.0
-        role_multiplier = 2.5 if role in ("implement", "driver", "l3-driver") else 2.8
-        excess_multiplier = 0.4
-        tok_weight = 0.012
-        cost_multiplier = 10.0
-        burn_weight = 1.5
-    elif risk == "high":
-        target_intel = 46.0
-        role_multiplier = 3.0 if role in ("implement", "driver", "l3-driver") else 3.2
-        excess_multiplier = 2.0
-        tok_weight = 0.010
-        cost_multiplier = 4.0
-        burn_weight = 1.0
-    else:  # critical
-        target_intel = 50.0
-        role_multiplier = 3.4 if role in ("implement", "driver", "l3-driver") else 3.6
-        excess_multiplier = 2.5
-        tok_weight = 0.008
-        cost_multiplier = 3.0
-        burn_weight = 1.0
+    i_min = RISK_MIN_INTELLIGENCE.get(risk, 44.0)
+    i_target = RISK_TARGET_INTELLIGENCE.get(risk, 47.0)
+    gamma_cost = RISK_GAMMA_COST.get(risk, 10.0)
+    beta_excess = RISK_BETA_EXCESS.get(risk, 0.4)
+    alpha_role = ROLE_ALPHA.get(role.lower(), 1.0)
 
-    base_intel = min(intel, target_intel) * role_multiplier
-    excess_intel = max(0.0, intel - target_intel) * excess_multiplier
-    effective_intel = base_intel + excess_intel
+    # Decoupled intelligence utility
+    base_intel = min(intel - i_min, i_target - i_min)
+    excess_intel = max(0.0, intel - i_target) * beta_excess
+    u_intel = alpha_role * (base_intel + excess_intel)
 
-    score = (
-        effective_intel
-        + (tok_s * tok_weight)
-        - (cost * cost_multiplier)
-        - (burn * burn_weight)
-        + (cache_disc * 2.0)
-        + tier_bonus
-    )
-    return round(score, 4)
+    # Core utility without linear throughput bonus (throughput is reserved for tie-breaking)
+    # and without double-counted cache discount
+    u_core = u_intel - (cost * gamma_cost) - (burn * 1.0) + tier_bonus
+    return round(u_core, 4)
+
+
+def rank_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    role: str = "implement",
+    risk: str = "normal",
+    need_tokens: int = 32000,
+) -> list[dict[str, Any]]:
+    """Rank candidates using two-stage lexicographic optimization.
+
+    Stage 1: Primary utility score U_core(M) based on intelligence, cost, burn, and tier.
+    Stage 2: Lexicographic equivalence band (epsilon = 0.3 for high/critical, 0.5 for low/normal).
+             Within each equivalence band, resolve ties using verified throughput (Speed(M)).
+    """
+    if not candidates:
+        return []
+
+    remaining: list[tuple[dict[str, Any], float, float]] = []
+    for c in candidates:
+        d = dict(c)
+        score = score_model(d, role=role, risk=risk, need_tokens=need_tokens)
+        speed = float(d.get("verified_tok_per_s") or d.get("tok_per_s") or 0.0)
+        remaining.append((d, score, speed))
+
+    epsilon = 0.3 if risk in ("high", "critical") else 0.5
+    ranked: list[dict[str, Any]] = []
+
+    while remaining:
+        u_max = max(item[1] for item in remaining)
+        in_band: list[tuple[dict[str, Any], float, float]] = []
+        out_band: list[tuple[dict[str, Any], float, float]] = []
+        for item in remaining:
+            if (u_max - item[1]) <= epsilon:
+                in_band.append(item)
+            else:
+                out_band.append(item)
+
+        # Sort in_band by speed descending, then score descending as tertiary tie breaker
+        in_band.sort(key=lambda x: (x[2], x[1]), reverse=True)
+        for item in in_band:
+            ranked.append(item[0])
+
+        remaining = out_band
+
+    return ranked
+
+
+def select_top_candidate(
+    candidates: Sequence[Mapping[str, Any]],
+    role: str = "implement",
+    risk: str = "normal",
+    need_tokens: int = 32000,
+) -> dict[str, Any] | None:
+    """Select the #1 candidate using two-stage lexicographic optimization."""
+    ranked = rank_candidates(candidates, role=role, risk=risk, need_tokens=need_tokens)
+    return ranked[0] if ranked else None
 
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -331,13 +408,21 @@ def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
     return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS]
 
 
-def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int) -> bool:
+def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
+    """Check if model satisfies context window and price cliff limits.
+
+    Multiplies need_tokens by role trajectory factor (1.5x worker, 1.3x driver, 1.1x reviewer)
+    before checking against price_cliff_tokens so multi-turn tool loops do not cross the price cliff mid-task.
+    """
     ctx = int(m.get("context_window") or m.get("context_tokens") or 128000)
     if ctx < need_tokens:
         return False
     cliff = m.get("price_cliff_tokens")
-    if cliff is not None and need_tokens > int(cliff):
-        return False
+    if cliff is not None:
+        factor = ROLE_TRAJECTORY_FACTORS.get(role.lower(), 1.5)
+        trajectory_tokens = int(need_tokens * factor)
+        if trajectory_tokens > int(cliff):
+            return False
     return True
 
 
@@ -372,7 +457,7 @@ def resolve_review_plan(
     if target_db is not None and hasattr(target_db, "get_route_legs") and combo_name:
         route_legs = target_db.get_route_legs(combo_name, active_only=True)
         if route_legs:
-            candidates = [_normalize_catalog_row(r) for r in route_legs if _passes_context_and_cliff(r, need_tokens)]
+            candidates = [_normalize_catalog_row(r) for r in route_legs if _passes_context_and_cliff(r, need_tokens, role="review")]
             combo_priority_legs = True
 
     if not candidates:
@@ -382,7 +467,7 @@ def resolve_review_plan(
             combos = m.get("combos")
             if combos and combo_name not in combos:
                 continue
-            if not _passes_context_and_cliff(m, need_tokens):
+            if not _passes_context_and_cliff(m, need_tokens, role="review"):
                 continue
             candidates.append(m)
 
@@ -398,7 +483,7 @@ def resolve_review_plan(
         rev1_candidates = [
             c for c in all_models
             if is_model_available(c)
-            and _passes_context_and_cliff(c, need_tokens)
+            and _passes_context_and_cliff(c, need_tokens, role="review")
             and detect_model_family(c["id"]) != writer_family
         ]
 
@@ -406,8 +491,8 @@ def resolve_review_plan(
         qual_rev1 = [c for c in rev1_candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
         reviewer_1 = qual_rev1[0] if qual_rev1 else (rev1_candidates[0] if rev1_candidates else None)
     else:
-        rev1_candidates.sort(key=lambda c: score_model(c, role="review", risk=risk, need_tokens=need_tokens), reverse=True)
-        reviewer_1 = rev1_candidates[0] if rev1_candidates else None
+        ranked_rev1 = rank_candidates(rev1_candidates, role="review", risk=risk, need_tokens=need_tokens)
+        reviewer_1 = ranked_rev1[0] if ranked_rev1 else None
 
     if not reviewer_1:
         reviewer_1 = {
@@ -452,7 +537,7 @@ def resolve_review_plan(
             rev2_candidates = [
                 c for c in all_models
                 if is_model_available(c)
-                and _passes_context_and_cliff(c, need_tokens)
+                and _passes_context_and_cliff(c, need_tokens, role="review")
                 and detect_model_family(c["id"]) not in (writer_family, family_1)
             ]
 
@@ -460,8 +545,8 @@ def resolve_review_plan(
             qual_rev2 = [c for c in rev2_candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
             reviewer_2 = qual_rev2[0] if qual_rev2 else (rev2_candidates[0] if rev2_candidates else None)
         else:
-            rev2_candidates.sort(key=lambda c: score_model(c, role="review", risk=risk, need_tokens=need_tokens), reverse=True)
-            reviewer_2 = rev2_candidates[0] if rev2_candidates else None
+            ranked_rev2 = rank_candidates(rev2_candidates, role="review", risk=risk, need_tokens=need_tokens)
+            reviewer_2 = ranked_rev2[0] if ranked_rev2 else None
 
         if not reviewer_2:
             reviewer_2 = {
@@ -524,7 +609,8 @@ def resolve_model_for_task(
       - Minimum intelligence threshold for the risk band
       - Availability and gated model exclusion
       - Family exclusion (including author_model family)
-      - Context window and price cliff limits
+      - Context window and price cliff limits (with role trajectory factor buffer)
+      - Two-stage lexicographic tie-breaker via rank_candidates
       - Vendor effort clamping (Sonnet 5.5 max -> xhigh)
     """
     excluded = {f.lower().strip() for f in exclude_families if f.strip()}
@@ -544,7 +630,7 @@ def resolve_model_for_task(
             continue
         if detect_model_family(m["id"]) in excluded:
             continue
-        if not _passes_context_and_cliff(m, need_tokens):
+        if not _passes_context_and_cliff(m, need_tokens, role=role):
             continue
         candidates.append(m)
 
@@ -560,17 +646,14 @@ def resolve_model_for_task(
                 continue
             if detect_model_family(m["id"]) in excluded:
                 continue
-            if not _passes_context_and_cliff(m, need_tokens):
+            if not _passes_context_and_cliff(m, need_tokens, role=role):
                 continue
             candidates.append(m)
 
-    # Rank candidates by utility score
-    candidates.sort(
-        key=lambda c: score_model(c, role=role, risk=risk, need_tokens=need_tokens),
-        reverse=True,
-    )
+    # Rank candidates using two-stage lexicographic optimization
+    ranked_candidates = rank_candidates(candidates, role=role, risk=risk, need_tokens=need_tokens)
 
-    selected = candidates[0] if candidates else {
+    selected = ranked_candidates[0] if ranked_candidates else {
         "id": "mimo/mimo-v2.6-pro",
         "family": "mimo",
         "aa_intelligence": 46.0,

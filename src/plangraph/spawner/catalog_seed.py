@@ -1099,7 +1099,7 @@ SEED_BENCHMARKS: list[dict[str, Any]] = [
         "direct_api_tok_per_s": None,
         "alt_provider_tok_per_s": None,
         "ttft_seconds": None,
-        "cost_per_task_usd": 0.37,
+        "cost_per_task_usd": 0.26,
         "cache_hit_rate": None,
         "benchmark_source": "AA-v4.3.2-2026-10",
         "updated_at": "2026-10-19T00:00:00Z",

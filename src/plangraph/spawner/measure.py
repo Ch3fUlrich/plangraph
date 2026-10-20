@@ -9,6 +9,7 @@ Classifies task complexity into S0..S4 buckets:
 """
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -18,6 +19,24 @@ from typing import Iterable, Sequence
 
 DOCS_EXTENSIONS = frozenset((".md", ".txt", ".rst", ".adoc", ".png", ".jpg", ".svg", ".drawio"))
 GENERIC_TEST_TOKENS = frozenset(("test", "tests", "py", "ps1", "sh", "js", "ts"))
+
+UBIQUITOUS_SYMBOLS_BLOCKLIST: frozenset[str] = frozenset((
+    "run", "get", "set", "resolve", "validate", "to_dict", "from_dict",
+    "__init__", "__str__", "__repr__", "__eq__", "__hash__", "__post_init__",
+    "items", "keys", "values", "update", "parse", "close", "setup",
+    "teardown", "main", "start", "stop", "execute", "handle", "process",
+    "load", "dump", "dumps", "loads", "read", "write", "send", "receive",
+    "call", "check", "test", "name", "id", "status", "data", "value",
+    "clean", "reset", "clear", "add", "remove", "pop", "copy", "format",
+))
+
+
+def is_ubiquitous_symbol(symbol: str) -> bool:
+    """Whether symbol is a ubiquitous method/function name that causes false fanout explosions."""
+    s = str(symbol or "").strip()
+    if s.startswith("__") and s.endswith("__"):
+        return True
+    return s.lower() in UBIQUITOUS_SYMBOLS_BLOCKLIST
 
 
 def _normalize_path(path: str) -> str:
@@ -125,8 +144,14 @@ class Measurement:
 
 
 def grep_fanout(repo: str | Path | None, symbol: str) -> int:
-    """Count whole-word references to symbol across tracked files in repository."""
+    """Count whole-word references to symbol across tracked files in repository.
+
+    Ignores ubiquitous method names (e.g., 'run', 'get', 'resolve', 'validate', '__init__')
+    to prevent false fanout escalations.
+    """
     if not repo or not symbol:
+        return 0
+    if is_ubiquitous_symbol(symbol):
         return 0
     repo_path = Path(repo)
     if not (repo_path / ".git").exists():
@@ -152,6 +177,53 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int:
         return total
     except Exception:
         return 0
+
+
+def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) -> int:
+    """Count the number of files in the repo that import any of the modified modules using AST analysis.
+
+    Scopes the fanout check so only files that actually import the modified module(s) are counted,
+    preventing common method names from falsely escalating fanout across the entire repository.
+    """
+    if not repo or not modified_paths:
+        return 0
+    repo_path = Path(repo)
+    if not repo_path.is_dir():
+        return 0
+
+    target_stems = {Path(p).stem for p in modified_paths if p.endswith(".py")}
+    if not target_stems:
+        return 0
+
+    norm_targets = {_normalize_path(p) for p in modified_paths}
+    importing_files: set[str] = set()
+
+    for py_file in repo_path.rglob("*.py"):
+        try:
+            rel_path = _normalize_path(str(py_file.relative_to(repo_path)))
+        except ValueError:
+            continue
+        if rel_path in norm_targets or ".venv" in rel_path or ".git" in rel_path or "site-packages" in rel_path:
+            continue
+        try:
+            tree = ast.parse(py_file.read_text(encoding="utf-8", errors="replace"))
+        except (SyntaxError, OSError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    if any(part in target_stems for part in parts):
+                        importing_files.add(rel_path)
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                parts = mod.split(".")
+                if any(part in target_stems for part in parts):
+                    importing_files.add(rel_path)
+                for alias in node.names:
+                    if alias.name in target_stems:
+                        importing_files.add(rel_path)
+    return len(importing_files)
 
 
 def check_has_tests(paths: Sequence[str], repo: str | Path | None = None) -> bool:
@@ -246,12 +318,21 @@ def measure(
         sources["fanout"] = "declared"
     elif symbols and repo:
         best_fanout = 0
-        for sym in symbols:
+        valid_symbols = [s for s in symbols if not is_ubiquitous_symbol(s)]
+        for sym in valid_symbols:
             f = grep_fanout(repo, sym)
             if f > best_fanout:
                 best_fanout = f
-        computed_fanout = best_fanout
-        sources["fanout"] = "git_grep"
+        if not valid_symbols and norm_paths:
+            # All provided symbols are ubiquitous (e.g. 'run', 'get') -> scope via AST caller imports
+            computed_fanout = ast_caller_fanout(repo, norm_paths)
+            sources["fanout"] = "ast_imports"
+        else:
+            computed_fanout = best_fanout
+            sources["fanout"] = "git_grep"
+    elif repo and norm_paths:
+        computed_fanout = ast_caller_fanout(repo, norm_paths)
+        sources["fanout"] = "ast_imports"
     else:
         computed_fanout = 0
         sources["fanout"] = "default_zero"

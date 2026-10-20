@@ -8,42 +8,166 @@ Plangraph Spawner provisions, routes, and supervises autonomous agents across mu
 
 The spawner pipeline follows a deterministic, layered design:
 
-```
-[Task Request / Plan Item]
-          │
-          ▼
-1. measure.py & risk.py
-   ├── Complexity Bucketing: S0 (trivial/docs) .. S4 (cross-cutting, decomposition trigger)
-   └── Risk Bands: low, normal, high, critical (governing reviewer counts & intelligence floors)
-          │
-          ▼
-2. catalog_db.py (SQLite WAL)
-   ├── 22 Verified Artificial Analysis v4.3.2 models, quota pools, and providers
-   └── Exported role routes: l1-orchestrator, l2-worker, l2-reviewer, l3-driver
-          │
-          ▼
-3. resolver.py
-   ├── 5-Rung Tier Ladder: trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
-   ├── Utility Scoring: mimo/mimo-v2.6-pro prioritized over opencode-go/qwen3.8-max
-   ├── Vendor Guardrails: Sonnet 5.5 max effort -> xhigh; Haiku 100K token price cliff
-   └── Cross-Family Review: writer.family != rev1.family != rev2.family on shared combos
-          │
-          ▼
-4. clients.py
-   ├── OmniRoute ACP/Gateway first with offline native CLI fallback
-   ├── Windows SystemRoot preservation (D-2090 BUG-B)
-   └── OPENCODE_CONFIG_CONTENT injection with X-OmniRoute-* envelope headers
-          │
-          ▼
-5. runner.py & mcp.py
-   ├── Async non-blocking SpawnerRunner process pool (spawn, status, steer, cancel)
-   ├── Response telemetry extraction: X-OmniRoute-Selected-Model / Selected-Family
-   └── JSON-RPC 2.0 MCP server tools: plangraph_agent_*
+```mermaid
+flowchart TD
+    Task["Task Request / Plan Item"] --> Measure["1. measure.py & risk.py\nComplexity Bucketing (S0..S4)\nRisk Evaluation (low, normal, high, critical)"]
+    Measure --> Catalog["2. catalog_db.py (SQLite WAL)\n22 Verified AA v4.3.2 Models\nRole Routes: l1, l2-worker, l2-reviewer, l3"]
+    Catalog --> Resolver["3. resolver.py\nPhase 1: Hard Gating & Price Cliff Trajectory Buffer\nPhase 2: Core Utility Optimization & Epsilon Lexicographic Tie-Breaker\nCross-Family Review: writer != rev1 != rev2"]
+    Resolver --> Clients["4. clients.py\nOmniRoute ACP-First (http://127.0.0.1:20128/v1)\nWindows SystemRoot Preservation (D-2090 BUG-B)\nEnvelope Headers: X-OmniRoute-*"]
+    Clients --> Runner["5. runner.py & mcp.py\nAsync SpawnerRunner Pool (spawn, status, steer, cancel)\nResponse Telemetry: Selected-Model / Family\nJSON-RPC 2.0 MCP Server"]
 ```
 
 ---
 
-## 2. 5-Rung Tier Priority Order & Quota Pools
+## 2. Risk Assessment & Complexity Telemetry
+
+Plangraph measures task write sets and repository signals to deterministically classify complexity and risk:
+
+```mermaid
+flowchart LR
+    subgraph Signals["Repository & Write Set Signals"]
+        Diff["Git Diff / Paths"]
+        Lines["Modified Line Count"]
+        Mods["Distinct Modules"]
+        Fanout["Import Fanout\n(Scoped AST / Blocklisted Grep)"]
+        Tests["Test Coverage Check"]
+    end
+
+    subgraph Complexity["Complexity Classification (measure.py)"]
+        S0["S0: Trivial / Pure Docs (<= 20 lines, 1 file, 0 fanout)"]
+        S1["S1: Small Module (<= 80 lines, <= 2 files, fanout <= 2)"]
+        S2["S2: Standard Task (<= 250 lines, <= 5 files, fanout <= 5)"]
+        S3["S3: Multi-Module (<= 12 files or fanout <= 12)"]
+        S4["S4: Cross-Cutting Architectural (> 12 files or fanout > 12)\nDecomposition Trigger: should_decompose = True"]
+    end
+
+    subgraph RiskEval["Risk Evaluation (risk.py)"]
+        Low["Low Risk: S0 / Pure Docs\nI_min = 37.5, Reviewers = 0..1"]
+        Normal["Normal Risk: Tested S1..S3\nI_min = 44.0, Reviewers = 1"]
+        High["High Risk: Critical Paths / S4 / Untested S2+\nI_min = 46.0, Reviewers = 2"]
+        Critical["Critical Risk: Auth, Crypto, Policy, Security\nI_min = 50.0, Reviewers = 2"]
+    end
+
+    Signals --> Complexity
+    Complexity --> RiskEval
+```
+
+### Complexity Bucketing Matrix (`measure.py`)
+
+| Bucket | Max Files | Max Lines | Max Fanout | Description | Action |
+|---|---|---|---|---|---|
+| **S0** | 1 (or docs) | $\le 20$ | 0 | Trivial / documentation change | Direct execution, 0-1 reviewer |
+| **S1** | $\le 2$ | $\le 80$ | $\le 2$ | Small single-module change | Standard execution, 1 reviewer |
+| **S2** | $\le 5$ | $\le 250$ | $\le 5$ | Standard multi-file feature/fix | Standard execution, 1 reviewer |
+| **S3** | $\le 12$ | $\le 500$ | $\le 12$ | Multi-module feature/refactor | Enhanced model, 1-2 reviewers |
+| **S4** | $> 12$ | $> 500$ | $> 12$ | Cross-cutting architectural change | `should_decompose = True`, 2 reviewers |
+
+### Smarter Symbol Fanout & Ubiquitous Blocklist
+
+To prevent false fanout escalations from common function and method names, `measure.py` filters candidate symbols against `UBIQUITOUS_SYMBOLS_BLOCKLIST`:
+
+- **Blocked Ubiquitous Symbols**: `run`, `get`, `set`, `resolve`, `validate`, `to_dict`, `from_dict`, `__init__`, `items`, `keys`, `values`, `update`, `parse`, `close`, `setup`, `teardown`, `main`, `start`, `stop`, `execute`, `handle`, `process`, `load`, `dump`, `read`, `write`, `send`, `receive`, etc.
+- **AST Caller Scoping**: When only ubiquitous symbols or file paths are present, `ast_caller_fanout()` scans the repository using Python's `ast` parser to inspect `Import` and `ImportFrom` statements, counting only modules that legitimately import the modified files.
+
+---
+
+## 3. Two-Stage Mathematical Routing Algorithm (`resolver.py`)
+
+Model selection is governed by a unified two-stage lexicographic optimization algorithm that decouples intelligence ramps, protects against price cliffs, prevents throughput distortion, and avoids double-counting prompt caching benefits.
+
+```mermaid
+flowchart TD
+    Candidates["Candidate Models (from SQLite / Combo)"] --> GateContext{"Phase 1 Gate:\nContext >= need_tokens?"}
+    GateContext -- No --> Drop1["Rejected"]
+    GateContext -- Yes --> GateCliff{"Phase 1 Gate:\nneed_tokens * tau_role <= price_cliff?"}
+    GateCliff -- No --> Drop2["Rejected (Price Cliff Buffer Guard)"]
+    GateCliff -- Yes --> GateIntel{"Phase 1 Gate:\nI(M) >= I_min?"}
+    GateIntel -- No --> Drop3["Dropped (or relaxed if empty)"]
+    GateIntel -- Yes --> Stage1["Phase 2: Calculate U_core(M)\nU_intel(M) - Cost(M)*gamma - Burn(M) + W_tier(M)"]
+    Stage1 --> FindMax["Find U_max = max(U_core)"]
+    FindMax --> EquivBand{"Filter Equivalence Band:\nU_max - U_core(M) <= epsilon?"}
+    EquivBand -- No --> RankLower["Ranked in lower priority bands"]
+    EquivBand -- Yes --> TieBreaker["Stage 2 Lexicographic Tie-Breaker:\nSort top candidates by Speed(M) tok/s"]
+    TieBreaker --> Winner["Selected Optimal Model M*"]
+```
+
+### Phase 1: Hard Gating & Price Cliff Trajectory Buffer
+
+Every candidate model $M$ must satisfy three hard gates:
+
+1. **Context Capacity**: $\text{Context}(M) \ge \text{need\_tokens}$
+2. **Multi-Turn Price Cliff Trajectory Buffer**:
+   To prevent multi-turn tool calling loops from crossing catastrophic pricing thresholds (e.g. Anthropic Claude Haiku 100K token price cliff), `need_tokens` is scaled by a role-specific trajectory factor $\tau_{\text{role}}$:
+   $$\text{Trajectory Tokens} = \text{need\_tokens} \times \tau_{\text{role}}$$
+   $$\text{Gate}_{\text{cliff}}(M) = \begin{cases} \text{Pass} & \text{if } M.\text{price\_cliff\_tokens} \text{ is None or } \text{Trajectory Tokens} \le M.\text{price\_cliff\_tokens} \\ \text{Reject} & \text{otherwise} \end{cases}$$
+
+| Role | Trajectory Factor $\tau_{\text{role}}$ | Rationale |
+|---|---|---|
+| `implement` / `worker` | **1.5×** | Multi-turn edit-test-debug loops generate significant cumulative context. |
+| `driver` / `orchestrate` | **1.3×** | Task dispatch and supervision generate moderate multi-turn context. |
+| `review` / `reviewer` | **1.1×** | Reviews read diffs and files with bounded conversation depth. |
+
+*Example*: At 70,000 tokens, Haiku (`price_cliff = 100000`) is rejected for workers ($70\text{k} \times 1.5 = 105\text{k} > 100\text{k}$) while safely admitted for reviewers ($70\text{k} \times 1.1 = 77\text{k} \le 100\text{k}$).
+
+3. **Intelligence Floor**: $I(M) \ge I_{\min}$ for the evaluated risk band.
+
+---
+
+### Phase 2: Core Utility Scoring ($U_{\text{core}}$)
+
+The core utility score $U_{\text{core}}(M)$ balances intelligence, cost sensitivity, quota pool burn, and subscription priority:
+
+$$U_{\text{intel}}(M) = \alpha_{\text{role}} \cdot \left(\min\left(I(M) - I_{\min}, I_{\text{target}} - I_{\min}\right) + \max\left(0, I(M) - I_{\text{target}}\right) \cdot \beta_{\text{excess}}\right)$$
+
+$$U_{\text{core}}(M) = U_{\text{intel}}(M) - \text{Cost}(M) \cdot \gamma_{\text{cost}} - \text{Burn}(M) \cdot 1.0 + W_{\text{tier}}(M)$$
+
+#### Decoupled Risk & Competency Parameters
+
+By decoupling $I_{\text{target}} > I_{\min}$, the intelligence ramp rewards models that reach the target competency level while scaling excess capability according to task risk:
+
+| Risk Band | Min Floor $I_{\min}$ | Target Ramp $I_{\text{target}}$ | Cost Weight $\gamma_{\text{cost}}$ | Excess Weight $\beta_{\text{excess}}$ | Tie Equivalence $\epsilon$ | Reviewers |
+|---|---|---|---|---|---|---|
+| `low` | 37.5 | 41.0 | 15.0 | 0.2 | 0.5 | 0–1 |
+| `normal` | 44.0 | 47.0 | 10.0 | 0.4 | 0.5 | 1 |
+| `high` | 46.0 | 50.0 | 4.0 | 2.0 | 0.3 | 2 |
+| `critical` | 50.0 | 54.0 | 1.5 | 2.5 | 0.3 | 2 |
+
+#### Role Multiplier ($\alpha_{\text{role}}$)
+
+Role scaling amplifies intelligence gains above $I_{\min}$ for critical supervisory roles:
+- `implement` / `worker`: $\alpha_{\text{role}} = 1.0$
+- `driver` / `orchestrator`: $\alpha_{\text{role}} = 1.1$
+- `review` / `reviewer`: $\alpha_{\text{role}} = 1.2$
+
+#### Tier Priority Weights ($W_{\text{tier}}$)
+
+Guarantees subscription and free pools are prioritized over paid per-token APIs:
+$$W_{\text{tier}}(M) = \begin{cases} (4 - \text{rung}(M)) \times 3.5 & \text{if } \text{rung}(M) \le 4 \\ -35.0 & \text{otherwise (unknown)} \end{cases}$$
+- `trial` (rung 0): $+14.0$
+- `free` (rung 1): $+10.5$
+- `credit` (rung 2): $+7.0$
+- `subscription` (rung 3): $+3.5$
+- `paid` (rung 4): $0.0$
+
+---
+
+### Stage 2: Lexicographic Throughput Tie-Breaker
+
+Linear throughput bonuses in primary utility scoring previously allowed fast models to override up to 18 points of intelligence. Plangraph confines throughput strictly to a **two-stage lexicographic tie-breaker**:
+
+1. Find the highest core utility among surviving candidates:
+   $$U_{\max} = \max_{M \in \mathcal{C}} U_{\text{core}}(M)$$
+2. Collect the equivalence band of candidates whose utility is within $\epsilon$ of $U_{\max}$:
+   $$\mathcal{C}_{\text{top}} = \{ M \in \mathcal{C} \mid U_{\max} - U_{\text{core}}(M) \le \epsilon \}$$
+   *(where $\epsilon = 0.5$ for low/normal risk, $\epsilon = 0.3$ for high/critical risk)*
+3. Resolve ties within $\mathcal{C}_{\text{top}}$ by verified token generation speed:
+   $$M^* = \arg\max_{M \in \mathcal{C}_{\text{top}}} \text{Speed}(M)$$
+
+Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can **never** win solely by virtue of generation speed.
+
+---
+
+## 4. 5-Rung Tier Priority Order & Quota Pools
 
 Every model candidate is assigned a tier according to its billing and quota consumption profile:
 
@@ -70,7 +194,7 @@ Every model candidate is assigned a tier according to its billing and quota cons
 
 ---
 
-## 3. Verified AA v4.3.2 Benchmark Catalog
+## 5. Verified AA v4.3.2 Benchmark Catalog
 
 The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py`, `catalog_db.py`) records 22 verified models benchmarked under Artificial Analysis v4.3.2 (October 2026):
 
@@ -82,10 +206,10 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 | 4 | `agy/claude-sonnet-5-5-high` | claude | subscription | 46.8 | 100.0 | 52.0 | $1.12 | 91.0% | `l1-orchestrator`, `l2-worker`, `l2-reviewer` |
 | 5 | `mimo/mimo-v2.6-pro` | mimo | subscription | **46.0** | **51.0** | **29.0** | **$0.13** | **92.4%** | `l1-orchestrator`, `l2-worker`, `l2-reviewer` |
 | 6 | `opencode-go/qwen3.8-max` | qwen | subscription | 45.4 | 85.0 | 50.0 | $0.45 | 80.0% | `l1-orchestrator`, `l2-worker` |
-| 7 | `opencode-go/deepseek-v4-flash-max` | deepseek | subscription | 45.2 | 210.0 | 110.0 | $0.22 | 84.0% | `l2-worker`, `l3-driver` |
+| 7 | `opencode-go/deepseek-v4-flash-max` | deepseek | subscription | **45.0** | **231.0** | **115.0** | **$0.26** | 84.0% | `l2-worker`, `l3-driver` |
 | 8 | `opencode-go/glm-5.2-max` | glm | subscription | 45.1 | 90.0 | 55.0 | $0.35 | 82.0% | `l2-worker`, `l2-reviewer` |
 | 9 | `opencode-go/muse-spark-1.3-contributor` | muse | subscription | 45.0 | 287.0 | 140.0 | $1.37 | 78.0% | `l2-worker` |
-| 10 | `deepseek/deepseek-v4-flash-max` | deepseek | paid | 45.0 | 231.0 | 115.0 | $0.37 | 84.0% | `l2-worker`, `l3-driver` |
+| 10 | `deepseek/deepseek-v4-flash-max` | deepseek | paid | **45.0** | **231.0** | **115.0** | **$0.26** | 84.0% | `l2-worker`, `l3-driver` |
 | 11 | `claude/claude-haiku-4-5` | claude | subscription | 43.4 | 130.0 | 70.0 | $0.21 | 89.0% | `l2-worker` |
 | 12 | `cxa/gpt-6-luna-high` | gpt | subscription | **38.4** | **180.0** | **95.0** | **$0.07** | **85.0%** | `l1-orchestrator`, `l2-worker`, `l2-reviewer`, `l3-driver` |
 | 13 | `mimo/mimo-v2.6-flash` | mimo | subscription | 37.9 | **54.0** | **29.0** | **$0.04** | **92.4%** | `l2-worker`, `l3-driver` |
@@ -111,14 +235,46 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
   Anthropic Claude Sonnet 5.5 does not support effort level `max`. `clamp_effort()` automatically transforms requested effort `max` $\rightarrow$ `xhigh` for all `claude-sonnet-5-5*` models.
 - **Claude Haiku Price Cliff**:
   `claude/claude-haiku-4-5` imposes a steep price increase for contexts above 100K tokens. When `need_tokens > 100000`, the resolver strictly drops Haiku from candidate pools.
+- **DeepSeek Flash v1017**:
+  The updated DeepSeek Flash v1017 snapshot reaches an Artificial Analysis Intelligence Index of `45.0` at `$0.26/task` cost and `231 tok/s` verified throughput. Available in both `opencode-go` subscription (`opencode-go/deepseek-v4-flash-max`, $U_{\text{core}} = 0.90$) and direct paid PAYG (`deepseek/deepseek-v4-flash-max`, $U_{\text{core}} = -2.60$). Subscription DeepSeek Flash beats Qwen Max ($U_{\text{core}} = -0.60$) on cost efficiency while providing strong code reasoning.
 
 ---
 
-## 4. Cross-Family Review Protocol
+## 6. Cross-Family Review Protocol
 
 To prevent self-review bias and single-model blindspots, Plangraph enforces strict cross-family isolation over shared OmniRoute combos:
 
 $$\text{writer.family} \neq \text{reviewer}_1\text{.family} \neq \text{reviewer}_2\text{.family}$$
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Orchestrator as Plangraph Runner
+    participant Gateway as OmniRoute Gateway (l2-worker)
+    participant Writer as Writer: agy/claude-sonnet-5-5-high (claude)
+    participant Rev1 as Reviewer 1: mimo/mimo-v2.6-pro (mimo)
+    participant Rev2 as Reviewer 2: opencode-go/muse-spark (muse)
+
+    Note over Orchestrator,Gateway: Implementation Phase (Task Role: implement)
+    Orchestrator->>Gateway: POST /v1/chat/completions (combo: l2-worker, role: implement)
+    Gateway->>Writer: Dispatches to #1 leg (claude-sonnet-5-5-high)
+    Writer-->>Gateway: Code changes generated
+    Gateway-->>Orchestrator: 200 OK (X-OmniRoute-Selected-Family: claude)
+
+    Note over Orchestrator,Gateway: Cross-Family Review 1 (Task Role: review, Exclude: claude)
+    Orchestrator->>Gateway: POST /v1/chat/completions (combo: l2-worker, X-OmniRoute-Exclude-Family: claude)
+    Note over Gateway: Gateway excludes all 'claude' legs & bypasses session stickiness
+    Gateway->>Rev1: Dispatches to top non-claude leg (mimo-v2.6-pro)
+    Rev1-->>Gateway: Review Verdict & Lints
+    Gateway-->>Orchestrator: 200 OK (X-OmniRoute-Selected-Family: mimo)
+
+    Note over Orchestrator,Gateway: Cross-Family Review 2 (Task Role: review, Exclude: claude,mimo)
+    Orchestrator->>Gateway: POST /v1/chat/completions (combo: l2-worker, X-OmniRoute-Exclude-Family: claude,mimo)
+    Note over Gateway: Gateway excludes both 'claude' and 'mimo' legs
+    Gateway->>Rev2: Dispatches to 3rd distinct family (muse-spark)
+    Rev2-->>Gateway: Independent Review Verdict
+    Gateway-->>Orchestrator: 200 OK (X-OmniRoute-Selected-Family: muse)
+```
 
 ### Routing Envelope Headers
 
@@ -152,7 +308,7 @@ All 3 participants run over the **exact same** `l2-worker` combo definition with
 
 ---
 
-## 5. MCP Server & CLI Reference
+## 7. MCP Server & CLI Reference
 
 ### JSON-RPC 2.0 MCP Server (`src/plangraph/spawner/mcp.py`)
 
@@ -201,7 +357,7 @@ python -m plangraph.spawner.mcp
 
 ---
 
-## 6. Host Bootstrap & AutoOS Delegation
+## 8. Host Bootstrap & AutoOS Delegation
 
 Host binary and client prerequisites are delegated to AutoOS (`deploy/requirements-host.json`, `deploy/bootstrap.ps1`, `deploy/bootstrap.sh`) without duplicating package management code:
 
