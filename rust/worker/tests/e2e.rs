@@ -2199,3 +2199,48 @@ async fn phase_card_without_claim_is_not_merged() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn phase_rerun_reuses_a_closed_card_child_id() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-rerun", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let c = format!("e2e-rerun-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(c.as_str(), false)]));
+        let mut claim1 = env.claim(&c, &["other.txt"], "test -f never.txt");
+        claim1.prompt = "other.txt".to_string();
+        env.keeper.push_card_claim(claim1);
+
+        let id1 = format!("e2e-phase-rerun-{}-{}", 1, unique());
+        let handle1 = env.start_phase(&id1, env.phase_input(&phase_key, 1)).await;
+        let out1 = finish_phase("phase_rerun_1", &handle1).await;
+        assert_eq!(out1.not_merged, vec![c.clone()], "{out1:?}");
+        assert!(out1.merged.is_empty(), "{out1:?}");
+
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(c.as_str(), false)]));
+        let file = format!("{c}.txt");
+        let mut claim2 = env.claim(&c, &[file.as_str()], &format!("test -f {file}"));
+        claim2.prompt = file.clone();
+        env.keeper.push_card_claim(claim2);
+
+        let id2 = format!("e2e-phase-rerun-{}-{}", 2, unique());
+        let handle2 = env.start_phase(&id2, env.phase_input(&phase_key, 1)).await;
+        let out2 = finish_phase("phase_rerun_2", &handle2).await;
+
+        assert_eq!(out2.outcome, "done", "{out2:?}");
+        assert_eq!(out2.merged, vec![c.clone()], "{out2:?}");
+        assert!(out2.not_merged.is_empty(), "{out2:?}");
+        let completed = env.keeper.completed();
+        assert!(
+            completed.iter().any(|(card, _)| card == &c),
+            "{completed:?}"
+        );
+    })
+    .await;
+}
