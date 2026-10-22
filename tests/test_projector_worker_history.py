@@ -5,6 +5,7 @@ The eight fixtures are proto-JSON ``temporal workflow show --output json`` captu
 an unknown shape (docs/projector.md, "Contract with the Card workflow (v1)").  Runs on whichever
 backend ``PG_KEEPER_BACKEND`` selects (``keeper_util.World``), same code path.
 """
+import base64
 import json
 import re
 from pathlib import Path
@@ -71,8 +72,24 @@ EXPECTED = {
 }
 
 
+def _expand_data_json(value):
+    """Restore ``data_json`` payloads to the recorded ``data`` base64 shape."""
+    if isinstance(value, dict):
+        for child in value.values():
+            _expand_data_json(child)
+        if "data_json" in value:
+            payload = value.pop("data_json")
+            value["data"] = base64.b64encode(
+                json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+            ).decode()
+    elif isinstance(value, list):
+        for child in value:
+            _expand_data_json(child)
+    return value
+
 def load(name):
-    return json.loads((FIXTURES / f"{name}.json").read_text())
+    data = json.loads((FIXTURES / f"{name}.json").read_text())
+    return _expand_data_json(data)
 
 
 def project(name, workflow_id="card:A"):
@@ -209,3 +226,34 @@ def test_apply_writes_attempt_rows(world, projector, name):
     again = projector.apply_run(p, run_ord=0)
     assert (again.attempts_written, again.attempts_existing) == (0, len(p.attempts))
     assert len(attempts(world)) == len(p.attempts)
+
+
+def test_load_expands_data_json():
+    history = load("gate_blocks")
+
+    def walk(node):
+        if isinstance(node, dict):
+            assert "data_json" not in node, node
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(history)
+
+    first_data = []
+
+    def collect(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("data"), str) and "metadata" in node:
+                first_data.append(node)
+            for child in node.values():
+                collect(child)
+        elif isinstance(node, list):
+            for child in node:
+                collect(child)
+
+    collect(history["events"][0])
+    payloads = [decode_payload(d) for d in first_data]
+    assert any(isinstance(p, dict) and "claim" in p for p in payloads)

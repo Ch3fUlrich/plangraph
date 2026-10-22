@@ -1266,3 +1266,15 @@ path = "rust/worker/tests/fixtures/needs_input_timeout_midwait.json"
 rule = "high-entropy"
 value_sha256 = "e27ef69a72d731b4192ee9c5f9ed945555c78485b5c1385600114c14ed916706"
 why = "first 29 events of the recorded needs_input_timeout Temporal history (random UUIDs and base64 test payloads; same events the allowed full fixture holds)"
+
+[[scrub.allow_value]]
+path = "rust/worker-core/src/check.rs"
+rule = "token-shape"
+value_sha256 = "28804bcd4506d512ee74283280f3b3b59a33366afb657b8898155b2183c65869"
+why = "test-only PEM fixture (pem_block), body 64x A, not a key (mod tests)"
+
+[[scrub.allow_value]]
+path = "rust/worker-core/src/redact.rs"
+rule = "token-shape"
+value_sha256 = "28804bcd4506d512ee74283280f3b3b59a33366afb657b8898155b2183c65869"
+why = "test-only PEM fixture (pem_block), body 64x A, not a key (mod tests)"

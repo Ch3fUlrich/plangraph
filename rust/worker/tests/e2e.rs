@@ -1493,14 +1493,14 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
     in_local(async {
         // Fake value, split mid-token so no whole token appears in the command
         // (and thus in the claim the history stores).
-        let secret = "abcd1234secretvalue9999";
+        let leak_marker = "abcd1234secretvalue9999";
         // The failing invocation is the gate's — odd counts (see
         // `counter_check`) — every time, so the gate is the failing surface
         // the budget eventually parks or quarantines the card on.
         let on_fail = format!(
             "printf 'API_TOKEN=%s%s\\n' {} {}; exit 1",
-            &secret[..8],
-            &secret[8..]
+            &leak_marker[..8],
+            &leak_marker[8..]
         );
         let check_cmd = counter_check(r#"[ $((N % 2)) -eq 1 ]"#, &on_fail);
         let Some(env) = env_or_skip("gate-secret", "echo ok > out.txt").await else {
@@ -1526,7 +1526,7 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
             ("park packets", format!("{:?}", env.keeper.parked())),
         ] {
             assert!(
-                !dump.contains(secret),
+                !dump.contains(leak_marker),
                 "the token reached the keeper {what}: {dump}"
             );
         }
@@ -1541,13 +1541,13 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
             .expect("fetch history json");
         let raw = String::from_utf8_lossy(&bytes);
         assert!(
-            !raw.contains(secret),
+            !raw.contains(leak_marker),
             "the token reached the workflow history"
         );
         let value: serde_json::Value = serde_json::from_slice(&bytes).expect("history is json");
         let decoded = decoded_payloads(&value).join("\n");
         assert!(
-            !decoded.contains(secret),
+            !decoded.contains(leak_marker),
             "the token reached a history payload: {decoded}"
         );
 
