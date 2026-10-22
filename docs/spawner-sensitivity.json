@@ -1,5 +1,55 @@
 {
   "catalogs": 200,
+  "fail_closed": {
+    "critical/driver": {
+      "resolved": 199,
+      "unresolved": 1
+    },
+    "critical/implement": {
+      "resolved": 199,
+      "unresolved": 1
+    },
+    "critical/review": {
+      "resolved": 199,
+      "unresolved": 1
+    },
+    "high/driver": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "high/implement": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "high/review": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "low/driver": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "low/implement": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "low/review": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "normal/driver": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "normal/implement": {
+      "resolved": 200,
+      "unresolved": 0
+    },
+    "normal/review": {
+      "resolved": 200,
+      "unresolved": 0
+    }
+  },
   "perturbations": {
     "cost_pm10pct": {
       "critical/driver": {
