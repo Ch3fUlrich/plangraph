@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## 2026-10-22
 
+- **RT-P1-EXEC-OWNERSHIP:** worker park/complete/ask_question accept optional `expected_state` for compare-and-set on the observed card state; new refusal `exec_stale_state` (HTTP 409). The Rust worker sends it (separate commit).
+
 - **RT-P1-EXEC-OWNERSHIP:** keeper schema v12 -> v13 (`exec_workflow_id`/`exec_run_id`/`exec_attempt`); new refusal codes `exec_stale` and `bad_transition` (HTTP 409); worker verbs park/complete/ask_question/alarm/attempt carry `(workflow_id, run_id, attempt)`; reaper reopen and release clear the owner. **Contract change:** the ask route gained optional `workflow_id`/`run_id`/`attempt`. Deploy keeper first, then worker. Audit-only attempts and no-op worker calls do not acquire a first owner; PostgreSQL fresh DDL matches SQLite's column order while upgrades remain idempotent.
 - **RT-P1-EXEC-OWNERSHIP:** regression tests that the reaper leaves running/waiting/needs_input cards alone and a delayed worker park with an older attempt or stale run leaves a newer projector waiting state intact (tests/test_keeper_exec_reaper.py).
 - **RT-P1-FLOW-UNBLOCK (follow-up):** tests only: non-router `add_dep` via `apply_ops` on a claimed item is refused (`forbidden`); the router's add_dep on a claimed item asserts its `item_defined` event; length assert in the claim-without-base test.

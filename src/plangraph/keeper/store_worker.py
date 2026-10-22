@@ -37,7 +37,7 @@ import re
 
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import _count, _exec_parts, _number, _text
+from .store_cards import SETTABLE_STATES, _count, _exec_parts, _number, _text
 
 __all__ = ["WorkerMixin"]
 
@@ -46,9 +46,9 @@ _ATTEMPT_KEYS = frozenset(("card", "n", "leg", "exit_class", "diff_hash",
                            "workflow_id", "run_id", "attempt"))
 # ``n`` is the projector's attempt number, distinct from the exec attempt.
 _PARK_KEYS = frozenset(("card", "tier", "exit_class", "check_tail", "epoch",
-                        "workflow_id", "run_id", "attempt"))
+                        "workflow_id", "run_id", "attempt", "expected_state"))
 _COMPLETE_KEYS = frozenset(("card", "merged_sha", "workflow_id", "run_id",
-                            "attempt"))
+                            "attempt", "expected_state"))
 _ALARM_KEYS = frozenset(("card", "reason", "workflow_id", "run_id", "attempt"))
 _ACQUIRE_KEYS = frozenset(("owner", "ttl_s"))
 _RELEASE_KEYS = frozenset(("token", "owner"))
@@ -93,6 +93,17 @@ class WorkerMixin:
     """The worker-facing verbs for :class:`plangraph.keeper.store.Store`."""
 
     # ------------------------------------------------------------- helpers
+    def _exec_expect_state(self, item, expected) -> None:
+        """Check observed state inside the write lock, before recording ownership."""
+        if expected is None:
+            return
+        if not isinstance(expected, str) or expected not in SETTABLE_STATES:
+            raise Refused("validation",
+                          f"expected_state must be one of {list(SETTABLE_STATES)}")
+        if item["state"] != expected:
+            raise Refused("exec_stale_state",
+                          f"{item['key']}: expected {expected!r}, is {item['state']!r}")
+
     def _resolve_scoped(self, principal, card):
         """Resolve *card* to its live key, refuse if unknown, check scope."""
         key = self.resolve_key(card)
@@ -185,6 +196,7 @@ class WorkerMixin:
 
     def _worker_park(self, principal, body, now):
         _check_body(body, _PARK_KEYS, "worker_park")
+        _strings(body, "expected_state")
         card = _text("card", body.get("card"), required=True)
         tier = _text("tier", body.get("tier"), key=card) or ""
         exit_class = body.get("exit_class")
@@ -200,6 +212,7 @@ class WorkerMixin:
         why = f"parked: {exit_class} ({tier})"[:500]
 
         def guard(item):
+            self._exec_expect_state(item, body.get("expected_state"))
             self._park_guard(principal, item, epoch, now)
             # RT-P1-EXEC-OWNERSHIP: inside the write lock, after the claim
             # checks.  run= cannot carry the owner from here because the
@@ -220,6 +233,7 @@ class WorkerMixin:
 
     def _worker_complete(self, principal, body, now):
         _check_body(body, _COMPLETE_KEYS, "worker_complete")
+        _strings(body, "expected_state")
         card = _text("card", body.get("card"), required=True)
         merged_sha = body.get("merged_sha")
         if not isinstance(merged_sha, str) or not _SHA_RE.fullmatch(merged_sha):
@@ -228,6 +242,7 @@ class WorkerMixin:
         key = self._resolve_scoped(principal, card)
         with self._write():
             item = self._get_or_refuse(key)
+            self._exec_expect_state(item, body.get("expected_state"))
             self._exec_gate(key, body, record=item["state"] != "done")
         return {"card": key, "merged_sha": merged_sha}
 
