@@ -49,7 +49,59 @@ fn jail(work: &Path, script: &str) -> Command {
 }
 
 fn systemd_scope_ok() -> bool {
-    std::env::var_os("PG_JAIL_TEST_RESOURCE_LIMITS").is_some()
+    if std::env::var_os("PG_JAIL_TEST_SKIP_RESOURCE_LIMITS").is_some() {
+        eprintln!("SKIP: resource limits explicitly disabled by PG_JAIL_TEST_SKIP_RESOURCE_LIMITS");
+        return false;
+    }
+
+    for command in [
+        vec!["/bin/true"],
+        // Read the controller while the scope is alive: systemd removes its
+        // cgroup after exit, and accepting properties alone does not prove
+        // that the host actually enabled the memory controller.
+        vec![
+            "--",
+            "sh",
+            "-c",
+            r#"path=$(sed -n 's/^0:://p' /proc/self/cgroup)
+test -n "$path" || { echo 'no unified cgroup path' >&2; exit 1; }
+limit="/sys/fs/cgroup$path/memory.max"
+value=$(cat "$limit") || exit 1
+test "$value" = 67108864 || {
+    echo "memory limit not enforced: $limit = $value (expected 67108864)" >&2
+    exit 1
+}"#,
+        ],
+    ] {
+        let output = Command::new("systemd-run")
+            .args([
+                "--user",
+                "--scope",
+                "--quiet",
+                "-p",
+                "MemoryMax=64M",
+                "-p",
+                "TasksMax=32",
+            ])
+            .args(command)
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                eprintln!(
+                    "SKIP: resource-limit capability probe failed ({}): {}",
+                    out.status,
+                    String::from_utf8_lossy(&out.stderr).trim()
+                );
+                return false;
+            }
+            Err(err) => {
+                eprintln!("SKIP: cannot run systemd resource-limit capability probe: {err}");
+                return false;
+            }
+        }
+    }
+    true
 }
 
 #[test]
@@ -271,7 +323,6 @@ fn memory_hog_and_fork_bomb() {
         return;
     }
     if !systemd_scope_ok() {
-        eprintln!("SKIP: resource-limit tests require PG_JAIL_TEST_RESOURCE_LIMITS");
         return;
     }
 
