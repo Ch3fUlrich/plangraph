@@ -243,6 +243,24 @@ pub fn replan_stop(plan: &PhasePlan, key: &str) -> Option<Vec<String>> {
     }
 }
 
+/// A replan stops the loop on replan_stop, or on ready=false while cards not
+/// yet attempted remain (the planner holds them back): stop with the planner's
+/// reason, else "phase not ready". ready=false with every card attempted (all
+/// claimed) is not a stop.
+pub fn replan_gate(
+    plan: &PhasePlan,
+    key: &str,
+    attempted: &std::collections::HashSet<String>,
+) -> Option<Vec<String>> {
+    if let Some(stop) = replan_stop(plan, key) {
+        return Some(stop);
+    }
+    if !plan.ready && !plan.unstarted(attempted).is_empty() {
+        return Some(vec!["phase not ready".to_string()]);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +302,34 @@ mod tests {
             cards: Vec::new(),
         };
         assert_eq!(replan_stop(&plan, "PH-A"), None);
+    }
+
+    #[test]
+    fn replan_gate_ready_false_with_unattempted_card_stops() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: false,
+            blocked: Vec::new(),
+            cards: vec![card("a", true, false)],
+        };
+        let attempted = std::collections::HashSet::new();
+        assert_eq!(
+            replan_gate(&plan, "PH-A", &attempted),
+            Some(vec!["phase not ready".to_string()])
+        );
+    }
+
+    #[test]
+    fn replan_gate_ready_false_all_attempted_is_not_a_stop() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: false,
+            blocked: Vec::new(),
+            cards: vec![card("a", true, false)],
+        };
+        let mut attempted = std::collections::HashSet::new();
+        attempted.insert("a".to_string());
+        assert_eq!(replan_gate(&plan, "PH-A", &attempted), None);
     }
 
     #[test]

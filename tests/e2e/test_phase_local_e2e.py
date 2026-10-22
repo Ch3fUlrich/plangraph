@@ -288,6 +288,37 @@ def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
     assert result["finish"] is not None
     assert result["finish"]["state"] == "refused"
     assert "refused phase_finish" in result["finish"]["detail"]
+    assert r.merge_bodies == []
+    assert not [c for c in r.calls if c[0] == "PUT"]
+
+    import json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        r.keeper.base + "/v1/phase_finish",
+        data=json.dumps({
+            "key": ITEM,
+            "branch": PHASE_BRANCH,
+            "head": u.git(r.repo, "rev-parse", PHASE_REF),
+        }).encode(),
+        headers={
+            "Authorization": "Bearer " + r.world.tok("system"),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req)
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 400
+        body = json.loads(exc.read().decode())
+        assert body["error"] == "bad_state"
+        assert "cards not done" in body["msg"]
+        assert "demo:C1" in body["msg"]
+        assert "demo:C2" in body["msg"]
+    else:
+        pytest.fail("phase_finish should be refused")
 
     for child_id, desc in children:
         assert _status_name(desc.status).endswith("COMPLETED"), child_id

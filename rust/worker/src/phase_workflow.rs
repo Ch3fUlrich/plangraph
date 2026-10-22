@@ -16,7 +16,7 @@ use crate::activities::{
 use crate::keeper::Claim;
 use crate::phase::{
     OUTCOME_BLOCKED, OUTCOME_DONE, OUTCOME_PARTIAL, PhaseInput, PhaseOutput, PhasePlan,
-    card_workflow_id, next_wave, phase_branch, replan_stop, select_legs,
+    card_workflow_id, next_wave, phase_branch, replan_gate, select_legs,
 };
 use crate::workflow::Card;
 
@@ -88,7 +88,7 @@ impl Phase {
                     });
                 }
             } else {
-                if let Some(blocked) = replan_stop(&plan, &input.key) {
+                if let Some(blocked) = replan_gate(&plan, &input.key, &attempted) {
                     last_blocked = blocked;
                     break;
                 }

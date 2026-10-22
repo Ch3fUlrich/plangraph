@@ -83,6 +83,6 @@ def worker_claim(
         if lease_dt is not None and lease_dt.timestamp() > store.now():
             lease_live = True
     if not lease_live:
-        store.claim(principal, key)
+        store.worker_claim_lease(principal, key)
 
     return build_claim(key, card, repo=repo_root, base_sha=base_sha)

@@ -116,6 +116,14 @@ def test_system_claims_through_the_door(doors, w, repo, gate, monkeypatch):
     assert body["allow"] == ["x.txt"]
     assert body["forbid"] == []
 
+def test_system_is_refused_on_generic_claim(doors, w, repo, gate):
+    status, _body = doors.http("system", "POST", "/v1/claim", {"key": "demo:C1"})
+    assert status == 403
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key = ?", ("demo:C1",)
+    ).fetchone()
+    assert row[0] == "open"
+
 def test_router_forbidden_without_env(doors, w, gate, monkeypatch):
     monkeypatch.delenv("PG_PHASE_REPO_ROOT", raising=False)
     status, body = _post(doors, "router", {"card": "demo:C1"})
