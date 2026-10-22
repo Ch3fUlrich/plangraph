@@ -132,13 +132,17 @@ impl Phase {
             {
                 Ok(head) => head,
                 Err(err) => {
+                    let blocked = vec![format!("ensure_phase_branch failed: {err}")];
+                    let merged = sorted_unique(merged);
+                    let not_merged = sorted_unique(not_merged);
+                    let outcome = phase_outcome(&merged, &not_merged, &blocked);
                     return Ok(PhaseOutput {
                         phase: input.key,
                         branch,
-                        outcome: OUTCOME_BLOCKED.to_string(),
-                        blocked: vec![format!("ensure_phase_branch failed: {err}")],
-                        merged: sorted_unique(merged),
-                        not_merged: sorted_unique(not_merged),
+                        outcome: outcome.to_string(),
+                        blocked,
+                        merged,
+                        not_merged,
                         waves,
                     });
                 }
