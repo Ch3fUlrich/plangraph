@@ -1,0 +1,31 @@
+batch: 2026-10-22-seat-verdict-families
+principal: router
+source: build-L1 gen-17 (D-2178 yes to the FAMILIES fix)
+note: 2 ops; phase dep edit is an ADDITION (live-union, no drops)
+ops:
+- op: create
+  item:
+  - project: plangraph
+    id: SEAT-VERDICT-FAMILIES
+    kind: lane
+    owner: build-L1
+    track: RETHINK
+    priority: 8
+    estimate_h: 1
+    review_tier: standard
+    depends_on:
+    - plangraph:RT-P1-FLOW-UNBLOCK
+    title: 'seat_verdict.py maps glm -> zhipu and nemotron -> nvidia so the workst-L1-main-zhipu/-nvidia reviewer tokens can post'
+    description: 'D-2165/D-2178: workst-L1-main holds reviewer principals for 8 families incl. zhipu and nvidia (the families opencode free glm and
+      openrouter free nemotron serve). tools/seat_verdict.py FAMILIES (line ~36) has no glm or nemotron pattern, so model_family() returns None and
+      the seat is refused as unknown. Add both patterns; a model id matching 2 families stays unknown (existing rule). Slotted after FLOW-UNBLOCK.'
+    done_criteria: 'FAMILIES maps glm/zhipu model ids -> zhipu and nemotron -> nvidia; tests: glm-5.3-flash-free -> zhipu, nvidia/nemotron-3-ultra-550b-a55b:free
+      -> nvidia, an id matching two patterns -> unknown, anthropic still refused; existing seat_verdict tests green; Writer trailer (D-2046); 2 seats of
+      non-Claude families different from the writer (D-2166 order).'
+    evidence_kinds:
+    - commit+ci
+- op: edit
+  key: plangraph:PH-FLEET-RULES
+  fields:
+    depends_on_add:
+    - plangraph:SEAT-VERDICT-FAMILIES
