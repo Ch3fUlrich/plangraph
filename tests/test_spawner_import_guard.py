@@ -62,6 +62,9 @@ def find_spawner_importers(root: Path) -> list[str]:
 
 def test_main_clean() -> None:
     src = Path(__file__).resolve().parents[1] / "src"
+    assert src.is_dir(), f"source tree missing: {src}"
+    anchor = src / ALLOWED_REL
+    assert anchor.is_file(), f"expected runtime module missing: {anchor}"
     assert find_spawner_importers(src) == []
 
 def test_fixture_red(tmp_path: Path) -> None:
@@ -69,8 +72,11 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/__init__.py": "",
         "plangraph/keeper/__init__.py": "",
         "plangraph/keeper/x.py": "from plangraph.spawner.resolver import resolve\n",
+        "plangraph/keeper/a.py": "from plangraph import spawner\n",
+        "plangraph/keeper/b.py": "import plangraph.spawner.clients as c\n",
         "plangraph/foo/__init__.py": "",
         "plangraph/foo/y.py": "from ..spawner import clients\n",
+        "plangraph/foo/z.py": "from . import spawner\nfrom .. import spawner\n",
         "plangraph/spawner/__init__.py": "",
         "plangraph/spawner/ok.py": "from plangraph.spawner.clients import make\n",
         "plangraph/planner/__init__.py": "",
@@ -80,8 +86,13 @@ def test_fixture_red(tmp_path: Path) -> None:
         path = tmp_path / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body, encoding="utf-8")
-    assert find_spawner_importers(tmp_path) == [
+    hits = find_spawner_importers(tmp_path)
+    assert hits == sorted(hits), "guard must return a sorted list"
+    assert hits == [
         "plangraph/foo/y.py",
+        "plangraph/foo/z.py",
+        "plangraph/keeper/a.py",
+        "plangraph/keeper/b.py",
         "plangraph/keeper/x.py",
     ]
 
