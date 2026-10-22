@@ -39,8 +39,10 @@ fn patterns() -> &'static [regex::Regex] {
             //     `&`, or a closing delimiter — so the rule is idempotent.
             //     An unquoted value may not start with `}`, `]`, `)`, or `&`
             //     after either separator. An unterminated quote falls back to
-            //     the rest of the line (no closing delimiter semantics).
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\.)*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\.)*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|[^\s"'}\])&][^\n\r}\])&]*|"[^\n\r]*|'[^\n\r]*)"#,
+            //     the rest of the line (no closing delimiter semantics). A
+            //     backslash before a line feed (or CRLF) continues the value
+            //     onto the next line, quoted, unquoted, or unterminated.
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -409,6 +411,9 @@ mod tests {
             format!("({pass_key}=x y)"),
             format!("?{token_key}=a b&next=1"),
             format!("{token_key}={REDACTED}"),
+            format!("{api_key}=abc\\\ndef"),
+            format!("{api_key}=\"abc\\\ndef\""),
+            format!("{api_key}=\"abc\\\ndef"),
         ];
         for x in cases {
             let once = redact(&x);
@@ -590,6 +595,26 @@ mod tests {
         check(
             format!("x({name}=)abc"),
             ["x(", name.as_str(), "=", REDACTED].concat(),
+        );
+    }
+
+    #[test]
+    fn backslash_newline_continues_a_value() {
+        let name = ["API_", "KEY"].concat();
+        let check = |input: String, expected: String| {
+            let once = redact(&input);
+            assert_eq!(once, expected, "{input}");
+            assert_eq!(redact(&once), once, "{once}");
+        };
+
+        check(format!("{name}=abc\\\ndef"), format!("{name}={REDACTED}"));
+        check(format!("{name}=a\\\nb\\\nc"), format!("{name}={REDACTED}"));
+        check(format!("{name}=abc\\\r\ndef"), format!("{name}={REDACTED}"));
+        check(format!("{name}=\"abc\\\ndef\""), format!("{name}={REDACTED}"));
+        check(format!("{name}=\"abc\\\ndef"), format!("{name}={REDACTED}"));
+        check(
+            format!("{name}=abc\nnext line"),
+            format!("{name}={REDACTED}\nnext line"),
         );
     }
 
