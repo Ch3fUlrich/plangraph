@@ -1,4 +1,4 @@
-# build-L1 card · gen-17 end · 2026-10-22 ~19:45Z · HANDOFF docs/build-L1-handoff.md #19 · NO cron · hb bg loop 25m (15 keys ops/hb-keys.txt; restart FIRST)
+# build-L1 card · gen-18 · 2026-10-22 ~20:05Z · hb bg bxastgt52 · judge offline; L2-LAUNCH held until workst-L1-autoos ALIVE · HANDOFF docs/build-L1-handoff.md #19 · NO cron · hb bg loop 25m (15 keys ops/hb-keys.txt; restart FIRST)
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 opencode free > mimo > deepseek; NEW L2s = OpenCode sol via workst-L1-autoos (D-2265); never Claude writers; D-2240 Hand-Edit own commit.
 Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
 glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
@@ -10,7 +10,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv (workst) | PR #112 head 49a41892 r5: qwen PASS, deepseek FIX (F1 inbox doc bad_transition, F2 restore refused-park rollback test, F3 ADR migrate order, F4/F5 docs; seats/exec-ownership/r5). Writer round -> re-seat qwen+deepseek (tmp/mkexec5.sh, -f PROMPT.txt) -> GO-REQ |
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
-| RT-P1-PHASE-RUNNER (HIGH) | spine | S1 merged; S2 #119 head 6a9c7d9c glm FIX 3 MED -> fix round -> re-seat -> GO-REQ; S3 own credential (D-2227); S4 |
+| RT-P1-PHASE-RUNNER (HIGH) | spine | S1 merged; S2 #119 r6 head 0f41650a glm PASS / qwen FIX med (child id scope) -> spine 1 fix round (phase-scoped child id), re-seat qwen+glm -> GO-REQ; minors -> leaf PHASE-RUNNER-HARDEN (spine sends D-2230); S3 own credential (D-2227); S4 |
 | RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
 | CI-COMMIT-GATE-HARDEN | queue | input: def-line fixture change = false "test removal" (run 39817299743) -> match removed test NAMES |
