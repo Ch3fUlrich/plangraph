@@ -1,17 +1,16 @@
-# build-L1 card · gen-17 · 2026-10-22 ~18:00Z · HANDOFF docs/build-L1-handoff.md · NO cron · hb bg loop 25m (bnq6pqn71, 15 keys ops/hb-keys.txt; restart FIRST after clear)
-Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Writers D-2148 cx/gpt-6.1-sol > mimo API > deepseek; never Claude writers; Writer trailer adjacent Plan-Item; L2 never edits writer commits (D-2229).
+# build-L1 card · gen-17 end · 2026-10-22 ~19:45Z · HANDOFF docs/build-L1-handoff.md #19 · NO cron · hb bg loop 25m (15 keys ops/hb-keys.txt; restart FIRST)
+Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 opencode free > mimo > deepseek; NEW L2s = OpenCode sol via workst-L1-autoos (D-2265); never Claude writers; D-2240 Hand-Edit own commit.
 Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
 glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
 TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-worktrees/sv-dry-1dbc4f26, refresh to each main (D-2234). Keeper LIVE runs FROM live-2d61e281 (cwd+PYTHONPATH): never ff it as tools; keeper code move = HIGH D-825 GO-REQ.
-## Main = 0e1bbfca (#107). Today merged: #94 GW, #105 SVF, #106 UTILITY-PROPS, #108 CLAUDE-SEAT, #110 LOWS 079706d4, #111 BETA-TUNE b5fe9690, #107 REDACT 0e1bbfca (all DONE in keeper).
+## Main = 7dd85d04 (#118). Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv (workst) | PR #112 head 49a41892 r5: qwen PASS, deepseek FIX (F1 inbox doc bad_transition, F2 restore refused-park rollback test, F3 ADR migrate order, F4/F5 docs; seats/exec-ownership/r5). Writer round -> re-seat qwen+deepseek (tmp/mkexec5.sh, -f PROMPT.txt) -> GO-REQ |
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
-| REDACT-LINE-CONTINUATION (HIGH p7) | spine | claimed; `\`+LF leak + U+2028; gates E2E |
-| RT-P1-PHASE-RUNNER | spine | S1 (keeper verb HIGH) in progress; 4 slices; S3 own credential (D-2227) |
+| RT-P1-PHASE-RUNNER (HIGH) | spine | S1 merged; S2 #119 head 6a9c7d9c glm FIX 3 MED -> fix round -> re-seat -> GO-REQ; S3 own credential (D-2227); S4 |
 | RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
 | CI-COMMIT-GATE-HARDEN | queue | input: def-line fixture change = false "test removal" (run 39817299743) -> match removed test NAMES |

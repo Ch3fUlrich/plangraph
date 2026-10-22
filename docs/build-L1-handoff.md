@@ -1,3 +1,25 @@
+# build-L1 handoff #19 (gen-17 end, 2026-10-22 ~19:45Z; compacted 4x -> recycle per routing D-2265)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt (15 keys; FIRST); caveman; effort medium.
+CARD status/build-L1.card.md = current lane table (read first). Main 7dd85d04 (#118).
+## Rules new this gen
+- D-2265 (operator): new L2s = OpenCode sessions on cx/gpt-6.1-sol on the workstation. `L2-LAUNCH <name> <brief> <cwd>` -> workst-L1-autoos (l2_start), NOT routing.
+  Brief must work for OpenCode: canonical FILES line, keeper verbs, no Claude-only tools. Running Claude L2s (spine, spawner, flow-oversight-2, exec-wfv) finish
+  current lane only. L3: sol writers, seats non-OpenAI, Claude seats last. Trial OC-3LAYER-TRIAL (workst-L1-autoos).
+- D-2248: no cx on coding.vm/server gateway until server OmniRoute update; writers opencode free > omniroute/mimo-v2.6-flash > deepseek (record skips).
+- D-2240: L2 hand edit = own commit + `Hand-Edit: <reason>`; auth/door surface always writer. D-2226 glm verdict reason: record path + banner + sha256 review/err (post via pg.sh).
+- D-2234: keeper LIVE runs from live-2d61e281; tools from detached sv-dry-1dbc4f26 (refresh to main). Never dump environ.
+- D-2252 DONE: keeper.json ci workst-basic-analysis=none (restart 19:14Z, backup seats/ci-none-ba/). Keeper has NO /health route: probe via verbs.
+## Lanes (detail on card)
+- EXEC-OWNERSHIP #112 r5 head 49a41892: qwen PASS, deepseek FIX F1-F5 (seats/exec-ownership/r5/deepseek/review.txt) -> sent to exec-wfv. Next: new head ->
+  re-seat qwen (qodercli) + deepseek (opencode -f PROMPT.txt, builder copied to ~/.local/share/plangraph/tools-l1/job-tmp/mkexec5.sh) -> judge GO-REQ.
+- PHASE-RUNNER S2 #119 head 6a9c7d9c: glm FIX 3 MED (done-on-empty, Config::default replay, wave cap) -> sent back to spine; then re-seat, GO-REQ. S3/S4 follow.
+- CI-COMMIT-GATE-HARDEN (HIGH): spawner L2 working; Q1-Q6 answered (Gate-Edit: D-2209, workflows covered, D-2214 all extensions). 2 non-Claude seats -> GO-REQ.
+- RT-OVERSIGHT-CHECKS #117: flow-oversight-2 (alarm fail-open fix + 2 PASS seats). Then SEAT-COVERAGE-KEEPER red tests -> GO-REQ.
+- fleet-outbox-read 3-verb: round 3 per seats/fleet-outbox/r2/NEXT-ROUND.md -> seats -> GO-REQ -> install /home/s/bin.
+- Stopped L2s (D-2251): sandbox, oc-harden, card-checks, bus; handoffs C:\fleet\handoff\build-L2-<name>.handoff.md -> relaunch as OpenCode L2s (D-2265).
+- D-2254 low: PH-OPERATOR gate ok; OS-149 after prox A1-A5; RT-P4-ARCHIVE parked.
+- Wait-for-CI tool: ~/.local/share/plangraph/tools-l1/job-tmp/ciwait.sh SHA KEY (bash).
+
 # build-L1 handoff #18 (gen-16 end, 2026-10-22 ~11:30Z; session compacted once, idle ~72 h 10-19..10-22)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt (FIRST); caveman; effort medium.
 State 10-22: all my leases had lapsed (loop ended) -> re-claimed epoch 2 at 11:16Z (10 keys). L2s rt-side-2 + predeploy-5 GONE (not in ListAgents).
