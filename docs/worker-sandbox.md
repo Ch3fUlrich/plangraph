@@ -64,9 +64,11 @@ from `osrelease`.
 ## Limits
 
 - Landlock restricts filesystem access only.
-- `/proc` is readable (the agent runtime needs `/proc/self`). A same-user process's
-  `/proc/<pid>/environ` and `cmdline` are therefore readable from the jail. Keep
-  secrets out of the worker's own environment and argv.
+- Procfs is restricted: the worker passes `--proc-self`, which allows read-only
+  only `/proc/<own pid>` (so `/proc/self`) plus `/proc/{cpuinfo,meminfo,stat,loadavg}`.
+  A sibling same-user process's `/proc/<pid>/environ` is refused (covered by the
+  escape tests; node starts under this policy). The jail cannot hide the attempt's
+  own `/proc/<pid>`, so keep secrets out of the attempt's own environment and argv.
 - The library default (`JailConfig::from_env`) runs unjailed when `PG_JAIL_BIN` is
   unset; the fail-closed policy is enforced at worker startup, so any other
   entrypoint must call `required_from_env` itself.
