@@ -303,3 +303,26 @@ def test_zero_intelligence_is_zero():
         call_with_timeout(
             lambda: score_model(explicit_none, role="implement", risk="normal")
         )
+
+
+@pytest.mark.parametrize(
+    "bad_need_tokens",
+    [0, -1, float("nan"), float("inf"), True, None, "100"],
+)
+def test_need_tokens_validated(bad_need_tokens):
+    r = row("fam0/a", 50.0)
+    r2 = row("fam1/b", 51.0)
+    db = FakeDB([r, r2])
+
+    calls = [
+        lambda: score_model(r, need_tokens=bad_need_tokens),
+        lambda: rank_candidates([r, r2], need_tokens=bad_need_tokens),
+        lambda: resolve_model_for_task(db=db, need_tokens=bad_need_tokens),
+        lambda: resolve_review_plan("mimo/x", db=db, need_tokens=bad_need_tokens),
+    ]
+    for call in calls:
+        with pytest.raises(ValueError):
+            call_with_timeout(call)
+
+    call_with_timeout(lambda: resolve_model_for_task(db=db, need_tokens=32000))
+    call_with_timeout(lambda: resolve_model_for_task(db=db, need_tokens=32000.0))
