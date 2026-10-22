@@ -17,6 +17,7 @@ if str(SRC_ROOT) not in sys.path:
 from plangraph.spawner.resolver import resolve_model_for_task  # noqa: E402
 
 SEED = 20261022
+STABILITY_SEEDS = (20261022, 11, 22, 33, 44)
 RISKS = ("low", "normal", "high", "critical")
 ROLES = ("implement", "driver", "review")
 TIERS = ("subscription", "paid", "free", "credit", "trial")
@@ -110,8 +111,8 @@ def _perturb_rows(
         raise ValueError(f"unknown perturbation: {kind}")
     return out
 
-def run(catalogs: int) -> dict[str, Any]:
-    rng = random.Random(SEED)
+def run(catalogs: int, seed: int = SEED) -> dict[str, Any]:
+    rng = random.Random(seed)
     stats: dict[str, dict[str, dict[str, float | int]]] = {
         pert: {
             f"{risk}/{role}": {"flips": 0, "unresolved": 0}
@@ -186,12 +187,27 @@ def run(catalogs: int) -> dict[str, Any]:
     }
 
     return {
-        "seed": SEED,
+        "seed": seed,
         "catalogs": catalogs,
         "perturbations": perturbations,
         "fail_closed": fail_closed,
         "summary": summary,
     }
+
+def stability_seeds(catalogs: int) -> dict[str, Any]:
+    seeds = list(STABILITY_SEEDS)
+    rates: dict[str, dict[str, float]] = {}
+    for seed in STABILITY_SEEDS:
+        result = run(catalogs, seed)
+        intel_pm1 = result["perturbations"]["intel_pm1"]
+        rates[str(seed)] = {
+            risk: max(
+                float(intel_pm1[f"{risk}/{role}"]["flip_rate"])
+                for role in ROLES
+            )
+            for risk in ("high", "critical")
+        }
+    return {"seeds": seeds, "intel_pm1_max_flip_rate": rates}
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -207,6 +223,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--catalogs must be >= 1")
 
     result = run(args.catalogs)
+    result["stability_seeds"] = stability_seeds(args.catalogs)
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
