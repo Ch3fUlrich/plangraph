@@ -82,6 +82,21 @@ class SemaphoreAdapter:
             raise SemaphoreError("task_id and project_id must be positive integers")
         return self._fetch(task, project)
 
+    def readable(self, project_id: Any) -> bool:
+        """True when the project is publicly readable (on the allow list).
+
+        Fail closed: an unconfigured allow list, an invalid id or any
+        unexpected error is not readable, never an exception.
+        """
+        project = positive_int(project_id)
+        if project is None:
+            return False
+        try:
+            allowed = _allowed_projects()
+        except Exception:  # noqa: BLE001 - fail closed on anything unexpected
+            return False
+        return project in allowed
+
     def __repr__(self) -> str:
         # Deliberately opaque: never mention the base URL or a token.
         return "SemaphoreAdapter()"

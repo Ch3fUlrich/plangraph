@@ -5,7 +5,7 @@ These are the verbs that create and edit the graph itself: ``create_items``,
 definition columns plus the ``edges`` table; the lifecycle transitions live in
 ``store_verbs`` and the pure helpers on the ``Store`` base class.
 
-One state exception (D-434): the router re-tiers claimed/in-review items -- its two tier fields only -- bumping ``round`` so no stale verdict counts.
+One state exception (D-434, widened by F4): the router edits claimed/in-review items -- its two tier fields plus ``done_criteria`` and ``depends_on`` -- bumping ``round`` so no stale verdict counts, and the event carries who edited plus the before/after values of every changed field.
 """
 from __future__ import annotations
 
@@ -26,8 +26,11 @@ from .store_tiers import (
     tier_needs_router,
     validated_decision_tier,
     validated_review_tier,
-    _tier_only,
 )
+
+#: F4: the fields the router may edit while an item is claimed/in_review --
+#: D-434's two tier fields plus these two.  Anyone else fails on authorisation.
+_ACTIVE_EDITABLE = _TIER_FIELDS | frozenset(("done_criteria", "depends_on"))
 
 _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id",
              "phase_kind", "fixes", "choices", "kg_refs", "estimate_h", "estimate_src",
@@ -71,6 +74,14 @@ def _defined_payload(fields):
         if name in fields:
             payload[name] = fields[name]
     return payload
+
+
+def _active_edit_only(fields):
+    """A non-empty subset of ``_ACTIVE_EDITABLE``; like ``_tier_only`` an empty
+    or non-mapping input answers ``False``, so those shapes keep the ordinary
+    open-only refusal."""
+    return (isinstance(fields, dict) and bool(fields)
+            and not set(fields) - _ACTIVE_EDITABLE)
 
 
 class CreateMixin:
@@ -297,6 +308,14 @@ class CreateMixin:
 
     # ------------------------------------------------------ edit/priority
     def edit_definition(self, principal, key, fields):
+        """Edit an item's definition (router-only on a claimed/in-review item).
+
+        A done_criteria/depends_on edit on an active item BUMPS ``epoch`` (old
+        evidence and verdicts stop counting; tier-only edits just bump
+        ``round``).  The result then carries the new ``epoch``: the claimant's
+        old epoch token fails ``_epoch_ok``, so it must re-read the item;
+        lease and claimed_by stay.
+        """
         return self._run(principal, "edit_definition", key,
                          lambda now: self._edit(principal, key, fields, now))
 
@@ -316,12 +335,15 @@ class CreateMixin:
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         self._may_manage(principal, item["project"])
-        # D-434: the router's one narrow exception -- the two tier fields alone on
-        # a claimed/in-review item; anyone else fails on authorisation, not state.
-        tier_edit = item["state"] in ("claimed", "in_review") and _tier_only(rest)
+        # D-434 + F4: the router's narrow exception -- the tier fields plus
+        # done_criteria/depends_on alone on a claimed/in-review item; anyone
+        # else fails on authorisation, not state.
+        tier_edit = (item["state"] in ("claimed", "in_review")
+                     and _active_edit_only(rest))
         if tier_edit and principal.role != "router":
-            raise Refused("forbidden", "only the router may edit review_tier or "
-                          "evidence_kinds while an item is claimed or in review")
+            raise Refused("forbidden", "only the router may edit tier fields, "
+                          "done_criteria or depends_on while an item is "
+                          "claimed or in review")
         if item["state"] != "open" and not tier_edit:
             raise Refused("bad_state", f"{key} is {item['state']}, not open")
         if not isinstance(rest, dict):
@@ -430,10 +452,18 @@ class CreateMixin:
         check_fix_limit(candidate, {key})
         self._validate_change(candidate, before, affected={key})
         assignments = [field for field in edit_fields if field != "depends_on"]
+        # F4 audit: the claimed/in-review exception is the router editing an
+        # active item's definition, so the event says what every changed field
+        # was and became.  ``depends_on`` reports the final (qualified,
+        # cancelled-dropped) edge list, not the caller's raw input.
+        audit_after = {name: (me["depends_on"] if name == "depends_on"
+                              else edit_fields[name]) for name in edit_fields}
         with self._write():
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
             fresh = self._get_or_refuse(key)
+            audit_before = {name: fresh.get(name) if name != "depends_on"
+                            else item.get(name) for name in edit_fields}   # F4: in-txn read
             self._assert_unlocked(fresh)
             # ``tier_edit`` implies router; guard the write on the states the read passed.
             states = ("claimed", "in_review") if tier_edit else ("open",)
@@ -441,6 +471,7 @@ class CreateMixin:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
             self._may_manage(principal, fresh["project"])
+            bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             if tier_edit:
                 # Re-check the resulting (tier, kinds) pair under the lock:
                 # evidence_kinds may have been edited under us since the read.
@@ -450,18 +481,38 @@ class CreateMixin:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
                 round_no = int(fresh.get("round") or 0) + 1
+                if bump_epoch:
+                    # An epoch bump voids old evidence (evidence.epoch == items.epoch)
+                    # and verdicts keyed (epoch, round); the claimant's old epoch token
+                    # then fails _epoch_ok, the claimant must re-read the item;
+                    # lease and claimed_by stay.
+                    new_epoch = int(item["epoch"]) + 1
             if assignments:
                 sets = ", ".join(f"{field}=?" for field in assignments)
                 values = [self._stored(field, edit_fields[field]) for field in assignments]
                 if tier_edit:
                     sets += ", round=?"
                     values.append(round_no)
+                    if bump_epoch:
+                        sets += ", epoch=?"
+                        values.append(new_epoch)
                 guard = "/".join(states)
                 cursor = self.conn.execute(
                     f"UPDATE items SET {sets}, updated_at=?"
                     f" WHERE key=? AND state IN ({','.join('?' for _ in states)})"
                     " AND epoch=?",
                     (*values, self._iso(now), key, *states, item["epoch"]))
+                self._race_guard(cursor, key, guard, item["epoch"])
+            elif tier_edit:
+                # A depends-on-only active edit: no definition column to set,
+                # but the state guard still has to be proven and the round
+                # bumped exactly like the assignments branch does.
+                guard = "/".join(states)
+                cursor = self.conn.execute(
+                    "UPDATE items SET round=?, epoch=?, updated_at=?"
+                    f" WHERE key=? AND state IN ({','.join('?' for _ in states)})"
+                    " AND epoch=?",
+                    (round_no, new_epoch, self._iso(now), key, *states, item["epoch"]))
                 self._race_guard(cursor, key, guard, item["epoch"])
             else:
                 self._guarded_touch(key, ("open",), item["epoch"])
@@ -477,13 +528,21 @@ class CreateMixin:
                 # for by the caller (``fold`` ignores the extra key).
                 payload["estimate_src_auto"] = True
             if tier_edit:
-                # D-434 marker: the state the router re-tiered through; the
-                # fold reads it to replay the round bump that voids verdicts.
+                # D-434 marker: the state the router edited through; the fold
+                # reads it to replay the round bump that voids verdicts.
                 payload["while"] = fresh["state"]
+                if bump_epoch:
+                    payload["new_epoch"] = new_epoch
+                # F4 audit keys: ``fold`` ignores names it does not compare.
+                payload["who"] = principal.name
+                payload["before"] = audit_before
+                payload["after"] = audit_after
             self._append(principal, key, "item_defined", payload, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
         result = {"key": key}
+        if bump_epoch:
+            result["epoch"] = new_epoch
         if dropped:
             # Only when something was actually dropped: every caller (the HTTP
             # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
