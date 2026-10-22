@@ -3,7 +3,7 @@ Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 op
 Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
 glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
 TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-worktrees/sv-dry-1dbc4f26, refresh to each main (D-2234). Keeper LIVE runs FROM live-2d61e281 (cwd+PYTHONPATH): never ff it as tools; keeper code move = HIGH D-825 GO-REQ.
-## Main = ef4cab7d (#119). Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
+## Main = 875205f1 (#121 S3a, GO D-2293, CI green, evidence on). Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
@@ -36,4 +36,4 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
-- New leaves: RT-P1-CARD-CHECKS-KEEPER (HIGH, dep CARD-CHECKS, D-2289). exec-wfv CI 39848623437 green on 31c525d8.
+- New leaves: RT-P1-CARD-CHECKS-KEEPER (HIGH, dep CARD-CHECKS, D-2289). exec-wfv CI 39848623437 green on 31c525d8.- EXEC #112 r6: exec-wfv workstation blocked (commit 83.7%) -> L1 spawns W19/W20/W21 on coding.vm one at a time; W19 run 20261022-211721-exec-r6-w19-keeper-hand-108b2d; briefs W20/W21: ~/.claude/jobs/c7643711/tmp/exec-r6-W20-W21.md; worktrees plangraph-worktrees/exec-own-w19..21.
