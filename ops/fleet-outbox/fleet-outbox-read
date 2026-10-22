@@ -1,21 +1,65 @@
-#!/bin/bash
+#!/bin/bash -p
 # fleet-outbox-read - SSH forced command (D-2221).
 #
 # Installed as:  authorized_keys  restrict,command="/home/s/bin/fleet-outbox-read"
 # Sole verb:     get <relpath>
 # Success:       stdout = file bytes and nothing else, exit 0.
 # Anything else: "refused" on stderr, empty stdout, exit 1.
-# The input is never echoed back, and nothing but `cat` on the already
-# validated absolute path is ever executed. (ssh forwarding is the job of
-# the authorized_keys `restrict` option, not of this script.)
+# The input is never echoed back, and nothing but a fixed-path `cat` on the
+# already validated absolute path is ever executed. (ssh forwarding is the job
+# of the authorized_keys `restrict` option, not of this script.)
+# The `-p` shebang argument is deliberate: privileged mode makes bash ignore
+# $BASH_ENV and $ENV, so a BASH_ENV smuggled into the environment cannot run
+# code while this forced command starts up.
+#
+# Deployment preconditions - checked and enforced outside this script; the
+# guarantees below only hold when BOTH of them hold:
+#   * sshd runs with `PermitUserEnvironment no`.  Otherwise the connecting
+#     account can inject FLEET_OUTBOX_ROOT (and BASH_ENV / ENV / PATH) into
+#     the forced command's own environment and steer the root trusted here.
+#   * ~/fleet-outbox and every subdirectory under it are mode 0700, owned by
+#     the serving account, and files are deposited only by that account.
+#     That closes the stat -> open TOCTOU window (no attacker can swap the
+#     path between the checks below and the final open) and the hardlink
+#     cases (no attacker-writable parent directory to plant links in).
 set -u
+PATH=/usr/bin:/bin; export PATH
+LC_ALL=C; export LC_ALL
+unset BASH_ENV ENV CDPATH GLOBIGNORE
 
 refuse() {
 	printf 'refused\n' >&2
 	exit 1
 }
 
-ROOT="${FLEET_OUTBOX_ROOT:-$HOME/fleet-outbox}"
+# HOME is normally set by sshd, but if neither it nor FLEET_OUTBOX_ROOT is
+# present, refuse instead of tripping `set -u` on $HOME or trusting a bogus
+# root such as "/fleet-outbox".  ${HOME-} never expands to an error.
+if [ -n "${FLEET_OUTBOX_ROOT:-}" ]; then
+	ROOT="$FLEET_OUTBOX_ROOT"
+elif [ -n "${HOME-}" ]; then
+	ROOT="${HOME-}/fleet-outbox"
+else
+	refuse
+fi
+
+# --- 0. tools: resolved once from fixed candidate lists --------------------
+# Never a lookup through an environment-controlled PATH, never `command -v`.
+CAT=
+for t in /bin/cat /usr/bin/cat; do
+	[ -f "$t" ] && [ -x "$t" ] || continue
+	CAT="$t"
+	break
+done
+[ -n "$CAT" ] || refuse
+
+REALPATH=
+for t in /usr/bin/realpath /bin/realpath; do
+	[ -f "$t" ] && [ -x "$t" ] || continue
+	REALPATH="$t"
+	break
+done
+[ -n "$REALPATH" ] || refuse
 
 # --- 1. command shape: exactly "get <relpath>", one literal get, one space ---
 cmd="${SSH_ORIGINAL_COMMAND-}"
@@ -46,8 +90,8 @@ done
 P="$ROOT/$relpath"
 
 # --- 4. canonical path must stay strictly inside the canonical root ---
-RR=$(realpath -e -- "$ROOT" 2>/dev/null) || refuse
-R=$(realpath -e -- "$P" 2>/dev/null) || refuse
+RR=$("$REALPATH" -e -- "$ROOT" 2>/dev/null) || refuse
+R=$("$REALPATH" -e -- "$P" 2>/dev/null) || refuse
 case "$R" in
 	"$RR"/*) ;;
 	*) refuse ;;
@@ -56,4 +100,12 @@ esac
 # --- 5. regular file, readable, not a symlink ---
 [[ -f "$R" && ! -L "$R" && -r "$R" ]] || refuse
 
-exec cat -- "$R"
+# --- 6. stream exactly the bytes of the validated file ---------------------
+# Open on fd 3 first: a failed open must become a refusal (with bash's own
+# redirection error swallowed), never a partial or crafted read.
+{ exec 3<"$R"; } 2>/dev/null || refuse
+# `exec` inside a subshell: should the exec itself fail (cat removed from
+# disk, noexec mount, ...) the subshell dies and the `||` still refuses,
+# instead of bash's silent exit 127.  stdout stays file bytes only.
+( exec "$CAT" <&3 2>/dev/null ) || refuse
+exit 0
