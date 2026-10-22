@@ -1,16 +1,18 @@
 """``oversight-check`` (RT-OVERSIGHT-CHECKS): the local oversight pass.
 
 Runs :func:`plangraph.keeper.oversight.run_checks` over the configured keeper
-DB with the real clock (and the config's repos as the config-style ``git``
-when it declares any), then writes ``DIR/digest.json`` and ``DIR/digest.sha256``
-atomically (temp file + rename, the snapshot-writer shape) and raises
-``projector_alarms`` rows for the findings (``--no-alarms`` skips that half).
+DB with the real clock, handing stall's R1/R2 the config-style ``git`` and R4 a
+real ``git(args) -> str`` adapter over the first configured repo (no fetch).
+Then writes ``DIR/digest.json`` and ``DIR/digest.sha256`` atomically (temp file
++ rename, the snapshot-writer shape) and raises ``projector_alarms`` rows for
+the findings (``--no-alarms`` skips that half).
 
 Exit 0 even with findings; nonzero (2) only on a config/runtime failure.
 """
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -50,8 +52,43 @@ def _config(session):
     return cfg
 
 
+def _repo_paths(cfg):
+    """Working tree paths from ``cfg.repos`` in config order (str or ``{path}``)."""
+    paths = []
+    for entry in (getattr(cfg, "repos", None) or {}).values():
+        path = entry.get("path") if isinstance(entry, dict) else entry
+        if path:
+            paths.append(str(path))
+    return paths
+
+
+def _lane_git(cfg):
+    """R4's adapter: ``git(args) -> stdout`` for the first configured repo.
+
+    Runs ``git -C <repo> <args>`` with list argv (never a shell), a 20 s
+    timeout, and no fetch; a non-zero exit raises.  ``None`` when no repo is
+    configured, in which case R4 skips silently.
+    """
+    paths = _repo_paths(cfg)
+    if not paths:
+        return None
+    repo = paths[0]
+
+    def git(args):
+        argv = ["git", "-C", repo] + [str(arg) for arg in args]
+        proc = subprocess.run(argv, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, text=True, timeout=20,
+                              check=False)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"{' '.join(argv)} failed ({proc.returncode}): {proc.stderr.strip()}")
+        return proc.stdout
+
+    return git
+
+
 def cmd_oversight_check(args, session):
-    from . import oversight     # lazy: oversight.py ships in its own lane
+    from . import oversight     # lazy: keeps the cli module's import graph light
     cfg = _config(session)
     if cfg is None:
         return EXIT_REFUSED
@@ -64,10 +101,12 @@ def cmd_oversight_check(args, session):
         return EXIT_REFUSED
     try:
         now = time.time()
-        # Config-style git (repos mapping): stall's r1/r2 read it, and a rule
-        # that wants an executable git simply skips its findings without one.
-        findings = oversight.run_checks(conn, now,
-                                        git=cfg if cfg.repos else None)
+        # Two distinct git shapes: stall's R1/R2 understand the config object,
+        # R4 needs a `git(args) -> str` callable (see oversight.run_checks).
+        findings = oversight.run_checks(
+            conn, now,
+            git=cfg if getattr(cfg, "repos", None) else None,
+            lane_git=_lane_git(cfg))
         text, sha = oversight.digest(findings)
         _atomic_write(out / "digest.json", text.encode("ascii"))
         _atomic_write(out / "digest.sha256",

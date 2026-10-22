@@ -234,7 +234,8 @@ def test_r6_fires_on_a_stale_watermark_and_an_open_reconcile_alarm(w):
     stale = [f for f in rows if f["kind"] == "watermark_stale"]
     assert len(stale) == 1 and stale[0]["rule"] == "R6"
     alarm = [f for f in rows if f["kind"] == "reconcile_alarm"]
-    assert [(f["rule"], f["key"]) for f in alarm] == [("R6", "demo:Z")]
+    assert [(f["rule"], f["key"]) for f in alarm] == [
+        ("R6", "state_drift:demo:Z")]
     assert alarm[0]["reason"].startswith("R6:") and "demo:Z" in alarm[0]["reason"]
 
 
@@ -314,3 +315,77 @@ def test_r1_r2_match_stall_alarms_on_the_same_fixture(w):
     git = lambda repo, ref: [("c0ffee", keys[1])]
     assert stall_alarms(w.conn, w.clock(), git=git) == []
     parity(w, git)
+
+
+# ------------------------------- run_checks threading (R1/R2 vs R4 git shapes)
+def test_run_checks_gives_r4_lane_git_while_r1_r2_keep_the_config_git(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    key = seed(w, [("A", ())])[0]
+    w.clock.advance(oversight.LANE_IDLE_S + HOUR)
+    git = lane_git(w.clock() - (oversight.LANE_IDLE_S + HOUR))
+    rows = oversight.run_checks(w.conn, w.clock(), lane_git=git)
+    assert ("R4", "lane_idle", key) in kinds(rows)
+    # A config-style object handed to `git=` (stall's contract) must not be
+    # mistaken for r4's `git(args) -> str`: only lane_git reaches R4.
+    assert "R4" not in {f["rule"] for f in oversight.run_checks(
+        w.conn, w.clock(), git=object())}
+
+
+# ------------------------------------------- F2: no wall clock in the digest
+def test_digest_does_not_change_just_because_time_passes(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    w.store.create_items(w.p("router"), [
+        defn("A", ()),
+        defn("OP", (), kind="operator_task", operator=True),
+        defn("GOAL", ["A", "OP"], kind="goal"),
+    ])
+    ask(w, "demo:A", w.store._iso(w.clock() - HOUR))    # overdue already
+    w.clock.advance(oversight.INBOX_WINDOW_S + HOUR)    # inbox + idle windows pass
+    now = w.clock()
+    watermark(w, w.store._iso(now - 2 * oversight.PROJECTOR_STALE_S))
+    metric(w, DAY, oversight.BURN_LIMIT + 1)
+    first = oversight.run_checks(w.conn, now, day=DAY)
+    later = oversight.run_checks(w.conn, now + 600, day=DAY)
+    assert {f["rule"] for f in first} >= {"R3", "R5", "R6", "R7"}
+    assert oversight.digest(first)[0] == oversight.digest(later)[0]
+
+
+# --------------------------- F3: reconcile alarms keep kind in the finding key
+def test_two_reconcile_alarms_with_one_key_but_two_kinds_stay_distinct(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    for alarm_id, kind in ((1, "state_drift"), (2, "lease_gap")):
+        w.conn.execute(
+            "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail,"
+            " raised_at) VALUES(?,?,?,?,?,?)",
+            (alarm_id, kind, "wf", "demo:Z", f"{kind} on demo:Z",
+             w.store._iso(w.clock())))
+    w.conn.commit()
+    rows = oversight.r6_projector(w.conn, w.clock())
+    alarms = [f for f in rows if f["kind"] == "reconcile_alarm"]
+    assert [f["key"] for f in alarms] == ["lease_gap:demo:Z",
+                                          "state_drift:demo:Z"]
+    assert len({f["reason"] for f in alarms}) == 2
+    assert oversight.raise_alarms(w.conn, alarms, w.clock()) == 2
+    stored = w.conn.execute(
+        "SELECT kind, key FROM projector_alarms WHERE workflow_id='oversight'"
+        " AND cleared_at IS NULL ORDER BY key").fetchall()
+    assert [(r["kind"], r["key"]) for r in stored] == [
+        ("reconcile_alarm", "lease_gap:demo:Z"),
+        ("reconcile_alarm", "state_drift:demo:Z")]
+
+
+# ---------------------------- F4: r5 tolerates a missing questions table
+def test_r5_skips_silently_when_the_questions_table_is_missing(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    seed_needs_you(w)                      # the inbox item is fresh: no findings
+    import sqlite3
+    raw = sqlite3.connect(str(w.path), isolation_level=None)
+    try:
+        raw.execute("DROP TABLE questions")
+    finally:
+        raw.close()
+    assert oversight.r5_windows(w.conn, w.clock()) == []

@@ -159,7 +159,7 @@ def r3_critical_idle(conn, now):
         age = _age(stamp, now)
         if age is None or age <= STALL_S:
             continue
-        detail = (f"{item['state']} {key} idle for {age}s with all deps done"
+        detail = (f"{item['state']} {key} idle with all deps done"
                   f" (last {stamp})")
         rows.append(_finding("R3", "critical_idle", key, detail, stamp))
     return _sort(rows)
@@ -225,15 +225,19 @@ def r4_lane_idle(conn, now, git=None):
 def r5_windows(conn, now):
     """Overdue questions and operator items ageing in the inbox."""
     rows = []
-    for row in conn.execute(
-            "SELECT key, deadline FROM questions"
-            " WHERE state='open' AND deadline IS NOT NULL ORDER BY key"):
-        age = _age(row["deadline"], now)
-        if age is None or age <= QUESTION_GRACE_S:
-            continue
-        detail = f"question {row['key']} is open past its deadline {row['deadline']}"
-        rows.append(_finding("R5", "question_overdue", row["key"], detail,
-                             row["deadline"]))
+    # Same silent skip as r6/r7: a snapshot without the questions table simply
+    # has no question findings.
+    if _table_exists(conn, "questions"):
+        for row in conn.execute(
+                "SELECT key, deadline FROM questions"
+                " WHERE state='open' AND deadline IS NOT NULL ORDER BY key"):
+            age = _age(row["deadline"], now)
+            if age is None or age <= QUESTION_GRACE_S:
+                continue
+            detail = (f"question {row['key']} is open past its deadline"
+                      f" {row['deadline']}")
+            rows.append(_finding("R5", "question_overdue", row["key"], detail,
+                                 row["deadline"]))
     for item in _items(conn):
         if item["state"] in _CLOSED:
             continue
@@ -244,7 +248,7 @@ def r5_windows(conn, now):
         if age is None or age <= INBOX_WINDOW_S:
             continue
         detail = (f"operator item {item['key']} ({item['kind']}) waiting"
-                  f" {age}s in the inbox")
+                  f" in the inbox (since {stamp})")
         rows.append(_finding("R5", "inbox_overdue", item["key"], detail, stamp))
     return _sort(rows)
 
@@ -260,15 +264,15 @@ def r6_projector(conn, now):
     ).fetchone()
     if row is None:
         rows.append(_finding("R6", "watermark_stale", "global",
-                             "no global projector watermark", iso(now)))
+                             "no global projector watermark", ""))
     else:
         age = _age(row["updated_at"], now)
         if age is None or age > PROJECTOR_STALE_S:
-            shown = "unknown" if age is None else f"{int(age)}s"
             rows.append(_finding(
                 "R6", "watermark_stale", "global",
-                f"global watermark age {shown} (limit {int(PROJECTOR_STALE_S)}s)",
-                row["updated_at"] or iso(now)))
+                f"global watermark is stale (limit {int(PROJECTOR_STALE_S)}s;"
+                f" last {row['updated_at'] or 'unknown'})",
+                row["updated_at"] or ""))
     if _table_exists(conn, "projector_alarms"):
         # Oversight's own rows (workflow_id='oversight') are outputs of this
         # module, not projector conditions: reporting them would feed back.
@@ -277,7 +281,10 @@ def r6_projector(conn, now):
                 " WHERE cleared_at IS NULL AND workflow_id <> 'oversight'"
                 " ORDER BY id"):
             reason = f"R6:reconcile_alarm:{alarm['kind']}:{alarm['key']}"
-            rows.append(_finding("R6", "reconcile_alarm", alarm["key"],
+            # The finding key carries the alarm kind so two open alarms that
+            # share a key but differ in kind stay distinct in raise_alarms.
+            rows.append(_finding("R6", "reconcile_alarm",
+                                 f"{alarm['kind']}:{alarm['key']}",
                                  alarm["detail"], alarm["raised_at"],
                                  reason=reason))
     return _sort(rows)
@@ -300,18 +307,24 @@ def r7_burn(conn, day, now):
     if value <= BURN_LIMIT:
         return []
     detail = f"burn index {value} on {day} exceeds limit {BURN_LIMIT}"
-    return [_finding("R7", "burn_over", str(day), detail, iso(now))]
+    return [_finding("R7", "burn_over", str(day), detail, str(day))]
 
 
 # ------------------------------------------------------------ aggregate
-def run_checks(conn, now, *, git=None, day=None):
-    """Every rule, one list sorted by ``(rule, key)``."""
+def run_checks(conn, now, *, git=None, lane_git=None, day=None):
+    """Every rule, one list sorted by ``(rule, key)``.
+
+    ``git`` is the config-style object (or ``(repo, ref)`` callable) that
+    :mod:`plangraph.keeper.stall` understands for R1/R2; ``lane_git`` is the
+    separate ``git(args) -> str`` callable R4 needs.  They are deliberately not
+    interchangeable: a config object silently yields no R4 rows.
+    """
     if day is None:
         day = datetime.fromtimestamp(float(now), tz=timezone.utc).date().isoformat()
     findings = []
     findings.extend(r1_r2(conn, now, git=git))
     findings.extend(r3_critical_idle(conn, now))
-    findings.extend(r4_lane_idle(conn, now, git=git))
+    findings.extend(r4_lane_idle(conn, now, git=lane_git))
     findings.extend(r5_windows(conn, now))
     findings.extend(r6_projector(conn, now))
     findings.extend(r7_burn(conn, day, now))

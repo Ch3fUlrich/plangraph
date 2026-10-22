@@ -199,3 +199,65 @@ def test_oversight_check_writes_both_digest_files_and_exits_0(
     assert re.search(
         rf"oversight: \d+ findings, \d+ new alarms, sha256 {recorded.group(0)}\b",
         printed)
+
+
+# ---------------------------------------- cli-level R4 with a real git repo
+def _git(repo, *args, env=None):
+    """Run git in *repo* for the adapter test (test-side, never the module)."""
+    import subprocess
+    full_env = dict(os.environ)
+    full_env.update(env or {})
+    return subprocess.run(["git", "-C", str(repo)] + list(args), check=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, env=full_env).stdout
+
+
+def _lane_repo(tmp_path):
+    """A repo with an old ``origin/main`` and an old, one-commit-ahead lane ref."""
+    import shutil
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    old = {"GIT_AUTHOR_DATE": "2020-01-01T00:00:00 +0000",
+           "GIT_COMMITTER_DATE": "2020-01-01T00:00:00 +0000"}
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com",
+         "commit", "-q", "-m", "base", env=old)
+    _git(repo, "checkout", "-q", "-b", "lane/demo-a")
+    (repo / "b.txt").write_text("b\n", encoding="utf-8")
+    _git(repo, "add", "b.txt")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@example.com",
+         "commit", "-q", "-m", "lane work", env=old)
+    _git(repo, "update-ref", "refs/remotes/origin/main", "main")
+    _git(repo, "update-ref", "refs/remotes/origin/lane/demo-a",
+         "refs/heads/lane/demo-a")
+    return repo
+
+
+def test_oversight_check_uses_a_real_lane_git_adapter(w, tmp_path, monkeypatch):
+    """The cli hands R4 a `git(args) -> str` adapter over cfg.repos, not cfg."""
+    import plangraph.keeper.cli_oversight  # noqa: F401
+    from plangraph.keeper import cli
+    key = seed(w, [("A", ())])[0]             # demo:A maps onto lane/demo-a
+    repo = _lane_repo(tmp_path)
+    snapshot = tmp_path / "plan.snapshot.json"
+    snapshot.write_text(json.dumps(w.store.snapshot(w.p("router"))),
+                        encoding="utf-8")
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text(json.dumps({"db": str(w.path), "snapshot": str(snapshot),
+                               "repos": {"demo": str(repo)}}),
+                   encoding="utf-8")
+    os.chmod(cfg, 0o600)
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(["--config", str(cfg), "oversight-check",
+                     "--out-dir", str(out), "--no-alarms"])
+    assert code == 0
+    findings = json.loads((out / "digest.json").read_bytes())
+    lanes = [f for f in findings if f["rule"] == "R4"]
+    assert [(f["kind"], f["key"]) for f in lanes] == [("lane_idle", key)]
+    assert "ahead of main" in lanes[0]["detail"]
