@@ -1,5 +1,3 @@
-plangraph:UI-BROWSER-TESTS
-plangraph:UI-DEPLOY-AUTO
 plangraph:RT-P1-FLOW-UNBLOCK
 plangraph:RT-GATE-WIRING
 plangraph:RT-P1-JEV-SHADOW
@@ -8,7 +6,5 @@ plangraph:RT-P1-EXEC-OWNERSHIP
 plangraph:KEEPER-BATCH-PRECONDITION
 plangraph:RT-P1-CI-GATE
 plangraph:RT-P1-WF-VERSIONING
-plangraph:OCGO-ROUTER-L0
 plangraph:OCGO-PROBE
-plangraph:OCGO-FLEET-BUS
 plangraph:OCGO-L1-FALLBACK

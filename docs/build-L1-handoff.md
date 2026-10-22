@@ -1,3 +1,37 @@
+# build-L1 handoff #18 (gen-16 end, 2026-10-22 ~11:30Z; session compacted once, idle ~72 h 10-19..10-22)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt (FIRST); caveman; effort medium.
+State 10-22: all my leases had lapsed (loop ended) -> re-claimed epoch 2 at 11:16Z (10 keys). L2s rt-side-2 + predeploy-5 GONE (not in ListAgents).
+Briefs for successors: docs/briefs/l2-rt-side-3.md, docs/briefs/l2-predeploy-6.md -> L2-LAUNCH via routing.
+plangraph main = 3026d6e1: 3 operator commits 10-19/20 (spawner/catalog, 6593 lines, no Plan-Item) on top of 8f7f1c55 -> lanes merge main in.
+## Rules in force (new this gen)
+- D-2038 spawner first; model path+family from registry; seat records: served model+provider+family. D-2043 spawner cap 10 (live 34235d48).
+- D-2046/2047: NEW commits = non-Claude writer + Writer trailer (model + run id); ci-gate refuses missing/Claude; merges ignored; Test-Removal: D-NNNN.
+  Existing commits never redone; trailer-less/Claude commits = "gemini-3.8-flash (operator-assigned D-2047)", leg-id-only trailers = their model
+  "(direct run, no spawner run id; D-2047)" -> #90 bootstrap tools/ci_commit_exempt.txt (frozen once on main). #87/#94/#95/#96 never rebase/squash;
+  merge with merge_method=merge, #90 FIRST.
+- Audit D-2042: ~/.local/share/plangraph/audit/writer-trailer-audit-2026-10-18.tsv (PRIVATE). Past commits never rewritten; DEV-PGDRILL-LOCAL-REDO cancelled.
+## Exempt lists (full 40)
+#94: 24e34a9ab52790e0e7a3de32e0d32915cddf6ffb 9d9e92c7baf14f75df4bea0c14e886b6beae9bba 6f476bfa91e47e321963b949c8bbfaa7729f7ee3 379fd98bfe96d91838f1da4e5468dc8bfa79b2c8
+#95: c9427a77040b41588e1ba1600a2805398b3d9e03 bc3549c7761eae81572b0d0a69f77f0254fb31f0 79e1f1ccd53656df805e9d27ab1da3d142c96c29 4d1b9390fc9124eeacb9515bf785164edadb9f3c 592798c6fb0b4c24bc206bb842990c87e8936fda 23172ae2cbfe9326e52066e8988e59f20f9f9d5a
+#96: 2a8bb220fdf0785e05db703cc9a13696a3a3374b fe3683d92fe41de3905ecd8f4a8a1e4af44bd8bd 7ccb21e7254235bd6f5771ad7d8a9c02f707ae69 21cabfbd3fd9c6fdb91ec56759f3632563997fa8 90ea8a5fc9ffd5e4879cc55d6182c56b00437e94
+#87 (head 1dc1f4ed): qwen qodercli e81fb0c2c297646be797fd22da43e328284603a1 c919250d488c1386d05f5ab6d7ad089bb676443d 852bedb5ef2428c473506d6b81cbf22ae23f070b
+  dd1d303a96e47f9a67e0a561e94a4659fdb984b4 3a65f1d0b197366501fa98386bfed11e4397dfd9 f19bb568610c04a9a6a6c66517e0045b412f7f84; agy gemini f54c18b0fb7173fc2857e0e4c811347c726142ec;
+  claude 4bfe7a25fba28fe7214b96902ab8280588f5e936 1525eab9710f1322093139a476d71ecb428b311e; none 72929e0489d4b7d98f1a583146b59e2c60b6e60d 6fd301f8d2c78684da87ec67b112e06d1c8f7241
+  e0db8ee2b5e9100147557c79666b54726ea31d15 4d06e334153906cb91d91f3776253cddb657a9b9 35f65fe94ab1450b3fa22e45409f3216632dfa7d 1dc1f4ed64210ede8dd22d5098e28366b87e9af2
+#90/EXEC/BATCH own lists: rt-side-2 had not sent them (5cf0c60 9ac459f fa27ede 363a3e6 known for #90).
+## OCGO
+- ROUTER-L0 DONE (keeper). FLEET-BUS in_review (workst; push-first + pull fallback D-2029/2030, dedupe by sender msg id).
+- PROBE (claimed): partial records from workst; open: context window per model, ACP in oc_l1 lane -> one run-record file -> submit.
+- L1-FALLBACK (claimed): pt1 7ebb84b5 + pt2 3bbd0637 merged (AutoOS CI 39143577186 green, evidence attached); NOT submittable: pt3 L1
+  supervisor (claude_limit_stop -> oc_l1 start same name/card -> switch back at reset_at, tests) ordered to workst.
+- FLEET-CUTOVER (open, mine): after BUS + FALLBACK.
+## Unprocessed router orders (fleet inbox, 10-19..10-22; most are workst relays): D-2054 start oc lane routing-00 direct glm-5.3 then CUTOVER;
+D-2055 workst implemented-inventory under CUTOVER; D-2063 spark-1.3-contributor driver leg (AO-MODEL-ROUTING-TRUTH); D-2066 oc_l1.py
+SYSTEMROOT allowlist case bug; D-2067 confirm; D-2069 re-point ROUTER-L0+CUTOVER to spark driver, BUS push-now steps; D-2070 workstation
+census handoffs; D-2074; D-2080 relay listener + secret paths; D-2085 sync-join fence; D-2088 BUG-A/B to AutoOS lane. Ask routing which still stand.
+## Judge GO pending use: #94 scrub 2 per-value entries (server-L1-routing). PG drill / live steps need own GO.
+coding.vm process: opencode serve :47200 pid 616275 = coding-L1-fleetbus (workst), not mine.
+
 CARD: /home/s/code/plangraph-worktrees/build-L1/status/build-L1.card.md (current state; read first)
 # build-L1 handoff #17 (gen-16, 2026-10-18 ~15:40Z; D-2009: Claude usage ends tomorrow -> successor may be an OpenCode oc_l1 lane "build-L1")
 Startup: same as #16 below (skill, NO crons, ONE bg hb loop over ops/hb-keys.txt, caveman). Model order now: D-2007/2008 (qodercli hung server-side;
