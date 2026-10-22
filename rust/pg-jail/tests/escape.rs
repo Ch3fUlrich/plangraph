@@ -155,6 +155,23 @@ fn deny_read() {
 }
 
 #[test]
+fn rw_on_a_device_file_works() {
+    if !landlock_ok() {
+        return;
+    }
+
+    let work = tempfile::tempdir().unwrap();
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--rw").arg(work.path());
+    cmd.arg("--rw").arg("/dev/null");
+    add_ro(&mut cmd);
+    cmd.arg("--").arg("sh").arg("-c").arg("echo x > /dev/null");
+
+    let status = cmd.status().unwrap();
+    assert!(status.success(), "expected exit 0, got {status:?}");
+}
+
+#[test]
 fn fail_closed_missing_path() {
     if !landlock_ok() {
         return;

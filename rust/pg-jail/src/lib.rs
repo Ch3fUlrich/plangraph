@@ -62,15 +62,33 @@ pub fn apply(spec: &JailSpec) -> Result<(), JailError> {
 
     for path in &spec.rw {
         let fd = PathFd::new(path).map_err(|e| path_err(path, e))?;
+        // A file takes file rights only: directory rights on it would make the kernel
+        // report a partial ruleset.
+        let access = if std::fs::metadata(path)
+            .map_err(|e| path_err(path, e))?
+            .is_dir()
+        {
+            all
+        } else {
+            AccessFs::from_file(abi)
+        };
         ruleset = ruleset
-            .add_rule(PathBeneath::new(fd, all))
+            .add_rule(PathBeneath::new(fd, access))
             .map_err(ruleset_err)?;
     }
 
     for path in &spec.ro {
         let fd = PathFd::new(path).map_err(|e| path_err(path, e))?;
+        let access = if std::fs::metadata(path)
+            .map_err(|e| path_err(path, e))?
+            .is_dir()
+        {
+            read_exec
+        } else {
+            AccessFs::from_read(abi) & AccessFs::from_file(abi)
+        };
         ruleset = ruleset
-            .add_rule(PathBeneath::new(fd, read_exec))
+            .add_rule(PathBeneath::new(fd, access))
             .map_err(ruleset_err)?;
     }
 
