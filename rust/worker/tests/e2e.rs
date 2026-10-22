@@ -281,6 +281,8 @@ impl Env {
     fn phase_input(&self, key: &str, parallel: u32) -> PhaseInput {
         PhaseInput {
             max_waves: None,
+            finish_poll_s: Some(1),
+            finish_max_polls: Some(3),
             key: key.to_string(),
             repo: self.repo.display().to_string(),
             workroot: self.workroot.display().to_string(),
@@ -1983,6 +1985,15 @@ async fn phase_runs_two_cards_into_the_phase_branch() {
         claim_b.prompt = file_b;
         env.keeper.push_card_claim(claim_b);
 
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
+
         let id = format!("e2e-phase-two-{}", unique());
         let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
         let out = finish_phase("phase_two_cards", &handle).await;
@@ -2074,6 +2085,14 @@ async fn phase_defers_an_overlapping_card_to_a_later_wave() {
         claim_b.prompt = file_b;
         env.keeper.push_card_claim(claim_b);
 
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
         let id = format!("e2e-phase-defer-{}", unique());
         let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
         let out = finish_phase("phase_defer", &handle).await;
@@ -2085,6 +2104,7 @@ async fn phase_defers_an_overlapping_card_to_a_later_wave() {
         expected.sort();
         assert_eq!(merged, expected, "{out:?}");
         assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(env.keeper.finish_calls().len(), 1);
         assert!(env.keeper.plan_calls().len() >= 2);
     })
     .await;
@@ -2125,6 +2145,11 @@ async fn phase_wave_cap_stops_before_the_next_wave() {
         assert_eq!(out.waves, 1, "{out:?}");
         assert_eq!(out.merged, vec![a.clone()], "{out:?}");
         assert_eq!(out.blocked, vec!["wave cap reached".to_string()], "{out:?}");
+        assert!(
+            env.keeper.finish_calls().is_empty(),
+            "{:?}",
+            env.keeper.finish_calls()
+        );
     })
     .await;
 }
@@ -2173,6 +2198,123 @@ async fn phase_unstartable_card_is_reported_not_done() {
         assert_eq!(out.waves, 0, "{out:?}");
         let branches = git(&env.repo, &["branch", "--list", "phase/*"]);
         assert!(branches.trim().is_empty(), "{branches:?}");
+        assert!(
+            env.keeper.finish_calls().is_empty(),
+            "{:?}",
+            env.keeper.finish_calls()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_waits_for_ci_then_merges() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-ci", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-ci-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "waiting_ci".to_string(),
+            pr: None,
+            detail: String::new(),
+        });
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-finish-ci-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 1)).await;
+        let out = finish_phase("phase_finish_ci", &handle).await;
+
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(
+            out.finish.as_ref().map(|f| f.state.as_str()),
+            Some("merged"),
+            "{out:?}"
+        );
+        assert_eq!(env.keeper.finish_calls().len(), 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_refused_is_partial() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-refused", "echo ok > \"$PG_PROMPT\"").await
+        else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-refused-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "refused".to_string(),
+            pr: None,
+            detail: "ci red".to_string(),
+        });
+
+        let id = format!("e2e-phase-finish-refused-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 1)).await;
+        let out = finish_phase("phase_finish_refused", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert!(out.blocked.iter().any(|s| s == "ci red"), "{out:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_never_green_is_partial() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-never-green", "echo ok > \"$PG_PROMPT\"").await
+        else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-never-green-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "waiting_ci".to_string(),
+            pr: None,
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-finish-never-green-{}", unique());
+        let mut input = env.phase_input(&phase_key, 1);
+        input.finish_max_polls = Some(2);
+        input.finish_poll_s = Some(1);
+        let handle = env.start_phase(&id, input).await;
+        let out = finish_phase("phase_finish_never_green", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert!(out.blocked.iter().any(|s| s.contains("ci-gate")), "{out:?}");
+        assert_eq!(env.keeper.finish_calls().len(), 2);
     })
     .await;
 }
@@ -2229,6 +2371,14 @@ async fn phase_rerun_reuses_a_closed_card_child_id() {
         claim2.prompt = file.clone();
         env.keeper.push_card_claim(claim2);
 
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
         let id2 = format!("e2e-phase-rerun-{}-{}", 2, unique());
         let handle2 = env.start_phase(&id2, env.phase_input(&phase_key, 1)).await;
         let out2 = finish_phase("phase_rerun_2", &handle2).await;

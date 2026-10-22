@@ -9,6 +9,10 @@ pub const DEFAULT_MAX_PARALLEL: u32 = 3;
 pub struct PhaseInput {
     #[serde(default)]
     pub max_waves: Option<u32>,
+    #[serde(default)]
+    pub finish_poll_s: Option<u64>,
+    #[serde(default)]
+    pub finish_max_polls: Option<u32>,
     pub key: String,
     pub repo: String,
     pub workroot: String,
@@ -24,7 +28,36 @@ impl PhaseInput {
             .unwrap_or(DEFAULT_MAX_PARALLEL)
             .clamp(1, 16) as usize
     }
+
+    pub fn finish_poll(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.finish_poll_s.unwrap_or(30).clamp(1, 600))
+    }
+
+    pub fn finish_polls(&self) -> u32 {
+        self.finish_max_polls.unwrap_or(40).clamp(1, 500)
+    }
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhasePr {
+    pub number: u64,
+    #[serde(default)]
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhaseFinish {
+    pub state: String,
+    #[serde(default)]
+    pub pr: Option<PhasePr>,
+    #[serde(default)]
+    pub detail: String,
+}
+
+pub const FINISH_MERGED: &str = "merged";
+pub const FINISH_WAITING_CI: &str = "waiting_ci";
+// refused = the keeper rejected the call; detail says why
+pub const FINISH_REFUSED: &str = "refused";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanRoute {
@@ -89,6 +122,8 @@ pub struct PhaseOutput {
     #[serde(default)]
     pub not_merged: Vec<String>,
     pub waves: u32,
+    #[serde(default)]
+    pub finish: Option<PhaseFinish>,
 }
 
 pub const OUTCOME_BLOCKED: &str = "blocked";
@@ -230,6 +265,26 @@ mod tests {
         phase.max_waves = Some(5);
         assert_eq!(phase.wave_cap(), 5);
     }
+
+    #[test]
+    fn finish_poll_defaults_and_clamps() {
+        let mut phase = input(None);
+        assert_eq!(phase.finish_poll(), std::time::Duration::from_secs(30));
+        phase.finish_poll_s = Some(0);
+        assert_eq!(phase.finish_poll(), std::time::Duration::from_secs(1));
+        phase.finish_poll_s = Some(1000);
+        assert_eq!(phase.finish_poll(), std::time::Duration::from_secs(600));
+        phase.finish_poll_s = Some(45);
+        assert_eq!(phase.finish_poll(), std::time::Duration::from_secs(45));
+
+        assert_eq!(phase.finish_polls(), 40);
+        phase.finish_max_polls = Some(0);
+        assert_eq!(phase.finish_polls(), 1);
+        phase.finish_max_polls = Some(1000);
+        assert_eq!(phase.finish_polls(), 500);
+        phase.finish_max_polls = Some(3);
+        assert_eq!(phase.finish_polls(), 3);
+    }
     use pg_worker_core::config::Tier;
     use std::collections::HashSet;
 
@@ -259,6 +314,8 @@ mod tests {
     fn input(max_parallel: Option<u32>) -> PhaseInput {
         PhaseInput {
             max_waves: None,
+            finish_poll_s: None,
+            finish_max_polls: None,
             key: "PH-X".to_string(),
             repo: "repo".to_string(),
             workroot: "/tmp/work".to_string(),
@@ -448,6 +505,14 @@ mod tests {
             merged: vec!["a".to_string()],
             not_merged: vec!["c".to_string()],
             waves: 2,
+            finish: Some(PhaseFinish {
+                state: FINISH_MERGED.to_string(),
+                pr: Some(PhasePr {
+                    number: 7,
+                    url: "u".to_string(),
+                }),
+                detail: String::new(),
+            }),
         };
 
         let json = serde_json::to_string(&output).unwrap();

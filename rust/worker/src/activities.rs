@@ -451,6 +451,24 @@ pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
     map_probe(outcome, id.branch())
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PhaseFinishInput {
+    pub key: String,
+    pub branch: String,
+    pub head: String,
+}
+
+pub(crate) fn do_phase_finish(
+    keeper: &dyn Keeper,
+    key: &str,
+    branch: &str,
+    head: &str,
+) -> Result<crate::phase::PhaseFinish, crate::keeper::KeeperError> {
+    retry_transient(&TRANSIENT_BACKOFF, || {
+        keeper.phase_finish(key, branch, head)
+    })
+}
+
 pub(crate) fn do_phase_plan(
     keeper: &dyn Keeper,
     key: &str,
@@ -1134,6 +1152,32 @@ impl CardActivities {
         .await
         .map_err(activity_error)?;
         settle_refusal(res, "ask_question")
+    }
+
+    /// Ask the keeper to land the finished phase branch; a refusal is data, not an error.
+    #[activity]
+    pub async fn phase_finish(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: PhaseFinishInput,
+    ) -> Result<crate::phase::PhaseFinish, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let key = input.key.clone();
+        let branch = input.branch.clone();
+        let head = input.head.clone();
+        let res =
+            tokio::task::spawn_blocking(move || do_phase_finish(&*keeper, &key, &branch, &head))
+                .await
+                .map_err(activity_error)?;
+        match res {
+            Ok(f) => Ok(f),
+            Err(e) if classify(&e) == Failure::Refused => Ok(crate::phase::PhaseFinish {
+                state: crate::phase::FINISH_REFUSED.to_string(),
+                pr: None,
+                detail: format!("keeper refused phase_finish: {e}"),
+            }),
+            Err(e) => Err(activity_error(e)),
+        }
     }
 
     /// Re-read the phase plan so overlap-deferred cards can become startable.
@@ -2582,6 +2626,36 @@ mod tests {
 
         assert_eq!(do_phase_plan(&keeper, "p1").unwrap(), plan);
         assert_eq!(keeper.plan_calls(), vec!["p1".to_string()]);
+    }
+
+    #[test]
+    fn phase_finish_pure_body_uses_keeper() {
+        let keeper = StubKeeper::default();
+        let finish = crate::phase::PhaseFinish {
+            state: crate::phase::FINISH_MERGED.to_string(),
+            pr: Some(crate::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        };
+        keeper.push_finish(finish.clone());
+
+        let got = do_phase_finish(&keeper, "p1", "phase/p1", "head1").unwrap();
+        assert_eq!(got.state, finish.state);
+        assert_eq!(
+            got.pr.as_ref().map(|p| (p.number, p.url.as_str())),
+            Some((7, "u"))
+        );
+        assert_eq!(got.detail, finish.detail);
+        assert_eq!(
+            keeper.finish_calls(),
+            vec![(
+                "p1".to_string(),
+                "phase/p1".to_string(),
+                "head1".to_string()
+            )]
+        );
     }
 
     #[test]

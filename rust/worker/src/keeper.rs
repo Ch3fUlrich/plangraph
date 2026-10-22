@@ -8,6 +8,7 @@
 //! |--------|----------------|--------------------------|--------------------|
 //! | POST   | `/v1/claim`    | `{"worker": ..,"card"?: ..}` | 200 `Claim` \| 204 |
 //! | POST   | `/v1/phase_plan` | `{"key"}`              | 200 `PhasePlan`    |
+//! | POST   | `/v1/phase_finish` | `{"key","branch","head"}` | 200 `PhaseFinish` |
 //! | POST   | `/v1/attempts` | `AttemptReport`          | 204                |
 //! | POST   | `/v1/park`     | `ParkPacket`             | 204                |
 //! | POST   | `/v1/complete` | `{"card", "merged_sha"}` | 204                |
@@ -85,6 +86,13 @@ pub trait Keeper: Send + Sync {
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError>;
     /// Read-only plan of phase `key`; the keeper never writes for it.
     fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError>;
+    /// Land the finished phase branch (push, PR, merge on green CI); the keeper uses its own credential.
+    fn phase_finish(
+        &self,
+        key: &str,
+        branch: &str,
+        head: &str,
+    ) -> Result<crate::phase::PhaseFinish, KeeperError>;
     fn report_attempt(&self, r: &AttemptReport) -> Result<(), KeeperError>;
     fn park(&self, p: &ParkPacket) -> Result<(), KeeperError>;
     fn complete(&self, card: &str, merged_sha: &str) -> Result<(), KeeperError>;
@@ -224,6 +232,25 @@ impl Keeper for HttpKeeper {
             .map_err(|e| KeeperError::Decode(e.to_string()))
     }
 
+    fn phase_finish(
+        &self,
+        key: &str,
+        branch: &str,
+        head: &str,
+    ) -> Result<crate::phase::PhaseFinish, KeeperError> {
+        let value = self.post_json(
+            "/v1/phase_finish",
+            &serde_json::json!({ "key": key, "branch": branch, "head": head }),
+        )?;
+        if !value.is_object() {
+            return Err(KeeperError::Decode(
+                "phase_finish reply is not an object".into(),
+            ));
+        }
+        serde_json::from_value::<crate::phase::PhaseFinish>(value)
+            .map_err(|e| KeeperError::Decode(e.to_string()))
+    }
+
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError> {
         self.claim_with(serde_json::json!({ "worker": worker }))
     }
@@ -306,6 +333,8 @@ struct StubState {
     card_claims: Vec<Claim>,
     plans: Vec<crate::phase::PhasePlan>,
     plan_calls: Vec<String>,
+    finishes: Vec<crate::phase::PhaseFinish>,
+    finish_calls: Vec<(String, String, String)>,
     claim_card_calls: Vec<(String, String)>,
     queue: Vec<Claim>,
     attempts: Vec<AttemptReport>,
@@ -345,6 +374,14 @@ impl StubKeeper {
 
     pub fn plan_calls(&self) -> Vec<String> {
         self.lock().plan_calls.clone()
+    }
+
+    pub fn push_finish(&self, f: crate::phase::PhaseFinish) {
+        self.lock().finishes.push(f);
+    }
+
+    pub fn finish_calls(&self) -> Vec<(String, String, String)> {
+        self.lock().finish_calls.clone()
     }
 
     pub fn claim_card_calls(&self) -> Vec<(String, String)> {
@@ -459,6 +496,26 @@ impl Keeper for StubKeeper {
             Ok(state.plans[0].clone())
         } else {
             Ok(state.plans.remove(0))
+        }
+    }
+
+    fn phase_finish(
+        &self,
+        key: &str,
+        branch: &str,
+        head: &str,
+    ) -> Result<crate::phase::PhaseFinish, KeeperError> {
+        let mut state = self.lock();
+        state
+            .finish_calls
+            .push((key.to_string(), branch.to_string(), head.to_string()));
+        if state.finishes.is_empty() {
+            return Err(KeeperError::Status(404));
+        }
+        if state.finishes.len() == 1 {
+            Ok(state.finishes[0].clone())
+        } else {
+            Ok(state.finishes.remove(0))
         }
     }
 
@@ -1147,5 +1204,83 @@ mod tests {
         assert_eq!(k.record_question_timeout(1), Err(KeeperError::Status(403)));
         assert_eq!(k.questions().len(), 2);
         assert_eq!(k.question_timeouts(), vec![2, 1]);
+    }
+
+    #[test]
+    fn http_phase_finish_posts_key_branch_head() {
+        let body = r#"{
+            "phase": "demo:PH-X",
+            "branch": "phase/p1",
+            "head": "abc",
+            "cards": [],
+            "state": "merged",
+            "pr": {"number": 7, "url": "u"},
+            "detail": ""
+        }"#;
+        let (base, handle) = serve_once(200, "OK", body);
+        let keeper = HttpKeeper::new(&base);
+
+        let got = keeper
+            .phase_finish("p1", "phase/p1", "abc")
+            .expect("phase_finish");
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/phase_finish");
+        let sent: serde_json::Value = serde_json::from_str(&captured.body).expect("json");
+        assert_eq!(
+            sent,
+            serde_json::json!({"key":"p1","branch":"phase/p1","head":"abc"})
+        );
+        assert_eq!(got.state, "merged");
+        assert_eq!(got.pr.as_ref().map(|p| p.number), Some(7));
+    }
+
+    #[test]
+    fn http_phase_finish_403_is_status() {
+        let (base, handle) = serve_once(403, "Forbidden", "");
+        let keeper = HttpKeeper::new(&base);
+
+        let err = keeper
+            .phase_finish("p1", "phase/p1", "abc")
+            .expect_err("phase_finish");
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/phase_finish");
+        assert!(matches!(err, KeeperError::Status(403)), "{err:?}");
+    }
+
+    #[test]
+    fn stub_finish_queue_and_calls() {
+        let keeper = StubKeeper::default();
+        assert!(matches!(
+            keeper.phase_finish("p1", "phase/p1", "h"),
+            Err(KeeperError::Status(404))
+        ));
+
+        let finish = crate::phase::PhaseFinish {
+            state: crate::phase::FINISH_MERGED.to_string(),
+            pr: None,
+            detail: String::new(),
+        };
+        keeper.push_finish(finish.clone());
+
+        for _ in 0..2 {
+            let got = keeper.phase_finish("p1", "phase/p1", "h").unwrap();
+            assert_eq!(got.state, finish.state);
+            assert_eq!(got.pr, finish.pr);
+            assert_eq!(got.detail, finish.detail);
+        }
+        // Refused/empty-queue calls are recorded too, so the initial 404 call
+        // contributes an entry in addition to the two successful finishes.
+        assert_eq!(
+            keeper.finish_calls(),
+            vec![
+                ("p1".to_string(), "phase/p1".to_string(), "h".to_string()),
+                ("p1".to_string(), "phase/p1".to_string(), "h".to_string()),
+                ("p1".to_string(), "phase/p1".to_string(), "h".to_string()),
+            ]
+        );
     }
 }
