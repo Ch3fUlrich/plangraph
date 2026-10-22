@@ -110,6 +110,7 @@ def _table_exists(conn, name):
         if getattr(conn, "backend", "sqlite") == "postgres":
             row = conn.execute(
                 "SELECT 1 FROM information_schema.tables WHERE table_name=?"
+                " AND table_schema=current_schema()"
                 " LIMIT 1", (name,)).fetchone()
         else:
             row = conn.execute(
@@ -333,7 +334,7 @@ def run_checks(conn, now, *, git=None, lane_git=None, day=None):
 
 def digest(findings):
     """``(text, sha256hex)``: the canonical JSON payload and its digest."""
-    text = json.dumps(sorted(findings, key=lambda f: (f["rule"], f["key"])),
+    text = json.dumps(sorted(_sort(findings)),
                       sort_keys=True, separators=(",", ":"),
                       ensure_ascii=True) + "\n"
     return text, hashlib.sha256(text.encode("ascii")).hexdigest()
