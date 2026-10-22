@@ -13,9 +13,12 @@ from pathlib import Path
 
 import pytest
 
-from evidence_fakes import CLAIM, ITEM, OTHER_SHA, SHA, FakeCI, FakeGit, make_ctx, verify
+from evidence_fakes import (
+    CLAIM, ITEM, MERGE_EMAIL, OTHER_SHA, SHA, FakeCI, FakeDecisions, FakeGit,
+    FakeRuns, FakeSemaphore, make_ctx, verify,
+)
 from plangraph.keeper import evidence as ev
-from plangraph.keeper.evidence_types import Result, as_epoch
+from plangraph.keeper.evidence_types import Context, Result, as_epoch
 
 
 # --------------------------------------------------------------------------- #
@@ -126,20 +129,152 @@ def test_commit_ci_wrong_trailer_value():
     assert verify("commit+ci", {"commit": SHA}, ctx).ok is False
 
 
-def test_commit_ci_commit_older_than_claim():
-    # 1000 s before the claim is far outside the default 120 s skew.
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1000))
-    res = verify("commit+ci", {"commit": SHA}, ctx)
-    assert res.ok is False
-    assert "claim" in res.detail.lower() or "predate" in res.detail.lower()
+# --------------------------------------------------------------------------- #
+# commit+ci: F1 trailer binding replaces the claim-time window
+# --------------------------------------------------------------------------- #
 
-
-def test_commit_ci_no_claim_time_fails_closed():
+def test_commit_ci_merged_pr_passes() -> None:
     ctx = make_ctx()
-    ctx.claim_time = None
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is True, res.detail
+
+    ctx_principal = make_ctx(merge_principals=(MERGE_EMAIL.upper(),))
+    res_principal = verify("commit+ci", {"commit": SHA}, ctx_principal)
+    assert res_principal.ok is True, res_principal.detail
+
+
+def test_commit_ci_commit_without_merged_pr_refused() -> None:
+    ctx = make_ctx(git=FakeGit(merge=None))
     res = verify("commit+ci", {"commit": SHA}, ctx)
     assert res.ok is False
-    assert "claim" in res.detail.lower()
+    assert "merged PR" in res.detail
+
+
+def test_commit_ci_unmerged_commit_not_ancestor_refused() -> None:
+    ctx = make_ctx(git=FakeGit(ancestor=False))
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "not an ancestor" in res.detail
+
+
+def test_commit_ci_merge_principals_allowlist() -> None:
+    ctx_disallowed = make_ctx(merge_principals=("other@example.invalid",))
+    res_disallowed = verify("commit+ci", {"commit": SHA}, ctx_disallowed)
+    assert res_disallowed.ok is False
+    assert "merge principal" in res_disallowed.detail
+
+    ctx_allowed = make_ctx(merge_principals=())
+    res_allowed = verify("commit+ci", {"commit": SHA}, ctx_allowed)
+    assert res_allowed.ok is True, res_allowed.detail
+
+
+def test_commit_ci_git_adapter_lacking_merge_commit_of_fails_closed() -> None:
+    class _NoMergeGit:
+        def __init__(self, git: FakeGit) -> None:
+            self._git = git
+
+        def __getattr__(self, name: str):
+            if name == "merge_commit_of":
+                raise AttributeError(name)
+            return getattr(self._git, name)
+
+    ctx = make_ctx(git=_NoMergeGit(FakeGit()))
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "cannot prove a merged PR" in res.detail
+
+
+def test_commit_ci_merge_commit_of_exception_fails_closed() -> None:
+    ctx = make_ctx(git=FakeGit(merge_error=RuntimeError("boom")))
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "RuntimeError" in res.detail
+    assert "boom" not in res.detail
+
+
+def test_commit_ci_ancestry_floor() -> None:
+    ctx_pass = make_ctx(
+        bind_floor_required=True,
+        bind_floor_sha=OTHER_SHA,
+        git=FakeGit(descends=True),
+    )
+    res_pass = verify("commit+ci", {"commit": SHA}, ctx_pass)
+    assert res_pass.ok is True, res_pass.detail
+
+    ctx_no_descend = make_ctx(
+        bind_floor_required=True,
+        bind_floor_sha=OTHER_SHA,
+        git=FakeGit(descends=False),
+    )
+    res_no_descend = verify("commit+ci", {"commit": SHA}, ctx_no_descend)
+    assert res_no_descend.ok is False
+    assert "does not descend" in res_no_descend.detail
+
+    ctx_no_floor = make_ctx(bind_floor_required=True, bind_floor_sha=None)
+    res_no_floor = verify("commit+ci", {"commit": SHA}, ctx_no_floor)
+    assert res_no_floor.ok is False
+    assert "no ancestry floor" in res_no_floor.detail
+
+    ctx_floor_err = make_ctx(
+        bind_floor_required=True,
+        bind_floor_sha=OTHER_SHA,
+        git=FakeGit(floor_error=RuntimeError("boom")),
+    )
+    res_floor_err = verify("commit+ci", {"commit": SHA}, ctx_floor_err)
+    assert res_floor_err.ok is False
+    assert "ancestry floor" in res_floor_err.detail
+
+    ctx_first_claim = make_ctx(bind_floor_required=False, bind_floor_sha=None)
+    res_first_claim = verify("commit+ci", {"commit": SHA}, ctx_first_claim)
+    assert res_first_claim.ok is True, res_first_claim.detail
+
+
+def test_commit_ci_context_default_requires_floor() -> None:
+    assert Context().bind_floor_required is True
+
+    real_ctx = Context(
+        git=FakeGit(),
+        ci=FakeCI(),
+        runs=FakeRuns(),
+        semaphore=FakeSemaphore(),
+        decisions=FakeDecisions(),
+        now=CLAIM + 50,
+    )
+    res_real = verify("commit+ci", {"commit": SHA}, real_ctx)
+    assert res_real.ok is False
+    assert "no ancestry floor" in res_real.detail
+
+    ns_ctx = make_ctx()
+    delattr(ns_ctx, "bind_floor_required")
+    res_ns = verify("commit+ci", {"commit": SHA}, ns_ctx)
+    assert res_ns.ok is False
+    assert "no ancestry floor" in res_ns.detail
+
+
+def test_commit_ci_different_plan_item_key_refused_even_when_floor_and_merge_pass() -> None:
+    ctx = make_ctx(
+        bind_floor_required=True,
+        bind_floor_sha=OTHER_SHA,
+        git=FakeGit(
+            trailers={"Plan-Item": "routing:T9-OTHER"},
+            descends=True,
+        ),
+    )
+    res = verify("commit+ci", {"commit": SHA}, ctx)
+    assert res.ok is False
+    assert "Plan-Item" in res.detail
+
+
+def test_default_context_merge_principals() -> None:
+    assert ev.default_context(
+        {"merge_principals": ["A@x.invalid", " b@x.invalid "]}
+    ).merge_principals == ("A@x.invalid", "b@x.invalid")
+
+    assert ev.default_context(
+        {"merge_principals": "A@x.invalid, b@x.invalid"}
+    ).merge_principals == ("A@x.invalid", "b@x.invalid")
+
+    assert ev.default_context({}).merge_principals == ()
 
 
 def test_commit_ci_red_ci():

@@ -183,6 +183,8 @@ def fold(events, unknown=None):
                 # bumped ``round`` in the same UPDATE; replay it or the cache
                 # would keep counting the verdicts this edit just voided.
                 item["round"] += 1
+            if "new_epoch" in payload:
+                item["epoch"] = payload["new_epoch"]
         elif kind == "claimed":
             item["state"] = "claimed"
             item["epoch"] = payload.get("epoch", item["epoch"] + 1)
