@@ -14,7 +14,7 @@ use crate::activities::{
     park_json_with_attempt,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
-use crate::keeper::{Alarm, AttemptReport, Claim};
+use crate::keeper::{Alarm, AttemptReport, Claim, WORKER_LIVE_STATES};
 use crate::question::{self, OnTimer, Question};
 use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
@@ -352,8 +352,8 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
-                        // Projector: needs_input close is asynchronous; running survives until applied.
-                        &["running", "needs_input"],
+                        // Question parks accept only live worker states, never waiting or claimed.
+                        WORKER_LIVE_STATES,
                     )
                     .await?
                     {
@@ -420,7 +420,7 @@ impl Card {
                                     MERGE_LOCK_PARK_REASON,
                                 );
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Projector: merge retry timers may leave waiting; no fixed CAS.
+                                // Park only live worker states; preserve waiting and exclude claimed.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
@@ -548,7 +548,7 @@ impl Card {
                         &check_tail,
                     );
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                    // Projector: synthetic probe verdicts do not determine state; no CAS.
+                    // Park only live worker states; preserve waiting and exclude claimed.
                     park_and_alarm(
                         ctx,
                         &cfg,
@@ -589,7 +589,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Projector: policy reroutes do not determine state; no CAS.
+                                // Park only live worker states; preserve waiting and exclude claimed.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
@@ -610,7 +610,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Projector: policy promotions do not determine state; no CAS.
+                                // Park only live worker states; preserve waiting and exclude claimed.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
@@ -636,7 +636,7 @@ impl Card {
                         if waited >= cfg.wait_cap {
                             let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                             run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                            // Projector: attempt exits, not the wait-cap verdict, set state; no CAS.
+                            // Park only live worker states; preserve waiting and exclude claimed.
                             park_and_alarm(
                                 ctx,
                                 &cfg,
@@ -665,7 +665,7 @@ impl Card {
                     Action::Quarantine => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Projector: synthetic quarantine verdicts do not set state; no CAS.
+                        // Park only live worker states; preserve waiting and exclude claimed.
                         park_and_alarm(
                             ctx,
                             &cfg,
@@ -679,7 +679,7 @@ impl Card {
                     Action::ToPlanner => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Projector: planner verdicts do not set state; no CAS.
+                        // Park only live worker states; preserve waiting and exclude claimed.
                         park_and_alarm(
                             ctx,
                             &cfg,
@@ -692,7 +692,7 @@ impl Card {
                     }
                     Action::Park { packet } => {
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Projector: policy park packets do not determine prior state; no CAS.
+                        // Park only live worker states; preserve waiting and exclude claimed.
                         park_and_alarm(
                             ctx,
                             &cfg,
@@ -820,8 +820,8 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
-                // Projector: needs_input close is asynchronous; running survives until applied.
-                expected_state: Some(vec!["running".into(), "needs_input".into()]),
+                // Questions accept only live worker states, never waiting or claimed.
+                expected_state: Some(WORKER_LIVE_STATES.iter().map(|s| (*s).to_owned()).collect()),
                 card: card.clone(),
                 question: q.clone(),
                 attempt: Some(n.max(1)),
@@ -842,8 +842,8 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
-                // Projector: failed asks do not override running or the projected needs_input.
-                &["running", "needs_input"],
+                // Failed asks park only live worker states, never waiting or claimed.
+                WORKER_LIVE_STATES,
             )
             .await;
         }
@@ -858,8 +858,8 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
-            // Projector: refused asks do not override running or the projected needs_input.
-            &["running", "needs_input"],
+            // Refused asks park only live worker states, never waiting or claimed.
+            WORKER_LIVE_STATES,
         )
         .await;
     };
@@ -929,8 +929,8 @@ async fn question_step(
                     QUESTION_PARK_REASON,
                     question::timeout_park_tail(&q.text),
                     n,
-                    // Projector: TimerStarted never overrides needs_input; running may await projection.
-                    &["running", "needs_input"],
+                    // Question timeouts park only live worker states, never waiting or claimed.
+                    WORKER_LIVE_STATES,
                 )
                 .await
             }
@@ -955,7 +955,7 @@ async fn park_question(
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    // Projector ignores janitor/ask activities; the question state survives them.
+    // Question parks preserve newer actor states by accepting only the live set.
     park_and_alarm_in_state(
         ctx,
         cfg,
@@ -1287,9 +1287,8 @@ async fn park_and_alarm(
     reason: String,
     attempt: u32,
 ) -> WorkflowResult<()> {
-    // Projector: attempt exits may leave running/needs_input/waiting and merge
-    // retry timers may emit waiting. Synthetic policy verdicts do not project.
-    park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, None).await
+    // Generic parks also accept only live worker states, never waiting or claimed.
+    park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, Some(WORKER_LIVE_STATES)).await
 }
 
 async fn park_and_alarm_in_state(

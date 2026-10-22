@@ -1306,6 +1306,81 @@ mod tests {
         }
     }
 
+    // Exercise Activities::report itself: testing exec_of alone would not catch
+    // replacing its call in report with ExecId::default(). No git fixture needed.
+    #[temporalio_macros::workflow]
+    #[derive(Default)]
+    pub struct ReportIdentity;
+
+    #[temporalio_macros::workflow_methods]
+    impl ReportIdentity {
+        #[run]
+        pub async fn run(
+            ctx: &mut temporalio_sdk::WorkflowContext<Self>,
+            input: AttemptReport,
+        ) -> temporalio_sdk::WorkflowResult<()> {
+            ctx.execute_activity(
+                CardActivities::report,
+                input,
+                temporalio_sdk::ActivityOptions::start_to_close_timeout(Duration::from_secs(10)),
+            )
+            .await?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn report_carries_the_real_workflow_run_and_card_attempt() {
+        use temporalio_client::{
+            Client, ClientOptions, Connection, ConnectionOptions, Url, WorkflowFetchHistoryOptions,
+            WorkflowGetResultOptions, WorkflowStartOptions,
+        };
+        use temporalio_sdk::{Runtime, Worker, WorkerOptions};
+        let Ok(addr) = std::env::var("PG_TEMPORAL_ADDR") else {
+            return;
+        };
+        if addr.is_empty() {
+            return;
+        }
+        tokio::task::LocalSet::new().run_until(async move {
+            let runtime = Runtime::from_current_tokio(Default::default()).expect("runtime");
+            let conn = Connection::connect(ConnectionOptions::new(addr.parse::<Url>().unwrap()).build())
+                .await.unwrap();
+            let client = Client::new(conn, ClientOptions::new("default").build()).unwrap();
+            let id = format!("report-identity-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+            let keeper = Arc::new(StubKeeper::default());
+            let mut d = deps();
+            d.keeper = keeper.clone();
+            let opts = WorkerOptions::new(id.as_str())
+                .register_workflow::<ReportIdentity>().unwrap()
+                .register_activities(CardActivities::new(d)).build();
+            let mut worker = Worker::new(&runtime, client.clone(), opts).unwrap();
+            let polling = tokio::task::spawn_local(async move { worker.run().await });
+            let report = AttemptReport {
+                card: "identity-card".into(), n: 7, leg: "leg".into(),
+                exit_class: pg_worker_core::exit_class::ExitClass::Ok,
+                diff_hash: "hash".into(), check_tail: String::new(),
+            };
+            client.start_workflow(ReportIdentity::run, report.clone(),
+                WorkflowStartOptions::new(id.as_str(), id.as_str()).build()).await.unwrap();
+            let handle = client.get_workflow_handle::<ReportIdentity>(id.as_str());
+            tokio::time::timeout(Duration::from_secs(30),
+                handle.get_result(WorkflowGetResultOptions::default())).await.unwrap().unwrap();
+            let bytes = handle.fetch_history(WorkflowFetchHistoryOptions::default()).to_json().await.unwrap();
+            polling.abort();
+            let history: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let run_id = history["events"][0]["attributes"]["WorkflowExecutionStartedEventAttributes"]
+                ["first_execution_run_id"].as_str().expect("real server run id");
+            assert!(!run_id.is_empty());
+            assert_eq!(keeper.attempts(), vec![report]);
+            assert_eq!(keeper.attempt_execs(), vec![ExecId {
+                workflow_id: Some(id), run_id: Some(run_id.to_owned()),
+                attempt: Some(7), expected_state: None,
+            }]);
+        }).await;
+    }
+
     /// Defaults with the watchdogs shrunk so probes finish quickly.
     fn tiny() -> Config {
         Config {
@@ -1457,11 +1532,16 @@ mod tests {
         let any = park_json_with_attempt(
             &p,
             Some(4),
-            Some(vec!["running".into(), "needs_input".into()]),
+            Some(
+                crate::keeper::WORKER_LIVE_STATES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+            ),
         );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&any).unwrap()["expected_state"],
-            serde_json::json!(["running", "needs_input"])
+            serde_json::json!(["open", "ready", "running", "needs_input"])
         );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&tagged).unwrap()["expected_state"],

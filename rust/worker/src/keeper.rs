@@ -61,6 +61,10 @@ pub struct Alarm {
     pub attempt: Option<u32>,
 }
 
+/// Worker-run writes may precede state projection. The run/attempt fence rejects
+/// stale retries; this CAS preserves newer actor states and excludes agent leases.
+pub const WORKER_LIVE_STATES: &[&str] = &["open", "ready", "running", "needs_input"];
+
 /// Which execution a keeper call belongs to: the workflow, this run of it, and
 /// the card attempt number (monotone per run — deliberately *not* Temporal's
 /// `ActivityInfo::attempt`, which is the activity retry count and resets per
@@ -575,11 +579,27 @@ impl Keeper for StubKeeper {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn live_states_exclude_newer_actor_and_agent_lease_states() {
+        assert_eq!(
+            super::WORKER_LIVE_STATES,
+            &["open", "ready", "running", "needs_input"]
+        );
+        for state in ["waiting", "parked", "failed", "done", "claimed"] {
+            assert!(!super::WORKER_LIVE_STATES.contains(&state));
+        }
+    }
+
+    #[test]
     fn expected_state_is_optional_in_state_call_bodies() {
         for state in [
             None,
             Some(vec!["running".to_owned()]),
-            Some(vec!["running".to_owned(), "needs_input".to_owned()]),
+            Some(
+                super::WORKER_LIVE_STATES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+            ),
         ] {
             for verb in ["park", "complete", "ask_question"] {
                 let (base, server) = serve_once(
@@ -611,7 +631,7 @@ mod tests {
                     }
                     Some(_) => assert_eq!(
                         body["expected_state"],
-                        serde_json::json!(["running", "needs_input"])
+                        serde_json::json!(["open", "ready", "running", "needs_input"])
                     ),
                 }
             }
