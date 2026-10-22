@@ -4,7 +4,6 @@ plangraph:RT-P1-JEV-SHADOW
 plangraph:RT-P1-OPENCODE-HARDEN
 plangraph:RT-P1-EXEC-OWNERSHIP
 plangraph:KEEPER-BATCH-PRECONDITION
-plangraph:RT-P1-CI-GATE
 plangraph:RT-P1-WF-VERSIONING
 plangraph:OCGO-PROBE
 plangraph:OCGO-L1-FALLBACK
