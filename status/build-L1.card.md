@@ -32,7 +32,7 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 
 - oc-harden #95: writer 20261022-204611-...ec818f running on workst (no_change migration); then seats mimo + non-OpenAI 2nd family -> GO-REQ routing. Workst queue: card-checks writer next, then bus.
 - sandbox #100 fix: WA run 20261022-204430-...759ac4 (mimo, wt attempt-sandbox-wA) -> push lane/attempt-sandbox-wA; WB next (wt attempt-sandbox-wB, brief in transcript: git hardening attempt.rs + walk); WC = L2 on workst (sol). L2 cherry-picks + CI; I re-seat glm+deepseek.
-- KEEPER-OPCLAIM-CLOSE (HIGH): writer done 7cbec2f4 (control lane/keeper-opclaim-close); A breaks 5 existing tests -> BLOCKED to routing, options A1 fixtures*/B drop A/C flag.
+- KEEPER-OPCLAIM-CLOSE (HIGH): D-2298 A1. 7cbec2f4 + fixture writer run 20261022-212840-opclaim-fixtures-contrac-0c5caf. Seat prompt: say contract test change intended, no reasons. After merge: legacy B -> server:OP-DOCKHAND-EVENTS in_review.
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
