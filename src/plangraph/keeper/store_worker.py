@@ -222,7 +222,7 @@ class WorkerMixin:
             fenced = item["exec_run_id"] is not None or any(
                 body.get(name) is not None
                 for name in ("workflow_id", "run_id", "attempt"))
-            if fenced and not _forward(item["state"], "parked"):
+            if fenced and item["state"] != "claimed" and not _forward(item["state"], "parked"):
                 raise Refused("bad_transition",
                               f"{item['key']}: {item['state']} -> parked is not a forward move")
             self._exec_gate(item["key"], body, record=item["state"] != "parked")

@@ -90,6 +90,17 @@ def test_a_claimed_card_parked_by_its_holder_records_the_owner(doors, w):
     assert owner(w, key) == ("wf-1", "run-1", 1)
 
 
+def test_a_claimed_owned_card_refuses_park_by_a_stale_run(doors, w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    assert doors.http("workerA", "POST", "/v1/complete",
+                      complete(key, **RUN1)) == (204, "")
+    status, body = doors.http("workerA", "POST", "/v1/park", park(key, **RUN2))
+    assert (status, body["error"]) == (409, "exec_stale")
+    assert state(w, key) == "claimed"
+    assert owner(w, key) == ("wf-1", "run-1", 1)
+
+
 def test_park_with_a_different_run_is_refused_and_changes_nothing(doors, w):
     key, = seed(w, [("A", [])])
     assert doors.http("workerA", "POST", "/v1/park", park(key, **RUN1)) == (204, "")
