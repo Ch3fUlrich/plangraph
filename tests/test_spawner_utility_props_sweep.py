@@ -116,6 +116,7 @@ def test_risk_monotone_intelligence():
         catalogs.append(rows)
 
     risks = ["low", "normal", "high", "critical"]
+    resolved_bands = 0
     for idx, catalog in enumerate(catalogs):
         selected = {}
         for risk in risks:
@@ -133,6 +134,7 @@ def test_risk_monotone_intelligence():
                 continue
             cand = res.get("candidate", {})
             selected[risk] = float(cand.get("aa_intelligence", -1e9))
+            resolved_bands += 1
 
         prev = None
         prev_risk = None
@@ -161,6 +163,8 @@ def test_risk_monotone_intelligence():
                     f"catalog {idx}: critical selected intel "
                     f"{selected['critical']} < {min_intel}"
                 )
+
+    assert resolved_bands >= 4 * len(catalogs) // 2, f"too few resolved bands: {resolved_bands}"
 
 
 def test_reviewer_family_distinct_and_in_catalog():

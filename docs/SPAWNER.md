@@ -178,6 +178,7 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 - `need_tokens` must be a positive finite number (an int or integral float); bools, non-numeric values, NaN/inf, non-integral floats, and values <= 0 raise ValueError.
 - Unknown risk and unknown role values raise ValueError. The role `"drive"` is accepted and uses alpha 1.1 and trajectory factor 1.3.
 - For high and critical risk bands, a candidate below `I_min` fails closed. The only escape is `relax_floor=True` with a non-empty `relax_reason`; when applied, result keys `relaxed` and `relax_reason` are set. A blank reason is not accepted.
+- For low and normal risk bands a floor miss does not raise: the highest-intelligence candidates are kept and ranked, and `relaxed` stays false.
 - There is no hardcoded fallback model. If no candidate is eligible, both `resolve_review_plan` and `resolve_model_for_task` raise instead of returning a default.
 - Exclusions (family/author/gated/availability) are applied in every fallback path, including relaxed-floor paths.
 - The context gate requires `ctx >= need_tokens * trajectory_factor`; role trajectory factors are applied consistently.
