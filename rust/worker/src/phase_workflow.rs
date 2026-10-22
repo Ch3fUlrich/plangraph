@@ -42,6 +42,7 @@ impl Phase {
                     merged: Vec::new(),
                     not_merged: Vec::new(),
                     waves: 0,
+                    finish: None,
                 });
             }
         };
@@ -83,6 +84,7 @@ impl Phase {
                         merged: sorted_unique(merged),
                         not_merged: sorted_unique(not_merged),
                         waves,
+                        finish: None,
                     });
                 }
             } else {
@@ -144,6 +146,7 @@ impl Phase {
                         merged,
                         not_merged,
                         waves,
+                        finish: None,
                     });
                 }
             };
@@ -230,6 +233,84 @@ impl Phase {
             waves += 1;
         }
 
+        let mut finish = None;
+        if !merged.is_empty() && not_merged.is_empty() && last_blocked.is_empty() {
+            let branch_input = crate::activities::PhaseBranchInput {
+                repo: input.repo.clone(),
+                base_branch: input.base_branch.clone(),
+                branch: branch.clone(),
+            };
+            match ctx
+                .execute_activity(
+                    CardActivities::ensure_phase_branch,
+                    branch_input,
+                    activity_options(&cfg),
+                )
+                .await
+            {
+                Ok(head) => {
+                    let polls = input.finish_polls();
+                    for poll in 0..polls {
+                        match ctx
+                            .execute_activity(
+                                CardActivities::phase_finish,
+                                crate::activities::PhaseFinishInput {
+                                    key: input.key.clone(),
+                                    branch: branch.clone(),
+                                    head: head.head.clone(),
+                                },
+                                activity_options(&cfg),
+                            )
+                            .await
+                        {
+                            Ok(f) => match f.state.as_str() {
+                                crate::phase::FINISH_MERGED => {
+                                    finish = Some(f);
+                                    break;
+                                }
+                                crate::phase::FINISH_REFUSED => {
+                                    let detail = if f.detail.is_empty() {
+                                        "phase_finish refused".to_string()
+                                    } else {
+                                        f.detail.clone()
+                                    };
+                                    last_blocked = vec![detail];
+                                    finish = Some(f);
+                                    break;
+                                }
+                                crate::phase::FINISH_WAITING_CI => {
+                                    finish = Some(f);
+                                    if poll + 1 < polls {
+                                        let _ = ctx.timer(input.finish_poll()).await;
+                                    }
+                                }
+                                _ => {
+                                    last_blocked =
+                                        vec![format!("phase_finish: unknown state {}", f.state)];
+                                    finish = Some(f);
+                                    break;
+                                }
+                            },
+                            Err(err) => {
+                                last_blocked = vec![format!("phase_finish failed: {err}")];
+                                break;
+                            }
+                        }
+                    }
+                    if last_blocked.is_empty()
+                        && !finish
+                            .as_ref()
+                            .is_some_and(|f| f.state == crate::phase::FINISH_MERGED)
+                    {
+                        last_blocked = vec!["phase_finish: waiting for ci-gate".to_string()];
+                    }
+                }
+                Err(err) => {
+                    last_blocked = vec![format!("ensure_phase_branch failed: {err}")];
+                }
+            }
+        }
+
         let merged = sorted_unique(merged);
         let not_merged = sorted_unique(not_merged);
         let outcome = phase_outcome(&merged, &not_merged, &last_blocked);
@@ -242,6 +323,7 @@ impl Phase {
             merged,
             not_merged,
             waves,
+            finish,
         })
     }
 }
