@@ -848,3 +848,11 @@ def test_gate_file_suffix_copy_needs_gate_edit(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
     sha = _commit(repo, 'add bak\n\nWriter: mimo-v2.6-flash run-1\n', {'tools/ci_commit_gate.py.bak': 'x\n'})
     assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
+
+def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
+    _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', files={'src/plangraph/keeper/mcp.py': 'x\n'})
+    base = _head(repo)
+    (repo / 'docs').mkdir()
+    _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
+    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
+    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']

@@ -232,3 +232,28 @@ def test_control_char_in_message_does_not_hide_commit(repo: Path, monkeypatch: p
     assert main(['--base', base, '--head', head]) == 1
     captured = capsys.readouterr()
     assert 'WITHOUT Gate-Edit' in captured.err
+
+
+def test_gate_edit_missing_on_earlier_commit_refused(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    first = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || true')
+    first_sha = _commit(repo, 'a', {WORKFLOW_PATH: first})
+    second = first.replace('python3 tools/ci_select.py gate || true', 'python3 tools/ci_select.py gate || true -v')
+    second_sha = _commit(repo, 'b\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: second})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', second_sha]) == 1
+    captured = capsys.readouterr()
+    assert 'WITHOUT Gate-Edit' in captured.err
+    assert first_sha in captured.err
+
+def test_control_char_on_offending_commit_does_not_hide_it(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    first = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || false')
+    _commit(repo, 'a\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: first})
+    second = first.replace('python3 tools/ci_select.py gate || false', 'python3 tools/ci_select.py gate || false || exit 1')
+    second_sha = _commit(repo, 'b\x01c', {WORKFLOW_PATH: second})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', second_sha]) == 1
+    captured = capsys.readouterr()
+    assert 'WITHOUT Gate-Edit' in captured.err
+    assert second_sha in captured.err
