@@ -33,12 +33,14 @@ fn patterns() -> &'static [regex::Regex] {
             // 4a. Env-style assignments: keep the credential name, cut the
             //     value. Separator whitespace is horizontal Unicode whitespace
             //     only, never CR/LF, so it never crosses a newline. Complete
-            //     quoted values are preferred, the placeholder plus any glued
-            //     tail keeps the rule idempotent, and an unquoted value may not
-            //     start with `}`, `]`, `)`, or `&` after either separator. An
-            //     unterminated quote falls back to the rest of the line (no
-            //     closing delimiter semantics).
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\][^\n\r}\])&]*|[^\s"'}\])&][^\n\r}\])&]*|"[^\n\r]*|'[^\n\r]*)"#,
+            //     quoted values are preferred. Both they and the placeholder
+            //     consume only a GLUED tail G = [^\s,;"'}\])&]* — directly
+            //     attached, stopping at whitespace, comma, semicolon, quotes,
+            //     `&`, or a closing delimiter — so the rule is idempotent.
+            //     An unquoted value may not start with `}`, `]`, `)`, or `&`
+            //     after either separator. An unterminated quote falls back to
+            //     the rest of the line (no closing delimiter semantics).
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\.)*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\.)*'[^\s,;"'}\])&]*|\[REDACTED\][^\s,;"'}\])&]*|[^\s"'}\])&][^\n\r}\])&]*|"[^\n\r]*|'[^\n\r]*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` (not `&`, so
             //     `?K=&x=1` stays empty). Separator whitespace is horizontal
@@ -483,10 +485,11 @@ mod tests {
         // 4a: the placeholder alternative consumes the glued "x"; replacing
         // the whole match with one placeholder drops it.
         check(format!("{name}=[REDACTED]x"), format!("{name}={REDACTED}"));
-        // 4a: the same alternative consumes the glued " tail text".
+        // 4a: the placeholder alternative consumes only a glued tail; a
+        // whitespace-separated tail is left exactly as it is.
         check(
             format!("{name}=[REDACTED] tail text"),
-            format!("{name}={REDACTED}"),
+            format!("{name}=[REDACTED] tail text"),
         );
         // 4a/4b: [^\S\r\n]* puts the NBSP in group 3, so it is kept; group 4
         // matches "secret" and is replaced.
@@ -500,6 +503,35 @@ mod tests {
             format!("{name}=\n# rotate quarterly"),
             format!("{name}=\n# rotate quarterly"),
         );
+    }
+
+    #[test]
+    fn glued_tail_is_idempotent() {
+        let name = ["API_", "KEY"].concat();
+        let check = |input: String, expected: String| {
+            let once = redact(&input);
+            assert_eq!(once, expected, "{input}");
+            assert_eq!(redact(&once), once, "{once}");
+        };
+
+        check(
+            format!("{name}=\"hunter2\" --flag"),
+            format!("{name}={REDACTED} --flag"),
+        );
+        check(format!("{name}=\"a\"b"), format!("{name}={REDACTED}"));
+        check(format!("{name}=[REDACTED]x"), format!("{name}={REDACTED}"));
+        check(
+            format!("{name}=[REDACTED] tail text"),
+            format!("{name}={REDACTED} tail text"),
+        );
+        check(format!("{name}=\"a\",x"), format!("{name}={REDACTED},x"));
+
+        let json = format!("{{\"{name}\":\"v\",\"other\":1}}");
+        let once = redact(&json);
+        let expected = format!("{{\"{name}\":{REDACTED},\"other\":1}}");
+        assert_eq!(once, expected, "{json}");
+        assert!(once.contains("\"other\":1"), "{once}");
+        assert_eq!(redact(&once), once, "{once}");
     }
 
     #[test]
