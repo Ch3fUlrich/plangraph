@@ -17,7 +17,8 @@ standalone agent mode.
 - Agent mode: invoke `opencode run --standalone`. Without `--standalone`, the
   default agent delegates tools to a shared host service outside the jail.
 - Attach leg: refused by default. `PG_ALLOW_ATTACH` is the explicit opt-in;
-  leave it unset for normal attempts.
+  leave it unset for normal attempts. `PG_ALLOW_ATTACH` is a global switch, not
+  per-card: a worker started with `PG_ALLOW_ATTACH=1` serves attended cards only.
 
 ## Environment knobs
 
