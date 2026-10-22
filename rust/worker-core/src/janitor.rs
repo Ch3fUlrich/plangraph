@@ -57,11 +57,35 @@ fn attempt_branches(repo: &Path) -> Result<Vec<(AttemptId, String)>, GitError> {
 /// kept and reported, never removed blindly. Branches without a worktree are
 /// classified by commit count only (no check can run there).
 pub fn sweep(repo: &Path, live: &HashSet<AttemptId>, spec: &ProbeSpec) -> Result<Report, GitError> {
+    sweep_where(repo, live, spec, None)
+}
+
+/// Probe and remove every attempt of `card` not in `live`; other cards' attempts are untouched.
+pub fn sweep_card(
+    repo: &Path,
+    card: &str,
+    live: &HashSet<AttemptId>,
+    spec: &ProbeSpec,
+) -> Result<Report, GitError> {
+    sweep_where(repo, live, spec, Some(card))
+}
+
+fn sweep_where(
+    repo: &Path,
+    live: &HashSet<AttemptId>,
+    spec: &ProbeSpec,
+    only: Option<&str>,
+) -> Result<Report, GitError> {
     let worktrees = list(repo)?;
     let mut report = Report::default();
     for (id, head) in attempt_branches(repo)? {
         if live.contains(&id) {
             continue;
+        }
+        if let Some(card) = only {
+            if !id.is_card(card) {
+                continue;
+            }
         }
         let base = (spec.base_for)(&id);
         let wt = worktrees.iter().find(|w| w.id == id);
@@ -264,5 +288,35 @@ mod tests {
         assert_eq!(rep.failed.len(), 2);
         assert!(w.path.exists());
         assert_eq!(branches(r.path()).len(), 3, "main + both attempt branches");
+    }
+
+    #[test]
+    fn sweep_card_leaves_other_cards_attempts() {
+        let (r, base) = crate::testutil::repo();
+        let p = r.path();
+        let root = tempfile::tempdir().unwrap();
+        let a = crate::worktree::AttemptId::new("a", 1);
+        let b = crate::worktree::AttemptId::new("b", 1);
+        let aw = crate::worktree::create(p, &base, &root.path().join(a.dir_name()), &a).unwrap();
+        let bw = crate::worktree::create(p, &base, &root.path().join(b.dir_name()), &b).unwrap();
+        let spec = crate::janitor::ProbeSpec {
+            check_cmd: "test -f nothere.txt",
+            base_for: &|_| base.clone(),
+            timeout: std::time::Duration::from_secs(10),
+            tail_lines: 10,
+        };
+
+        let report =
+            crate::janitor::sweep_card(p, "a", &std::collections::HashSet::new(), &spec).unwrap();
+
+        assert_eq!(report.removed.len(), 1);
+        assert!(!aw.path.exists());
+        assert!(bw.path.exists());
+        assert!(!crate::janitor::git(p, &["branch", "--list", &a.branch()])
+            .unwrap()
+            .contains(&a.branch()));
+        assert!(crate::janitor::git(p, &["branch", "--list", &b.branch()])
+            .unwrap()
+            .contains(&b.branch()));
     }
 }

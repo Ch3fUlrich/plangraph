@@ -6,7 +6,8 @@
 //!
 //! | Method | Path           | Request body             | Success response   |
 //! |--------|----------------|--------------------------|--------------------|
-//! | POST   | `/v1/claim`    | `{"worker": ..}`         | 200 `Claim` \| 204 |
+//! | POST   | `/v1/claim`    | `{"worker": ..,"card"?: ..}` | 200 `Claim` \| 204 |
+//! | POST   | `/v1/phase_plan` | `{"key"}`              | 200 `PhasePlan`    |
 //! | POST   | `/v1/attempts` | `AttemptReport`          | 204                |
 //! | POST   | `/v1/park`     | `ParkPacket`             | 204                |
 //! | POST   | `/v1/complete` | `{"card", "merged_sha"}` | 204                |
@@ -80,6 +81,10 @@ pub enum KeeperError {
 /// the real service and by [`StubKeeper`] in tests.
 pub trait Keeper: Send + Sync {
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError>;
+    /// Claim one named card for the phase runner; `None` means the keeper has nothing for it (not ready / taken).
+    fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError>;
+    /// Read-only plan of phase `key`; the keeper never writes for it.
+    fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError>;
     fn report_attempt(&self, r: &AttemptReport) -> Result<(), KeeperError>;
     fn park(&self, p: &ParkPacket) -> Result<(), KeeperError>;
     fn complete(&self, card: &str, merged_sha: &str) -> Result<(), KeeperError>;
@@ -122,6 +127,24 @@ pub struct HttpKeeper {
 }
 
 impl HttpKeeper {
+    fn claim_with(&self, payload: serde_json::Value) -> Result<Option<Claim>, KeeperError> {
+        let url = self.url("/v1/claim");
+        match self.post(&url).send_json(payload) {
+            Ok(resp) => match resp.status() {
+                200 => {
+                    let claim: Claim = resp
+                        .into_json()
+                        .map_err(|e| KeeperError::Decode(e.to_string()))?;
+                    Ok(Some(claim))
+                }
+                204 => Ok(None),
+                code => Err(KeeperError::Status(code)),
+            },
+            Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
+            Err(e) => Err(KeeperError::Http(e.to_string())),
+        }
+    }
+
     /// `base_url` may carry a trailing slash; it is stripped so paths can be
     /// appended verbatim.
     pub fn new(base_url: &str) -> Self {
@@ -186,24 +209,23 @@ impl HttpKeeper {
 }
 
 impl Keeper for HttpKeeper {
-    fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError> {
-        let url = self.url("/v1/claim");
-        let payload = serde_json::json!({ "worker": worker });
-        match self.post(&url).send_json(payload) {
-            Ok(resp) => match resp.status() {
-                200 => {
-                    let claim: Claim = resp
-                        .into_json()
-                        .map_err(|e| KeeperError::Decode(e.to_string()))?;
-                    Ok(Some(claim))
-                }
-                // No work available right now.
-                204 => Ok(None),
-                code => Err(KeeperError::Status(code)),
-            },
-            Err(ureq::Error::Status(code, _)) => Err(KeeperError::Status(code)),
-            Err(e) => Err(KeeperError::Http(e.to_string())),
+    fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
+        self.claim_with(serde_json::json!({ "worker": worker, "card": card }))
+    }
+
+    fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError> {
+        let value = self.post_json("/v1/phase_plan", &serde_json::json!({ "key": key }))?;
+        if !value.is_object() {
+            return Err(KeeperError::Decode(
+                "phase_plan reply is not an object".into(),
+            ));
         }
+        serde_json::from_value::<crate::phase::PhasePlan>(value)
+            .map_err(|e| KeeperError::Decode(e.to_string()))
+    }
+
+    fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError> {
+        self.claim_with(serde_json::json!({ "worker": worker }))
     }
 
     fn report_attempt(&self, r: &AttemptReport) -> Result<(), KeeperError> {
@@ -281,6 +303,10 @@ pub struct StubKeeper {
 
 #[derive(Default)]
 struct StubState {
+    card_claims: Vec<Claim>,
+    plans: Vec<crate::phase::PhasePlan>,
+    plan_calls: Vec<String>,
+    claim_card_calls: Vec<(String, String)>,
     queue: Vec<Claim>,
     attempts: Vec<AttemptReport>,
     parked: Vec<ParkPacket>,
@@ -309,6 +335,22 @@ struct StubState {
 }
 
 impl StubKeeper {
+    pub fn push_card_claim(&self, c: Claim) {
+        self.lock().card_claims.push(c);
+    }
+
+    pub fn push_plan(&self, p: crate::phase::PhasePlan) {
+        self.lock().plans.push(p);
+    }
+
+    pub fn plan_calls(&self) -> Vec<String> {
+        self.lock().plan_calls.clone()
+    }
+
+    pub fn claim_card_calls(&self) -> Vec<(String, String)> {
+        self.lock().claim_card_calls.clone()
+    }
+
     /// Make every `acquire_merge_lock` fail, as an unreachable keeper would.
     pub fn set_lock_unavailable(&self, down: bool) {
         self.lock().lock_unavailable = down;
@@ -395,6 +437,31 @@ impl StubKeeper {
 }
 
 impl Keeper for StubKeeper {
+    fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
+        let mut state = self.lock();
+        state
+            .claim_card_calls
+            .push((worker.to_string(), card.to_string()));
+        let pos = state.card_claims.iter().position(|c| c.card == card);
+        match pos {
+            Some(i) => Ok(Some(state.card_claims.remove(i))),
+            None => Ok(None),
+        }
+    }
+
+    fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError> {
+        let mut state = self.lock();
+        state.plan_calls.push(key.to_string());
+        if state.plans.is_empty() {
+            return Err(KeeperError::Status(404));
+        }
+        if state.plans.len() == 1 {
+            Ok(state.plans[0].clone())
+        } else {
+            Ok(state.plans.remove(0))
+        }
+    }
+
     fn claim_next(&self, _worker: &str) -> Result<Option<Claim>, KeeperError> {
         let mut state = self.lock();
         if state.queue.is_empty() {
@@ -681,6 +748,189 @@ mod tests {
             .unwrap();
         let captured = server.join().expect("server thread");
         assert!(!captured.head.to_lowercase().contains("authorization"));
+    }
+
+    #[test]
+    fn http_claim_card_posts_worker_and_card() {
+        let body = serde_json::to_string(&claim()).unwrap();
+        let (base, handle) = serve_once(200, "OK", &body);
+        let keeper = HttpKeeper::new(&base);
+
+        let got = keeper.claim_card("w-1", "c-9").expect("claim_card");
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/claim");
+        let sent: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+        assert_eq!(sent, serde_json::json!({"worker": "w-1", "card": "c-9"}));
+        assert_eq!(got, Some(claim()));
+    }
+
+    #[test]
+    fn http_claim_card_204_is_none() {
+        let (base, handle) = serve_once(204, "No Content", "");
+        let keeper = HttpKeeper::new(&base);
+
+        let got = keeper.claim_card("w-1", "c-9").expect("claim_card");
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/claim");
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn http_phase_plan_posts_key_and_parses() {
+        let body = r#"{
+            "phase": "demo:PH-X",
+            "ready": true,
+            "cards": [{
+                "key": "A",
+                "write_set": ["src/a.rs"],
+                "route": {
+                    "window_class": "128k",
+                    "harness": "opencode",
+                    "legs": ["l1"]
+                },
+                "extra": 1
+            }]
+        }"#;
+        let (base, handle) = serve_once(200, "OK", body);
+        let keeper = HttpKeeper::new(&base);
+
+        let plan = keeper.phase_plan("demo:PH-X").expect("phase_plan");
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/phase_plan");
+        let sent: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+        assert_eq!(sent, serde_json::json!({"key": "demo:PH-X"}));
+
+        let plan = serde_json::to_value(&plan).unwrap();
+        assert_eq!(plan["phase"], serde_json::json!("demo:PH-X"));
+        assert_eq!(plan["ready"], serde_json::json!(true));
+        assert_eq!(plan["cards"][0]["key"], serde_json::json!("A"));
+        assert_eq!(
+            plan["cards"][0]["write_set"],
+            serde_json::json!(["src/a.rs"])
+        );
+        assert_eq!(plan["cards"][0]["route"]["legs"], serde_json::json!(["l1"]));
+    }
+
+    #[test]
+    fn http_phase_plan_bad_body_is_decode_error() {
+        let (base, handle) = serve_once(200, "OK", "[]");
+        let keeper = HttpKeeper::new(&base);
+
+        let err = keeper.phase_plan("demo:PH-X").unwrap_err();
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/phase_plan");
+        assert!(matches!(err, KeeperError::Decode(_)));
+    }
+
+    #[test]
+    fn http_phase_plan_403_is_status() {
+        let (base, handle) = serve_once(403, "Forbidden", "");
+        let keeper = HttpKeeper::new(&base);
+
+        let err = keeper.phase_plan("demo:PH-X").unwrap_err();
+        let captured = handle.join().expect("server thread");
+
+        assert_eq!(captured.method, "POST");
+        assert_eq!(captured.path, "/v1/phase_plan");
+        assert!(matches!(err, KeeperError::Status(403)));
+    }
+
+    #[test]
+    fn stub_card_claims_and_plans() {
+        let keeper = StubKeeper::default();
+
+        let mut one = claim();
+        one.card = "c-1".to_string();
+        let mut two = claim();
+        two.card = "c-2".to_string();
+        let mut one_again = claim();
+        one_again.card = "c-1".to_string();
+
+        keeper.push_card_claim(one);
+        keeper.push_card_claim(two);
+        keeper.push_card_claim(one_again);
+
+        let mut expected_two = claim();
+        expected_two.card = "c-2".to_string();
+        assert_eq!(
+            keeper.claim_card("w-1", "c-2").expect("claim_card"),
+            Some(expected_two)
+        );
+        assert!(
+            keeper
+                .claim_card("w-1", "missing")
+                .expect("claim_card")
+                .is_none()
+        );
+
+        let mut expected_one = claim();
+        expected_one.card = "c-1".to_string();
+        assert_eq!(
+            keeper.claim_card("w-1", "c-1").expect("claim_card"),
+            Some(expected_one)
+        );
+
+        let mut expected_one_again = claim();
+        expected_one_again.card = "c-1".to_string();
+        assert_eq!(
+            keeper.claim_card("w-1", "c-1").expect("claim_card"),
+            Some(expected_one_again)
+        );
+        assert!(
+            keeper
+                .claim_card("w-1", "c-1")
+                .expect("claim_card")
+                .is_none()
+        );
+
+        assert_eq!(
+            keeper.claim_card_calls(),
+            vec![
+                ("w-1".to_string(), "c-2".to_string()),
+                ("w-1".to_string(), "missing".to_string()),
+                ("w-1".to_string(), "c-1".to_string()),
+                ("w-1".to_string(), "c-1".to_string()),
+                ("w-1".to_string(), "c-1".to_string()),
+            ]
+        );
+
+        assert!(matches!(
+            keeper.phase_plan("demo:PH-X"),
+            Err(KeeperError::Status(404))
+        ));
+
+        let p1: crate::phase::PhasePlan = serde_json::from_str(
+            r#"{"phase":"demo:PH-1","ready":true,"cards":[],"route":{"legs":[]}}"#,
+        )
+        .unwrap();
+        let p2: crate::phase::PhasePlan = serde_json::from_str(
+            r#"{"phase":"demo:PH-2","ready":false,"cards":[],"route":{"legs":[]}}"#,
+        )
+        .unwrap();
+        keeper.push_plan(p1.clone());
+        keeper.push_plan(p2.clone());
+
+        assert_eq!(keeper.phase_plan("demo:PH-1").unwrap(), p1);
+        assert_eq!(keeper.phase_plan("demo:PH-2").unwrap(), p2);
+        assert_eq!(keeper.phase_plan("demo:PH-2").unwrap(), p2);
+
+        assert_eq!(
+            keeper.plan_calls(),
+            vec![
+                "demo:PH-X".to_string(),
+                "demo:PH-1".to_string(),
+                "demo:PH-2".to_string(),
+                "demo:PH-2".to_string(),
+            ]
+        );
     }
 
     #[test]
