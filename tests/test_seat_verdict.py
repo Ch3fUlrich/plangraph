@@ -82,16 +82,54 @@ def run(tmp_path, name, review, writer=None, extra=(), **ev):
     sub = tmp_path / name
     sub.mkdir()
     argv = seat(sub, review, **ev)
-    if writer:
+    if writer is not None:
         argv[argv.index("--writer-family") + 1] = writer
     return sv.main(argv + list(extra))
 
 
 def test_refusals(tmp_path, capsys):
-    assert run(tmp_path, "a", "VERDICT: PASS", served_model="claude-opus") == 2
+    assert run(tmp_path, "a", "VERDICT: PASS", served_model="claude-opus",
+               extra=("--dry-run",)) == 0
+    capsys.readouterr()
     assert run(tmp_path, "b", "VERDICT: PASS", served_model="mystery") == 2
     assert run(tmp_path, "c", "VERDICT: PASS", writer="openai") == 2
+    assert run(tmp_path, "d", "VERDICT: PASS", served_model="claude-opus",
+               writer="anthropic") == 2
+    assert run(tmp_path, "e", "VERDICT: PASS", served_model="claude-opus",
+               writer="mystery-x") == 2
     assert capsys.readouterr().out == ""
+
+
+def test_claude_seat_writer_gate(tmp_path):
+    assert run(tmp_path, "a", "VERDICT: PASS", served_model="claude-opus",
+               writer="xiaomi", extra=("--dry-run",)) == 0
+    assert run(tmp_path, "b", "VERDICT: PASS", served_model="claude-opus",
+               writer="anthropic") == 2
+    assert run(tmp_path, "c", "VERDICT: PASS", served_model="claude-opus",
+               writer="xiaomi,anthropic") == 2
+    assert run(tmp_path, "d", "VERDICT: PASS", served_model="claude-opus",
+               writer="unknownfam") == 2
+    assert run(tmp_path, "e", "VERDICT: PASS", served_model="claude-opus",
+               writer="") == 2
+
+
+def test_writer_coverage_gate(tmp_path, capsys):
+    assert run(tmp_path, "a", "VERDICT: PASS", writer="openai") == 2
+    assert run(tmp_path, "b", "VERDICT: PASS", writer="openai,xiaomi",
+               extra=("--dry-run",)) == 0
+    assert "covers: xiaomi" in capsys.readouterr().out
+
+
+def test_coverage():
+    assert sv.coverage(["xiaomi"], ["anthropic", "anthropic"], need=2) == ["xiaomi"]
+    assert sv.coverage(["xiaomi"], ["anthropic", "alibaba"], need=2) == []
+    assert sv.coverage(["xiaomi"], ["anthropic", "anthropic", "alibaba"],
+                       need=2) == []
+    assert sv.coverage(["xiaomi"], ["anthropic", "anthropic"], need=1,
+                       sensitive=True) == ["xiaomi"]
+    assert sv.coverage(["xiaomi", "alibaba"], ["alibaba", "google"],
+                       need=2) == ["alibaba"]
+    assert sv.coverage(["xiaomi"], ["anthropic"], need=1, sensitive=False) == []
 
 
 def test_new_families_not_refused(tmp_path):
@@ -102,7 +140,8 @@ def test_new_families_not_refused(tmp_path):
                served_model="nvidia/nemotron-3-ultra-550b-a55b:free",
                extra=("--dry-run",)) == 0
     assert run(tmp_path, "o", "VERDICT: PASS",
-               served_model="claude-opus", extra=("--dry-run",)) == 2
+               served_model="claude-opus", writer="anthropic",
+               extra=("--dry-run",)) == 2
 
 
 def test_multi_family_refused_before_send(tmp_path, capsys):

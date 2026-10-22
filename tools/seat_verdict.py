@@ -10,9 +10,12 @@ verdict strictly, checks the reviewing model's family, and POSTs
 The JSON ``ok`` is always a real boolean: the keeper coerces it with ``bool()``,
 so a string such as ``"false"`` would be read as true.
 
-Exit codes: 0 sent (2xx), 1 I/O or keeper error, 2 refused (unknown, writer or
-anthropic family; a model id matching several families is unknown), 3 no
-parseable verdict, 4 pass refused.  A PASS is sent only when finish_reason is
+Exit codes: 0 sent (2xx), 1 I/O or keeper error, 2 refused (unknown model
+family, empty writer-family list, a Claude seat over a writer list that is
+unknown or contains anthropic, or a seat whose family covers no listed writer),
+3 no parseable verdict, 4 pass refused.  A Claude (anthropic) seat is accepted
+only over a known non-anthropic writer list.  coverage() computes which writer
+families the recorded seats cover.  A PASS is sent only when finish_reason is
 "stop" AND test_gaming is "no" (case-insensitive); missing, "unsure", "yes" or
 anything else refuses it.  fix/halt verdicts are sent regardless of test_gaming.  The token is read at send time and never printed.
 """
@@ -39,6 +42,7 @@ FAMILIES = (
     (r"glm|zhipu", "zhipu"),
     (r"nemotron", "nvidia"),
 )
+KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
 PASS_WORDS = frozenset({"pass", "approve"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
@@ -88,11 +92,40 @@ def verdict_payload(key, ok, reason):
     return {"key": str(key), "ok": ok, "reason": str(reason)}
 
 
-def build_reason(evidence, ok, text, idx):
+def build_reason(evidence, ok, text, idx, covers=None):
     head = (f"seat {evidence.get('served_model') or evidence.get('requested_model')}"
             f" PASS corr {evidence.get('correlation_id')}"
             f" prompt {str(evidence.get('prompt_sha256') or '')[:12]}")
-    return head if ok else f"{head}\n{findings(text, idx)}".rstrip()
+    reason = head if ok else f"{head}\n{findings(text, idx)}".rstrip()
+    if covers is not None:
+        reason = f"{reason}\ncovers: {', '.join(covers)}"
+    return reason
+
+
+def coverage(writers, seats, need=2, sensitive=False):
+    """Return sorted writer families not covered by the recorded seats.
+
+    All anthropic seats count as one family.  A writer is covered when at least
+    ``need`` distinct other seat families exist; with ``sensitive`` there must
+    also be a non-anthropic seat family different from the writer.
+    """
+    writer_set = sorted({str(w).strip().lower() for w in writers if str(w).strip()})
+    seat_families = {str(seat).strip().lower() for seat in seats if str(seat).strip()}
+    uncovered = []
+    for writer in writer_set:
+        others = {family for family in seat_families if family != writer}
+        covered = len(others) >= need
+        if covered and sensitive:
+            covered = any(family != "anthropic" and family != writer
+                          for family in seat_families)
+        if not covered:
+            uncovered.append(writer)
+    return sorted(uncovered)
+
+
+def parse_writer_families(value):
+    """Parse comma-separated writer families, ignoring empty entries."""
+    return [part.strip().lower() for part in str(value or "").split(",") if part.strip()]
 
 
 def send(url, token, payload):
@@ -126,11 +159,25 @@ def main(argv=None):
     if not isinstance(evidence, dict):
         print("seat_verdict: evidence.json is not an object", file=sys.stderr)
         return EXIT_IO
+    writer_families = parse_writer_families(args.writer_family)
+    if not writer_families:
+        print("seat_verdict: refused, writer family list is empty", file=sys.stderr)
+        return EXIT_REFUSED
     model = evidence.get("served_model") or evidence.get("requested_model")
     family = model_family(model)
-    if family is None or family == "anthropic" or family == args.writer_family.lower():
+    if family is None:
         print(f"seat_verdict: refused, family {family!r} of model {model!r} "
-              f"is unknown, anthropic or the writer's", file=sys.stderr)
+              f"is unknown", file=sys.stderr)
+        return EXIT_REFUSED
+    if family == "anthropic":
+        if ("anthropic" in writer_families
+                or any(writer not in KNOWN_FAMILIES for writer in writer_families)):
+            print(f"seat_verdict: refused, anthropic seat over writer families "
+                  f"{writer_families!r}", file=sys.stderr)
+            return EXIT_REFUSED
+    elif all(writer == family for writer in writer_families):
+        print(f"seat_verdict: refused, family {family!r} of model {model!r} "
+              f"covers no listed writer", file=sys.stderr)
         return EXIT_REFUSED
     ok, idx = parse_verdict(text)
     if ok is None:
@@ -142,7 +189,9 @@ def main(argv=None):
         print("seat_verdict: pass refused (finish_reason not stop or test_gaming not no)",
               file=sys.stderr)
         return EXIT_PASS_REFUSED
-    payload = verdict_payload(args.key, ok, build_reason(evidence, ok, text, idx))
+    covers = sorted({writer for writer in writer_families if writer != family})
+    payload = verdict_payload(args.key, ok,
+                              build_reason(evidence, ok, text, idx, covers))
     if args.dry_run:
         print(json.dumps({"url": (args.url or "").rstrip("/") + ROUTE, "family": family,
                           "headers": {"Authorization": "Bearer <redacted>"},
