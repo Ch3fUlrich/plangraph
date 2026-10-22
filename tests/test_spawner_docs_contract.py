@@ -79,3 +79,26 @@ def test_sweep_is_not_vacuous():
                 saw_flip = True
 
     assert saw_flip, "sensitivity sweep never flipped; vacuous sweep"
+
+
+def test_fail_closed_sweep_exercised() -> None:
+    data = json.loads(
+        (ROOT / "docs" / "spawner-sensitivity.json").read_text(encoding="utf-8")
+    )
+    fail_closed = data["fail_closed"]
+    catalogs = data["catalogs"]
+    for risk in RISKS:
+        for role in ROLES:
+            key = f"{risk}/{role}"
+            entry = fail_closed[key]
+            assert entry["resolved"] + entry["unresolved"] == catalogs
+    # The floor binds rarely on the random catalogs (intel 38..60): only critical shows it.
+    assert fail_closed["critical/implement"]["unresolved"] > 0
+    for risk in ("low", "normal"):
+        entry = fail_closed[f"{risk}/implement"]
+        assert entry["unresolved"] <= entry["resolved"]
+    assert any(
+        fail_closed[f"{risk}/{role}"]["resolved"] > 0
+        for risk in RISKS
+        for role in ROLES
+    )

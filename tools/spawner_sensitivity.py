@@ -67,6 +67,25 @@ def _resolve_id(role: str, risk: str, rows: list[dict[str, Any]]) -> str | None:
             return value
     return None
 
+def _resolve_id_fail_closed(
+    role: str, risk: str, rows: list[dict[str, Any]]
+) -> str | None:
+    try:
+        picked = resolve_model_for_task(
+            role=role,
+            risk=risk,
+            combo_name="l2-worker",
+            db=FakeDB(rows),
+            relax_floor=False,
+        )
+    except ValueError:
+        return None
+    if isinstance(picked, dict):
+        value = picked.get("model")
+        if isinstance(value, str):
+            return value
+    return None
+
 def _resolve_catalog(rows: list[dict[str, Any]]) -> dict[tuple[str, str], str | None]:
     return {
         (risk, role): _resolve_id(role, risk, rows)
@@ -101,10 +120,27 @@ def run(catalogs: int) -> dict[str, Any]:
         }
         for pert in PERTURBATIONS
     }
+    fail_closed: dict[str, dict[str, int]] = {
+        f"{risk}/{role}": {"resolved": 0, "unresolved": 0}
+        for risk in RISKS
+        for role in ROLES
+    }
 
     for catalog_idx in range(catalogs):
         rows = _make_catalog(rng, catalog_idx)
         baseline = _resolve_catalog(rows)
+        baseline_fail_closed = {
+            (risk, role): _resolve_id_fail_closed(role, risk, rows)
+            for risk in RISKS
+            for role in ROLES
+        }
+        for risk in RISKS:
+            for role in ROLES:
+                key = f"{risk}/{role}"
+                if baseline_fail_closed[(risk, role)] is None:
+                    fail_closed[key]["unresolved"] += 1
+                else:
+                    fail_closed[key]["resolved"] += 1
 
         for pert in PERTURBATIONS:
             perturbed_rows = _perturb_rows(rows, pert, rng)
@@ -153,6 +189,7 @@ def run(catalogs: int) -> dict[str, Any]:
         "seed": SEED,
         "catalogs": catalogs,
         "perturbations": perturbations,
+        "fail_closed": fail_closed,
         "summary": summary,
     }
 
