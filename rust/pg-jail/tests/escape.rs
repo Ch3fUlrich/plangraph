@@ -63,7 +63,7 @@ fn systemd_scope_ok() -> bool {
             "--",
             "sh",
             "-c",
-            r#"path=$(sed -n 's/^0:://p' /proc/self/cgroup)
+            r#"path=$(awk -F: '$1 == 0 { print $3 }' /proc/self/cgroup)
 test -n "$path" || { echo 'no unified cgroup path' >&2; exit 1; }
 limit="/sys/fs/cgroup$path/memory.max"
 value=$(cat "$limit") || exit 1

@@ -1240,7 +1240,7 @@ mod tests {
             dir.path().to_path_buf(),
         ] {
             for required in [false, true] {
-                let lookup = |k| (k == JAIL_BIN_ENV).then(|| path.to_string_lossy().into_owned());
+                let lookup = |k: &str| (k == JAIL_BIN_ENV).then(|| path.to_string_lossy().into_owned());
                 let result = if required {
                     JailConfig::required_from_lookup(lookup)
                 } else {
