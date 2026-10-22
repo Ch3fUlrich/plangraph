@@ -1,10 +1,11 @@
 """Planner half of the Phase runner (S1): plan a gate's cards for ``phase_plan``.
 
-Pure planning: reads the phase gate by key, its card edges and the cards; routes
-and gates every card; reports intra-plan write-set overlaps and startability.
-It never writes to the store.  The only possible write is the shadow audit row,
-which :func:`plangraph.planner.shadow.route_with_shadow` no-ops when the hook is
-off.
+Reads the phase gate by key, its card edges and the cards; routes and gates
+every card; reports intra-plan write-set overlaps and startability.
+``plan_phase`` performs no store write; the only side effect is the shadow audit
+row when the shadow hook is enabled by the environment (a file append, via
+:func:`plangraph.planner.shadow.route_with_shadow`); the keeper's own ``_run``
+audit of the call is the store's normal read audit.
 """
 from __future__ import annotations
 
@@ -27,8 +28,6 @@ PHASE_LEGS: tuple[Leg, ...] = tuple(
 
 #: States in which a card may be planned / gated.
 _GATEABLE_STATES = ("open", "needs_input", "ready")
-#: States that make a card "busy" (not planned, reported in ``busy``).
-_BUSY_STATES = ("running", "parked", "in_review", "claimed")
 #: States that close the phase gate itself.
 _TERMINAL_STATES = ("done", "cancelled")
 
@@ -66,7 +65,13 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
                answerer: shadow.Answerer | None = None,
                unavailable: Collection[str] = (),
                initiator: str = "agent") -> dict:
-    """Plan the cards of the phase gate ``key`` (writes nothing to the store)."""
+    """Plan the cards of the phase gate ``key``.
+
+    ``plan_phase`` performs no store write.  The only side effect is the shadow
+    audit row when the shadow hook is enabled by the environment (a file append,
+    via :func:`plangraph.planner.shadow.route_with_shadow`); the keeper's own
+    ``_run`` audit of the call is the store's normal read audit.
+    """
     # Role first, before reading anything at all.
     role = getattr(principal, "role", None)
     if role not in ("router", "system"):
@@ -96,22 +101,27 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     busy: list[dict] = []
 
     for dst in dsts:
+        item = store.conn.execute(
+            "SELECT state FROM items WHERE key = ?", (dst,)).fetchone()
+        if item is None:
+            skipped.append({"key": dst, "why": "missing_item"})
+            continue
+
+        card_state = item[0]
+        if card_state == "done":
+            skipped.append({"key": dst, "why": "already_done"})
+            continue
+        if card_state == "cancelled":
+            skipped.append({"key": dst, "why": "cancelled"})
+            continue
+        if card_state not in _GATEABLE_STATES:
+            busy.append({"key": dst, "state": card_state})
+            continue
+
         card_row = store.conn.execute(
             "SELECT 1 FROM cards WHERE key = ?", (dst,)).fetchone()
         if card_row is None:
             skipped.append({"key": dst, "why": "missing_card"})
-            continue
-
-        item = store.conn.execute(
-            "SELECT state FROM items WHERE key = ?", (dst,)).fetchone()
-        card_state = item[0] if item is not None else None
-        if card_state == "done":
-            skipped.append({"key": dst, "why": "already_done"})
-            continue
-        if card_state in _BUSY_STATES:
-            busy.append({"key": dst, "state": card_state})
-            continue
-        if card_state not in _GATEABLE_STATES:
             continue
 
         card = store.get_card(principal, dst)

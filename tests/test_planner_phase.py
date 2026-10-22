@@ -5,6 +5,7 @@ repo trees live under ``tmp_path`` and nothing is executed for real.
 """
 import pytest
 
+from door_util import Doors
 from keeper_util import World, defn
 from plangraph.governor import policy
 from plangraph.keeper.api import KeeperHandler
@@ -18,6 +19,14 @@ def w(tmp_path):
     world = World(tmp_path / "keeper")
     yield world
     world.close()
+
+@pytest.fixture
+def doors(w, tmp_path):
+    live = Doors(w, tmp_path)
+    try:
+        yield live
+    finally:
+        live.close()
 
 @pytest.fixture
 def repo(tmp_path):
@@ -127,6 +136,36 @@ def test_done_and_busy_dsts_not_planned(w, repo):
     assert plan["cards"] == []
     assert plan["ready"] is False
 
+def test_unclassified_and_done_dsts_are_reported_once(w, repo):
+    w.store.create_items(w.p("router"), [
+        defn("C1"), defn("C2"), defn("C3"), defn("C4"), defn("C5"),
+        defn("PH-X", ["C1", "C2", "C3", "C4", "C5"], kind="gate"),
+        defn("GOAL", ["PH-X"], kind="goal"),
+    ])
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
+    w.store.set_state(w.p("router"), "demo:C2", "running")
+    w.conn.execute("UPDATE items SET state = ? WHERE key = ?",
+                   ("done", "demo:C3"))
+    w.conn.execute("UPDATE items SET state = ? WHERE key = ?",
+                   ("blocked", "demo:C5"))
+    w.conn.commit()
+
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+
+    assert {c["key"] for c in plan["cards"]} == {"demo:C1"}
+    assert {b["key"]: b["state"] for b in plan["busy"]} == {
+        "demo:C2": "running", "demo:C5": "blocked"}
+    assert {"key": "demo:C3", "why": "already_done"} in plan["skipped"]
+    assert {"key": "demo:C4", "why": "missing_card"} in plan["skipped"]
+
+    dsts = {r[0] for r in w.conn.execute(
+        "SELECT dst FROM edges WHERE src = ?", ("demo:PH-X",)).fetchall()}
+    seen = ([c["key"] for c in plan["cards"]]
+            + [s["key"] for s in plan["skipped"]]
+            + [b["key"] for b in plan["busy"]])
+    assert len(seen) == len(set(seen))
+    assert set(seen) == dsts
+
 def test_guards(w, repo):
     w.store.create_items(w.p("router"), [defn("C1"), defn("L1"),
         defn("PH-X", ["C1"], kind="gate"),
@@ -148,6 +187,13 @@ def test_guards(w, repo):
 
     plan = phase.plan_phase(w.store, w.p("system"), "demo:PH-X", repo_root=repo)
     assert plan["phase"] == "demo:PH-X"
+
+def test_reader_and_l1_forbidden(w, repo):
+    make_phase(w)
+    for who in ("reader", "l1main"):
+        with pytest.raises(Refused) as exc:
+            phase.plan_phase(w.store, w.p(who), "demo:PH-X", repo_root=repo)
+        assert code_of(exc.value) == "forbidden"
 
 def test_governor_denies_rate_limited_card(w, repo):
     make_phase(w)
@@ -185,14 +231,65 @@ def test_writes_nothing(w, repo):
     w.store.put_card(w.p("router"), "demo:C1", card())
     w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
 
-    before = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    def counts():
+        return {table: w.conn.execute(
+            f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            for table in ("items", "cards", "edges", "events")}
+
+    before = counts()
     phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
-    after = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-    assert before == after
+    assert counts() == before
 
 # --------------------------------------------------------------------------- #
 # HTTP handler
 # --------------------------------------------------------------------------- #
+
+def test_dispatcher_phase_plan_role_env_and_validation(doors, w, repo, monkeypatch):
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(repo))
+
+    status, body = doors.http("router", "POST", "/v1/phase_plan",
+                              {"key": "demo:PH-X"})
+    assert status == 200
+    assert body["phase"] == "demo:PH-X"
+    assert phase.startable(body) == ["demo:C1", "demo:C2"]
+
+    status, body = doors.http("workerA", "POST", "/v1/phase_plan",
+                              {"key": "demo:PH-X"})
+    assert (status, body["error"]) == (403, "forbidden")
+
+    monkeypatch.delenv("PG_PHASE_REPO_ROOT", raising=False)
+    status, body = doors.http("router", "POST", "/v1/phase_plan",
+                              {"key": "demo:PH-X"})
+    assert (status, body["error"]) == (503, "unavailable")
+
+    status, body = doors.http("workerA", "POST", "/v1/phase_plan",
+                              {"key": "demo:PH-X"})
+    assert (status, body["error"]) == (403, "forbidden")
+
+    status, body = doors.http("workerA", "POST", "/v1/phase_plan", {})
+    assert (status, body["error"]) == (403, "forbidden")
+
+    monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(repo))
+    status, body = doors.http("router", "POST", "/v1/phase_plan", {})
+    assert (status, body["error"]) == (400, "validation")
+
+def test_body_repo_root_is_ignored(w, repo, monkeypatch):
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(repo))
+
+    body = {"key": "demo:PH-X", "repo_root": "/nonexistent"}
+    result = api_routes._phase_plan(
+        w.store, w.p("router"), body, KeeperHandler._need)
+    direct = phase.plan_phase(w.store, w.p("router"), "demo:PH-X",
+                              repo_root=repo)
+    assert result == direct
+    assert result["phase"] == "demo:PH-X"
+    assert phase.startable(result) == ["demo:C1", "demo:C2"]
 
 def test_handler_returns_plan(w, repo, monkeypatch):
     make_phase(w)

@@ -27,7 +27,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "reopen", "set_kind", "set_metrics",
-               "governor_override",
+               "governor_override", "phase_plan",
                "attempts", "park", "complete", "alarms", "locks"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
@@ -168,12 +168,14 @@ def _replay(store, principal, body, need):
 
 
 def _phase_plan(store, principal, body, need):
+    # Role first: a non-router/system principal gets 403 before env or key checks.
+    store._require_role(principal, "router", "system")
     from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
     key = need(body, "key")
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
-    # plan_phase checks the role first (403); repo root is server-side only.
+    # repo_root is server-side only; plan_phase also re-checks the role first.
     return plan_phase(store, principal, key, repo_root=repo_root, now=None)
 
 
