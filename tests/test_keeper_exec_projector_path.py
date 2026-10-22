@@ -79,7 +79,8 @@ def test_needs_input_timer_preserves_projected_state_and_worker_cas(w, verb):
         "needs_input" if verb == "ask_question" else "parked", "card:" + key, "run", 1)
 
 
-def test_projector_waiting_refuses_delayed_same_run_park(w):
+@pytest.mark.parametrize("expected", ["running", ["open", "ready", "running", "needs_input"]])
+def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
     key, = seed(w, [("A", [])])
     projector = Projector(w.store, w.p("system"), now=w.clock)
     full = history("usage_limit")
@@ -96,7 +97,7 @@ def test_projector_waiting_refuses_delayed_same_run_park(w):
     before = snapshot(w, key)
     assert before[:4] == ("waiting", "card:" + key, "run", 1)
     with pytest.raises(Refused) as exc:
-        worker_call(w, key, "park", "running")
+        worker_call(w, key, "park", expected)
     assert exc.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
     worker_call(w, key, "park", "waiting")

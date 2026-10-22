@@ -33,12 +33,12 @@ def waiting(w):
 @pytest.mark.parametrize("http", [False, True])
 @pytest.mark.parametrize("expected, accepted", [("running", False),
                                                 ("waiting", True), (None, True),
-                                                (["running", "needs_input"], False),
+                                                 (["open", "ready", "running", "needs_input"], False),
                                                 (["running", "waiting"], True)])
 def test_delayed_ask_compares_projected_state(w, tmp_path, http, expected, accepted):
     key = waiting(w)
     before = snapshot(w, key)
-    extra = {} if expected is None else {"expected_state": expected}
+    extra = {"expected_state": expected}
     if http:
         live = Doors(w, tmp_path)
         try:
