@@ -506,19 +506,32 @@ def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str 
     role_l = str(role).strip().lower() if role is not None else "implement"
     factor = ROLE_TRAJECTORY_FACTORS.get(role_l, 1.5)
 
-    ctx_value = m.get("context_window")
+    ctx_value = m.get('context_window')
     if ctx_value is None:
-        ctx_value = m.get("context_tokens")
+        ctx_value = m.get('context_tokens')
     if ctx_value is None:
-        ctx_value = 128000
-    ctx = int(ctx_value)
+        ctx = 128000
+    else:
+        if isinstance(ctx_value, bool) or not isinstance(ctx_value, (int, float)):
+            raise ValueError(f'invalid context_window: {ctx_value!r}')
+        if isinstance(ctx_value, float) and not math.isfinite(ctx_value):
+            raise ValueError(f'invalid context_window: {ctx_value!r}')
+        if ctx_value <= 0:
+            raise ValueError(f'invalid context_window: {ctx_value!r}')
+        ctx = int(ctx_value)
 
     required_ctx = int(need_tokens * factor)
     if ctx < required_ctx:
         return False
 
-    cliff = m.get("price_cliff_tokens")
+    cliff = m.get('price_cliff_tokens')
     if cliff is not None:
+        if isinstance(cliff, bool) or not isinstance(cliff, (int, float)):
+            raise ValueError(f'invalid price_cliff_tokens: {cliff!r}')
+        if isinstance(cliff, float) and not math.isfinite(cliff):
+            raise ValueError(f'invalid price_cliff_tokens: {cliff!r}')
+        if cliff < 0:
+            raise ValueError(f'invalid price_cliff_tokens: {cliff!r}')
         trajectory_tokens = int(need_tokens * factor)
         if trajectory_tokens > int(cliff):
             return False

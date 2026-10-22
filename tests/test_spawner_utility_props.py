@@ -37,6 +37,7 @@ import pytest
 from plangraph.spawner.resolver import (
     ROLE_ALPHA,
     ROLE_TRAJECTORY_FACTORS,
+    _passes_context_and_cliff,
     rank_candidates,
     resolve_model_for_task,
     resolve_review_plan,
@@ -372,3 +373,19 @@ def test_route_leg_missing_intelligence_skipped():
     )
     assert len(set(families)) == 2, f"reviewer families not distinct: {families}"
     assert "mimo" not in families, f"writer family leaked: {families}"
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -1, 0, 'big', True])
+def test_context_window_invalid_values_raise(value):
+    with pytest.raises(ValueError):
+        _passes_context_and_cliff({'id': 'a/x', 'context_window': value}, 1000, role='implement')
+
+
+def test_context_window_missing_uses_default():
+    assert _passes_context_and_cliff({'id': 'a/x'}, 1000, role='implement') is True
+    assert _passes_context_and_cliff({'id': 'a/x', 'context_window': None}, 100000, role='implement') is False
+
+
+def test_price_cliff_invalid_nan_raises():
+    with pytest.raises(ValueError):
+        _passes_context_and_cliff({'id': 'a/x', 'price_cliff_tokens': float('nan')}, 1000, role='implement')
