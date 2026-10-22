@@ -1,7 +1,13 @@
-# build-L1 card · gen-16 end · HANDOFF #18 docs/build-L1-handoff.md · NO cron · hb bg loop 25m · 2026-10-22 · D-1932 P1 ONLY
+# build-L1 card · gen-17 · HANDOFF #18 docs/build-L1-handoff.md · NO cron · hb bg loop 25m (bq9o0sgvf) · 2026-10-22 · D-2172 order
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
 Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes). D-2019: NO Go writers/seats (Go window = orchestrators); writers D-1704 legs 6-7 (mimo API, deepseek API 7.75 USD) via omniroute baseURL (workst adding); seats tool-less qwen or agy gemini.
 D-1442 judge = server-L1-routing (HIGH only). D-2038 spawner first. D-2046/2047 Writer trailer rule (handoff #18). Spawner cap 10 (D-2043).
+## GEN-17 (D-2172 hold lifted; D-2148 writers cx/gpt-6.1-sol>mimo API>omniroute deepseek-direct-flash; D-2166 seats; never Sonnet writers)
+L2s (coding.vm, D-2175): flow-oversight ec773009 (#90 CI-GATE -> #87 -> OVERSIGHT-CHECKS+KEEPER-SCOPE), spawner affc5ae8 (NO-RUNTIME-IMPORT ->
+  UTILITY-PROPS GO per PR -> ROUTE-FROM-OMNIROUTE-DB), spine e4241665 (DRILL -> PROJECTOR-RUN-UNIT -> ATTEMPT-SANDBOX -> #94/#95/#96/VERSIONING/#97/EXEC).
+  Item text relay: ~/.local/share/plangraph/relay/*.md. Briefs docs/briefs/l2-{flow-oversight,spawner,spine}.md. RAM: add no local L2 w/o check.
+DRILL ran by me: NOT REPRODUCED; F2 default opencode 2.1 run uses shared `serve --service` env -> worker needs --standalone. .sessions/drill/RESULT.md; attach evidence + claim SANDBOX next.
+D-2165 DONE: 8 principals workst-L1-main-<family> (reviewer, 4 workst projects), tokens ~/.config/plangraph/workst-L1-main/; seats ~/.local/share/plangraph/seats/workst-L1-main.
 ## Main = 3026d6e1 (3 operator spawner commits 10-19/20 on 8f7f1c55 #93). Older: git log.
 Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
 Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
@@ -9,13 +15,6 @@ Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still
 | Item | Owner | State / next |
 |---|---|---|
 | DONE | - | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW (+FOLLOWUP, TEMPORAL-CHECK server); QUESTION-TIMER 541e4a6c (deploy conds -> WF-VERSIONING); LIVE-GUARDS 2424d40b (live cond -> EXEC-OWNERSHIP) |
-| md-sync | - | LIVE 15:28Z on wt md-sync-8f7f1c55 (drop-in z9, judge GO, 2 seats mimo+gemini); OS-OCGO-LOGIN DONE 15:30Z (router fixed D-rows, D-2016); follow-up: exclude kind=gate from gone |
-| OCGO | - | ROUTER-L0 DONE; FLEET-BUS in_review (workst); PROBE + L1-FALLBACK claimed (pt3 supervisor open, workst); FLEET-CUTOVER mine last |
-| DEV-PGDRILL | - | DONE #89 d8c7b606 (judge GO, D-1988 closed; xiaomi+google). FLAKES for CI-GATE/DRILLS: test_devstack_sh::test_start_launches_temporal_set_current_and_one_docker_pg; pg_drill t4 (diag only) |
-| FLOW-UNBLOCK | L2 gone | #87 1dc1f4ed: restore deleted test + asserts only (D-2047), merge after #90; then RT-QC-ACCEPTS |
-| EXEC / BATCH #97 / CI-GATE #90 | L2 gone -> rt-side-3 | brief docs/briefs/l2-rt-side-3.md; #90 strict gate + exempt file FIRST |
-| GATE-WIRING | L2 gone -> predeploy-6 | #94 afae587 (HIGH): judged scrub entries, rename, fixture builder; after #90 |
-| HARDEN #95 / JEV #96 / WF-VERSIONING | L2 gone -> predeploy-6 | brief docs/briefs/l2-predeploy-6.md |
 | PHASE-RUNNER | predeploy-5 | needs GATE-WIRING done -> I claim; Jev shadow call site lives here (D-2002) |
 | E2E | frozen 7b1e92a | new criteria: phase runner, >=2 cards, pinned opencode Go/free leg, phase PR + ci-gate; driver = FAILURE-DRILLS harness |
 | FAILURE-DRILLS / CARD-CHECKS | dogfood (Q-3) | phase runner builds them after PHASE-RUNNER+HARDEN+OWNERSHIP merge; I plan/judge only |
