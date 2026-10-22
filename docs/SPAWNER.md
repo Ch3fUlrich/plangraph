@@ -1,5 +1,7 @@
 # Plangraph Spawner & Model Routing Architecture
 
+__all__ = ["route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION", "SPAWNER_SELECTION_ENABLED"]
+
 Plangraph Spawner provisions, routes, and supervises autonomous agents across multi-model coding workflows. It combines a local WAL-mode SQLite benchmark catalog, a 5-rung tier priority ladder, fine-grained task complexity and risk measurement, OmniRoute ACP-first execution with full Windows Tailnet environment preservation, cross-family code review isolation, and a JSON-RPC 2.0 MCP server.
 
 ---
