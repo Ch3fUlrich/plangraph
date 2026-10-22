@@ -1,5 +1,10 @@
 # Plangraph Spawner & Model Routing Architecture
 
+Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
+import `plangraph.spawner` at runtime; the boundary is enforced by
+`tests/test_spawner_import_guard.py`, and the switch
+`SPAWNER_SELECTION_ENABLED` defaults to `False`.
+
 Plangraph Spawner provisions, routes, and supervises autonomous agents across multi-model coding workflows. It combines a local WAL-mode SQLite benchmark catalog, a 5-rung tier priority ladder, fine-grained task complexity and risk measurement, OmniRoute ACP-first execution with full Windows Tailnet environment preservation, cross-family code review isolation, and a JSON-RPC 2.0 MCP server.
 
 ---
