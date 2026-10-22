@@ -237,7 +237,7 @@ def test_co_authored_by_claude_passes(repo: Path):
     message = (
         "feat: fine\n\n"
         "Writer: mimo-v2.6-flash run-1\n\n"
-        "Co-Authored-By: Claude <noreply@anthropic.com>\n"
+        "Co-Authored-By: Claude Assistant\n"
     )
     sha = _commit(repo, message)
     assert check(base, sha, cwd=repo) == []
