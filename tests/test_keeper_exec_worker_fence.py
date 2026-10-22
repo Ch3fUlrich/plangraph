@@ -24,14 +24,35 @@ def owner(w, key):
     return tuple(row)
 
 
-@pytest.mark.parametrize("extra", [{}, {**RUN, "run_id": "stale"},
+@pytest.mark.parametrize("extra", [RUN, {}, {**RUN, "run_id": "stale"},
                                    {**RUN, "attempt": 1}])
 def test_attempt_checks_existing_owner(w, extra):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
+    # Rust worker report now carries ExecId on worker_attempt, not just lifecycle verbs.
+    if extra == RUN:
+        result = w.store.worker_attempt(w.p("workerA"),
+                                       {"card": key, "n": 1, "exit_class": "check_fail", **extra})
+        assert result["n"] == 1
+    else:
+        with pytest.raises(Refused) as exc:
+            w.store.worker_attempt(w.p("workerA"),
+                                   {"card": key, "n": 1, "exit_class": "check_fail", **extra})
+        assert exc.value.code == "exec_stale"
+    assert owner(w, key) == ("wf", "run", 2)
+
+
+def test_audit_attempt_checks_but_does_not_advance_owner(w):
+    key, = seed(w, [("A", [])])
+    w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
+    w.store.worker_attempt(w.p("workerA"),
+                           {"card": key, "n": 1, "exit_class": "check_fail",
+                            **RUN, "attempt": 3})
+    assert owner(w, key) == ("wf", "run", 2)
     with pytest.raises(Refused) as exc:
         w.store.worker_attempt(w.p("workerA"),
-                               {"card": key, "n": 1, "exit_class": "check_fail", **extra})
+                               {"card": key, "n": 1, "exit_class": "check_fail",
+                                **RUN, "attempt": 1})
     assert exc.value.code == "exec_stale"
     assert owner(w, key) == ("wf", "run", 2)
 

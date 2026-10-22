@@ -162,7 +162,7 @@ class WorkerMixin:
                                   body.get("attempt")))
         # Audit-only and no-op calls validate but cannot acquire a first owner.
         if owned or record:
-            self._exec_check(self.conn, key, *parts)
+            self._exec_check(self.conn, key, *parts, record=record)
 
     # ----------------------------------------------------------- attempts
     def worker_attempt(self, principal, body):

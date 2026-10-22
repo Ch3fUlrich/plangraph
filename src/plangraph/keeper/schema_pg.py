@@ -97,9 +97,6 @@ CREATE TABLE items (
     writer_model   TEXT COLLATE "C",
     seat_models    TEXT COLLATE "C",
     run_ids        TEXT COLLATE "C",
-    exec_workflow_id TEXT COLLATE "C",
-    exec_run_id      TEXT COLLATE "C",
-    exec_attempt     BIGINT,
     created_at     TEXT COLLATE "C",
     updated_at     TEXT COLLATE "C"
 );
@@ -459,4 +456,8 @@ def parse_tables(ddl: str) -> dict:
             if m and m.group(1) not in _NOT_COLUMNS:
                 cols.append((m.group(1), "NOT NULL" in line))
         out[name] = cols
+    for match in re.finditer(
+            r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]+);", ddl):
+        table, column, declaration = match.groups()
+        out[table].append((column, "NOT NULL" in declaration))
     return out
