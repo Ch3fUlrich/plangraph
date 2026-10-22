@@ -9,6 +9,7 @@ All units are user units (`systemctl --user`), not system units.
 | pg-snapshot-pull.service | reader-host local plan copy refresh every 5 min | reader host |
 | pg-snapshot-pull.timer | timer driving pg-snapshot-pull.service every 5 min | reader host |
 | plangraph-keeper.service | persistent keeper daemon | keeper host |
+| plangraph-projector.service | continuous projector run loop (30 s poll): attempts reach the keeper | keeper host |
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |
 | plangraph-projector-reconcile.timer | nightly timer (03:30) starting the reconcile service | keeper host |
 | plangraph-render.service | one tick: follow the gated head, render the static page, check the stamp | render host |
@@ -53,3 +54,37 @@ A mismatch becomes an open row in `projector_alarms` (`cleared_at IS NULL`); the
 ## 6. Deploy note
 
 This lane ships files only; install on the keeper host is a separate, gated deploy step.
+
+## 7. Projector run loop
+
+Install:
+
+```sh
+mkdir -p ~/.config/systemd/user
+cp plangraph-projector.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now plangraph-projector.service
+```
+
+Linger is covered in section 2.
+
+Verify:
+
+```sh
+systemctl --user status plangraph-projector.service
+journalctl --user -u plangraph-projector.service -n 20
+```
+
+Restart check:
+
+```sh
+systemctl --user kill -s KILL plangraph-projector.service
+```
+
+After `RestartSec` (5 s) status shows active again; `Restart=on-failure` restarts the loop on a signal exit.
+
+Notes:
+
+- Reads the same `projector.env` (`%h/.config/plangraph/projector.env`) as the reconcile service.
+- Does not replace the nightly reconcile timer.
+- Production placement stays with the release/deploy item.
