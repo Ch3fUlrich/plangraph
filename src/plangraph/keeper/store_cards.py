@@ -325,16 +325,18 @@ class CardsMixin:
     # ------------------------------------------------------------ questions
     def ask_question(self, principal, key, text, default_answer=None, deadline=None,
                      risk_tags=(), exec_workflow_id=None, exec_run_id=None,
-                     exec_attempt=None):
+                     exec_attempt=None, expected_state=None):
         return self._run(principal, "ask_question", key,
                          lambda now: self._ask_question(principal, key, text,
                                                         default_answer, deadline,
                                                         risk_tags, now,
                                                         exec_workflow_id,
-                                                        exec_run_id, exec_attempt))
+                                                        exec_run_id, exec_attempt,
+                                                        expected_state))
 
     def _ask_question(self, principal, key, text, default_answer, deadline, risk_tags,
-                      now, exec_workflow_id=None, exec_run_id=None, exec_attempt=None):
+                      now, exec_workflow_id=None, exec_run_id=None, exec_attempt=None,
+                      expected_state=None):
         self._require_role(principal, "router", "l1", "worker", "spawner", "system")
         body = _text("text", text, required=True, key=key)
         default = _text("default_answer", default_answer, key=key)
@@ -352,6 +354,9 @@ class CardsMixin:
             item = self._get_or_refuse(key)
             self._may_act_in(principal, item["project"])
             self._assert_unlocked(item)
+            # Compare the observed state before _exec_check can record an owner.
+            if expected_state is not None:
+                self._exec_expect_state(item, expected_state)
             # RT-P1-EXEC-OWNERSHIP: an ask carrying any exec field is checked
             # against the recorded owner (a first ask records it; a stale run
             # or a backwards attempt is refused and inserts no question).  A

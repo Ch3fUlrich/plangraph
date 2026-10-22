@@ -228,7 +228,8 @@ def _ask(store, principal, body: dict) -> dict:
                               body.get("risk_tags") or (),
                               exec_workflow_id=body.get("workflow_id"),
                               exec_run_id=body.get("run_id"),
-                              exec_attempt=body.get("attempt"))
+                              exec_attempt=body.get("attempt"),
+                              expected_state=body.get("expected_state"))
 
 
 def _answer(store, principal, body: dict) -> dict:
