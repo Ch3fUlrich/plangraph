@@ -20,6 +20,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
 | workst L2s sandbox, card-checks, bus, oc-harden | workst | await MERGE-READY; BUS-KEEPER claim when BUS-CONTRACT ready |
 | D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
+| D-2254 low (after crit path) | me | PH-OPERATOR gate->GOAL holds (checked 19:2xZ); OS-149 A6 keeper cfg after prox A1-A5; RT-P4-ARCHIVE parked until cutover+1wk |
 Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, PG-PUBLIC-READY.
 ## Traps
 - zsh: `"${H}:path"` not `$H:t`; no `h()`; `echo ===` fails; string vars don't split -> bash scripts (tmp/ciwait.sh SHA KEY = CI wait + evidence + submit).
