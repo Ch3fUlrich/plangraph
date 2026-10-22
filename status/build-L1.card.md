@@ -3,7 +3,7 @@ Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 op
 Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
 glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
 TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-worktrees/sv-dry-1dbc4f26, refresh to each main (D-2234). Keeper LIVE runs FROM live-2d61e281 (cwd+PYTHONPATH): never ff it as tools; keeper code move = HIGH D-825 GO-REQ.
-## Main = 875205f1 (#121 S3a, GO D-2293, CI green, evidence on). Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
+## Main = e515c264 (#122); #121 S3a 875205f1 evidence on. Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
@@ -32,8 +32,9 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 
 - oc-harden #95: writer 20261022-204611-...ec818f running on workst (no_change migration); then seats mimo + non-OpenAI 2nd family -> GO-REQ routing. Workst queue: card-checks writer next, then bus.
 - sandbox #100 fix: WA run 20261022-204430-...759ac4 (mimo, wt attempt-sandbox-wA) -> push lane/attempt-sandbox-wA; WB next (wt attempt-sandbox-wB, brief in transcript: git hardening attempt.rs + walk); WC = L2 on workst (sol). L2 cherry-picks + CI; I re-seat glm+deepseek.
-- KEEPER-OPCLAIM-CLOSE (HIGH, D-2283/2284, mine): wt opclaim-close lane/keeper-opclaim-close; writer omniroute/mimo-v2.6-flash run 20261022-202358-...6d5fb8 (cx not declared on coding.vm, D-2148 skip). Design: A refuse legacy claimed on non-none tier, B legacy claim -> in_review recovery. Then PR, 2 seats non-xiaomi, GO-REQ routing, then router closes server:OP-DOCKHAND-EVENTS. 21:0xZ: part A breaks 4 existing tests (test_keeper_fix_a2 legacy move/reaper, test_keeper_rehome closes token) outside its FILES -> judge on report (A may need tier-aware fixtures or drop A, keep B).
+- KEEPER-OPCLAIM-CLOSE (HIGH): writer done 7cbec2f4 (control lane/keeper-opclaim-close); A breaks 5 existing tests -> BLOCKED to routing, options A1 fixtures*/B drop A/C flag.
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
 - New leaves: RT-P1-CARD-CHECKS-KEEPER (HIGH, dep CARD-CHECKS, D-2289). exec-wfv CI 39848623437 green on 31c525d8.- EXEC #112 r6: exec-wfv workstation blocked (commit 83.7%) -> L1 spawns W19/W20/W21 on coding.vm one at a time; W19 run 20261022-211721-exec-r6-w19-keeper-hand-108b2d; briefs W20/W21: ~/.claude/jobs/c7643711/tmp/exec-r6-W20-W21.md; worktrees plangraph-worktrees/exec-own-w19..21.
+- Sandbox: WA 29ca342c pushed lane/attempt-sandbox-wA (origin+control), told L2; WB run 20261022-212733-sandbox-wb-git-hardening-7481a6.
