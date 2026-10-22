@@ -23,6 +23,7 @@ import json
 
 from ..keeper import db_errors
 from ..keeper.errors import Refused
+from ..keeper.stall import stall_alarms
 from . import temporal_signal
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "PAGE_HEADERS", "page", "read", "write"]
@@ -134,20 +135,31 @@ def _age_s(store, stamp, moment) -> int | None:
 
 
 def _alarms(store, principal) -> dict:
-    """The open, unacknowledged projector alarms *principal* may see, oldest first."""
+    """The open, unacknowledged projector alarms *principal* may see, oldest first.
+
+    The computed stall rows (``K/stall.py``: stalled claims, merged-but-open
+    items) are merged in after the stored rows and pass the same project filter.
+    """
     def fn(now):
         try:
             rows = store.conn.execute(_ALARMS).fetchall()
         except _UNREADABLE as exc:      # table missing or unreadable: named, never silent
             return {"alarms": [], "error": f"alarms unreadable: {type(exc).__name__}"}
         moment = store.now()
+        try:
+            computed = stall_alarms(store.conn, moment,
+                                    getattr(getattr(store, "config", None),
+                                            "repos", None))
+        except _UNREADABLE:             # no items/events to judge: stored alarms only
+            computed = []
         allowed = None if principal.role in _SEES_ALL else set(principal.projects or [])
-        return {"alarms": [{"id": r["id"], "key": r["key"], "kind": r["kind"],
-                            "workflow_id": r["workflow_id"], "detail": r["detail"],
-                            "raised_at": r["raised_at"],
-                            "age_s": _age_s(store, r["raised_at"], moment)}
-                           for r in rows
-                           if allowed is None or _project(r["key"]) in allowed]}
+        alarms = [{"id": r["id"], "key": r["key"], "kind": r["kind"],
+                   "workflow_id": r["workflow_id"], "detail": r["detail"],
+                   "raised_at": r["raised_at"],
+                   "age_s": _age_s(store, r["raised_at"], moment)}
+                  for r in list(rows) + computed
+                  if allowed is None or _project(r["key"]) in allowed]
+        return {"alarms": alarms}
 
     return store._run(principal, "alarms", None, fn)
 

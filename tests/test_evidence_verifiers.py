@@ -62,6 +62,64 @@ def test_run_record_missing_exit_file():
     assert verify("run-record", {"run_id": "run-1"}, ctx).ok is False
 
 
+def test_run_record_item_key_matches():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "unrelated heading", "item_key": ITEM["key"]}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is True
+
+
+def test_run_record_item_key_differs_title_contains_key():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "work on " + ITEM["key"], "item_key": "routing:OTHER"}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is False
+    assert ITEM["key"] in res.detail
+
+
+def test_run_record_item_key_prefix_collision():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": ITEM["key"], "item_key": ITEM["key"] + "B"}, "task": ""}))
+    assert verify("run-record", {"run_id": "run-1"}, ctx).ok is False
+
+
+def test_run_record_item_key_matched_by_id_only():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "unrelated", "item_key": ITEM["id"]}, "task": ""}))
+    assert verify("run-record", {"run_id": "run-1"}, ctx).ok is True
+
+
+def test_run_record_absent_item_key_is_legacy_ok():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {
+        "title": "x " + ITEM["key"] + " y"}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is True
+    assert "legacy title match" in res.detail
+
+
+def test_run_record_absent_item_key_is_legacy_fail():
+    ctx = make_ctx(runs=FakeRuns(job={"request": {"title": "nothing here"}, "task": ""}))
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is False
+    assert "legacy title match" in res.detail
+
+
+@pytest.mark.parametrize("value", [None, 7, ["x"], "", "  "])
+def test_run_record_present_unusable_item_key_refused(value):
+    ctx = make_ctx(
+        runs=FakeRuns(
+            job={
+                "request": {"title": "x " + ITEM["key"], "item_key": value},
+                "task": "",
+            }
+        )
+    )
+    res = verify("run-record", {"run_id": "run-1"}, ctx)
+    assert res.ok is False
+    assert "item_key" in res.detail
+    assert "usable string" in res.detail
+
+
 # --------------------------------------------------------------------------- #
 # semaphore-task
 # --------------------------------------------------------------------------- #
@@ -159,6 +217,40 @@ def test_semaphore_missing_task_id():
     assert "task_id" in res.detail
 
 
+def test_semaphore_gated_without_readable_refused():
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", REF, ctx)
+    assert res.ok is False
+    assert "semaphore-task" in res.detail
+    assert "readable" in res.detail
+
+
+def test_semaphore_gated_with_readable_url_ok():
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", {**REF, "readable": "https://art.example/5/copy.json"}, ctx)
+    assert res.ok is True
+
+
+def test_semaphore_gated_with_artifact_id_ok():
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", {**REF, "readable": "artifact-dp-913f"}, ctx)
+    assert res.ok is True
+
+
+@pytest.mark.parametrize("bad", [
+    "", "   ", "has spaces", "/abs/path/copy.json", "ftp://host/copy",
+    "https://", "C:\\copy.exe", "relative/path.json", 7, None, True,
+])
+def test_semaphore_readable_copy_must_be_url_or_bare_id(bad):
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    assert verify("semaphore-task", {**REF, "readable": bad}, ctx).ok is False
+
+
+def test_semaphore_non_gated_project_ok():
+    ctx = make_ctx()
+    assert verify("semaphore-task", REF, ctx).ok is True
+
+
 # --------------------------------------------------------------------------- #
 # decision
 # --------------------------------------------------------------------------- #
@@ -224,3 +316,17 @@ def test_semaphore_template_required():
 def test_semaphore_response_without_template_id_fails():
     ctx = make_ctx(semaphore=FakeSemaphore({"status": "success", "id": 5, "project_id": 1}))
     assert verify("semaphore-task", REF, ctx).ok is False
+
+
+def test_semaphore_gated_refusal_says_readable_is_attested():
+    from plangraph.keeper import evidence as ev
+
+    doc = ev.SemaphoreTaskVerifier.__doc__ or ""
+    assert "attested" in doc
+    assert "not fetched" in doc
+
+    ctx = make_ctx(semaphore=FakeSemaphore(readable=False))
+    res = verify("semaphore-task", REF, ctx)
+    assert res.ok is False
+    assert "readable" in res.detail
+    assert "attested" in res.detail
