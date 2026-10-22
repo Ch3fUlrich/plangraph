@@ -221,7 +221,8 @@ fn run_attempt_inner(
     // confined env carries no credential names; see sandbox_env). The guard
     // removes what it staged when the attempt ends.
     home.stage_harness_auth()?;
-    let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
+    let jail = crate::harness::JailConfig::from_env().map_err(std::io::Error::other)?;
+    let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
 

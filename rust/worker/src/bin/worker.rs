@@ -132,6 +132,11 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let harnesses = build_registry();
     println!("harnesses: {}", harnesses.names().join(", "));
+    match harness::JailConfig::required_from_env() {
+        Ok(Some(_)) => println!("attempt jail on"),
+        Ok(None) => eprintln!("warning: PG_JAIL=off; attempts run unjailed"),
+        Err(e) => anyhow::bail!("attempt jail: {e}"),
+    }
     // Fail closed on a harness version drift; unset means no pin.
     let pins = std::env::var(harness::VERSIONS_ENV).ok();
     match harness::check_version_pins(&harnesses, pins.as_deref()) {
