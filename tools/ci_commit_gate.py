@@ -1,7 +1,9 @@
 """CI commit trailer gate: Writer attribution and test-removal reasons.
 
 Commits come from ``git log --no-merges base..head``, so merge commits are never
-inspected.  Commits listed in the exempt file skip every rule.
+inspected.  Commits listed in the exempt file skip every rule.  A repo-relative
+exempt path is read from the BASE commit, never from the working tree, so a PR
+cannot exempt the commits it introduces.
 """
 
 from __future__ import annotations
@@ -12,11 +14,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-#: Trailer key/value per message line; the last ``Writer:`` line wins.
-WRITER_RE = re.compile(r"^Writer:\s*(.+)$")
+#: Trailer key/value per message line; every ``writer:`` line is inspected
+#: (case-insensitive), and no line is allowed to override an earlier one.
+WRITER_RE = re.compile(r"^writer:\s*(.*)$", re.IGNORECASE)
 
-#: A test-removal commit must carry ``Test-Removal: D-<digits>``.
-TEST_REMOVAL_RE = re.compile(r"^Test-Removal:\s*D-\d+")
+#: A test-removal commit must carry ``Test-Removal: D-<digits>`` and nothing after.
+TEST_REMOVAL_RE = re.compile(r"^Test-Removal:\s*D-\d+\s*$")
 
 #: Case-insensitive markers in the Writer value that identify a Claude writer.
 CLAUDE_MARKERS: tuple[str, ...] = (
@@ -28,8 +31,9 @@ CLAUDE_MARKERS: tuple[str, ...] = (
     "fable",
 )
 
-#: Deleted file names matching ``tests/test_*.py``.
-TEST_PATH_RE = re.compile(r"^tests/test_.*\.py$")
+#: Test file paths: anything under a ``test``/``tests`` directory, a ``test_*``
+#: file anywhere, or a ``*_test.py`` file anywhere.
+TEST_PATH_RE = re.compile(r"(^|/)tests?/.+\.py$|(^|/)test_[^/]*\.py$|_test\.py$")
 
 #: Removed diff lines (``-U0``) defining a test function.
 REMOVED_TEST_DEF_RE = re.compile(r"^-\s*(async\s+)?def test_")
@@ -52,22 +56,31 @@ class GateError(Exception):
     """Git itself failed, so the range could not be inspected."""
 
 
-def load_exempt(path: str | Path) -> set[str]:
-    """Parse the exempt file: 40-hex shas, ``#`` comments and blanks ignored."""
-    try:
-        text = Path(path).read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ExemptError(f"cannot read exempt file {path}: {exc}") from exc
+def _parse_exempt_text(text: str, source: str) -> set[str]:
+    """Parse exempt-file ``text`` read from ``source`` (path label for errors).
 
+    40-hex shas only; ``#`` comments and blank lines are ignored.  Raises
+    ``ExemptError`` on the first malformed line.
+    """
     exempt: set[str] = set()
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
         if EXEMPT_SHA_RE.match(line) is None:
-            raise ExemptError(f"exempt file {path}:{lineno}: not a 40-hex sha: {line!r}")
+            raise ExemptError(f"exempt file {source}:{lineno}: not a 40-hex sha: {line!r}")
         exempt.add(line.lower())
     return exempt
+
+
+def load_exempt(path: str | Path) -> set[str]:
+    """Parse the exempt file on disk: 40-hex shas, ``#`` comments and blanks."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ExemptError(f"cannot read exempt file {path}: {exc}") from exc
+
+    return _parse_exempt_text(text, str(path))
 
 
 def _git_text(args: list[str], cwd: str | Path | None = None) -> str:
@@ -92,14 +105,18 @@ def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[t
     return commits
 
 
-def _writer_value(message: str) -> str | None:
-    """Last ``Writer:`` line wins; ``None`` when the trailer is absent."""
-    value: str | None = None
+def _writer_values(message: str) -> list[str]:
+    """Every ``writer:`` line value in ``message``, stripped, in order.
+
+    The list is empty only when no ``writer:`` line exists at all; a line with a
+    blank value yields ``""`` (and therefore does not count as a Writer trailer).
+    """
+    values: list[str] = []
     for line in message.splitlines():
         match = WRITER_RE.match(line)
         if match:
-            value = match.group(1).strip()
-    return value
+            values.append(match.group(1).strip())
+    return values
 
 
 def _has_test_removal_trailer(message: str) -> bool:
@@ -107,17 +124,65 @@ def _has_test_removal_trailer(message: str) -> bool:
 
 
 def _removes_test(sha: str, cwd: str | Path | None = None) -> bool:
-    """True when the commit deletes ``tests/test_*.py`` or drops a ``def test_`` line."""
+    """True when the commit deletes a test file or drops a ``def test_`` line.
+
+    Test files are ``tests?/.../*.py``, ``test_*.py`` and ``*_test.py``; the
+    removed-line scan walks the whole commit diff and counts a removed
+    ``def test_`` line only inside a file matching that pattern.
+    """
     deleted = _git_text(["show", "--format=", "--diff-filter=D", "--name-only", sha], cwd=cwd)
     for line in deleted.splitlines():
-        if TEST_PATH_RE.match(line.strip()):
+        if TEST_PATH_RE.search(line.strip()):
             return True
 
-    diff = _git_text(["show", "--format=", "-U0", sha, "--", "tests"], cwd=cwd)
+    diff = _git_text(["show", "--format=", "-U0", sha], cwd=cwd)
+    current: str | None = None
     for line in diff.splitlines():
-        if REMOVED_TEST_DEF_RE.match(line):
+        if line.startswith("diff --git "):
+            current = None
+        elif line.startswith("--- ") or line.startswith("+++ "):
+            # File header: remember which file the hunk belongs to.  ``/dev/null``
+            # keeps the side that named a real path (deleted files say it once).
+            path = line[4:].strip()
+            if path != "/dev/null":
+                current = path[2:] if path[:2] in ("a/", "b/") else path
+        elif current and TEST_PATH_RE.search(current) and REMOVED_TEST_DEF_RE.match(line):
             return True
     return False
+
+
+def _exempt_at_base(base: str, rel: str, cwd: str | Path | None = None) -> set[str] | None:
+    """Exempt shas recorded in the ``base`` commit for repo-relative ``rel``.
+
+    ``None`` when the file is absent at ``base`` (a bootstrap PR that introduces
+    the exempt file), so the caller falls back to the working tree.
+    """
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{base}:{rel}"], cwd=cwd, capture_output=True
+    )
+    if probe.returncode != 0:
+        return None
+    text = _git_text(["show", f"{base}:{rel}"], cwd=cwd)
+    return _parse_exempt_text(text, f"{base}:{rel}")
+
+
+def _resolve_exempt(
+    base: str, exempt: str | Path, cwd: str | Path | None = None
+) -> set[str]:
+    """Load ``exempt``, preferring the BASE commit's copy of a repo-relative path.
+
+    A PR must not exempt its own commits: when ``exempt`` is repo-relative and
+    exists at ``base``, the base copy wins over the working tree.  A bootstrap PR
+    (no file at ``base``) uses the working-tree file, resolved against ``cwd``.
+    """
+    rel = Path(exempt).as_posix() if not Path(exempt).is_absolute() else None
+    if rel is not None:
+        at_base = _exempt_at_base(base, rel, cwd=cwd)
+        if at_base is not None:
+            return at_base
+        path: str | Path = Path(cwd) / rel if cwd is not None else exempt
+        return load_exempt(path)
+    return load_exempt(exempt)
 
 
 def check(
@@ -130,17 +195,17 @@ def check(
 
     Raises ``ExemptError`` for a bad exempt file and ``GateError`` when git fails.
     """
-    exempt_set = load_exempt(exempt) if exempt else set()
+    exempt_set = _resolve_exempt(base, exempt, cwd=cwd) if exempt else set()
 
     violations: list[str] = []
     for sha, message in _iter_commits(base, head, cwd=cwd):
         if sha in exempt_set:
             continue
 
-        writer = _writer_value(message)
-        if writer is None:
+        writers = _writer_values(message)
+        if not any(writers):
             violations.append(f"{sha}: {MISSING_WRITER}")
-        elif any(marker in writer.lower() for marker in CLAUDE_MARKERS):
+        elif any(marker in value.lower() for value in writers for marker in CLAUDE_MARKERS):
             violations.append(f"{sha}: {CLAUDE_WRITER}")
 
         # A present Test-Removal trailer satisfies the rule, so git only runs when absent.
