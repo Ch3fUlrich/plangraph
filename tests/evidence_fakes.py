@@ -26,6 +26,7 @@ class FakeGit:
         exists: bool = True,
         ancestor: bool = True,
         trailers: dict | None = None,
+        trailers_by_sha: dict | None = None,
         commit_time: float | None = CLAIM + 100,
         error: Exception | None = None,
         author_time: float | None = None,
@@ -41,6 +42,9 @@ class FakeGit:
         self.exists = exists
         self.ancestor = ancestor
         self.message_trailers = {"Plan-Item": ITEM["key"]} if trailers is None else trailers
+        # Per-commit trailers for the seat-coverage tests; any sha not listed
+        # falls back to ``trailers`` above.
+        self.trailers_by_sha = trailers_by_sha or {}
         self.ctime = commit_time
         self.atime = commit_time if author_time is None else author_time
         self.error = error
@@ -76,6 +80,8 @@ class FakeGit:
         return self.ancestor
 
     def trailers(self, repo, sha):
+        if sha in self.trailers_by_sha:
+            return dict(self.trailers_by_sha[sha])
         return dict(self.message_trailers)
 
     def commit_times(self, repo, sha):
