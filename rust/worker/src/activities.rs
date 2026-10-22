@@ -145,8 +145,11 @@ pub struct GateCheck {
     /// Matched by `[A-Za-z0-9_.-]{1,64}`; duplicates are invalid input, since
     /// a report could not tell two same-named runs apart.
     pub name: String,
-    /// The command, run via `sh -c`.
+    /// The command, run via `sh -c`. Builtins ignore it, but still require a
+    /// non-blank placeholder to preserve the wire validation contract.
     pub cmd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<String>,
     /// Kill this check after this many seconds; unset = whatever is left of
     /// the gate's `start_to_close` budget when the check starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -168,6 +171,10 @@ pub struct GateInput {
     /// as the single `cmd` before it did, and an empty list is invalid input,
     /// never a silent pass.
     pub checks: Vec<GateCheck>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<String>,
 }
 
 /// Outcome of ONE gate check: the `check::CheckResult` fields plus the
@@ -455,6 +462,29 @@ fn validate_gate_input(input: &GateInput) -> std::io::Result<()> {
     }
     let mut seen: HashSet<&str> = HashSet::new();
     for c in &input.checks {
+        match c.builtin.as_deref() {
+            Some("diffscan") => {
+                let base = input.base_sha.as_deref().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "diffscan requires base_sha",
+                    )
+                })?;
+                pg_worker_core::git::check_rev(base).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "invalid diffscan base_sha",
+                    )
+                })?;
+            }
+            Some("exports") | None => {}
+            Some(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "unknown gate builtin",
+                ));
+            }
+        }
         if !gate_check_name_ok(&c.name) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -540,6 +570,52 @@ pub(crate) fn do_gate(
                 exit_code: None,
                 signal: None,
                 timed_out: true,
+                output_hash: hash::hash_bytes(tail.as_bytes()),
+                tail,
+            });
+            continue;
+        }
+        if let Some(builtin) = c.builtin.as_deref() {
+            let (passed, reason) = if builtin == "diffscan" {
+                let range = format!(
+                    "{}..HEAD",
+                    input.base_sha.as_deref().expect("validated base")
+                );
+                let diff = git(
+                    &dir,
+                    &["diff", "--no-ext-diff", "--no-textconv", &range, "--"],
+                )
+                .map_err(std::io::Error::other)?;
+                let findings = pg_worker_core::diffscan::scan_diff(&diff);
+                (
+                    findings.is_empty(),
+                    pg_worker_core::diffscan::reason(&findings),
+                )
+            } else {
+                let missing = pg_worker_core::exports::verify(&input.exports, &|path| {
+                    let candidate = dir.join(path);
+                    let parent = candidate.parent()?.to_str()?;
+                    let parent = pathjail::confine_dir(&dir, parent).ok()?;
+                    let file = parent.join(candidate.file_name()?).canonicalize().ok()?;
+                    if !file.starts_with(&dir) {
+                        return None;
+                    }
+                    std::fs::read_to_string(file).ok()
+                });
+                let reason = if missing.is_empty() {
+                    String::new()
+                } else {
+                    format!("missing exports: {}", missing.join(", "))
+                };
+                (missing.is_empty(), redact::cap_tail_bytes(&reason, 300))
+            };
+            let tail = redact::cap_tail_bytes(&redact::redact(&reason), redact::MAX_TAIL_BYTES);
+            results.push(GateCheckResult {
+                name: c.name.clone(),
+                passed,
+                exit_code: Some(if passed { 0 } else { 1 }),
+                signal: None,
+                timed_out: false,
                 output_hash: hash::hash_bytes(tail.as_bytes()),
                 tail,
             });
@@ -1283,9 +1359,12 @@ mod tests {
             base_sha: "b".to_string(),
         });
         round_trip(&GateInput {
+            base_sha: None,
+            exports: Vec::new(),
             workroot: "/w".to_string(),
             workdir: "/w/c1-1".to_string(),
             checks: vec![GateCheck {
+                builtin: None,
                 name: "card-check".to_string(),
                 cmd: "true".to_string(),
                 timeout_s: Some(30),
@@ -1839,9 +1918,62 @@ mod tests {
         assert!(!wt.path.exists());
     }
 
+    #[test]
+    fn gate_builtin_validation_and_legacy_json() {
+        let json =
+            r#"{"workroot":".","workdir":".","checks":[{"name":"scan","cmd":"placeholder"}]}"#;
+        let mut input: GateInput = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&input).unwrap(), json);
+        input.checks[0].builtin = Some("unknown".into());
+        assert_eq!(
+            do_gate(&tiny(), &input, &|| false).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        input.checks[0].builtin = Some("diffscan".into());
+        assert_eq!(
+            do_gate(&tiny(), &input, &|| false).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn gate_diffscan_clean_deleted_test_and_later_check() {
+        let (r, _) = repo();
+        write(r.path(), "test_x.py", "def test_x():\n    assert True\n");
+        let base = commit_all(r.path(), "test");
+        let mut scan = named_check("scan", "exit 99", None);
+        scan.builtin = Some("diffscan".into());
+        let mut input = gate_input(r.path(), vec![scan, named_check("later", "true", None)]);
+        input.base_sha = Some(base);
+        assert!(run(&tiny(), &input).passed);
+        std::fs::remove_file(r.path().join("test_x.py")).unwrap();
+        commit_all(r.path(), "delete test");
+        let result = run(&tiny(), &input);
+        assert!(!result.passed);
+        assert!(result.checks[0].tail.contains("deleted test"));
+        assert_eq!(result.checks[0].name, "scan");
+        assert!(result.checks[1].passed);
+    }
+
+    #[test]
+    fn gate_exports_confines_files() {
+        let (r, _) = repo();
+        write(r.path(), "lib.rs", "pub fn run() {}");
+        let mut check = named_check("exports", "exit 99", None);
+        check.builtin = Some("exports".into());
+        let mut input = gate_input(r.path(), vec![check]);
+        input.exports = vec!["lib.rs:run".into()];
+        assert!(run(&tiny(), &input).passed);
+        input.exports.push("../lib.rs:run".into());
+        let result = run(&tiny(), &input);
+        assert!(!result.passed);
+        assert!(result.checks[0].tail.contains("../lib.rs:run"));
+    }
+
     /// One named check for the gate tests.
     fn named_check(name: &str, cmd: &str, timeout_s: Option<u64>) -> GateCheck {
         GateCheck {
+            builtin: None,
             name: name.to_string(),
             cmd: cmd.to_string(),
             timeout_s,
@@ -1852,6 +1984,8 @@ mod tests {
     fn gate_input(dir: &std::path::Path, checks: Vec<GateCheck>) -> GateInput {
         let workroot = dir.to_string_lossy().into_owned();
         GateInput {
+            base_sha: None,
+            exports: Vec::new(),
             workroot: workroot.clone(),
             workdir: workroot,
             checks,
@@ -2110,6 +2244,8 @@ mod tests {
             "nope",
         ] {
             let input = GateInput {
+                base_sha: None,
+                exports: Vec::new(),
                 workroot: workroot.clone(),
                 workdir: candidate.to_string(),
                 checks: vec![named_check("card-check", "true", None)],
@@ -2127,6 +2263,8 @@ mod tests {
 
         // A subdir of the root is inside the jail and runs normally.
         let input = GateInput {
+            base_sha: None,
+            exports: Vec::new(),
             workroot,
             workdir: "sub".to_string(),
             checks: vec![named_check("card-check", "test -d . && echo ok", None)],
