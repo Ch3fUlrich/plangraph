@@ -1996,20 +1996,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let c1 = AttemptId::new("c1", 1);
         let c2 = AttemptId::new("c2", 1);
-        let wt1 = worktree::create(
-            r.path(),
-            &base,
-            &root.path().join(c1.dir_name()),
-            &c1,
-        )
-        .unwrap();
-        let wt2 = worktree::create(
-            r.path(),
-            &base,
-            &root.path().join(c2.dir_name()),
-            &c2,
-        )
-        .unwrap();
+        let wt1 = worktree::create(r.path(), &base, &root.path().join(c1.dir_name()), &c1).unwrap();
+        let wt2 = worktree::create(r.path(), &base, &root.path().join(c2.dir_name()), &c2).unwrap();
         write(&wt1.path, "half.txt", "x");
         commit_all(&wt1.path, "work");
 
