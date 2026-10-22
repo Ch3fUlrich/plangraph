@@ -216,7 +216,7 @@ def test_risk_tags_absent_vs_empty(tmp_path):
     assert gate(tmp_path, card).codes() == ["no_risk_tags"]
     assert gate(tmp_path, good_card(risk_tags=None)).codes() == ["no_risk_tags"]
     assert gate(tmp_path, good_card(risk_tags=[])).ready
-    assert gate(tmp_path, good_card(risk_tags=["auth"])).ready
+    assert gate(tmp_path, good_card(risk_tags=["auth"], heldout_check="true")).ready
 
 
 def test_no_window_class(tmp_path):
@@ -280,6 +280,79 @@ def test_require_heldout(tmp_path):
     assert gate(tmp_path, good_card(heldout_check="  "),
                 require_heldout=True).codes() == ["no_heldout"]
     assert gate(tmp_path, good_card(heldout_check="true"), require_heldout=True).ready
+
+
+@pytest.mark.parametrize("held", [None, "", "   ", 5])
+def test_risk_requires_heldout(tmp_path, held):
+    card = good_card(risk_tags=["auth"], heldout_check=held)
+    assert gate(tmp_path, card, require_heldout=False).codes() == ["no_heldout"]
+
+
+@pytest.mark.parametrize("smoke", ["true", None, ("true",), [""], ["  "], [4]])
+def test_bad_smoke_check(tmp_path, smoke):
+    assert gate(tmp_path, good_card(smoke_checks=smoke)).codes() == ["bad_smoke_check"]
+
+
+def test_smoke_checks_use_injected_dry_run(tmp_path):
+    calls = []
+
+    def run(cmd, root):
+        calls.append((cmd, root))
+        return (cmd != "broken", "missing executable")
+
+    v = gate(tmp_path, good_card(smoke_checks=["true", "broken"]), dry_run=run)
+    assert calls == [("true", tmp_path), ("true", tmp_path), ("broken", tmp_path)]
+    assert v.findings == (Finding("smoke_not_runnable", "broken: missing executable"),)
+    assert set(v.codes()) <= set(rd.CODES)
+
+
+def test_smoke_checks_default_dry_run(tmp_path):
+    v = check_card(good_card(smoke_checks=["python -m pytest tests/missing.py"]),
+                   repo_root=tmp_path)
+    assert v.findings == (Finding("smoke_not_runnable",
+        "python -m pytest tests/missing.py: missing test path: tests/missing.py"),)
+
+
+@pytest.mark.parametrize("entry", ["", "  ", None, 3])
+def test_bad_export(tmp_path, entry):
+    assert gate(tmp_path, good_card(exports=[entry])).codes() == ["bad_export"]
+    assert "bad_export" in rd.CODES
+
+
+def test_exports_are_signatures_not_paths(tmp_path):
+    assert gate(tmp_path, good_card(exports=["pkg.mod:func", "f(x) -> str"])).ready
+
+
+@pytest.mark.parametrize("cmd,want", [
+    ("FOO=1 python -m pytest -q tests/a.py::test_x -k 'a.py' tests/b.py",
+     ["tests/a.py", "tests/b.py"]),
+    ("true && bin/pytest -c config.py -o cache_dir=x -m slow -p plugin tests; "
+     "py.test ./tests/a.py tests/a.py", ["tests", "tests/a.py"]),
+    ("pytest --ignore=tests/ignored.py tests/**/*.py", ["tests/**/*.py"]),
+    ("echo tests/a.py", []), ("", []), ("pytest 'unterminated", []),
+])
+def test_check_read_paths(cmd, want):
+    assert rd.check_read_paths(cmd) == want
+
+
+@pytest.mark.parametrize("writes,want", [
+    ([], ["tests/a.py", "tests/sub/b.py", "other/test_c.py"]),
+    (["tests/a.py"], ["tests/sub/b.py", "other/test_c.py"]),
+    (["tests/**"], ["other/test_c.py"]),
+    (["./tests/"], ["other/test_c.py"]),
+    (["src/**"], ["tests/a.py", "tests/sub/b.py", "other/test_c.py"]),
+])
+def test_protected_check_paths(writes, want):
+    card = good_card(check_cmd="pytest tests/a.py tests/sub/b.py other/test_c.py",
+                     write_set=writes, forbid_paths=["private"])
+    import copy
+    before = copy.deepcopy(card)
+    assert rd.protected_check_paths(card) == want
+    assert card == before
+
+
+def test_protected_check_paths_without_command():
+    assert rd.protected_check_paths({}) == []
 
 
 def test_all_findings_collected_in_order(tmp_path):

@@ -20,7 +20,7 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 
 __all__ = ["WINDOW_TOKENS", "USABLE_FRACTION", "CODES", "Finding", "Verdict",
            "paths_overlap", "write_sets_disjoint", "default_dry_run", "check_card",
-           "check_cards"]
+           "check_cards", "check_read_paths", "protected_check_paths"]
 
 #: Context window per class, in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
@@ -29,7 +29,8 @@ USABLE_FRACTION = 0.55
 #: Every finding code ``check_card`` can emit.
 CODES = ("no_check", "check_not_runnable", "read_missing", "write_overlap",
          "estimate_missing", "estimate_too_big", "leg_request_too_big", "no_risk_tags",
-         "no_window_class", "bad_path", "no_heldout")
+          "no_window_class", "bad_path", "no_heldout", "bad_smoke_check",
+          "smoke_not_runnable", "bad_export")
 
 _GLOB_CHARS = "*?["
 _ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -219,6 +220,54 @@ def _pytest_args(words: list[str]) -> list[str] | None:
     return None
 
 
+def _pytest_paths(args: list[str]) -> list[str]:
+    paths: list[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        if arg in _PYTEST_VALUE_OPTS:
+            skip = True
+            continue
+        if arg.startswith("-"):
+            continue
+        path = arg.split("::", 1)[0]
+        if path:
+            paths.append(path)
+    return paths
+
+
+def check_read_paths(cmd: str) -> list[str]:
+    """Return distinct, normalised pytest test paths in command order; no filesystem I/O."""
+    if not isinstance(cmd, str):
+        return []
+    try:
+        segments = _split_segments(cmd)
+    except ValueError:
+        return []
+    paths: list[str] = []
+    for seg in segments:
+        words = list(seg)
+        while words and _ASSIGN_RE.match(words[0]):
+            words.pop(0)
+        args = _pytest_args(words) if words else None
+        if args is not None:
+            for path in _pytest_paths(args):
+                path = _norm(path)
+                if path not in paths:
+                    paths.append(path)
+    return paths
+
+
+def protected_check_paths(card: Mapping) -> list[str]:
+    """Return check paths not overlapping writes, without modifying the card."""
+    writes = _as_list(card.get("write_set"))
+    return [path for path in check_read_paths(card.get("check_cmd"))
+            if not any(isinstance(write, str) and paths_overlap(path, write)
+                       for write in writes)]
+
+
 def default_dry_run(cmd: str, repo_root: Path) -> tuple[bool, str]:
     """Check a command line without running it: executables and test paths must exist."""
     repo_root = Path(repo_root)
@@ -241,17 +290,7 @@ def default_dry_run(cmd: str, repo_root: Path) -> tuple[bool, str]:
         args = _pytest_args(words)
         if args is None:
             continue
-        skip = False
-        for arg in args:
-            if skip:
-                skip = False
-                continue
-            if arg in _PYTEST_VALUE_OPTS:
-                skip = True
-                continue
-            if arg.startswith("-"):
-                continue
-            path = arg.split("::", 1)[0]
+        for path in _pytest_paths(args):
             if ("/" in path or path.endswith(".py")) and not (repo_root / path).exists():
                 return False, f"missing test path: {path}"
     return True, "ok"
@@ -350,7 +389,24 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
             and pack_tokens > leg_max_request:
         add("leg_request_too_big", f"pack {pack_tokens} > {leg_max_request}")
 
-    if require_heldout:
+    smoke = card.get("smoke_checks", [])
+    if not isinstance(smoke, list):
+        add("bad_smoke_check", "smoke_checks must be a list")
+    else:
+        for entry in smoke:
+            if not isinstance(entry, str) or not entry.strip():
+                add("bad_smoke_check", f"smoke_checks: {entry!r}")
+                continue
+            ok, reason = dry_run(entry, repo_root)
+            if not ok:
+                add("smoke_not_runnable", f"{entry}: {reason}")
+
+    for entry in _as_list(card.get("exports")):
+        if not isinstance(entry, str) or not entry.strip():
+            add("bad_export", f"exports: {entry!r}")
+
+    risk_tags = card.get("risk_tags")
+    if require_heldout or (isinstance(risk_tags, list) and risk_tags):
         held = card.get("heldout_check")
         if not isinstance(held, str) or not held.strip():
             add("no_heldout", "heldout_check is empty")

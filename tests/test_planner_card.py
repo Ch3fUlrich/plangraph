@@ -29,7 +29,7 @@ def test_valid_roundtrip_to_store():
     out = card.to_store()
     assert set(out) == {"outcome", "read_set", "write_set", "exports", "forbid_paths",
                         "smoke_checks", "check_cmd", "heldout_check", "window_class",
-                        "risk_tags", "estimate_tokens"}
+                        "risk_tags", "estimate_tokens", "check_kind"}
     assert out["write_set"] == ["src/a.py"] and isinstance(out["write_set"], list)
     assert out["exports"] == [] and out["heldout_check"] is None
     assert parse_card(out) == card
@@ -38,6 +38,21 @@ def test_valid_roundtrip_to_store():
 def test_card_is_frozen():
     with pytest.raises(Exception):
         parse_card(raw()).outcome = "x"
+
+
+def test_check_kind_default_and_roundtrip():
+    assert parse_card(raw()).check_kind == "change"
+    assert Card(outcome="old card").check_kind == "change"
+    for kind in ("change", "regression"):
+        card = parse_card(raw(check_kind=kind))
+        assert card.check_kind == kind
+        assert card.to_store()["check_kind"] == kind
+        assert parse_card(card.to_store()) == card
+
+
+@pytest.mark.parametrize("kind", [None, "", "other", " regression ", 1, []])
+def test_invalid_check_kind(kind):
+    assert any("check_kind" in p for p in problems_of(raw(check_kind=kind)))
 
 
 def test_unknown_field_rejected():
@@ -285,6 +300,8 @@ def test_apply_cards_real_store_roundtrip(tmp_path):
         assert apply_cards(world.store, world.p("router"), {key: card}) == [key]
         got = world.store.get_card(world.p("reader"), key)
         want = card.to_store()
+        # Keeper persistence does not yet store the planner-only check_kind field.
+        want.pop("check_kind")
         assert {k: got[k] for k in want} == want
     finally:
         world.close()

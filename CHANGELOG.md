@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-22
+
+- **RT-P1-CARD-CHECKS:** Add planner `check_kind` (default `change`, or `regression`), require held-out checks for risk-tagged cards, validate runnable smoke checks and non-blank export signatures, and expose pure pytest read/protected-path helpers without altering card forbid paths. These deterministic readiness checks prevent incomplete execution briefs from passing the gate; keeper persistence of `check_kind` remains outside this lane.
+
 ## 2026-10-19
 
 - **SPAWNER-CATALOG-DB:** SQLite Model & Benchmark Catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py`, `catalog_db.py`): WAL-mode SQLite catalog storing 22 Artificial Analysis v4.3.2 model benchmarks, quota pools, providers, clients, and role routes (`l1-orchestrator`, `l2-worker`, `l2-reviewer`, `l3-driver`), plus deterministic JSON/OmniRoute combo exporters (`export-json`, `export-combos`).
