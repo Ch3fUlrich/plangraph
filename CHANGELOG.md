@@ -5,6 +5,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## 2026-10-22
 
 - **RT-P1-CARD-CHECKS:** Add planner `check_kind` (default `change`, or `regression`), require held-out checks for risk-tagged cards, validate runnable smoke checks and non-blank export signatures, and expose pure pytest read/protected-path helpers without altering card forbid paths. These deterministic readiness checks prevent incomplete execution briefs from passing the gate; keeper persistence of `check_kind` remains outside this lane.
+- **RT-P1-CARD-CHECKS / RS-DIFFSCAN:** Add a pure unified-diff test-gaming scanner and bounded failure summaries; per-file function matching and net assertion accounting avoid flagging moved tests or replacement assertions.
 
 ## 2026-10-19
 

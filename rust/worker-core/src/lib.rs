@@ -8,6 +8,7 @@ pub mod budget;
 pub mod check;
 pub mod config;
 pub mod confine;
+pub mod diffscan;
 pub mod exit_class;
 pub mod git;
 pub mod hash;
