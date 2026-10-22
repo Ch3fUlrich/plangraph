@@ -1,0 +1,146 @@
+[
+  {
+    "name": "status-table",
+    "fn": "constants",
+    "inputs": {},
+    "expect": {
+      "ERROR_STATUS": {
+        "bad_request": 400,
+        "skew": 401,
+        "unknown_kid": 401,
+        "bad_signature": 401,
+        "replayed_nonce": 401,
+        "not_found": 404,
+        "too_large": 413,
+        "cursor_gone": 410,
+        "rate_limited": 429
+      }
+    }
+  },
+  {
+    "name": "bad_request",
+    "fn": "error_body",
+    "inputs": {
+      "code": "bad_request",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "bad_request",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "skew",
+    "fn": "error_body",
+    "inputs": {
+      "code": "skew",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "skew",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "unknown_kid",
+    "fn": "error_body",
+    "inputs": {
+      "code": "unknown_kid",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "unknown_kid",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "bad_signature",
+    "fn": "error_body",
+    "inputs": {
+      "code": "bad_signature",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "bad_signature",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "replayed_nonce",
+    "fn": "error_body",
+    "inputs": {
+      "code": "replayed_nonce",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "replayed_nonce",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "not_found",
+    "fn": "error_body",
+    "inputs": {
+      "code": "not_found",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "not_found",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "too_large",
+    "fn": "error_body",
+    "inputs": {
+      "code": "too_large",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "too_large",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "cursor_gone",
+    "fn": "error_body",
+    "inputs": {
+      "code": "cursor_gone",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "cursor_gone",
+        "message": "Request rejected"
+      }
+    }
+  },
+  {
+    "name": "rate_limited",
+    "fn": "error_body",
+    "inputs": {
+      "code": "rate_limited",
+      "message": "Request rejected"
+    },
+    "expect": {
+      "error": {
+        "code": "rate_limited",
+        "message": "Request rejected"
+      }
+    }
+  }
+]
