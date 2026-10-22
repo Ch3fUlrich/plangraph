@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from datetime import datetime, timezone
 
@@ -70,9 +71,10 @@ def _age(stamp, now):
 
 
 def _finding(rule, kind, key, detail, ts, reason=None):
+    key = key or ""                     # a NULL column never reaches _sort/JSON
     return {"rule": rule, "kind": kind, "key": key,
             "reason": reason or f"{rule}:{kind}:{key}",
-            "detail": str(detail), "ts": ts}
+            "detail": str(detail or ""), "ts": ts or ""}
 
 
 def _sort(rows):
@@ -300,13 +302,14 @@ def r6_projector(conn, now):
         # module, not projector conditions: reporting them would feed back.
         for alarm in conn.execute(
                 "SELECT kind, key, detail, raised_at FROM projector_alarms"
-                " WHERE cleared_at IS NULL AND workflow_id <> 'oversight'"
+                " WHERE cleared_at IS NULL AND (workflow_id IS NULL"
+                " OR workflow_id <> 'oversight')"
                 " ORDER BY id"):
-            reason = f"R6:reconcile_alarm:{alarm['kind']}:{alarm['key']}"
+            reason = f"R6:reconcile_alarm:{alarm['kind']}:{alarm['key'] or ''}"
             # The finding key carries the alarm kind so two open alarms that
             # share a key but differ in kind stay distinct in raise_alarms.
             rows.append(_finding("R6", "reconcile_alarm",
-                                 f"{alarm['kind']}:{alarm['key']}",
+                                 f"{alarm['kind']}:{alarm['key'] or ''}",
                                  alarm["detail"], alarm["raised_at"],
                                  reason=reason))
     return _sort(rows)
@@ -326,7 +329,7 @@ def r7_burn(conn, day, now):
         value = float(row["value"])
     except (TypeError, ValueError):
         return []
-    if value <= BURN_LIMIT:
+    if not math.isfinite(value) or value <= BURN_LIMIT:
         return []
     detail = f"burn index {value} on {day} exceeds limit {BURN_LIMIT}"
     return [_finding("R7", "burn_over", str(day), detail, str(day))]

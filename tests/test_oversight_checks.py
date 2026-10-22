@@ -517,3 +517,83 @@ def test_sort_breaks_ties_on_detail_then_ts():
     rows = [dict(rule="R1", kind="k", key="demo:A", reason="r", detail=d,
                  ts="") for d in ("b", "a")]
     assert [f["detail"] for f in oversight._sort(rows)] == ["a", "b"]
+
+
+# ------------------------------- F9: R7 ignores a non-finite burn index
+def test_r7_does_not_fire_on_a_nan_burn_index(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    # SQLite's REAL affinity keeps a non-numeric TEXT ('nan') as text; float()
+    # parses it, but a NaN is not a number this rule may report on.
+    w.conn.execute(
+        "INSERT INTO metrics(day, metric, value, source, computed_at)"
+        " VALUES(?,?,?,?,?)",
+        (DAY, "claude_burn_index", "nan", "test", w.store._iso(w.clock())))
+    w.conn.commit()
+    assert oversight.r7_burn(w.conn, DAY, w.clock()) == []
+
+
+def legacy_alarm_rows(w):
+    """Rebuild ``projector_alarms`` so NULL workflow_id/raised_at rows can exist.
+
+    The current DDL declares both columns NOT NULL, but rows written before
+    those defaults (or by another writer) can still hold NULL; the rules must
+    tolerate them.  Rebuilding in this fixture is the only way to seed one.
+    """
+    import sqlite3
+    raw = sqlite3.connect(str(w.path), isolation_level=None)
+    try:
+        raw.execute("ALTER TABLE projector_alarms"
+                    " RENAME TO projector_alarms_strict")
+        raw.execute(
+            "CREATE TABLE projector_alarms ("
+            " id INTEGER PRIMARY KEY, kind TEXT NOT NULL,"
+            " workflow_id TEXT, key TEXT NOT NULL, detail TEXT,"
+            " raised_at TEXT, cleared_at TEXT)")
+        raw.execute("DROP TABLE projector_alarms_strict")
+    finally:
+        raw.close()
+
+
+# ------------------- F10: R6 includes an open alarm with a NULL workflow_id
+def test_r6_reports_an_open_alarm_whose_workflow_id_is_null(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    watermark(w, w.store._iso(w.clock()))   # isolate the alarm from the watermark
+    legacy_alarm_rows(w)
+    w.conn.execute(
+        "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail,"
+        " raised_at) VALUES(9, 'state_drift', NULL, 'demo:Z', 'drifted', ?)",
+        (w.store._iso(w.clock()),))
+    w.conn.commit()
+    rows = oversight.r6_projector(w.conn, w.clock())
+    assert [(f["rule"], f["kind"], f["key"]) for f in rows] == [
+        ("R6", "reconcile_alarm", "state_drift:demo:Z")]
+
+
+# ---------------- F11: a NULL raised_at/detail never reaches a finding
+def test_run_checks_tolerates_a_null_raised_at_on_an_open_alarm(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    watermark(w, w.store._iso(w.clock()))
+    legacy_alarm_rows(w)
+    now = w.store._iso(w.clock())
+    # The two state_drift rows differ only in workflow_id (not part of a
+    # finding) and ts, so _sort has to compare a raw None against a str.
+    for alarm_id, workflow, raised_at in ((1, "wf", None), (2, "wf2", now)):
+        w.conn.execute(
+            "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail,"
+            " raised_at) VALUES(?,?,?,?,?,?)",
+            (alarm_id, "state_drift", workflow, "demo:Z", "drifted", raised_at))
+    # A NULL detail must not surface as the literal string "None".
+    w.conn.execute(
+        "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail,"
+        " raised_at) VALUES(3, 'lease_gap', 'wf', 'demo:Y', NULL, ?)", (now,))
+    w.conn.commit()
+    rows = oversight.run_checks(w.conn, w.clock())
+    alarms = {(f["key"], f["ts"]): f["detail"] for f in rows
+              if f["kind"] == "reconcile_alarm"}
+    assert sorted(alarms) == [("lease_gap:demo:Y", now),
+                              ("state_drift:demo:Z", ""),
+                              ("state_drift:demo:Z", now)]
+    assert alarms[("lease_gap:demo:Y", now)] == ""
