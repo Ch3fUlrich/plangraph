@@ -184,6 +184,9 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 - Risk monotonicity uses `envelope_intelligence` as a best-effort envelope: candidates are filtered to intelligence at or above the best lower-band pick; when that leaves none, resolution falls back to the floor rules, so the envelope cannot be met in every case.
 - Tie-breaking uses an epsilon band with absolute utility thresholds of 0.5 and 0.3 utility points.
 - The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers — see the file.
+- The `cost_per_task_usd` field is the catalogued price in USD per task. Utility subtracts `cost_per_task_usd * gamma_cost` in utility points.
+- Absolute cost scale matters on purpose: a 10x price change may reorder near-ties inside the epsilon band because cost is real money. Outside the band the order follows utility at any cost scale (proved by `test_order_follows_utility_outside_epsilon_band_any_cost_scale`).
+- Speed-scale invariance (`test_speed_scale_invariance`) holds because speed is only a relative tie-break inside the band.
 
 ---
 

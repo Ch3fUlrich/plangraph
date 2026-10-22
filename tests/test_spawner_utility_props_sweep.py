@@ -32,6 +32,7 @@ from plangraph.spawner.resolver import (
     rank_candidates,
     resolve_model_for_task,
     resolve_review_plan,
+    score_model,
 )
 from plangraph.spawner.risk import RISK_MIN_INTELLIGENCE
 
@@ -360,3 +361,64 @@ def test_pick_stability_under_one_point():
     assert flip_rate <= 0.10, (
         f"pick flip rate {flip_rate:.3f} ({flips}/{len(catalogs)}) exceeds 10%"
     )
+
+
+def test_order_follows_utility_outside_epsilon_band_any_cost_scale():
+    base_specs = [
+        ('r1/x', 0.0100, 10.0),
+        ('r2/x', 0.0175, 20.0),
+        ('r3/x', 0.0250, 30.0),
+        ('r4/x', 0.0325, 40.0),
+        ('r5/x', 0.0400, 1000.0),
+    ]
+
+    def _check(rows, risk):
+        ranked = call_with_timeout(
+            lambda: rank_candidates(
+                rows, role='implement', risk=risk, need_tokens=32000
+            )
+        )
+        epsilon = 0.3 if risk in ('high', 'critical') else 0.5
+        for i, a in enumerate(ranked):
+            for b in ranked[i + 1:]:
+                diff = (
+                    score_model(b, role='implement', risk=risk, need_tokens=32000)
+                    - score_model(a, role='implement', risk=risk, need_tokens=32000)
+                )
+                assert diff <= epsilon + 1e-9, (
+                    f'risk {risk}: later candidate is {diff:.12g} utility points better '
+                    f'than earlier candidate (epsilon {epsilon})'
+                )
+
+    for c in (0.1, 1.0, 10.0):
+        base_rows = [
+            row(
+                rid,
+                50.0,
+                cost=cost * c,
+                tier='subscription',
+                speed=speed,
+                combos=('l2-worker',),
+            )
+            for rid, cost, speed in base_specs
+        ]
+        for risk in ('low', 'normal', 'high', 'critical'):
+            _check(base_rows, risk)
+
+        rng = random.Random(77)
+        for catalog_i in range(30):
+            n = rng.randint(6, 10)
+            random_rows = []
+            for model_i in range(n):
+                random_rows.append(
+                    row(
+                        f'rand{catalog_i}_{model_i}/x',
+                        rng.uniform(40.0, 58.0),
+                        cost=rng.uniform(0.02, 2.0) * c,
+                        tier=rng.choice(('subscription', 'api', 'free')),
+                        speed=rng.uniform(1.0, 300.0),
+                        combos=('l2-worker',),
+                    )
+                )
+            for risk in ('low', 'normal', 'high', 'critical'):
+                _check(random_rows, risk)
