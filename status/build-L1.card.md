@@ -31,3 +31,6 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 
 - oc-harden #95 d542cf0 BLOCKED: workst admission 82.6% commit charge; asked workst-L1-autoos to reap; fix = no_change migration PG6 + sqlite rebuild (cx writer).
 - sandbox #100 head 5903b35: push ff to spine/attempt-sandbox authorised; seats glm+deepseek wait admission (fallback: I run them from coding.vm after 21:30Z).
+- KEEPER-OPCLAIM-CLOSE (HIGH, D-2283/2284, mine): wt opclaim-close lane/keeper-opclaim-close; writer omniroute/mimo-v2.6-flash run 20261022-202358-...6d5fb8 (cx not declared on coding.vm, D-2148 skip). Design: A refuse legacy claimed on non-none tier, B legacy claim -> in_review recovery. Then PR, 2 seats non-xiaomi, GO-REQ routing, then router closes server:OP-DOCKHAND-EVENTS.
+- sandbox #100 d0905cc CI green (39848018702); seats base cd073676..d0905cc; admission 88% -> coding.vm seats at 21:30Z if BLOCKED.
+- D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
