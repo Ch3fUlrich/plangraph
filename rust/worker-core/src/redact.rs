@@ -610,7 +610,10 @@ mod tests {
         check(format!("{name}=abc\\\ndef"), format!("{name}={REDACTED}"));
         check(format!("{name}=a\\\nb\\\nc"), format!("{name}={REDACTED}"));
         check(format!("{name}=abc\\\r\ndef"), format!("{name}={REDACTED}"));
-        check(format!("{name}=\"abc\\\ndef\""), format!("{name}={REDACTED}"));
+        check(
+            format!("{name}=\"abc\\\ndef\""),
+            format!("{name}={REDACTED}"),
+        );
         check(format!("{name}=\"abc\\\ndef"), format!("{name}={REDACTED}"));
         check(
             format!("{name}=abc\nnext line"),
