@@ -1397,6 +1397,7 @@ mod tests {
     #[test]
     fn park_json_with_attempt_carries_the_attempt_and_still_parses() {
         use pg_worker_core::exit_class::ExitClass;
+        use std::collections::BTreeSet;
         let p = ParkPacket {
             card: "c1".to_string(),
             tier: Tier::Free,
@@ -1411,13 +1412,50 @@ mod tests {
         );
         let v: serde_json::Value = serde_json::from_str(&tagged).unwrap();
         assert_eq!(v["attempt"], 4);
-        assert_eq!(v.as_object().unwrap().len(), 5);
+        assert_eq!(
+            v.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "card",
+                "tier",
+                "exit_class",
+                "check_tail",
+                "attempt",
+                "expected_state",
+            ])
+        );
         assert_eq!(ParkPacket::from_json(&tagged).unwrap(), p);
         // The activity reads the same key back out of the input.
         assert_eq!(park_attempt_of(&tagged), Some(4));
 
+        let attempt_only = park_json_with_attempt(&p, Some(4), None);
+        let v: serde_json::Value = serde_json::from_str(&attempt_only).unwrap();
+        assert_eq!(
+            v.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["card", "tier", "exit_class", "check_tail", "attempt"])
+        );
+        assert_eq!(v["attempt"], 4);
+        assert_eq!(ParkPacket::from_json(&attempt_only).unwrap(), p);
+        assert_eq!(park_attempt_of(&attempt_only), Some(4));
+
         // Unset attempt: the plain packet JSON, no extra key at all.
         let plain = park_json_with_attempt(&p, None, None);
+        let v: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(
+            v.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["card", "tier", "exit_class", "check_tail"])
+        );
         assert!(
             serde_json::from_str::<serde_json::Value>(&plain)
                 .unwrap()
