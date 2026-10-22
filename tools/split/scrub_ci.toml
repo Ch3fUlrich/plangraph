@@ -1278,3 +1278,15 @@ path = "rust/worker-core/src/redact.rs"
 rule = "token-shape"
 value_sha256 = "28804bcd4506d512ee74283280f3b3b59a33366afb657b8898155b2183c65869"
 why = "test-only PEM fixture (pem_block), body 64x A, not a key (mod tests)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "14abc6cf8ac6921ce1a0f8fb62e01870c7a9c05f9595fcecf34d55236cf6a339"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "101c1f4ba5b0a10ef9f5b4b3666c7c3f935c1ac957f00d32697ef6df308799cf"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
