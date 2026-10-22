@@ -109,6 +109,7 @@ def test_claim_succeeds_without_base_when_git_or_head_unavailable(w):
         evidence_kinds=("commit+ci",),
     )
 
+    assert len(keys) == len(cases)
     for ctx, key in zip(cases, keys):
         w.store.ctx = ctx
         epoch = to_claimed(w, key)
