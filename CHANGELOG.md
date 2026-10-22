@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-22
+
+- **RT-P1-EXEC-OWNERSHIP:** regression tests that the reaper leaves running/waiting/needs_input cards alone and a delayed worker retry cannot overwrite a newer projector state (tests/test_keeper_exec_reaper.py).
+
 ## 2026-10-19
 
 - **SPAWNER-CATALOG-DB:** SQLite Model & Benchmark Catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py`, `catalog_db.py`): WAL-mode SQLite catalog storing 22 Artificial Analysis v4.3.2 model benchmarks, quota pools, providers, clients, and role routes (`l1-orchestrator`, `l2-worker`, `l2-reviewer`, `l3-driver`), plus deterministic JSON/OmniRoute combo exporters (`export-json`, `export-combos`).
