@@ -182,8 +182,8 @@ def seed_needs_you(w):
 def ask(w, key, deadline):
     """An open question for *key* whose *deadline* is an ISO stamp."""
     w.conn.execute(
-        "INSERT INTO questions(key, text, deadline, state, created_at)"
-        " VALUES(?,?,?,?,?)",
+        "INSERT INTO questions(id, key, text, deadline, state, created_at)"
+        " VALUES((SELECT COALESCE(MAX(id),0)+1 FROM questions),?,?,?,?,?)",
         (key, "which way?", deadline, "open", w.store._iso(w.clock())))
     w.conn.commit()
 
