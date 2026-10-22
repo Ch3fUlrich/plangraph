@@ -244,7 +244,6 @@ class ReviewMixin:
             if second:
                 cursor = self.conn.execute(
                     "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
-                    " exec_workflow_id=NULL, exec_run_id=NULL, exec_attempt=NULL,"
                     " reviewer=?, lease_until=NULL, updated_at=?"
                     " WHERE key=? AND state='in_review' AND epoch=?",
                     (principal.name, self._iso(now), key, item["epoch"]))
@@ -257,4 +256,6 @@ class ReviewMixin:
                     " WHERE key=? AND state='in_review' AND epoch=?",
                     (principal.name, lease, self._iso(now), key, item["epoch"]))
             self._race_guard(cursor, key, "in_review", item["epoch"])
+            # Both outcomes hand back new work, even when the claimant stays.
+            self._exec_clear(self.conn, key)
         return {"key": key, "state": state, "reviews_passed": 0}

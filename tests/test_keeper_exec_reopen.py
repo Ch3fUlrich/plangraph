@@ -83,9 +83,10 @@ def test_second_review_change_reopens_without_owner_and_new_run_can_park(w):
     for expected in ("claimed", "open"):
         w.store.submit(worker, key, epoch)
         assert w.store._item(key)["state"] == "in_review"
-        assert owner(w, key) == RUN1
+        assert owner(w, key) == (RUN1 if expected == "claimed" else (None, None, None))
         result = w.store.verdict(w.p("reviewer"), key, False, "needs changes")
         assert result["state"] == expected
+        assert owner(w, key) == (None, None, None)
     assert owner(w, key) == (None, None, None)
     assert w.store.worker_park(worker, park(key, **RUN2))["state"] == "parked"
     assert owner(w, key) == ("wf-2", "run-2", 1)
