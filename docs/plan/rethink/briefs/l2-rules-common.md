@@ -10,6 +10,7 @@
 - SEATS = D-2166 order: opencode free > openrouter free > qodercli qwen3.8-flash > agy gemini-3.8-flash > mimo-v2.6-flash > agy claude-sonnet-5.5-medium
   > deepseek-v4-flash (last resort). Family differs from the writer and each other; skip a rate-limited leg + record why (2026-10-22: opencode 429,
   agy gemini quota 429 ~33 h, openrouter free has no direct spawner path). agy sonnet is never the non-Claude seat of a HIGH lane.
+  D-2195: while OR free fails, deepseek-v4-flash takes its slot (2nd); mimo seats no-tools only; agy gemini 429 until ~10-23 22Z.
   Seat records: served model + provider + family. Spawner first (D-2038); a leg the spawner does not declare -> ops/seat.sh (gateway review-call).
 - Authorship D-2046/2047: every NEW commit carries `Writer: <served model> <run id>`; ci-gate refuses missing/Claude writers; existing commits never redone;
   removing a test needs `Test-Removal: D-NNNN`.
