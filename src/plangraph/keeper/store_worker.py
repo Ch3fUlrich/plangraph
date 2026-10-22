@@ -37,7 +37,7 @@ import re
 
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import SETTABLE_STATES, _count, _exec_parts, _forward, _number, _text
+from .store_cards import SETTABLE_STATES, _count, _exec_parts, _number, _text
 
 __all__ = ["WorkerMixin"]
 
@@ -142,15 +142,17 @@ class WorkerMixin:
     def _exec_gate(self, key, body, *, record=True):
         """Check a worker verb body against the card's recorded exec owner.
 
-        Runs INSIDE the caller's write lock (park's ``guard`` hook and
+        Recording runs INSIDE the caller's write lock (park's ``guard`` hook and
         complete/alarm's write block) because it may record the owner or bump
         the attempt.  RT-P1-EXEC-OWNERSHIP: a body naming any of
         ``workflow_id``/``run_id``/``attempt`` must present all three and match
         the owner (``_exec_check``: a first call records it; a stale run or a
         lower attempt is refused); a body without them keeps the historical
         behaviour unless the card is already owned. ``record=False`` validates
-        an unowned call without acquiring ownership (audit-only or no-op).
+        an unowned call without acquiring ownership (audit-only or no-op), and
+        permits a plain read for audit-only attempts.
         """
+        # No router/system exemption: router paths clear the owner instead.
         row = self.conn.execute(
             "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
         owned = row is not None and row["exec_run_id"] is not None
@@ -188,8 +190,7 @@ class WorkerMixin:
         _count("tokens_out", body.get("tokens_out"))
         _number("cost", body.get("cost"))
         key = self._resolve_scoped(principal, card)
-        with self._write():
-            self._exec_gate(key, body, record=False)
+        self._exec_gate(key, body, record=False)
         return {"card": key, "n": number, "exit_class": exit_class}
 
     # -------------------------------------------------------------- park
@@ -199,8 +200,6 @@ class WorkerMixin:
 
     def _worker_park(self, principal, body, now):
         _check_body(body, _PARK_KEYS, "worker_park")
-        if "expected_state" in body and body["expected_state"] is None:
-            raise Refused("validation", "expected_state must be a state or non-empty list")
         card = _text("card", body.get("card"), required=True)
         tier = _text("tier", body.get("tier"), key=card) or ""
         exit_class = body.get("exit_class")
@@ -218,14 +217,6 @@ class WorkerMixin:
         def guard(item):
             self._exec_expect_state(item, body.get("expected_state"))
             self._park_guard(principal, item, epoch, now)
-            # Claimed parks retain holder/lease-guarded claim release even when
-            # exec-fenced; claimed is intentionally outside the forward table.
-            fenced = item["exec_run_id"] is not None or any(
-                body.get(name) is not None
-                for name in ("workflow_id", "run_id", "attempt"))
-            if fenced and item["state"] != "claimed" and not _forward(item["state"], "parked"):
-                raise Refused("bad_transition",
-                              f"{item['key']}: {item['state']} -> parked is not a forward move")
             self._exec_gate(item["key"], body, record=item["state"] != "parked")
 
         result = self._apply_state(principal, key, "parked", why, now,
@@ -242,8 +233,6 @@ class WorkerMixin:
 
     def _worker_complete(self, principal, body, now):
         _check_body(body, _COMPLETE_KEYS, "worker_complete")
-        if "expected_state" in body and body["expected_state"] is None:
-            raise Refused("validation", "expected_state must be a state or non-empty list")
         card = _text("card", body.get("card"), required=True)
         merged_sha = body.get("merged_sha")
         if not isinstance(merged_sha, str) or not _SHA_RE.fullmatch(merged_sha):

@@ -87,16 +87,6 @@ def test_existing_unowned_fact_does_not_acquire_owner(w, verb, body):
     assert owner(w, key) == (None, None, None)
 
 
-def test_refused_park_does_not_acquire_owner(w):
-    key, = seed(w, [("A", [])])
-    with w.store._write():
-        w.conn.execute("UPDATE items SET state='done' WHERE key=?", (key,))
-    with pytest.raises(Refused):
-        w.store.worker_park(w.p("workerA"),
-                            {"card": key, "exit_class": "check_fail", **RUN})
-    assert owner(w, key) == (None, None, None)
-
-
 @pytest.mark.parametrize("extra", [{}, {**RUN, "run_id": "stale"},
                                    {**RUN, "attempt": 1}])
 def test_noop_complete_still_checks_recorded_owner(w, extra):

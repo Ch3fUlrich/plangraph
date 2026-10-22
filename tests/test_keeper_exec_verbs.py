@@ -88,6 +88,10 @@ def test_a_claimed_card_parked_by_its_holder_records_the_owner(doors, w):
     assert doors.http("workerA", "POST", "/v1/park", park(key, **RUN1)) == (204, "")
     assert state(w, key) == "parked"
     assert owner(w, key) == ("wf-1", "run-1", 1)
+    row = w.conn.execute(
+        "SELECT claimed_by, delegate, lease_until FROM items WHERE key=?",
+        (key,)).fetchone()
+    assert tuple(row) == (None, None, None)
 
 
 def test_a_claimed_owned_card_refuses_park_by_a_stale_run(doors, w):
