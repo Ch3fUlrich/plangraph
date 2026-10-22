@@ -7,7 +7,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv | #112 31c525d8 CI green; r6 deepseek FIX (H1 park excludes waiting, H2 parked no owner clear, M3 retry 409) -> fix round sent; qwen rerun via stdin (bg bi0zedgih). qodercli: big prompts via stdin, NOT --attachment |
+| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv | #112 31c525d8 CI green; r6 deepseek FIX (H1 park excludes waiting, H2 parked no owner clear, M3 retry 409) -> fix round sent; qwen PASS (3rd try). qodercli: big prompts via stdin + "You have NO tools" header line, NOT --attachment |
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S2 MERGED ef4cab7d (GO D-2291, head 02a5b0eb = 4c88ad17 + clean main merge); ciev bg bx1u58lc0 evidence only. S3: spine/phase-runner-s3a (keeper verb phase_finish, D-2227) + s3 (worker). HARDEN: add D-2288 criteria when open |
