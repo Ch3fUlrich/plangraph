@@ -275,6 +275,9 @@ pub struct JanitorInput {
     pub workroot: String,
     pub check_cmd: String,
     pub base_sha: String,
+    /// Card whose attempts are swept; empty sweeps every attempt of the repo (legacy input).
+    #[serde(default)]
+    pub card: String,
 }
 
 /// Everything the activities need, injected so tests can stub the seams.
@@ -855,8 +858,8 @@ impl Drop for KeeperLease<'_> {
     }
 }
 
-/// Sweep dead attempts of `repo`, treating none as live, and report how many
-/// were removed. Every attempt branched from the same `base_sha`.
+/// Sweep dead attempts of `input.card` (every card when empty), treating none
+/// as live, and report how many were removed. Every attempt branched from the same `base_sha`.
 pub(crate) fn do_janitor(cfg: &Config, input: &JanitorInput) -> Result<u32, GitError> {
     let base = input.base_sha.clone();
     let base_for = move |_: &AttemptId| base.clone();
@@ -866,7 +869,13 @@ pub(crate) fn do_janitor(cfg: &Config, input: &JanitorInput) -> Result<u32, GitE
         tail_lines: cfg.check_tail_lines,
         base_for: &base_for,
     };
-    let report = janitor::sweep(Path::new(&input.repo), &HashSet::new(), &spec)?;
+    let live = HashSet::new();
+    let repo = Path::new(&input.repo);
+    let report = if input.card.is_empty() {
+        janitor::sweep(repo, &live, &spec)?
+    } else {
+        janitor::sweep_card(repo, &input.card, &live, &spec)?
+    };
     Ok(report.removed.len() as u32)
 }
 
@@ -1421,6 +1430,7 @@ mod tests {
             workroot: "/w".to_string(),
             check_cmd: "true".to_string(),
             base_sha: "b".to_string(),
+            card: "c1".to_string(),
         });
         round_trip(&GateInput {
             workroot: "/w".to_string(),
@@ -1973,10 +1983,48 @@ mod tests {
             workroot: root.path().to_string_lossy().into_owned(),
             check_cmd: "test -f other.txt".to_string(),
             base_sha: base,
+            card: "c1".to_string(),
         };
         // Commit beyond base but a failing check is `partial`, so it is removed.
         assert_eq!(do_janitor(&tiny(), &input).unwrap(), 1);
         assert!(!wt.path.exists());
+    }
+
+    #[test]
+    fn do_janitor_scoped_to_one_card() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let c1 = AttemptId::new("c1", 1);
+        let c2 = AttemptId::new("c2", 1);
+        let wt1 = worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(c1.dir_name()),
+            &c1,
+        )
+        .unwrap();
+        let wt2 = worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(c2.dir_name()),
+            &c2,
+        )
+        .unwrap();
+        write(&wt1.path, "half.txt", "x");
+        commit_all(&wt1.path, "work");
+
+        let input = JanitorInput {
+            repo: r.path().to_string_lossy().into_owned(),
+            workroot: root.path().to_string_lossy().into_owned(),
+            check_cmd: "test -f other.txt".to_string(),
+            base_sha: base,
+            card: "c1".to_string(),
+        };
+
+        // c1 is partial and removed; c2 belongs to another card and stays.
+        assert_eq!(do_janitor(&tiny(), &input).unwrap(), 1);
+        assert!(!wt1.path.exists());
+        assert!(wt2.path.exists());
     }
 
     /// One named check for the gate tests.
