@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## 2026-10-22
 
+- **SEAT-COVERAGE-KEEPER (tests only):** red tests in `tests/test_keeper_seat_coverage.py` for the keeper refusing to close an item until every `Writer:` family of its current-epoch commit+ci evidence is covered by the posted reviewer families (mixed writers, two Claude seats counting as one family, sensitive high items, standard tier, missing/unknown trailers and `trailers()` errors failing closed as `writer_unknown`, decision-only items unchanged, `ok=False` exempt, and atomic refusals), plus a `trailers_by_sha` extension to `FakeGit` in `tests/evidence_fakes.py`; the keeper-side check is not implemented yet.
 - **RT-P1-FLOW-UNBLOCK (follow-up):** tests only: non-router `add_dep` via `apply_ops` on a claimed item is refused (`forbidden`); the router's add_dep on a claimed item asserts its `item_defined` event; length assert in the claim-without-base test.
 
 ## 2026-10-19
