@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 RISKS = ("low", "normal", "high", "critical")
@@ -19,6 +22,9 @@ def test_docs_contract_terms() -> None:
         "envelope_intelligence",
         '"drive"',
         "spawner-sensitivity.json",
+        "0.20",
+        "pool_burn_weight",
+        "128000",
     ):
         assert term in text
 
@@ -52,13 +58,43 @@ def _load_sweep_module():
     spec.loader.exec_module(module)
     return module
 
-def test_sensitivity_json_reproducible(tmp_path: Path) -> None:
+
+@contextlib.contextmanager
+def isolated_import_state():
+    """Restore sys.path and drop the test-only module after the block."""
+    saved_path = list(sys.path)
+    had_module = "spawner_sensitivity_under_test" in sys.modules
+    try:
+        yield
+    finally:
+        sys.path[:] = saved_path
+        if not had_module:
+            sys.modules.pop("spawner_sensitivity_under_test", None)
+
+
+@pytest.fixture
+def restore_import_state(monkeypatch):
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    with isolated_import_state():
+        yield
+
+def test_sensitivity_json_reproducible(
+    tmp_path: Path, restore_import_state
+) -> None:
     committed = (ROOT / "docs" / "spawner-sensitivity.json").read_bytes()
     out = tmp_path / "spawner-sensitivity.json"
     module = _load_sweep_module()
     rc = module.main(["--out", str(out), "--catalogs", "200"])
     assert rc == 0
     assert out.read_bytes() == committed
+
+
+def test_sweep_loader_does_not_leak_state() -> None:
+    saved_path = list(sys.path)
+    with isolated_import_state():
+        _load_sweep_module()
+    assert sys.path == saved_path
+    assert "spawner_sensitivity_under_test" not in sys.modules
 
 
 def test_sweep_is_not_vacuous():
