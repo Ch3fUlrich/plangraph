@@ -28,6 +28,14 @@ an owner refuses bodies that omit all three, so one run cannot act on another
 run's card.  Bodies without the fields keep the historical behaviour on
 unowned cards.
 
+Order inside the park/complete guards: the stale-run and lower-attempt checks
+run first (validating only), then a DUPLICATE -- the card already reached the
+verb's final state (``parked``/``done``) and the body either names the
+recorded owner or, with no owner, names no triple -- is a success no-op that
+short-circuits before ``expected_state``.  A retried park whose response was
+lost therefore succeeds instead of failing every retry with
+``exec_stale_state``; a different run is still ``exec_stale``.
+
 All SQL is portable (``?`` placeholders, ids assigned as ``MAX(id)+1`` inside
 the write lock) so it runs unchanged on SQLite and Postgres.
 """
@@ -44,6 +52,8 @@ __all__ = ["WorkerMixin"]
 _ATTEMPT_KEYS = frozenset(("card", "n", "leg", "exit_class", "diff_hash",
                            "check_tail", "cost", "tokens_in", "tokens_out",
                            "workflow_id", "run_id", "attempt"))
+#: The three fields that name an exec run on a worker body.
+_EXEC_IDS = ("workflow_id", "run_id", "attempt")
 # ``n`` is the projector's attempt number, distinct from the exec attempt.
 _PARK_KEYS = frozenset(("card", "tier", "exit_class", "check_tail", "epoch",
                         "workflow_id", "run_id", "attempt", "expected_state"))
@@ -169,6 +179,29 @@ class WorkerMixin:
         if owned or record:
             self._exec_check(self.conn, key, *parts, record=record)
 
+    @staticmethod
+    def _exec_duplicate(item, body, final):
+        """True when *body* retries a worker call that already reached *final*.
+
+        RT-P1-EXEC-OWNERSHIP: a park whose response was lost (card already
+        ``parked``) or a complete whose response was lost (card already
+        ``done``) is a SUCCESS NO-OP, decided BEFORE ``expected_state``: the
+        observed state the retry carries is the state the worker saw before its
+        first call succeeded, so honouring it would turn a duplicate into
+        ``exec_stale_state`` on every retry.  It is a duplicate only when the
+        body's ``(workflow_id, run_id, attempt)`` equals the recorded owner, or
+        the card has no owner and the body carries no triple -- a different run,
+        a backwards attempt and a malformed triple are refused by the caller's
+        stale/lower-attempt check, which runs first.
+        """
+        if item["state"] != final:
+            return False
+        parts = tuple(body.get(name) for name in _EXEC_IDS)
+        if all(part is None for part in parts):   # no triple: as the gate reads it
+            return item["exec_run_id"] is None
+        return parts == (item["exec_workflow_id"], item["exec_run_id"],
+                         item["exec_attempt"])
+
     # ----------------------------------------------------------- attempts
     def worker_attempt(self, principal, body):
         return self._run(principal, "worker_attempt", _card_name(body),
@@ -215,9 +248,18 @@ class WorkerMixin:
         why = f"parked: {exit_class} ({tier})"[:500]
 
         def guard(item):
+            # 1. Stale-run / lower-attempt checks decide first, and only
+            #    validate here: a call that fails later must not acquire
+            #    ownership (record=False).
+            self._exec_gate(item["key"], body, record=False)
+            # 2. A duplicate park is a success no-op, ahead of expected_state.
+            if self._exec_duplicate(item, body, "parked"):
+                return
+            # 3. Observed-state CAS, then the claim binding, then ownership.
             self._exec_expect_state(item, body.get("expected_state"))
             self._park_guard(principal, item, epoch, now)
-            self._exec_gate(item["key"], body, record=item["state"] != "parked")
+            if item["state"] != "parked":
+                self._exec_gate(item["key"], body, record=True)
 
         result = self._apply_state(principal, key, "parked", why, now,
                                    lambda project: self._may_act_in(principal,
@@ -241,8 +283,14 @@ class WorkerMixin:
         key = self._resolve_scoped(principal, card)
         with self._write():
             item = self._get_or_refuse(key)
-            self._exec_expect_state(item, body.get("expected_state"))
-            self._exec_gate(key, body, record=item["state"] != "done")
+            # Stale-run / lower-attempt checks decide first (validate only, so a
+            # call that fails below acquires nothing).
+            self._exec_gate(key, body, record=False)
+            # A duplicate complete is a success no-op, ahead of expected_state.
+            if not self._exec_duplicate(item, body, "done"):
+                self._exec_expect_state(item, body.get("expected_state"))
+                if item["state"] != "done":
+                    self._exec_gate(key, body, record=True)
         return {"card": key, "merged_sha": merged_sha}
 
     # ------------------------------------------------------------ alarms

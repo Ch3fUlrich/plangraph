@@ -47,8 +47,9 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
 
 
 # Explicit exceptions are function-scoped so moving line numbers is harmless.
+# ``set_state``/``_apply_state`` is NOT allow-listed: since RT-P1-EXEC-OWNERSHIP
+# every hand-back it writes (open/ready, changing, run-less) calls ``_exec_clear``.
 STATE_WRITER_EXCEPTIONS = {
-    ("store_cards.py", "_apply_state"): "Worker/projector/set_state preserves or checks run ownership.",
     ("store_legacy.py", "_set_legacy_state"): "Legacy set_state compatibility path, not a work handback.",
     ("store_verbs.py", "_claim"): "A worker may claim before running; claim must preserve ownership.",
     ("store_verbs.py", "_submit"): "Submits to review, not to new work.",

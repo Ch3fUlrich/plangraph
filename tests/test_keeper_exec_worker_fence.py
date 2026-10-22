@@ -109,3 +109,71 @@ def test_noop_complete_still_checks_recorded_owner(w, extra):
                                 {"card": key, "merged_sha": "deadbeef", **extra})
     assert exc.value.code == "exec_stale"
     assert owner(w, key) == ("wf", "run", 2)
+
+
+# ---------------------------------------- a lost response retries as a no-op
+def park_body(key, **extra):
+    body = {"card": key, "tier": "free", "exit_class": "check_fail",
+            "check_tail": "boom"}
+    body.update(extra)
+    return body
+
+
+def test_a_duplicate_park_with_a_stale_live_set_is_a_success_noop(w):
+    key, = seed(w, [("A", [])])
+    w.store.set_state(w.p("router"), key, "running")
+    # The live-set the worker observed before its first park succeeded.
+    body = park_body(key, expected_state="running", **RUN)
+    assert w.store.worker_park(w.p("workerA"), body) == {
+        "card": key, "state": "parked", "changed": True}
+    before = dict(w.store._item(key))
+    # The retry names the recorded owner: a duplicate is a success no-op, decided
+    # before expected_state -- not exec_stale_state on all five retries.
+    assert w.store.worker_park(w.p("workerA"), body) == {
+        "card": key, "state": "parked", "changed": False}
+    assert dict(w.store._item(key)) == before
+    assert owner(w, key) == ("wf", "run", 2)
+
+
+def test_a_parked_card_retried_by_another_run_is_exec_stale(w):
+    key, = seed(w, [("A", [])])
+    w.store.set_state(w.p("router"), key, "running")
+    body = park_body(key, expected_state="running", **RUN)
+    w.store.worker_park(w.p("workerA"), body)
+    before = dict(w.store._item(key))
+    # The stale-run check decides first: a different run is exec_stale even
+    # though the card is parked and the live set is stale too.
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"), dict(body, run_id="another-run"))
+    assert exc.value.code == "exec_stale"
+    assert dict(w.store._item(key)) == before
+    assert owner(w, key) == ("wf", "run", 2)
+
+
+def test_a_first_park_with_a_stale_live_set_is_exec_stale_state(w):
+    key, = seed(w, [("A", [])])
+    w.store.set_state(w.p("router"), key, "running")
+    before = dict(w.store._item(key))
+    # Not a duplicate: the card is not parked yet, so expected_state still fences.
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"),
+                            park_body(key, expected_state="open", **RUN))
+    assert exc.value.code == "exec_stale_state"
+    assert dict(w.store._item(key)) == before
+    assert owner(w, key) == (None, None, None)
+
+
+def test_a_duplicate_complete_with_a_stale_live_set_is_a_success_noop(w):
+    key, = seed(w, [("A", [])])
+    w.store.set_state(w.p("router"), key, "waiting", run=("wf", "run", 2))
+    body = {"card": key, "merged_sha": "deadbeef",
+            "expected_state": "waiting", **RUN}
+    w.store.worker_complete(w.p("workerA"), body)
+    with w.store._write():
+        w.conn.execute("UPDATE items SET state='done' WHERE key=?", (key,))
+    before = dict(w.store._item(key))
+    # The same order for complete: a duplicate of the recorded owner is a
+    # success no-op before expected_state, everything else is checked as before.
+    w.store.worker_complete(w.p("workerA"), body)
+    assert dict(w.store._item(key)) == before
+    assert owner(w, key) == ("wf", "run", 2)

@@ -20,7 +20,9 @@ trigger).
   needs_input, waiting, failed, parked); claim, review, done and cancel keep their verbs.
   RT-P1-EXEC-OWNERSHIP: a move that carries ``run=(workflow_id, run_id, attempt)`` is
    exec-owned -- it must stay forward per ``TRANSITIONS``, and the recorded
-  owner refuses a stale run or an attempt that would go backwards.
+  owner refuses a stale run or an attempt that would go backwards.  A run-less
+  move that changes the state and lands on ``open``/``ready`` is a hand-back: it
+  frees the exec owner for the next run.
 """
 from __future__ import annotations
 
@@ -39,10 +41,19 @@ __all__ = ["CardsMixin", "SETTABLE_STATES", "TRANSITIONS", "NO_DEFAULT_TAGS"]
 SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed",
                    "parked")
 
+#: RT-P1-EXEC-OWNERSHIP: the hand-back states.  A ``set_state`` move that lands on one
+#: of these, changes the state and carries no ``run`` is a router/operator hand-back,
+#: not a worker or projector write: it frees the exec owner so the next run can claim
+#: the card (same transaction as the state UPDATE).  Run-carrying moves, no-op moves
+#: and moves to any other state leave the owner alone.
+_HAND_BACK_STATES = frozenset({"open", "ready"})
+
 #: RT-P1-EXEC-OWNERSHIP: direct successors of each settable state (same-state always
 #: allowed; reachability is the transitive closure).  A set-state move that carries a
 #: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
-#: back to ``open``/``ready``) are refused. Only a reopen clears ownership.
+#: back to ``open``/``ready``) are refused. A run-carrying move never clears
+#: ownership; a run-less hand-back to ``open``/``ready`` does (see
+#: ``_HAND_BACK_STATES``).
 #: Moves without a ``run``
 #: keep their historical behaviour. Worker parks do not consult this table at
 #: all: ``_worker_park`` applies its state move with no ``run``, so park never
@@ -462,7 +473,8 @@ class CardsMixin:
 
     # ---------------------------------------------------------------- state
     def set_state(self, principal, key, state, reason="", run=None, new_run=False):
-        # Accepted for compatibility; ownership can only be cleared by reopening.
+        # A run-less move to open/ready hands the card back: it clears the exec
+        # owner (``_HAND_BACK_STATES``) so the next run can claim it.
         return self._run(principal, "set_state", key,
                          lambda now: self._set_state(principal, key, state, reason,
                                                      now, run=run, new_run=new_run))
@@ -539,6 +551,12 @@ class CardsMixin:
         ``run=(workflow_id, run_id, attempt)`` is exec-owned -- it must be
         forward per ``TRANSITIONS`` (back-moves are always refused),
         and the recorded owner refuses a stale run or a backwards attempt.
+        A move that changes the state, lands on ``open``/``ready`` and carries no
+        ``run`` is a non-worker hand-back (a router/operator move -- neither a
+        worker park nor a run-carrying projector write): it clears the exec owner
+        in the same transaction as the state UPDATE (``_HAND_BACK_STATES``), so the
+        next run can claim the card.  No-op moves, run-carrying moves and moves to
+        any other state keep the owner.
         ``new_run`` is accepted and ignored for compatibility. Callers without
         ``run`` keep the historical, unchecked behaviour.
         """
@@ -577,4 +595,8 @@ class CardsMixin:
                     "UPDATE items SET state=?, updated_at=? WHERE key=? AND state=?"
                     " AND epoch=?", (state, self._iso(now), key, was, item["epoch"]))
             self._race_guard(cursor, key, was, item["epoch"])
+            if run is None and state in _HAND_BACK_STATES:
+                # RT-P1-EXEC-OWNERSHIP: a non-worker hand-back frees the owner
+                # for the next run, in the same transaction as the move above.
+                self._exec_clear(self.conn, key)
         return {"key": key, "state": state, "changed": True}

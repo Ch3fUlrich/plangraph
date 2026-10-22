@@ -33,6 +33,10 @@ def claimed_owner(w, key):
     # The planner service has no run-carrying projector path in this checkout.
     w.store.set_state(w.p("router"), key, "running", run=RUN1)
     w.store.set_state(w.p("router"), key, "open")
+    # The run-less hand-back above is a revival: it frees the owner (RT-P1), so
+    # re-record it -- this helper must hand back a CLAIMED card RUN1 still owns.
+    with w.store._write():
+        w.store._exec_record(w.conn, key, *RUN1)
     epoch = to_claimed(w, key, "workerA")
     assert owner(w, key) == RUN1
     return epoch
@@ -146,9 +150,12 @@ def test_new_run_requires_owner_clear_before_acquiring(w, attempt):
     assert dict(w.store._item(key)) == before
     refused("exec_stale", w.store.worker_park, w.p("workerA"),
             park(key, **dict(RUN2, attempt=attempt)))
-    # A bare projector move is not an owner-clearing lifecycle operation.
+    # RT-P1 revival: a bare, run-less move to open is a hand-back, so it now
+    # frees the owner here (it used to preserve it: "a bare projector move is
+    # not an owner-clearing lifecycle operation") -- which is exactly the clear
+    # the new run below needs before it can acquire.
     w.store.set_state(w.p("router"), key, "open")
-    assert owner(w, key) == RUN1
+    assert owner(w, key) == (None, None, None)
     epoch = to_claimed(w, key, "workerA")
     w.store.release(w.p("workerA"), key, epoch)
     assert owner(w, key) == (None, None, None)
