@@ -82,6 +82,8 @@ def row(
     d.update(kw)
     return d
 
+MONOTONE_TOLERANCE = 1e-9
+
 def test_risk_monotone_intelligence():
     rng = random.Random(1234)
     catalogs = []
@@ -138,8 +140,9 @@ def test_risk_monotone_intelligence():
                 continue
             intel = selected[risk]
             if prev is not None:
-                assert intel >= prev - 1e-9, (
-                    f"catalog {idx}: selected intel decreased from "
+                assert intel >= prev - MONOTONE_TOLERANCE, (
+                    f"catalog {idx}: selected intel decreased beyond "
+                    f"{MONOTONE_TOLERANCE} intelligence points from "
                     f"{prev_risk} {prev} to {risk} {intel}"
                 )
             prev = intel
@@ -157,6 +160,7 @@ def test_risk_monotone_intelligence():
                     f"catalog {idx}: critical selected intel "
                     f"{selected['critical']} < {min_intel}"
                 )
+
 
 def test_reviewer_family_distinct_and_in_catalog():
     rows = [
@@ -253,7 +257,7 @@ def test_context_gate_uses_trajectory():
         lambda: _passes_context_and_cliff(m, 95000, role="reviewer")
     ) is False
 
-def test_cost_scale_invariance():
+def test_speed_scale_invariance():
     base_specs = [
         ("r1/x", 0.0100, 10.0),
         ("r2/x", 0.0175, 20.0),
@@ -269,9 +273,9 @@ def test_cost_scale_invariance():
                 row(
                     rid,
                     50.0,
-                    cost=cost * c,
+                    cost=cost,
                     tier="subscription",
-                    speed=speed,
+                    speed=speed * c,
                     combos=("l2-worker",),
                 )
                 for rid, cost, speed in base_specs
@@ -283,8 +287,9 @@ def test_cost_scale_invariance():
             )
             orders.append([m["id"] for m in ranked])
         assert orders[0] == orders[1] == orders[2], (
-            f"risk {risk}: cost scaling changed rank order: {orders}"
+            f"risk {risk}: speed scaling changed rank order: {orders}"
         )
+
 
 def test_pick_stability_under_one_point():
     rng = random.Random(2024)
