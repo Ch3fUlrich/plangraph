@@ -251,7 +251,7 @@ impl Harness for OpencodeServer {
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
         cmd.arg("run")
-            .arg("--attach")
+            .arg("--server")
             .arg(&self.url)
             .arg("-m")
             .arg(run.model)
@@ -338,6 +338,10 @@ pub fn run_harness(
     pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
     if let Some(j) = jail {
         cmd.env("TMPDIR", &j.tmp);
+        let mut ro = system_ro();
+        if let Some(binary) = h.binary() {
+            ro.extend(scope::binary_ro(binary)?);
+        }
         cmd = scope::wrap(
             cmd,
             &j.limits,
@@ -349,7 +353,7 @@ pub fn run_harness(
                     j.tmp.clone(),
                     PathBuf::from("/dev/null"),
                 ],
-                ro: system_ro(),
+                ro,
             },
         );
     }
@@ -370,9 +374,9 @@ pub struct JailConfig {
 }
 
 impl JailConfig {
-    /// None when `PG_JAIL_BIN` is unset (library default: tests, tools).
+    /// Require a jail unless the explicit test-only override is set.
     pub fn from_env() -> Result<Option<JailConfig>, String> {
-        Self::from_lookup(|k| std::env::var(k).ok())
+        Self::required_from_env()
     }
 
     /// Startup policy of the worker binary: jailed or explicitly disabled.
@@ -419,12 +423,14 @@ impl JailConfig {
             })?;
             return Ok(Some(cfg));
         }
-        if lookup(JAIL_OFF_ENV).as_deref() == Some("off") {
+        if lookup(JAIL_OFF_ENV).as_deref() == Some("off")
+            && lookup("PG_TEST_ALLOW_UNJAILED").as_deref() == Some("1")
+        {
             return Ok(None);
         }
         Err(format!(
             "{JAIL_BIN_ENV} is not set; refusing to run attempts unjailed \
-             ({JAIL_OFF_ENV}=off is the explicit dev override)"
+             (tests require {JAIL_OFF_ENV}=off and PG_TEST_ALLOW_UNJAILED=1)"
         ))
     }
 
@@ -761,7 +767,7 @@ mod tests {
             argv(&c),
             [
                 "run",
-                "--attach",
+                "--server",
                 "http://127.0.0.1:4096",
                 "-m",
                 "some/model",
@@ -1214,8 +1220,15 @@ mod tests {
 
     #[test]
     fn required_jail_allows_explicit_off() {
-        let r =
-            JailConfig::required_from_lookup(|k| (k == JAIL_OFF_ENV).then(|| "off".to_string()));
+        assert!(
+            JailConfig::required_from_lookup(|k| (k == JAIL_OFF_ENV).then(|| "off".to_string()))
+                .is_err()
+        );
+        let r = JailConfig::required_from_lookup(|k| match k {
+            JAIL_OFF_ENV => Some("off".into()),
+            "PG_TEST_ALLOW_UNJAILED" => Some("1".into()),
+            _ => None,
+        });
         assert!(r.unwrap().is_none());
     }
 

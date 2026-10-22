@@ -56,6 +56,50 @@ pub fn system_ro() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Add only the executable's installation directories, never the user's HOME.
+pub fn binary_ro(binary: &str) -> std::io::Result<Vec<PathBuf>> {
+    let path = Path::new(binary);
+    let resolved = if path.components().count() > 1 || path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|dir| dir.join(path))
+            .find(|p| p.is_file())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "harness binary missing")
+            })?
+    };
+    let canonical = std::fs::canonicalize(&resolved)?;
+    let home = std::env::var_os("HOME").and_then(|p| std::fs::canonicalize(p).ok());
+    let mut ro = Vec::new();
+    let mut add = |p: &Path| -> std::io::Result<()> {
+        let p = std::fs::canonicalize(p)?;
+        if p.parent().is_none() || home.as_ref() == Some(&p) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "refusing broad harness read access",
+            ));
+        }
+        if !ro.contains(&p) {
+            ro.push(p);
+        }
+        Ok(())
+    };
+    if let Some(parent) = canonical.parent() {
+        add(parent)?;
+    }
+    // npm-style links point into an installation with sibling runtime assets.
+    if std::fs::symlink_metadata(&resolved)?
+        .file_type()
+        .is_symlink()
+    {
+        if let Some(parent) = canonical.parent().and_then(Path::parent) {
+            add(parent)?;
+        }
+    }
+    Ok(ro)
+}
+
 /// Rebuild `cmd` as `systemd-run --user --scope … -- pg-jail … -- env -i … <cmd>`.
 ///
 /// `wrap` expects `cmd` already confined by `sandbox_env::confine_harness`
@@ -270,5 +314,36 @@ mod tests {
         let d = ScopeLimits::default();
         assert_eq!(d.memory_max, "2G");
         assert_eq!(d.tasks_max, 256);
+    }
+
+    #[test]
+    fn check_scope_carries_attempt_limits() {
+        let (bin, _) = sample();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "echo check"]);
+        let limits = ScopeLimits {
+            memory_max: "768M".into(),
+            tasks_max: 17,
+        };
+        let a = argv(&wrap(cmd, &limits, &sample_jail(&bin)));
+        assert!(a.contains(&"MemoryMax=768M".into()));
+        assert!(a.contains(&"TasksMax=17".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn binary_under_home_grants_install_not_home() {
+        let home = tempfile::tempdir().unwrap();
+        let install = home.path().join(".local/share/tool/version");
+        std::fs::create_dir_all(install.join("bin")).unwrap();
+        let binary = install.join("bin/tool");
+        std::fs::write(&binary, "binary").unwrap();
+        let link = home.path().join(".local/bin/tool");
+        std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&binary, &link).unwrap();
+        let ro = binary_ro(link.to_str().unwrap()).unwrap();
+        assert!(ro.contains(&std::fs::canonicalize(install.join("bin")).unwrap()));
+        assert!(ro.contains(&std::fs::canonicalize(&install).unwrap()));
+        assert!(!ro.contains(&std::fs::canonicalize(home.path()).unwrap()));
     }
 }

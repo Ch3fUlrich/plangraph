@@ -297,7 +297,7 @@ fn run_attempt_inner(
     // diff of what the attempt changed.
     let diff_hash = confine::diff_hash(&dest, &claim.base_sha)?;
     let (outcome, check_hash, check_tail) = if clean && !contract && question.is_none() {
-        let (o, last) = check_with_rerun(&claim.check_cmd, &dest, cfg)?;
+        let (o, last) = check_with_rerun(&claim.check_cmd, &dest, cfg, jail.as_ref())?;
         (Some(o), last.output_hash, last.tail)
     } else if let Some(why) = &malformed {
         (None, String::new(), why.clone())
@@ -474,12 +474,15 @@ fn check_with_rerun(
     cmd: &str,
     dest: &Path,
     cfg: &Config,
+    jail: Option<&crate::harness::JailConfig>,
 ) -> Result<(CheckOutcome, CheckResult), AttemptError> {
-    let first = check::run_check(cmd, dest, cfg.start_to_close, cfg.check_tail_lines)?;
+    let jail = jail.map(|j| (j.bin.as_path(), &j.limits, j.tmp.as_path()));
+    let first = check::run_check_scoped(cmd, dest, cfg.start_to_close, cfg.check_tail_lines, jail)?;
     if first.passed() {
         return Ok((CheckOutcome::Pass, first));
     }
-    let second = check::run_check(cmd, dest, cfg.start_to_close, cfg.check_tail_lines)?;
+    let second =
+        check::run_check_scoped(cmd, dest, cfg.start_to_close, cfg.check_tail_lines, jail)?;
     let outcome = if second.passed() {
         CheckOutcome::Flaky
     } else {
