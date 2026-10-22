@@ -15,6 +15,7 @@ pub mod janitor;
 pub mod packet;
 pub mod probe;
 pub mod sandbox_env;
+pub mod scope;
 pub mod stall;
 pub mod worktree;
 
