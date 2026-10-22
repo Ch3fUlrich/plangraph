@@ -14,3 +14,4 @@ plangraph:RT-P1-CARD-CHECKS
 plangraph:RT-P1-BUS-CONTRACT
 plangraph:REDACT-MULTIWORD
 plangraph:RT-P1-PHASE-RUNNER
+plangraph:SPAWNER-PROPS-LOWS
