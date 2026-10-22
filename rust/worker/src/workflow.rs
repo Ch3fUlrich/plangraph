@@ -9,8 +9,8 @@
 
 use crate::activities::AskInput;
 use crate::activities::{
-    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, JanitorInput, MergeInput,
-    MergeResult, ProbeInput, ProbeResult, Tick,
+    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput,
+    GateResult, JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
@@ -19,6 +19,7 @@ use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
+use pg_worker_core::redact;
 use pg_worker_core::worktree::AttemptId;
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -46,6 +47,15 @@ const MERGE_RETRY_CAP: u32 = 20;
 
 /// Alarm reason when the keeper merge lock stayed unavailable.
 const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
+
+/// Temporal patch marker for the card's gate running before a merge.
+///
+/// Scheduling the `gate` activity adds a command to the workflow history that a
+/// history recorded before this change has no room for. `gate_step` asks the SDK
+/// for this marker first, so an old in-flight card replays without the gate while
+/// a card started after the change runs it. The id is pinned by a test: renaming
+/// it would strand every card whose history already carries the old marker.
+const GATE_PATCH: &str = "gate-before-merge-v1";
 
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
@@ -370,9 +380,16 @@ impl Card {
             // Inner loop: a merge can move the base and hand a synthetic attempt back
             // to the policy without starting a new worktree.
             loop {
-                // Step 4: merge an `ok` (or probed already-done) attempt now.
+                // Step 4: merge an `ok` (or probed already-done) attempt now, but
+                // only after the card's gate has passed on the exact tree about to
+                // be merged. A gate that blocks produces the same step a merge-time
+                // check failure would, so the arms below need no gate case.
                 if let Some(branch) = branch_to_merge.take() {
-                    match merge_step(ctx, &cfg, &input, &base_sha, &branch, n).await? {
+                    let step = match gate_step(ctx, &cfg, &input, &base_sha, n).await? {
+                        Some(blocked) => blocked,
+                        None => merge_step(ctx, &cfg, &input, &base_sha, &branch, n).await?,
+                    };
+                    match step {
                         MergeStep::Merged(sha) => {
                             ctx.execute_activity(
                                 CardActivities::complete,
@@ -951,6 +968,148 @@ fn map_merge_result(r: MergeResult) -> MergeStep {
     }
 }
 
+/// The card's named gate checks.
+///
+/// Today the list holds ONE check, `card-check`, whose command is the card's
+/// own `check_cmd` — and is EMPTY when the card configures none. CARD-CHECKS
+/// appends more named checks (e.g. a test-gaming diff scan) here: the wire
+/// shape (`GateInput.checks`) is already a list, so a new check joins it
+/// without another gate wiring change.
+///
+/// A blank command means the card has nothing to verify, so the list is empty
+/// and the gate is skipped. The original string is kept, untrimmed: the shell
+/// is what decides whitespace, and `merge_fenced` still runs an empty
+/// `check_cmd` through `sh -c ''` (which passes). The `gate` activity instead
+/// rejects an empty command as invalid input, so the workflow must never hand
+/// it one — hence the empty list here and the trim test rather than an
+/// emptiness test.
+fn gate_checks(input: &CardInput) -> Vec<GateCheck> {
+    let cmd = input.claim.check_cmd.as_str();
+    if cmd.trim().is_empty() {
+        return Vec::new();
+    }
+    vec![GateCheck {
+        name: "card-check".to_string(),
+        cmd: cmd.to_string(),
+        timeout_s: None,
+    }]
+}
+
+/// Run the card's gate in the attempt worktree before the branch is merged.
+///
+/// `Ok(None)` means the merge may proceed: there is no gate to run (the check
+/// list is empty — the activity is never handed one, because an empty list is
+/// invalid input there), or it passed. `Ok(Some(step))` means the gate blocked
+/// the merge, and the step is exactly the one a merge-time check failure
+/// produces (`CheckFail`, the gate's tail, main's head as the base), so the
+/// run loop's `Failed` arm retries or parks the card with no gate-specific
+/// case.
+///
+/// Replay safety comes first: scheduling the gate is a new command in the
+/// history, so `ctx.patched` records (or replays) the marker before anything
+/// else. `false` means the history predates the gate, so nothing is scheduled
+/// and the old workflow replays unchanged; `true` means the gate runs. The check
+/// is unconditional and outside any gate-specific branch, so every pass — a
+/// first pass or one reached after a retry — takes the same path.
+async fn gate_step(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    input: &CardInput,
+    base_sha: &str,
+    n: u32,
+) -> WorkflowResult<Option<MergeStep>> {
+    if !ctx.patched(GATE_PATCH) {
+        return Ok(None);
+    }
+    let checks = gate_checks(input);
+    if checks.is_empty() {
+        return Ok(None);
+    }
+    let r: GateResult = match ctx
+        .execute_activity(
+            CardActivities::gate,
+            GateInput {
+                workroot: input.workroot.clone(),
+                // The same worktree `merge_step` hands the merge: the gate must
+                // judge the tree that will land, not a fresh checkout of it.
+                workdir: format!(
+                    "{}/{}",
+                    input.workroot,
+                    AttemptId::new(input.claim.card.clone(), n).dir_name()
+                ),
+                checks,
+            },
+            gate_options(cfg),
+        )
+        .await
+    {
+        Ok(r) => r,
+        // A cancelled call ends the workflow the same way every other activity
+        // call in this file does.
+        Err(e) if e.as_cancelled().is_some() => return Err(e.into()),
+        // A gate that could not run must never fall through to the merge, so it
+        // parks the card; the merge refusal class is what the policy grows into.
+        Err(e) => {
+            return Ok(Some(MergeStep::Failed(
+                ExitClass::MergeRefused,
+                format!("gate activity failed: {e}"),
+                base_sha.to_string(),
+            )));
+        }
+    };
+    Ok(map_gate_result(r, base_sha))
+}
+
+/// Map a gate result to the step the run loop acts on: `None` when the gate
+/// passed and the merge may go ahead.
+///
+/// A gate that does not pass — any check failed, timed out, or was never run
+/// for lack of budget — is a merge-time check failure. The tail is built from
+/// the FAILING checks only, each named, so a report says which check blocked
+/// the merge; passing checks are omitted to keep the tail on the failure. The
+/// join is capped to `redact::MAX_TAIL_BYTES` (keep the end, cut on a char
+/// boundary). `base_sha` is passed through unchanged: a blocked gate never
+/// moves main.
+fn map_gate_result(r: GateResult, base_sha: &str) -> Option<MergeStep> {
+    if r.passed {
+        return None;
+    }
+    let failing: Vec<String> = r
+        .checks
+        .iter()
+        .filter(|c| !c.passed)
+        .map(|c| {
+            // A timed-out check says so, in its own block, before its tail.
+            let body = if c.timed_out {
+                format!("timed out\n{}", c.tail)
+            } else {
+                c.tail.clone()
+            };
+            format!("[{}]\n{}", c.name, body)
+        })
+        .collect();
+    let tail = redact::cap_tail_bytes(&failing.join("\n\n"), redact::MAX_TAIL_BYTES);
+    Some(MergeStep::Failed(
+        ExitClass::CheckFail,
+        tail,
+        base_sha.to_string(),
+    ))
+}
+
+/// The options the `gate` activity gets: it heartbeats, so it carries a
+/// heartbeat timeout, and a gate may be re-run a bounded number of times before
+/// the run loop treats the failure as it does any other activity error.
+fn gate_options(cfg: &Config) -> ActivityOptions {
+    let retry = RetryPolicy::builder()
+        .initial_interval(Duration::from_secs(2))
+        .maximum_attempts(3)
+        .build();
+    ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
+        .heartbeat_timeout(cfg.heartbeat_timeout)
+        .retry_policy(retry)
+        .build()
+}
+
 /// True once the keeper merge lock has stayed unavailable for more than
 /// [`MERGE_RETRY_CAP`] retries: the card parks instead of waiting again.
 fn merge_retry_exhausted(retries: u32) -> bool {
@@ -1183,6 +1342,7 @@ fn exit_name(class: ExitClass) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::activities::GateCheckResult;
     use tempfile::TempDir;
 
     fn leg(id: &str, tier: Tier) -> LegSpec {
@@ -1417,6 +1577,173 @@ mod tests {
         assert_eq!(base, "new");
         adopt_base(&mut base, String::new());
         assert_eq!(base, "new", "an empty head keeps the base");
+    }
+
+    fn gate_check_result(name: &str, passed: bool, timed_out: bool, tail: &str) -> GateCheckResult {
+        GateCheckResult {
+            name: name.to_string(),
+            passed,
+            exit_code: None,
+            signal: None,
+            timed_out,
+            tail: tail.to_string(),
+            output_hash: String::new(),
+        }
+    }
+
+    fn gate_result(passed: bool, checks: Vec<GateCheckResult>) -> GateResult {
+        GateResult { passed, checks }
+    }
+
+    #[test]
+    fn gate_checks_is_empty_for_a_blank_check_cmd() {
+        for blank in ["", " ", "\t\n  "] {
+            let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
+            input.claim.check_cmd = blank.to_string();
+            // A card with no check command has nothing to verify: the check
+            // list is empty and `gate_step` skips the gate entirely — the
+            // activity is never handed an empty list, which it rejects as
+            // invalid input.
+            assert!(gate_checks(&input).is_empty(), "{blank:?}");
+        }
+    }
+
+    #[test]
+    fn gate_checks_names_one_card_check_with_the_untrimmed_cmd() {
+        let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
+        input.claim.check_cmd = "  cargo test  ".to_string();
+        let checks = gate_checks(&input);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "card-check");
+        // The original string is kept, not a trimmed copy: the shell owns
+        // whitespace.
+        assert_eq!(checks[0].cmd, "  cargo test  ");
+        // Unset: the activity shares its `start_to_close` budget across checks.
+        assert_eq!(checks[0].timeout_s, None);
+    }
+
+    #[test]
+    fn map_gate_result_is_none_only_when_the_gate_passed() {
+        assert!(map_gate_result(gate_result(true, vec![]), "base").is_none());
+        // `passed` is the authority: a stale nonzero exit code does not block.
+        assert!(
+            map_gate_result(
+                gate_result(
+                    true,
+                    vec![gate_check_result("card-check", true, false, "boom")]
+                ),
+                "base"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn map_gate_result_blocks_a_failure_with_check_fail() {
+        let step = map_gate_result(
+            gate_result(
+                false,
+                vec![gate_check_result("card-check", false, false, "boom")],
+            ),
+            "base",
+        );
+        match step {
+            Some(MergeStep::Failed(ExitClass::CheckFail, tail, base)) => {
+                assert_eq!(tail, "[card-check]\nboom");
+                // A blocked gate leaves main alone, so the base is main's head.
+                assert_eq!(base, "base");
+            }
+            other => panic!("a failed gate must block the merge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_gate_result_marks_a_timeout_in_the_tail() {
+        let step = map_gate_result(
+            gate_result(
+                false,
+                vec![gate_check_result(
+                    "card-check",
+                    false,
+                    true,
+                    "partial output",
+                )],
+            ),
+            "base",
+        );
+        let Some(MergeStep::Failed(ExitClass::CheckFail, tail, base)) = step else {
+            panic!("a timed-out gate must block the merge");
+        };
+        assert!(tail.contains("[card-check]"), "{tail}");
+        assert!(tail.contains("timed out\npartial output"), "{tail}");
+        assert_eq!(base, "base");
+    }
+
+    #[test]
+    fn map_gate_result_names_each_failing_check_and_omits_passing_ones() {
+        let r = gate_result(
+            false,
+            vec![
+                gate_check_result("unit", false, false, "unit broke"),
+                gate_check_result("diff-scan", true, false, "clean"),
+                gate_check_result("lint", false, true, "lint output"),
+            ],
+        );
+        match map_gate_result(r, "base") {
+            Some(MergeStep::Failed(ExitClass::CheckFail, tail, _)) => {
+                assert!(tail.contains("[unit]\nunit broke"), "{tail}");
+                assert!(tail.contains("[lint]\ntimed out\nlint output"), "{tail}");
+                // The failing blocks are joined by a blank line...
+                assert!(tail.contains("unit broke\n\n[lint]"), "{tail}");
+                // ...and the passing check is not named anywhere.
+                assert!(
+                    !tail.contains("diff-scan") && !tail.contains("clean"),
+                    "{tail}"
+                );
+            }
+            other => panic!("a failed gate must block the merge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn map_gate_result_tail_is_capped_keeping_the_end() {
+        let big = "x".repeat(redact::MAX_TAIL_BYTES + 1000);
+        let step = map_gate_result(
+            gate_result(
+                false,
+                vec![gate_check_result("card-check", false, false, &big)],
+            ),
+            "base",
+        );
+        let Some(MergeStep::Failed(ExitClass::CheckFail, tail, _)) = step else {
+            panic!("a failed gate must block the merge");
+        };
+        assert!(tail.len() <= redact::MAX_TAIL_BYTES, "{}", tail.len());
+        // The cap keeps the END: what is kept is a suffix of the check's tail.
+        assert!(big.ends_with(&tail), "tail is not a suffix of the source");
+    }
+
+    #[test]
+    fn gate_options_are_bounded() {
+        let cfg = Config::default();
+        let opts = gate_options(&cfg);
+        assert_eq!(
+            opts.close_timeouts.start_to_close(),
+            Some(cfg.start_to_close)
+        );
+        assert_eq!(opts.heartbeat_timeout, Some(cfg.heartbeat_timeout));
+        let retry = opts
+            .retry_policy
+            .expect("the gate options carry a retry policy");
+        assert_eq!(retry.maximum_attempts(), 3);
+        assert_eq!(retry.initial_interval(), Duration::from_secs(2));
+    }
+
+    #[test]
+    fn gate_patch_id_is_stable() {
+        // Renaming the marker would strand every card whose history already
+        // carries it, so the id is pinned.
+        assert_eq!(GATE_PATCH, "gate-before-merge-v1");
     }
 
     #[test]
