@@ -11,9 +11,9 @@ Each test maps to one pathology in the current resolver:
   fallback that ignores family exclusions and never raises; resolver.py:656-665.
 - test_context_gate_uses_trajectory -> trajectory factor is only applied to
   price_cliff_tokens, not to context_window; resolver.py:417-425.
-- test_cost_scale_invariance -> epsilon band membership depends on absolute cost
-  scale, so speed tie-breaking changes rank order; resolver.py:352 and
-  resolver.py:360-366.
+- test_speed_scale_invariance -> epsilon band is absolute, so speed is only a
+  relative tie-break and changing it must not change rank order; resolver.py:352
+  and resolver.py:360-366.
 - test_pick_stability_under_one_point -> resolve_model_for_task lacks
   relax_floor/relax_reason controls; resolver.py:594-603.
 """
@@ -172,6 +172,11 @@ def test_reviewer_family_distinct_and_in_catalog():
     ]
     plan = call_with_timeout(
         lambda: resolve_review_plan("mimo/mimo-v2.6-pro", risk="high", db=FakeDB(rows))
+    )
+    reviewers = plan["reviewers"]
+    assert reviewers, "high-risk review plan returned no reviewers"
+    assert len(reviewers) == 2, (
+        f"high risk requires 2 reviewers, got {len(reviewers)}: {reviewers}"
     )
     catalog_ids = {r["id"] for r in rows}
     reviewer_ids = [rev["model"] for rev in plan["reviewers"]]

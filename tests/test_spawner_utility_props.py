@@ -121,6 +121,7 @@ BAD_FIELD_VALUES = [
     ("verified_tok_per_s", float("nan")),
     ("verified_tok_per_s", float("inf")),
     ("verified_tok_per_s", float("-inf")),
+    ("verified_tok_per_s", -1.0),
 ]
 
 @pytest.mark.parametrize("field,bad", BAD_FIELD_VALUES)
@@ -326,3 +327,48 @@ def test_need_tokens_validated(bad_need_tokens):
 
     call_with_timeout(lambda: resolve_model_for_task(db=db, need_tokens=32000))
     call_with_timeout(lambda: resolve_model_for_task(db=db, need_tokens=32000.0))
+
+
+def test_route_leg_missing_intelligence_skipped():
+    """A route leg with no aa_intelligence must be skipped, not crash selection."""
+    missing_intel_leg = {
+        "id": "qwen/qwen-no-intel",
+        "family": "qwen",
+        "verified_tok_per_s": 100.0,
+        "cost_per_task_usd": 0.2,
+        "pool_burn_weight": 1.0,
+        "tier": "subscription",
+        "available": 1,
+        "context_window": 1000000,
+        "combos": ["l2-reviewer"],
+        # aa_intelligence deliberately omitted
+    }
+    valid_legs = [
+        row("claude/claude-leg", 46.0),
+        row("gemini/gemini-leg", 47.0),
+    ]
+
+    class RouteLegDB(FakeDB):
+        def __init__(self, legs):
+            super().__init__(legs)
+            self._legs = [dict(r) for r in legs]
+
+        def get_route_legs(self, combo_name, active_only=True):
+            return [dict(r) for r in self._legs]
+
+    db = RouteLegDB([missing_intel_leg, *valid_legs])
+
+    plan = call_with_timeout(
+        lambda: resolve_review_plan(
+            "mimo/x", risk="high", combo_name="l2-reviewer", db=db
+        )
+    )
+    reviewers = plan["reviewers"]
+    assert len(reviewers) == 2, f"expected 2 reviewers, got {reviewers}"
+    reviewer_ids = [rev["model"] for rev in reviewers]
+    families = [rev["family"] for rev in reviewers]
+    assert missing_intel_leg["id"] not in reviewer_ids, (
+        f"leg without aa_intelligence leaked into reviewers: {reviewer_ids}"
+    )
+    assert len(set(families)) == 2, f"reviewer families not distinct: {families}"
+    assert "mimo" not in families, f"writer family leaked: {families}"
