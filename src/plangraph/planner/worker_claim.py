@@ -32,8 +32,8 @@ def worker_claim(
     repo_root: str | None,
     base_branch: str = "main",
 ) -> dict[str, Any]:
-    if principal.role != "worker":
-        raise Refused("forbidden", "worker_claim requires a worker")
+    if principal.role not in ("worker", "system"):
+        raise Refused("forbidden", "worker_claim requires a worker or system principal")
     if not repo_root or not os.path.isdir(repo_root):
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
 

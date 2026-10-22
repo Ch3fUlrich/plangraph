@@ -204,7 +204,8 @@ def _phase_finish(store, principal, body, need):
 
 def _worker_claim(store, principal, body, need):
     # Role first: a non-worker principal gets 403 before key or env access checks.
-    store._require_role(principal, "worker")
+    # The phase runner's system principal also claims cards, so this is not worker-only.
+    store._require_role(principal, "worker", "system")
     key = need(body, "card")
     if body.get("worker") is not None and body["worker"] != principal.name:
         raise Refused("validation", "worker must be the calling principal")

@@ -94,7 +94,9 @@ class VerbsMixin:
                          lambda now: self._claim(principal, key, lease_s, now))
 
     def _claim(self, principal, key, lease_s, now):
-        self._require_role(principal, "l1", "worker")
+        # The phase runner uses the system principal for card leases; system is
+        # global, so only l1/worker are project-scoped here.
+        self._require_role(principal, "l1", "worker", "system")
         lease_seconds = self._lease_seconds(lease_s)
         with self._write():
             item = self._item(key)
