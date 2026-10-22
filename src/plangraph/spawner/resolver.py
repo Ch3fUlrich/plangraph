@@ -758,7 +758,7 @@ def resolve_model_for_task(
       - Context window and price cliff limits (with role trajectory factor buffer)
       - Two-stage lexicographic tie-breaker via rank_candidates
       - Vendor effort clamping (Sonnet 5.5 max -> xhigh)
-      - Risk-monotone intelligence envelope across low<normal<high<critical
+      - Best-effort risk-monotone intelligence envelope across low<normal<high<critical
     """
     need_tokens = _validate_need_tokens(need_tokens)
     role_l = _validate_role(role)
