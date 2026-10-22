@@ -92,6 +92,8 @@ pub struct CardInput {
 /// Ask the keeper to store an agent question for a card.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AskInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_state: Option<String>,
     pub card: String,
     pub question: Question,
     /// The card attempt number (monotone per run), not Temporal's activity
@@ -245,6 +247,8 @@ pub struct MergeResult {
 /// Tell the keeper a card is done.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoneInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_state: Option<String>,
     pub card: String,
     pub merged_sha: String,
     /// The card attempt number (monotone per run), not Temporal's activity
@@ -370,12 +374,13 @@ fn gate_error(e: std::io::Error) -> ActivityError {
 /// the *card* attempt number, monotone per run, never Temporal's
 /// `ActivityInfo::attempt` (the activity retry count, which resets per
 /// activity and would be refused as lower by the Python keeper).
-fn exec_of(ctx: &ActivityContext, attempt: Option<u32>) -> ExecId {
+fn exec_of(ctx: &ActivityContext, attempt: Option<u32>, expected_state: Option<String>) -> ExecId {
     let info = ctx.info();
     ExecId {
         workflow_id: info.workflow_id.clone(),
         run_id: info.workflow_run_id.clone(),
         attempt,
+        expected_state,
     }
 }
 
@@ -393,17 +398,23 @@ fn park_attempt_of(input: &str) -> Option<u32> {
 }
 
 /// The park packet JSON the workflow hands to the `park` activity, with the
-/// card attempt number added as an extra top-level key when it is known.
-/// [`ParkPacket::from_json`] ignores the extra key (the activity re-reads it
+/// card attempt and observed state added as extra top-level keys when known.
+/// [`ParkPacket::from_json`] ignores the extra keys (the activity re-reads them
 /// there to build the [`ExecId`]), so the packet itself round-trips.
-pub fn park_json_with_attempt(p: &ParkPacket, attempt: Option<u32>) -> String {
-    let Some(attempt) = attempt else {
-        return p.to_json();
-    };
+pub fn park_json_with_attempt(
+    p: &ParkPacket,
+    attempt: Option<u32>,
+    expected_state: Option<String>,
+) -> String {
     let mut v: serde_json::Value =
         serde_json::from_str(&p.to_json()).expect("packet serializes to JSON");
     if let Some(obj) = v.as_object_mut() {
-        obj.insert("attempt".into(), serde_json::json!(attempt));
+        if let Some(attempt) = attempt {
+            obj.insert("attempt".into(), serde_json::json!(attempt));
+        }
+        if let Some(state) = expected_state {
+            obj.insert("expected_state".into(), state.into());
+        }
     }
     v.to_string()
 }
@@ -1036,7 +1047,10 @@ impl CardActivities {
         // The card attempt rides along as an extra key of the packet JSON
         // (`ParkPacket::from_json` ignores it); read it before the blocking
         // task so the exec identity is built from this activity's context.
-        let exec = exec_of(&ctx, park_attempt_of(&input));
+        let expected_state = serde_json::from_str::<serde_json::Value>(&input)
+            .ok()
+            .and_then(|v| v.get("expected_state")?.as_str().map(str::to_owned));
+        let exec = exec_of(&ctx, park_attempt_of(&input), expected_state);
         tokio::task::spawn_blocking(move || {
             let packet =
                 ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
@@ -1054,7 +1068,7 @@ impl CardActivities {
         input: DoneInput,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let exec = exec_of(&ctx, input.attempt);
+        let exec = exec_of(&ctx, input.attempt, input.expected_state.clone());
         tokio::task::spawn_blocking(move || keeper.complete(&input.card, &input.merged_sha, &exec))
             .await
             .map_err(activity_error)?
@@ -1069,7 +1083,7 @@ impl CardActivities {
         input: Alarm,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let exec = exec_of(&ctx, input.attempt);
+        let exec = exec_of(&ctx, input.attempt, None);
         tokio::task::spawn_blocking(move || keeper.alarm(&input, &exec))
             .await
             .map_err(activity_error)?
@@ -1088,7 +1102,7 @@ impl CardActivities {
         input: AskInput,
     ) -> Result<Option<i64>, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let exec = exec_of(&ctx, input.attempt);
+        let exec = exec_of(&ctx, input.attempt, input.expected_state.clone());
         let res = tokio::task::spawn_blocking(move || {
             retry_transient(&TRANSIENT_BACKOFF, || {
                 keeper.ask_question(&input.card, &input.question, &exec)
@@ -1331,6 +1345,7 @@ mod tests {
             detail: String::new(),
         });
         round_trip(&DoneInput {
+            expected_state: None,
             card: "c1".to_string(),
             merged_sha: "sha".to_string(),
             attempt: None,
@@ -1389,7 +1404,11 @@ mod tests {
             check_tail: "boom".to_string(),
         };
 
-        let tagged = park_json_with_attempt(&p, Some(4));
+        let tagged = park_json_with_attempt(&p, Some(4), Some("running".into()));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&tagged).unwrap()["expected_state"],
+            "running"
+        );
         let v: serde_json::Value = serde_json::from_str(&tagged).unwrap();
         assert_eq!(v["attempt"], 4);
         assert_eq!(v.as_object().unwrap().len(), 5);
@@ -1398,7 +1417,13 @@ mod tests {
         assert_eq!(park_attempt_of(&tagged), Some(4));
 
         // Unset attempt: the plain packet JSON, no extra key at all.
-        let plain = park_json_with_attempt(&p, None);
+        let plain = park_json_with_attempt(&p, None, None);
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&plain)
+                .unwrap()
+                .get("expected_state")
+                .is_none()
+        );
         assert_eq!(plain, p.to_json());
         assert_eq!(ParkPacket::from_json(&plain).unwrap(), p);
         assert_eq!(park_attempt_of(&plain), None);

@@ -352,6 +352,7 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
+                        "running",
                     )
                     .await?
                     {
@@ -395,6 +396,8 @@ impl Card {
                             ctx.execute_activity(
                                 CardActivities::complete,
                                 DoneInput {
+                                    // Merge finishes the running attempt, without a question wait.
+                                    expected_state: Some("running".into()),
                                     card: input.claim.card.clone(),
                                     merged_sha: sha.clone(),
                                     attempt: Some(n.max(1)),
@@ -807,6 +810,8 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
+                // The attempt is running until this question is accepted.
+                expected_state: Some("running".into()),
                 card: card.clone(),
                 question: q.clone(),
                 attempt: Some(n.max(1)),
@@ -827,6 +832,7 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
+                "running",
             )
             .await;
         }
@@ -841,6 +847,7 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
+            "running",
         )
         .await;
     };
@@ -910,6 +917,7 @@ async fn question_step(
                     QUESTION_PARK_REASON,
                     question::timeout_park_tail(&q.text),
                     n,
+                    "waiting",
                 )
                 .await
             }
@@ -930,10 +938,20 @@ async fn park_question(
     reason: &str,
     check_tail: String,
     n: u32,
+    expected_state: &str,
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    park_and_alarm(ctx, cfg, &packet, reason.to_string(), n.max(1)).await?;
+    // Only an accepted question has entered waiting; failed asks remain running.
+    park_and_alarm_in_state(
+        ctx,
+        cfg,
+        &packet,
+        reason.to_string(),
+        n.max(1),
+        expected_state,
+    )
+    .await?;
     Ok(QuestionStep::Finished(parked(n)))
 }
 
@@ -1256,9 +1274,21 @@ async fn park_and_alarm(
     reason: String,
     attempt: u32,
 ) -> WorkflowResult<()> {
+    // Ordinary park paths are still in the running card attempt, before a wait.
+    park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, "running").await
+}
+
+async fn park_and_alarm_in_state(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    packet: &ParkPacket,
+    reason: String,
+    attempt: u32,
+    expected_state: &str,
+) -> WorkflowResult<()> {
     ctx.execute_activity(
         CardActivities::park,
-        park_json_with_attempt(packet, Some(attempt)),
+        park_json_with_attempt(packet, Some(attempt), Some(expected_state.into())),
         activity_options(cfg),
     )
     .await?;

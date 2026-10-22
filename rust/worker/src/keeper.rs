@@ -72,6 +72,9 @@ pub struct ExecId {
     pub workflow_id: Option<String>,
     pub run_id: Option<String>,
     pub attempt: Option<u32>,
+    /// Last observed card state for compare-and-set; absent for legacy callers
+    /// and alarms. Roll out keeper support before deploying this worker.
+    pub expected_state: Option<String>,
 }
 
 /// Fencing token of a keeper-held merge lock. The token only ever grows, so a
@@ -135,6 +138,10 @@ fn encode_segment(s: &str) -> String {
 /// exec is unknown or only partially known goes out exactly as it did before
 /// (a legacy body, never a half-tagged one).
 fn with_exec(mut body: serde_json::Value, exec: &ExecId) -> serde_json::Value {
+    // Independent of execution fencing; deploy the keeper before the worker.
+    if let (Some(obj), Some(state)) = (body.as_object_mut(), &exec.expected_state) {
+        obj.insert("expected_state".into(), state.as_str().into());
+    }
     let (Some(workflow_id), Some(run_id), Some(attempt)) =
         (&exec.workflow_id, &exec.run_id, exec.attempt)
     else {
@@ -257,7 +264,11 @@ impl Keeper for HttpKeeper {
 
     fn alarm(&self, a: &Alarm, exec: &ExecId) -> Result<(), KeeperError> {
         let body = serde_json::to_value(a).expect("alarm serializes");
-        self.post204("/v1/alarms", &with_exec(body, exec))
+        let alarm_exec = ExecId {
+            expected_state: None,
+            ..exec.clone()
+        };
+        self.post204("/v1/alarms", &with_exec(body, &alarm_exec))
     }
 
     fn acquire_merge_lock(
@@ -541,6 +552,61 @@ impl Keeper for StubKeeper {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn expected_state_is_optional_in_state_call_bodies() {
+        for body in [
+            serde_json::json!({"card":"c"}),
+            serde_json::json!({"card":"c", "merged_sha":"s"}),
+            serde_json::json!({"key":"c"}),
+        ] {
+            assert!(
+                with_exec(body.clone(), &ExecId::default())
+                    .get("expected_state")
+                    .is_none()
+            );
+            let exec = ExecId {
+                expected_state: Some("running".into()),
+                ..ExecId::default()
+            };
+            assert_eq!(with_exec(body, &exec)["expected_state"], "running");
+        }
+    }
+
+    #[test]
+    fn http_expected_state_on_state_calls_but_never_alarms() {
+        for state in [None, Some("running".to_string())] {
+            for verb in ["park", "complete", "ask_question", "alarm"] {
+                let (base, server) = serve_once(
+                    if verb == "ask_question" { 200 } else { 204 },
+                    "OK",
+                    if verb == "ask_question" {
+                        r#"{"id":1}"#
+                    } else {
+                        ""
+                    },
+                );
+                let keeper = HttpKeeper::new(&base);
+                let exec = ExecId {
+                    expected_state: state.clone(),
+                    ..exec()
+                };
+                match verb {
+                    "park" => keeper.park(&park(), &exec).unwrap(),
+                    "complete" => keeper.complete("c-1", "sha", &exec).unwrap(),
+                    "ask_question" => {
+                        keeper.ask_question("c-1", &question(), &exec).unwrap();
+                    }
+                    _ => keeper.alarm(&alarm(), &exec).unwrap(),
+                }
+                let body = body_of(&server.join().unwrap());
+                if verb == "alarm" || state.is_none() {
+                    assert!(body.get("expected_state").is_none());
+                } else {
+                    assert_eq!(body["expected_state"], "running");
+                }
+            }
+        }
+    }
     use super::*;
     use pg_worker_core::config::Tier;
     use std::io::{Read, Write};
@@ -591,6 +657,7 @@ mod tests {
     /// context and a card attempt in its input would build one.
     fn exec() -> ExecId {
         ExecId {
+            expected_state: None,
             workflow_id: Some("wf-1".into()),
             run_id: Some("run-1".into()),
             attempt: Some(3),
@@ -1042,16 +1109,19 @@ mod tests {
     #[test]
     fn http_card_calls_omit_the_exec_keys_unless_all_three_are_known() {
         let only_workflow = ExecId {
+            expected_state: None,
             workflow_id: Some("wf-1".into()),
             run_id: None,
             attempt: None,
         };
         let no_attempt = ExecId {
+            expected_state: None,
             workflow_id: Some("wf-1".into()),
             run_id: Some("run-1".into()),
             attempt: None,
         };
         let only_attempt = ExecId {
+            expected_state: None,
             workflow_id: None,
             run_id: None,
             attempt: Some(3),
@@ -1093,10 +1163,12 @@ mod tests {
         let done: crate::activities::DoneInput =
             serde_json::from_str(r#"{"card":"c-1","merged_sha":"sha-1"}"#).unwrap();
         assert_eq!(done.attempt, None);
+        assert_eq!(done.expected_state, None);
 
         let ask: crate::activities::AskInput =
             serde_json::from_str(r#"{"card":"c-1","question":{"text":"which db?"}}"#).unwrap();
         assert_eq!(ask.attempt, None);
+        assert_eq!(ask.expected_state, None);
 
         assert_eq!(
             serde_json::to_value(&alarm).unwrap(),
@@ -1126,11 +1198,13 @@ mod tests {
     fn stub_records_the_exec_of_every_card_state_call_in_order() {
         let k = StubKeeper::default();
         let first = ExecId {
+            expected_state: None,
             workflow_id: Some("wf-1".into()),
             run_id: Some("run-1".into()),
             attempt: Some(1),
         };
         let second = ExecId {
+            expected_state: None,
             workflow_id: Some("wf-1".into()),
             run_id: Some("run-1".into()),
             attempt: Some(2),
