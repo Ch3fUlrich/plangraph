@@ -371,7 +371,7 @@ class CardsMixin:
                 row = self.conn.execute(
                     "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
                 if row is not None and row["exec_run_id"] is not None:
-                    raise Refused("validation",
+                    raise Refused("exec_stale",
                                   f"{key} has an exec owner: workflow_id, run_id"
                                   " and attempt are required")
             row = self.conn.execute(

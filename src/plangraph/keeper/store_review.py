@@ -244,6 +244,7 @@ class ReviewMixin:
             if second:
                 cursor = self.conn.execute(
                     "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
+                    " exec_workflow_id=NULL, exec_run_id=NULL, exec_attempt=NULL,"
                     " reviewer=?, lease_until=NULL, updated_at=?"
                     " WHERE key=? AND state='in_review' AND epoch=?",
                     (principal.name, self._iso(now), key, item["epoch"]))

@@ -6,7 +6,7 @@ posts with every ``/v1/ask_question`` (rust/worker/src/keeper.rs ``with_exec``)
 a different run or a lower attempt is refused as ``exec_stale`` and inserts no
 question row, and partial fields are a validation refusal that records nothing.
 A worker/spawner that omits all three on an owned card names no run and is
-refused as ``validation``; router/l1/system callers (the planner,
+refused as ``exec_stale`` (HTTP 409); router/l1/system callers (the planner,
 ``planner/service.py``) omit them freely — the kwargs default to ``None``.
 
 Every rule gets a test that fails if the rule is removed: the over-HTTP cases
@@ -117,7 +117,7 @@ def test_worker_ask_without_fields_on_an_owned_card_is_refused(doors, w):
     assert doors.http("workerA", "POST", "/v1/ask_question",
                       ask(key, **RUN1))[0] == 200
     status, body = doors.http("workerA", "POST", "/v1/ask_question", ask(key))
-    assert (status, body["error"]) == (400, "validation")
+    assert (status, body["error"]) == (409, "exec_stale")
     assert "has an exec owner" in body["msg"]
     assert len(questions(w, key)) == 1        # the refused ask inserted no row
     assert owner(w, key) == OWNED
@@ -161,7 +161,7 @@ def test_store_worker_ask_without_fields_on_an_owned_card_is_refused(w):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "running",
                       run=("wf-1", "run-1", 1))
-    err = refused("validation", w.store.ask_question, w.p("workerA"), key, "q?")
+    err = refused("exec_stale", w.store.ask_question, w.p("workerA"), key, "q?")
     assert "has an exec owner" in err.msg
     assert questions(w, key) == []
     assert owner(w, key) == OWNED

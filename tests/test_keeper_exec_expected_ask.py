@@ -7,17 +7,8 @@ from plangraph.keeper.errors import Refused
 
 
 @pytest.fixture
-def w(tmp_path, monkeypatch):
+def w(tmp_path):
     world = World(tmp_path)
-    # Integration bridge only: the shared helper belongs to the other writer.
-    if not hasattr(type(world.store), "_exec_expect_state"):
-        def expect_state(self, item, expected):
-            if expected is None:
-                return
-            if item["state"] != expected:
-                raise Refused("exec_stale_state", "observed state changed")
-        monkeypatch.setattr(type(world.store), "_exec_expect_state",
-                            expect_state, raising=False)
     try:
         yield world
     finally:

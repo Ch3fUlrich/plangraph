@@ -65,6 +65,33 @@ def test_release_clears_owner(w):
     assert owner(w, key) == (None, None, None)
 
 
+def test_second_review_change_reopens_without_owner_and_new_run_can_park(w):
+    key, = seed(w, [("A", [])])
+    epoch = claimed_owner(w, key)
+    worker = w.p("workerA")
+    w.store.add_evidence(worker, key, epoch, "decision", {"id": "D-1"})
+    for expected in ("claimed", "open"):
+        w.store.submit(worker, key, epoch)
+        assert w.store._item(key)["state"] == "in_review"
+        assert owner(w, key) == RUN1
+        result = w.store.verdict(w.p("reviewer"), key, False, "needs changes")
+        assert result["state"] == expected
+    assert owner(w, key) == (None, None, None)
+    assert w.store.worker_park(worker, park(key, **RUN2))["state"] == "parked"
+    assert owner(w, key) == ("wf-2", "run-2", 1)
+
+
+def test_null_exec_keys_behave_as_omitted(w):
+    key, = seed(w, [("A", [])])
+    assert w.store.worker_park(w.p("workerA"), park(
+        key, workflow_id=None, run_id=None, attempt=None))["state"] == "parked"
+    assert owner(w, key) == (None, None, None)
+    w.store.set_state(w.p("router"), key, "open", run=RUN1, new_run=True)
+    refused("exec_stale", w.store.worker_park, w.p("workerA"),
+            park(key, attempt=None))
+    assert owner(w, key) == RUN1
+
+
 def test_workflow_mismatch_is_stale_even_with_same_run(w):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "running", run=RUN1)

@@ -151,7 +151,7 @@ class WorkerMixin:
         row = self.conn.execute(
             "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
         owned = row is not None and row["exec_run_id"] is not None
-        if not any(name in body
+        if not any(body.get(name) is not None
                    for name in ("workflow_id", "run_id", "attempt")):
             if owned:
                 raise Refused("exec_stale",
