@@ -12,6 +12,7 @@ All units are user units (`systemctl --user`), not system units.
 | plangraph-projector.service | continuous projector run loop (30 s poll): attempts reach the keeper | keeper host |
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |
 | plangraph-projector-reconcile.timer | nightly timer (03:30) starting the reconcile service | keeper host |
+| plangraph-oversight-check.service + .timer | oversight check (digest files + projector_alarms) every 30 min | keeper host |
 | plangraph-render.service | one tick: follow the gated head, render the static page, check the stamp | render host |
 | plangraph-render.timer | timer driving plangraph-render.service every 5 min | render host |
 | render.env.example | environment template for plangraph-render.service (paths, not secrets) | render host |
