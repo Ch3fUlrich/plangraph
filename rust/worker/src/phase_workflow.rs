@@ -107,6 +107,14 @@ impl Phase {
 
             let wave = next_wave(&plan, &attempted, input.parallel());
             if wave.is_empty() {
+                let unstarted = plan.unstarted(&attempted);
+                if !unstarted.is_empty() {
+                    last_blocked = vec![format!("cards not startable: {}", unstarted.join(", "))];
+                }
+                break;
+            }
+            if waves >= input.wave_cap() {
+                last_blocked = vec!["wave cap reached".to_string()];
                 break;
             }
 
@@ -220,7 +228,7 @@ impl Phase {
 
         let merged = sorted_unique(merged);
         let not_merged = sorted_unique(not_merged);
-        let outcome = phase_outcome(&not_merged, &last_blocked);
+        let outcome = phase_outcome(&merged, &not_merged, &last_blocked);
 
         Ok(PhaseOutput {
             phase: input.key,
@@ -250,9 +258,11 @@ fn sorted_unique(mut keys: Vec<String>) -> Vec<String> {
     keys
 }
 
-pub fn phase_outcome(not_merged: &[String], blocked: &[String]) -> &'static str {
+pub fn phase_outcome(merged: &[String], not_merged: &[String], blocked: &[String]) -> &'static str {
     if not_merged.is_empty() && blocked.is_empty() {
         OUTCOME_DONE
+    } else if merged.is_empty() && not_merged.is_empty() && !blocked.is_empty() {
+        OUTCOME_BLOCKED
     } else {
         OUTCOME_PARTIAL
     }
@@ -264,18 +274,25 @@ mod tests {
 
     #[test]
     fn phase_outcome_done_when_nothing_ran() {
-        assert_eq!(phase_outcome(&[], &[]), OUTCOME_DONE);
+        assert_eq!(phase_outcome(&[], &[], &[]), OUTCOME_DONE);
     }
 
     #[test]
     fn phase_outcome_partial_when_not_merged() {
         let not_merged = vec!["b".to_string()];
-        assert_eq!(phase_outcome(&not_merged, &[]), OUTCOME_PARTIAL);
+        assert_eq!(phase_outcome(&[], &not_merged, &[]), OUTCOME_PARTIAL);
     }
 
     #[test]
     fn phase_outcome_partial_when_blocked_later() {
+        let merged = vec!["a".to_string()];
         let blocked = vec!["phase not ready".to_string()];
-        assert_eq!(phase_outcome(&[], &blocked), OUTCOME_PARTIAL);
+        assert_eq!(phase_outcome(&merged, &[], &blocked), OUTCOME_PARTIAL);
+    }
+
+    #[test]
+    fn phase_outcome_blocked_when_nothing_ran_and_blocked() {
+        let blocked = vec!["phase not ready".to_string()];
+        assert_eq!(phase_outcome(&[], &[], &blocked), OUTCOME_BLOCKED);
     }
 }

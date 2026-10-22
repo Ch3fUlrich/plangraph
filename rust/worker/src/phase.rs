@@ -7,6 +7,8 @@ pub const DEFAULT_MAX_PARALLEL: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PhaseInput {
+    #[serde(default)]
+    pub max_waves: Option<u32>,
     pub key: String,
     pub repo: String,
     pub workroot: String,
@@ -172,9 +174,62 @@ pub fn next_wave<'a>(
     wave
 }
 
+pub const DEFAULT_MAX_WAVES: u32 = 64;
+
+impl PhaseInput {
+    pub fn wave_cap(&self) -> u32 {
+        self.max_waves.unwrap_or(DEFAULT_MAX_WAVES).clamp(1, 256)
+    }
+}
+
+impl PhasePlan {
+    pub fn unstarted(&self, attempted: &std::collections::HashSet<String>) -> Vec<String> {
+        let mut keys: Vec<String> = self
+            .cards
+            .iter()
+            .filter(|c| !attempted.contains(&c.key))
+            .map(|c| c.key.clone())
+            .collect();
+        keys.sort();
+        keys
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unstarted_reports_cards_not_attempted() {
+        let plan = PhasePlan {
+            phase: "PH-X".to_string(),
+            ready: true,
+            blocked: Vec::new(),
+            cards: vec![
+                card("b", true, false),
+                card("a", false, false),
+                card("c", true, true),
+            ],
+        };
+        let attempted: std::collections::HashSet<String> =
+            vec!["a".to_string()].into_iter().collect();
+        assert_eq!(
+            plan.unstarted(&attempted),
+            vec!["b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn wave_cap_defaults_and_clamps() {
+        let mut phase = input(None);
+        assert_eq!(phase.wave_cap(), DEFAULT_MAX_WAVES);
+        phase.max_waves = Some(0);
+        assert_eq!(phase.wave_cap(), 1);
+        phase.max_waves = Some(1000);
+        assert_eq!(phase.wave_cap(), 256);
+        phase.max_waves = Some(5);
+        assert_eq!(phase.wave_cap(), 5);
+    }
     use pg_worker_core::config::Tier;
     use std::collections::HashSet;
 
@@ -203,6 +258,7 @@ mod tests {
 
     fn input(max_parallel: Option<u32>) -> PhaseInput {
         PhaseInput {
+            max_waves: None,
             key: "PH-X".to_string(),
             repo: "repo".to_string(),
             workroot: "/tmp/work".to_string(),
