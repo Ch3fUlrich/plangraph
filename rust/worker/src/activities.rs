@@ -1154,7 +1154,8 @@ impl CardActivities {
         settle_refusal(res, "ask_question")
     }
 
-    /// Ask the keeper to land the finished phase branch; a refusal is data, not an error.
+    /// Ask the keeper to land the finished phase branch; a refusal (including
+    /// KeeperError::Status(400)) is data, not an error.
     #[activity]
     pub async fn phase_finish(
         self: Arc<Self>,
@@ -1171,11 +1172,16 @@ impl CardActivities {
                 .map_err(activity_error)?;
         match res {
             Ok(f) => Ok(f),
-            Err(e) if classify(&e) == Failure::Refused => Ok(crate::phase::PhaseFinish {
-                state: crate::phase::FINISH_REFUSED.to_string(),
-                pr: None,
-                detail: format!("keeper refused phase_finish: {e}"),
-            }),
+            Err(e)
+                if classify(&e) == Failure::Refused
+                    || matches!(&e, crate::keeper::KeeperError::Status(400)) =>
+            {
+                Ok(crate::phase::PhaseFinish {
+                    state: crate::phase::FINISH_REFUSED.to_string(),
+                    pr: None,
+                    detail: format!("keeper refused phase_finish: {e}"),
+                })
+            }
             Err(e) => Err(activity_error(e)),
         }
     }

@@ -139,16 +139,21 @@ def test_body_repo_is_ignored(doors, w, repo, gate, monkeypatch):
     assert status == 200
     assert body["repo"] == str(root)
 
-def test_body_worker_mismatch_is_400(doors, w, repo, gate, monkeypatch):
+def test_body_worker_is_informational(doors, w, repo, gate, monkeypatch):
     root, _main_tip, _phase_tip = repo
     monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(root))
     status, body = _post(
         doors,
         "workerA",
-        {"card": "demo:C1", "worker": "workerB"},
+        {"card": "demo:C1", "worker": "someone-else"},
     )
-    assert status == 400
-    assert _code(body) == "validation"
+    assert status == 200
+    assert body["card"] == "demo:C1"
+    row = w.conn.execute(
+        "SELECT claimed_by FROM items WHERE key = ?", ("demo:C1",)
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "workerA"
 
 def test_worker_b_after_worker_a_is_conflict(doors, w, repo, gate, monkeypatch):
     root, _main_tip, _phase_tip = repo
