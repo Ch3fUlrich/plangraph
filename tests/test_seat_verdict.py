@@ -49,6 +49,10 @@ def test_findings_after_else_before():
     ("mimo-v2", "xiaomi"), ("llama-4", "meta"), ("muse-spark", "meta"),
     ("deepseek-r1", "deepseek"), ("qwen3-max", "alibaba"),
     ("gemini-3-pro", "google"), ("claude-sonnet-5", "anthropic"),
+    ("claude-3", "anthropic"),
+    ("glm-5.3-flash-free", "zhipu"), ("zhipu/glm-5", "zhipu"),
+    ("nvidia/nemotron-3-ultra-550b-a55b:free", "nvidia"),
+    ("glm-qwen-merge", None),
     ("opus", "anthropic"), ("haiku-4", "anthropic"),
     ("mystery-1", None), (None, None),
     ("gpt-claude-3", None), ("claude-via-gpt-router", None),
@@ -88,6 +92,17 @@ def test_refusals(tmp_path, capsys):
     assert run(tmp_path, "b", "VERDICT: PASS", served_model="mystery") == 2
     assert run(tmp_path, "c", "VERDICT: PASS", writer="openai") == 2
     assert capsys.readouterr().out == ""
+
+
+def test_new_families_not_refused(tmp_path):
+    assert run(tmp_path, "z", "VERDICT: PASS",
+               served_model="glm-5.3-flash-free",
+               extra=("--dry-run",)) == 0
+    assert run(tmp_path, "n", "VERDICT: PASS",
+               served_model="nvidia/nemotron-3-ultra-550b-a55b:free",
+               extra=("--dry-run",)) == 0
+    assert run(tmp_path, "o", "VERDICT: PASS",
+               served_model="claude-opus", extra=("--dry-run",)) == 2
 
 
 def test_multi_family_refused_before_send(tmp_path, capsys):
