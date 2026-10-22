@@ -29,7 +29,9 @@ class ReapMixin:
                         self.conn.execute(
                             "UPDATE items SET state='open', claimed_by=NULL,"
                             " delegate=NULL, reviewer=NULL, lease_until=NULL,"
-                            " review_waiver=NULL, updated_at=? WHERE key=?",
+                            " review_waiver=NULL, exec_workflow_id=NULL,"
+                            " exec_run_id=NULL, exec_attempt=NULL,"
+                            " updated_at=? WHERE key=?",
                             (self._iso(now), item["key"]))
                         expired.append(item["key"])
                 elif item["state"] == "in_review":

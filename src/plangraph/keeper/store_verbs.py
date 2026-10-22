@@ -223,6 +223,7 @@ class VerbsMixin:
             cursor = self.conn.execute(
                 "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
                 " reviewer=NULL, lease_until=NULL, review_waiver=NULL,"
+                " exec_workflow_id=NULL, exec_run_id=NULL, exec_attempt=NULL,"
                 " updated_at=?"
                 " WHERE key=? AND state='claimed' AND epoch=?",
                 (self._iso(now), key, epoch))

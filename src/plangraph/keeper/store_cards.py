@@ -361,7 +361,7 @@ class CardsMixin:
             if any(part is not None
                    for part in (exec_workflow_id, exec_run_id, exec_attempt)):
                 self._exec_check(self.conn, key, exec_workflow_id, exec_run_id,
-                                 exec_attempt)
+                                 exec_attempt, now=now)
             elif principal.role in ("worker", "spawner"):
                 row = self.conn.execute(
                     "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
@@ -472,13 +472,22 @@ class CardsMixin:
                                                                      project),
                                  run=run, new_run=new_run)
 
-    def _exec_record(self, conn, item_id, wf, run, attempt):
+    def _exec_clear(self, conn, key):
+        """Free the exec owner inside the caller's keeper transaction."""
+        conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
+                     " exec_attempt=NULL WHERE key=?", (key,))
+
+    def _exec_record(self, conn, item_id, wf, run, attempt, now=None):
         """(Re)record the exec owner of *item_id*: a first owner or a new run."""
         wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
+        touch = ", updated_at=?" if now is not None else ""
+        values = (wf, run, attempt)
+        if now is not None:
+            values += (self._iso(now),)
         conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?,"
-                     " exec_attempt=? WHERE key=?", (wf, run, attempt, item_id))
+                     f" exec_attempt=?{touch} WHERE key=?", (*values, item_id))
 
-    def _exec_check(self, conn, item_id, wf, run, attempt):
+    def _exec_check(self, conn, item_id, wf, run, attempt, now=None, record=True):
         """RT-P1-EXEC-OWNERSHIP: enforce the recorded exec owner of *item_id*.
 
         An unowned card records ``(wf, run, attempt)``; the same run may only
@@ -487,22 +496,26 @@ class CardsMixin:
         so the helper reads as a pure check against one connection.
         """
         wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
-        row = conn.execute("SELECT exec_run_id, exec_attempt FROM items WHERE key=?",
+        row = conn.execute("SELECT exec_workflow_id, exec_run_id, exec_attempt"
+                           " FROM items WHERE key=?",
                            (item_id,)).fetchone()
         recorded = row["exec_run_id"] if row is not None else None
         if recorded is None:
-            self._exec_record(conn, item_id, wf, run, attempt)
+            if record:
+                self._exec_record(conn, item_id, wf, run, attempt, now=now)
             return
-        if run != recorded:
+        if run != recorded or wf != row["exec_workflow_id"]:
             raise Refused("exec_stale",
                           f"{item_id} is owned by run {recorded!r}, not {run!r}")
         at = row["exec_attempt"] or 0
         if attempt < at:
             raise Refused("exec_stale",
                           f"{item_id} is at attempt {at}; {attempt} would go backwards")
-        if attempt > at:
-            conn.execute("UPDATE items SET exec_attempt=? WHERE key=?",
-                         (attempt, item_id))
+        if attempt > at and record:
+            touch = ", updated_at=?" if now is not None else ""
+            values = (attempt,) if now is None else (attempt, self._iso(now))
+            conn.execute(f"UPDATE items SET exec_attempt=?{touch} WHERE key=?",
+                         (*values, item_id))
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False):
@@ -531,9 +544,15 @@ class CardsMixin:
             if run is not None:
                 wf, run_id, attempt_no = _exec_parts(key, run)
                 if _forward(was, state):
-                    self._exec_check(self.conn, key, wf, run_id, attempt_no)
+                    self._exec_check(self.conn, key, wf, run_id, attempt_no,
+                                     now=now, record=was != state)
                 elif new_run and run_id != item["exec_run_id"]:
-                    self._exec_record(self.conn, key, wf, run_id, attempt_no)
+                    if (item["exec_run_id"] is not None
+                            and attempt_no <= (item["exec_attempt"] or 0)):
+                        raise Refused("exec_stale",
+                                      f"{key}: takeover needs a higher attempt")
+                    self._exec_record(self.conn, key, wf, run_id, attempt_no,
+                                      now=now)
                 else:
                     raise Refused("bad_transition",
                                   f"{key}: {was} -> {state} is not a forward move;"
