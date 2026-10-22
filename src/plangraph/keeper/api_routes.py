@@ -207,8 +207,8 @@ def _worker_claim(store, principal, body, need):
     # The phase runner's system principal also claims cards, so this is not worker-only.
     store._require_role(principal, "worker", "system")
     key = need(body, "card")
-    if body.get("worker") is not None and body["worker"] != principal.name:
-        raise Refused("validation", "worker must be the calling principal")
+    # body.worker is informational (a worker process id) and is ignored.
+    # The calling principal from the token is the only identity.
     # Repo root and base branch come from the server environment only, never the body.
     repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
     base_branch = os.environ.get("PG_PHASE_BASE_BRANCH") or "main"

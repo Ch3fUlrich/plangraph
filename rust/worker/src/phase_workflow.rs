@@ -92,14 +92,6 @@ impl Phase {
                     last_blocked = vec!["plan is for another phase".to_string()];
                     break;
                 }
-                if !plan.ready {
-                    last_blocked = if plan.blocked.is_empty() {
-                        vec!["phase not ready".to_string()]
-                    } else {
-                        plan.blocked.clone()
-                    };
-                    break;
-                }
                 if !plan.blocked.is_empty() {
                     last_blocked = plan.blocked.clone();
                     break;
