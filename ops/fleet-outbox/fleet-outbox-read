@@ -1,0 +1,59 @@
+#!/bin/bash
+# fleet-outbox-read - SSH forced command (D-2221).
+#
+# Installed as:  authorized_keys  restrict,command="/home/s/bin/fleet-outbox-read"
+# Sole verb:     get <relpath>
+# Success:       stdout = file bytes and nothing else, exit 0.
+# Anything else: "refused" on stderr, empty stdout, exit 1.
+# The input is never echoed back, and nothing but `cat` on the already
+# validated absolute path is ever executed. (ssh forwarding is the job of
+# the authorized_keys `restrict` option, not of this script.)
+set -u
+
+refuse() {
+	printf 'refused\n' >&2
+	exit 1
+}
+
+ROOT="${FLEET_OUTBOX_ROOT:-$HOME/fleet-outbox}"
+
+# --- 1. command shape: exactly "get <relpath>", one literal get, one space ---
+cmd="${SSH_ORIGINAL_COMMAND-}"
+[ -n "$cmd" ] || refuse
+# ^...$ over the whole string: no extra args, spaces, tabs, newlines, quotes,
+# $, ;, |, &, backticks, glob chars, or a bare shell like "bash" / "scp".
+[[ "$cmd" =~ ^get\ [A-Za-z0-9._/-]+$ ]] || refuse
+relpath="${cmd#get }"
+
+# --- 2. relpath shape ---
+[ "${#relpath}" -le 255 ] || refuse
+[ "${relpath#/}" = "$relpath" ] || refuse          # no absolute path
+[ "${relpath%/}" = "$relpath" ] || refuse          # no trailing slash
+[[ "$relpath" == *"//"* ]] && refuse                # no empty segment
+IFS='/' read -r -a segs <<< "$relpath"
+for seg in "${segs[@]}"; do
+	[ -n "$seg" ] || refuse
+	[[ "$seg" != "." && "$seg" != ".." ]] || refuse
+done
+
+# --- 3. no symlink anywhere from ROOT down to the target (inclusive) ---
+p="$ROOT"
+[ ! -L "$p" ] || refuse
+for seg in "${segs[@]}"; do
+	p="$p/$seg"
+	[ ! -L "$p" ] || refuse
+done
+P="$ROOT/$relpath"
+
+# --- 4. canonical path must stay strictly inside the canonical root ---
+RR=$(realpath -e -- "$ROOT" 2>/dev/null) || refuse
+R=$(realpath -e -- "$P" 2>/dev/null) || refuse
+case "$R" in
+	"$RR"/*) ;;
+	*) refuse ;;
+esac
+
+# --- 5. regular file, readable, not a symlink ---
+[[ -f "$R" && ! -L "$R" && -r "$R" ]] || refuse
+
+exec cat -- "$R"
