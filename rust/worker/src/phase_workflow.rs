@@ -52,6 +52,7 @@ impl Phase {
         let mut not_merged = Vec::new();
         let mut waves = 0;
         let mut first_plan = true;
+        let mut last_blocked: Vec<String> = Vec::new();
 
         loop {
             let plan: PhasePlan = ctx
@@ -66,8 +67,10 @@ impl Phase {
 
             if first_plan {
                 first_plan = false;
-                if !plan.ready || !plan.blocked.is_empty() {
-                    let blocked = if plan.blocked.is_empty() {
+                if plan.phase != input.key || !plan.ready || !plan.blocked.is_empty() {
+                    let blocked = if plan.phase != input.key {
+                        vec!["plan is for another phase".to_string()]
+                    } else if plan.blocked.is_empty() {
                         vec!["phase not ready".to_string()]
                     } else {
                         plan.blocked.clone()
@@ -82,6 +85,24 @@ impl Phase {
                         waves,
                     });
                 }
+            } else {
+                if plan.phase != input.key {
+                    last_blocked = vec!["plan is for another phase".to_string()];
+                    break;
+                }
+                if !plan.ready {
+                    last_blocked = if plan.blocked.is_empty() {
+                        vec!["phase not ready".to_string()]
+                    } else {
+                        plan.blocked.clone()
+                    };
+                    break;
+                }
+                if !plan.blocked.is_empty() {
+                    last_blocked = plan.blocked.clone();
+                    break;
+                }
+                last_blocked.clear();
             }
 
             let wave = next_wave(&plan, &attempted, input.parallel());
@@ -190,7 +211,7 @@ impl Phase {
 
             for (key, result) in results {
                 match result {
-                    Ok(output) if output.outcome == "done" => merged.push(key),
+                    Ok(output) if output.outcome == OUTCOME_DONE => merged.push(key),
                     _ => not_merged.push(key),
                 }
             }
@@ -199,13 +220,13 @@ impl Phase {
 
         let merged = sorted_unique(merged);
         let not_merged = sorted_unique(not_merged);
-        let outcome = phase_outcome(&merged, &not_merged);
+        let outcome = phase_outcome(&not_merged, &last_blocked);
 
         Ok(PhaseOutput {
             phase: input.key,
             branch,
             outcome: outcome.to_string(),
-            blocked: Vec::new(),
+            blocked: last_blocked,
             merged,
             not_merged,
             waves,
@@ -229,9 +250,8 @@ fn sorted_unique(mut keys: Vec<String>) -> Vec<String> {
     keys
 }
 
-pub fn phase_outcome(merged: &[String], not_merged: &[String]) -> &'static str {
-    let _ = merged;
-    if not_merged.is_empty() {
+pub fn phase_outcome(not_merged: &[String], blocked: &[String]) -> &'static str {
+    if not_merged.is_empty() && blocked.is_empty() {
         OUTCOME_DONE
     } else {
         OUTCOME_PARTIAL
@@ -248,14 +268,14 @@ mod tests {
     }
 
     #[test]
-    fn phase_outcome_done_when_merged() {
-        let merged = vec!["a".to_string()];
-        assert_eq!(phase_outcome(&merged, &[]), OUTCOME_DONE);
+    fn phase_outcome_partial_when_not_merged() {
+        let not_merged = vec!["b".to_string()];
+        assert_eq!(phase_outcome(&not_merged, &[]), OUTCOME_PARTIAL);
     }
 
     #[test]
-    fn phase_outcome_partial_when_not_merged() {
-        let not_merged = vec!["b".to_string()];
-        assert_eq!(phase_outcome(&[], &not_merged), OUTCOME_PARTIAL);
+    fn phase_outcome_partial_when_blocked_later() {
+        let blocked = vec!["phase not ready".to_string()];
+        assert_eq!(phase_outcome(&[], &blocked), OUTCOME_PARTIAL);
     }
 }
