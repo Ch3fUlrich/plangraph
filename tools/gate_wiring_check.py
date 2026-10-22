@@ -56,25 +56,83 @@ def wiring_at(rev: str, workflow: str, job: str, cwd: str | Path | None = None) 
     return {'on': triggers, 'job': jobs[job]}
 
 
-def has_gate_edit(base: str, head: str, cwd: str | Path | None = None) -> bool:
-    '''Return True when any commit in base..head has a valid Gate-Edit trailer.'''
-    command = ['git', 'log', '--no-merges', '--format=%H%x00%B%x01', f'{base}..{head}']
+def _git_out(args: list[str], cwd: str | Path | None) -> str:
+    command = ['git', *args]
     try:
         result = subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
-        message = exc.stderr.strip() or f'git log failed for {base}..{head}'
+        message = exc.stderr.strip() or f'git command failed: {" ".join(command)}'
         raise GateError(message, 2) from exc
-    pattern = re.compile(r'Gate-Edit: D-\d+')
-    for record in result.stdout.split('\x01'):
-        if not record.strip():
-            continue
-        parts = record.split('\x00', 1)
-        if len(parts) != 2:
-            continue
-        for line in parts[1].splitlines():
-            if pattern.fullmatch(line):
-                return True
+    return result.stdout
+
+
+_TRAILER_LINE = re.compile(r'[A-Za-z][A-Za-z0-9-]*: \S')
+_GATE_EDIT = re.compile(r'Gate-Edit: D-\d+')
+
+
+def _trailer_block(message: str) -> list[str]:
+    '''Return the trailing paragraphs whose every line is a trailer line.'''
+    lines = message.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    paragraphs: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if not line.strip():
+            if current:
+                paragraphs.append(current)
+                current = []
+        else:
+            current.append(line)
+    if current:
+        paragraphs.append(current)
+    block: list[str] = []
+    for paragraph in reversed(paragraphs):
+        if not all(_TRAILER_LINE.match(line) for line in paragraph):
+            break
+        block = paragraph + block
+    return block
+
+
+def _commit_shas(base: str, head: str, cwd: str | Path | None) -> list[str]:
+    text = _git_out(['log', '--no-merges', '--format=%H', f'{base}..{head}'], cwd)
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _commit_message(sha: str, cwd: str | Path | None) -> str:
+    return _git_out(['show', '-s', '--format=%B', sha], cwd)
+
+
+def _commit_paths(sha: str, cwd: str | Path | None) -> list[str]:
+    text = _git_out(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', sha], cwd)
+    return [path for path in text.split('\x00') if path]
+
+
+def has_gate_edit(base: str, head: str, cwd: str | Path | None = None) -> bool:
+    '''Return True when any commit in base..head has a valid Gate-Edit trailer.'''
+    for sha in _commit_shas(base, head, cwd):
+        message = _commit_message(sha, cwd)
+        if any(_GATE_EDIT.fullmatch(line) for line in _trailer_block(message)):
+            return True
     return False
+
+
+def commits_touching(base: str, head: str, workflow: str, cwd: str | Path | None = None) -> list[tuple[str, bool]]:
+    '''Return (sha, has_gate_edit) for commits in base..head touching workflow.'''
+    touching: list[tuple[str, bool]] = []
+    for sha in _commit_shas(base, head, cwd):
+        message = _commit_message(sha, cwd)
+        paths = _commit_paths(sha, cwd)
+        if workflow not in paths:
+            continue
+        has_edit = any(_GATE_EDIT.fullmatch(line) for line in _trailer_block(message))
+        touching.append((sha, has_edit))
+    return touching
+
+
+def commits_missing_gate_edit(base: str, head: str, workflow: str, cwd: str | Path | None = None) -> list[str]:
+    '''Return shas in base..head that touch workflow without a strict Gate-Edit line in their message.'''
+    return [sha for sha, has_edit in commits_touching(base, head, workflow, cwd=cwd) if not has_edit]
 
 
 def _wiring_diff(base_wiring: dict[str, object], head_wiring: dict[str, object]) -> str:
@@ -118,14 +176,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(_wiring_diff(base_wiring, head_wiring))
     try:
-        carries_gate_edit = has_gate_edit(args.base, args.head)
+        missing = commits_missing_gate_edit(args.base, args.head, args.workflow)
+        touching = commits_touching(args.base, args.head, args.workflow)
     except GateError as exc:
         print(exc.message, file=sys.stderr)
         return exc.code
-    if carries_gate_edit:
+    if not touching:
+        print('gate wiring changed WITHOUT Gate-Edit', file=sys.stderr)
+        return 1
+    if not missing:
         print('gate wiring changed WITH Gate-Edit: review the diff')
         return 0
-    print('gate wiring changed WITHOUT Gate-Edit', file=sys.stderr)
+    print('gate wiring changed WITHOUT Gate-Edit: ' + ' '.join(missing), file=sys.stderr)
     return 1
 
 
