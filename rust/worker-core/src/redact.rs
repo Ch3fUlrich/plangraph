@@ -34,13 +34,15 @@ fn patterns() -> &'static [regex::Regex] {
             //    value. Also handles quoted keys ("name": "value" /
             //    'name' = 'value'); the closing key quote and the separator
             //    survive, and a quoted value (spaces included) is replaced
-            //    whole. An unquoted value runs to the end of the line
-            //    (spaces included) but stops before a structured closing
-            //    delimiter (`}`, `]`, `)`) or a URL-query `&`; the
-            //    delimiter itself survives. The explicit placeholder
-            //    alternative keeps the rule idempotent even though `]` ends
-            //    an unquoted value.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)(\s*[=:]\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\]|[^\n\r"'}\])&]+)"#,
+            //    whole. An unquoted value starts with a non-whitespace,
+            //    non-quote character that is not `}`, `]`, `)`, or `&`, then
+            //    runs to the end of the line (spaces and quotes included)
+            //    but stops before a structured closing delimiter (`}`, `]`,
+            //    `)`) or a URL-query `&`; the delimiter itself survives.
+            //    Quotes inside an unquoted value do not end it. The explicit
+            //    placeholder alternative keeps the rule idempotent even
+            //    though `]` ends an unquoted value.
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)(\s*[=:]\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\]|[^\s"'}\])&][^\n\r}\])&]*)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
             r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
@@ -419,6 +421,24 @@ mod tests {
     }
 
     #[test]
+    fn quotes_inside_an_unquoted_value_do_not_end_it() {
+        let key = ["API_", "KEY"].concat();
+        let cases = [
+            (format!("{key}=a \"b c\" d"), format!("{key}={REDACTED}")),
+            (format!("{key}=pre 'x' y"), format!("{key}={REDACTED}")),
+            (
+                format!("{{{key}: a \"b\" c}}"),
+                format!("{{{key}: {REDACTED}}}"),
+            ),
+        ];
+        for (text, expected) in cases {
+            let out = redact(&text);
+            assert_eq!(out, expected, "{text}");
+            assert_eq!(redact(&out), out, "{out}");
+        }
+    }
+
+    #[test]
     fn redact_is_idempotent() {
         let json_key = ["api_", "token"].concat();
         let json_val = ["abcd", "1234"].concat();
@@ -446,6 +466,9 @@ mod tests {
             format!("?{token_key}=a b&next=1"),
             format!("{token_key}={REDACTED}"),
             format!("{api_key}={REDACTED}&next=1"),
+            format!("{api_key}=a \"b c\" d"),
+            format!("{api_key}=pre 'x' y"),
+            format!("{{{api_key}: a \"b\" c}}"),
         ];
         for x in cases {
             let once = redact(&x);
