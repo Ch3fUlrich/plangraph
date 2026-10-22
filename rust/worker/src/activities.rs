@@ -17,7 +17,7 @@ use pg_worker_core::check;
 use pg_worker_core::config::Config;
 use pg_worker_core::confine;
 use pg_worker_core::exit_class::Patterns;
-use pg_worker_core::git::{GitError, git, git_bytes};
+use pg_worker_core::git::{GitError, check_rev, git, git_bytes};
 use pg_worker_core::hash;
 use pg_worker_core::janitor;
 use pg_worker_core::packet::ParkPacket;
@@ -87,6 +87,29 @@ pub struct CardInput {
     /// configured `max_question_rounds` (3). Injectable so a test is quick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_question_rounds: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhasePlanInput {
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClaimCardInput {
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhaseBranchInput {
+    pub repo: String,
+    pub base_branch: String,
+    pub branch: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PhaseBranchResult {
+    pub head: String,
+    pub created: bool,
 }
 
 /// Ask the keeper to store an agent question for a card.
@@ -252,6 +275,9 @@ pub struct JanitorInput {
     pub workroot: String,
     pub check_cmd: String,
     pub base_sha: String,
+    /// Card whose attempts are swept; empty sweeps every attempt of the repo (legacy input).
+    #[serde(default)]
+    pub card: String,
 }
 
 /// Everything the activities need, injected so tests can stub the seams.
@@ -423,6 +449,69 @@ pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
         cfg.check_tail_lines,
     );
     map_probe(outcome, id.branch())
+}
+
+pub(crate) fn do_phase_plan(
+    keeper: &dyn Keeper,
+    key: &str,
+) -> Result<crate::phase::PhasePlan, crate::keeper::KeeperError> {
+    retry_transient(&TRANSIENT_BACKOFF, || keeper.phase_plan(key))
+}
+
+pub(crate) fn do_claim_card(
+    keeper: &dyn Keeper,
+    key: &str,
+) -> Result<Option<Claim>, crate::keeper::KeeperError> {
+    retry_transient(&TRANSIENT_BACKOFF, || {
+        keeper.claim_card(merge_owner_id(), key)
+    })
+}
+
+pub(crate) fn do_ensure_phase_branch(
+    input: &PhaseBranchInput,
+) -> Result<PhaseBranchResult, String> {
+    if input.repo.is_empty() || input.base_branch.is_empty() || input.branch.is_empty() {
+        return Err("repo, base_branch and branch are required".to_string());
+    }
+    check_rev(&input.base_branch).map_err(|e| e.to_string())?;
+    check_rev(&input.branch).map_err(|e| e.to_string())?;
+
+    if !input.branch.starts_with("phase/") {
+        return Err("not a phase/ branch".to_string());
+    }
+    if input.branch == input.base_branch {
+        return Err("phase branch must not be the base branch".to_string());
+    }
+
+    let repo = Path::new(&input.repo);
+    let base_ref = format!("refs/heads/{}", input.base_branch);
+    let branch_ref = format!("refs/heads/{}", input.branch);
+    let base_head = git(repo, &["rev-parse", base_ref.as_str()]).map_err(|e| e.to_string())?;
+
+    if let Ok(head) = git(repo, &["rev-parse", "--verify", "-q", branch_ref.as_str()]) {
+        return Ok(PhaseBranchResult {
+            head,
+            created: false,
+        });
+    }
+
+    let zero = "0000000000000000000000000000000000000000";
+    match git(
+        repo,
+        &["update-ref", branch_ref.as_str(), base_head.as_str(), zero],
+    ) {
+        Ok(_) => Ok(PhaseBranchResult {
+            head: base_head,
+            created: true,
+        }),
+        Err(_) => {
+            let head = git(repo, &["rev-parse", branch_ref.as_str()]).map_err(|e| e.to_string())?;
+            Ok(PhaseBranchResult {
+                head,
+                created: false,
+            })
+        }
+    }
 }
 
 /// What a gate run produced: a result, or the fact that the caller cancelled
@@ -769,8 +858,8 @@ impl Drop for KeeperLease<'_> {
     }
 }
 
-/// Sweep dead attempts of `repo`, treating none as live, and report how many
-/// were removed. Every attempt branched from the same `base_sha`.
+/// Sweep dead attempts of `input.card` (every card when empty), treating none
+/// as live, and report how many were removed. Every attempt branched from the same `base_sha`.
 pub(crate) fn do_janitor(cfg: &Config, input: &JanitorInput) -> Result<u32, GitError> {
     let base = input.base_sha.clone();
     let base_for = move |_: &AttemptId| base.clone();
@@ -780,7 +869,13 @@ pub(crate) fn do_janitor(cfg: &Config, input: &JanitorInput) -> Result<u32, GitE
         tail_lines: cfg.check_tail_lines,
         base_for: &base_for,
     };
-    let report = janitor::sweep(Path::new(&input.repo), &HashSet::new(), &spec)?;
+    let live = HashSet::new();
+    let repo = Path::new(&input.repo);
+    let report = if input.card.is_empty() {
+        janitor::sweep(repo, &live, &spec)?
+    } else {
+        janitor::sweep_card(repo, &input.card, &live, &spec)?
+    };
     Ok(report.removed.len() as u32)
 }
 
@@ -1041,6 +1136,60 @@ impl CardActivities {
         settle_refusal(res, "ask_question")
     }
 
+    /// Re-read the phase plan so overlap-deferred cards can become startable.
+    #[activity]
+    pub async fn phase_plan(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: PhasePlanInput,
+    ) -> Result<crate::phase::PhasePlan, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let key = input.key.clone();
+        let res = tokio::task::spawn_blocking(move || do_phase_plan(&*keeper, &key))
+            .await
+            .map_err(activity_error)?;
+        match res {
+            Ok(plan) => Ok(plan),
+            Err(e) if classify(&e) == Failure::Refused => Ok(crate::phase::PhasePlan {
+                phase: input.key,
+                ready: false,
+                blocked: vec![format!("keeper refused phase_plan: {e}")],
+                cards: vec![],
+            }),
+            Err(e) => Err(activity_error(e)),
+        }
+    }
+
+    /// Claim one card for this worker before starting its child workflow.
+    #[activity]
+    pub async fn claim_card(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: ClaimCardInput,
+    ) -> Result<Option<Claim>, ActivityError> {
+        let keeper = self.deps.keeper.clone();
+        let key = input.key;
+        let res = tokio::task::spawn_blocking(move || do_claim_card(&*keeper, &key))
+            .await
+            .map_err(activity_error)?;
+        settle_refusal(res, "claim_card").map(Option::flatten)
+    }
+
+    /// Create the phase branch once; a racing creator simply wins the CAS.
+    #[activity]
+    pub async fn ensure_phase_branch(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: PhaseBranchInput,
+    ) -> Result<PhaseBranchResult, ActivityError> {
+        tokio::task::spawn_blocking(move || do_ensure_phase_branch(&input))
+            .await
+            .map_err(activity_error)?
+            .map_err(|msg| {
+                ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(msg))
+            })
+    }
+
     /// Record `question_timeout` for a question whose default was taken.
     /// `true` when recorded; `false` on any failure that outlasts the transient
     /// retries here or is a refusal (for example the worker token lacks the
@@ -1281,6 +1430,7 @@ mod tests {
             workroot: "/w".to_string(),
             check_cmd: "true".to_string(),
             base_sha: "b".to_string(),
+            card: "c1".to_string(),
         });
         round_trip(&GateInput {
             workroot: "/w".to_string(),
@@ -1833,10 +1983,36 @@ mod tests {
             workroot: root.path().to_string_lossy().into_owned(),
             check_cmd: "test -f other.txt".to_string(),
             base_sha: base,
+            card: "c1".to_string(),
         };
         // Commit beyond base but a failing check is `partial`, so it is removed.
         assert_eq!(do_janitor(&tiny(), &input).unwrap(), 1);
         assert!(!wt.path.exists());
+    }
+
+    #[test]
+    fn do_janitor_scoped_to_one_card() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let c1 = AttemptId::new("c1", 1);
+        let c2 = AttemptId::new("c2", 1);
+        let wt1 = worktree::create(r.path(), &base, &root.path().join(c1.dir_name()), &c1).unwrap();
+        let wt2 = worktree::create(r.path(), &base, &root.path().join(c2.dir_name()), &c2).unwrap();
+        write(&wt1.path, "half.txt", "x");
+        commit_all(&wt1.path, "work");
+
+        let input = JanitorInput {
+            repo: r.path().to_string_lossy().into_owned(),
+            workroot: root.path().to_string_lossy().into_owned(),
+            check_cmd: "test -f other.txt".to_string(),
+            base_sha: base,
+            card: "c1".to_string(),
+        };
+
+        // c1 is partial and removed; c2 belongs to another card and stays.
+        assert_eq!(do_janitor(&tiny(), &input).unwrap(), 1);
+        assert!(!wt1.path.exists());
+        assert!(wt2.path.exists());
     }
 
     /// One named check for the gate tests.
@@ -2334,5 +2510,101 @@ mod tests {
         );
         let back: GateResult = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
+    }
+
+    #[test]
+    fn ensure_phase_branch_creates_and_is_idempotent() {
+        let (dir, base) = repo();
+        let path = dir.path().to_str().unwrap();
+        let input = PhaseBranchInput {
+            repo: path.to_string(),
+            base_branch: "main".to_string(),
+            branch: "phase/p1".to_string(),
+        };
+
+        let first = do_ensure_phase_branch(&input).unwrap();
+        assert!(first.created);
+        assert_eq!(first.head, base);
+        assert_eq!(git(dir.path(), &["rev-parse", "refs/heads/phase/p1"]), base);
+
+        git(dir.path(), &["commit", "--allow-empty", "-m", "advance"]);
+        let second = do_ensure_phase_branch(&input).unwrap();
+        assert!(!second.created);
+        assert_eq!(second.head, base);
+    }
+
+    #[test]
+    fn ensure_phase_branch_refuses_bad_input() {
+        let (dir, _) = repo();
+        let path = dir.path().to_str().unwrap();
+
+        let same = PhaseBranchInput {
+            repo: path.to_string(),
+            base_branch: "phase/x".to_string(),
+            branch: "phase/x".to_string(),
+        };
+        assert_eq!(
+            do_ensure_phase_branch(&same).unwrap_err(),
+            "phase branch must not be the base branch"
+        );
+
+        let not_phase = PhaseBranchInput {
+            repo: path.to_string(),
+            base_branch: "main".to_string(),
+            branch: "main".to_string(),
+        };
+        assert_eq!(
+            do_ensure_phase_branch(&not_phase).unwrap_err(),
+            "not a phase/ branch"
+        );
+
+        let evil = PhaseBranchInput {
+            repo: path.to_string(),
+            base_branch: "-evil".to_string(),
+            branch: "phase/p1".to_string(),
+        };
+        assert!(do_ensure_phase_branch(&evil).is_err());
+
+        let missing = PhaseBranchInput {
+            repo: path.to_string(),
+            base_branch: "nope".to_string(),
+            branch: "phase/p1".to_string(),
+        };
+        assert!(do_ensure_phase_branch(&missing).is_err());
+    }
+
+    #[test]
+    fn phase_plan_pure_body_uses_keeper() {
+        let keeper = StubKeeper::default();
+        let plan: crate::phase::PhasePlan =
+            serde_json::from_str(r#"{"phase":"p1","ready":true,"blocked":[],"cards":[]}"#).unwrap();
+        keeper.push_plan(plan.clone());
+
+        assert_eq!(do_phase_plan(&keeper, "p1").unwrap(), plan);
+        assert_eq!(keeper.plan_calls(), vec!["p1".to_string()]);
+    }
+
+    #[test]
+    fn claim_card_pure_body_uses_keeper() {
+        let keeper = StubKeeper::default();
+        let claim = Claim {
+            card: "c1".to_string(),
+            repo: "r".to_string(),
+            base_sha: "s".to_string(),
+            check_cmd: "true".to_string(),
+            allow: vec![],
+            forbid: vec![],
+            prompt: "p".to_string(),
+        };
+        keeper.push_card_claim(claim.clone());
+
+        assert_eq!(do_claim_card(&keeper, "c1").unwrap(), Some(claim));
+        assert_eq!(
+            keeper.claim_card_calls(),
+            vec![(merge_owner_id().to_string(), "c1".to_string())]
+        );
+
+        let empty = StubKeeper::default();
+        assert_eq!(do_claim_card(&empty, "missing").unwrap(), None);
     }
 }
