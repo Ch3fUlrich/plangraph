@@ -103,10 +103,11 @@ def cmd_oversight_check(args, session):
         now = time.time()
         # Two distinct git shapes: stall's R1/R2 understand the config object,
         # R4 needs a `git(args) -> str` callable (see oversight.run_checks).
+        lane_git = _lane_git(cfg)
         findings = oversight.run_checks(
             conn, now,
             git=cfg if getattr(cfg, "repos", None) else None,
-            lane_git=_lane_git(cfg))
+            lane_git=lane_git)
         text, sha = oversight.digest(findings)
         _atomic_write(out / "digest.json", text.encode("ascii"))
         _atomic_write(out / "digest.sha256",
@@ -114,7 +115,10 @@ def cmd_oversight_check(args, session):
         if getattr(args, "no_alarms", False):
             new = 0
         else:
-            new = oversight.raise_alarms(conn, findings, now)
+            # No lane git means R4 did not run: its alarms are kept open.
+            new = oversight.raise_alarms(
+                conn, findings, now,
+                keep_rules=() if lane_git is not None else ("R4",))
     except Exception as exc:
         print(f"oversight-check: {exc}", file=sys.stderr)
         return EXIT_REFUSED

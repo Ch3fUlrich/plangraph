@@ -237,6 +237,37 @@ def _lane_repo(tmp_path):
     return repo
 
 
+# ---------------------- cli-level R4 skip: no repo means R4 did not run
+def test_oversight_check_with_no_configured_repo_keeps_open_lane_idle_alarms(
+        w, tmp_path, monkeypatch):
+    """With no lane git adapter R4 never ran, so its open alarms stay open."""
+    import plangraph.keeper.cli_oversight  # noqa: F401
+    from plangraph.keeper import cli
+    key = seed_claimed(w, ("A", ()), priority=1)[0]
+    now = w.clock()
+    w.conn.execute(
+        "INSERT INTO projector_alarms(id, kind, workflow_id, key, detail,"
+        " raised_at) VALUES((SELECT COALESCE(MAX(id),0)+1 FROM"
+        " projector_alarms),?,?,?,?,?)",
+        ("lane_idle", "oversight", key, f"R4:lane_idle:{key}: lane idle",
+         w.store._iso(now)))
+    w.conn.commit()
+    w.clock.advance(25 * HOUR)
+    cfg = write_config(w, tmp_path)           # no "repos": _lane_git() is None
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(["--config", str(cfg), "oversight-check",
+                     "--out-dir", str(out)])
+    assert code == 0
+    row = w.conn.execute(
+        "SELECT cleared_at FROM projector_alarms"
+        " WHERE workflow_id='oversight' AND kind='lane_idle' AND key=?",
+        (key,)).fetchone()
+    assert row is not None
+    assert row["cleared_at"] is None, "a rule that did not run must not clear alarms"
+
+
 def test_oversight_check_uses_a_real_lane_git_adapter(w, tmp_path, monkeypatch):
     """The cli hands R4 a `git(args) -> str` adapter over cfg.repos, not cfg."""
     import plangraph.keeper.cli_oversight  # noqa: F401

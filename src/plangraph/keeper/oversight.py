@@ -192,7 +192,8 @@ def r4_lane_idle(conn, now, git=None):
     """Lane branches ahead of main whose commit and item have both gone quiet.
 
     *git* is the same injectable shape the check uses for stall trailers but
-    here as ``git(args) -> str``; without it the rule is skipped silently.
+    here as ``git(args) -> str``; without it the rule is skipped silently, so
+    a caller must then pass ``keep_rules=("R4",)`` to :func:`raise_alarms`.
     A *git* that raises while listing means the check itself could not run, so
     it fails closed with one ``oversight_check_failed`` finding (never ``[]``:
     an empty result would let :func:`raise_alarms` clear open ``lane_idle``
@@ -361,7 +362,7 @@ def digest(findings):
 
 
 # --------------------------------------------------------------- alarms
-def raise_alarms(conn, findings, now):
+def raise_alarms(conn, findings, now, keep_rules=()):
     """Open one ``projector_alarms`` row per new finding; clear vanished ones.
 
     Rows live under ``workflow_id='oversight'`` and dedupe on ``(kind, key)``
@@ -370,6 +371,8 @@ def raise_alarms(conn, findings, now):
     An open row whose kind belongs to a rule that reported
     ``oversight_check_failed`` is *kept*: the rule's findings are missing
     because the check could not run, not because the condition vanished.
+    ``keep_rules`` names further rules that did not run at all this pass (for
+    instance R4 without a lane git adapter), so their open alarms are kept too.
     Returns the number of *new* rows.
     """
     stamp = iso(now)
@@ -379,6 +382,7 @@ def raise_alarms(conn, findings, now):
     try:
         failed = {f["rule"] for f in findings
                   if f["kind"] == "oversight_check_failed"}
+        kept = failed | set(keep_rules)
         present = {}
         for row in conn.execute(
                 "SELECT id, kind, key FROM projector_alarms"
@@ -406,7 +410,7 @@ def raise_alarms(conn, findings, now):
         for ident, alarm_id in present.items():
             if ident not in wanted:
                 owner = _RULE_OF_ALARM_KIND.get(ident[0])
-                if owner is not None and owner in failed:
+                if owner is not None and owner in kept:
                     continue        # the owning rule could not run: keep it
                 conn.execute(
                     "UPDATE projector_alarms SET cleared_at=? WHERE id=?",

@@ -453,6 +453,28 @@ def test_r4_failure_keeps_the_lane_alarm_and_its_own_alarm_clears(w):
     assert alarms[("oversight_check_failed", "r4")] is not None  # cleared now
 
 
+def test_raise_alarms_keep_rules_keeps_a_rule_that_did_not_run(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    key = seed(w, [("A", ())])[0]
+    w.clock.advance(oversight.LANE_IDLE_S + HOUR)
+    now = w.clock()
+    lane = {"rule": "R4", "kind": "lane_idle", "key": key,
+            "reason": f"R4:lane_idle:{key}", "detail": "lane fell idle",
+            "ts": w.store._iso(now)}
+    stall = {"rule": "R1", "kind": "stall_no_event", "key": "demo:S",
+             "reason": "R1:stall_no_event:demo:S", "detail": "claimed, quiet",
+             "ts": w.store._iso(now)}
+    assert oversight.raise_alarms(w.conn, [lane, stall], now) == 2
+
+    # R4 could not run at all this pass (no lane git): its open alarm must stay
+    # open, while a vanished alarm of a rule that *did* run is still cleared.
+    assert oversight.raise_alarms(w.conn, [], now, keep_rules=("R4",)) == 0
+    alarms = _oversight_alarms(w)
+    assert alarms[("lane_idle", key)] is None          # kept open
+    assert alarms[("stall_no_event", "demo:S")] is not None   # cleared
+
+
 def test_r4_per_ref_failure_stays_a_skip_and_the_failure_digest_is_stable(w):
     import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
     from plangraph.keeper import oversight
