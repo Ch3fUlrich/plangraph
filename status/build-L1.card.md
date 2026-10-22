@@ -13,7 +13,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S2 #119 r9 head 4c88ad17 CI green, qwen PASS, glm FIX 4 -> spine disputed all to routing (SDK + 3 tests); await ruling -> GO or fix. S3 own cred (D-2227), S4 |
 | RT-OVERSIGHT-CHECKS | DONE | 5fe070b3 verdict alibaba; timer = operator ask #3 at workst (needs operator OK); was MERGED 5fe070b3 (GO D-2274); ciwait bg b2ansobqb -> evidence+submit; then verdicts qwen/haiku seats/oversight-117d; timer install workst keeper only (D-1854) via workst-L1-autoos; LOW followup leaf -> routing |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
-| CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 9f168e51 CI green; seats were on 0a7a30d3 (glmA FIX 2 HIGH: Hand-Edit claude marker, workflow suppression). Round: fix HIGH-1, add tools/gate_wiring_check.py (L1 runs before merge), leaf for MEDs, re-seat qwen+glm exact head -> GO-REQ routing |
+| CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 2209279d CI 8/8, seats qwen+glm A/B PASS neutral; wiring check rc0 read by me; GO-REQ routing 20:5xZ -> merge, CI main, evidence, submit, verdicts (writer deepseek) |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | DONE | qwen r2 PASS 59a5e0e5, verdict alibaba; PH-RT-RUNTIME 13/33 |
@@ -32,6 +32,6 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 - oc-harden #95 d542cf0 BLOCKED: workst admission 82.6% commit charge; asked workst-L1-autoos to reap; fix = no_change migration PG6 + sqlite rebuild (cx writer).
 - sandbox #100 head 5903b35: push ff to spine/attempt-sandbox authorised; seats glm+deepseek wait admission (fallback: I run them from coding.vm after 21:30Z).
 - KEEPER-OPCLAIM-CLOSE (HIGH, D-2283/2284, mine): wt opclaim-close lane/keeper-opclaim-close; writer omniroute/mimo-v2.6-flash run 20261022-202358-...6d5fb8 (cx not declared on coding.vm, D-2148 skip). Design: A refuse legacy claimed on non-none tier, B legacy claim -> in_review recovery. Then PR, 2 seats non-xiaomi, GO-REQ routing, then router closes server:OP-DOCKHAND-EVENTS.
-- sandbox #100 d0905cc CI green (39848018702); seats base cd073676..d0905cc; admission 88% -> coding.vm seats at 21:30Z if BLOCKED.
+- sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
