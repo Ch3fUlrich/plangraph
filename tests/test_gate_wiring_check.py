@@ -177,3 +177,27 @@ def test_real_repo_workflow_parses() -> None:
     wiring = wiring_at('HEAD', '.github/workflows/tests.yml', 'ci-gate', cwd=REPO_ROOT)
     assert isinstance(wiring, dict)
     assert 'steps' in wiring['job']
+
+
+def test_gate_edit_must_be_on_every_workflow_commit(repo, monkeypatch, capsys):
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    first = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate -v')
+    _commit(repo, 'a\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: first})
+    second = first.replace('-v', '|| true')
+    head = _commit(repo, 'b', {WORKFLOW_PATH: second})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 1
+    captured = capsys.readouterr()
+    assert 'WITHOUT Gate-Edit' in captured.err
+
+
+def test_gate_edit_on_every_workflow_commit_passes(repo, monkeypatch, capsys):
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    first = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate -v')
+    _commit(repo, 'a\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: first})
+    second = first.replace('-v', '|| true')
+    head = _commit(repo, 'b\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: second})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 0
+    captured = capsys.readouterr()
+    assert 'WITH Gate-Edit' in captured.out

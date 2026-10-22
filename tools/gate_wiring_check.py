@@ -77,6 +77,36 @@ def has_gate_edit(base: str, head: str, cwd: str | Path | None = None) -> bool:
     return False
 
 
+def commits_touching(base: str, head: str, workflow: str, cwd: str | Path | None = None) -> list[tuple[str, bool]]:
+    '''Return (sha, has_gate_edit) for commits in base..head touching workflow.'''
+    command = ['git', 'log', '--no-merges', '--name-only', '--format=%x01%H%x00%B%x00', f'{base}..{head}']
+    try:
+        completed = subprocess.run(command, cwd=cwd, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        raise GateError(f'git log failed: {exc.stderr.strip()}', 2) from exc
+    touching: list[tuple[str, bool]] = []
+    for record in completed.stdout.split('\x01'):
+        if not record:
+            continue
+        sha, sep, rest = record.partition('\x00')
+        if not sep:
+            continue
+        message, sep, files = rest.partition('\x00')
+        if not sep:
+            continue
+        paths = [line.strip() for line in files.splitlines() if line.strip()]
+        if workflow not in paths:
+            continue
+        has_edit = any(re.fullmatch(r'Gate-Edit: D-\d+', line) for line in message.splitlines())
+        touching.append((sha, has_edit))
+    return touching
+
+
+def commits_missing_gate_edit(base: str, head: str, workflow: str, cwd: str | Path | None = None) -> list[str]:
+    '''Return shas in base..head that touch workflow without a strict Gate-Edit line in their message.'''
+    return [sha for sha, has_edit in commits_touching(base, head, workflow, cwd=cwd) if not has_edit]
+
+
 def _wiring_diff(base_wiring: dict[str, object], head_wiring: dict[str, object]) -> str:
     base_text = json.dumps(base_wiring, indent=2, sort_keys=True)
     head_text = json.dumps(head_wiring, indent=2, sort_keys=True)
@@ -118,14 +148,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     print(_wiring_diff(base_wiring, head_wiring))
     try:
-        carries_gate_edit = has_gate_edit(args.base, args.head)
+        missing = commits_missing_gate_edit(args.base, args.head, args.workflow)
+        touching = commits_touching(args.base, args.head, args.workflow)
     except GateError as exc:
         print(exc.message, file=sys.stderr)
         return exc.code
-    if carries_gate_edit:
+    if not touching:
+        print('gate wiring changed WITHOUT Gate-Edit', file=sys.stderr)
+        return 1
+    if not missing:
         print('gate wiring changed WITH Gate-Edit: review the diff')
         return 0
-    print('gate wiring changed WITHOUT Gate-Edit', file=sys.stderr)
+    print('gate wiring changed WITHOUT Gate-Edit: ' + ' '.join(missing), file=sys.stderr)
     return 1
 
 

@@ -808,3 +808,42 @@ def test_gate_wiring_check_requires_gate_edit(repo: Path):
     base = _head(repo)
     sha = _commit(repo, 'feat: x\n\nWriter: mimo-v2.6-flash run-1\n', files={'tools/gate_wiring_check.py': 'x'})
     assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
+
+
+def test_hand_edit_auth_path_rename_refused(repo):
+    _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'src/plangraph/keeper/mcp.py': 'x\n'})
+    base = _head(repo)
+    _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
+    sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
+    violations = check(base, sha, cwd=repo)
+    assert f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py' in violations
+
+
+def test_hand_edit_ten_changed_lines_passes(repo):
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 10})
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_hand_edit_eleven_changed_lines_refused(repo):
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 11})
+    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 10 changed lines']
+
+
+def test_hand_edit_deleted_lines_count(repo):
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 20})
+    sha = _commit(repo, 'docs: rewrite\n\nHand-Edit: rewrite\n', {'docs/y.md': 'new\n'})
+    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 10 changed lines']
+
+
+def test_root_level_roles_file_hand_edit_refused(repo):
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
+    sha = _commit(repo, 'roles: add\n\nHand-Edit: add\n', {'roles.py': 'x\n'})
+    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: roles.py']
+
+
+def test_gate_file_suffix_copy_needs_gate_edit(repo):
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
+    sha = _commit(repo, 'add bak\n\nWriter: mimo-v2.6-flash run-1\n', {'tools/ci_commit_gate.py.bak': 'x\n'})
+    assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
