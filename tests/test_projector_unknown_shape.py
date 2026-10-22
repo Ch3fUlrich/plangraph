@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from keeper_util import World
+from test_projector_worker_history import _expand_data_json
 from plangraph.projector.apply import Projector
 from plangraph.projector.history import project_history
 from plangraph.projector.reconcile import reconcile
@@ -37,7 +38,7 @@ def projector(world):
 
 
 def load(path):
-    data = json.loads(path.read_text())
+    data = _expand_data_json(json.loads(path.read_text()))
     return data.get("history", data)
 
 

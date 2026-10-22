@@ -36,7 +36,7 @@ fn base64_std(bytes: &[u8]) -> String {
     let alphabet: Vec<u8> = (b'A'..=b'Z')
         .chain(b'a'..=b'z')
         .chain(b'0'..=b'9')
-        .chain([b'+', b'/'])
+        .chain(*b"+/")
         .collect();
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
