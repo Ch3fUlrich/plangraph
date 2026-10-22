@@ -5,6 +5,7 @@
 //! non-deterministic edit before it reaches a live worker.
 
 use pg_worker::activities::{CardActivities, CardInput, CardOutput, Tick};
+use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
 use std::time::Duration;
 use temporalio_client::WorkflowHistory;
@@ -103,6 +104,8 @@ fn replayer() -> WorkflowReplayer {
         WorkflowReplayerOptions::new()
             .register_workflow::<Card>()
             .expect("register Card")
+            .register_workflow::<Phase>()
+            .expect("register Phase")
             .build(),
     )
     .expect("replayer")
@@ -247,4 +250,20 @@ async fn drifted_code_fails_replay() {
     .expect("replayer");
     let res = r.replay_workflow(history("happy")).await;
     assert!(res.is_err(), "non-deterministic change must fail replay");
+}
+
+#[tokio::test]
+async fn replays_phase_two_cards() {
+    replayer()
+        .replay_workflow(history("phase_two_cards"))
+        .await
+        .expect("phase_two_cards history replays");
+}
+
+#[tokio::test]
+async fn replays_phase_defer() {
+    replayer()
+        .replay_workflow(history("phase_defer"))
+        .await
+        .expect("phase_defer history replays");
 }
