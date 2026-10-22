@@ -30,11 +30,17 @@ fn patterns() -> &'static [regex::Regex] {
             r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*",
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
-            // 4. KEY=value env style: keep the name, cut the value. Also
-            //    handles quoted keys ("name": "value" / 'name' = 'value');
-            //    the closing key quote and the separator survive, and a
-            //    quoted value (spaces included) is replaced whole.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)(\s*[=:]\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\s"']+)"#,
+            // 4. Env-style assignments: keep the credential name, cut the
+            //    value. Also handles quoted keys ("name": "value" /
+            //    'name' = 'value'); the closing key quote and the separator
+            //    survive, and a quoted value (spaces included) is replaced
+            //    whole. An unquoted value runs to the end of the line
+            //    (spaces included) but stops before a structured closing
+            //    delimiter (`}`, `]`, `)`) or a URL-query `&`; the
+            //    delimiter itself survives. The explicit placeholder
+            //    alternative keeps the rule idempotent even though `]` ends
+            //    an unquoted value.
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)(\s*[=:]\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\]|[^\n\r"'}\])&]+)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
             r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
@@ -343,6 +349,76 @@ mod tests {
     }
 
     #[test]
+    fn unquoted_multiword_value_is_fully_redacted() {
+        let token_key = ["TO", "KEN"].concat();
+        let out = redact(&format!("{token_key}=a b c"));
+        assert_eq!(out, format!("{token_key}={REDACTED}"));
+
+        let key = ["pass", "word"].concat();
+        let out = redact(&format!("{key}: v w"));
+        assert_eq!(out, format!("{key}: {REDACTED}"));
+    }
+
+    #[test]
+    fn export_prefix_is_kept_and_value_redacted() {
+        let key = ["API_", "KEY"].concat();
+        let out = redact(&format!("export {key}=x y"));
+        assert_eq!(out, format!("export {key}={REDACTED}"));
+    }
+
+    #[test]
+    fn structured_delimiters_end_the_value() {
+        let token_key = ["to", "ken"].concat();
+        let out = redact(&format!("{{{token_key}: a b}}"));
+        assert_eq!(out, format!("{{{token_key}: {REDACTED}}}"));
+
+        let pass_key = ["pass", "word"].concat();
+        let out = redact(&format!("({pass_key}=x y)"));
+        assert_eq!(out, format!("({pass_key}={REDACTED})"));
+
+        let out = redact(&format!("?{token_key}=a b&next=1"));
+        assert_eq!(out, format!("?{token_key}={REDACTED}&next=1"));
+    }
+
+    #[test]
+    fn value_stops_at_the_end_of_the_line() {
+        let key = ["to", "ken"].concat();
+        let out = redact(&format!("{key}=a b c\nsecond line is untouched"));
+        assert_eq!(out, format!("{key}={REDACTED}\nsecond line is untouched"));
+    }
+
+    #[test]
+    fn unquoted_multiword_is_idempotent() {
+        let token_key = ["to", "ken"].concat();
+        let api_key = ["API_", "KEY"].concat();
+        let pass_key = ["pass", "word"].concat();
+        let cases = [
+            format!("{token_key}=a b c"),
+            format!("export {api_key}=x y"),
+            format!("{{{token_key}: a b}}"),
+            format!("({pass_key}=x y)"),
+            format!("?{token_key}=a b&next=1"),
+            format!("{token_key}={REDACTED}"),
+        ];
+        for x in cases {
+            let once = redact(&x);
+            assert_eq!(redact(&once), once, "{once}");
+        }
+    }
+
+    #[test]
+    fn prose_still_untouched_with_multiword_rule() {
+        for text in [
+            "the token was rotated yesterday",
+            "a secret meeting",
+            "token rotation is routine",
+            "the password was changed",
+        ] {
+            assert_eq!(redact(text), text, "{text} was altered");
+        }
+    }
+
+    #[test]
     fn redact_is_idempotent() {
         let json_key = ["api_", "token"].concat();
         let json_val = ["abcd", "1234"].concat();
@@ -350,6 +426,9 @@ mod tests {
         let single_val = ["hunter", "22hunter22"].concat();
         let spaced_key = ["pass", "word"].concat();
         let spaced_val = ["a ", "b ", "c"].concat();
+        let token_key = ["to", "ken"].concat();
+        let api_key = ["API_", "KEY"].concat();
+        let pass_key = ["pass", "word"].concat();
         let cases = [
             "plain log line, nothing to cut".to_string(),
             format!("run {secret} here", secret = sk()),
@@ -360,6 +439,13 @@ mod tests {
             format!("{spaced_key}: \"{spaced_val}\""),
             format!("{spaced_key} = '{spaced_val}'"),
             format!("{json_key}={json_val}"),
+            format!("{token_key}=a b c"),
+            format!("export {api_key}=x y"),
+            format!("{{{token_key}: a b}}"),
+            format!("({pass_key}=x y)"),
+            format!("?{token_key}=a b&next=1"),
+            format!("{token_key}={REDACTED}"),
+            format!("{api_key}={REDACTED}&next=1"),
         ];
         for x in cases {
             let once = redact(&x);
