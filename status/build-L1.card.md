@@ -30,3 +30,4 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 - Never touch .claude/worktrees/proposal (frozen; render/proxy use it).
 
 - oc-harden #95 d542cf0 BLOCKED: workst admission 82.6% commit charge; asked workst-L1-autoos to reap; fix = no_change migration PG6 + sqlite rebuild (cx writer).
+- sandbox #100 head 5903b35: push ff to spine/attempt-sandbox authorised; seats glm+deepseek wait admission (fallback: I run them from coding.vm after 21:30Z).
