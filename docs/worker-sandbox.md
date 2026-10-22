@@ -30,3 +30,44 @@ standalone agent mode.
 WSL defaults can expose host drives and host executables to the worker distro.
 In the worker distro's `/etc/wsl.conf`, set:
 
+```ini
+[automount]
+enabled=false
+
+[interop]
+enabled=false
+```
+
+This is an operator step. Run `wsl --shutdown` to apply it. `wsl_findings`
+reports these defaults from the conf text; `is_wsl` identifies a WSL kernel
+from `osrelease`.
+
+## Verification
+
+- Landlock is in the kernel LSM list: `grep -w landlock /sys/kernel/security/lsm`.
+- The jail denies an out-of-tree write and permits an in-tree one with a small
+  `pg-jail --rw . --rw /tmp -- true`-style probe.
+- The scope accepts the configured limits:
+  `systemd-run --user --scope -p MemoryMax=... -p TasksMax=... true`.
+- The agent command contains `--standalone`.
+
+## Limits
+
+- Landlock restricts filesystem access only.
+- `/proc` is readable (the agent runtime needs `/proc/self`). A same-user process's
+  `/proc/<pid>/environ` and `cmdline` are therefore readable from the jail. Keep
+  secrets out of the worker's own environment and argv.
+- The library default (`JailConfig::from_env`) runs unjailed when `PG_JAIL_BIN` is
+  unset; the fail-closed policy is enforced at worker startup, so any other
+  entrypoint must call `required_from_env` itself.
+- There is no network egress control in this layer.
+- The kernel must list Landlock in its LSM set; otherwise `pg-jail` fails closed.
+- The systemd scope limits CPU, memory, and tasks, not files or network.
+- Without `--standalone`, tool calls can escape the jail through the shared host
+  service.
+
+## Host facts
+
+Bubblewrap is not available and unprivileged user namespaces are blocked on the
+target host. Landlock and `systemd-run --user --scope` work there, so this layer
+uses them.
