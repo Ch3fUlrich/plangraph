@@ -104,6 +104,18 @@ def test_worker_claim_ok(doors, w, repo, gate, monkeypatch):
     assert body["allow"] == ["x.txt"]
     assert body["forbid"] == []
 
+def test_system_claims_through_the_door(doors, w, repo, gate, monkeypatch):
+    root, _main_tip, phase_tip = repo
+    monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(root))
+    status, body = _post(doors, "system", {"card": "demo:C1"})
+    assert status == 200
+    assert body["card"] == "demo:C1"
+    assert body["base_sha"] == phase_tip
+    assert body["repo"] == str(root)
+    assert body["check_cmd"] == "test -f x.txt"
+    assert body["allow"] == ["x.txt"]
+    assert body["forbid"] == []
+
 def test_router_forbidden_without_env(doors, w, gate, monkeypatch):
     monkeypatch.delenv("PG_PHASE_REPO_ROOT", raising=False)
     status, body = _post(doors, "router", {"card": "demo:C1"})

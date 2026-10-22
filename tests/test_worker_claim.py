@@ -91,6 +91,15 @@ def test_claim_exact(w, repo, gate):
         "prompt": "do the thing",
     }
 
+def test_system_claims_like_a_worker(w, repo, gate):
+    root, _main_tip, phase_tip = repo
+    got = worker_claim(w.store, w.p("system"), "demo:C1", repo_root=str(root))
+    assert got["base_sha"] == phase_tip
+    claimed_by = w.store.conn.execute(
+        "SELECT claimed_by FROM items WHERE key = ?", ("demo:C1",)
+    ).fetchone()[0]
+    assert claimed_by == "system"
+
 def test_falls_back_to_main_tip(w, repo, gate):
     root, main_tip, _phase_tip = repo
     _git(root, "branch", "-D", "phase/demo-PH-X")
@@ -113,7 +122,7 @@ def test_worker_b_conflict(w, repo, gate):
         worker_claim(w.store, w.p("workerB"), "demo:C1", repo_root=str(root))
     assert _code(ei.value) == "conflict"
 
-@pytest.mark.parametrize("name", ["router", "system", "l1main", "reviewer", "reader"])
+@pytest.mark.parametrize("name", ["router", "l1main", "reviewer", "reader"])
 def test_non_worker_forbidden(w, repo, gate, name):
     root, _main_tip, _phase_tip = repo
     with pytest.raises(Refused) as ei:
