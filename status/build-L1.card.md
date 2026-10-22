@@ -1,38 +1,30 @@
-# build-L1 card · gen-17 · HANDOFF #18 docs/build-L1-handoff.md · NO cron · hb bg loop 25m (bq9o0sgvf) · 2026-10-22 · D-2172 order
-Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Workstation briefs: PASTE inline (+sha256) to workst-L1-autoos (Taildrop to bz-wg-pdw028 never arrives); origin/build-L1 122963c stale/dead.
-Brief: /home/s/code/routing-worktrees/rethink-setup/docs/plan/rethink/build-L1-brief.md. Rules: briefs/l2-rules-common.md (D-1704/1714 model order, judge notes). D-2019: NO Go writers/seats (Go window = orchestrators); writers D-1704 legs 6-7 (mimo API, deepseek API 7.75 USD) via omniroute baseURL (workst adding); seats tool-less qwen or agy gemini.
-D-1442 judge = server-L1-routing (HIGH only). D-2038 spawner first. D-2046/2047 Writer trailer rule (handoff #18). Spawner cap 10 (D-2043).
-## GEN-17 (D-2172 hold lifted; D-2148 writers cx/gpt-6.1-sol>mimo API>omniroute deepseek-direct-flash; D-2166 seats; never Sonnet writers)
-L2s coding.vm: flow-oversight-2 b099412e (recycled; brief l2-flow-oversight-2.md: #87 followup -> OVERSIGHT x2 -> (#90 -> #87 -> OVERSIGHT x2), + D-2206 queue OPTASK-CLOSE, SEAT-VERDICT-FAMILIES -> CLAUDE-SEAT (claim at start); spawner affc5ae8 (UTILITY-PROPS GO D-2201 -> ROUTE-FROM-DB), spine e4241665 (B: #94 GW -> PHASE-RUNNER only).
-  workst (D-2201, sent 5 inline to workst-L1-autoos [7e15e3]; briefs docs/briefs/workst/): sandbox(A #100) exec-wfv(D) oc-harden(E #95+#96) bus(F CONTRACT->KEEPER, #97) card-checks(C). LIVE 5/5 [7ecf50 9a4547 e64f6d 4dcfc0 ff2601], cwd C:/Users/mauls/Documents/Code/plangraph-wt-rtp1-predeploy. Old unpushed there: wfv 6, exec 7, flow-unblock 6, gw 2, ci-gate 2 (pre-D-2047, not reused w/o Writer trailer).
-DONE: CI-GATE (#90 e3e6c0a4 + protection D-2211, #102 519b9ba1), DRILL (D-2180), NO-RUNTIME-IMPORT (#99 0b1a4bab). PROJECTOR-RUN-UNIT in_review: D-2189 (4 checks PASS) attached; qwen close seat FIX (watermark API gap) -> router (a) D-2190: DC narrowed to CLI watermark cmd + new lane PROJECTOR-WATERMARK-API; re-seat AFTER next router gen applies. SANDBOX #100 cd073676 parked (seats fix M1-M4; decided: fix M2-4, M1 = Landlock /proc/<pid>+4 files, else documented). Claimed SANDBOX, UTILITY-PROPS (router GO before 1st PR). spine/e2e-no-inline e3772856 needs own PR later.
-D-2212: 8 principals workst-L1-basic-analysis-<family> (BA only), tokens ~/.config/plangraph/workst-L1-basic-analysis; operator scp pending -> await 'BA-TOKENS OK' -> tell routing. D-2165 DONE: 8 principals workst-L1-main-<family> (reviewer, 4 workst projects), tokens ~/.config/plangraph/workst-L1-main/; seats ~/.local/share/plangraph/seats/workst-L1-main.
-## Main = 3026d6e1 (3 operator spawner commits 10-19/20 on 8f7f1c55 #93). Older: git log.
-Keeper LIVE = 2d61e281 on POSTGRES (LIVE-SYNC-7 D-1667, MainPID 2817573, drop-ins z7 keeper+render; record seats-archive/live-sync-7-2d61e281/LIVE-RECORD.md).
-Rollback = rm both z7 drop-ins (back to 102e4885 z6). render/proxy/md-sync still use the frozen .claude/worktrees/proposal tree: never retire it.
-## P1 (D-1932) after AUDIT D-2000..2003 (report routing p1-audit 1b97a282 docs/p1-audit/REPORT.md, PRIVATE): 21 deps, 7/21 done
+# build-L1 card · gen-17 · 2026-10-22 ~18:00Z · HANDOFF docs/build-L1-handoff.md · NO cron · hb bg loop 25m (bnq6pqn71, 15 keys ops/hb-keys.txt; restart FIRST after clear)
+Control repo LOCAL ONLY (D-1751): `git push control build-L1`; NEVER origin. Writers D-2148 cx/gpt-6.1-sol > mimo API > deepseek; never Claude writers; Writer trailer adjacent Plan-Item; L2 never edits writer commits (D-2229).
+Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
+glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
+TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-worktrees/sv-dry-1dbc4f26, refresh to each main (D-2234). Keeper LIVE runs FROM live-2d61e281 (cwd+PYTHONPATH): never ff it as tools; keeper code move = HIGH D-825 GO-REQ.
+## Main = 0e1bbfca (#107). Today merged: #94 GW, #105 SVF, #106 UTILITY-PROPS, #108 CLAUDE-SEAT, #110 LOWS 079706d4, #111 BETA-TUNE b5fe9690, #107 REDACT 0e1bbfca (all DONE in keeper).
+## Lanes
 | Item | Owner | State / next |
 |---|---|---|
-| DONE | - | DEVSTACK, KEEPER-WORKER-VERBS, WORKER, PROJECTOR, INBOX, REVIEW (+FOLLOWUP, TEMPORAL-CHECK server); QUESTION-TIMER 541e4a6c (deploy conds -> WF-VERSIONING); LIVE-GUARDS 2424d40b (live cond -> EXEC-OWNERSHIP) |
-| GATE-WIRING->PHASE-RUNNER | spine | D-2200 prio 9 critical path: #94 first (after #90), then I claim PHASE-RUNNER -> spine; relay relay/phase-runner.md |
-| E2E | frozen 7b1e92a | new criteria: phase runner, >=2 cards, pinned opencode Go/free leg, phase PR + ci-gate; driver = FAILURE-DRILLS harness |
-| FAILURE-DRILLS / CARD-CHECKS | dogfood (Q-3) | phase runner builds them after PHASE-RUNNER+HARDEN+OWNERSHIP merge; I plan/judge only |
-| RT-P0 / FLEET-SID-REFRESH / CLASS-COMBOS / AO-QC-SPAWNER | router / workst | not mine; CLASS-COMBOS -> workst-L1-autoos (D-2200) |
-| PG-PUBLIC-READY | me | in_review until history cut after P1 (D-1966) |
-## Open (parked D-1932: republish, UI, u1-stamp, #71)
-| Item | State | Next |
-|---|---|---|
-| UI-DEPLOY-AUTO (HIGH) | LIVE 19:25Z (GO D-1850): z8 drop-in, tree live-render, render.env, token gh-live-follow.env (gh auth, rw scopes; OS-GH-RO-TOKEN). Record ~/.local/share/plangraph/deploy-auto/RUN-RECORD-install-539ef09d.md. submit REFUSED: run-record kind wants autoos run dir | BLOCKED to routing: *set_kind decision D-1850 / waive -> submit -> verdicts google+xiaomi |
-| UI-BROWSER-TESTS (U2) | PARKED 2026-10-17: WIP lane/ui-browser-tests @6fd8de39 (pushed, no PR) (41 pass/18 skip/100 xfail), verify + W4 hardening + 2nd seat pending; L2 stopped (RAM <12 GB, budget) | relaunch when RAM ok + P1 done; gemini seat from coding.vm |
-| PG-REPUBLISH-FRESH (HIGH) | NOT claimable until PUBLIC-READY done. Step1 DONE: private plangraph-work mirror (226 refs identical + 32 local-codingvm/*). D-1751: dev stays PUBLIC; plangraph-work archived after cut | L2 build-L2-republish (workst): T1 3 private-word hits, T2 full-dev manifest, T6 pre-push scrub hook, T7 allowlist, export → step plan → routing GO → steps 4-5 mine |
-| republish GO | D-1898: step plan 588d6838 shape accepted, NO exec GO; L2 relaunch WAIT until Claude budget recovers (D-1916); scope confirmed rust+deploy public, 8 docs/plan private. Before GO request: P1+P2 CLOSED (#72); P3 T2 manifest + P4 words list open, R1 timer pause step, R2 mirror path D-row, R3 lane-branch merged/parked list to routing | wait operator |
-Leases: ops/hb-keys.txt (10 keys re-claimed epoch 2 2026-10-22 11:16Z after lapse); loop bweqyutz5; restart FIRST after clear.
+| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv (workst, Remote Control) | PR #112 draft, head 80dd7e68; qwen ACCEPT; deepseek r3 FIX (ask CAS vs projector lag HIGH, forward table unused MED-H, takeover unreachable, v12 ALTER untested). Fix round cx -> re-seat qwen + deepseek (I run deepseek: prompt >128KB -> `opencode run -f PROMPT.txt`, r3 builder tmp/mkexec3.sh) -> GO-REQ |
+| RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
+| RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
+| REDACT-LINE-CONTINUATION (HIGH p7) | spine | claimed; `\`+LF leak + U+2028; gates E2E |
+| RT-P1-PHASE-RUNNER | spine | S1 (keeper verb HIGH) in progress; 4 slices; S3 own credential (D-2227) |
+| RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
+| SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
+| CI-COMMIT-GATE-HARDEN | queue | input: def-line fixture change = false "test removal" (run 39817299743) -> match removed test NAMES |
+| DEVSTACK-TEST-FLAKE p6 | unassigned | test_start_is_idempotent flakes on main (b5fe9690, c87e6811): rerun --failed |
+| fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
+| PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
+| workst L2s sandbox, card-checks, bus, oc-harden | workst | await MERGE-READY; BUS-KEEPER claim when BUS-CONTRACT ready |
+| D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
+Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, PG-PUBLIC-READY.
 ## Traps
-- GH check-runs lag: jobs show in_progress long after ci-gate success (stale API); keeper commit+ci says 'CI pending': wait until all settle, re-attach.
-- Never push site strings / seat prompts to any GitHub branch (repo public). Private evidence: ~/.local/share/plangraph/{seats,republish,temporal-check}.
-- Keeper: tier-high verdicts need 2 distinct non-claimant families; claimant build-L1 = anthropic. Working seat families: xiaomi (mimo; gateway API times out at 300 s now), google (agy client only; omniroute google = 401), nvidia (nemotron free, no principal: evidence only). deepseek 400, gpt-oss off list.
-- TRAILER TRAP: merge commit_message = trailer paragraph ONLY (Plan-Item last, no note lines after); my #46-#49/#73 merges broke it -> attach PR head commit (on main, CI green).
-- Claim BEFORE the PR: keeper refuses commits older than the claim (records-PR recipe #75; lease_until = claim+2h). 'commit' kind is router-only.
-- MERGE GATE: every suite (pytest + pytest-postgres + rust) green on the head; path filters skip pytest on rust-only PRs (#84 broke main).
-- Decision evidence ref key is `id` ({"id":"D-NNN"}), not `decision`.
-- docs-only PRs skip CI; pre-#59 lanes runs-on self-hosted (no runners): test main+head on ci/prN-<sha> via `gh workflow run tests.yml --ref`. `gh pr edit/merge` broken -> `gh api` PATCH/PUT, graphql markPullRequestReadyForReview for drafts.
+- zsh: `"${H}:path"` not `$H:t`; no `h()`; `echo ===` fails; string vars don't split -> bash scripts (tmp/ciwait.sh SHA KEY = CI wait + evidence + submit).
+- Never dump process environ / unit env values (DSN leak 10-22, D-2234 KEEP). Names only.
+- Merge: `gh pr ready N` then `gh api -X PUT .../pulls/N/merge -f sha=HEAD -f commit_message="Plan-Item: plangraph:KEY"`.
+- GH check-runs lag; DONE items are locked (no more evidence). Claim needs deps done.
+- Never push site strings / seat prompts to GitHub (repo public). Private: ~/.local/share/plangraph/{seats,relay}.
+- Never touch .claude/worktrees/proposal (frozen; render/proxy use it).
