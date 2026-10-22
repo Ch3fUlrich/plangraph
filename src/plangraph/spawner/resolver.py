@@ -235,6 +235,17 @@ def _validate_role(role: str) -> str:
         raise ValueError(f"unknown role: {role!r}")
     return role_l
 
+def _validate_need_tokens(need_tokens: Any) -> int:
+    if isinstance(need_tokens, bool) or not isinstance(need_tokens, (int, float)):
+        raise ValueError(f"need_tokens must be a positive finite number: {need_tokens!r}")
+    if isinstance(need_tokens, float):
+        if not math.isfinite(need_tokens) or not need_tokens.is_integer():
+            raise ValueError(f"need_tokens must be a positive finite number: {need_tokens!r}")
+    tokens = int(need_tokens)
+    if tokens <= 0:
+        raise ValueError(f"need_tokens must be a positive finite number: {need_tokens!r}")
+    return tokens
+
 def _validated_metric(
     model: Mapping[str, Any],
     field_name: str,
@@ -364,6 +375,7 @@ def score_model(
     Tier weights (W_tier):
       trial (0): +14.0, free (1): +10.5, credit (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
     """
+    need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     role_l = _validate_role(role)
 
@@ -409,6 +421,7 @@ def rank_candidates(
              verified throughput (Speed(M)); an existing test pins that a score
              gap <= 0.5 is tied and ordered by speed.
     """
+    need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     role_l = _validate_role(role)
 
@@ -489,6 +502,7 @@ def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str 
     before checking against both context_window and price_cliff_tokens so multi-turn tool loops
     do not cross the price cliff or overflow the effective context window mid-task.
     """
+    need_tokens = _validate_need_tokens(need_tokens)
     role_l = str(role).strip().lower() if role is not None else "implement"
     factor = ROLE_TRAJECTORY_FACTORS.get(role_l, 1.5)
 
@@ -529,6 +543,7 @@ def resolve_review_plan(
           Rev 2: X-OmniRoute-Task-Role: review, X-OmniRoute-Exclude-Family: <writer_family>,<family_1>
       - Raises ValueError if no eligible reviewer exists.
     """
+    need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
     reviewer_count = 2 if risk_l in ("high", "critical") else 1
@@ -590,10 +605,14 @@ def resolve_review_plan(
             return None
 
         if combo_priority_legs:
-            qualifying = [
-                c for c in eligible
-                if _validated_metric(c, "aa_intelligence") >= min_intelligence
-            ]
+            qualifying = []
+            for c in eligible:
+                try:
+                    intel = _validated_metric(c, "aa_intelligence")
+                except ValueError:
+                    continue
+                if intel >= min_intelligence:
+                    qualifying.append(c)
             if qualifying:
                 return qualifying[0]
             return eligible[0]
@@ -741,6 +760,7 @@ def resolve_model_for_task(
       - Vendor effort clamping (Sonnet 5.5 max -> xhigh)
       - Risk-monotone intelligence envelope across low<normal<high<critical
     """
+    need_tokens = _validate_need_tokens(need_tokens)
     role_l = _validate_role(role)
     risk_l = _validate_risk(risk)
 

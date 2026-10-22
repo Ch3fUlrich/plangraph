@@ -175,12 +175,13 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 ### Input Contract, Fail-Closed Rules and Sensitivity
 
 - Numeric inputs are validated before scoring. NaN, +inf, -inf, negative values, and None are rejected with ValueError; a missing intelligence value is rejected with ValueError.
+- `need_tokens` must be a positive finite number (an int or integral float); bools, non-numeric values, NaN/inf, non-integral floats, and values <= 0 raise ValueError.
 - Unknown risk and unknown role values raise ValueError. The role `"drive"` is accepted and uses alpha 1.1 and trajectory factor 1.3.
 - For high and critical risk bands, a candidate below `I_min` fails closed. The only escape is `relax_floor=True` with a non-empty `relax_reason`; when applied, result keys `relaxed` and `relax_reason` are set. A blank reason is not accepted.
 - There is no hardcoded fallback model. If no candidate is eligible, both `resolve_review_plan` and `resolve_model_for_task` raise instead of returning a default.
 - Exclusions (family/author/gated/availability) are applied in every fallback path, including relaxed-floor paths.
 - The context gate requires `ctx >= need_tokens * trajectory_factor`; role trajectory factors are applied consistently.
-- Risk monotonicity is enforced by `envelope_intelligence`: low < normal < high < critical utility envelopes remain ordered.
+- Risk monotonicity uses `envelope_intelligence` as a best-effort envelope: candidates are filtered to intelligence at or above the best lower-band pick; when that leaves none, resolution falls back to the floor rules, so the envelope cannot be met in every case.
 - Tie-breaking uses an epsilon band with absolute utility thresholds of 0.5 and 0.3 utility points.
 - The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers — see the file.
 
