@@ -239,8 +239,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="temporal CLI binary (env TEMPORAL_CLI)")
     p.add_argument("--leg", choices=("stub", "stub-fail", "opencode"), default="stub")
     p.add_argument("--model", default="", help="opencode model id for --leg opencode")
+    p.add_argument("--no-inline-projection", action="store_true",
+                   help="never run the projector inline; wait for the deployed unit's rows")
+    p.add_argument("--projection-wait", type=float, default=75.0,
+                   help="seconds to wait for the deployed projector unit (default 75.0)")
     p.add_argument("--keep", action="store_true", help="keep the scratch dir")
     return p.parse_args(argv)
+
+
+def wait_for_projection(read, key, want_n, wait_s, *, now=time.time, sleep=time.sleep,
+                        step_s=1.0) -> dict:
+    """Poll `read(key)` read-only (the rows are written by the deployed projector unit, never by
+    this driver) until some attempt row has n >= want_n or `wait_s` has elapsed. `now`/`sleep`
+    are injectable so tests never sleep for real; `waited_s` is measured from the call start."""
+    start = now()
+    while True:
+        attempts = read(key)
+        if any(a.get("n", 0) >= want_n for a in attempts):
+            seen = now()
+            return {"card": key,
+                    "attempt_seen_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seen)),
+                    "waited_s": round(seen - start, 1)}
+        if now() - start >= wait_s:
+            raise Fail(f"no attempt {want_n} for {key} within {wait_s} s "
+                       "(is the projector unit running?)")
+        sleep(step_s)
 
 
 def validate_args(args) -> tuple[str, str]:
@@ -375,12 +398,19 @@ def main() -> int:
 
                     question = wait_until(open_question, "the worker's question row",
                                           QUESTION_WAIT_S)
-                    step(f"question row {question['id']} open; projecting attempt 1")
-                    run_projector(cfg, args.temporal)
-                    # a persistent devstack keeps other runs, so check our own row instead
-                    # of the test's global missing_item==0
-                    wait_until(lambda: [a for a in read_attempts(cfg, key) if a["n"] == 1],
-                               "attempt 1 projected", 30)
+                    if args.no_inline_projection:
+                        step(f"question row {question['id']} open; waiting for the deployed "
+                             "projector unit to project attempt 1 (no inline projection)")
+                        proj = wait_for_projection(lambda k: read_attempts(cfg, k), key, 1,
+                                                   args.projection_wait)
+                        print("PROJECTION " + json.dumps(proj, sort_keys=True))
+                    else:
+                        step(f"question row {question['id']} open; projecting attempt 1")
+                        run_projector(cfg, args.temporal)
+                        # a persistent devstack keeps other runs, so check our own row instead
+                        # of the test's global missing_item==0
+                        wait_until(lambda: [a for a in read_attempts(cfg, key) if a["n"] == 1],
+                                   "attempt 1 projected", 30)
                     status, answered = u.call(keeper, "POST", "/v1/answer_question",
                                               token=tokens["router"],
                                               body={"question_id": question["id"],
@@ -411,7 +441,14 @@ def main() -> int:
                      + (f", content {merged!r}" if args.leg == "stub" else ""))
 
             step("project again, then read the attempt rows back from the dev keeper")
-            run_projector(cfg, args.temporal)
+            if args.no_inline_projection:
+                want = 2 if args.leg == "stub" else (3 if args.leg == "stub-fail" else 1)
+                proj = wait_for_projection(lambda k: read_attempts(cfg, k), key, want,
+                                           args.projection_wait)
+                if args.leg != "stub":   # the stub leg's PROJECTION line was printed at the question step
+                    print("PROJECTION " + json.dumps(proj, sort_keys=True))
+            else:
+                run_projector(cfg, args.temporal)
             rows = read_attempts(cfg, key)
             for row in rows:
                 print("[step] attempt " + " ".join(
