@@ -18,6 +18,6 @@ A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a
 - The Claude marker list matches the Writer value by substring and relies on the writer naming itself.
 - Copies of gate files under other names are not path-matched (only suffix variants such as .bak are).
 - Test removal is detected by name in files whose path looks like a test (tests/ directories, test_* files, *_test.* and *.test.*/*.spec.* files), unconventional locations and deleted conftest.py fixtures are not detected.
-- The ci-gate step wiring is checked by tools/gate_wiring_check.py, which the merger runs before merging (it compares the ci-gate job and triggers with the base and demands a Gate-Edit trailer on every commit that touches the workflow file; it cannot verify the id).
+- The ci-gate step wiring is checked by tools/gate_wiring_check.py, which the merger runs before merging (it compares the ci-gate job and triggers with the base and demands a Gate-Edit trailer, in the trailer block, on every commit that touches the workflow file; it cannot verify the id).
 - Hand-Edit commits are capped at 10 changed lines, may not touch the auth/door surface and are listed in the gate log.
 - For a Writer-trailer commit the gate checks the trailer text, not that a writer really ran.

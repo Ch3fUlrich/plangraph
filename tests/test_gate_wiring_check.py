@@ -201,3 +201,34 @@ def test_gate_edit_on_every_workflow_commit_passes(repo, monkeypatch, capsys):
     assert main(['--base', base, '--head', head]) == 0
     captured = capsys.readouterr()
     assert 'WITH Gate-Edit' in captured.out
+
+def test_gate_edit_in_body_does_not_count(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    changed = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || true')
+    head = _commit(repo, 'x\n\nGate-Edit: D-2209\n\nmore prose after\n', {WORKFLOW_PATH: changed})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 1
+    captured = capsys.readouterr()
+    assert 'WITHOUT Gate-Edit' in captured.err
+
+
+def test_gate_edit_with_co_author_paragraph_counts(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    changed = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || true')
+    head = _commit(repo, 'x\n\nGate-Edit: D-2209\n\nCo-Authored-By: A B <a@example.invalid>\n', {WORKFLOW_PATH: changed})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 0
+    captured = capsys.readouterr()
+    assert 'WITH Gate-Edit' in captured.out
+
+
+def test_control_char_in_message_does_not_hide_commit(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    base = _commit(repo, 'base', {WORKFLOW_PATH: WORKFLOW})
+    changed = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || false')
+    _commit(repo, 'a\x01b\n\nGate-Edit: D-2209\n', {WORKFLOW_PATH: changed})
+    changed = WORKFLOW.replace('python3 tools/ci_select.py gate', 'python3 tools/ci_select.py gate || exit 1')
+    head = _commit(repo, 'b', {WORKFLOW_PATH: changed})
+    monkeypatch.chdir(repo)
+    assert main(['--base', base, '--head', head]) == 1
+    captured = capsys.readouterr()
+    assert 'WITHOUT Gate-Edit' in captured.err
