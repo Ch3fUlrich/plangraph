@@ -18,7 +18,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | DEVSTACK-TEST-FLAKE p6 | unassigned | test_start_is_idempotent flakes on main (b5fe9690, c87e6811): rerun --failed |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
-| workst L2s sandbox, card-checks, bus, oc-harden | workst | await MERGE-READY; BUS-KEEPER claim when BUS-CONTRACT ready |
+| workst L2s sandbox, card-checks, bus, oc-harden | STOPPED (D-2251) | handoffs C:\fleet\handoff\build-L2-<name>.handoff.md; relaunch via L2-LAUNCH when lane comes up |
 | D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
 | D-2254 low (after crit path) | me | PH-OPERATOR gate->GOAL holds (checked 19:2xZ); OS-149 A6 keeper cfg after prox A1-A5; RT-P4-ARCHIVE parked until cutover+1wk |
 Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, PG-PUBLIC-READY.
