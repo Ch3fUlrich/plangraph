@@ -535,6 +535,40 @@ mod tests {
     }
 
     #[test]
+    fn colon_empty_value_before_closing_brace_is_unchanged() {
+        let name = ["API_", "KEY"].concat();
+        let check = |input: String, expected: String| {
+            let once = redact(&input);
+            assert_eq!(once, expected, "{input}");
+            assert_eq!(redact(&once), once, "{once}");
+        };
+
+        // Trace: 4b is `=` only. 4a needs a non-empty value; after `:` the
+        // next byte is `}` or `)`, and 4a's unquoted value branch excludes
+        // both, so none of these forms match.
+        check(format!("{{{name}: }}"), format!("{{{name}: }}"));
+        check(format!("{{\"{name}\": }}"), format!("{{\"{name}\": }}"));
+        check(format!("({name}: )"), format!("({name}: )"));
+    }
+
+    #[test]
+    fn opening_quote_belongs_to_the_value_not_the_key_group() {
+        let name = ["API_", "KEY"].concat();
+        let check = |input: String, expected: String| {
+            let once = redact(&input);
+            assert_eq!(once, expected, "{input}");
+            assert_eq!(redact(&once), once, "{once}");
+        };
+
+        // Trace: in `NAME="abc"` the optional key quote after the name is
+        // empty because the next byte is `=`; 4a's group 3 takes `=`, and
+        // its complete quoted-value branches consume `"abc"`/`'abc'`/`"abc def"`.
+        check(format!("{name}=\"abc\""), format!("{name}={REDACTED}"));
+        check(format!("{name}='abc'"), format!("{name}={REDACTED}"));
+        check(format!("{name}=\"abc def\""), format!("{name}={REDACTED}"));
+    }
+
+    #[test]
     fn redact_is_idempotent() {
         let json_key = ["api_", "token"].concat();
         let json_val = ["abcd", "1234"].concat();
