@@ -18,10 +18,83 @@ use temporalio_sdk::{
 ///
 /// A missing fixture is a hard failure, never a silent pass: a replay test with
 /// no evidence to replay would hide a broken recording step.
+/// A fixture may also carry a payload as `data_json` (the decoded JSON value)
+/// instead of `data` (its base64), which is expanded back to the recorded shape
+/// here before the history is handed to `WorkflowHistory::from_json`.
 fn history(name: &str) -> WorkflowHistory {
     let path = format!("{}/tests/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("parse {path}: {e}"));
+    expand_data_json(&mut value);
+    let bytes = serde_json::to_vec(&value).expect("re-serialize history json");
     WorkflowHistory::from_json(&bytes).expect("parse history json")
+}
+
+/// Standard base64 alphabet (RFC 4648 §4) with `=` padding.
+fn base64_std(bytes: &[u8]) -> String {
+    let alphabet: Vec<u8> = (b'A'..=b'Z')
+        .chain(b'a'..=b'z')
+        .chain(b'0'..=b'9')
+        .chain(*b"+/")
+        .collect();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (u32::from(chunk[0]) << 16)
+            | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8)
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        out.push(alphabet[(n >> 18) as usize & 0x3f] as char);
+        out.push(alphabet[(n >> 12) as usize & 0x3f] as char);
+        out.push(if chunk.len() > 1 {
+            alphabet[(n >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            alphabet[n as usize & 0x3f] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Recursively replace every `data_json` key with a `data` key holding the
+/// standard-alphabet, `=`-padded base64 of the COMPACT serialization of the
+/// value (`, ` / `: ` separators absent, non-ASCII kept as UTF-8, key order as
+/// `serde_json` emits it).
+fn expand_data_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for child in map.values_mut() {
+                expand_data_json(child);
+            }
+            if let Some(payload) = map.remove("data_json") {
+                // `preserve_order` is off, so `serde_json::to_vec` sorts this
+                // sub-value's object keys; the base64 therefore encodes the
+                // sorted-key compact form, which is fine because replay does
+                // not compare payload bytes.
+                let bytes = serde_json::to_vec(&payload).expect("serialize data_json");
+                map.insert(
+                    "data".to_string(),
+                    serde_json::Value::String(base64_std(&bytes)),
+                );
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                expand_data_json(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn data_json_expands_to_base64() {
+    let mut value = serde_json::json!({"data_json": {"a": 1}});
+    expand_data_json(&mut value);
+    assert_eq!(value, serde_json::json!({"data": "eyJhIjoxfQ=="}));
 }
 
 /// A replayer that knows the production `Card` workflow.
@@ -57,6 +130,17 @@ async fn replays_check_fails() {
         .replay_workflow(history("check_fails"))
         .await
         .expect("check_fails history replays");
+}
+
+/// The gate-block run (a first attempt blocked on the card's check, main left
+/// untouched, then a retry that passes and merges) must replay
+/// deterministically like any other recorded run.
+#[tokio::test]
+async fn replays_gate_blocks() {
+    replayer()
+        .replay_workflow(history("gate_blocks"))
+        .await
+        .expect("gate_blocks history replays");
 }
 
 #[tokio::test]

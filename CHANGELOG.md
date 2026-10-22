@@ -5,6 +5,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## 2026-10-22
 
 - **RT-P1-EXEC-OWNERSHIP:** regression tests that the reaper leaves running/waiting/needs_input cards alone and a delayed worker retry cannot overwrite a newer projector state (tests/test_keeper_exec_reaper.py).
+- **RT-P1-FLOW-UNBLOCK (follow-up):** tests only: non-router `add_dep` via `apply_ops` on a claimed item is refused (`forbidden`); the router's add_dep on a claimed item asserts its `item_defined` event; length assert in the claim-without-base test.
 
 ## 2026-10-19
 

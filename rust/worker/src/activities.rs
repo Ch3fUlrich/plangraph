@@ -18,9 +18,12 @@ use pg_worker_core::config::Config;
 use pg_worker_core::confine;
 use pg_worker_core::exit_class::Patterns;
 use pg_worker_core::git::{GitError, git, git_bytes};
+use pg_worker_core::hash;
 use pg_worker_core::janitor;
 use pg_worker_core::packet::ParkPacket;
+use pg_worker_core::pathjail;
 use pg_worker_core::probe::{self, ProbeError, ProbeOutcome};
+use pg_worker_core::redact;
 use pg_worker_core::worktree::AttemptId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -137,28 +140,62 @@ pub struct ProbeResult {
     pub branch: String,
 }
 
-/// Run a card's gate command (taken from the card) in a worktree.
+/// One named check of a card's gate: a shell command and an optional per-check
+/// timeout. A list of named checks — never a single command — is the wire
+/// shape, so more checks (a test-gaming diff scan, say) can be appended
+/// without another gate wiring change.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GateInput {
-    /// Directory the command runs in.
-    pub workdir: String,
-    /// The gate command, run via `sh -c`.
+pub struct GateCheck {
+    /// Matched by `[A-Za-z0-9_.-]{1,64}`; duplicates are invalid input, since
+    /// a report could not tell two same-named runs apart.
+    pub name: String,
+    /// The command, run via `sh -c`.
     pub cmd: String,
-    /// Kill after this many seconds; unset or larger than the configured
-    /// `start_to_close` = `start_to_close`.
+    /// Kill this check after this many seconds; unset = whatever is left of
+    /// the gate's `start_to_close` budget when the check starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_s: Option<u64>,
 }
 
-/// Outcome of a gate run: the `check::CheckResult` fields plus `passed`.
+/// Input of the `gate` activity: the named checks to run, in list order, in
+/// one confined directory. The top-level `timeout_s` of the single-command
+/// gate is gone: time is one budget the whole list shares.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GateResult {
+pub struct GateInput {
+    /// The card work root the workdir must stay inside.
+    pub workroot: String,
+    /// Directory the checks run in; confined to `workroot`: relative or
+    /// absolute, no `..`, symlinks resolved, never outside the root.
+    pub workdir: String,
+    /// The checks, run sequentially in list order. Required on the wire (no
+    /// serde default): a missing field must fail the deserialisation exactly
+    /// as the single `cmd` before it did, and an empty list is invalid input,
+    /// never a silent pass.
+    pub checks: Vec<GateCheck>,
+}
+
+/// Outcome of ONE gate check: the `check::CheckResult` fields plus the
+/// check's name, so a failing tail is reported under the name that failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateCheckResult {
+    pub name: String,
     pub passed: bool,
     pub exit_code: Option<i32>,
     pub signal: Option<i32>,
     pub timed_out: bool,
+    /// The check's own redacted, line- and byte-capped tail — or the reason
+    /// it did not run.
     pub tail: String,
+    /// Hash of `tail`, for "identical failure" comparisons.
     pub output_hash: String,
+}
+
+/// Outcome of a gate run: `passed` only when EVERY check passed. A failing
+/// check does not stop the later ones, so a later diff scan still reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GateResult {
+    pub passed: bool,
+    pub checks: Vec<GateCheckResult>,
 }
 
 /// The write set a merge re-checks under the lock.
@@ -314,9 +351,10 @@ fn activity_error(e: impl std::fmt::Display) -> ActivityError {
     anyhow::anyhow!(e.to_string()).into()
 }
 
-/// Invalid gate input (empty command, timeout 0, missing workdir) can never
-/// succeed on a retry, so it is reported as a non-retryable application
-/// failure; any other io error keeps the default retry behaviour.
+/// Invalid gate input (empty command, timeout 0, a workdir outside the workroot
+/// or not a directory) can never succeed on a retry, so it is reported as a
+/// non-retryable application failure; any other io error keeps the default
+/// retry behaviour.
 fn gate_error(e: std::io::Error) -> ActivityError {
     if e.kind() == std::io::ErrorKind::InvalidInput {
         ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(
@@ -438,49 +476,159 @@ pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
     map_probe(outcome, id.branch())
 }
 
-/// Run the gate command of a card through the shared check runner. An empty
-/// command, a `timeout_s` of 0 and a workdir that is not an existing directory
-/// are invalid input, never a pass; they error before the check runner is
-/// entered, because `run_check` creates a sibling home dir and a bad workdir
-/// must not reach it. The deadline is honoured in here because the blocking
-/// thread cannot be cancelled from outside.
-pub(crate) fn do_gate(cfg: &Config, input: &GateInput) -> std::io::Result<GateResult> {
-    if input.cmd.trim().is_empty() {
+/// What a gate run produced: a result, or the fact that the caller cancelled
+/// it before the command finished.
+#[derive(Debug)]
+pub(crate) enum GateRun {
+    Done(GateResult),
+    Cancelled,
+}
+
+/// The name a check must carry: short, no whitespace, no path or shell
+/// characters, so a report line `[name]` stays unambiguous.
+fn gate_check_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Reject an invalid check list before ANY check runs, so a bad list can never
+/// produce a partial gate. Invalid input is `ErrorKind::InvalidInput`, which
+/// [`gate_error`] reports as a non-retryable application failure.
+fn validate_gate_input(input: &GateInput) -> std::io::Result<()> {
+    if input.checks.is_empty() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "gate command is empty",
+            "gate has no checks",
         ));
     }
-    if input.timeout_s == Some(0) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "gate timeout_s must be at least 1",
-        ));
+    let mut seen: HashSet<&str> = HashSet::new();
+    for c in &input.checks {
+        if !gate_check_name_ok(&c.name) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "gate check name {name:?} must match [A-Za-z0-9_.-]{{1,64}}",
+                    name = c.name
+                ),
+            ));
+        }
+        if !seen.insert(c.name.as_str()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("duplicate gate check name {:?}", c.name),
+            ));
+        }
+        if c.cmd.trim().is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("gate check {:?} has an empty command", c.name),
+            ));
+        }
+        if c.timeout_s == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("gate check {:?} timeout_s must be at least 1", c.name),
+            ));
+        }
     }
-    if !Path::new(&input.workdir).is_dir() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "gate workdir is not a directory",
-        ));
+    Ok(())
+}
+
+/// Run the named checks of a card's gate sequentially, in list order, in one
+/// confined directory, through the shared check runner.
+///
+/// Validation is up front ([`validate_gate_input`]) and the workdir is
+/// confined before anything runs ([`pathjail::confine_dir`], whose escapes and
+/// non-directories are `InvalidInput` as well): an empty list, a blank
+/// command, a blank/duplicate/misnamed check, a `timeout_s` of 0 and a workdir
+/// outside the card work root are invalid input, never a pass — and nothing
+/// runs, so a bad list can never produce a partial gate. [`gate_error`] keeps
+/// all of them non-retryable and the check runner is never entered with a bad
+/// directory (it creates a sibling home dir).
+///
+/// Time is ONE shared budget of the configured `start_to_close` for the whole
+/// gate: each check gets `min(its own timeout_s, what is left of the budget)`,
+/// and a check that would start after the budget is spent is reported as not
+/// run (`timed_out`, tail "not run: gate budget exhausted") instead of being
+/// killed mid-flight.
+///
+/// Each check keeps its OWN bounded tail — the last `min(cfg.check_tail_lines,
+/// 50)` lines, redacted and byte-capped by the check runner itself — and its
+/// own `output_hash` of that tail. Nothing raw may reach Temporal history, and
+/// hashing the raw output would let anyone with the hash confirm a guessed
+/// secret (and would make the hash differ across runs that differ only in a
+/// secret, breaking "identical failure" comparison). A failing check does not
+/// stop the later ones: a later diff scan must still report.
+///
+/// Cancellation is unchanged: `cancelled` is polled by the check runner, which
+/// kills the whole child process group, and it is checked between checks too;
+/// the deadline is honoured in here because the blocking thread cannot be
+/// cancelled from outside.
+pub(crate) fn do_gate(
+    cfg: &Config,
+    input: &GateInput,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<GateRun> {
+    validate_gate_input(input)?;
+    let dir = pathjail::confine_dir(Path::new(&input.workroot), &input.workdir)?;
+    let started = Instant::now();
+    let mut results = Vec::with_capacity(input.checks.len());
+    for c in &input.checks {
+        if cancelled() {
+            return Ok(GateRun::Cancelled);
+        }
+        let remaining = cfg.start_to_close.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            // Do not start a command that must be killed mid-flight: report it
+            // as not run, so the report still names every check of the gate.
+            let tail = "not run: gate budget exhausted".to_string();
+            results.push(GateCheckResult {
+                name: c.name.clone(),
+                passed: false,
+                exit_code: None,
+                signal: None,
+                timed_out: true,
+                output_hash: hash::hash_bytes(tail.as_bytes()),
+                tail,
+            });
+            continue;
+        }
+        let timeout = c
+            .timeout_s
+            .map(Duration::from_secs)
+            .map_or(remaining, |t| t.min(remaining));
+        // The runner redacts the WHOLE output before its line cut and caps the
+        // bytes; the line cap per check is min(cfg lines, 50).
+        let r = check::run_check_cancellable(
+            &c.cmd,
+            &dir,
+            timeout,
+            cfg.check_tail_lines.min(50),
+            cancelled,
+        )?;
+        if r.cancelled {
+            return Ok(GateRun::Cancelled);
+        }
+        // The tail is already redacted; the byte cap here is defensive only,
+        // so a future runner change cannot push raw bytes into history.
+        let tail = redact::cap_tail_bytes(&r.tail, redact::MAX_TAIL_BYTES);
+        results.push(GateCheckResult {
+            name: c.name.clone(),
+            passed: r.passed(),
+            exit_code: r.exit_code,
+            signal: r.signal,
+            timed_out: r.timed_out,
+            output_hash: hash::hash_bytes(tail.as_bytes()),
+            tail,
+        });
     }
-    let timeout = input
-        .timeout_s
-        .map(Duration::from_secs)
-        .map_or(cfg.start_to_close, |t| t.min(cfg.start_to_close));
-    let r = check::run_check(
-        &input.cmd,
-        Path::new(&input.workdir),
-        timeout,
-        cfg.check_tail_lines,
-    )?;
-    Ok(GateResult {
-        passed: r.passed(),
-        exit_code: r.exit_code,
-        signal: r.signal,
-        timed_out: r.timed_out,
-        tail: r.tail,
-        output_hash: r.output_hash,
-    })
+    Ok(GateRun::Done(GateResult {
+        passed: results.iter().all(|c| c.passed),
+        checks: results,
+    }))
 }
 
 fn merge_result(outcome: &str, main_head: String, detail: String) -> MergeResult {
@@ -783,18 +931,69 @@ impl CardActivities {
             .map_err(activity_error)
     }
 
-    /// Run a card's gate command in a worktree and report the outcome.
+    /// Run a card's named gate checks in a worktree and report the outcome.
+    ///
+    /// Cancellation kills the child process group: a cancel (or a failed
+    /// heartbeat) flips a flag the blocking checks poll, which kills the
+    /// group; the task is always joined afterwards so the children are reaped,
+    /// never orphaned. Time is one shared budget of the configured
+    /// `start_to_close`: each check gets `min(its own timeout_s, what is left
+    /// of the budget)`, and a check that would start after the budget is spent
+    /// is reported as not run.
     #[activity]
     pub async fn gate(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: GateInput,
     ) -> Result<GateResult, ActivityError> {
+        let heartbeat = self.deps.cfg.heartbeat;
         let cfg = self.deps.cfg.clone();
-        tokio::task::spawn_blocking(move || do_gate(&cfg, &input))
-            .await
-            .map_err(activity_error)?
-            .map_err(gate_error)
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let mut cancelled = ctx.is_cancelled();
+        if cancelled {
+            cancel_flag.store(true, Ordering::SeqCst);
+        }
+        let mut handle = {
+            let cancel_flag = cancel_flag.clone();
+            tokio::task::spawn_blocking(move || {
+                let is_cancelled = || cancel_flag.load(Ordering::SeqCst);
+                do_gate(&cfg, &input, &is_cancelled)
+            })
+        };
+
+        let mut beats: u32 = 0;
+        let joined = loop {
+            tokio::select! {
+                res = &mut handle => break res,
+                _ = tokio::time::sleep(heartbeat) => {
+                    // A heartbeat error means the activity is cancelled/gone; keep looping so the blocking task is still joined and reaped.
+                    if ctx.record_heartbeat(beats).await.is_err() {
+                        cancelled = true;
+                        cancel_flag.store(true, Ordering::SeqCst);
+                    }
+                    beats = beats.wrapping_add(1);
+                    if ctx.is_cancelled() {
+                        cancelled = true;
+                        cancel_flag.store(true, Ordering::SeqCst);
+                    }
+                }
+                // The cancel future fires once; the guard keeps a second poll
+                // from spinning while the blocking task drains.
+                _ = ctx.cancelled(), if !cancelled => {
+                    cancelled = true;
+                    cancel_flag.store(true, Ordering::SeqCst);
+                }
+            }
+        };
+
+        let run = joined.map_err(activity_error)?;
+        if cancelled {
+            return Err(ActivityError::cancelled());
+        }
+        match run.map_err(gate_error)? {
+            GateRun::Done(result) => Ok(result),
+            GateRun::Cancelled => Err(ActivityError::cancelled()),
+        }
     }
 
     /// Fast-forward the attempt branch into main under the merge lock.
@@ -1141,6 +1340,27 @@ mod tests {
             workroot: "/w".to_string(),
             check_cmd: "true".to_string(),
             base_sha: "b".to_string(),
+        });
+        round_trip(&GateInput {
+            workroot: "/w".to_string(),
+            workdir: "/w/c1-1".to_string(),
+            checks: vec![GateCheck {
+                name: "card-check".to_string(),
+                cmd: "true".to_string(),
+                timeout_s: Some(30),
+            }],
+        });
+        round_trip(&GateResult {
+            passed: false,
+            checks: vec![GateCheckResult {
+                name: "card-check".to_string(),
+                passed: false,
+                exit_code: Some(3),
+                signal: None,
+                timed_out: false,
+                tail: "boom".to_string(),
+                output_hash: "h".to_string(),
+            }],
         });
     }
 
@@ -1706,90 +1926,442 @@ mod tests {
         assert!(!wt.path.exists());
     }
 
-    fn gate_input(dir: &std::path::Path, cmd: &str, timeout_s: Option<u64>) -> GateInput {
-        GateInput {
-            workdir: dir.to_string_lossy().into_owned(),
+    /// One named check for the gate tests.
+    fn named_check(name: &str, cmd: &str, timeout_s: Option<u64>) -> GateCheck {
+        GateCheck {
+            name: name.to_string(),
             cmd: cmd.to_string(),
             timeout_s,
+        }
+    }
+
+    /// A gate input that runs `checks` in `dir`, with `dir` as its own work root.
+    fn gate_input(dir: &std::path::Path, checks: Vec<GateCheck>) -> GateInput {
+        let workroot = dir.to_string_lossy().into_owned();
+        GateInput {
+            workroot: workroot.clone(),
+            workdir: workroot,
+            checks,
+        }
+    }
+
+    /// Run a gate that nobody cancels and take its result.
+    fn run(cfg: &Config, input: &GateInput) -> GateResult {
+        match do_gate(cfg, input, &|| false).unwrap() {
+            GateRun::Done(result) => result,
+            GateRun::Cancelled => panic!("a gate without a cancel must not report Cancelled"),
         }
     }
 
     #[test]
     fn gate_pass() {
         let d = tempfile::tempdir().unwrap();
-        let r = do_gate(&tiny(), &gate_input(d.path(), "echo fine", None)).unwrap();
-        assert!(r.passed && !r.timed_out);
-        assert_eq!(r.exit_code, Some(0));
-        assert_eq!(r.tail, "fine");
-        assert!(!r.output_hash.is_empty());
+        let r = run(
+            &tiny(),
+            &gate_input(d.path(), vec![named_check("card-check", "echo fine", None)]),
+        );
+        assert!(r.passed);
+        assert_eq!(r.checks.len(), 1);
+        let c = &r.checks[0];
+        assert_eq!(c.name, "card-check");
+        assert!(c.passed && !c.timed_out);
+        assert_eq!(c.exit_code, Some(0));
+        assert_eq!(c.tail, "fine");
+        assert!(!c.output_hash.is_empty());
     }
 
     #[test]
     fn gate_fail_keeps_tail_and_a_stable_hash() {
         let d = tempfile::tempdir().unwrap();
-        let a = do_gate(&tiny(), &gate_input(d.path(), "echo nope; exit 3", None)).unwrap();
-        let b = do_gate(&tiny(), &gate_input(d.path(), "echo nope; exit 3", None)).unwrap();
-        assert!(!a.passed && !a.timed_out);
-        assert_eq!(a.exit_code, Some(3));
-        assert!(a.tail.contains("nope"));
-        assert_eq!(a.output_hash, b.output_hash);
+        let a = run(
+            &tiny(),
+            &gate_input(
+                d.path(),
+                vec![named_check("card-check", "echo nope; exit 3", None)],
+            ),
+        );
+        let b = run(
+            &tiny(),
+            &gate_input(
+                d.path(),
+                vec![named_check("card-check", "echo nope; exit 3", None)],
+            ),
+        );
+        assert!(!a.passed);
+        let (ca, cb) = (&a.checks[0], &b.checks[0]);
+        assert!(!ca.passed && !ca.timed_out);
+        assert_eq!(ca.exit_code, Some(3));
+        assert!(ca.tail.contains("nope"));
+        assert_eq!(ca.output_hash, cb.output_hash);
+    }
+
+    #[test]
+    fn two_checks_keep_separate_tails_and_hashes() {
+        let d = tempfile::tempdir().unwrap();
+        let r = run(
+            &tiny(),
+            &gate_input(
+                d.path(),
+                vec![
+                    named_check("first", "echo one-a; echo one-b; exit 1", None),
+                    named_check("second", "echo two-c", None),
+                ],
+            ),
+        );
+        // The gate fails because ONE check failed...
+        assert!(!r.passed);
+        assert_eq!(r.checks.len(), 2);
+        let (a, b) = (&r.checks[0], &r.checks[1]);
+        assert_eq!((a.name.as_str(), b.name.as_str()), ("first", "second"));
+        assert!(!a.passed && b.passed);
+        // ...but each check reports its own tail, with no bleed across them.
+        assert!(
+            a.tail.contains("one-a") && a.tail.contains("one-b"),
+            "{}",
+            a.tail
+        );
+        assert!(!a.tail.contains("two-c"), "{}", a.tail);
+        assert!(b.tail.contains("two-c"), "{}", b.tail);
+        assert!(!b.tail.contains("one-a"), "{}", b.tail);
+        assert_ne!(a.output_hash, b.output_hash);
+        assert_eq!(a.output_hash, hash::hash_bytes(a.tail.as_bytes()));
+        assert_eq!(b.output_hash, hash::hash_bytes(b.tail.as_bytes()));
+    }
+
+    /// A failing first check must not stop the later ones: a later diff scan
+    /// still reports, so the card sees everything the gate saw.
+    #[test]
+    fn a_failing_first_check_does_not_stop_the_later_ones() {
+        let d = tempfile::tempdir().unwrap();
+        let r = run(
+            &tiny(),
+            &gate_input(
+                d.path(),
+                vec![
+                    named_check("fails", "exit 1", None),
+                    named_check("still-runs", "echo done > ran-marker", None),
+                ],
+            ),
+        );
+        assert!(!r.passed);
+        assert_eq!(r.checks.len(), 2);
+        assert!(!r.checks[0].passed);
+        assert!(r.checks[1].passed, "{}", r.checks[1].tail);
+        assert!(
+            d.path().join("ran-marker").exists(),
+            "the later check must still have run"
+        );
+    }
+
+    #[test]
+    fn gate_budget_exhaustion_marks_later_checks_not_run() {
+        let d = tempfile::tempdir().unwrap();
+        // The first check eats the whole budget (it is killed at the budget's
+        // end); the second must be reported as not run, never half-run.
+        let cfg = Config {
+            start_to_close: Duration::from_millis(500),
+            ..tiny()
+        };
+        let input = gate_input(
+            d.path(),
+            vec![
+                named_check("slow", "sleep 30", None),
+                named_check("never", "echo too late", None),
+            ],
+        );
+        let t = Instant::now();
+        let r = run(&cfg, &input);
+        assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+        assert!(!r.passed);
+        assert_eq!(r.checks.len(), 2);
+        assert!(
+            r.checks[0].timed_out && !r.checks[0].passed,
+            "{:?}",
+            r.checks[0]
+        );
+        let second = &r.checks[1];
+        assert!(second.timed_out && !second.passed, "{second:?}");
+        assert_eq!(second.exit_code, None);
+        assert_eq!(second.tail, "not run: gate budget exhausted");
+        assert_eq!(second.output_hash, hash::hash_bytes(second.tail.as_bytes()));
     }
 
     #[test]
     fn gate_timeout_is_reported_and_capped_by_start_to_close() {
         let d = tempfile::tempdir().unwrap();
         let t = Instant::now();
-        let r = do_gate(
+        let r = run(
             &tiny(),
-            &gate_input(d.path(), "echo start; sleep 30", Some(1)),
-        )
-        .unwrap();
-        assert!(r.timed_out && !r.passed);
-        assert!(r.tail.contains("start"));
+            &gate_input(
+                d.path(),
+                vec![named_check("card-check", "echo start; sleep 30", Some(1))],
+            ),
+        );
+        assert!(!r.passed);
+        assert!(r.checks[0].timed_out);
+        assert!(r.checks[0].tail.contains("start"));
         assert!(t.elapsed() < Duration::from_secs(20));
         // A requested timeout above start_to_close is capped to it.
         let cfg = Config {
             start_to_close: Duration::from_secs(1),
             ..tiny()
         };
-        let r = do_gate(&cfg, &gate_input(d.path(), "sleep 30", Some(3600))).unwrap();
-        assert!(r.timed_out && !r.passed);
+        let r = run(
+            &cfg,
+            &gate_input(
+                d.path(),
+                vec![named_check("card-check", "sleep 30", Some(3600))],
+            ),
+        );
+        assert!(r.checks[0].timed_out && !r.passed);
     }
 
+    /// Every invalid list is rejected before ANY check runs (so the marker
+    /// file a check would create never appears) and is non-retryable input,
+    /// never a pass and never a retry.
     #[test]
-    fn gate_empty_command_is_an_error_not_a_pass() {
+    fn gate_invalid_lists_run_nothing_and_are_not_retryable() {
         let d = tempfile::tempdir().unwrap();
-        let e = do_gate(&tiny(), &gate_input(d.path(), "   ", None)).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
-        let ActivityError::Application(f) = gate_error(e) else {
+        let marker_cmd = "echo ran > ran-marker";
+        let cases: Vec<(&str, Vec<GateCheck>)> = vec![
+            ("empty list", vec![]),
+            (
+                "duplicate name",
+                vec![
+                    named_check("dup", "true", None),
+                    named_check("dup", marker_cmd, None),
+                ],
+            ),
+            ("blank name", vec![named_check("", marker_cmd, None)]),
+            (
+                "name with a space",
+                vec![named_check("bad name", marker_cmd, None)],
+            ),
+            (
+                "name with a slash",
+                vec![named_check("bad/name", marker_cmd, None)],
+            ),
+            (
+                "name longer than 64",
+                vec![named_check(&"x".repeat(65), marker_cmd, None)],
+            ),
+            ("blank command", vec![named_check("ok-name", "   ", None)]),
+            (
+                "zero timeout",
+                vec![named_check("ok-name", marker_cmd, Some(0))],
+            ),
+            // A valid check before the invalid one must not run either: the
+            // whole list is validated before the first command starts.
+            (
+                "valid first, invalid second",
+                vec![
+                    named_check("runs-first", marker_cmd, None),
+                    named_check("bad name", "true", None),
+                ],
+            ),
+        ];
+        for (why, checks) in cases {
+            let e = do_gate(&tiny(), &gate_input(d.path(), checks), &|| false).unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{why}");
+            assert!(!d.path().join("ran-marker").exists(), "{why} ran a check");
+        }
+        let ActivityError::Application(f) = gate_error(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "gate has no checks",
+        )) else {
             panic!("expected an application failure")
         };
         assert!(f.is_non_retryable());
     }
 
+    /// The workdir is confined to the workroot: anything that leaves it — a
+    /// `..` component, an absolute path, a symlink out — is refused as invalid
+    /// input before the check runner is entered.
     #[test]
-    fn gate_zero_timeout_is_invalid_input() {
-        let d = tempfile::tempdir().unwrap();
-        let e = do_gate(&tiny(), &gate_input(d.path(), "true", Some(0))).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
-        let ActivityError::Application(f) = gate_error(e) else {
-            panic!("expected an application failure")
+    fn gate_workdir_escape_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("work");
+        std::fs::create_dir(&root).unwrap();
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::create_dir(root.join("sub")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        let workroot = root.to_string_lossy().into_owned();
+        let outside = outside.to_string_lossy().into_owned();
+        for candidate in [
+            "../outside",
+            "sub/../../outside",
+            outside.as_str(),
+            "link",
+            "nope",
+        ] {
+            let input = GateInput {
+                workroot: workroot.clone(),
+                workdir: candidate.to_string(),
+                checks: vec![named_check("card-check", "true", None)],
+            };
+            let e = do_gate(&tiny(), &input, &|| false).unwrap_err();
+            assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput, "{candidate}");
+            let ActivityError::Application(f) = gate_error(e) else {
+                panic!("expected an application failure for {candidate}")
+            };
+            assert!(f.is_non_retryable(), "{candidate}");
+        }
+        // run_check_cancellable was never entered: it would have created this
+        // sibling home dir for the missing subdir.
+        assert!(!root.join("nope.home-check").exists());
+
+        // A subdir of the root is inside the jail and runs normally.
+        let input = GateInput {
+            workroot,
+            workdir: "sub".to_string(),
+            checks: vec![named_check("card-check", "test -d . && echo ok", None)],
         };
-        assert!(f.is_non_retryable());
+        let r = run(&tiny(), &input);
+        assert!(r.passed, "{}", r.checks[0].tail);
+        assert_eq!(r.checks[0].tail, "ok");
+    }
+
+    /// Fake secrets are built at runtime from fragments so that no token-shaped
+    /// literal ever appears in this file.
+    fn fake_sk(filler: &str) -> String {
+        ["sk", "-", filler].concat()
+    }
+
+    fn fake_env(filler: &str) -> String {
+        ["API_", "KEY=", filler].concat()
     }
 
     #[test]
-    fn gate_bad_workdir_is_invalid_input() {
+    fn gate_tail_is_redacted_before_it_is_returned_and_hashed() {
         let d = tempfile::tempdir().unwrap();
-        let missing = d.path().join("missing");
-        let e = do_gate(&tiny(), &gate_input(&missing, "true", None)).unwrap_err();
-        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
-        // run_check was never entered: it would have created this sibling dir.
-        assert!(!d.path().join("missing.home-check").exists());
-        let ActivityError::Application(f) = gate_error(e) else {
-            panic!("expected an application failure")
+        let (sk_a, sk_b) = (fake_sk(&"a".repeat(24)), fake_sk(&"b".repeat(24)));
+        let (env_a, env_b) = (fake_env("hunter22hunter22"), fake_env("sleeper33sleeper3"));
+        let cmd_a = format!("echo {sk_a}; echo {env_a}; exit 1");
+        let cmd_b = format!("echo {sk_b}; echo {env_b}; exit 1");
+
+        let a = run(
+            &tiny(),
+            &gate_input(d.path(), vec![named_check("card-check", &cmd_a, None)]),
+        );
+        let b = run(
+            &tiny(),
+            &gate_input(d.path(), vec![named_check("card-check", &cmd_b, None)]),
+        );
+        let (ta, tb) = (&a.checks[0].tail, &b.checks[0].tail);
+        for secret in [sk_a.as_str(), sk_b.as_str(), env_a.as_str(), env_b.as_str()] {
+            assert!(!ta.contains(secret) && !tb.contains(secret), "{ta}");
+        }
+        assert!(ta.contains(redact::REDACTED) && tb.contains(redact::REDACTED));
+        // The hash is over the redacted tail, so two runs that differed only in
+        // the secret compare equal — and the hash proves nothing about a guess.
+        assert_eq!(ta, tb);
+        assert_eq!(a.checks[0].output_hash, b.checks[0].output_hash);
+        assert_eq!(a.checks[0].output_hash, hash::hash_bytes(ta.as_bytes()));
+        assert_eq!(b.checks[0].output_hash, hash::hash_bytes(tb.as_bytes()));
+    }
+
+    #[test]
+    fn gate_tail_is_capped_in_lines_and_bytes() {
+        let cfg = Config {
+            check_tail_lines: 50,
+            ..tiny()
         };
-        assert!(f.is_non_retryable());
+        let d = tempfile::tempdir().unwrap();
+        let r = run(
+            &cfg,
+            &gate_input(d.path(), vec![named_check("card-check", "seq 1 500", None)]),
+        );
+        let lines: Vec<&str> = r.checks[0].tail.lines().collect();
+        assert_eq!(lines.len(), 50);
+        assert_eq!(lines[0], "451");
+        assert_eq!(lines[49], "500");
+
+        let r = run(
+            &cfg,
+            &gate_input(
+                d.path(),
+                vec![named_check(
+                    "card-check",
+                    "head -c 200000 /dev/zero | tr '\\0' 'a'; echo",
+                    None,
+                )],
+            ),
+        );
+        assert!(
+            r.checks[0].tail.len() <= redact::MAX_TAIL_BYTES,
+            "{}",
+            r.checks[0].tail.len()
+        );
+    }
+
+    /// True if Linux still exposes this pid as a live (non-zombie) process.
+    fn pid_alive(pid: &str) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|s| {
+            s.rsplit(')')
+                .next()
+                .and_then(|t| t.split_whitespace().next())
+                != Some("Z")
+        })
+    }
+
+    #[test]
+    fn gate_cancel_kills_the_child() {
+        let d = tempfile::tempdir().unwrap();
+        let pid_file = d.path().join("child.pid");
+        let cfg = Config {
+            start_to_close: Duration::from_secs(30),
+            ..tiny()
+        };
+        let input = gate_input(
+            d.path(),
+            vec![named_check(
+                "card-check",
+                "sleep 60 & echo $! > child.pid; wait",
+                Some(30),
+            )],
+        );
+        let flag = Arc::new(AtomicBool::new(false));
+        let start = Instant::now();
+
+        let watching = flag.clone();
+        let handle =
+            std::thread::spawn(move || do_gate(&cfg, &input, &|| watching.load(Ordering::SeqCst)));
+
+        // Wait (up to 5 s) for the command to record the grandchild pid, then
+        // cancel: the group must die well before its 30 s timeout.
+        let mut seen = false;
+        for _ in 0..500 {
+            if pid_file.exists() {
+                seen = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(seen, "the gate never recorded its child pid");
+        flag.store(true, Ordering::SeqCst);
+
+        let outcome = handle.join().unwrap();
+        assert!(start.elapsed() < Duration::from_secs(15));
+        assert!(
+            matches!(outcome, Ok(GateRun::Cancelled)),
+            "a cancelled gate must report GateRun::Cancelled"
+        );
+
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        let pid = pid.trim();
+        if Path::new("/proc/self").exists() {
+            let mut dead = false;
+            for _ in 0..300 {
+                if !pid_alive(pid) {
+                    dead = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(dead, "backgrounded sleep {pid} is still alive");
+        }
     }
 
     #[test]
@@ -1814,24 +2386,38 @@ mod tests {
         assert_eq!(CardActivities::merge.name(), "CardActivities::merge");
         let mut defs = temporalio_sdk::activities::ActivityDefinitions::default();
         defs.register_activities(CardActivities::new(deps()));
-        // Input without the optional field (older or minimal recording) decodes.
-        let i: GateInput = serde_json::from_str(r#"{"workdir":"/w","cmd":"true"}"#).unwrap();
-        assert_eq!(i.timeout_s, None);
+        // `workroot`, `workdir` and `checks` are required on the wire; only a
+        // check's `timeout_s` may be left out.
+        let i: GateInput = serde_json::from_str(
+            r#"{"workroot":"/w","workdir":"/w","checks":[{"name":"card-check","cmd":"true"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(i.checks.len(), 1);
+        assert_eq!(i.checks[0].timeout_s, None);
+        let json = serde_json::to_string(&i).unwrap();
         assert_eq!(
-            serde_json::to_string(&i).unwrap(),
-            r#"{"workdir":"/w","cmd":"true"}"#
+            json,
+            r#"{"workroot":"/w","workdir":"/w","checks":[{"name":"card-check","cmd":"true"}]}"#
         );
+        // A missing `checks` must fail the deserialisation, as a missing `cmd`
+        // did before the list: a producer that cannot name its checks must not
+        // pass as a silent no-op gate.
+        assert!(serde_json::from_str::<GateInput>(r#"{"workroot":"/w","workdir":"/w"}"#).is_err());
         let r = GateResult {
             passed: true,
-            exit_code: Some(0),
-            signal: None,
-            timed_out: false,
-            tail: "t".into(),
-            output_hash: "h".into(),
+            checks: vec![GateCheckResult {
+                name: "card-check".to_string(),
+                passed: true,
+                exit_code: Some(0),
+                signal: None,
+                timed_out: false,
+                tail: "t".into(),
+                output_hash: "h".into(),
+            }],
         };
         assert_eq!(
             serde_json::to_string(&r).unwrap(),
-            r#"{"passed":true,"exit_code":0,"signal":null,"timed_out":false,"tail":"t","output_hash":"h"}"#
+            r#"{"passed":true,"checks":[{"name":"card-check","passed":true,"exit_code":0,"signal":null,"timed_out":false,"tail":"t","output_hash":"h"}]}"#
         );
         let back: GateResult = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back, r);
