@@ -11,7 +11,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S1 merged; S2 #119 r6 head 0f41650a glm PASS / qwen FIX med (child id scope) -> spine 1 fix round (phase-scoped child id), re-seat qwen+glm -> GO-REQ; minors -> leaf PHASE-RUNNER-HARDEN (spine sends D-2230); S3 own credential (D-2227); S4 |
-| RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
+| RT-OVERSIGHT-CHECKS | flow-oversight-2 | #117 head 112be288 CI green, seats qwen+haiku PASS (seats/oversight-117d); GO-REQ to routing 20:2xZ (treated HIGH) -> on GO: merge, CI main, evidence, submit, verdicts |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
 | CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 9f168e51 CI green; seats were on 0a7a30d3 (glmA FIX 2 HIGH: Hand-Edit claude marker, workflow suppression). Round: fix HIGH-1, add tools/gate_wiring_check.py (L1 runs before merge), leaf for MEDs, re-seat qwen+glm exact head -> GO-REQ routing |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
