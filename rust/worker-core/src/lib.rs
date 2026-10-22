@@ -18,6 +18,7 @@ pub mod sandbox_env;
 pub mod scope;
 pub mod stall;
 pub mod worktree;
+pub mod wsl;
 
 #[cfg(test)]
 pub(crate) mod testutil;
