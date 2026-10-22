@@ -64,8 +64,12 @@ also the ask_question integration point.
 
 ## Rollout
 
-Deploy keeper first, then worker: a worker with a known attempt sends the
-exec fields. An old keeper silently drops them on ask_question, but rejects
+Migrate first, then deploy keeper, then worker: on Postgres `open_db(create=False)`
+refuses a schema behind the code (`keeper schema is at migration <have>, code needs
+<latest>: run pg admin migrate`), so the keeper will not start before the
+`pg admin migrate` step (`docs/keeper-postgres.md`); only then does a worker with a
+known attempt send the exec fields. An old keeper silently drops them on
+ask_question, but rejects
 unknown fields on park/complete/alarm/worker_attempt. During the mixed
 window, an old worker's park/complete/alarm/worker_attempt/ask_question without exec fields is refused
 with `exec_stale` once a new worker owns the card.

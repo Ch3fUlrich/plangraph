@@ -7,11 +7,11 @@
 //! | Method | Path           | Request body             | Success response   |
 //! |--------|----------------|--------------------------|--------------------|
 //! | POST   | `/v1/claim`    | `{"worker": ..}`         | 200 `Claim` \| 204 |
-//! | POST   | `/v1/attempts` | `AttemptReport`          | 204                |
+//! | POST   | `/v1/attempts` | `AttemptReport` + `workflow_id`/`run_id`/`attempt` (all three or none; no `expected_state`) | 204 |
 //! | POST   | `/v1/park`     | `ParkPacket`             | 204                |
-//! | POST   | `/v1/complete` | `{"card", "merged_sha"}` | 204                |
-//! | POST   | `/v1/alarms`   | `Alarm`                  | 204                |
-//! | POST   | `/v1/ask_question` | `{"key","text","default_answer","deadline","risk_tags"}` | 200 `{"id",..}` |
+//! | POST   | `/v1/complete` | `{"card","merged_sha"}` + `workflow_id`/`run_id`/`attempt` (+ `expected_state` when the activity input carries one) | 204 |
+//! | POST   | `/v1/alarms`   | `Alarm` (`{"card","reason","attempt"?}`) + `workflow_id`/`run_id`/`attempt` (no `expected_state`) | 204 |
+//! | POST   | `/v1/ask_question` | `{"key","text","default_answer","deadline","risk_tags"}` + `workflow_id`/`run_id`/`attempt` + `expected_state` (the live set) | 200 `{"id",..}` |
 //! | POST   | `/v1/answer_question` | `{"question_id","source":"question_timeout"}` | 200 |
 //! | POST   | `/v1/locks/<repo>/acquire` | `{"owner", "ttl_s"}` | 200 `Fence`    |
 //! | POST   | `/v1/locks/<repo>/release` | `Fence`              | 204            |

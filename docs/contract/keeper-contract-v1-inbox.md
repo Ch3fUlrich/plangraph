@@ -39,7 +39,16 @@ Park, complete and ask_question accept `expected_state` as a state string or a
 non-empty list of state strings (any-of): `open`, `ready`, `running`, `needs_input`,
 `waiting`, `failed`, `parked`. Invalid values/elements are `validation` (400);
 a mismatch is `exec_stale_state` (409), checked before ownership writes. Exec-fenced
-park must be forward-reachable per the transition table (`bad_transition`, 409).
+park never consults the transition table: `_worker_park` moves the card with no
+`run`, so `bad_transition` cannot happen on `POST /v1/park`. What park refuses is
+`validation` (400) for a malformed body or a bad `expected_state` element,
+`exec_stale_state` (409) when `expected_state` does not match the card's live state
+(checked before any ownership write), `exec_stale` (409) when the card has an owner
+and the body omits all three exec fields, names another run or a lower attempt, and
+`bad_state` (400) when the card sits outside the states `set_state` moves among
+(`done`, `in_review`); an owner recorded by `_exec_gate` first is rolled back with
+that refusal. The unchanged claim, lease and scope guards still answer `not_found`
+(404), `forbidden` (403), `locked` (409), `epoch_stale` (409) and `conflict` (409).
 
 ## `POST /v1/answer_question`
 

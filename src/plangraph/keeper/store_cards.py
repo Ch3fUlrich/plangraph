@@ -44,7 +44,9 @@ SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed
 #: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
 #: back to ``open``/``ready``) are refused. Only a reopen clears ownership.
 #: Moves without a ``run``
-#: keep their historical behaviour; exec-fenced worker parks also use this table.
+#: keep their historical behaviour. Worker parks do not consult this table at
+#: all: ``_worker_park`` applies its state move with no ``run``, so park never
+#: raises ``bad_transition`` (it refuses ``bad_state`` instead).
 TRANSITIONS: dict[str, frozenset[str]] = {
     "open":        frozenset({"open", "ready"}),
     "ready":       frozenset({"ready", "running"}),
@@ -483,7 +485,11 @@ class CardsMixin:
                      " exec_attempt=NULL WHERE key=?", (key,))
 
     def _exec_record(self, conn, item_id, wf, run, attempt, now=None):
-        """(Re)record the exec owner of *item_id*: a first owner or a new run."""
+        """Record the exec owner of *item_id*: the first owner of an unowned card.
+
+        Only ``_exec_check`` calls this, and only while no owner is recorded, so
+        an existing owner is never replaced here.
+        """
         wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
         touch = ", updated_at=?" if now is not None else ""
         values = (wf, run, attempt)
