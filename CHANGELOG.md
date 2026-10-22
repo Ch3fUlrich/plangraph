@@ -6,6 +6,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 - **PG-JAIL:** Require fully enforced Landlock ABI V2 so cross-root rename/link is supported without a best-effort bypass. Replace broad procfs read grants with opt-in process-local and selected system-file access to protect sibling environments. Strengthen escape and resource-limit assertions, avoid default systemd probes, and remove unused exec/dependency code.
 - **WORKER-SANDBOX:** Give each jailed attempt a private, drop-cleaned tmp root and `TMPDIR` instead of shared temp write access. Require and canonicalize absolute existing `PG_JAIL_BIN` files; configure the local e2e test profile explicitly without weakening production startup.
+- **PG-JAIL / WORKER-SANDBOX (review round 2):** Require Landlock ABI V3 so `truncate(2)` outside the writable roots is denied (fail closed with exit 78 below V3). Run card `check_cmd` through the attempt jail and resource scope, add the harness binary directory read-only, require `PG_TEST_ALLOW_UNJAILED=1` with `PG_JAIL=off`, and fail resource-limit/landlock test skips when `CI=true`.
 
 ## 2026-10-19
 

@@ -122,7 +122,10 @@ class WorkerProc:
                 env["PG_JAIL_BIN"] = str(jail.resolve())
             else:
                 # Test profile only: production startup must still fail closed.
+                if os.environ.get("CI"):
+                    raise RuntimeError(f"pg-jail helper missing next to {binary}: refusing an unjailed e2e run in CI")
                 env["PG_JAIL"] = "off"
+                env["PG_TEST_ALLOW_UNJAILED"] = "1"
         self.log = log
         self.out = open(log, "wb")
         self.proc = subprocess.Popen([binary], env=env, stdout=self.out, stderr=subprocess.STDOUT,

@@ -69,14 +69,15 @@ access, so anything not listed in `--rw` or `--ro` is already denied.
 ## Fail closed
 
 Missing `--rw` or `--ro` paths are errors. `--deny-read` paths that overlap an
-allow entry (including generated procfs entries) are errors. Landlock ABI V2
-is required, including `Refer` for rename/link across writable roots. If ABI V2
-cannot be fully enforced, the process exits with `78`; there is no best-effort
-bypass.
+allow entry (including generated procfs entries) are errors. Landlock ABI V3
+is required: `Refer` for rename/link across writable roots and `Truncate` so
+`truncate(2)` outside the writable roots is denied. If ABI V3 cannot be fully
+enforced, the process exits with `78`; there is no best-effort bypass.
 
-The resource-limit integration test is opt-in via
-`PG_JAIL_TEST_RESOURCE_LIMITS=1` on hosts with a configured systemd user scope.
-The default test run does not probe systemd or cgroups.
+The resource-limit tests probe for a working systemd user scope and a live
+cgroup `memory.max`; they run wherever the probe succeeds. Set
+`PG_JAIL_TEST_SKIP_RESOURCE_LIMITS=1` to skip them locally (this fails when
+`CI=true`).
 
 ## Exit codes
 
