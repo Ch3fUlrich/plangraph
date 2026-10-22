@@ -2,16 +2,20 @@
 - Load skill `unattended-orchestration` first. L2 = Sonnet orchestrator: split, brief, spawn, review; never write code itself, never merge
   to main, never do live steps. Parent = build-L1 (SendMessage `build-L1`). Report <= 30 lines at phase end, then stop.
 - D-437/D-1317 (binding): on CODING.VM only tool-less writers/seats (review-call: L2 applies the returned diff); tool-using opencode L3s (autoos-agent spawn) only on the workstation. Commit trailer adds `Writer: <model> <run id> [tool-less]`.
-- L3 writers AND seats = D-1704 (operator 2026-10-17, replaces D-1701 + the D-1351/2026-10-15 writer order), each model ONLY by the path named:
-  1 qodercli/qwen3.8-flash incl. qodercli 'Efficient' (D-1714; spawn client=qoder model=Qwen3.8-Flash, case-sensitive), 2 opencode free deepseek-v4.1-flash-free / glm-5.3-free (D-1714; muse free gone), 3 agy/gemini-3.8-flash (ACP), 4 opencode/mimo-v2.6-flash
-  (ACP), 5 openrouter/free (API), 6 mimo/mimo-v2.6-flash (API), 7 deepseek/deepseek-v4.1-flash (API). Rate-limited/down -> next, record skip + reason in the lane
-  record. Seats = first available entries whose family differs from the writer and from each other. Off-list models are never used. Sonnet (in-session Agent)
-  ONLY if every entry fails or spawner admission refuses; record why. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every free write:
-  diff stat, tests, files-read; relaunch, never resume, a no-change run. Run finished = exit.json / `status`; never poll job.json.
-  Several writers in parallel are fine when write sets are disjoint.
+- WRITERS = D-2148 (operator 2026-10-22, replaces D-1704 for implementations): cx/gpt-6.1-sol (Codex via OmniRoute) first; NEVER Claude Sonnet
+  for implementations (tiny fixes included); never cx/gpt-5.6-sol. coding.vm OmniRoute does not serve 6.1 yet -> mimo/mimo-v2.6-flash
+  (tool-less review-call, gateway id xiaomi-mimo/mimo-v2.6-flash, as ops/seat.sh), then omniroute/deepseek-direct-flash; record each skip + reason.
+  opencode go+free rate-limited: skip. One closed task per writer brief (one file/module, exact spec, file:line anchors; R-orch-02); gate every write:
+  diff stat, tests, files-read; relaunch, never resume, a no-change run. Writers in parallel only with disjoint write sets.
+- SEATS = D-2166 order: opencode free > openrouter free > qodercli qwen3.8-flash > agy gemini-3.8-flash > mimo-v2.6-flash > agy claude-sonnet-5.5-medium
+  > deepseek-v4-flash (last resort). Family differs from the writer and each other; skip a rate-limited leg + record why (2026-10-22: opencode 429,
+  agy gemini quota 429 ~33 h, openrouter free has no direct spawner path). agy sonnet is never the non-Claude seat of a HIGH lane.
+  Seat records: served model + provider + family. Spawner first (D-2038); a leg the spawner does not declare -> ops/seat.sh (gateway review-call).
+- Authorship D-2046/2047: every NEW commit carries `Writer: <served model> <run id>`; ci-gate refuses missing/Claude writers; existing commits never redone;
+  removing a test needs `Test-Removal: D-NNNN`.
 - RAM floors (operator 2026-10-15): coding.vm MemAvailable >= 1 GB, workstation >= 12 GB free. Heavy Rust/Temporal builds on the
   workstation, one CARGO_TARGET_DIR, `cargo clean` after (D-1319).
-- Seats (tool-less, max 4 fleet-wide): (gpt-oss is OFF the D-1704 list, D-1754; seats only from the D-1704 order) qwen =
+- Seats (tool-less, max 4 fleet-wide): qwen =
   qodercli in an empty dir: `timeout 900 qodercli -p --model Qwen3.8-Flash --tools "" --no-session-persistence -o json "$(cat PROMPT)"`
   with the first line "You have NO tools and no repository access. The full material is inline below. Answer in plain text; never
   emit tool calls." NEVER ovh Qwen (times out). Prompt = vector block V1..Vn + diff + ALWAYS /home/s/code/plangraph-worktrees/build-L1/ops/tail.md last.
