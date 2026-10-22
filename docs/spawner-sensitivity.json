@@ -1,0 +1,163 @@
+{
+  "catalogs": 200,
+  "perturbations": {
+    "cost_pm10pct": {
+      "critical/driver": {
+        "flip_rate": 0.025,
+        "unresolved": 0
+      },
+      "critical/implement": {
+        "flip_rate": 0.02,
+        "unresolved": 0
+      },
+      "critical/review": {
+        "flip_rate": 0.025,
+        "unresolved": 0
+      },
+      "high/driver": {
+        "flip_rate": 0.025,
+        "unresolved": 0
+      },
+      "high/implement": {
+        "flip_rate": 0.05,
+        "unresolved": 0
+      },
+      "high/review": {
+        "flip_rate": 0.035,
+        "unresolved": 0
+      },
+      "low/driver": {
+        "flip_rate": 0.05,
+        "unresolved": 0
+      },
+      "low/implement": {
+        "flip_rate": 0.04,
+        "unresolved": 0
+      },
+      "low/review": {
+        "flip_rate": 0.05,
+        "unresolved": 0
+      },
+      "normal/driver": {
+        "flip_rate": 0.04,
+        "unresolved": 0
+      },
+      "normal/implement": {
+        "flip_rate": 0.05,
+        "unresolved": 0
+      },
+      "normal/review": {
+        "flip_rate": 0.04,
+        "unresolved": 0
+      }
+    },
+    "intel_pm1": {
+      "critical/driver": {
+        "flip_rate": 0.105,
+        "unresolved": 0
+      },
+      "critical/implement": {
+        "flip_rate": 0.12,
+        "unresolved": 0
+      },
+      "critical/review": {
+        "flip_rate": 0.105,
+        "unresolved": 0
+      },
+      "high/driver": {
+        "flip_rate": 0.135,
+        "unresolved": 0
+      },
+      "high/implement": {
+        "flip_rate": 0.115,
+        "unresolved": 0
+      },
+      "high/review": {
+        "flip_rate": 0.11,
+        "unresolved": 0
+      },
+      "low/driver": {
+        "flip_rate": 0.015,
+        "unresolved": 0
+      },
+      "low/implement": {
+        "flip_rate": 0.015,
+        "unresolved": 0
+      },
+      "low/review": {
+        "flip_rate": 0.045,
+        "unresolved": 0
+      },
+      "normal/driver": {
+        "flip_rate": 0.025,
+        "unresolved": 0
+      },
+      "normal/implement": {
+        "flip_rate": 0.03,
+        "unresolved": 0
+      },
+      "normal/review": {
+        "flip_rate": 0.035,
+        "unresolved": 0
+      }
+    },
+    "speed_pm10pct": {
+      "critical/driver": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "critical/implement": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "critical/review": {
+        "flip_rate": 0.005,
+        "unresolved": 0
+      },
+      "high/driver": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "high/implement": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "high/review": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "low/driver": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "low/implement": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "low/review": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "normal/driver": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "normal/implement": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      },
+      "normal/review": {
+        "flip_rate": 0.0,
+        "unresolved": 0
+      }
+    }
+  },
+  "seed": 20261022,
+  "summary": {
+    "max_flip_rate_by_perturbation": {
+      "cost_pm10pct": 0.05,
+      "intel_pm1": 0.135,
+      "speed_pm10pct": 0.005
+    }
+  }
+}
