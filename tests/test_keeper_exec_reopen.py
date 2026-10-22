@@ -97,10 +97,35 @@ def test_null_exec_keys_behave_as_omitted(w):
     assert w.store.worker_park(w.p("workerA"), park(
         key, workflow_id=None, run_id=None, attempt=None))["state"] == "parked"
     assert owner(w, key) == (None, None, None)
-    w.store.set_state(w.p("router"), key, "open", run=RUN1, new_run=True)
-    refused("exec_stale", w.store.worker_park, w.p("workerA"),
-            park(key, attempt=None))
+    # Acquire on a fact-writing call, not the removed back-move takeover.
+    w.store.worker_complete(w.p("workerA"), complete(
+        key, workflow_id=RUN1[0], run_id=RUN1[1], attempt=RUN1[2]))
     assert owner(w, key) == RUN1
+    before = dict(w.store._item(key))
+    for fields in ({}, {"attempt": None},
+                   {"workflow_id": None, "run_id": None, "attempt": None}):
+        refused("exec_stale", w.store.worker_park, w.p("workerA"),
+                park(key, **fields))
+        assert dict(w.store._item(key)) == before
+    assert owner(w, key) == RUN1
+
+
+@pytest.mark.parametrize("verb", ["park", "complete", "ask"])
+def test_null_expected_state_behaves_as_omitted(w, verb):
+    key, = seed(w, [("A", [])])
+    worker = w.p("workerA")
+    if verb == "park":
+        assert w.store.worker_park(worker, park(
+            key, expected_state=None, **RUN2))["state"] == "parked"
+    elif verb == "complete":
+        w.store.worker_complete(worker, complete(key, expected_state=None, **RUN2))
+        assert w.store._item(key)["state"] == "open"
+    else:
+        w.store.ask_question(worker, key, "Which path?", expected_state=None,
+                             exec_workflow_id=RUN2["workflow_id"],
+                             exec_run_id=RUN2["run_id"], exec_attempt=RUN2["attempt"])
+        assert w.store._item(key)["state"] == "open"
+    assert owner(w, key) == ("wf-2", "run-2", 1)
 
 
 def test_workflow_mismatch_is_stale_even_with_same_run(w):
@@ -112,11 +137,23 @@ def test_workflow_mismatch_is_stale_even_with_same_run(w):
 
 
 @pytest.mark.parametrize("attempt", [1, 2])
-def test_new_run_takeover_replaces_attempt(w, attempt):
+def test_new_run_requires_owner_clear_before_acquiring(w, attempt):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "parked", run=RUN1)
-    w.store.set_state(w.p("router"), key, "open",
-                      run=("wf-2", "run-2", attempt), new_run=True)
+    before = dict(w.store._item(key))
+    refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
+            run=("wf-2", "run-2", attempt), new_run=True)
+    assert dict(w.store._item(key)) == before
+    refused("exec_stale", w.store.worker_park, w.p("workerA"),
+            park(key, **dict(RUN2, attempt=attempt)))
+    # A bare projector move is not an owner-clearing lifecycle operation.
+    w.store.set_state(w.p("router"), key, "open")
+    assert owner(w, key) == RUN1
+    epoch = to_claimed(w, key, "workerA")
+    w.store.release(w.p("workerA"), key, epoch)
+    assert owner(w, key) == (None, None, None)
+    w.store.worker_park(w.p("workerA"), park(key, **dict(RUN2, attempt=attempt)))
+    assert w.store._item(key)["state"] == "parked"
     assert owner(w, key) == ("wf-2", "run-2", attempt)
 
 
@@ -149,11 +186,15 @@ def test_first_owner_and_attempt_bump_touch_updated_at(w):
         assert w.store._item(key)["updated_at"] != before
 
 
-def test_unowned_back_move_can_record_a_first_owner(w):
+@pytest.mark.parametrize("new_run", [False, True])
+def test_unowned_back_move_with_run_is_refused(w, new_run):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "parked")
-    w.store.set_state(w.p("router"), key, "open", run=RUN1, new_run=True)
-    assert owner(w, key) == RUN1
+    before = dict(w.store._item(key))
+    refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
+            run=RUN1, new_run=new_run)
+    assert dict(w.store._item(key)) == before
+    assert owner(w, key) == (None, None, None)
 
 
 def test_exec_helpers_without_now_preserve_timestamp_and_clear_owner(w):
