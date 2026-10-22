@@ -11,12 +11,12 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S2 #119 r7 64cdb5f3 qwen PASS / glm FIX F1 (rerun dup child id). Ordered: refute via SDK reuse default + rerun e2e, else fix n from PhaseInput; re-seat -> GO-REQ routing. S3 own cred (D-2227), S4 |
-| RT-OVERSIGHT-CHECKS | flow-oversight-2 | MERGED 5fe070b3 (GO D-2274); ciwait bg b2ansobqb -> evidence+submit; then verdicts qwen/haiku seats/oversight-117d; timer install workst keeper only (D-1854) via workst-L1-autoos; LOW followup leaf -> routing |
+| RT-OVERSIGHT-CHECKS | DONE | 5fe070b3 verdict alibaba; timer = operator ask #3 at workst (needs operator OK); was MERGED 5fe070b3 (GO D-2274); ciwait bg b2ansobqb -> evidence+submit; then verdicts qwen/haiku seats/oversight-117d; timer install workst keeper only (D-1854) via workst-L1-autoos; LOW followup leaf -> routing |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
 | CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 9f168e51 CI green; seats were on 0a7a30d3 (glmA FIX 2 HIGH: Hand-Edit claude marker, workflow suppression). Round: fix HIGH-1, add tools/gate_wiring_check.py (L1 runs before merge), leaf for MEDs, re-seat qwen+glm exact head -> GO-REQ routing |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
-| PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
+| PROJECTOR-RUN-UNIT | in_review | qwen FIX (lag in UI/API unproven); BLOCKED to routing 21:0xZ opts *A narrow to R6 alarm / B lag_s leaf / C reopen |
 | workst L2s sandbox, card-checks, bus, oc-harden | sandbox c15, oc-harden c16, card-checks c17 LAUNCHED; bus HELD (RAM 84.4%, workst BLOCKED to routing) | admission clear -> oc-harden writer + sandbox seats, then bus |
 | D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
 | D-2254 low (after crit path) | me | PH-OPERATOR gate->GOAL holds (checked 19:2xZ); OS-149 A6 keeper cfg after prox A1-A5; RT-P4-ARCHIVE parked until cutover+1wk |
