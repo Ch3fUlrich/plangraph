@@ -69,6 +69,40 @@ def test_schema_version_is_thirteen():
     assert schema.SCHEMA_VERSION == 13
 
 
+def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
+    path = tmp_path / "v12.db"
+    conn = kdb.open_db(path, create=True)
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token),
+                       [defn("A", [], kind="lane"), defn("GOAL", ["A"], kind="goal")])
+    before = dict(store._item("demo:A"))
+    chain = keeper_events.read_events(conn)
+    conn.close()
+    raw = sqlite3.connect(str(path))
+    for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
+        raw.execute(f"ALTER TABLE items DROP COLUMN {column}")
+        before.pop(column)
+    raw.execute("PRAGMA user_version=12")
+    raw.commit()
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert not {"exec_workflow_id", "exec_run_id", "exec_attempt"} & {
+        row[1] for row in raw.execute("PRAGMA table_info(items)")}
+    raw.close()
+    conn = kdb.open_db(path)
+    # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
+    # production upgrades detect missing columns without reading/writing the pragma.
+    assert schema.SCHEMA_VERSION == 13
+    row = dict(Store(conn, clock=Clock())._item("demo:A"))
+    for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
+        assert column in row and row.pop(column) is None
+    assert row == before
+    assert keeper_events.read_events(conn) == chain
+    assert keeper_events.verify_chain(conn) == []
+    assert keeper_events.verify_integrity(conn) == []
+    conn.close()
+
+
 def test_open_without_create_still_refuses_a_non_keeper_file(tmp_path):
     path = tmp_path / "empty.db"
     sqlite3.connect(str(path)).close()

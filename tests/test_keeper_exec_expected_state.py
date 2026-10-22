@@ -71,7 +71,8 @@ def test_matching_or_absent_expected_state_preserves_existing_behavior(w, doors,
 
 
 @pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])
-@pytest.mark.parametrize("expected", ["bogus", "claimed", 1, True, [], {}, None])
+@pytest.mark.parametrize("expected", ["bogus", "claimed", 1, True, [], {}, None,
+                                      ["running", True], ["running", "bogus"]])
 def test_invalid_expected_state_is_validation(w, doors, verb, body, expected):
     key = waiting(w)
     before = dict(w.store._item(key))
@@ -79,6 +80,13 @@ def test_invalid_expected_state_is_validation(w, doors, verb, body, expected):
                                   body(key, expected_state=expected, **RUN1))
     assert (status, response["error"]) == (400, "validation")
     assert dict(w.store._item(key)) == before
+
+
+@pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])
+def test_any_of_expected_state(w, doors, verb, body):
+    key = waiting(w)
+    assert doors.http("workerA", "POST", f"/v1/{verb}", body(
+        key, expected_state=["running", "waiting"], **RUN1)) == (204, "")
 
 
 @pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])

@@ -32,7 +32,9 @@ def waiting(w):
 
 @pytest.mark.parametrize("http", [False, True])
 @pytest.mark.parametrize("expected, accepted", [("running", False),
-                                                ("waiting", True), (None, True)])
+                                                ("waiting", True), (None, True),
+                                                (["running", "needs_input"], False),
+                                                (["running", "waiting"], True)])
 def test_delayed_ask_compares_projected_state(w, tmp_path, http, expected, accepted):
     key = waiting(w)
     before = snapshot(w, key)
@@ -79,6 +81,21 @@ def test_stale_state_is_checked_before_first_owner_record(w, monkeypatch):
                              exec_workflow_id="wf-1", exec_run_id="run-1",
                              exec_attempt=1, expected_state="running")
     assert err.value.code == "exec_stale_state"
+    assert snapshot(w, key) == before
+    assert w.conn.execute("SELECT COUNT(*) FROM questions WHERE key=?",
+                          (key,)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("expected", [True, [], ["running", False],
+                                      ["running", "bogus"], [1], {}])
+def test_ask_rejects_invalid_any_of_before_writes(w, expected):
+    key = waiting(w)
+    before = snapshot(w, key)
+    with pytest.raises(Refused) as err:
+        w.store.ask_question(w.p("workerA"), key, "continue?",
+                             exec_workflow_id="wf-1", exec_run_id="run-1",
+                             exec_attempt=1, expected_state=expected)
+    assert err.value.code == "validation"
     assert snapshot(w, key) == before
     assert w.conn.execute("SELECT COUNT(*) FROM questions WHERE key=?",
                           (key,)).fetchone()[0] == 0

@@ -25,10 +25,21 @@ in their principal. Audited like other reads.
 
 ## `POST /v1/ask_question`
 
-Body `{key, text, default_answer?, deadline?, risk_tags?}`. Returns
+Body `{key, text, default_answer?, deadline?, risk_tags?, workflow_id?, run_id?, attempt?, expected_state?}`. Returns
 `{"id", "key", "state": "open"}`. Roles, the no-default rule for risk tags
 (`auth`, `secrets`, `money`, `live-step`, `public-release`) and the
 default-needs-deadline rule are enforced by the store.
+
+Exec-fenced worker bodies also accept optional `workflow_id`, `run_id`, `attempt`
+on `POST /v1/park`, `/v1/complete`, `/v1/alarm`, and `/v1/attempt` (store verb
+`worker_attempt`). Supplying any exec field requires all three; owned cards
+require matching identity and a non-decreasing attempt (`exec_stale`, HTTP 409).
+Audit-only worker_attempt does not acquire or advance ownership.
+Park, complete and ask_question accept `expected_state` as a state string or a
+non-empty list of state strings (any-of): `open`, `ready`, `running`, `needs_input`,
+`waiting`, `failed`, `parked`. Invalid values/elements are `validation` (400);
+a mismatch is `exec_stale_state` (409), checked before ownership writes. Exec-fenced
+park must be forward-reachable per the transition table (`bad_transition`, 409).
 
 ## `POST /v1/answer_question`
 

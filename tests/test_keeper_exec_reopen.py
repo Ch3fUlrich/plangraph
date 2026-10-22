@@ -43,7 +43,7 @@ def test_lapsed_lease_frees_owner_and_late_worker_cannot_take_over(w, doors):
     claimed_owner(w, key)
     body = park(key, **RUN2)
     status, response = doors.http("workerA", "POST", "/v1/park", body)
-    assert (status, response["error"]) == (409, "exec_stale")
+    assert (status, response["error"]) == (409, "bad_transition")
     assert owner(w, key) == RUN1
 
     assert w.store.reap(w.p("system"), w.clock.advance(7201))["expired"] == [key]
@@ -101,16 +101,12 @@ def test_workflow_mismatch_is_stale_even_with_same_run(w):
 
 
 @pytest.mark.parametrize("attempt", [1, 2])
-def test_takeover_needs_strictly_higher_attempt(w, attempt):
+def test_new_run_takeover_replaces_attempt(w, attempt):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "parked", run=RUN1)
-    refused("exec_stale", w.store.set_state, w.p("router"), key, "open",
-            run=("wf-2", "run-2", attempt), new_run=True)
-    assert owner(w, key) == RUN1
-    assert w.store._item(key)["state"] == "parked"
     w.store.set_state(w.p("router"), key, "open",
-                      run=("wf-2", "run-2", 3), new_run=True)
-    assert owner(w, key) == ("wf-2", "run-2", 3)
+                      run=("wf-2", "run-2", attempt), new_run=True)
+    assert owner(w, key) == ("wf-2", "run-2", attempt)
 
 
 def test_noop_records_no_owner_and_checks_existing_owner(w):

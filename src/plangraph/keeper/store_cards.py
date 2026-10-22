@@ -45,8 +45,7 @@ SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed
 #: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
 #: back to ``open``/``ready``) are refused unless the caller passes ``new_run=True``
 #: with a fresh ``run_id``, which records the new owner.  Moves without a ``run``
-#: keep their historical, unchecked behaviour so routers and worker verbs (which
-#: never carry one) are unaffected.
+#: keep their historical behaviour; exec-fenced worker parks also use this table.
 TRANSITIONS: dict[str, frozenset[str]] = {
     "open":        frozenset({"open", "ready"}),
     "ready":       frozenset({"ready", "running"}),
@@ -361,7 +360,7 @@ class CardsMixin:
             # against the recorded owner (a first ask records it; a stale run
             # or a backwards attempt is refused and inserts no question).  A
             # worker/spawner that omits all three on an owned card names no
-            # run, so it is refused as validation; router/l1/system callers
+            # run, so it is refused as exec_stale; router/l1/system callers
             # (planner, router) never are.
             if any(part is not None
                    for part in (exec_workflow_id, exec_run_id, exec_attempt)):
@@ -552,10 +551,7 @@ class CardsMixin:
                     self._exec_check(self.conn, key, wf, run_id, attempt_no,
                                      now=now, record=was != state)
                 elif new_run and run_id != item["exec_run_id"]:
-                    if (item["exec_run_id"] is not None
-                            and attempt_no <= (item["exec_attempt"] or 0)):
-                        raise Refused("exec_stale",
-                                      f"{key}: takeover needs a higher attempt")
+                    # Attempts belong to a run; a fresh run restarts at one.
                     self._exec_record(self.conn, key, wf, run_id, attempt_no,
                                       now=now)
                 else:

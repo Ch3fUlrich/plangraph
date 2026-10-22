@@ -24,12 +24,24 @@ state: the completion report is a fact, not a lifecycle state transition.
 
 The projector does not yet forward run ids to `set_state`. Therefore the first
 run-carrying worker verb wins ownership, rather than the projector establishing
-the owner. The forward-only transition table plus reaper/release/review-reopen
-clearing are the protection until follow-up **RT-P1-PROJECTOR-RUN-IDS**.
+the owner. The forward-only transition table applies to `set_state` with `run`
+and worker park when the card is owned or the body carries exec fields (including
+transitive reachability and same-state no-ops). Legacy unowned parks without exec
+fields retain their old behavior. Bare projector `set_state` does not use the table;
+forward fencing there awaits **RT-P1-PROJECTOR-RUN-IDS**.
+
+A back-move through `set_state` may take over with `new_run=True` only when
+`run_id` differs from the recorded run. Attempts are not compared across runs:
+a new run restarts at attempt 1 and replaces the recorded attempt. The same
+run_id with `new_run=True` cannot authorize a back-move. Worker verbs cannot
+request this takeover.
 
 Worker park, complete and ask_question may carry optional `expected_state`, a
-string from `SETTABLE_STATES`. When supplied, the card's current state must
-equal that observed state and the exec identity/attempt checks must still pass.
+string or non-empty list of strings from `SETTABLE_STATES` (any-of). When supplied,
+the card's current state must equal the string or be in the list, and the exec
+identity/attempt checks must still pass. Every list element is validated.
+The worker sends `["running", "needs_input"]` for asks and question parks because
+the needs-input attempt report precedes the projector's 30-second state pass.
 The state comparison runs inside the same write transaction, before any write
 or ownership recording/attempt bump; mismatch refuses `exec_stale_state` (HTTP
 409) without changing state, owner or `updated_at`. Omitting it preserves the
@@ -39,8 +51,9 @@ also the ask_question integration point.
 ## Rollout
 
 Deploy keeper first, then worker: a worker with a known attempt sends the
-exec fields, which an old keeper rejects as unknown fields. During the mixed
-window, an old worker's park/complete/alarm without exec fields is refused
+exec fields. An old keeper silently drops them on ask_question, but rejects
+unknown fields on park/complete/alarm/worker_attempt. During the mixed
+window, an old worker's park/complete/alarm/worker_attempt/ask_question without exec fields is refused
 with `exec_stale` once a new worker owns the card.
 
 ## Consequences

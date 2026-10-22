@@ -81,9 +81,9 @@ def test_a_back_move_needs_a_new_run(w):
     refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
             run=RUN1, new_run=True)          # new_run still needs a FRESH run
     assert owner(w, key) == ("wf-1", "run-1", 1)
-    w.store.set_state(w.p("router"), key, "open", run=("wf-2", "run-2", 2),
+    w.store.set_state(w.p("router"), key, "open", run=("wf-2", "run-2", 1),
                       new_run=True)
-    assert owner(w, key) == ("wf-2", "run-2", 2)  # higher attempt took over
+    assert owner(w, key) == ("wf-2", "run-2", 1)  # new run restarts at one
 
 
 def test_a_malformed_run_is_refused_and_records_nothing(w):

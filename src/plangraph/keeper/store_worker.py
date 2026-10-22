@@ -37,7 +37,7 @@ import re
 
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import SETTABLE_STATES, _count, _exec_parts, _number, _text
+from .store_cards import SETTABLE_STATES, _count, _exec_parts, _forward, _number, _text
 
 __all__ = ["WorkerMixin"]
 
@@ -97,10 +97,13 @@ class WorkerMixin:
         """Check observed state inside the write lock, before recording ownership."""
         if expected is None:
             return
-        if not isinstance(expected, str) or expected not in SETTABLE_STATES:
+        states = [expected] if isinstance(expected, str) else expected
+        if (not isinstance(states, list) or not states
+                or any(not isinstance(s, str) or s not in SETTABLE_STATES
+                       for s in states)):
             raise Refused("validation",
-                          f"expected_state must be one of {list(SETTABLE_STATES)}")
-        if item["state"] != expected:
+                          f"expected_state must be a state or non-empty list from {list(SETTABLE_STATES)}")
+        if item["state"] not in states:
             raise Refused("exec_stale_state",
                           f"{item['key']}: expected {expected!r}, is {item['state']!r}")
 
@@ -196,7 +199,8 @@ class WorkerMixin:
 
     def _worker_park(self, principal, body, now):
         _check_body(body, _PARK_KEYS, "worker_park")
-        _strings(body, "expected_state")
+        if "expected_state" in body and body["expected_state"] is None:
+            raise Refused("validation", "expected_state must be a state or non-empty list")
         card = _text("card", body.get("card"), required=True)
         tier = _text("tier", body.get("tier"), key=card) or ""
         exit_class = body.get("exit_class")
@@ -214,9 +218,13 @@ class WorkerMixin:
         def guard(item):
             self._exec_expect_state(item, body.get("expected_state"))
             self._park_guard(principal, item, epoch, now)
-            # RT-P1-EXEC-OWNERSHIP: inside the write lock, after the claim
-            # checks.  run= cannot carry the owner from here because the
-            # claimed -> parked move is not in TRANSITIONS.
+            # Legacy unowned parks retain their claim-release behaviour.
+            fenced = item["exec_run_id"] is not None or any(
+                body.get(name) is not None
+                for name in ("workflow_id", "run_id", "attempt"))
+            if fenced and not _forward(item["state"], "parked"):
+                raise Refused("bad_transition",
+                              f"{item['key']}: {item['state']} -> parked is not a forward move")
             self._exec_gate(item["key"], body, record=item["state"] != "parked")
 
         result = self._apply_state(principal, key, "parked", why, now,
@@ -233,7 +241,8 @@ class WorkerMixin:
 
     def _worker_complete(self, principal, body, now):
         _check_body(body, _COMPLETE_KEYS, "worker_complete")
-        _strings(body, "expected_state")
+        if "expected_state" in body and body["expected_state"] is None:
+            raise Refused("validation", "expected_state must be a state or non-empty list")
         card = _text("card", body.get("card"), required=True)
         merged_sha = body.get("merged_sha")
         if not isinstance(merged_sha, str) or not _SHA_RE.fullmatch(merged_sha):
