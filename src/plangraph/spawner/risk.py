@@ -35,15 +35,15 @@ RISK_GAMMA_COST: dict[str, float] = {
     "low": 15.0,
     "normal": 10.0,
     "high": 4.0,
-    "critical": 1.5,
+    "critical": 4.0,
 }
 
 # Excess intelligence multiplier above I_target
 RISK_BETA_EXCESS: dict[str, float] = {
     "low": 0.2,
     "normal": 0.4,
-    "high": 2.0,
-    "critical": 2.5,
+    "high": 0.6,
+    "critical": 0.6,
 }
 
 # Required cross-family reviewer count per risk band (0 for pure doc S0)
