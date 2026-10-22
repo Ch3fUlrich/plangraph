@@ -743,3 +743,62 @@ def test_workflow_runs_gate_from_base_copy_and_on_push():
     assert 'python3 tools/ci_commit_gate.py' not in run
     on = workflow.get('on') or workflow.get(True)
     assert 'push' in on
+
+
+def test_hand_edit_does_not_satisfy_gate_edit(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'fix: tweak\n\nHand-Edit: typo\n',
+        files={'.github/workflows/x.yml': 'name: x\n'},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: hand-edit touches auth/door surface: .github/workflows/x.yml',
+        f'{sha}: gate edit without Gate-Edit trailer'
+    ]
+
+
+def test_hand_edit_blank_value_is_malformed(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'fix: tweak\n\nHand-Edit:   \n',
+        files={'docs/y.md': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: missing Writer trailer',
+        f'{sha}: malformed Hand-Edit trailer'
+    ]
+
+
+def test_strict_writer_tab_variants_refused(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'feat: x\n\nWriter:\tmimo-v2.6-flash run-1\n',
+        files={'a.txt': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: malformed Writer trailer'
+    ]
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'feat: x\n\n\tWriter: mimo-v2.6-flash run-1\n',
+        files={'b.txt': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: malformed Writer trailer'
+    ]
+
+
+def test_workflow_yaml_extension_needs_gate_edit(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'chore: wf\n\nWriter: mimo-v2.6-flash run-1\n',
+        files={'.github/workflows/y.yaml': 'name: y\n'},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: gate edit without Gate-Edit trailer'
+    ]
