@@ -31,18 +31,21 @@ fn patterns() -> &'static [regex::Regex] {
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
             // 4a. Env-style assignments: keep the credential name, cut the
-            //     value. Separator whitespace is horizontal only, so it never
-            //     crosses a newline. Complete quoted values are preferred, the
-            //     placeholder keeps the rule idempotent, and an unquoted value
-            //     may not start with `}`, `]`, `)`, or `&` after either
-            //     separator. An unterminated quote falls back to the rest of
-            //     the line (no closing delimiter semantics).
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([ \t]*[=:][ \t]*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\]|[^\s"'}\])&][^\n\r}\])&]*|"[^\n\r]*|'[^\n\r]*)"#,
+            //     value. Separator whitespace is horizontal Unicode whitespace
+            //     only, never CR/LF, so it never crosses a newline. Complete
+            //     quoted values are preferred, the placeholder plus any glued
+            //     tail keeps the rule idempotent, and an unquoted value may not
+            //     start with `}`, `]`, `)`, or `&` after either separator. An
+            //     unterminated quote falls back to the rest of the line (no
+            //     closing delimiter semantics).
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\][^\n\r}\])&]*|[^\s"'}\])&][^\n\r}\])&]*|"[^\n\r]*|'[^\n\r]*)"#,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` (not `&`, so
-            //     `?K=&x=1` stays empty). The tail class is unchanged; 4a
-            //     runs first and handles the `[REDACTED]` placeholder.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([ \t]*=[ \t]*)([}\])][^\n\r}\])&]*)"#,
+            //     `?K=&x=1` stays empty). Separator whitespace is horizontal
+            //     Unicode whitespace only, never CR/LF. The tail class is
+            //     unchanged; 4a runs first and handles the `[REDACTED]`
+            //     placeholder and any glued tail after it.
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]*)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
             r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
@@ -465,6 +468,37 @@ mod tests {
         check(
             format!("{{\"{key}\": \"abc\"}}"),
             format!("{{\"{key}\": {REDACTED}}}"),
+        );
+    }
+
+    #[test]
+    fn placeholder_tail_and_unicode_space() {
+        let name = ["API_", "KEY"].concat();
+        let check = |input: String, expected: String| {
+            let once = redact(&input);
+            assert_eq!(once, expected, "{input}");
+            assert_eq!(redact(&once), once, "{once}");
+        };
+
+        // 4a: the placeholder alternative consumes the glued "x"; replacing
+        // the whole match with one placeholder drops it.
+        check(format!("{name}=[REDACTED]x"), format!("{name}={REDACTED}"));
+        // 4a: the same alternative consumes the glued " tail text".
+        check(
+            format!("{name}=[REDACTED] tail text"),
+            format!("{name}={REDACTED}"),
+        );
+        // 4a/4b: [^\S\r\n]* puts the NBSP in group 3, so it is kept; group 4
+        // matches "secret" and is replaced.
+        check(
+            format!("{name}=\u{00a0}secret"),
+            format!("{name}=\u{00a0}{REDACTED}"),
+        );
+        // No value after `=` on the first line; separator/value cannot cross
+        // the newline, so the text is unchanged.
+        check(
+            format!("{name}=\n# rotate quarterly"),
+            format!("{name}=\n# rotate quarterly"),
         );
     }
 
