@@ -1,19 +1,14 @@
+# One required status check: ci-gate.
+# Branch protection requires only ci-gate; unselected suites skip, while selected
+# suites that skip or fail will fail the gate. Push to main and workflow_dispatch run everything.
+
 name: tests
 
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "src/**"
-      - "tests/**"
-      - "tools/**"
-      - "vendor/**"
-      - "rust/**"
-      - "requirements-ci.txt"
-      - ".github/workflows/tests.yml"
-      - "!**/*.md"
-      - "!docs/**"
-      - "!CHANGELOG*"
+  push:
+    branches: [main]
   workflow_dispatch:
 
 # CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
@@ -26,9 +21,37 @@ permissions:
   contents: read
 
 jobs:
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      scrub: ${{ steps.sel.outputs.scrub }}
+      pytest: ${{ steps.sel.outputs.pytest }}
+      pytest-postgres: ${{ steps.sel.outputs.pytest-postgres }}
+      rust: ${{ steps.sel.outputs.rust }}
+      rust-worker: ${{ steps.sel.outputs.rust-worker }}
+      rust-spike: ${{ steps.sel.outputs.rust-spike }}
+      full: ${{ steps.sel.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: sel
+        name: Select test suites
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 tools/ci_select.py select --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            python3 tools/ci_select.py select --full
+          fi
+
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
   # the private word list never enters CI; output is path:line:rule only.
   scrub:
+    needs: select
+    if: needs.select.outputs.scrub == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -41,6 +64,8 @@ jobs:
         run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
 
   pytest:
+    needs: select
+    if: needs.select.outputs.pytest == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -77,6 +102,8 @@ jobs:
         run: python -m pytest -q -n auto --dist loadgroup --durations=30 tests
 
   pytest-postgres:
+    needs: select
+    if: needs.select.outputs.pytest-postgres == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     services:
@@ -138,3 +165,127 @@ jobs:
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
           python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
             tests/test_projector_ddl.py $FILES
+
+  rust:
+    needs: select
+    if: needs.select.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test
+
+  rust-worker:
+    needs: select
+    if: needs.select.outputs.rust-worker == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust/worker
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/worker/target
+          key: rust-worker-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker-core/Cargo.toml') }}
+      - name: Install Temporal CLI 1.9.1
+        run: |
+          dir=$(mktemp -d)
+          curl -fsSL -o "$dir/temporal.tar.gz" \
+            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
+          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
+          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - name: Start Temporal dev server
+        run: |
+          "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port 17233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 1 30); do
+            if "$TEMPORAL_CLI" operator cluster health --address 127.0.0.1:17233 2>/dev/null; then
+              echo "Temporal server is healthy"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Temporal server failed to start"
+              exit 1
+            fi
+            sleep 1
+          done
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        env:
+          PG_TEMPORAL_ADDR: http://127.0.0.1:17233
+        run: cargo test
+      - name: Dev server log tail
+        if: always()
+        run: |
+          if [ -f /tmp/temporal.log ]; then
+            tail -n 100 /tmp/temporal.log
+          fi
+
+  rust-spike:
+    needs: select
+    if: needs.select.outputs.rust-spike == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/spikes/temporal-spike/target
+          key: temporal-spike-${{ hashFiles('rust/spikes/temporal-spike/Cargo.lock') }}
+      - name: cargo test replay
+        run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
+
+  ci-gate:
+    name: ci-gate
+    runs-on: ubuntu-24.04
+    needs: [select, scrub, pytest, pytest-postgres, rust, rust-worker, rust-spike]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gate
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 tools/ci_select.py gate --needs "$NEEDS_JSON"
+      - name: Commit trailers
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        run: python3 tools/ci_commit_gate.py check --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}" --exempt tools/ci_commit_exempt.txt
