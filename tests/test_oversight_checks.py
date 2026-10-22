@@ -58,7 +58,10 @@ def test_r1_fires_on_a_claimed_item_whose_newest_event_is_stale(w):
     rows = oversight.r1_r2(w.conn, w.clock())
     assert kinds(rows) == [("R1", "stall_no_event", key)]
     assert rows[0]["reason"] == f"R1:stall_no_event:{key}"
-    assert "10800" in rows[0]["detail"]     # the stall detail rides along
+    # Data-derived only: the stamp, never the stall age that grows with `now`.
+    assert rows[0]["ts"] == w.store._iso(w.clock() - 3 * HOUR)
+    assert rows[0]["detail"] == f"claimed, no event since {rows[0]['ts']}"
+    assert "10800" not in rows[0]["detail"]
 
 
 def test_r1_does_not_fire_when_the_claim_has_a_recent_heartbeat(w):
@@ -81,6 +84,7 @@ def test_r2_fires_on_an_open_item_a_merged_main_trailer_claims(w):
     assert kinds(rows) == [("R2", "merged_open", key)]
     assert rows[0]["reason"] == f"R2:merged_open:{key}"
     assert rows[0]["detail"].startswith("merged commit ")
+    assert rows[0]["ts"] == ""              # merged_open's raised_at is iso(now)
 
 
 def test_r2_does_not_fire_for_a_trailer_on_a_closed_item(w):
@@ -284,16 +288,19 @@ def test_r7_does_not_fire_at_the_limit_or_without_a_row(w):
 
 # --------------------------------------------- R1/R2 parity with stall_alarms
 def parity(w, git=None):
-    """``r1_r2`` must reproduce ``stall_alarms`` here, rule id aside."""
+    """``r1_r2`` must reproduce ``stall_alarms`` here, rule id aside.
+
+    Only the identity triple is compared: R1's detail/ts are deliberately
+    data-derived (the stall age is not) and R2's ts is empty (stall stamps it
+    with ``iso(now)``), so the digest stays stable.
+    """
     import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
     from plangraph.keeper import oversight
     rows = stall_alarms(w.conn, w.clock(), git=git)
     found = oversight.r1_r2(w.conn, w.clock(), git=git)
     rule_of = {"stall_no_event": "R1", "merged_open": "R2"}
-    expected = sorted((rule_of[r["kind"]], r["kind"], r["key"], r["detail"],
-                       r["raised_at"]) for r in rows)
-    actual = sorted((f["rule"], f["kind"], f["key"], f["detail"], f["ts"])
-                    for f in found)
+    expected = sorted((rule_of[r["kind"]], r["kind"], r["key"]) for r in rows)
+    actual = sorted((f["rule"], f["kind"], f["key"]) for f in found)
     assert actual == expected
 
 
@@ -462,3 +469,29 @@ def test_r4_per_ref_failure_stays_a_skip_and_the_failure_digest_is_stable(w):
     first = oversight.r4_lane_idle(w.conn, w.clock(), git=_boom)
     later = oversight.r4_lane_idle(w.conn, w.clock() + 600, git=_boom)
     assert oversight.digest(first)[0] == oversight.digest(later)[0]
+
+
+# -------------------- F8: R1/R2 findings carry only data-derived stamps
+def test_r1_r2_digest_is_identical_on_the_same_fixture_600s_later(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    keys = seed(w, [("A", ()), ("B", ())])
+    to_claimed(w, keys[0], lease_s=10 * HOUR)   # R1: stale claim
+    event(w, keys[0])                           # ...whose newest event is old
+    w.clock.advance(3 * HOUR)
+    git = lambda repo, ref: [("deadbeef", keys[0])]   # R2: open item merged
+    now = w.clock()
+    first = oversight.run_checks(w.conn, now, git=git)
+    later = oversight.run_checks(w.conn, now + 600, git=git)   # both still fire
+    assert {(f["rule"], f["kind"]) for f in first} >= {
+        ("R1", "stall_no_event"), ("R2", "merged_open")}
+    assert {(f["rule"], f["kind"]) for f in later} >= {
+        ("R1", "stall_no_event"), ("R2", "merged_open")}
+    assert oversight.digest(first)[0] == oversight.digest(later)[0]
+
+
+def test_sort_breaks_ties_on_detail_then_ts():
+    from plangraph.keeper import oversight
+    rows = [dict(rule="R1", kind="k", key="demo:A", reason="r", detail=d,
+                 ts="") for d in ("b", "a")]
+    assert [f["detail"] for f in oversight._sort(rows)] == ["a", "b"]

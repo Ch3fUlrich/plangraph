@@ -77,7 +77,7 @@ def _finding(rule, kind, key, detail, ts, reason=None):
 
 def _sort(rows):
     return sorted(rows, key=lambda f: (f["rule"], f["key"], f["kind"],
-                                       f["reason"]))
+                                       f["reason"], f["detail"], f["ts"]))
 
 
 def _items(conn):
@@ -130,14 +130,25 @@ _RULE_OF_ALARM_KIND = {"lane_idle": "R4"}
 
 
 def r1_r2(conn, now, git=None):
-    """Map :func:`stall.stall_alarms` rows onto R1 and R2 findings."""
+    """Map :func:`stall.stall_alarms` rows onto R1 and R2 findings.
+
+    Only data-derived stamps reach the finding: R1's ``detail`` and ``ts`` come
+    from the stall row's ``raised_at`` (never the stall age, which grows with
+    ``now``), and R2's ``ts`` stays empty because ``merged_open`` stamps
+    ``raised_at`` with ``iso(now)``.  That keeps :func:`digest` stable across
+    two runs over one snapshot.
+    """
     rows = []
     for alarm in stall_alarms(conn, now, git=git):
         rule = _RULE_OF_STALL.get(alarm["kind"])
         if rule is None:
             continue
-        rows.append(_finding(rule, alarm["kind"], alarm["key"],
-                             alarm["detail"], alarm.get("raised_at")))
+        raised_at = alarm.get("raised_at") or ""
+        if rule == "R1":
+            detail, ts = f"claimed, no event since {raised_at}", raised_at
+        else:
+            detail, ts = alarm["detail"], ""
+        rows.append(_finding(rule, alarm["kind"], alarm["key"], detail, ts))
     return _sort(rows)
 
 
