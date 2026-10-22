@@ -153,13 +153,13 @@ def test_two_clean_writer_lines_pass(repo: Path):
 def test_lowercase_writer_claude_fails(repo: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: served model\n\nwriter: claude run-1\n")
-    assert check(base, sha, cwd=repo) == [f"{sha}: claude writer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: malformed Writer trailer"]
 
 
 def test_whitespace_only_writer_line_fails(repo: Path):
     base = _head(repo)
     sha = _commit(repo, "feat: blank value\n\nWriter:    \n")
-    assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
+    assert check(base, sha, cwd=repo) == [f"{sha}: malformed Writer trailer"]
 
 
 def test_merge_commit_without_trailer_is_ignored(repo: Path):
@@ -198,7 +198,7 @@ def test_exempt_list_read_from_base_not_from_pr_edit(repo: Path):
     # The PR adds the violating sha to the working-tree exempt file...
     head = _commit(
         repo,
-        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n",
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
     )
     assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
@@ -209,23 +209,26 @@ def test_exempt_list_read_from_base_not_from_pr_edit(repo: Path):
 
 
 def test_exempt_bootstrap_uses_working_tree_when_absent_in_base(repo: Path):
+    """Bootstrap self-exempt removed; absent at base means no exemptions (D-2209)."""
     base = _head(repo)  # no exempt file at base: bootstrap PR
     sha = _commit(repo, "feat: no trailer at all")
     head = _commit(
         repo,
-        "chore: introduce exempt file\n\nWriter: mimo-v2.6-flash run-1\n",
+        "chore: introduce exempt file\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"{sha}\n"},
     )
-    assert check(base, head, exempt=EXEMPT_REL, cwd=repo) == []
+    assert check(base, head, exempt=EXEMPT_REL, cwd=repo) == [
+        f"{sha}: missing Writer trailer"
+    ]
 
 
 def test_deleted_test_file_without_trailer_fails(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n",
@@ -270,12 +273,12 @@ def test_lowercase_test_removal_trailer_passes(repo: Path):
 
 
 def test_test_removal_trailer_with_trailing_junk_does_not_satisfy(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
@@ -289,7 +292,6 @@ def test_test_removal_trailer_with_trailing_junk_does_not_satisfy(repo: Path):
 
 def test_deleted_widened_test_paths_detected(repo: Path):
     """Nested tests/sub/test_y.py and a top-level foo_test.py are both test files."""
-    base = _head(repo)
     _commit(
         repo,
         "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
@@ -298,6 +300,7 @@ def test_deleted_widened_test_paths_detected(repo: Path):
             "foo_test.py": "def test_foo():\n    pass\n",
         },
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n",
@@ -309,12 +312,12 @@ def test_deleted_widened_test_paths_detected(repo: Path):
 
 
 def test_removed_def_line_in_widened_test_path_detected(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"foo_test.py": "def test_foo():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n",
@@ -342,12 +345,12 @@ def test_removed_def_line_in_non_test_file_is_ignored(repo: Path):
 
 
 def test_removed_test_function_without_trailer_fails(repo: Path):
-    base = _head(repo)
     _commit(
         repo,
         "test: seed\n\nWriter: mimo-v2.6-flash run-1\n",
         files={"tests/test_y.py": "def test_beta():\n    pass\n"},
     )
+    base = _head(repo)
     sha = _commit(
         repo,
         "refactor: drop the test body\n\nWriter: mimo-v2.6-flash run-2\n",
@@ -449,7 +452,7 @@ def test_cli_default_exempt_resolves_from_base_not_from_pr_edit(repo: Path, monk
     sha = _commit(repo, "feat: no trailer at all")
     head = _commit(
         repo,
-        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n",
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n",
         files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
     )
     assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
