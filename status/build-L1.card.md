@@ -16,7 +16,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 9f168e51 CI green; seats were on 0a7a30d3 (glmA FIX 2 HIGH: Hand-Edit claude marker, workflow suppression). Round: fix HIGH-1, add tools/gate_wiring_check.py (L1 runs before merge), leaf for MEDs, re-seat qwen+glm exact head -> GO-REQ routing |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
-| PROJECTOR-RUN-UNIT | me (claimed ep2) | commit+ci 59a5e0e5 re-attached OK; recorded runs = D-2189 (12.9s<2 polls, kill->NRestarts 1). LAG-API leaf (D-2280, claimed) = dup of 07551a6e /v1/projector_watermark age_s + inbox UI; asked routing *A close dup + re-seat qwen w/ artifacts only |
+| PROJECTOR-RUN-UNIT | me (claimed ep2) | D-2281: LAG-API cancelled dup. commit+ci ok, decision D-2189 = recorded runs. qwen r2 seat bg buv7cyo2w (seats/projector-run-unit/r2, prompt sha 86a1b766) -> PASS: submit + seat_verdict (writer xiaomi) |
 | workst L2s sandbox, card-checks, bus, oc-harden | sandbox c15, oc-harden c16, card-checks c17 LAUNCHED; bus HELD (RAM 84.4%, workst BLOCKED to routing) | admission clear -> oc-harden writer + sandbox seats, then bus |
 | D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
 | D-2254 low (after crit path) | me | PH-OPERATOR gate->GOAL holds (checked 19:2xZ); OS-149 A6 keeper cfg after prox A1-A5; RT-P4-ARCHIVE parked until cutover+1wk |
