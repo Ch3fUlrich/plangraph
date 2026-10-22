@@ -15,6 +15,9 @@ EXEMPT_PATH = REPO_ROOT / "tools" / "ci_commit_exempt.txt"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "tests.yml"
 #: Repo-relative exempt file used by the tamper-proofing tests.
 EXEMPT_REL = "tools/ci_commit_exempt.txt"
+#: Author/committer address, assembled so this file holds no email-shaped
+#: literal (the whole tree is public and scrubbed).
+CI_MAIL = "ci" "@" "example.invalid"
 
 spec = importlib.util.spec_from_file_location("ci_commit_gate", MODULE_PATH)
 assert spec is not None and spec.loader is not None
@@ -35,9 +38,9 @@ def _git_env() -> dict[str, str]:
     env.update(
         {
             "GIT_AUTHOR_NAME": "plangraph-ci",
-            "GIT_AUTHOR_EMAIL": "ci@example.invalid",
+            "GIT_AUTHOR_EMAIL": CI_MAIL,
             "GIT_COMMITTER_NAME": "plangraph-ci",
-            "GIT_COMMITTER_EMAIL": "ci@example.invalid",
+            "GIT_COMMITTER_EMAIL": CI_MAIL,
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -249,6 +252,23 @@ def test_deleted_test_file_with_trailer_passes(repo: Path):
     assert check(base, sha, cwd=repo) == []
 
 
+def test_lowercase_test_removal_trailer_passes(repo: Path):
+    """The trailer key is case-insensitive, like ``writer:``."""
+    base = _head(repo)
+    _commit(
+        repo,
+        "test: add coverage\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={"tests/test_x.py": "def test_alpha():\n    pass\n"},
+    )
+    sha = _commit(
+        repo,
+        "chore: drop coverage\n\nWriter: mimo-v2.6-flash run-2\n\n"
+        "test-removal: D-1\n",
+        remove=("tests/test_x.py",),
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
 def test_test_removal_trailer_with_trailing_junk_does_not_satisfy(repo: Path):
     base = _head(repo)
     _commit(
@@ -413,11 +433,43 @@ def test_load_exempt_rejects_bad_line(tmp_path: Path):
         load_exempt(exempt)
 
 
+def test_cli_default_exempt_is_repo_relative():
+    """The CLI default must be the repo-relative path, base-anchored like --exempt."""
+    assert ci_commit_gate.DEFAULT_EXEMPT == "tools/ci_commit_exempt.txt"
+    assert not Path(ci_commit_gate.DEFAULT_EXEMPT).is_absolute()
+
+
+def test_cli_default_exempt_resolves_from_base_not_from_pr_edit(repo: Path, monkeypatch, capsys):
+    """With no --exempt, a PR appending its own sha to the default file still fails."""
+    base = _commit(
+        repo,
+        "chore: seed exempt file\n\nWriter: mimo-v2.6-flash run-0\n",
+        files={EXEMPT_REL: "# frozen: no shas yet\n"},
+    )
+    sha = _commit(repo, "feat: no trailer at all")
+    head = _commit(
+        repo,
+        "chore: exempt my own commit\n\nWriter: mimo-v2.6-flash run-1\n",
+        files={EXEMPT_REL: f"# frozen: no shas yet\n{sha}\n"},
+    )
+    assert sha in load_exempt(repo / EXEMPT_REL), "working tree really does exempt it"
+
+    monkeypatch.chdir(repo)  # CI case: cwd is the repo root, no --exempt given
+    ret = main(["check", "--base", base, "--head", head])
+    captured = capsys.readouterr()
+    assert ret == 1
+    assert captured.out.strip() == f"{sha}: missing Writer trailer"
+
+
 def test_cli_check_ok_prints_nothing(repo: Path, monkeypatch, capsys):
-    base = _head(repo)
+    base = _commit(
+        repo,
+        "chore: seed exempt file\n\nWriter: mimo-v2.6-flash run-0\n",
+        files={EXEMPT_REL: "# frozen: no shas yet\n"},
+    )
     sha = _commit(repo, OK_MSG)
     monkeypatch.chdir(repo)
-    # No --exempt: the default file next to the script is used and loads cleanly.
+    # No --exempt: the repo-relative default resolves from base and loads cleanly.
     assert main(["check", "--base", base, "--head", sha]) == 0
     captured = capsys.readouterr()
     assert captured.out == ""

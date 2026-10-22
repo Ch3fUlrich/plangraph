@@ -3,7 +3,9 @@
 Commits come from ``git log --no-merges base..head``, so merge commits are never
 inspected.  Commits listed in the exempt file skip every rule.  A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
-cannot exempt the commits it introduces.
+cannot exempt the commits it introduces.  The default exempt path is itself
+repo-relative (``tools/ci_commit_exempt.txt``), so the CLI default is base-anchored
+exactly like an explicit ``--exempt`` of the same path.
 """
 
 from __future__ import annotations
@@ -18,8 +20,9 @@ from pathlib import Path
 #: (case-insensitive), and no line is allowed to override an earlier one.
 WRITER_RE = re.compile(r"^writer:\s*(.*)$", re.IGNORECASE)
 
-#: A test-removal commit must carry ``Test-Removal: D-<digits>`` and nothing after.
-TEST_REMOVAL_RE = re.compile(r"^Test-Removal:\s*D-\d+\s*$")
+#: A test-removal commit must carry ``Test-Removal: D-<digits>`` and nothing after;
+#: the trailer key is matched case-insensitively, just like ``writer:``.
+TEST_REMOVAL_RE = re.compile(r"^Test-Removal:\s*D-\d+\s*$", re.IGNORECASE)
 
 #: Case-insensitive markers in the Writer value that identify a Claude writer.
 CLAUDE_MARKERS: tuple[str, ...] = (
@@ -44,8 +47,10 @@ MISSING_WRITER = "missing Writer trailer"
 CLAUDE_WRITER = "claude writer"
 TEST_REMOVAL_VIOLATION = "test removal without Test-Removal trailer"
 
-#: Default exempt file lives next to this script, so the CLI works from any cwd.
-DEFAULT_EXEMPT = Path(__file__).resolve().with_name("ci_commit_exempt.txt")
+#: Default exempt file, REPO-RELATIVE so the CLI default is base-anchored exactly
+#: like an explicit ``--exempt tools/ci_commit_exempt.txt`` (CI runs from the repo
+#: root, so the relative path resolves there).
+DEFAULT_EXEMPT = "tools/ci_commit_exempt.txt"
 
 
 class ExemptError(Exception):
@@ -171,9 +176,15 @@ def _resolve_exempt(
 ) -> set[str]:
     """Load ``exempt``, preferring the BASE commit's copy of a repo-relative path.
 
-    A PR must not exempt its own commits: when ``exempt`` is repo-relative and
-    exists at ``base``, the base copy wins over the working tree.  A bootstrap PR
-    (no file at ``base``) uses the working-tree file, resolved against ``cwd``.
+    A PR must not exempt its own commits: when ``exempt`` is repo-relative (the
+    CLI default ``DEFAULT_EXEMPT`` = ``tools/ci_commit_exempt.txt`` included) and
+    exists at ``base``, the base copy wins over the working tree, so the default
+    is base-anchored exactly like an explicit ``--exempt
+    tools/ci_commit_exempt.txt``.  A bootstrap PR (no file at ``base``) uses the
+    working-tree file, resolved against ``cwd`` -- or against the process cwd
+    when ``cwd`` is ``None`` (the CI case: cwd is the repo root).  An absolute
+    ``exempt`` path skips the base lookup and is a plain working-tree load; it is
+    for local use only, never for CI.
     """
     rel = Path(exempt).as_posix() if not Path(exempt).is_absolute() else None
     if rel is not None:
@@ -225,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     check_parser.add_argument(
         "--exempt",
         default=None,
-        help="Exempt sha file (default: tools/ci_commit_exempt.txt next to this script)",
+        help="Exempt sha file (default: repo-relative tools/ci_commit_exempt.txt; "
+             "absolute paths are a plain working-tree load, for local use only)",
     )
 
     try:
