@@ -230,9 +230,69 @@ impl PhasePlan {
     }
 }
 
+pub fn replan_stop(plan: &PhasePlan, key: &str) -> Option<Vec<String>> {
+    if plan.phase != key {
+        Some(vec!["plan is for another phase".to_string()])
+    } else if !plan.blocked.is_empty() {
+        Some(plan.blocked.clone())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replan_stop_other_phase_reports_another_phase() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: true,
+            blocked: Vec::new(),
+            cards: Vec::new(),
+        };
+        assert_eq!(
+            replan_stop(&plan, "PH-B"),
+            Some(vec!["plan is for another phase".to_string()])
+        );
+    }
+
+    #[test]
+    fn replan_stop_reports_blocked_cards() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: true,
+            blocked: vec!["card blocked".to_string()],
+            cards: Vec::new(),
+        };
+        assert_eq!(
+            replan_stop(&plan, "PH-A"),
+            Some(vec!["card blocked".to_string()])
+        );
+    }
+
+    #[test]
+    fn replan_stop_ready_false_without_blockers_is_not_a_stop() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: false,
+            blocked: Vec::new(),
+            cards: Vec::new(),
+        };
+        assert_eq!(replan_stop(&plan, "PH-A"), None);
+    }
+
+    #[test]
+    fn replan_stop_ready_clean_phase_is_not_a_stop() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: true,
+            blocked: Vec::new(),
+            cards: Vec::new(),
+        };
+        assert_eq!(replan_stop(&plan, "PH-A"), None);
+    }
 
     #[test]
     fn unstarted_reports_cards_not_attempted() {

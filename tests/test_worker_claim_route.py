@@ -173,4 +173,5 @@ def test_v1_claim_is_not_worker_claim(doors, w, repo, gate, monkeypatch):
         "/v1/claim",
         {"worker": "workerA", "card": "demo:C1"},
     )
-    assert not (status == 200 and isinstance(body, dict) and "base_sha" in body)
+    assert status == 400
+    assert body == {"error": "validation", "msg": "missing field 'key'"}
