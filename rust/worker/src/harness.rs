@@ -337,6 +337,7 @@ pub fn run_harness(
     let mut cmd = h.command(run);
     pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
     if let Some(j) = jail {
+        cmd.env("TMPDIR", &j.tmp);
         cmd = scope::wrap(
             cmd,
             &j.limits,
@@ -388,10 +389,21 @@ impl JailConfig {
         };
         let bin = bin.trim();
         if bin.is_empty() {
-            return Ok(None);
+            return Err(format!(
+                "{JAIL_BIN_ENV} is empty; expected an absolute file path"
+            ));
+        }
+        let path = Path::new(bin);
+        if !path.is_absolute() {
+            return Err(format!("{JAIL_BIN_ENV} {bin:?} must be an absolute path"));
+        }
+        let bin = std::fs::canonicalize(path)
+            .map_err(|e| format!("{JAIL_BIN_ENV} {bin:?}: cannot canonicalize: {e}"))?;
+        if !bin.is_file() {
+            return Err(format!("{JAIL_BIN_ENV} {bin:?} is not a file"));
         }
         Ok(Some(JailConfig {
-            bin: PathBuf::from(bin),
+            bin,
             limits: Self::limits_from_lookup(&lookup)?,
             tmp: std::env::temp_dir(),
         }))
@@ -405,9 +417,6 @@ impl JailConfig {
             let cfg = Self::from_lookup(&lookup)?.ok_or_else(|| {
                 format!("{JAIL_BIN_ENV} is empty; refusing to run attempts unjailed")
             })?;
-            if !cfg.bin.is_file() {
-                return Err(format!("{JAIL_BIN_ENV} {:?} is not a file", cfg.bin));
-            }
             return Ok(Some(cfg));
         }
         if lookup(JAIL_OFF_ENV).as_deref() == Some("off") {
@@ -1212,12 +1221,47 @@ mod tests {
 
     #[test]
     fn jail_rejects_a_bad_tasks_value() {
+        let bin = tempfile::NamedTempFile::new().unwrap();
         let e = JailConfig::from_lookup(|k| match k {
-            JAIL_BIN_ENV => Some("/pg-jail".to_string()),
+            JAIL_BIN_ENV => Some(bin.path().to_string_lossy().into_owned()),
             "PG_ATTEMPT_TASKS_MAX" => Some("many".to_string()),
             _ => None,
         })
         .unwrap_err();
         assert!(e.contains("PG_ATTEMPT_TASKS_MAX"), "{e}");
+    }
+
+    #[test]
+    fn jail_binary_must_be_an_existing_absolute_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [
+            PathBuf::from("pg-jail"),
+            dir.path().join("missing"),
+            dir.path().to_path_buf(),
+        ] {
+            for required in [false, true] {
+                let lookup = |k| (k == JAIL_BIN_ENV).then(|| path.to_string_lossy().into_owned());
+                let result = if required {
+                    JailConfig::required_from_lookup(lookup)
+                } else {
+                    JailConfig::from_lookup(lookup)
+                };
+                assert!(result.unwrap_err().contains(JAIL_BIN_ENV));
+            }
+        }
+    }
+
+    #[test]
+    fn jail_binary_is_stored_canonicalized() {
+        let bin = tempfile::NamedTempFile::new().unwrap();
+        let alias = bin.path().with_extension("link");
+        symlink(bin.path(), &alias).unwrap();
+        let cfg = JailConfig::from_lookup(|k| {
+            (k == JAIL_BIN_ENV).then(|| alias.to_string_lossy().into_owned())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(cfg.bin, std::fs::canonicalize(bin.path()).unwrap());
+        std::fs::remove_file(alias).unwrap();
     }
 }

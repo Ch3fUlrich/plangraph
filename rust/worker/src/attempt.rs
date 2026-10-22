@@ -217,11 +217,17 @@ fn run_attempt_inner(
     // goes away with the attempt. The check below gets its own HOME, so a login
     // the harness persisted here never reaches the check child.
     let mut home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
+    let tmp = attempt_tmp()?;
     // Harness auth travels as staged files in this HOME, never by env (the
     // confined env carries no credential names; see sandbox_env). The guard
     // removes what it staged when the attempt ends.
     home.stage_harness_auth()?;
-    let jail = crate::harness::JailConfig::from_env().map_err(std::io::Error::other)?;
+    let jail = crate::harness::JailConfig::from_env()
+        .map_err(std::io::Error::other)?
+        .map(|mut jail| {
+            jail.tmp = tmp.path().to_path_buf();
+            jail
+        });
     let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
@@ -499,8 +505,24 @@ fn clear_dest(repo: &Path, dest: &Path) -> Result<(), AttemptError> {
     }
 }
 
+// Never grant an attempt write access to the shared system temp root.
+fn attempt_tmp() -> std::io::Result<tempfile::TempDir> {
+    tempfile::Builder::new().prefix("pg-attempt-").tempdir()
+}
+
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn attempts_have_private_tmp_directories() {
+        let first = super::attempt_tmp().unwrap();
+        let second = super::attempt_tmp().unwrap();
+        assert_ne!(first.path(), second.path());
+        assert_ne!(first.path(), std::env::temp_dir());
+        assert_ne!(second.path(), std::env::temp_dir());
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(!path.exists());
+    }
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;

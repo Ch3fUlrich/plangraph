@@ -7,7 +7,7 @@ standalone agent mode.
 ## What confines an attempt
 
 - Filesystem: `pg-jail` applies a Landlock allow-list before exec. Writes are
-  allowed only under the worktree, the attempt's private HOME, and tmp; system
+  allowed only under the worktree, the attempt's private HOME, and private tmp; system
   paths are read-only where needed. Missing allow-list paths fail closed.
 - Resources: the harness runs the jailed child inside a transient
   `systemd-run --user --scope` with `MemoryMax` and `TasksMax`.
@@ -20,10 +20,20 @@ standalone agent mode.
 
 | Variable | Effect |
 | --- | --- |
-| `PG_JAIL_BIN` | Path to the `pg-jail` helper binary. |
+| `PG_JAIL_BIN` | Absolute path to an existing `pg-jail` helper file; canonicalized before storage. Relative, missing, and non-file paths are refused. |
 | `PG_ATTEMPT_MEMORY_MAX` | Value for the scope's `MemoryMax` property. |
 | `PG_ATTEMPT_TASKS_MAX` | Value for the scope's `TasksMax` property. |
 | `PG_ALLOW_ATTACH` | Permit the attach leg; default is refused. |
+
+Each attempt creates its own private temporary directory under the system temp
+directory, removed on drop alongside its private HOME. Only that temporary
+directory is writable in the jail, not the shared system temp root; the child
+receives its path as `TMPDIR` after environment confinement.
+
+The local devstack e2e test profile (`tests/e2e/rtp1_local_util.py`) selects a
+built `pg-jail` beside the worker binary when present, otherwise explicitly sets
+`PG_JAIL=off`. This fallback is test-profile-only, never a worker default;
+explicit caller configuration is preserved.
 
 ## WSL hardening
 
