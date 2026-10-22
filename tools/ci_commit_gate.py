@@ -73,19 +73,22 @@ AUTH_DOOR_PATHS: tuple[str, ...] = (
     'src/plangraph/*auth*',
     '*/roles*',
     '*/scopes*',
-    'tools/seat_verdict.py',
-    'ops/pg.sh',
-    'tools/ci_commit_gate.py',
-    'tools/ci_commit_exempt.txt',
+    'roles*',
+    'scopes*',
+    'tools/seat_verdict.py*',
+    'ops/pg.sh*',
+    'tools/ci_commit_gate.py*',
+    'tools/ci_commit_exempt.txt*',
+    'tools/gate_wiring_check.py*',
     '.github/*',
 )
 
 #: Touching any of these paths requires a ``Gate-Edit: D-<digits>`` trailer.
 GATE_PATHS: tuple[str, ...] = (
-    'tools/ci_commit_gate.py',
-    'tools/ci_commit_exempt.txt',
+    'tools/ci_commit_gate.py*',
+    'tools/ci_commit_exempt.txt*',
     '.github/workflows/*',
-    'tools/gate_wiring_check.py',
+    'tools/gate_wiring_check.py*',
 )
 
 EXEMPT_SHA_RE = re.compile(r'^[0-9a-fA-F]{40}$')
@@ -96,6 +99,8 @@ TEST_REMOVAL_VIOLATION = 'test removal without Test-Removal trailer'
 MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
+#: A Hand-Edit commit may change at most this many lines (added + deleted).
+HAND_EDIT_MAX_LINES = 10
 
 #: Default exempt file, REPO-RELATIVE so CI reads it from the base commit.
 DEFAULT_EXEMPT = 'tools/ci_commit_exempt.txt'
@@ -314,6 +319,19 @@ def _resolve_exempt(
     return at_base if at_base is not None else set()
 
 
+def _changed_lines(sha: str, cwd: str | Path | None = None) -> int | None:
+    '''Added plus deleted lines of sha; None when a binary file is touched.'''
+    out = _git_text(['diff-tree', '--no-commit-id', '--numstat', '-r', '--root', sha], cwd=cwd)
+    total = 0
+    for line in out.splitlines():
+        added, _, rest = line.partition('\t')
+        deleted = rest.partition('\t')[0]
+        if added == '-' or deleted == '-':
+            return None
+        total += int(added) + int(deleted)
+    return total
+
+
 def hand_edit_commits(
     base: str, head: str, cwd: str | Path | None = None
 ) -> list[tuple[str, str]]:
@@ -378,6 +396,9 @@ def check(
             for path in touched:
                 if any(fnmatch.fnmatchcase(path, pattern) for pattern in AUTH_DOOR_PATHS):
                     violations.append(f'{sha}: hand-edit touches auth/door surface: {path}')
+            changed = _changed_lines(sha, cwd=cwd)
+            if changed is None or changed > HAND_EDIT_MAX_LINES:
+                violations.append(f'{sha}: hand-edit exceeds {HAND_EDIT_MAX_LINES} changed lines')
 
         if (
             any(fnmatch.fnmatchcase(path, pattern) for path in touched for pattern in GATE_PATHS)
