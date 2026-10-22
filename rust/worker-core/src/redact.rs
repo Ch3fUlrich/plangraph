@@ -30,8 +30,11 @@ fn patterns() -> &'static [regex::Regex] {
             r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*",
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
-            // 4. KEY=value env style: keep the name, cut the value (bare, "quoted" or 'quoted').
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)\s*[=:]\s*("[^"\n]*"|'[^'\n]*'|[^\s"']+)"#,
+            // 4. KEY=value env style: keep the name, cut the value. Also
+            //    handles quoted keys ("name": "value" / 'name' = 'value');
+            //    the closing key quote and the separator survive, and a
+            //    quoted value (spaces included) is replaced whole.
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)(\s*[=:]\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|[^\s"']+)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
             r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
@@ -61,7 +64,7 @@ pub fn redact(text: &str) -> String {
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
-    let out = rs[3].replace_all(&out, "$1=[REDACTED]").into_owned();
+    let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
     let out = rs[4].replace_all(&out, REDACTED).into_owned();
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
@@ -278,14 +281,88 @@ mod tests {
     }
 
     #[test]
-    fn redact_is_idempotent() {
-        for x in [
-            "plain log line, nothing to cut",
-            &format!("run {secret} here", secret = sk()),
-            &["Bear", "er ", &"c9".repeat(12)].concat(),
-            &env(),
+    fn quoted_json_key_keeps_name_and_drops_value() {
+        let key = ["api_", "token"].concat();
+        let val = ["abcd", "1234"].concat();
+        let text = format!("\"{key}\": \"{val}\"");
+        let out = redact(&text);
+        assert_eq!(out, format!("\"{key}\": {REDACTED}"));
+        assert!(!out.contains(&val), "{out}");
+
+        let tight = format!("\"{key}\":\"{val}\"");
+        let out = redact(&tight);
+        assert_eq!(out, format!("\"{key}\":{REDACTED}"));
+    }
+
+    #[test]
+    fn single_quoted_key_and_value() {
+        let key = ["client_", "secret"].concat();
+        let val = ["hunter", "22hunter22"].concat();
+        let text = format!("'{key}': '{val}'");
+        let out = redact(&text);
+        assert_eq!(out, format!("'{key}': {REDACTED}"));
+        assert!(!out.contains(&val), "{out}");
+    }
+
+    #[test]
+    fn quoted_value_with_spaces_is_fully_redacted() {
+        let key = ["pass", "word"].concat();
+        let val = ["a ", "b ", "c"].concat();
+        let text = format!("{key}: \"{val}\"");
+        let out = redact(&text);
+        assert_eq!(out, format!("{key}: {REDACTED}"));
+        assert!(!out.contains("b c"), "{out}");
+
+        let text = format!("{key} = '{val}'");
+        let out = redact(&text);
+        assert_eq!(out, format!("{key} = {REDACTED}"));
+    }
+
+    #[test]
+    fn separator_forms_survive() {
+        let key = ["api_", "key"].concat();
+        let val = ["hunter", "22hunter22"].concat();
+        let text = format!("{key}={val}\n{key}: {val}\n{key} = {val}");
+        let out = redact(&text);
+        assert_eq!(
+            out,
+            format!("{key}={REDACTED}\n{key}: {REDACTED}\n{key} = {REDACTED}")
+        );
+    }
+
+    #[test]
+    fn prose_with_the_word_token_is_untouched() {
+        for text in [
+            "the token was rotated yesterday",
+            "a secret meeting",
+            "token rotation is routine",
+            "the password was changed",
         ] {
-            let once = redact(x);
+            assert_eq!(redact(text), text, "{text} was altered");
+        }
+    }
+
+    #[test]
+    fn redact_is_idempotent() {
+        let json_key = ["api_", "token"].concat();
+        let json_val = ["abcd", "1234"].concat();
+        let single_key = ["client_", "secret"].concat();
+        let single_val = ["hunter", "22hunter22"].concat();
+        let spaced_key = ["pass", "word"].concat();
+        let spaced_val = ["a ", "b ", "c"].concat();
+        let cases = [
+            "plain log line, nothing to cut".to_string(),
+            format!("run {secret} here", secret = sk()),
+            ["Bear", "er ", &"c9".repeat(12)].concat(),
+            env(),
+            format!("\"{json_key}\": \"{json_val}\""),
+            format!("'{single_key}': '{single_val}'"),
+            format!("{spaced_key}: \"{spaced_val}\""),
+            format!("{spaced_key} = '{spaced_val}'"),
+            format!("{json_key}={json_val}"),
+        ];
+        for x in cases {
+            let once = redact(&x);
             assert_eq!(redact(&once), once);
         }
     }
