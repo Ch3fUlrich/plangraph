@@ -9,8 +9,8 @@
 
 use crate::activities::AskInput;
 use crate::activities::{
-    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput,
-    GateResult, JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick,
+    CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
+    JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
 use crate::keeper::{Alarm, AttemptReport, Claim};
@@ -56,6 +56,38 @@ const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 /// a card started after the change runs it. The id is pinned by a test: renaming
 /// it would strand every card whose history already carries the old marker.
 const GATE_PATCH: &str = "gate-before-merge-v1";
+
+/// Workflow wire input. Kept here so gate metadata does not change the legacy
+/// activity input contract; missing fields preserve recorded start payloads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CardInput {
+    #[serde(flatten)]
+    pub legacy: crate::activities::CardInput,
+    #[serde(default)]
+    pub risk_tagged: bool,
+    #[serde(default)]
+    pub heldout_cmd: String,
+    #[serde(default)]
+    pub smoke_checks: Vec<String>,
+    #[serde(default)]
+    pub exports: Vec<String>,
+    #[serde(default)]
+    pub base_sha: Option<String>,
+}
+
+impl std::ops::Deref for CardInput {
+    type Target = crate::activities::CardInput;
+
+    fn deref(&self) -> &Self::Target {
+        &self.legacy
+    }
+}
+
+impl std::ops::DerefMut for CardInput {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.legacy
+    }
+}
 
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
@@ -332,6 +364,22 @@ impl Card {
             };
             ctx.execute_activity(CardActivities::report, report, activity_options(&cfg))
                 .await?;
+
+            // An already-green change check is a broken contract, not work a
+            // retry or an already-done probe can repair.
+            if result.exit_class == ExitClass::ContractDefect
+                && check_tail.starts_with("red-first:")
+            {
+                let packet = packet_for(
+                    &input.claim.card,
+                    leg.tier,
+                    ExitClass::ContractDefect,
+                    &check_tail,
+                );
+                run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                park_and_alarm(ctx, &cfg, &packet, "red-first contract defect".into()).await?;
+                return Ok(parked(n));
+            }
 
             // A question is not a failure: it takes no retry budget, so the
             // attempt stays out of the history. The next attempt reruns the
@@ -970,29 +1018,43 @@ fn map_merge_result(r: MergeResult) -> MergeStep {
 
 /// The card's named gate checks.
 ///
-/// Today the list holds ONE check, `card-check`, whose command is the card's
-/// own `check_cmd` — and is EMPTY when the card configures none. CARD-CHECKS
-/// appends more named checks (e.g. a test-gaming diff scan) here: the wire
-/// shape (`GateInput.checks`) is already a list, so a new check joins it
-/// without another gate wiring change.
-///
-/// A blank command means the card has nothing to verify, so the list is empty
-/// and the gate is skipped. The original string is kept, untrimmed: the shell
-/// is what decides whitespace, and `merge_fenced` still runs an empty
-/// `check_cmd` through `sh -c ''` (which passes). The `gate` activity instead
-/// rejects an empty command as invalid input, so the workflow must never hand
-/// it one — hence the empty list here and the trim test rather than an
-/// emptiness test.
+/// Builtins always run, even when no shell check was configured. A required
+/// but missing heldout command fails closed instead of silently disappearing.
 fn gate_checks(input: &CardInput) -> Vec<GateCheck> {
-    let cmd = input.claim.check_cmd.as_str();
-    if cmd.trim().is_empty() {
-        return Vec::new();
+    let mut checks = Vec::new();
+    let mut command = |name: String, cmd: String| {
+        checks.push(GateCheck {
+            name,
+            cmd,
+            builtin: None,
+            timeout_s: None,
+        })
+    };
+    if !input.claim.check_cmd.trim().is_empty() {
+        command("check".into(), input.claim.check_cmd.clone());
     }
-    vec![GateCheck {
-        name: "card-check".to_string(),
-        cmd: cmd.to_string(),
-        timeout_s: None,
-    }]
+    if input.risk_tagged || !input.heldout_cmd.trim().is_empty() {
+        command(
+            "heldout".into(),
+            if input.heldout_cmd.trim().is_empty() {
+                "false".into()
+            } else {
+                input.heldout_cmd.clone()
+            },
+        );
+    }
+    for (i, cmd) in input.smoke_checks.iter().enumerate() {
+        command(format!("smoke-{}", i + 1), cmd.clone());
+    }
+    for builtin in ["diffscan", "exports"] {
+        checks.push(GateCheck {
+            name: builtin.into(),
+            cmd: builtin.into(),
+            builtin: Some(builtin.into()),
+            timeout_s: None,
+        });
+    }
+    checks
 }
 
 /// Run the card's gate in the attempt worktree before the branch is merged.
@@ -1038,6 +1100,13 @@ async fn gate_step(
                     AttemptId::new(input.claim.card.clone(), n).dir_name()
                 ),
                 checks,
+                base_sha: Some(
+                    input
+                        .base_sha
+                        .clone()
+                        .unwrap_or_else(|| base_sha.to_string()),
+                ),
+                exports: input.exports.clone(),
             },
             gate_options(cfg),
         )
@@ -1376,16 +1445,73 @@ mod tests {
             allow: vec!["src/**".to_string()],
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),
+            ..Default::default()
         };
         let input = CardInput {
-            claim,
-            legs,
-            workroot: root.path().to_string_lossy().into_owned(),
-            main_branch: "main".to_string(),
-            question_wait_cap_s: None,
-            max_question_rounds: None,
+            legacy: crate::activities::CardInput {
+                claim,
+                legs,
+                workroot: root.path().to_string_lossy().into_owned(),
+                main_branch: "main".to_string(),
+                question_wait_cap_s: None,
+                max_question_rounds: None,
+            },
+            risk_tagged: false,
+            heldout_cmd: String::new(),
+            smoke_checks: Vec::new(),
+            exports: Vec::new(),
+            base_sha: None,
         };
         (root, input)
+    }
+
+    #[test]
+    fn old_card_json_defaults_gate_metadata() {
+        let old = serde_json::json!({
+            "claim": {"card":"c", "repo":"r", "base_sha":"abc", "check_cmd":"true",
+                "allow":[], "forbid":[], "prompt":"p"},
+            "legs":[], "workroot":"work", "main_branch":"main"
+        });
+        let input: CardInput = serde_json::from_value(old).unwrap();
+        assert!(!input.risk_tagged);
+        assert!(input.heldout_cmd.is_empty());
+        assert!(input.smoke_checks.is_empty());
+        assert!(input.exports.is_empty());
+        assert!(input.base_sha.is_none());
+    }
+
+    #[test]
+    fn gate_checks_compose_commands_and_builtins() {
+        let (_root, mut input) = card_input(vec![]);
+        input.risk_tagged = true;
+        input.heldout_cmd = "  heldout  ".into();
+        input.smoke_checks = vec!["smoke one".into(), "smoke two".into()];
+        input.exports = vec!["src/a:run".into()];
+        input.base_sha = Some("explicit-base".into());
+        let checks = gate_checks(&input);
+        assert_eq!(
+            checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            vec![
+                "check", "heldout", "smoke-1", "smoke-2", "diffscan", "exports"
+            ]
+        );
+        assert_eq!(checks[1].cmd, "  heldout  ");
+        assert_eq!(checks[2].cmd, "smoke one");
+        assert_eq!(checks[3].cmd, "smoke two");
+        assert!(checks[..4].iter().all(|c| c.builtin.is_none()));
+        assert_eq!(checks[4].builtin.as_deref(), Some("diffscan"));
+        assert_eq!(checks[5].builtin.as_deref(), Some("exports"));
+        assert!(checks.iter().all(|c| c.timeout_s.is_none()));
+    }
+
+    #[test]
+    fn risk_tagged_card_cannot_skip_missing_heldout() {
+        let (_root, mut input) = card_input(vec![]);
+        input.risk_tagged = true;
+        let checks = gate_checks(&input);
+        let heldout = checks.iter().find(|c| c.name == "heldout").unwrap();
+        assert_eq!(heldout.cmd, "false");
+        assert!(heldout.builtin.is_none());
     }
 
     #[test]
@@ -1596,15 +1722,14 @@ mod tests {
     }
 
     #[test]
-    fn gate_checks_is_empty_for_a_blank_check_cmd() {
+    fn gate_checks_keeps_builtins_for_a_blank_check_cmd() {
         for blank in ["", " ", "\t\n  "] {
             let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
             input.claim.check_cmd = blank.to_string();
-            // A card with no check command has nothing to verify: the check
-            // list is empty and `gate_step` skips the gate entirely — the
-            // activity is never handed an empty list, which it rejects as
-            // invalid input.
-            assert!(gate_checks(&input).is_empty(), "{blank:?}");
+            let checks = gate_checks(&input);
+            assert_eq!(checks.len(), 2, "{blank:?}");
+            assert_eq!(checks[0].builtin.as_deref(), Some("diffscan"));
+            assert_eq!(checks[1].builtin.as_deref(), Some("exports"));
         }
     }
 
@@ -1613,8 +1738,8 @@ mod tests {
         let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
         input.claim.check_cmd = "  cargo test  ".to_string();
         let checks = gate_checks(&input);
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, "card-check");
+        assert_eq!(checks.len(), 3);
+        assert_eq!(checks[0].name, "check");
         // The original string is kept, not a trimmed copy: the shell owns
         // whitespace.
         assert_eq!(checks[0].cmd, "  cargo test  ");

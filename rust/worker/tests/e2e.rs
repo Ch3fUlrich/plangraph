@@ -28,11 +28,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QUEUE};
+use pg_worker::activities::{CardActivities, CardOutput, Deps, TASK_QUEUE};
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
-use pg_worker::workflow::Card;
+use pg_worker::workflow::{Card, CardInput};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::Patterns;
 use tempfile::TempDir;
@@ -211,6 +211,7 @@ impl Env {
             allow: allow.iter().map(|s| s.to_string()).collect(),
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),
+            ..Default::default()
         }
     }
 
@@ -232,12 +233,19 @@ impl Env {
     /// Like [`start`](Self::start), with the card's legs given by the caller.
     async fn start_with_legs(&self, id: &str, claim: Claim, legs: Vec<LegSpec>) -> Handle {
         let input = CardInput {
-            claim,
-            legs,
-            workroot: self.workroot.to_string_lossy().into_owned(),
-            main_branch: "main".to_string(),
-            question_wait_cap_s: self.question_cap_s.get(),
-            max_question_rounds: self.max_rounds.get(),
+            legacy: pg_worker::activities::CardInput {
+                claim,
+                legs,
+                workroot: self.workroot.to_string_lossy().into_owned(),
+                main_branch: "main".to_string(),
+                question_wait_cap_s: self.question_cap_s.get(),
+                max_question_rounds: self.max_rounds.get(),
+            },
+            risk_tagged: false,
+            heldout_cmd: String::new(),
+            smoke_checks: Vec::new(),
+            exports: Vec::new(),
+            base_sha: None,
         };
         let wf_id = workflow_id(id);
         self.client
@@ -1579,6 +1587,35 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
 
 /// A leg naming a harness this worker never registered is the plan's fault:
 /// the card goes back to the planner instead of crashing or retrying.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn red_first_parks_without_retry_or_harness() {
+    in_local(async {
+        let Some(env) = env_or_skip("red-first", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-red-first", &["out.txt"], "true");
+        let id = format!("e2e-red-first-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let out = finish("red_first", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "parked", "{out:?}");
+        assert_eq!(out.attempts, 1);
+        let reports = env.keeper.attempts();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].exit_class, ExitClass::ContractDefect);
+        assert!(reports[0].check_tail.starts_with("red-first:"));
+        let packets = env.keeper.parked();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].exit_class, ExitClass::ContractDefect);
+        assert!(packets[0].check_tail.starts_with("red-first:"));
+        assert!(env.keeper.completed().is_empty());
+        assert!(!env.repo.join("out.txt").exists());
+        env.stop();
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_harness_goes_to_planner() {
     in_local(async {

@@ -1280,6 +1280,7 @@ mod tests {
             allow: vec!["src/**".to_string()],
             forbid: vec![".env".to_string()],
             prompt: "do the thing".to_string(),
+            ..Default::default()
         }
     }
 
