@@ -7,7 +7,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv | #112 head 31c525d8 (base 5fe070b3); seats r6 neutral deepseek+qwen run by me (bg bu55331mg, -f attach); CI 39848623437 pending -> GO-REQ routing |
+| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv | #112 31c525d8 CI green; r6 deepseek FIX (H1 park excludes waiting, H2 parked no owner clear, M3 retry 409) -> fix round sent; qwen rerun via stdin (bg bi0zedgih). qodercli: big prompts via stdin, NOT --attachment |
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S2 MERGED ef4cab7d (GO D-2291, head 02a5b0eb = 4c88ad17 + clean main merge); ciev bg bx1u58lc0 evidence only. S3: spine/phase-runner-s3a (keeper verb phase_finish, D-2227) + s3 (worker). HARDEN: add D-2288 criteria when open |
@@ -31,7 +31,7 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 - Never touch .claude/worktrees/proposal (frozen; render/proxy use it).
 
 - oc-harden #95 d542cf0 BLOCKED: workst admission 82.6% commit charge; asked workst-L1-autoos to reap; fix = no_change migration PG6 + sqlite rebuild (cx writer).
-- sandbox #100 d0905ccb seats r1 (coding.vm): glm PASS, deepseek FIX 2 CRIT (landlock ABI2 truncate; unjailed git commit hooks) + 2 HIGH (check_cmd unjailed, harness bin under HOME) -> fix round at sandbox L2; I re-seat on MERGE-READY.
+- sandbox #100 d0905ccb seats r1 (coding.vm): glm PASS, deepseek FIX 2 CRIT (landlock ABI2 truncate; unjailed git commit hooks) + 2 HIGH (check_cmd unjailed, harness bin under HOME) -> fix round at sandbox L2; I re-seat on MERGE-READY. Workst floor 12.3 GB blocks writers -> WA/WB/WC briefs inline -> I spawn on coding.vm one at a time.
 - KEEPER-OPCLAIM-CLOSE (HIGH, D-2283/2284, mine): wt opclaim-close lane/keeper-opclaim-close; writer omniroute/mimo-v2.6-flash run 20261022-202358-...6d5fb8 (cx not declared on coding.vm, D-2148 skip). Design: A refuse legacy claimed on non-none tier, B legacy claim -> in_review recovery. Then PR, 2 seats non-xiaomi, GO-REQ routing, then router closes server:OP-DOCKHAND-EVENTS.
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
