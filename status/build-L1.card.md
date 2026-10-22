@@ -7,7 +7,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv (workst, Remote Control) | PR #112 draft, head 80dd7e68; qwen ACCEPT; deepseek r3 FIX (ask CAS vs projector lag HIGH, forward table unused MED-H, takeover unreachable, v12 ALTER untested). Fix round cx -> re-seat qwen + deepseek (I run deepseek: prompt >128KB -> `opencode run -f PROMPT.txt`, r3 builder tmp/mkexec3.sh) -> GO-REQ |
+| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv (workst) | PR #112 head 49a41892 r5: qwen PASS, deepseek FIX (F1 inbox doc bad_transition, F2 restore refused-park rollback test, F3 ADR migrate order, F4/F5 docs; seats/exec-ownership/r5). Writer round -> re-seat qwen+deepseek (tmp/mkexec5.sh, -f PROMPT.txt) -> GO-REQ |
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
 | REDACT-LINE-CONTINUATION (HIGH p7) | spine | claimed; `\`+LF leak + U+2028; gates E2E |
@@ -15,7 +15,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
 | CI-COMMIT-GATE-HARDEN | queue | input: def-line fixture change = false "test removal" (run 39817299743) -> match removed test NAMES |
-| DEVSTACK-TEST-FLAKE p6 | unassigned | test_start_is_idempotent flakes on main (b5fe9690, c87e6811): rerun --failed |
+| DEVSTACK-TEST-FLAKE | me | #118 merged 7dd85d04; ciwait bsgidcarz -> evidence+submit; post qwen seat (spawner seats/devstack-flake/q.json) |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
 | workst L2s sandbox, card-checks, bus, oc-harden | STOPPED (D-2251) | handoffs C:\fleet\handoff\build-L2-<name>.handoff.md; relaunch via L2-LAUNCH when lane comes up |
