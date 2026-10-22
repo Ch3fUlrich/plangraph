@@ -200,7 +200,7 @@ impl Phase {
                     max_question_rounds: None,
                 };
 
-                let child_id = card_workflow_id(card.key.as_str(), 1);
+                let child_id = card_workflow_id(input.key.as_str(), card.key.as_str(), 1);
                 match ctx
                     .start_child_workflow(
                         Card::run,

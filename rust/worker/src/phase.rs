@@ -133,8 +133,8 @@ pub fn phase_branch(key: &str) -> Result<String, String> {
     Ok(format!("phase/{safe}"))
 }
 
-pub fn card_workflow_id(key: &str, n: u32) -> String {
-    format!("card:{key}:{n}")
+pub fn card_workflow_id(phase_key: &str, card_key: &str, n: u32) -> String {
+    format!("card:{phase_key}:{card_key}:{n}")
 }
 
 pub fn select_legs(catalog: &[LegSpec], ids: &[String]) -> Vec<LegSpec> {
@@ -370,7 +370,15 @@ mod tests {
 
     #[test]
     fn card_workflow_id_formats_key_and_index() {
-        assert_eq!(card_workflow_id("demo:PH-X", 2), "card:demo:PH-X:2");
+        assert_eq!(card_workflow_id("PH-X", "demo:K", 2), "card:PH-X:demo:K:2");
+    }
+
+    #[test]
+    fn card_workflow_id_differs_per_phase() {
+        assert_ne!(
+            card_workflow_id("PH-X", "demo:K", 1),
+            card_workflow_id("PH-Y", "demo:K", 1)
+        );
     }
 
     #[test]
