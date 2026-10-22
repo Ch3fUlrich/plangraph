@@ -19,11 +19,15 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 from plangraph.keeper import credential_guard  # noqa: E402  (D-405)
+from plangraph.keeper.cli_local import resolve_alias  # noqa: E402
 from plangraph.keeper.evidence_decisions import DecisionsAdapter  # noqa: E402
 from plangraph.keeper.item_fields import CHOICE_KINDS  # noqa: E402
 
 import md_sync_dclose  # noqa: E402  (D-505: router D-rows with Closes key@sha)
 
+# Defaults only: build_plan resolves these through the snapshot's rehome
+# aliases (and an optional --gate override) onto the Plan below, so a rehomed
+# gate (old key cancelled, alias old -> new) is imported into its new project.
 PROJECT = "routing"
 GATE_ID = "PH-OPERATOR"
 GATE_KEY = f"{PROJECT}:{GATE_ID}"
@@ -63,6 +67,12 @@ class Plan:
         self.invalid_tokens = [] # D-ids whose Closes tokens the keeper parser marked invalid
         self.choices_skipped = []  # (key, state): valid Options block on a non-open item
         self.redactions = 0
+        #: the resolved import target (module-constant defaults; build_plan
+        #: overwrites them from the snapshot's rehome aliases / --gate)
+        self.project = PROJECT
+        self.gate_key = GATE_KEY
+        self.gate_id = GATE_ID
+        self.goal_key = GOAL_KEY
 
     def add(self, op):
         self.ops.append(op)
@@ -107,10 +117,10 @@ def _index(items):
     return by_id
 
 
-def _find(by_id, ident):
-    """The live item for *ident*: ``routing:`` first, then any project."""
+def _find(by_id, project, ident):
+    """The live item for *ident*: *project* first, then any project."""
     found = sorted(by_id.get(ident, []), key=lambda i: i["key"])
-    mine = [i for i in found if i["project"] == PROJECT]
+    mine = [i for i in found if i["project"] == project]
     pool = mine or [i for i in found if i["state"] != "cancelled"]
     return (pool or [None])[0]
 
@@ -125,7 +135,8 @@ def _decision_ids(item):
 
 
 def build_plan(questions, answers, skipped_answers, decision_ids, items,
-               decisions_view=None, decisions_text=None, repos=None, since=1):
+               decisions_view=None, decisions_text=None, repos=None, since=1,
+               aliases=None, gate=None):
     """``decisions_view`` is the keeper's own ``DecisionsAdapter`` over the
     decisions file (or ``None``: no ``Closes:`` pre-check, as before).
 
@@ -133,8 +144,19 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
     too (D-505): its ``Closes: key@sha`` rows close only on a merged commit,
     with ``repos`` (the keeper config's ``repos``) and ``since`` (ignore D-rows
     below it) selecting the merge gate.
+
+    ``aliases`` (the snapshot's ``old -> new`` rehome aliases) and ``gate`` (a
+    ``--gate KEY`` override) resolve the import target through
+    ``resolve_alias``: new lanes are created in the resolved gate's project,
+    and a rehomed gate whose old key is cancelled no longer reads as closed.
     """
     plan = Plan()
+    gate_key = resolve_alias(aliases or {}, gate or GATE_KEY)
+    project = gate_key.split(":")[0]
+    goal_key = resolve_alias(aliases or {}, f"{project}:GOAL")
+    gate_id = gate_key.split(":", 1)[1]
+    plan.project, plan.gate_key = project, gate_key
+    plan.goal_key, plan.gate_id = goal_key, gate_id
     by_id = _index(items)
     state = {i["key"]: i for i in items}
     plan.skipped.extend((s.id, s.reason) for s in skipped_answers)
@@ -157,11 +179,11 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
             entry_parent = entry_parent.strip() or None
         entry_choices = getattr(entry, "choices", None)
         malformed = bool(getattr(entry, "options_malformed", False))
-        item = _find(by_id, entry.id)
+        item = _find(by_id, project, entry.id)
         if item is None:
             want_create = getattr(entry, "wait", None)
             # SYNC-MD-IMPORT: a new row is a MODEL-KINDS question (or operator step).
-            lane = {"project": PROJECT, "id": entry.id, "title": title,
+            lane = {"project": project, "id": entry.id, "title": title,
                     "kind": "operator_task" if want_create == "task" else "question",
                     "track": "QUESTIONS", "owner": "operator",
                     "operator": True, "evidence_kinds": ["decision"],
@@ -174,7 +196,7 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
             if choices:
                 lane["choices"] = choices
             plan.add({"op": "create", "item": lane})
-            key = f"{PROJECT}:{entry.id}"
+            key = f"{project}:{entry.id}"
             pending[entry.id] = key
             new_lanes.append(key)
             if malformed:
@@ -183,7 +205,7 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
             if entry_parent:
                 parent_requests.append((key, entry_parent))
         else:
-            is_ours_open = (item["project"] == PROJECT and item.get("source") == SOURCE
+            is_ours_open = (item["project"] == project and item.get("source") == SOURCE
                             and item["state"] == "open")
             fields = {}
             if is_ours_open:
@@ -207,7 +229,7 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                                           "text": "malformed Options block ignored"})
             else:
                 want_choices = _masked_choices(entry_choices, plan)
-                if item["project"] == PROJECT:
+                if item["project"] == project:
                     if item["state"] == "open":
                         if item.get("kind") not in CHOICE_KINDS:
                             # A legacy kind (e.g. a pre-kinds 'lane' OS row) cannot carry choices;
@@ -221,7 +243,7 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                         if (item.get("choices") or None) != want_choices:
                             plan.choices_skipped.append((item["key"], item["state"]))
                     # terminal states: no op
-                # non-routing project: no choices op
+                # foreign project: no choices op
             if fields and (is_ours_open or "choices" in fields):
                 # Non-md-sync open items emit a choices-only edit; ours may
                 # carry title/description/wait plus choices in one edit.
@@ -245,7 +267,7 @@ def build_plan(questions, answers, skipped_answers, decision_ids, items,
                             pending_keys=set(pending.values()), repos=repos)
     answered = {a.id for a in answers}
     for item in items:
-        if (item["project"] == PROJECT and item.get("source") == SOURCE
+        if (item["project"] == project and item.get("source") == SOURCE
                 and item["state"] == "open" and item["id"] not in seen
                 and item["id"] not in answered):
             plan.gone.append(item["key"])
@@ -316,21 +338,21 @@ def _dedup(seq):
     return out
 
 
-def _resolve_parent(by_id, state, parent_str):
+def _resolve_parent(by_id, state, project, parent_str):
     """The live parent item for a Parent value, or None."""
     p = (parent_str or "").strip()
     if not p:
         return None
     if ":" in p:
         return state.get(p)
-    found = _find(by_id, p)
+    found = _find(by_id, project, p)
     if found is None:
         try:
             norm = mp._norm_id(p)
         except Exception:
             norm = p
         if norm != p:
-            found = _find(by_id, norm)
+            found = _find(by_id, project, norm)
     return found
 
 
@@ -340,12 +362,12 @@ def _link(plan, state, new_lanes):
 
 
 def _link_with_parents(plan, state, new_lanes, parent_requests, by_id):
-    """Gate linking merged with Parent edges: GATE_KEY gets exactly one edit."""
-    gate = state.get(GATE_KEY)
+    """Gate linking merged with Parent edges: plan.gate_key gets one edit."""
+    gate = state.get(plan.gate_key)
     requests = list(parent_requests or [])
-    # Gate-creation case: fold GATE-targeted children into the new gate.
+    # Gate-creation case: fold gate-targeted children into the new gate.
     if gate is None and new_lanes:
-        gate_targets = {GATE_ID, GATE_KEY}
+        gate_targets = {plan.gate_id, plan.gate_key}
         extra, rest = [], []
         for child, parent in requests:
             if (parent or "").strip() in gate_targets:
@@ -353,15 +375,17 @@ def _link_with_parents(plan, state, new_lanes, parent_requests, by_id):
                     extra.append(child)
             else:
                 rest.append((child, parent))
-        goal = state.get(GOAL_KEY)
+        goal = state.get(plan.goal_key)
         if goal is None or goal["state"] != "open":
-            raise PlanError(f"{GOAL_KEY} must exist and be open to link {GATE_KEY}")
+            raise PlanError(f"{plan.goal_key} must exist and be open to link "
+                            f"{plan.gate_key}")
         plan.add({"op": "create", "item": {
-            "project": PROJECT, "id": GATE_ID, "title": "Operator questions and steps",
+            "project": plan.project, "id": plan.gate_id,
+            "title": "Operator questions and steps",
             "kind": "gate", "track": "QUESTIONS", "owner": "operator",
             "depends_on": _dedup(list(new_lanes) + extra), "source": SOURCE}})
-        plan.add({"op": "edit", "key": GOAL_KEY, "fields": {
-            "depends_on": list(goal.get("depends_on") or []) + [GATE_KEY]}})
+        plan.add({"op": "edit", "key": plan.goal_key, "fields": {
+            "depends_on": list(goal.get("depends_on") or []) + [plan.gate_key]}})
         requests = rest
         if by_id is None:
             return
@@ -370,15 +394,17 @@ def _link_with_parents(plan, state, new_lanes, parent_requests, by_id):
         return
     if gate is None:
         if new_lanes:
-            goal = state.get(GOAL_KEY)
+            goal = state.get(plan.goal_key)
             if goal is None or goal["state"] != "open":
-                raise PlanError(f"{GOAL_KEY} must exist and be open to link {GATE_KEY}")
+                raise PlanError(f"{plan.goal_key} must exist and be open to link "
+                                f"{plan.gate_key}")
             plan.add({"op": "create", "item": {
-                "project": PROJECT, "id": GATE_ID, "title": "Operator questions and steps",
+                "project": plan.project, "id": plan.gate_id,
+                "title": "Operator questions and steps",
                 "kind": "gate", "track": "QUESTIONS", "owner": "operator",
                 "depends_on": list(new_lanes), "source": SOURCE}})
-            plan.add({"op": "edit", "key": GOAL_KEY, "fields": {
-                "depends_on": list(goal.get("depends_on") or []) + [GATE_KEY]}})
+            plan.add({"op": "edit", "key": plan.goal_key, "fields": {
+                "depends_on": list(goal.get("depends_on") or []) + [plan.gate_key]}})
         if by_id is None:
             return
         edges = _parent_edges(plan, requests, by_id, state)
@@ -386,12 +412,16 @@ def _link_with_parents(plan, state, new_lanes, parent_requests, by_id):
         return
     # Gate exists.
     if new_lanes and gate["state"] != "open":
-        raise PlanError(f"{GATE_KEY} is {gate['state']}: new lanes would be unreachable")
+        raise PlanError(f"{plan.gate_key} is {gate['state']}: "
+                        "new lanes would be unreachable")
     edges = _parent_edges(plan, requests, by_id, state) if by_id is not None else {}
     live_gate = list(gate.get("depends_on") or [])
-    desired_gate = _dedup(live_gate + list(new_lanes) + list(edges.pop(GATE_KEY, [])))
-    if desired_gate != live_gate:
-        plan.add({"op": "edit", "key": GATE_KEY, "fields": {"depends_on": desired_gate}})
+    desired_gate = _dedup(live_gate + list(new_lanes) + list(edges.pop(plan.gate_key, [])))
+    # A closed (done/cancelled) gate never gains lanes: emit no edit on it
+    # (the keeper would refuse an edit to a non-open item and roll the batch).
+    if desired_gate != live_gate and gate["state"] == "open":
+        plan.add({"op": "edit", "key": plan.gate_key,
+                  "fields": {"depends_on": desired_gate}})
     _emit_parent_edits(plan, state, edges)
 
 
@@ -402,7 +432,7 @@ def _parent_edges(plan, requests, by_id, state):
         p = (parent_str or "").strip()
         if not p:
             continue
-        live_parent = _resolve_parent(by_id, state, p)
+        live_parent = _resolve_parent(by_id, state, plan.project, p)
         if live_parent is None:
             plan.warnings.append({"key": child_key, "decision": None,
                                   "text": f"parent {p} unknown"})
@@ -487,7 +517,7 @@ def _answers(plan, answers, decision_ids, by_id, pending, view=None,
             item = {"key": pending[ident], "state": "open", "review_tier": "none",
                     "evidence_kinds": ["decision"], "evidence": []}
         else:
-            item = _find(by_id, ident)
+            item = _find(by_id, plan.project, ident)
         if item is None:
             plan.skipped.append((ident, "no live item"))
             continue

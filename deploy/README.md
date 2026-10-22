@@ -47,3 +47,26 @@ or copied into a unit or into `render.env`.
 `systemctl --user enable --now plangraph-render.timer`. Optional drop-ins live in
 `plangraph-render.service.d/` as `.example` files (`kg.conf.example` for the knowledge-graph sidecar,
 `live-tree.conf.example` for overriding the live tree location); copy without the suffix to make one live.
+
+## Host Bootstrap & Spawner Setup
+
+Host runtime packages and agent CLI dependencies are defined declaratively and delegated to [AutoOS](https://github.com/mauls/AutoOS) without duplicating installation logic.
+
+- `requirements-host.json`: Inventory of required AutoOS components split into `core` (`git`, `python`, `nodejs`, `tailscale`, `omniroute`, `opencode-cli`) and `agents` (`claude-code`, `qwen-code`, `gemini-cli`, `qoder-cli`, `agent-skill-links`).
+- `bootstrap.ps1` (Windows): Resolves AutoOS root, invokes `setup.ps1 -Only <components> -Yes`, and initializes the local SQLite spawner catalog DB.
+- `bootstrap.sh` (Linux / macOS): Resolves AutoOS root, invokes `setup.sh --only <components> --yes`, and initializes the local SQLite spawner catalog DB.
+
+Usage:
+```powershell
+# Windows PowerShell
+.\deploy\bootstrap.ps1 -DryRun
+.\deploy\bootstrap.ps1
+```
+```bash
+# Linux / macOS
+./deploy/bootstrap.sh --dry-run
+./deploy/bootstrap.sh
+```
+
+For complete spawner catalog, routing ladder, and MCP details, see [`docs/SPAWNER.md`](../docs/SPAWNER.md).
+
