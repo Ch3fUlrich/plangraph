@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import types
 from pathlib import Path
 
 import pytest
@@ -114,6 +115,29 @@ def test_reclaim_same_worker_keeps_row(w, repo, gate):
     row2 = w.store.conn.execute("SELECT * FROM items WHERE key = ?", ("demo:C1",)).fetchone()
     assert first == second
     assert row1 == row2
+
+def test_expired_own_lease_is_not_idempotent(w, repo, gate):
+    root, _main_tip, _phase_tip = repo
+    worker_claim(w.store, w.p("workerA"), "demo:C1", repo_root=str(root))
+    w.store.conn.execute(
+        "UPDATE items SET lease_until = ? WHERE key = ?",
+        ("2000-01-01T00:00:00Z", "demo:C1"),
+    )
+    w.store.conn.commit()
+    with pytest.raises(Refused) as exc:
+        worker_claim(w.store, w.p("workerA"), "demo:C1", repo_root=str(root))
+    assert exc.value.code == "conflict"
+
+def test_cross_project_worker_gets_not_found(w, repo, gate):
+    root, _main_tip, _phase_tip = repo
+    outsider = types.SimpleNamespace(name="outsider", role="worker", projects=["other"])
+    with pytest.raises(Refused) as exc:
+        worker_claim(w.store, outsider, "demo:C1", repo_root=str(root))
+    assert exc.value.code == "not_found"
+    state = w.store.conn.execute(
+        "SELECT state FROM items WHERE key = ?", ("demo:C1",)
+    ).fetchone()[0]
+    assert state == "open"
 
 def test_worker_b_conflict(w, repo, gate):
     root, _main_tip, _phase_tip = repo
