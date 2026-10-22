@@ -389,3 +389,76 @@ def test_r5_skips_silently_when_the_questions_table_is_missing(w):
     finally:
         raw.close()
     assert oversight.r5_windows(w.conn, w.clock()) == []
+
+
+# ------------------------- F6: R4 fails closed instead of clearing alarms
+def _boom(args):
+    """A ``git(args) -> str`` that always raises (the failing-listing shape)."""
+    raise RuntimeError("git exploded")
+
+
+def test_r4_reports_one_oversight_check_failed_finding_when_git_raises(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    seed(w, [("A", ())])
+    w.clock.advance(oversight.LANE_IDLE_S + HOUR)
+    rows = oversight.r4_lane_idle(w.conn, w.clock(), git=_boom)
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["rule"], row["kind"], row["key"]) == (
+        "R4", "oversight_check_failed", "r4")
+    assert row["reason"] == "R4:oversight_check_failed:r4"
+    assert row["detail"] == "RuntimeError"      # short error class name only
+    assert row["ts"] == ""                      # data-free: no wall clock
+
+
+def _oversight_alarms(w):
+    """``{(kind, key): cleared_at}`` for every oversight alarm row."""
+    return {(r["kind"], r["key"]): r["cleared_at"] for r in w.conn.execute(
+        "SELECT kind, key, cleared_at FROM projector_alarms"
+        " WHERE workflow_id='oversight'")}
+
+
+def test_r4_failure_keeps_the_lane_alarm_and_its_own_alarm_clears(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    key = seed(w, [("A", ())])[0]
+    w.clock.advance(oversight.LANE_IDLE_S + HOUR)
+    good = lane_git(w.clock() - (oversight.LANE_IDLE_S + HOUR))
+
+    first = oversight.run_checks(w.conn, w.clock(), lane_git=good)   # idle lane
+    oversight.raise_alarms(w.conn, first, w.clock())
+    alarms = _oversight_alarms(w)
+    assert alarms[("lane_idle", key)] is None
+
+    failed = oversight.run_checks(w.conn, w.clock(), lane_git=_boom)
+    assert [(f["rule"], f["kind"], f["key"]) for f in failed
+            if f["rule"] == "R4"] == [("R4", "oversight_check_failed", "r4")]
+    assert oversight.raise_alarms(w.conn, failed, w.clock()) == 1
+    alarms = _oversight_alarms(w)
+    assert alarms[("lane_idle", key)] is None                 # fail open, not clear
+    assert alarms[("oversight_check_failed", "r4")] is None    # raised like any
+
+    third = oversight.run_checks(w.conn, w.clock(), lane_git=good)   # recovered
+    assert oversight.raise_alarms(w.conn, third, w.clock()) == 0
+    alarms = _oversight_alarms(w)
+    assert alarms[("lane_idle", key)] is None                 # still reported open
+    assert alarms[("oversight_check_failed", "r4")] is not None  # cleared now
+
+
+def test_r4_per_ref_failure_stays_a_skip_and_the_failure_digest_is_stable(w):
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    seed(w, [("A", ())])
+    w.clock.advance(oversight.LANE_IDLE_S + HOUR)
+    listing = lane_git(w.clock() - (oversight.LANE_IDLE_S + HOUR))
+
+    def git(args):                          # the listing works, one ref does not
+        if "rev-list" in args:
+            raise RuntimeError("rev-list failed")
+        return listing(args)
+
+    assert oversight.r4_lane_idle(w.conn, w.clock(), git=git) == []   # still a skip
+    first = oversight.r4_lane_idle(w.conn, w.clock(), git=_boom)
+    later = oversight.r4_lane_idle(w.conn, w.clock() + 600, git=_boom)
+    assert oversight.digest(first)[0] == oversight.digest(later)[0]

@@ -123,6 +123,10 @@ def _table_exists(conn, name):
 
 # ------------------------------------------------------------------ R1, R2
 _RULE_OF_STALL = {"stall_no_event": "R1", "merged_open": "R2"}
+#: Alarm kind handed back to the rule that owns it.  When a rule's check fails
+#: (``oversight_check_failed``) :func:`raise_alarms` must keep its open alarms
+#: instead of reading the missing findings as "the condition went away".
+_RULE_OF_ALARM_KIND = {"lane_idle": "R4"}
 
 
 def r1_r2(conn, now, git=None):
@@ -178,6 +182,10 @@ def r4_lane_idle(conn, now, git=None):
 
     *git* is the same injectable shape the check uses for stall trailers but
     here as ``git(args) -> str``; without it the rule is skipped silently.
+    A *git* that raises while listing means the check itself could not run, so
+    it fails closed with one ``oversight_check_failed`` finding (never ``[]``:
+    an empty result would let :func:`raise_alarms` clear open ``lane_idle``
+    alarms).  Per-ref ``rev-list`` failures still only skip that one ref.
     """
     if git is None:
         return []
@@ -185,8 +193,9 @@ def r4_lane_idle(conn, now, git=None):
         listing = git(["for-each-ref",
                        "--format=%(refname) %(committerdate:unix)",
                        _LANE_REF_PREFIX])
-    except Exception:  # noqa: BLE001 - a failing git never fails the check
-        return []
+    except Exception as exc:  # noqa: BLE001 - fail closed, keep R4's alarms open
+        return [_finding("R4", "oversight_check_failed", "r4",
+                         type(exc).__name__, "")]
     slugs = {}
     for item in _items(conn):
         slugs.setdefault(_slug(item["key"]), item["key"])
@@ -347,6 +356,9 @@ def raise_alarms(conn, findings, now):
     Rows live under ``workflow_id='oversight'`` and dedupe on ``(kind, key)``
     while open (a finding's ``reason`` is carried in ``detail``).  New ids are
     ``MAX(id)+1`` inside one write transaction, exactly like the reconciler.
+    An open row whose kind belongs to a rule that reported
+    ``oversight_check_failed`` is *kept*: the rule's findings are missing
+    because the check could not run, not because the condition vanished.
     Returns the number of *new* rows.
     """
     stamp = iso(now)
@@ -354,6 +366,8 @@ def raise_alarms(conn, findings, now):
     if started:
         conn.execute("BEGIN IMMEDIATE")
     try:
+        failed = {f["rule"] for f in findings
+                  if f["kind"] == "oversight_check_failed"}
         present = {}
         for row in conn.execute(
                 "SELECT id, kind, key FROM projector_alarms"
@@ -380,6 +394,9 @@ def raise_alarms(conn, findings, now):
             new += 1
         for ident, alarm_id in present.items():
             if ident not in wanted:
+                owner = _RULE_OF_ALARM_KIND.get(ident[0])
+                if owner is not None and owner in failed:
+                    continue        # the owning rule could not run: keep it
                 conn.execute(
                     "UPDATE projector_alarms SET cleared_at=? WHERE id=?",
                     (stamp, alarm_id))
