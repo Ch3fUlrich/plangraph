@@ -428,15 +428,15 @@ fn workflow_id(id: &str) -> String {
 
 /// Every keeper call the card made must carry the full execution identity:
 /// the workflow id, this run's id and the card attempt number (1-based, never
-/// Temporal's activity retry count). The attempt must also equal `attempts`,
-/// the number of attempts the card ran, so a park, a completion and the alarm
-/// that goes with it all name the card's final attempt.
+/// Temporal's activity retry count). Calls name an attempt the card has run,
+/// in non-decreasing order: a question-timeout alarm can precede another attempt.
 fn assert_execs_name_the_attempts(env: &Env, attempts: u32) {
     let execs = env.keeper.execs();
     assert!(
         !execs.is_empty(),
         "the card must have reached the keeper at least once"
     );
+    let mut previous = 0;
     for exec in &execs {
         assert!(
             exec.workflow_id.is_some(),
@@ -450,10 +450,15 @@ fn assert_execs_name_the_attempts(env: &Env, attempts: u32) {
             .attempt
             .unwrap_or_else(|| panic!("every keeper call carries the card attempt: {exec:?}"));
         assert!(attempt >= 1, "the card attempt is 1-based: {exec:?}");
-        assert_eq!(
-            attempt, attempts,
-            "the keeper call carries the attempt the card ran: {exec:?} vs {attempts} attempts"
+        assert!(
+            attempt <= attempts,
+            "keeper call cannot name a future attempt: {exec:?}"
         );
+        assert!(
+            attempt >= previous,
+            "keeper call attempts cannot go backwards: {exec:?}"
+        );
+        previous = attempt;
     }
 }
 

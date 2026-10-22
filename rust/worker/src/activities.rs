@@ -92,8 +92,12 @@ pub struct CardInput {
 /// Ask the keeper to store an agent question for a card.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AskInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_state: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_expected_state"
+    )]
+    pub expected_state: Option<Vec<String>>,
     pub card: String,
     pub question: Question,
     /// The card attempt number (monotone per run), not Temporal's activity
@@ -247,8 +251,12 @@ pub struct MergeResult {
 /// Tell the keeper a card is done.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoneInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_state: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_expected_state"
+    )]
+    pub expected_state: Option<Vec<String>>,
     pub card: String,
     pub merged_sha: String,
     /// The card attempt number (monotone per run), not Temporal's activity
@@ -369,12 +377,35 @@ fn gate_error(e: std::io::Error) -> ActivityError {
     }
 }
 
+// Old activity histories carry a single string; keep them readable on replay.
+fn deserialize_expected_state<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum States {
+        One(String),
+        Any(Vec<String>),
+    }
+    Ok(
+        Option::<States>::deserialize(deserializer)?.map(|states| match states {
+            States::One(state) => vec![state],
+            States::Any(states) => states,
+        }),
+    )
+}
+
 /// The execution identity for a keeper call made by this activity: workflow
 /// and run from the activity context, the attempt from the activity input —
 /// the *card* attempt number, monotone per run, never Temporal's
 /// `ActivityInfo::attempt` (the activity retry count, which resets per
 /// activity and would be refused as lower by the Python keeper).
-fn exec_of(ctx: &ActivityContext, attempt: Option<u32>, expected_state: Option<String>) -> ExecId {
+fn exec_of(
+    ctx: &ActivityContext,
+    attempt: Option<u32>,
+    expected_state: Option<Vec<String>>,
+) -> ExecId {
     let info = ctx.info();
     ExecId {
         workflow_id: info.workflow_id.clone(),
@@ -404,7 +435,7 @@ fn park_attempt_of(input: &str) -> Option<u32> {
 pub fn park_json_with_attempt(
     p: &ParkPacket,
     attempt: Option<u32>,
-    expected_state: Option<String>,
+    expected_state: Option<Vec<String>>,
 ) -> String {
     let mut v: serde_json::Value =
         serde_json::from_str(&p.to_json()).expect("packet serializes to JSON");
@@ -413,7 +444,14 @@ pub fn park_json_with_attempt(
             obj.insert("attempt".into(), serde_json::json!(attempt));
         }
         if let Some(state) = expected_state {
-            obj.insert("expected_state".into(), state.into());
+            obj.insert(
+                "expected_state".into(),
+                if state.len() == 1 {
+                    serde_json::json!(state[0])
+                } else {
+                    serde_json::json!(state)
+                },
+            );
         }
     }
     v.to_string()
@@ -1050,7 +1088,16 @@ impl CardActivities {
         // task so the exec identity is built from this activity's context.
         let expected_state = serde_json::from_str::<serde_json::Value>(&input)
             .ok()
-            .and_then(|v| v.get("expected_state")?.as_str().map(str::to_owned));
+            .and_then(|v| {
+                let state = v.get("expected_state")?;
+                if let Some(state) = state.as_str() {
+                    Some(vec![state.to_owned()])
+                } else {
+                    serde_json::from_value::<Vec<String>>(state.clone())
+                        .ok()
+                        .filter(|states| !states.is_empty())
+                }
+            });
         let exec = exec_of(&ctx, park_attempt_of(&input), expected_state);
         tokio::task::spawn_blocking(move || {
             let packet =
@@ -1406,7 +1453,16 @@ mod tests {
             check_tail: "boom".to_string(),
         };
 
-        let tagged = park_json_with_attempt(&p, Some(4), Some("running".into()));
+        let tagged = park_json_with_attempt(&p, Some(4), Some(vec!["running".into()]));
+        let any = park_json_with_attempt(
+            &p,
+            Some(4),
+            Some(vec!["running".into(), "needs_input".into()]),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&any).unwrap()["expected_state"],
+            serde_json::json!(["running", "needs_input"])
+        );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&tagged).unwrap()["expected_state"],
             "running"

@@ -352,8 +352,8 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
-                        // Projector: the attempt closed with needs_input.
-                        "needs_input",
+                        // Projector: needs_input close is asynchronous; running survives until applied.
+                        &["running", "needs_input"],
                     )
                     .await?
                     {
@@ -820,8 +820,8 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
-                // Projector: the attempt already closed with needs_input.
-                expected_state: Some("needs_input".into()),
+                // Projector: needs_input close is asynchronous; running survives until applied.
+                expected_state: Some(vec!["running".into(), "needs_input".into()]),
                 card: card.clone(),
                 question: q.clone(),
                 attempt: Some(n.max(1)),
@@ -842,8 +842,8 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
-                // Projector: failed asks do not override the attempt's needs_input.
-                "needs_input",
+                // Projector: failed asks do not override running or the projected needs_input.
+                &["running", "needs_input"],
             )
             .await;
         }
@@ -858,8 +858,8 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
-            // Projector: refused asks do not override the attempt's needs_input.
-            "needs_input",
+            // Projector: refused asks do not override running or the projected needs_input.
+            &["running", "needs_input"],
         )
         .await;
     };
@@ -929,8 +929,8 @@ async fn question_step(
                     QUESTION_PARK_REASON,
                     question::timeout_park_tail(&q.text),
                     n,
-                    // Projector: TimerStarted never overrides needs_input.
-                    "needs_input",
+                    // Projector: TimerStarted never overrides needs_input; running may await projection.
+                    &["running", "needs_input"],
                 )
                 .await
             }
@@ -951,7 +951,7 @@ async fn park_question(
     reason: &str,
     check_tail: String,
     n: u32,
-    expected_state: &str,
+    expected_state: &[&str],
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
@@ -1298,11 +1298,15 @@ async fn park_and_alarm_in_state(
     packet: &ParkPacket,
     reason: String,
     attempt: u32,
-    expected_state: Option<&str>,
+    expected_state: Option<&[&str]>,
 ) -> WorkflowResult<()> {
     ctx.execute_activity(
         CardActivities::park,
-        park_json_with_attempt(packet, Some(attempt), expected_state.map(str::to_owned)),
+        park_json_with_attempt(
+            packet,
+            Some(attempt),
+            expected_state.map(|states| states.iter().map(|state| (*state).to_owned()).collect()),
+        ),
         activity_options(cfg),
     )
     .await?;

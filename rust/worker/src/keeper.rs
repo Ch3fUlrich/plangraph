@@ -74,7 +74,7 @@ pub struct ExecId {
     pub attempt: Option<u32>,
     /// Last observed card state for compare-and-set; absent for legacy callers
     /// and alarms. Roll out keeper support before deploying this worker.
-    pub expected_state: Option<String>,
+    pub expected_state: Option<Vec<String>>,
 }
 
 /// Fencing token of a keeper-held merge lock. The token only ever grows, so a
@@ -140,7 +140,12 @@ fn encode_segment(s: &str) -> String {
 fn with_exec(mut body: serde_json::Value, exec: &ExecId) -> serde_json::Value {
     // Independent of execution fencing; deploy the keeper before the worker.
     if let (Some(obj), Some(state)) = (body.as_object_mut(), &exec.expected_state) {
-        obj.insert("expected_state".into(), state.as_str().into());
+        let value = if state.len() == 1 {
+            serde_json::json!(state[0])
+        } else {
+            serde_json::json!(state)
+        };
+        obj.insert("expected_state".into(), value);
     }
     let (Some(workflow_id), Some(run_id), Some(attempt)) =
         (&exec.workflow_id, &exec.run_id, exec.attempt)
@@ -571,27 +576,51 @@ impl Keeper for StubKeeper {
 mod tests {
     #[test]
     fn expected_state_is_optional_in_state_call_bodies() {
-        for body in [
-            serde_json::json!({"card":"c"}),
-            serde_json::json!({"card":"c", "merged_sha":"s"}),
-            serde_json::json!({"key":"c"}),
+        for state in [
+            None,
+            Some(vec!["running".to_owned()]),
+            Some(vec!["running".to_owned(), "needs_input".to_owned()]),
         ] {
-            assert!(
-                with_exec(body.clone(), &ExecId::default())
-                    .get("expected_state")
-                    .is_none()
-            );
-            let exec = ExecId {
-                expected_state: Some("running".into()),
-                ..ExecId::default()
-            };
-            assert_eq!(with_exec(body, &exec)["expected_state"], "running");
+            for verb in ["park", "complete", "ask_question"] {
+                let (base, server) = serve_once(
+                    if verb == "ask_question" { 200 } else { 204 },
+                    "OK",
+                    if verb == "ask_question" {
+                        r#"{"id":1}"#
+                    } else {
+                        ""
+                    },
+                );
+                let keeper = HttpKeeper::new(&base);
+                let exec = ExecId {
+                    expected_state: state.clone(),
+                    ..exec()
+                };
+                match verb {
+                    "park" => keeper.park(&park(), &exec).unwrap(),
+                    "complete" => keeper.complete("c-1", "sha", &exec).unwrap(),
+                    _ => {
+                        keeper.ask_question("c-1", &question(), &exec).unwrap();
+                    }
+                }
+                let body = body_of(&server.join().unwrap());
+                match &state {
+                    None => assert!(body.get("expected_state").is_none()),
+                    Some(states) if states.len() == 1 => {
+                        assert_eq!(body["expected_state"], "running")
+                    }
+                    Some(_) => assert_eq!(
+                        body["expected_state"],
+                        serde_json::json!(["running", "needs_input"])
+                    ),
+                }
+            }
         }
     }
 
     #[test]
     fn http_exec_identity_and_expected_state_on_fenced_calls() {
-        for state in [None, Some("running".to_string())] {
+        for state in [None, Some(vec!["running".to_string()])] {
             for verb in [
                 "report_attempt",
                 "park",
@@ -1222,38 +1251,39 @@ mod tests {
         );
     }
 
-    /// The stub records the exec of every park/complete/alarm/ask_question
-    /// call, in call order, beside what the call carried.
+    /// Exercise each card-state endpoint through HttpKeeper, not the stub.
     #[test]
-    fn stub_records_the_exec_of_every_card_state_call_in_order() {
-        let k = StubKeeper::default();
-        let first = ExecId {
-            expected_state: None,
-            workflow_id: Some("wf-1".into()),
-            run_id: Some("run-1".into()),
-            attempt: Some(1),
-        };
-        let second = ExecId {
-            expected_state: None,
-            workflow_id: Some("wf-1".into()),
-            run_id: Some("run-1".into()),
-            attempt: Some(2),
-        };
-        assert!(k.execs().is_empty());
-
-        k.park(&park(), &first).unwrap();
-        k.complete("c-1", "sha-1", &second).unwrap();
-        k.alarm(&alarm(), &first).unwrap();
-        assert_eq!(k.ask_question("c-1", &question(), &second).unwrap(), 1);
-
-        assert_eq!(
-            k.execs(),
-            vec![first.clone(), second.clone(), first, second]
-        );
-        // The legacy recordings are still there and untouched.
-        assert_eq!(k.parked().len(), 1);
-        assert_eq!(k.completed().len(), 1);
-        assert_eq!(k.alarms().len(), 1);
-        assert_eq!(k.questions().len(), 1);
+    fn http_sends_the_exec_of_every_card_state_call_in_order() {
+        for (index, verb) in ["park", "complete", "alarm", "ask_question"]
+            .iter()
+            .enumerate()
+        {
+            let (base, server) = serve_once(
+                if *verb == "ask_question" { 200 } else { 204 },
+                "OK",
+                if *verb == "ask_question" {
+                    r#"{"id":1}"#
+                } else {
+                    ""
+                },
+            );
+            let keeper = HttpKeeper::new(&base);
+            let exec = ExecId {
+                attempt: Some(index as u32 + 1),
+                ..exec()
+            };
+            match *verb {
+                "park" => keeper.park(&park(), &exec).unwrap(),
+                "complete" => keeper.complete("c-1", "sha", &exec).unwrap(),
+                "alarm" => keeper.alarm(&alarm(), &exec).unwrap(),
+                _ => {
+                    keeper.ask_question("c-1", &question(), &exec).unwrap();
+                }
+            }
+            let body = body_of(&server.join().unwrap());
+            assert_eq!(body["workflow_id"], "wf-1");
+            assert_eq!(body["run_id"], "run-1");
+            assert_eq!(body["attempt"], index as u32 + 1);
+        }
     }
 }
