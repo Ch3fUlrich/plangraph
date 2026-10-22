@@ -3,17 +3,17 @@ Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 op
 Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
 glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
 TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-worktrees/sv-dry-1dbc4f26, refresh to each main (D-2234). Keeper LIVE runs FROM live-2d61e281 (cwd+PYTHONPATH): never ff it as tools; keeper code move = HIGH D-825 GO-REQ.
-## Main = 5fe070b3 (#117). Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
+## Main = 1e1a5ec4 (#120). Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
 ## Lanes
 | Item | Owner | State / next |
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv | #112 head 31c525d8 (base 5fe070b3); seats r6 neutral deepseek+qwen run by me (bg bu55331mg, -f attach); CI 39848623437 pending -> GO-REQ routing |
 | RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
 | RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
-| RT-P1-PHASE-RUNNER (HIGH) | spine | S2 #119 r9 head 4c88ad17 CI green, qwen PASS, glm FIX 4 -> spine disputed all to routing (SDK + 3 tests); await ruling -> GO or fix. S3 own cred (D-2227), S4 |
+| RT-P1-PHASE-RUNNER (HIGH) | spine | S2 GO D-2291 @4c88ad17: spine rebases onto 1e1a5ec4 + CI -> I merge (no submit). S3 phase_finish verb per D-2227 started. HARDEN: add D-2288 criteria when open |
 | RT-OVERSIGHT-CHECKS | DONE | 5fe070b3 verdict alibaba; timer = operator ask #3 at workst (needs operator OK); was MERGED 5fe070b3 (GO D-2274); ciwait bg b2ansobqb -> evidence+submit; then verdicts qwen/haiku seats/oversight-117d; timer install workst keeper only (D-1854) via workst-L1-autoos; LOW followup leaf -> routing |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
-| CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 2209279d CI 8/8, seats qwen+glm A/B PASS neutral; wiring check rc0 read by me; GO-REQ routing 20:5xZ -> merge, CI main, evidence, submit, verdicts (writer deepseek) |
+| CI-COMMIT-GATE-HARDEN (HIGH) | me | MERGED 1e1a5ec4 (GO D-2290); ciwait bg -> tmp/ci120.log -> evidence+submit -> verdicts qwen/glm final-2209279d (writer deepseek). Next leaf CI-COMMIT-GATE-EDGES (open, dep HARDEN) |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | DONE | qwen r2 PASS 59a5e0e5, verdict alibaba; PH-RT-RUNTIME 13/33 |
@@ -35,3 +35,4 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
+- New leaves: RT-P1-CARD-CHECKS-KEEPER (HIGH, dep CARD-CHECKS, D-2289). exec-wfv CI 39848623437 green on 31c525d8.
