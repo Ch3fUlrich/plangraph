@@ -4,6 +4,7 @@ import importlib.util
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -516,3 +517,229 @@ def test_workflow_commit_trailers_step_runs_always_on_pull_request():
     expr = trailer_steps[0].get("if") or ""
     assert "always()" in expr
     assert "pull_request" in expr
+    assert "push" in expr
+
+
+def test_pr_editing_gate_is_refused_by_base_copy(repo: Path, tmp_path: Path):
+    base = _commit(
+        repo,
+        OK_MSG,
+        files={'tools/ci_commit_gate.py': MODULE_PATH.read_text(encoding='utf-8')},
+    )
+    head = _commit(
+        repo,
+        'feat: weaken gate',
+        files={'tools/ci_commit_gate.py': 'import sys\nsys.exit(0)\n'},
+    )
+    gate_base = tmp_path / 'gate_base.py'
+    gate_base.write_text(
+        _git(repo, 'show', f'{base}:tools/ci_commit_gate.py'),
+        encoding='utf-8',
+    )
+    proc = subprocess.run(
+        [sys.executable, str(gate_base), 'check', '--base', base, '--head', head],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert f'{head}: missing Writer trailer' in proc.stdout
+    assert 'gate edit without Gate-Edit trailer' in proc.stdout
+    proc = subprocess.run(
+        [sys.executable, str(repo / 'tools/ci_commit_gate.py'), 'check', '--base', base, '--head', head],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0
+
+
+def test_strict_writer_leading_whitespace_refused(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'feat: x\n\n  Writer: mimo-v2.6-flash run-1\n',
+        files={'a.txt': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: malformed Writer trailer']
+
+
+def test_strict_writer_space_before_colon_refused(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'feat: x\n\nWriter : mimo-v2.6-flash run-1\n',
+        files={'a.txt': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: malformed Writer trailer']
+
+
+def test_hand_edit_without_writer_passes(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        files={'docs/x.md': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_hand_edit_on_auth_surface_refused(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        files={'src/plangraph/keeper/mcp.py': 'x'},
+    )
+    assert check(base, sha, cwd=repo) == [
+        f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py'
+    ]
+
+
+def test_hand_edit_commits_listed_on_stderr(repo: Path, monkeypatch, capsys):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'fix: tweak\n\nHand-Edit: typo in docs\n',
+        files={'docs/x.md': 'x'},
+    )
+    monkeypatch.chdir(repo)
+    main(['check', '--base', base, '--head', sha])
+    err = capsys.readouterr().err
+    assert f'hand-edit {sha}: typo in docs' in err
+    assert ci_commit_gate.hand_edit_commits(base, sha, cwd=repo) == [(sha, 'typo in docs')]
+
+
+def test_js_test_removal_needs_trailer(repo: Path):
+    base = _commit(
+        repo,
+        OK_MSG,
+        files={'tests/foo.test.js': '''it('does x', () => {});\n'''},
+    )
+    sha = _commit(
+        repo,
+        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\n',
+        remove=('tests/foo.test.js',),
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: test removal without Test-Removal trailer']
+
+    base = _commit(
+        repo,
+        OK_MSG,
+        files={'tests/foo.test.js': '''it('does x', () => {});\n'''},
+    )
+    sha = _commit(
+        repo,
+        'chore: remove test\n\nWriter: mimo-v2.6-flash run-1\n\nTest-Removal: D-1\n',
+        remove=('tests/foo.test.js',),
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_bats_test_removal_needs_trailer(repo: Path):
+    base = _commit(
+        repo,
+        OK_MSG,
+        files={'tests/t.bats': '@test ' + chr(34) + 'works' + chr(34) + ' {\n'},
+    )
+    sha = _commit(
+        repo,
+        'chore: remove bats test\n\nWriter: mimo-v2.6-flash run-1\n',
+        remove=('tests/t.bats',),
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: test removal without Test-Removal trailer']
+
+
+def test_test_added_in_pr_then_removed_is_not_removal(repo: Path):
+    base = _head(repo)
+    _commit(
+        repo,
+        OK_MSG,
+        files={'tests/test_new.py': 'def test_x():\n    pass\n'},
+    )
+    sha = _commit(
+        repo,
+        'chore: drop new test\n\nWriter: mimo-v2.6-flash run-1\n',
+        remove=('tests/test_new.py',),
+    )
+    assert check(base, sha, cwd=repo) == []
+
+    base = _head(repo)
+    _commit(
+        repo,
+        OK_MSG,
+        files={'tests/new.test.js': '''it('x', () => {});\n'''},
+    )
+    sha = _commit(
+        repo,
+        'chore: drop new js test\n\nWriter: mimo-v2.6-flash run-1\n',
+        remove=('tests/new.test.js',),
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_changed_signature_is_not_removal(repo: Path):
+    base = _commit(
+        repo,
+        OK_MSG,
+        files={'tests/test_sig.py': 'def test_a(x):\n    pass\n'},
+    )
+    sha = _commit(
+        repo,
+        'chore: change signature\n\nWriter: mimo-v2.6-flash run-1\n',
+        files={'tests/test_sig.py': 'def test_a(x, y):\n    pass\n'},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+
+def test_renamed_base_test_is_removal(repo: Path):
+    base = _commit(
+        repo,
+        OK_MSG,
+        files={'tests/test_z.py': 'def test_old():\n    pass\n'},
+    )
+    sha = _commit(
+        repo,
+        'chore: rename test\n\nWriter: mimo-v2.6-flash run-1\n',
+        files={'tests/test_z.py': 'def test_new():\n    pass\n'},
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: test removal without Test-Removal trailer']
+
+
+def test_gate_edit_required_for_workflow_and_exempt(repo: Path):
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n',
+        files={'.github/workflows/x.yml': 'name: x\n'},
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
+
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-2209\n',
+        files={'.github/workflows/x.yml': 'name: y\n'},
+    )
+    assert check(base, sha, cwd=repo) == []
+
+    base = _head(repo)
+    sha = _commit(
+        repo,
+        'chore: edit workflow\n\nWriter: mimo-v2.6-flash run-1\n\nGate-Edit: D-x\n',
+        files={'.github/workflows/x.yml': 'name: z\n'},
+    )
+    assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']
+
+
+def test_workflow_runs_gate_from_base_copy_and_on_push():
+    text = WORKFLOW_PATH.read_text(encoding='utf-8')
+    workflow = yaml.safe_load(text)
+    steps = workflow['jobs']['ci-gate']['steps']
+    trailer = [s for s in steps if s.get('name') == 'Commit trailers'][0]
+    run = trailer['run']
+    assert 'git show' in run
+    assert 'ci_commit_gate_base.py' in run
+    assert 'python3 tools/ci_commit_gate.py' not in run
+    on = workflow.get('on') or workflow.get(True)
+    assert 'push' in on
