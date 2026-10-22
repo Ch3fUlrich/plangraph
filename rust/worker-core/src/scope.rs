@@ -43,7 +43,6 @@ pub fn system_ro() -> Vec<PathBuf> {
         "/lib",
         "/lib64",
         "/etc",
-        "/proc",
         "/dev",
         "/opt",
         "/run/systemd/resolve",
@@ -88,7 +87,11 @@ pub fn wrap(cmd: Command, limits: &ScopeLimits, jail: &Jail) -> Command {
     for p in &jail.ro {
         out.arg("--ro").arg(p);
     }
-    out.arg("--").arg("/usr/bin/env").arg("-i");
+    // Let the helper grant only its own proc entries, not the host's process tree.
+    out.arg("--proc-self")
+        .arg("--")
+        .arg("/usr/bin/env")
+        .arg("-i");
     for (k, v) in cmd.get_envs().filter_map(|(k, v)| v.map(|v| (k, v))) {
         let mut kv = k.to_os_string();
         kv.push("=");
@@ -156,6 +159,7 @@ mod tests {
             "/usr",
             "--ro",
             "/etc",
+            "--proc-self",
             "--",
             "/usr/bin/env",
             "-i",
@@ -215,6 +219,7 @@ mod tests {
     fn system_ro_only_returns_existing_paths() {
         let ro = system_ro();
         assert!(!ro.is_empty());
+        assert!(!ro.contains(&PathBuf::from("/proc")));
         const ALLOWED: &[&str] = &[
             "/usr",
             "/bin",
@@ -222,7 +227,6 @@ mod tests {
             "/lib",
             "/lib64",
             "/etc",
-            "/proc",
             "/dev",
             "/opt",
             "/run/systemd/resolve",
@@ -234,6 +238,31 @@ mod tests {
                 "{p:?} not a candidate"
             );
         }
+    }
+
+    #[test]
+    fn wrapped_system_ro_uses_proc_self() {
+        let (bin, cmd) = sample();
+        let jail = Jail {
+            bin: &bin,
+            rw: vec![PathBuf::from("/work")],
+            ro: system_ro(),
+        };
+        let wrapped = wrap(cmd, &ScopeLimits::default(), &jail);
+        let a = argv(&wrapped);
+        assert_eq!(a.iter().filter(|arg| *arg == "--proc-self").count(), 1);
+        let helper_start = a
+            .iter()
+            .position(|arg| arg == bin.to_str().unwrap())
+            .unwrap();
+        let helper_args: Vec<_> = a[helper_start + 1..]
+            .iter()
+            .take_while(|arg| arg.as_str() != "--")
+            .collect();
+        assert!(helper_args.iter().any(|arg| arg.as_str() == "--proc-self"));
+        assert!(!a
+            .windows(2)
+            .any(|args| args[0] == "--ro" && args[1] == "/proc"));
     }
 
     #[test]
