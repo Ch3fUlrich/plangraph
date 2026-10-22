@@ -2,6 +2,14 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-19
+
+- **SPAWNER-CATALOG-DB:** SQLite Model & Benchmark Catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py`, `catalog_db.py`): WAL-mode SQLite catalog storing 22 Artificial Analysis v4.3.2 model benchmarks, quota pools, providers, clients, and role routes (`l1-orchestrator`, `l2-worker`, `l2-reviewer`, `l3-driver`), plus deterministic JSON/OmniRoute combo exporters (`export-json`, `export-combos`).
+- **SPAWNER-TIER-LADDER:** 5-Rung Tier Priority Order (`TIER_RUNG`): Enforces `trial (0) < free (1) < credit (2) < subscription (3) < paid (4)` so subscription pools (`agy`, `cxa`, `mimo`, `opencode-go`, `claude`) are strictly prioritized before pay-as-you-go (`deepseek`, `gemini` API).
+- **SPAWNER-RANKING-GUARDRAILS:** Verified AA v4.3.2 Model Ranking & Guardrails: Promotes `mimo/mimo-v2.6-pro` (`46.0` AA Intelligence, `51 tok/s` overall / `29 tok/s` direct, `$0.13/task`, `92.4%` cache hit rate, deeper `mimo` subscription token pool) ahead of `opencode-go/qwen3.8-max` (`45.4` AA Intelligence, `85 tok/s`, `$0.45/task`); sets `cxa/gpt-6-luna-high` (`38.4` Intel, `180 tok/s`, `$0.07/task`) as the sole active Codex ACP (`cxa`) model while gating `astra` and `sol-*`; clamps `claude-sonnet-5-5*` `max` effort to `xhigh`; and guards against the Haiku 100K token price cliff.
+- **SPAWNER-OMNIROUTE-RESOLVER-MCP:** OmniRoute ACP-First Spawner, Resolver & MCP Server (`measure.py`, `risk.py`, `clients.py`, `resolver.py`, `runner.py`, `mcp.py`): Routes all providers through OmniRoute ACP/Gateway first with offline CLI fallback, preserves Windows `SystemRoot` (`D-2090 BUG-B`), injects `OPENCODE_CONFIG_CONTENT` (`baseURL` + `X-OmniRoute-*` envelope headers), and enforces strict cross-family code reviews (`writer.family != reviewer1.family != reviewer2.family`).
+- **SPAWNER-HOST-BOOTSTRAP:** Host Bootstrap Delegation (`deploy/requirements-host.json`, `deploy/bootstrap.ps1`, `deploy/bootstrap.sh`): Delegates host package provisioning (`opencode-cli`, `tailscale`, `omniroute`, agent CLIs) to `AutoOS` without code duplication.
+
 ## 2026-10-18
 
 - **RT-P1-VERBS-LIVE-GUARDS:** `/v1/park` now checks the claim holder/delegate, an unexpired lease and an optional body `epoch` like heartbeat/submit (a stale worker cannot park a re-claimed card; router/system exempt; a holder's park of a `claimed` card releases the claim). Parking a claimed card now also revokes the card's run tokens, as release does. Merge locks are lease locks, not store-side fencing, whose owner is bound to the calling principal and stored as `<principal>:<owner>` (`%` and `:` in the principal name are percent-escaped, so the first `:` always ends the principal segment; echoed by acquire and required verbatim by release; cross-principal acquire and release are 409). Tests in `tests/test_keeper_worker_verbs.py`.
