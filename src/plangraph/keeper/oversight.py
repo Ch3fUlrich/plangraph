@@ -334,7 +334,7 @@ def run_checks(conn, now, *, git=None, lane_git=None, day=None):
 
 def digest(findings):
     """``(text, sha256hex)``: the canonical JSON payload and its digest."""
-    text = json.dumps(sorted(_sort(findings)),
+    text = json.dumps(_sort(findings),
                       sort_keys=True, separators=(",", ":"),
                       ensure_ascii=True) + "\n"
     return text, hashlib.sha256(text.encode("ascii")).hexdigest()
