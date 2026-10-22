@@ -7,6 +7,7 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+import os
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -166,6 +167,16 @@ def _replay(store, principal, body, need):
     return store.replay(principal, body.get("entries"))   # M2B-OUTBOX: principal checked first (403)
 
 
+def _phase_plan(store, principal, body, need):
+    from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
+    key = need(body, "key")
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    if not repo_root or not os.path.isdir(repo_root):
+        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+    # plan_phase checks the role first (403); repo root is server-side only.
+    return plan_phase(store, principal, key, repo_root=repo_root, now=None)
+
+
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
@@ -183,4 +194,5 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
-                      "governor_override": _governor_override}
+                      "governor_override": _governor_override,
+                      "phase_plan": _phase_plan}
