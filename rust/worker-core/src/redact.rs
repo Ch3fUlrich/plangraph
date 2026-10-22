@@ -18,7 +18,7 @@ pub const MAX_TAIL_BYTES: usize = 64 * 1024;
 fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
-        let specs: [&'static str; 8] = [
+        let specs: [&'static str; 9] = [
             // 1. PEM private-key blocks, complete: header through the matching
             //    footer, newlines included. Applied FIRST and to the whole
             //    text, because a multi-line secret cannot be redacted line by
@@ -30,19 +30,19 @@ fn patterns() -> &'static [regex::Regex] {
             r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*",
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
             r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
-            // 4. Env-style assignments: keep the credential name, cut the
-            //    value. Also handles quoted keys ("name": "value" /
-            //    'name' = 'value'); the closing key quote and the separator
-            //    survive, and a quoted value (spaces included) is replaced
-            //    whole. An unquoted value starts with a non-whitespace,
-            //    non-quote character that is not `}`, `]`, `)`, or `&`, then
-            //    runs to the end of the line (spaces and quotes included)
-            //    but stops before a structured closing delimiter (`}`, `]`,
-            //    `)`) or a URL-query `&`; the delimiter itself survives.
-            //    Quotes inside an unquoted value do not end it. The explicit
-            //    placeholder alternative keeps the rule idempotent even
-            //    though `]` ends an unquoted value.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)(\s*[=:]\s*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\]|[^\s"'}\])&][^\n\r}\])&]*)"#,
+            // 4a. Env-style assignments: keep the credential name, cut the
+            //     value. Separator whitespace is horizontal only, so it never
+            //     crosses a newline. Complete quoted values are preferred, the
+            //     placeholder keeps the rule idempotent, and an unquoted value
+            //     may not start with `}`, `]`, `)`, or `&` after either
+            //     separator. An unterminated quote falls back to the rest of
+            //     the line (no closing delimiter semantics).
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([ \t]*[=:][ \t]*)("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|\[REDACTED\]|[^\s"'}\])&][^\n\r}\])&]*|"[^\n\r]*|'[^\n\r]*)"#,
+            // 4b. Same assignment rule for `=` only: after `=` an unquoted
+            //     value may start with `}`, `]`, or `)` (not `&`, so
+            //     `?K=&x=1` stays empty). The tail class is unchanged; 4a
+            //     runs first and handles the `[REDACTED]` placeholder.
+            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([ \t]*=[ \t]*)([}\])][^\n\r}\])&]*)"#,
             // 5. Prefixed tokens: one alternation; every prefix is distinctive
             // enough to match on its own.
             r"\bsk-[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{30,}",
@@ -73,12 +73,13 @@ pub fn redact(text: &str) -> String {
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
-    let out = rs[4].replace_all(&out, REDACTED).into_owned();
+    let out = rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
+    let out = rs[7].replace_all(&out, REDACTED).into_owned();
     // 8. Long blobs — but only runs mixing digits and letters, so plain long
     // words and letter-only paths survive.
-    rs[7]
+    rs[8]
         .replace_all(&out, |m: &regex::Captures| {
             let t = m.get(0).unwrap().as_str();
             let has_digit = t.chars().any(|c| c.is_ascii_digit());
@@ -439,6 +440,35 @@ mod tests {
     }
 
     #[test]
+    fn seat_review_edge_cases() {
+        let key = ["API_", "KEY"].concat();
+        let check = |input: String, expected: String| {
+            let once = redact(&input);
+            assert_eq!(once, expected, "{input}");
+            assert_eq!(redact(&once), once, "{once}");
+        };
+
+        check(format!("{key}=\"abc def"), format!("{key}={REDACTED}"));
+        check(format!("{key}='abc"), format!("{key}={REDACTED}"));
+        check(
+            format!("{key}=\n# rotate quarterly"),
+            format!("{key}=\n# rotate quarterly"),
+        );
+        check(format!("{key}=)abc"), format!("{key}={REDACTED}"));
+        check(format!("{key}=]abc"), format!("{key}={REDACTED}"));
+        check(format!("{key}=}}abc"), format!("{key}={REDACTED}"));
+        check(format!("{{{key}: }}"), format!("{{{key}: }}"));
+        check(format!("url?{key}=&x=1"), format!("url?{key}=&x=1"));
+        check(format!("{key}=a \"b c\" d"), format!("{key}={REDACTED}"));
+        // Existing inline tests replace the quoted value whole, so the
+        // placeholder is not quoted here.
+        check(
+            format!("{{\"{key}\": \"abc\"}}"),
+            format!("{{\"{key}\": {REDACTED}}}"),
+        );
+    }
+
+    #[test]
     fn redact_is_idempotent() {
         let json_key = ["api_", "token"].concat();
         let json_val = ["abcd", "1234"].concat();
@@ -466,6 +496,9 @@ mod tests {
             format!("?{token_key}=a b&next=1"),
             format!("{token_key}={REDACTED}"),
             format!("{api_key}={REDACTED}&next=1"),
+            format!("{api_key}=\"abc def"),
+            format!("{api_key}=)abc"),
+            format!("{api_key}=\n# rotate quarterly"),
             format!("{api_key}=a \"b c\" d"),
             format!("{api_key}=pre 'x' y"),
             format!("{{{api_key}: a \"b\" c}}"),
