@@ -11,7 +11,7 @@ from plangraph.governor import policy
 from plangraph.keeper.api import KeeperHandler
 from plangraph.keeper import api_routes
 from plangraph.keeper.errors import Refused
-from plangraph.planner import phase
+from plangraph.planner import phase, shadow
 from plangraph.planner.legs import DEFAULT_LEGS
 
 @pytest.fixture
@@ -88,6 +88,21 @@ def test_two_ready_cards_disjoint(w, repo):
         assert c["route"]["harness"] == "opencode"
         assert c["route"]["window_class"] == "128k"
         assert not (set(c["route"]["legs"]) & non_opencode)
+
+def test_needs_input_and_ready_cards_are_planned(w, repo):
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    w.store.set_state(w.p("router"), "demo:C1", "needs_input")
+    w.store.set_state(w.p("router"), "demo:C2", "ready")
+
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+
+    by_key = {c["key"]: c for c in plan["cards"]}
+    assert set(by_key) == {"demo:C1", "demo:C2"}
+    assert by_key["demo:C1"]["state"] == "needs_input"
+    assert by_key["demo:C2"]["state"] == "ready"
+    assert plan["skipped"] == [] and plan["busy"] == []
 
 def test_overlapping_write_sets_defer_second(w, repo):
     make_phase(w)
@@ -240,6 +255,34 @@ def test_writes_nothing(w, repo):
     phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
     assert counts() == before
 
+def test_shadow_hook_off_writes_no_file(w, repo, tmp_path, monkeypatch):
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    monkeypatch.delenv(shadow.ENV_FLAG, raising=False)
+    monkeypatch.delenv(shadow.ENV_LOG, raising=False)
+
+    def files():
+        return {p for p in tmp_path.rglob("*") if p.is_file()}
+
+    before = files()
+    plan = phase.plan_phase(
+        w.store, w.p("router"), "demo:PH-X", repo_root=repo,
+        answerer=lambda _card, _route: {"legs": ["opencode-default"]})
+    after = files()
+
+    assert {c["key"] for c in plan["cards"]} == {"demo:C1", "demo:C2"}
+    assert all(c["shadow_id"] is None for c in plan["cards"])
+    assert after == before
+
+def test_terminal_gate_is_bad_state(w, repo):
+    make_phase(w)
+    w.store.cancel(w.p("router"), "demo:PH-X", "test")
+
+    with pytest.raises(Refused) as exc:
+        phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert code_of(exc.value) == "bad_state"
+
 # --------------------------------------------------------------------------- #
 # HTTP handler
 # --------------------------------------------------------------------------- #
@@ -308,6 +351,17 @@ def test_handler_returns_plan(w, repo, monkeypatch):
 def test_handler_requires_env(w, repo, monkeypatch):
     make_phase(w)
     monkeypatch.delenv("PG_PHASE_REPO_ROOT", raising=False)
+    with pytest.raises(Refused) as exc:
+        api_routes._phase_plan(
+            w.store, w.p("router"), {"key": "demo:PH-X"}, KeeperHandler._need)
+    assert code_of(exc.value) == "unavailable"
+
+def test_env_not_a_directory_is_unavailable(w, tmp_path, monkeypatch):
+    make_phase(w)
+    missing = tmp_path / "missing-repo"
+    assert not missing.exists()
+    monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(missing))
+
     with pytest.raises(Refused) as exc:
         api_routes._phase_plan(
             w.store, w.p("router"), {"key": "demo:PH-X"}, KeeperHandler._need)

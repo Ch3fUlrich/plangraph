@@ -27,6 +27,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "reopen", "set_kind", "set_metrics",
+               # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
                "governor_override", "phase_plan",
                "attempts", "park", "complete", "alarms", "locks"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
