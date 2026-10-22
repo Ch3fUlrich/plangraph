@@ -15,7 +15,7 @@ __all__ = ["RunsMixin", "normalise_run"]
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
-_TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats"})
+_TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats", "item_key"})
 _WRITER_KEYS = frozenset({"model", "family", "source"})
 _SEAT_KEYS = frozenset({"model", "verdict", "run_id"})
 
@@ -88,8 +88,11 @@ def normalise_run(run) -> dict:
                 entry["run_id"] = _check_run_id(seat["run_id"], "seat.run_id")
             normed.append(entry)
         seats = normed
+    item_key = run.get("item_key")
+    if item_key is not None and not isinstance(item_key, str):
+        raise Refused("validation", "item_key must be a string or null")
     return {"run_id": run_id, "phase": phase, "rc": rc,
-            "writer": writer, "seats": seats}
+            "writer": writer, "seats": seats, "item_key": item_key}
 
 
 class RunsMixin:
