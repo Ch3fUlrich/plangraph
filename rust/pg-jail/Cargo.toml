@@ -1,0 +1,21 @@
+[package]
+name = "pg-jail"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "pg_jail"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pg-jail"
+path = "src/main.rs"
+
+[dependencies]
+landlock = "0.4"
+thiserror = "2"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
