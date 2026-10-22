@@ -802,3 +802,9 @@ def test_workflow_yaml_extension_needs_gate_edit(repo: Path):
     assert check(base, sha, cwd=repo) == [
         f'{sha}: gate edit without Gate-Edit trailer'
     ]
+
+
+def test_gate_wiring_check_requires_gate_edit(repo: Path):
+    base = _head(repo)
+    sha = _commit(repo, 'feat: x\n\nWriter: mimo-v2.6-flash run-1\n', files={'tools/gate_wiring_check.py': 'x'})
+    assert check(base, sha, cwd=repo) == [f'{sha}: gate edit without Gate-Edit trailer']

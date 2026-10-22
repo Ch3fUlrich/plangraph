@@ -85,6 +85,7 @@ GATE_PATHS: tuple[str, ...] = (
     'tools/ci_commit_gate.py',
     'tools/ci_commit_exempt.txt',
     '.github/workflows/*',
+    'tools/gate_wiring_check.py',
 )
 
 EXEMPT_SHA_RE = re.compile(r'^[0-9a-fA-F]{40}$')
