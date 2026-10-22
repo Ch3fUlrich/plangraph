@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-22
+
+- **PG-JAIL:** Require fully enforced Landlock ABI V2 so cross-root rename/link is supported without a best-effort bypass. Replace broad procfs read grants with opt-in process-local and selected system-file access to protect sibling environments. Strengthen escape and resource-limit assertions, avoid default systemd probes, and remove unused exec/dependency code.
+
 ## 2026-10-19
 
 - **SPAWNER-CATALOG-DB:** SQLite Model & Benchmark Catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py`, `catalog_db.py`): WAL-mode SQLite catalog storing 22 Artificial Analysis v4.3.2 model benchmarks, quota pools, providers, clients, and role routes (`l1-orchestrator`, `l2-worker`, `l2-reviewer`, `l3-driver`), plus deterministic JSON/OmniRoute combo exporters (`export-json`, `export-combos`).

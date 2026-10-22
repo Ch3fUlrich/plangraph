@@ -7,14 +7,18 @@ paths.
 ## CLI
 
 ```
-pg-jail [--rw PATH]... [--ro PATH]... [--deny-read PATH]... [--best-effort] -- CMD [ARGS]...
+pg-jail [--rw PATH]... [--ro PATH]... [--deny-read PATH]... [--proc-self] -- CMD [ARGS]...
 ```
 
 - `--rw PATH` full read/write/execute access.
 - `--ro PATH` read/execute access.
 - `--deny-read PATH` no rule for this path. It must not overlap an `--rw` or
   `--ro` path.
-- `--best-effort` accept a partially enforced ruleset.
+- `--proc-self` allow `/proc/<jail-pid>` and existing `/proc/cpuinfo`,
+  `/proc/meminfo`, `/proc/stat`, `/proc/loadavg` files read-only. The PID is
+  preserved across exec, so `/proc/self` works for the exec'd command, but not
+  for a forked child's new PID. Sibling process directories remain denied.
+  A legacy `--ro /proc` is ignored with this flag and rejected without it.
 
 ## Write jail
 
@@ -31,7 +35,7 @@ pg-jail \
   --ro /lib64 \
   --ro /bin \
   --ro /etc \
-  --ro /proc \
+  --proc-self \
   --ro /dev \
   -- some-command
 ```
@@ -53,7 +57,7 @@ pg-jail \
   --ro /lib64 \
   --ro /bin \
   --ro /etc \
-  --ro /proc \
+  --proc-self \
   --ro /dev \
   --deny-read /secrets \
   -- some-command
@@ -65,8 +69,14 @@ access, so anything not listed in `--rw` or `--ro` is already denied.
 ## Fail closed
 
 Missing `--rw` or `--ro` paths are errors. `--deny-read` paths that overlap an
-allow entry are errors. If the ruleset is not fully enforced and
-`--best-effort` is not set, the process exits with `78`.
+allow entry (including generated procfs entries) are errors. Landlock ABI V2
+is required, including `Refer` for rename/link across writable roots. If ABI V2
+cannot be fully enforced, the process exits with `78`; there is no best-effort
+bypass.
+
+The resource-limit integration test is opt-in via
+`PG_JAIL_TEST_RESOURCE_LIMITS=1` on hosts with a configured systemd user scope.
+The default test run does not probe systemd or cgroups.
 
 ## Exit codes
 

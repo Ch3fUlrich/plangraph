@@ -32,7 +32,8 @@ fn landlock_ok() -> bool {
 }
 
 fn add_ro(cmd: &mut Command) {
-    for path in ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc", "/dev"] {
+    cmd.arg("--proc-self");
+    for path in ["/usr", "/bin", "/lib", "/lib64", "/etc", "/dev"] {
         if Path::new(path).exists() {
             cmd.arg("--ro").arg(path);
         }
@@ -48,11 +49,7 @@ fn jail(work: &Path, script: &str) -> Command {
 }
 
 fn systemd_scope_ok() -> bool {
-    Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "/bin/true"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    std::env::var_os("PG_JAIL_TEST_RESOURCE_LIMITS").is_some()
 }
 
 #[test]
@@ -147,11 +144,82 @@ fn deny_read() {
     let secret = tempfile::tempdir().unwrap();
     let file = secret.path().join("secret");
     fs::write(&file, "secret").unwrap();
-    let out = jail(work.path(), "cat \"$SECRET\"")
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--rw").arg(work.path());
+    cmd.arg("--deny-read").arg(&file);
+    add_ro(&mut cmd);
+    let out = cmd
+        .args(["--", "sh", "-c", "cat \"$SECRET\""])
         .env("SECRET", file.as_os_str())
         .output()
         .unwrap();
     assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Permission denied"));
+}
+
+#[test]
+fn proc_self_and_sibling_isolation() {
+    if !landlock_ok() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    // exec keeps the jail PID: a forked cat would have a different /proc/self.
+    let out = jail(work.path(), "exec cat /proc/self/status")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("Pid:"));
+
+    let mut sibling = Command::new("sleep").arg("30").spawn().unwrap();
+    let sibling_path = format!("/proc/{}/environ", sibling.id());
+    assert!(fs::read(&sibling_path).is_ok());
+    let outputs: Vec<_> = ["/proc/1/environ", sibling_path.as_str()]
+        .into_iter()
+        .map(|path| {
+            let mut cmd = Command::new(BIN);
+            cmd.arg("--rw").arg(work.path()).args(["--ro", "/proc"]);
+            add_ro(&mut cmd);
+            cmd.args(["--", "cat", path]).output().unwrap()
+        })
+        .collect();
+    sibling.kill().unwrap();
+    sibling.wait().unwrap();
+    for out in outputs {
+        assert!(!out.status.success(), "{out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("Permission denied"),
+            "{out:?}"
+        );
+    }
+}
+
+#[test]
+fn rename_and_link_across_rw_roots() {
+    if !landlock_ok() {
+        return;
+    }
+    let base = tempfile::tempdir().unwrap();
+    let a = base.path().join("a");
+    let b = base.path().join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    fs::write(a.join("source"), "data").unwrap();
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--rw").arg(&a).arg("--rw").arg(&b);
+    add_ro(&mut cmd);
+    let out = cmd
+        .args([
+            "--",
+            "sh",
+            "-c",
+            "mv \"$A/source\" \"$B/moved\" && ln \"$B/moved\" \"$A/linked\"",
+        ])
+        .env("A", &a)
+        .env("B", &b)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(fs::read(a.join("linked")).unwrap(), b"data");
 }
 
 #[test]
@@ -203,7 +271,7 @@ fn memory_hog_and_fork_bomb() {
         return;
     }
     if !systemd_scope_ok() {
-        eprintln!("SKIP: systemd user scope unavailable");
+        eprintln!("SKIP: resource-limit tests require PG_JAIL_TEST_RESOURCE_LIMITS");
         return;
     }
 
@@ -226,12 +294,11 @@ fn memory_hog_and_fork_bomb() {
         .arg("sh")
         .arg("-c")
         .arg("x=a; while :; do x=\"$x$x\"; done");
-    let status = cmd.status().unwrap();
-    assert!(!status.success(), "memory hog unexpectedly succeeded");
-    assert_ne!(
-        status.code(),
-        Some(124),
-        "memory hog hit the external timeout"
+    let out = cmd.output().unwrap();
+    use std::os::unix::process::ExitStatusExt;
+    assert!(
+        out.status.signal() == Some(9) || out.status.code() == Some(137),
+        "expected OOM SIGKILL, got {out:?}"
     );
 
     let mut cmd = Command::new("timeout");
@@ -256,6 +323,11 @@ fn memory_hog_and_fork_bomb() {
         .arg("sh")
         .arg("-c")
         .arg("f() { f | f & }; f; sleep 30");
-    let status = cmd.status().unwrap();
-    assert!(!status.success(), "fork bomb unexpectedly succeeded");
+    let out = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("Cannot fork") || stderr.contains("Resource temporarily unavailable"),
+        "expected task-limit refusal, got {out:?}"
+    );
+    assert!(!out.status.success(), "fork bomb unexpectedly succeeded");
 }

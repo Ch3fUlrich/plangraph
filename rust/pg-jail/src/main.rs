@@ -25,7 +25,7 @@ fn run() -> Result<(), i32> {
             Some("--rw") => spec.rw.push(next_path(&mut args)?),
             Some("--ro") => spec.ro.push(next_path(&mut args)?),
             Some("--deny-read") => spec.deny_read.push(next_path(&mut args)?),
-            Some("--best-effort") => spec.best_effort = true,
+            Some("--proc-self") => spec.proc_self = true,
             _ => return Err(usage("unexpected argument")),
         }
     }
