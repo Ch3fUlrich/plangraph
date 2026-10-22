@@ -1026,11 +1026,12 @@ impl CardActivities {
     #[activity]
     pub async fn report(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: AttemptReport,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        tokio::task::spawn_blocking(move || keeper.report_attempt(&input))
+        let exec = exec_of(&ctx, Some(input.n.max(1)), None);
+        tokio::task::spawn_blocking(move || keeper.report_attempt(&input, &exec))
             .await
             .map_err(activity_error)?
             .map_err(activity_error)
@@ -1462,7 +1463,10 @@ mod tests {
                 .get("expected_state")
                 .is_none()
         );
-        assert_eq!(plain, p.to_json());
+        assert_eq!(
+            v,
+            serde_json::from_str::<serde_json::Value>(&p.to_json()).unwrap()
+        );
         assert_eq!(ParkPacket::from_json(&plain).unwrap(), p);
         assert_eq!(park_attempt_of(&plain), None);
     }

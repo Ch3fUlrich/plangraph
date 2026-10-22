@@ -100,7 +100,7 @@ pub enum KeeperError {
 /// the real service and by [`StubKeeper`] in tests.
 pub trait Keeper: Send + Sync {
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError>;
-    fn report_attempt(&self, r: &AttemptReport) -> Result<(), KeeperError>;
+    fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError>;
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError>;
     fn complete(&self, card: &str, merged_sha: &str, exec: &ExecId) -> Result<(), KeeperError>;
     fn alarm(&self, a: &Alarm, exec: &ExecId) -> Result<(), KeeperError>;
@@ -248,8 +248,13 @@ impl Keeper for HttpKeeper {
         }
     }
 
-    fn report_attempt(&self, r: &AttemptReport) -> Result<(), KeeperError> {
-        self.post204("/v1/attempts", r)
+    fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError> {
+        let body = serde_json::to_value(r).expect("attempt report serializes");
+        let attempt_exec = ExecId {
+            expected_state: None,
+            ..exec.clone()
+        };
+        self.post204("/v1/attempts", &with_exec(body, &attempt_exec))
     }
 
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
@@ -334,6 +339,8 @@ struct StubState {
     parked: Vec<ParkPacket>,
     completed: Vec<(String, String)>,
     alarms: Vec<Alarm>,
+    /// Execution identities paired with attempt reports, in report order.
+    attempt_execs: Vec<ExecId>,
     /// The [`ExecId`] of every park/complete/alarm/ask_question call, in call
     /// order (failed calls included: they were calls too).
     execs: Vec<ExecId>,
@@ -446,6 +453,11 @@ impl StubKeeper {
         self.lock().execs.clone()
     }
 
+    /// Execution identities of reports, separate from final state-change calls.
+    pub fn attempt_execs(&self) -> Vec<ExecId> {
+        self.lock().attempt_execs.clone()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, StubState> {
         self.inner.lock().expect("stub keeper mutex poisoned")
     }
@@ -461,8 +473,13 @@ impl Keeper for StubKeeper {
         }
     }
 
-    fn report_attempt(&self, r: &AttemptReport) -> Result<(), KeeperError> {
-        self.lock().attempts.push(r.clone());
+    fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError> {
+        let mut s = self.lock();
+        s.attempt_execs.push(ExecId {
+            expected_state: None,
+            ..exec.clone()
+        });
+        s.attempts.push(r.clone());
         Ok(())
     }
 
@@ -573,9 +590,15 @@ mod tests {
     }
 
     #[test]
-    fn http_expected_state_on_state_calls_but_never_alarms() {
+    fn http_exec_identity_and_expected_state_on_fenced_calls() {
         for state in [None, Some("running".to_string())] {
-            for verb in ["park", "complete", "ask_question", "alarm"] {
+            for verb in [
+                "report_attempt",
+                "park",
+                "complete",
+                "ask_question",
+                "alarm",
+            ] {
                 let (base, server) = serve_once(
                     if verb == "ask_question" { 200 } else { 204 },
                     "OK",
@@ -591,6 +614,7 @@ mod tests {
                     ..exec()
                 };
                 match verb {
+                    "report_attempt" => keeper.report_attempt(&report(), &exec).unwrap(),
                     "park" => keeper.park(&park(), &exec).unwrap(),
                     "complete" => keeper.complete("c-1", "sha", &exec).unwrap(),
                     "ask_question" => {
@@ -599,7 +623,10 @@ mod tests {
                     _ => keeper.alarm(&alarm(), &exec).unwrap(),
                 }
                 let body = body_of(&server.join().unwrap());
-                if verb == "alarm" || state.is_none() {
+                assert_eq!(body["workflow_id"], "wf-1");
+                assert_eq!(body["run_id"], "run-1");
+                assert_eq!(body["attempt"], 3);
+                if verb == "alarm" || verb == "report_attempt" || state.is_none() {
                     assert!(body.get("expected_state").is_none());
                 } else {
                     assert_eq!(body["expected_state"], "running");
@@ -675,8 +702,9 @@ mod tests {
         assert_eq!(keeper.claim_next("w-1").unwrap(), None);
 
         let r = report();
-        keeper.report_attempt(&r).unwrap();
+        keeper.report_attempt(&r, &ExecId::default()).unwrap();
         assert_eq!(keeper.attempts(), vec![r.clone()]);
+        assert_eq!(keeper.attempt_execs(), vec![ExecId::default()]);
 
         let p = park();
         keeper.park(&p, &ExecId::default()).unwrap();
@@ -792,7 +820,7 @@ mod tests {
         let (base, server) = serve_once(204, "No Content", "");
         HttpKeeper::new(&base)
             .with_token(" s3cret \n")
-            .report_attempt(&report())
+            .report_attempt(&report(), &ExecId::default())
             .unwrap();
         let captured = server.join().expect("server thread");
         assert!(
@@ -805,7 +833,7 @@ mod tests {
         let (base, server) = serve_once(204, "No Content", "");
         HttpKeeper::new(&base)
             .with_token("  ")
-            .report_attempt(&report())
+            .report_attempt(&report(), &ExecId::default())
             .unwrap();
         let captured = server.join().expect("server thread");
         assert!(!captured.head.to_lowercase().contains("authorization"));
@@ -827,7 +855,7 @@ mod tests {
         // A trailing slash on the base must not double up in the path.
         let keeper = HttpKeeper::new(&format!("{base}/"));
 
-        keeper.report_attempt(&r).unwrap();
+        keeper.report_attempt(&r, &ExecId::default()).unwrap();
 
         let captured = server.join().expect("server thread");
         assert_eq!(captured.method, "POST");
@@ -842,7 +870,9 @@ mod tests {
         let (base, server) = serve_once(500, "Internal Server Error", "");
         let keeper = HttpKeeper::new(&base);
 
-        let err = keeper.report_attempt(&report()).unwrap_err();
+        let err = keeper
+            .report_attempt(&report(), &ExecId::default())
+            .unwrap_err();
         assert_eq!(err, KeeperError::Status(500));
         server.join().expect("server thread");
     }

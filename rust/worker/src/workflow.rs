@@ -352,7 +352,8 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
-                        "running",
+                        // Projector: the attempt closed with needs_input.
+                        "needs_input",
                     )
                     .await?
                     {
@@ -396,8 +397,9 @@ impl Card {
                             ctx.execute_activity(
                                 CardActivities::complete,
                                 DoneInput {
-                                    // Merge finishes the running attempt, without a question wait.
-                                    expected_state: Some("running".into()),
+                                    // Projector: merge retry timers can leave waiting; probe paths
+                                    // can retain the attempt's needs_input/waiting state. No fixed CAS.
+                                    expected_state: None,
                                     card: input.claim.card.clone(),
                                     merged_sha: sha.clone(),
                                     attempt: Some(n.max(1)),
@@ -418,6 +420,7 @@ impl Card {
                                     MERGE_LOCK_PARK_REASON,
                                 );
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                // Projector: merge retry timers may leave waiting; no fixed CAS.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
@@ -545,6 +548,7 @@ impl Card {
                         &check_tail,
                     );
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                    // Projector: synthetic probe verdicts do not determine state; no CAS.
                     park_and_alarm(
                         ctx,
                         &cfg,
@@ -585,6 +589,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                // Projector: policy reroutes do not determine state; no CAS.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
@@ -605,6 +610,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                // Projector: policy promotions do not determine state; no CAS.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
@@ -630,6 +636,7 @@ impl Card {
                         if waited >= cfg.wait_cap {
                             let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                             run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                            // Projector: attempt exits, not the wait-cap verdict, set state; no CAS.
                             park_and_alarm(
                                 ctx,
                                 &cfg,
@@ -658,6 +665,7 @@ impl Card {
                     Action::Quarantine => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                        // Projector: synthetic quarantine verdicts do not set state; no CAS.
                         park_and_alarm(
                             ctx,
                             &cfg,
@@ -671,6 +679,7 @@ impl Card {
                     Action::ToPlanner => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                        // Projector: planner verdicts do not set state; no CAS.
                         park_and_alarm(
                             ctx,
                             &cfg,
@@ -683,6 +692,7 @@ impl Card {
                     }
                     Action::Park { packet } => {
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                        // Projector: policy park packets do not determine prior state; no CAS.
                         park_and_alarm(
                             ctx,
                             &cfg,
@@ -810,8 +820,8 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
-                // The attempt is running until this question is accepted.
-                expected_state: Some("running".into()),
+                // Projector: the attempt already closed with needs_input.
+                expected_state: Some("needs_input".into()),
                 card: card.clone(),
                 question: q.clone(),
                 attempt: Some(n.max(1)),
@@ -832,7 +842,8 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
-                "running",
+                // Projector: failed asks do not override the attempt's needs_input.
+                "needs_input",
             )
             .await;
         }
@@ -847,7 +858,8 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
-            "running",
+            // Projector: refused asks do not override the attempt's needs_input.
+            "needs_input",
         )
         .await;
     };
@@ -917,7 +929,8 @@ async fn question_step(
                     QUESTION_PARK_REASON,
                     question::timeout_park_tail(&q.text),
                     n,
-                    "waiting",
+                    // Projector: TimerStarted never overrides needs_input.
+                    "needs_input",
                 )
                 .await
             }
@@ -942,14 +955,14 @@ async fn park_question(
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    // Only an accepted question has entered waiting; failed asks remain running.
+    // Projector ignores janitor/ask activities; the question state survives them.
     park_and_alarm_in_state(
         ctx,
         cfg,
         &packet,
         reason.to_string(),
         n.max(1),
-        expected_state,
+        Some(expected_state),
     )
     .await?;
     Ok(QuestionStep::Finished(parked(n)))
@@ -1274,8 +1287,9 @@ async fn park_and_alarm(
     reason: String,
     attempt: u32,
 ) -> WorkflowResult<()> {
-    // Ordinary park paths are still in the running card attempt, before a wait.
-    park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, "running").await
+    // Projector: attempt exits may leave running/needs_input/waiting and merge
+    // retry timers may emit waiting. Synthetic policy verdicts do not project.
+    park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, None).await
 }
 
 async fn park_and_alarm_in_state(
@@ -1284,11 +1298,11 @@ async fn park_and_alarm_in_state(
     packet: &ParkPacket,
     reason: String,
     attempt: u32,
-    expected_state: &str,
+    expected_state: Option<&str>,
 ) -> WorkflowResult<()> {
     ctx.execute_activity(
         CardActivities::park,
-        park_json_with_attempt(packet, Some(attempt), Some(expected_state.into())),
+        park_json_with_attempt(packet, Some(attempt), expected_state.map(str::to_owned)),
         activity_options(cfg),
     )
     .await?;
