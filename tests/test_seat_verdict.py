@@ -120,6 +120,32 @@ def test_writer_coverage_gate(tmp_path, capsys):
     assert "covers: xiaomi" in capsys.readouterr().out
 
 
+def test_unknown_writer_family_refused_for_any_seat(tmp_path):
+    assert run(tmp_path, "u1", "VERDICT: PASS", writer="qwenn",
+               extra=("--dry-run",)) == 2
+    assert run(tmp_path, "u2", "VERDICT: PASS", writer="alibaba,qwenn",
+               extra=("--dry-run",)) == 2
+    assert run(tmp_path, "u3", "VERDICT: PASS", served_model="claude-opus",
+               writer="qwenn", extra=("--dry-run",)) == 2
+    assert run(tmp_path, "u4", "VERDICT: PASS", served_model="claude-opus",
+               writer="alibaba", extra=("--dry-run",)) == 0
+
+
+def test_coverage_sensitive_high_claude_plus_foreign_passes(tmp_path):
+    assert sv.coverage(["xiaomi"], ["anthropic", "alibaba"], need=1,
+                       sensitive=True) == []
+    assert sv.coverage(["xiaomi"], ["anthropic", "alibaba"], need=2,
+                       sensitive=True) == []
+    assert sv.coverage(["xiaomi"], ["anthropic", "anthropic"], need=2,
+                       sensitive=True) == ["xiaomi"]
+    assert sv.coverage(["xiaomi"], ["anthropic", "alibaba", "google"],
+                       need=2, sensitive=True) == []
+    assert run(tmp_path, "s1", "VERDICT: PASS", served_model="claude-opus",
+               writer="alibaba", extra=("--dry-run",)) == 0
+    assert run(tmp_path, "s2", "VERDICT: PASS", writer="xiaomi",
+               extra=("--dry-run",)) == 0
+
+
 def test_coverage():
     assert sv.coverage(["xiaomi"], ["anthropic", "anthropic"], need=2) == ["xiaomi"]
     assert sv.coverage(["xiaomi"], ["anthropic", "alibaba"], need=2) == []

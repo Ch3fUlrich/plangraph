@@ -163,6 +163,11 @@ def main(argv=None):
     if not writer_families:
         print("seat_verdict: refused, writer family list is empty", file=sys.stderr)
         return EXIT_REFUSED
+    unknown_writers = [w for w in writer_families if w not in KNOWN_FAMILIES]
+    if unknown_writers:
+        print(f"seat_verdict: refused, unknown writer families "
+              f"{unknown_writers!r}", file=sys.stderr)
+        return EXIT_REFUSED
     model = evidence.get("served_model") or evidence.get("requested_model")
     family = model_family(model)
     if family is None:
@@ -170,8 +175,7 @@ def main(argv=None):
               f"is unknown", file=sys.stderr)
         return EXIT_REFUSED
     if family == "anthropic":
-        if ("anthropic" in writer_families
-                or any(writer not in KNOWN_FAMILIES for writer in writer_families)):
+        if "anthropic" in writer_families:
             print(f"seat_verdict: refused, anthropic seat over writer families "
                   f"{writer_families!r}", file=sys.stderr)
             return EXIT_REFUSED
