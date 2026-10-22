@@ -15,7 +15,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
 | CI-COMMIT-GATE-HARDEN | queue | input: def-line fixture change = false "test removal" (run 39817299743) -> match removed test NAMES |
-| DEVSTACK-TEST-FLAKE | me | #118 merged 7dd85d04; ciwait bsgidcarz -> evidence+submit; post qwen seat (spawner seats/devstack-flake/q.json) |
+| DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
 | workst L2s sandbox, card-checks, bus, oc-harden | STOPPED (D-2251) | handoffs C:\fleet\handoff\build-L2-<name>.handoff.md; relaunch via L2-LAUNCH when lane comes up |
