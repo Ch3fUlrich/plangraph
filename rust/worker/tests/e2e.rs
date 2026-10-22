@@ -2284,6 +2284,42 @@ async fn phase_finish_refused_is_partial() {
 }
 
 #[tokio::test]
+async fn phase_finish_unknown_state_is_partial() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-unknown", "echo ok > \"$PG_PROMPT\"").await
+        else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-unknown-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "conflict".to_string(),
+            pr: None,
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-finish-unknown-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 1)).await;
+        let out = finish_phase("phase_finish_unknown", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert!(
+            out.blocked.iter().any(|s| s.contains("unknown state")),
+            "{out:?}"
+        );
+        assert_eq!(env.keeper.finish_calls().len(), 1, "{out:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn phase_finish_never_green_is_partial() {
     in_local(async {
         let Some(env) = env_or_skip("phase-finish-never-green", "echo ok > \"$PG_PROMPT\"").await

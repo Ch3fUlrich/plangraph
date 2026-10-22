@@ -278,11 +278,17 @@ impl Phase {
                                     finish = Some(f);
                                     break;
                                 }
-                                _ => {
+                                crate::phase::FINISH_WAITING_CI => {
                                     finish = Some(f);
                                     if poll + 1 < polls {
                                         let _ = ctx.timer(input.finish_poll()).await;
                                     }
+                                }
+                                _ => {
+                                    last_blocked =
+                                        vec![format!("phase_finish: unknown state {}", f.state)];
+                                    finish = Some(f);
+                                    break;
                                 }
                             },
                             Err(err) => {
@@ -292,9 +298,9 @@ impl Phase {
                         }
                     }
                     if last_blocked.is_empty()
-                        && finish
+                        && !finish
                             .as_ref()
-                            .is_some_and(|f| f.state == crate::phase::FINISH_WAITING_CI)
+                            .is_some_and(|f| f.state == crate::phase::FINISH_MERGED)
                     {
                         last_blocked = vec!["phase_finish: waiting for ci-gate".to_string()];
                     }
