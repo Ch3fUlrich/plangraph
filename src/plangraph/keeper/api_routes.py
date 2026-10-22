@@ -7,6 +7,7 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+import os
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -26,7 +27,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "reopen", "set_kind", "set_metrics",
-               "governor_override",
+               # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
+               "governor_override", "phase_plan",
                "attempts", "park", "complete", "alarms", "locks"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
@@ -166,6 +168,18 @@ def _replay(store, principal, body, need):
     return store.replay(principal, body.get("entries"))   # M2B-OUTBOX: principal checked first (403)
 
 
+def _phase_plan(store, principal, body, need):
+    # Role first: a non-router/system principal gets 403 before env or key checks.
+    store._require_role(principal, "router", "system")
+    from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
+    key = need(body, "key")
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    if not repo_root or not os.path.isdir(repo_root):
+        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+    # repo_root is server-side only; plan_phase also re-checks the role first.
+    return plan_phase(store, principal, key, repo_root=repo_root, now=None)
+
+
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
@@ -183,4 +197,5 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
-                      "governor_override": _governor_override}
+                      "governor_override": _governor_override,
+                      "phase_plan": _phase_plan}
