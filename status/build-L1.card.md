@@ -1,4 +1,4 @@
-# build-L1 card · gen-18 · 2026-10-22 ~20:05Z · hb bg bxastgt52 · judge offline; L2-LAUNCH held until workst-L1-autoos ALIVE · HANDOFF docs/build-L1-handoff.md #19 · NO cron · hb bg loop 25m (15 keys ops/hb-keys.txt; restart FIRST)
+# build-L1 card · gen-18 · 2026-10-22 ~20:05Z · hb bg bxastgt52 · D-2270: server-L1-routing retired -> HIGH GO-REQ to routing; OC L2 env unset -> Claude Sonnet L2 fallback · HANDOFF docs/build-L1-handoff.md #19 · NO cron · hb bg loop 25m (15 keys ops/hb-keys.txt; restart FIRST)
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 opencode free > mimo > deepseek; NEW L2s = OpenCode sol via workst-L1-autoos (D-2265); never Claude writers; D-2240 Hand-Edit own commit.
 Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
 glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
@@ -17,7 +17,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
-| workst L2s sandbox, card-checks, bus, oc-harden | STOPPED (D-2251) | handoffs C:\fleet\handoff\build-L2-<name>.handoff.md; relaunch via L2-LAUNCH when lane comes up |
+| workst L2s sandbox, card-checks, bus, oc-harden | RELAUNCH sent 20:1xZ to workst-L1-autoos [230a16] (Sonnet, D-2270) | await their first MERGE-READY/BLOCKED |
 | D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
 | D-2254 low (after crit path) | me | PH-OPERATOR gate->GOAL holds (checked 19:2xZ); OS-149 A6 keeper cfg after prox A1-A5; RT-P4-ARCHIVE parked until cutover+1wk |
 Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, PG-PUBLIC-READY.
