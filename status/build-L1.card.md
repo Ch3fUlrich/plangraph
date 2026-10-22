@@ -13,7 +13,7 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S1 merged; S2 #119 r6 head 0f41650a glm PASS / qwen FIX med (child id scope) -> spine 1 fix round (phase-scoped child id), re-seat qwen+glm -> GO-REQ; minors -> leaf PHASE-RUNNER-HARDEN (spine sends D-2230); S3 own credential (D-2227); S4 |
 | RT-OVERSIGHT-CHECKS | flow-oversight-2 | GO impl (standard): 2 writers cx-first, rebase main, 2 seats -> MERGE-READY |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
-| CI-COMMIT-GATE-HARDEN | queue | input: def-line fixture change = false "test removal" (run 39817299743) -> match removed test NAMES |
+| CI-COMMIT-GATE-HARDEN (HIGH) | spawner | #120 head 9f168e51 CI green; seats were on 0a7a30d3 (glmA FIX 2 HIGH: Hand-Edit claude marker, workflow suppression). Round: fix HIGH-1, add tools/gate_wiring_check.py (L1 runs before merge), leaf for MEDs, re-seat qwen+glm exact head -> GO-REQ routing |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | in_review | re-seat after D-2190 |
