@@ -813,6 +813,7 @@ def test_gate_wiring_check_requires_gate_edit(repo: Path):
 def test_hand_edit_auth_path_rename_refused(repo):
     _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'src/plangraph/keeper/mcp.py': 'x\n'})
     base = _head(repo)
+    (repo / 'docs').mkdir()
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
     sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
     violations = check(base, sha, cwd=repo)
