@@ -578,7 +578,7 @@ mod tests {
 
     // Recorded `opencode run --format json` streams; tests must not edit them.
     const RATE_LIMITED_429: &str =
-        include_str!("../tests/fixtures/opencode/real-429-big-pickle.jsonl");
+        include_str!("../tests/fixtures/opencode/real-429-free-tier-quota.jsonl");
     const TRANSPORT_ERROR: &str =
         include_str!("../tests/fixtures/opencode/real-provider-transport-error.jsonl");
     const OK_TOOL_TOKENS: &str =

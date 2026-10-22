@@ -1,2 +1,2 @@
-{"type":"step_start","timestamp":1792335265366,"sessionID":"ses_eb07f0947ffeLLcmBTj8Rhdtmr","part":{"id":"prt_14f81be56001KAj6ERafKbYPpX","sessionID":"ses_eb07f0947ffeLLcmBTj8Rhdtmr","messageID":"msg_14f80fb05001af054CbYPCkRs8","type":"step-start"}}
-{"type":"error","timestamp":1792335347030,"sessionID":"ses_eb07f0947ffeLLcmBTj8Rhdtmr","error":{"type":"unknown","message":"Transport: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"}}
+{"type":"step_start","timestamp":1792335265366,"sessionID":"ses_synthetic006","part":{"id":"prt_synthetic016","sessionID":"ses_synthetic006","messageID":"msg_synthetic008","type":"step-start"}}
+{"type":"error","timestamp":1792335347030,"sessionID":"ses_synthetic006","error":{"type":"unknown","message":"Transport: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()"}}

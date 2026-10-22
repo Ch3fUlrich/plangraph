@@ -190,7 +190,7 @@ mod tests {
     use super::*;
 
     const RATE_LIMITED: [&str; 2] = [
-        include_str!("../tests/fixtures/opencode/real-429-big-pickle.jsonl"),
+        include_str!("../tests/fixtures/opencode/real-429-free-tier-quota.jsonl"),
         include_str!("../tests/fixtures/opencode/real-429-deepseek-v4.1-flash-free.jsonl"),
     ];
     const TRANSPORT: &str =

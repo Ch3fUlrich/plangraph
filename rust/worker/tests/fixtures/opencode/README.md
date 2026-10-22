@@ -1,6 +1,6 @@
 # Recorded opencode 2.0.32 `run --format json` streams
 
-Real recordings (only local paths replaced by `/work` and `/outside`): free-tier 429
+Real recordings (local paths replaced by `/work` and `/outside`; session, message and part ids replaced by synthetic `ses_syntheticNNN`-style ids): free-tier 429
 (`provider.quota`, FreeUsageLimitError), a transport error, a text run, a tool run with
 `step_finish` token counts, and a denied external-directory write.
 
