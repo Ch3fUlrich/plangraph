@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## Unreleased
+
+- **KEEPER-OPCLAIM-CLOSE:** router `set_legacy_state` refuses `claimed` on any `review_tier` other than `none` (except kind `operator_task`) with `bad_state` naming the tier and pointing at `in_review`, and accepts `in_review` from an already-stranded legacy claim (`claimed`, no lease, `claimed_by == owner`, last state-changing event `legacy_state_set`) with the full open→in_review bookkeeping (epoch+1, fresh round, delegate/reviewer/lease/waiver cleared), so fold/`verify_integrity` stay clean; tests in `tests/test_keeper_legacy_state.py`.
+
 ## 2026-10-22
 
 - **RT-P1-FLOW-UNBLOCK (follow-up):** tests only: non-router `add_dep` via `apply_ops` on a claimed item is refused (`forbidden`); the router's add_dep on a claimed item asserts its `item_defined` event; length assert in the claim-without-base test.
