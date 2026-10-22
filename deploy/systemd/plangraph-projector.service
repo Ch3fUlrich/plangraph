@@ -1,0 +1,16 @@
+[Unit]
+Description=plangraph projector: continuous run loop (30 s poll: attempts reach the keeper)
+After=plangraph-keeper.service
+Wants=plangraph-keeper.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/proposal/src
+EnvironmentFile=-%h/.config/plangraph/projector.env
+ExecStart=/usr/bin/python3 -m plangraph.projector --config %h/.local/share/plangraph/keeper.json run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
