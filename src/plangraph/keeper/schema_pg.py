@@ -97,6 +97,9 @@ CREATE TABLE items (
     writer_model   TEXT COLLATE "C",
     seat_models    TEXT COLLATE "C",
     run_ids        TEXT COLLATE "C",
+    exec_workflow_id TEXT COLLATE "C",
+    exec_run_id      TEXT COLLATE "C",
+    exec_attempt     BIGINT,
     created_at     TEXT COLLATE "C",
     updated_at     TEXT COLLATE "C"
 );
@@ -423,9 +426,9 @@ CREATE TABLE merge_locks (
 #: The store records them when a set-state move carries a
 #: ``(workflow_id, run_id, attempt)`` run; see ``store_cards._exec_check``.
 _V6 = """
-ALTER TABLE items ADD COLUMN exec_workflow_id TEXT COLLATE "C";
-ALTER TABLE items ADD COLUMN exec_run_id TEXT COLLATE "C";
-ALTER TABLE items ADD COLUMN exec_attempt BIGINT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_workflow_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_run_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_attempt BIGINT;
 """
 
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),

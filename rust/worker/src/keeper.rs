@@ -1081,10 +1081,10 @@ mod tests {
     }
 
     /// JSON recorded before `attempt` existed still decodes: the field
-    /// defaults to `None` instead of failing the read, so rolling upgrades
-    /// stay compatible. Writing it back out keeps the legacy shape too — no
-    /// `attempt` key at all when unset, so a pre-exec keeper never sees the
-    /// field.
+    /// defaults to `None` instead of failing the read. The field is omitted
+    /// only when unset; whenever an attempt is known, the body carries
+    /// workflow_id/run_id/attempt. An old keeper rejects these as unknown
+    /// fields, so deploy the keeper first, then the worker.
     #[test]
     fn old_wire_json_without_attempt_still_deserializes() {
         let alarm: Alarm = serde_json::from_str(r#"{"card":"c-1","reason":"stuck"}"#).unwrap();

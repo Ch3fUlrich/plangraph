@@ -113,7 +113,7 @@ def test_park_without_fields_on_an_owned_card_is_refused(doors, w):
     key, = seed(w, [("A", [])])
     assert doors.http("workerA", "POST", "/v1/park", park(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/park", park(key))
-    assert (status, body["error"]) == (400, "validation")
+    assert (status, body["error"]) == (409, "exec_stale")
     assert "has an exec owner" in body["msg"]
     assert state(w, key) == "parked"
     assert owner(w, key) == ("wf-1", "run-1", 1)
@@ -161,7 +161,7 @@ def test_complete_without_fields_on_an_owned_card_is_refused(doors, w):
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/complete", complete(key))
-    assert (status, body["error"]) == (400, "validation")
+    assert (status, body["error"]) == (409, "exec_stale")
     assert "has an exec owner" in body["msg"]
     assert owner(w, key) == ("wf-1", "run-1", 1)
 
@@ -209,7 +209,7 @@ def test_alarm_without_fields_on_an_owned_card_is_refused(doors, w):
     assert doors.http("workerA", "POST", "/v1/alarms",
                       alarm(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/alarms", alarm(key))
-    assert (status, body["error"]) == (400, "validation")
+    assert (status, body["error"]) == (409, "exec_stale")
     assert "has an exec owner" in body["msg"]
     assert [r[0] for r in alarms(w, key)] == ["stuck on check"]   # no new row
     assert owner(w, key) == ("wf-1", "run-1", 1)

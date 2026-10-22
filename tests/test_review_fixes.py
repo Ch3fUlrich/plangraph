@@ -23,7 +23,9 @@ def test_halt_payload_matches_the_keeper_ask_contract():
     found = re.findall(r'body\.get\("(\w+)"|_need\(body, "(\w+)"\)',
                        inspect.getsource(routes._ask))
     keys = {a or b for a, b in found}
-    assert set(item) == keys == {"key", "text", "default_answer", "deadline", "risk_tags"}
+    assert set(item) == {"key", "text", "default_answer", "deadline", "risk_tags"}
+    assert set(item) <= keys
+    assert keys - set(item) == {"workflow_id", "run_id", "attempt"}
     assert item["key"] == "demo:A" and item["default_answer"] is None
     assert item["deadline"] is None and item["risk_tags"] == ["auth"]
 

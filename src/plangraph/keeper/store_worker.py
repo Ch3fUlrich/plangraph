@@ -19,7 +19,7 @@ fencing of writes.
 history: it numbers them ``MAX(n)+1`` and carries the cost.  ``worker_attempt``
 therefore records an audit row only — inserting here would double the rows.
 
-RT-P1-EXEC-OWNERSHIP: ``worker_park``, ``worker_complete`` and ``worker_alarm``
+RT-P1-EXEC-OWNERSHIP: park, complete, alarm and audit-only attempt calls
 are checked against the card's recorded exec owner (``_exec_gate``).  A body
 that names ``workflow_id``, ``run_id`` or ``attempt`` must present all three
 and match the owner — an unowned card records its first owner, a different run
@@ -37,14 +37,14 @@ import re
 
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import _count, _number, _text
+from .store_cards import _count, _exec_parts, _number, _text
 
 __all__ = ["WorkerMixin"]
 
 _ATTEMPT_KEYS = frozenset(("card", "n", "leg", "exit_class", "diff_hash",
-                           "check_tail", "cost", "tokens_in", "tokens_out"))
-# RT-P1-EXEC-OWNERSHIP: park/complete/alarm carry the exec owner triple;
-# worker_attempt does not (its ``n`` is the projector's attempt number).
+                           "check_tail", "cost", "tokens_in", "tokens_out",
+                           "workflow_id", "run_id", "attempt"))
+# ``n`` is the projector's attempt number, distinct from the exec attempt.
 _PARK_KEYS = frozenset(("card", "tier", "exit_class", "check_tail", "epoch",
                         "workflow_id", "run_id", "attempt"))
 _COMPLETE_KEYS = frozenset(("card", "merged_sha", "workflow_id", "run_id",
@@ -125,7 +125,7 @@ class WorkerMixin:
         if due is not None and due.timestamp() <= now:
             raise Refused("epoch_stale", f"{item['key']}: claim lease expired")
 
-    def _exec_gate(self, key, body):
+    def _exec_gate(self, key, body, *, record=True):
         """Check a worker verb body against the card's recorded exec owner.
 
         Runs INSIDE the caller's write lock (park's ``guard`` hook and
@@ -134,19 +134,24 @@ class WorkerMixin:
         ``workflow_id``/``run_id``/``attempt`` must present all three and match
         the owner (``_exec_check``: a first call records it; a stale run or a
         lower attempt is refused); a body without them keeps the historical
-        behaviour unless the card is already owned.
+        behaviour unless the card is already owned. ``record=False`` validates
+        an unowned call without acquiring ownership (audit-only or no-op).
         """
+        row = self.conn.execute(
+            "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
+        owned = row is not None and row["exec_run_id"] is not None
         if not any(name in body
                    for name in ("workflow_id", "run_id", "attempt")):
-            row = self.conn.execute(
-                "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
-            if row is not None and row["exec_run_id"] is not None:
-                raise Refused("validation",
+            if owned:
+                raise Refused("exec_stale",
                               f"{key} has an exec owner: workflow_id, run_id"
                               " and attempt are required")
             return
-        self._exec_check(self.conn, key, body.get("workflow_id"),
-                         body.get("run_id"), body.get("attempt"))
+        parts = _exec_parts(key, (body.get("workflow_id"), body.get("run_id"),
+                                  body.get("attempt")))
+        # Audit-only and no-op calls validate but cannot acquire a first owner.
+        if owned or record:
+            self._exec_check(self.conn, key, *parts)
 
     # ----------------------------------------------------------- attempts
     def worker_attempt(self, principal, body):
@@ -169,6 +174,8 @@ class WorkerMixin:
         _count("tokens_out", body.get("tokens_out"))
         _number("cost", body.get("cost"))
         key = self._resolve_scoped(principal, card)
+        with self._write():
+            self._exec_gate(key, body, record=False)
         return {"card": key, "n": number, "exit_class": exit_class}
 
     # -------------------------------------------------------------- park
@@ -197,7 +204,7 @@ class WorkerMixin:
             # RT-P1-EXEC-OWNERSHIP: inside the write lock, after the claim
             # checks.  run= cannot carry the owner from here because the
             # claimed -> parked move is not in TRANSITIONS.
-            self._exec_gate(item["key"], body)
+            self._exec_gate(item["key"], body, record=item["state"] != "parked")
 
         result = self._apply_state(principal, key, "parked", why, now,
                                    lambda project: self._may_act_in(principal,
@@ -220,7 +227,8 @@ class WorkerMixin:
                           "merged_sha must be 7 to 64 hex characters")
         key = self._resolve_scoped(principal, card)
         with self._write():
-            self._exec_gate(key, body)
+            item = self._get_or_refuse(key)
+            self._exec_gate(key, body, record=item["state"] != "done")
         return {"card": key, "merged_sha": merged_sha}
 
     # ------------------------------------------------------------ alarms
@@ -237,7 +245,11 @@ class WorkerMixin:
         reason = _text("reason", reason, required=True, cap=500, key=card)
         key = self._resolve_scoped(principal, card)
         with self._write():
-            self._exec_gate(key, body)
+            existing = self.conn.execute(
+                "SELECT 1 FROM projector_alarms WHERE kind='worker_alarm'"
+                " AND workflow_id='' AND key=? AND cleared_at IS NULL",
+                (key,)).fetchone()
+            self._exec_gate(key, body, record=existing is None)
             self.conn.execute(
                 "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,"
                 "raised_at)"
