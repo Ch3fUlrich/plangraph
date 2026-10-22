@@ -19,6 +19,8 @@ def test_docs_contract_terms() -> None:
         "envelope_intelligence",
         '"drive"',
         "spawner-sensitivity.json",
+        "stability_seeds",
+        "risk-monotone envelope",
     ):
         assert term in text
 
@@ -40,6 +42,8 @@ def test_sensitivity_json_shape_and_threshold() -> None:
                 assert "unresolved" in entries[key]
 
     assert data["perturbations"]["intel_pm1"]["normal/implement"]["flip_rate"] <= 0.10
+    assert data["perturbations"]["intel_pm1"]["high/implement"]["flip_rate"] <= 0.10
+    assert data["perturbations"]["intel_pm1"]["critical/implement"]["flip_rate"] <= 0.10
     max_by_kind = data["summary"]["max_flip_rate_by_perturbation"]
     assert set(max_by_kind) == set(PERTURBATIONS)
 
@@ -102,3 +106,18 @@ def test_fail_closed_sweep_exercised() -> None:
         for risk in RISKS
         for role in ROLES
     )
+
+
+def test_stability_seeds_meet_threshold() -> None:
+    data = json.loads(
+        (ROOT / "docs" / "spawner-sensitivity.json").read_text(encoding="utf-8")
+    )
+    stability = data["stability_seeds"]
+    seeds = stability["seeds"]
+    assert len(seeds) >= 5
+    assert 20261022 in seeds
+    rates = stability["intel_pm1_max_flip_rate"]
+    for seed in seeds:
+        entry = rates[str(seed)]
+        assert entry["high"] <= 0.10
+        assert entry["critical"] <= 0.10

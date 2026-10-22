@@ -364,8 +364,8 @@ def score_model(
     Decoupled risk parameters:
       - low:      I_min = 37.5, I_target = 41.0, gamma_cost = 15.0, beta_excess = 0.2
       - normal:   I_min = 44.0, I_target = 47.0, gamma_cost = 10.0, beta_excess = 0.4
-      - high:     I_min = 46.0, I_target = 50.0, gamma_cost = 4.0,  beta_excess = 2.0
-      - critical: I_min = 50.0, I_target = 54.0, gamma_cost = 1.5,  beta_excess = 2.5
+      - high:     I_min = 46.0, I_target = 50.0, gamma_cost = 4.0,  beta_excess = 0.6
+      - critical: I_min = 50.0, I_target = 54.0, gamma_cost = 4.0,  beta_excess = 0.6
 
     Role multipliers (alpha_role):
       - implement / worker: 1.0

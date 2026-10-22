@@ -134,8 +134,8 @@ By decoupling $I_{\text{target}} > I_{\min}$, the intelligence ramp rewards mode
 |---|---|---|---|---|---|---|
 | `low` | 37.5 | 41.0 | 15.0 | 0.2 | 0.5 | 0–1 |
 | `normal` | 44.0 | 47.0 | 10.0 | 0.4 | 0.5 | 1 |
-| `high` | 46.0 | 50.0 | 4.0 | 2.0 | 0.3 | 2 |
-| `critical` | 50.0 | 54.0 | 1.5 | 2.5 | 0.3 | 2 |
+| `high` | 46.0 | 50.0 | 4.0 | 0.6 | 0.3 | 2 |
+| `critical` | 50.0 | 54.0 | 4.0 | 0.6 | 0.3 | 2 |
 
 #### Role Multiplier ($\alpha_{\text{role}}$)
 
@@ -184,6 +184,7 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 - The context gate requires `ctx >= need_tokens * trajectory_factor`; role trajectory factors are applied consistently.
 - Risk monotonicity uses `envelope_intelligence` as a best-effort envelope: candidates are filtered to intelligence at or above the best lower-band pick; when that leaves none, resolution falls back to the floor rules, so the envelope cannot be met in every case.
 - Tie-breaking uses an epsilon band with absolute utility thresholds of 0.5 and 0.3 utility points.
+- Stability is measured by tools/spawner_sensitivity.py over several seeds (key `stability_seeds` in docs/spawner-sensitivity.json); high/critical beta_excess 0.6 and critical gamma_cost 4.0 keep the intelligence +-1 pick flip rate <= 0.10 on every listed seed; the flips that remain at critical are the cost of the hard risk-monotone envelope (critical's intelligence floor is the best lower-band pick, a hard filter), and the strict monotone guarantee (1e-9) is kept.
 - The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers — see the file.
 - The `cost_per_task_usd` field is the catalogued price in USD per task. Utility subtracts `cost_per_task_usd * gamma_cost` in utility points.
 - Absolute cost scale matters on purpose: a 10x price change may reorder near-ties inside the epsilon band because cost is real money. Outside the band the order follows utility at any cost scale (proved by `test_order_follows_utility_outside_epsilon_band_any_cost_scale`).
