@@ -2,8 +2,8 @@
 
 A set_state move that carries ``run=(workflow_id, run_id, attempt)`` is exec-owned:
 an unowned card records its first owner, the same run may only move its attempt
-forward, a different run is stale, and a back-move needs ``new_run=True`` with a
-fresh run (which takes over ownership).  Every rule here gets a test that fails
+forward, a different run is stale, and run-carrying back-moves are refused.
+Every rule here gets a test that fails
 if the rule is removed.  Moves without a ``run`` are out of scope (unchanged
 behaviour, covered by test_keeper_cards.py).  Portable: runs on the default
 backend (``World`` follows ``PG_KEEPER_BACKEND``).
@@ -72,18 +72,19 @@ def test_a_higher_attempt_is_accepted_and_recorded(w):
 
 
 # ------------------------------------------------------------- transitions
-def test_a_back_move_needs_a_new_run(w):
+@pytest.mark.parametrize("terminal", ["failed", "parked"])
+@pytest.mark.parametrize("target", ["open", "ready"])
+def test_a_back_move_is_refused_even_with_a_new_run(w, terminal, target):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "running", run=RUN1)
-    w.store.set_state(w.p("router"), key, "parked", run=RUN1)     # forward: ok
-    refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
+    w.store.set_state(w.p("router"), key, terminal, run=RUN1)
+    refused("bad_transition", w.store.set_state, w.p("router"), key, target,
             run=RUN1)
-    refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
-            run=RUN1, new_run=True)          # new_run still needs a FRESH run
+    refused("bad_transition", w.store.set_state, w.p("router"), key, target,
+            run=RUN1, new_run=True)
+    refused("bad_transition", w.store.set_state, w.p("router"), key, target,
+            run=("wf-2", "run-2", 1), new_run=True)
     assert owner(w, key) == ("wf-1", "run-1", 1)
-    w.store.set_state(w.p("router"), key, "open", run=("wf-2", "run-2", 1),
-                      new_run=True)
-    assert owner(w, key) == ("wf-2", "run-2", 1)  # new run restarts at one
 
 
 def test_a_malformed_run_is_refused_and_records_nothing(w):
@@ -104,3 +105,28 @@ def test_claim_and_release_never_touch_exec_ownership(w):
     epoch = to_claimed(w, key)
     w.store.release(w.p("l1main"), key, epoch)
     assert owner(w, key) == (None, None, None)      # only run-carrying moves record
+
+
+@pytest.mark.parametrize("door", ["release", "reap"])
+def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
+    key, = seed(w, [("A", [])])
+    epoch = to_claimed(w, key)
+    with w.store._write():
+        w.store._exec_record(w.conn, key, *RUN1)
+    calls = []
+    clear = w.store._exec_clear
+
+    def tracked_clear(conn, item_key):
+        calls.append((conn, item_key))
+        clear(conn, item_key)
+
+    monkeypatch.setattr(w.store, "_exec_clear", tracked_clear)
+    if door == "release":
+        w.store.release(w.p("l1main"), key, epoch)
+    else:
+        lease = w.conn.execute("SELECT lease_until FROM items WHERE key=?",
+                               (key,)).fetchone()[0]
+        w.store.reap(w.p("system"),
+                     now=w.store._parse_iso(lease).timestamp() + 1)
+    assert calls == [(w.conn, key)]
+    assert owner(w, key) == (None, None, None)

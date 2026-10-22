@@ -19,8 +19,7 @@ trigger).
 * ``set_state``: move an item among the non-claim states (open, ready, running,
   needs_input, waiting, failed, parked); claim, review, done and cancel keep their verbs.
   RT-P1-EXEC-OWNERSHIP: a move that carries ``run=(workflow_id, run_id, attempt)`` is
-  exec-owned -- it must stay forward per ``TRANSITIONS`` (a back-move needs
-  ``new_run=True`` with a fresh run, which takes over ownership), and the recorded
+   exec-owned -- it must stay forward per ``TRANSITIONS``, and the recorded
   owner refuses a stale run or an attempt that would go backwards.
 """
 from __future__ import annotations
@@ -43,8 +42,8 @@ SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed
 #: RT-P1-EXEC-OWNERSHIP: direct successors of each settable state (same-state always
 #: allowed; reachability is the transitive closure).  A set-state move that carries a
 #: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
-#: back to ``open``/``ready``) are refused unless the caller passes ``new_run=True``
-#: with a fresh ``run_id``, which records the new owner.  Moves without a ``run``
+#: back to ``open``/``ready``) are refused. Only a reopen clears ownership.
+#: Moves without a ``run``
 #: keep their historical behaviour; exec-fenced worker parks also use this table.
 TRANSITIONS: dict[str, frozenset[str]] = {
     "open":        frozenset({"open", "ready"}),
@@ -152,8 +151,9 @@ def _exec_parts(key, run):
     wf, run_id, attempt = run
     wf = _text("workflow_id", wf, required=True, cap=200, key=key)
     run_id = _text("run_id", run_id, required=True, cap=200, key=key)
-    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
-        raise Refused("validation", "attempt must be a positive integer")
+    if (isinstance(attempt, bool) or not isinstance(attempt, int)
+            or not 1 <= attempt <= 2**31 - 1):
+        raise Refused("validation", "attempt must be an integer in [1, 2147483647]")
     return wf, run_id, attempt
 
 
@@ -460,6 +460,7 @@ class CardsMixin:
 
     # ---------------------------------------------------------------- state
     def set_state(self, principal, key, state, reason="", run=None, new_run=False):
+        # Accepted for compatibility; ownership can only be cleared by reopening.
         return self._run(principal, "set_state", key,
                          lambda now: self._set_state(principal, key, state, reason,
                                                      now, run=run, new_run=new_run))
@@ -530,10 +531,10 @@ class CardsMixin:
         lock checks and may raise; `release_claim` lets a `claimed` item move to
         *state* and clears its claim.  RT-P1-EXEC-OWNERSHIP: a move carrying
         ``run=(workflow_id, run_id, attempt)`` is exec-owned -- it must be
-        forward per ``TRANSITIONS`` (a back-move only with ``new_run=True`` and
-        a run_id differing from the recorded one, which takes over ownership),
+        forward per ``TRANSITIONS`` (back-moves are always refused),
         and the recorded owner refuses a stale run or a backwards attempt.
-        Callers that pass neither kwarg keep the historical, unchecked behaviour.
+        ``new_run`` is accepted and ignored for compatibility. Callers without
+        ``run`` keep the historical, unchecked behaviour.
         """
         with self._write():
             item = self._get_or_refuse(key)
@@ -550,14 +551,9 @@ class CardsMixin:
                 if _forward(was, state):
                     self._exec_check(self.conn, key, wf, run_id, attempt_no,
                                      now=now, record=was != state)
-                elif new_run and run_id != item["exec_run_id"]:
-                    # Attempts belong to a run; a fresh run restarts at one.
-                    self._exec_record(self.conn, key, wf, run_id, attempt_no,
-                                      now=now)
                 else:
                     raise Refused("bad_transition",
-                                  f"{key}: {was} -> {state} is not a forward move;"
-                                  " only a new run (new_run=True) may go back")
+                                  f"{key}: {was} -> {state} is not a forward move")
             if was == state:
                 return {"key": key, "state": state, "changed": False}
             payload = {"state": state, "was": was, "reason": why}
