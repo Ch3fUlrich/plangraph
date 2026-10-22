@@ -30,7 +30,7 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 - Never push site strings / seat prompts to GitHub (repo public). Private: ~/.local/share/plangraph/{seats,relay}.
 - Never touch .claude/worktrees/proposal (frozen; render/proxy use it).
 
-- oc-harden #95 d542cf0 BLOCKED: workst admission 82.6% commit charge; asked workst-L1-autoos to reap; fix = no_change migration PG6 + sqlite rebuild (cx writer).
+- oc-harden #95: writer 20261022-204611-...ec818f running on workst (no_change migration); then seats mimo + non-OpenAI 2nd family -> GO-REQ routing. Workst queue: card-checks writer next, then bus.
 - sandbox #100 fix: WA run 20261022-204430-...759ac4 (mimo, wt attempt-sandbox-wA) -> push lane/attempt-sandbox-wA; WB next (wt attempt-sandbox-wB, brief in transcript: git hardening attempt.rs + walk); WC = L2 on workst (sol). L2 cherry-picks + CI; I re-seat glm+deepseek.
 - KEEPER-OPCLAIM-CLOSE (HIGH, D-2283/2284, mine): wt opclaim-close lane/keeper-opclaim-close; writer omniroute/mimo-v2.6-flash run 20261022-202358-...6d5fb8 (cx not declared on coding.vm, D-2148 skip). Design: A refuse legacy claimed on non-none tier, B legacy claim -> in_review recovery. Then PR, 2 seats non-xiaomi, GO-REQ routing, then router closes server:OP-DOCKHAND-EVENTS.
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
