@@ -4,6 +4,7 @@ import pytest
 from door_util import Doors
 from keeper_util import seed, to_claimed
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.store_cards import TRANSITIONS, _forward
 from plangraph.projector.apply import Projector
 from plangraph.projector.history import project_history
 from test_keeper_exec_projector_path import w, history, snapshot, worker_call
@@ -51,24 +52,38 @@ def test_projected_waiting_refuses_delayed_any_of(w, verb):
 
 @pytest.mark.parametrize("owned", [False, True])
 @pytest.mark.parametrize("triple", [False, True])
-def test_claimed_park_uses_forward_table_only_when_exec_fenced(w, owned, triple):
+def test_claimed_holder_park_is_exempt_from_forward_table(w, owned, triple):
     key, = seed(w, [("A", [])])
     if owned:
         w.store.set_state(w.p("system"), key, "running",
                           run=("card:" + key, "run", 1))
         w.store.set_state(w.p("system"), key, "open")
-    to_claimed(w, key)
+    to_claimed(w, key, "workerA")
     body = {"card": key, "exit_class": "needs_input"}
     if triple:
         body.update(workflow_id="card:" + key, run_id="run", attempt=1)
     before = dict(w.store._item(key))
-    if owned or triple:
+    if owned and not triple:
         with pytest.raises(Refused) as err:
-            w.store.worker_park(w.p("system"), body)
-        assert err.value.code == "bad_transition"
+            w.store.worker_park(w.p("workerA"), body)
+        assert err.value.code == "exec_stale"
         assert dict(w.store._item(key)) == before
     else:
-        assert w.store.worker_park(w.p("system"), body)["state"] == "parked"
+        result = w.store.worker_park(w.p("workerA"), body)
+        assert result == {"card": key, "state": "parked", "changed": True}
+        item = w.store._item(key)
+        assert item["claimed_by"] is None
+        assert item["lease_until"] is None
+        assert (item["exec_workflow_id"], item["exec_run_id"], item["exec_attempt"]) == (
+            ("card:" + key, "run", 1) if triple else (None, None, None))
+
+
+def test_forward_closure_reaches_parked_from_every_table_state():
+    # No table state supplies a negative park case; claimed is outside the table
+    # and is deliberately exempt only in worker_park, not in _forward itself.
+    assert all(_forward(state, "parked") for state in TRANSITIONS)
+    assert not _forward("claimed", "parked")
+    assert not _forward("parked", "open")
 
 
 @pytest.mark.parametrize("state", ["open", "ready", "running", "needs_input",

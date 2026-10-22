@@ -218,7 +218,8 @@ class WorkerMixin:
         def guard(item):
             self._exec_expect_state(item, body.get("expected_state"))
             self._park_guard(principal, item, epoch, now)
-            # Legacy unowned parks retain their claim-release behaviour.
+            # Claimed parks retain holder/lease-guarded claim release even when
+            # exec-fenced; claimed is intentionally outside the forward table.
             fenced = item["exec_run_id"] is not None or any(
                 body.get(name) is not None
                 for name in ("workflow_id", "run_id", "attempt"))

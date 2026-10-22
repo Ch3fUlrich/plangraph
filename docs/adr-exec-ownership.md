@@ -18,7 +18,10 @@ run and backwards-attempt checks, even on a no-op. Audit-only calls with
 Keeper reopen (reaper), release, and review-reopen clear the owner. Worker
 verbs never take over ownership **while an owner exists**; an unowned card is
 claimed by the first run-carrying verb that records a fact (not audit-only or
-no-op calls). Same-run attempts may advance, never go backwards. In particular,
+no-op calls). Same-run attempts may advance, never go backwards. However,
+after reaping, a late call from the old run can reacquire ownership if it is the
+first fact-writing call; clearing ownership does not retain a retired-run fence.
+In particular,
 complete on an unowned waiting card acquires the owner without changing its
 state: the completion report is a fact, not a lifecycle state transition.
 
@@ -26,7 +29,11 @@ The projector does not yet forward run ids to `set_state`. Therefore the first
 run-carrying worker verb wins ownership, rather than the projector establishing
 the owner. The forward-only transition table applies to `set_state` with `run`
 and worker park when the card is owned or the body carries exec fields (including
-transitive reachability and same-state no-ops). Legacy unowned parks without exec
+transitive reachability and same-state no-ops), except that a `claimed` card's
+holder/delegate may park and release its live claim even with exec fields.
+The claim/lease guards and exec identity checks still apply: a mismatched run or
+omitted triple on an owned claim refuses `exec_stale`, not `bad_transition`.
+Legacy unowned parks without exec
 fields retain their old behavior. Bare projector `set_state` does not use the table;
 forward fencing there awaits **RT-P1-PROJECTOR-RUN-IDS**.
 
@@ -58,7 +65,9 @@ with `exec_stale` once a new worker owns the card.
 
 ## Consequences
 
-Stale identities are refused rather than silently taking over lifecycle facts.
+Stale identities are refused while an owner exists, rather than silently taking
+over lifecycle facts. After an owner-clearing reopen, first writer wins, even
+if that writer is a late worker from the previous run (a known limit).
 The observed-state compare-and-set closes the delayed-duplicate case within the
 same run and attempt: after the projector moves running to waiting, a delayed
 worker verb expecting running cannot overwrite waiting or record ownership.

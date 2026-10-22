@@ -1,4 +1,4 @@
-"""Keeper reopen frees exec ownership; worker calls never take it over."""
+"""Keeper reopen frees ownership; the first fact-writing run can acquire it."""
 import pytest
 
 from door_util import Doors
@@ -38,16 +38,26 @@ def claimed_owner(w, key):
     return epoch
 
 
-def test_lapsed_lease_frees_owner_and_late_worker_cannot_take_over(w, doors):
+@pytest.mark.parametrize("late_run_first", [False, True])
+def test_lapsed_lease_first_writer_wins_even_for_late_run(w, doors, late_run_first):
     key, = seed(w, [("A", [])])
     claimed_owner(w, key)
     body = park(key, **RUN2)
     status, response = doors.http("workerA", "POST", "/v1/park", body)
-    assert (status, response["error"]) == (409, "bad_transition")
+    assert (status, response["error"]) == (409, "exec_stale")
     assert owner(w, key) == RUN1
 
     assert w.store.reap(w.p("system"), w.clock.advance(7201))["expired"] == [key]
     assert owner(w, key) == (None, None, None)
+    if late_run_first:
+        late = {"workflow_id": RUN1[0], "run_id": RUN1[1], "attempt": RUN1[2]}
+        assert doors.http("workerA", "POST", "/v1/park", park(key, **late)) == (204, "")
+        assert owner(w, key) == RUN1
+        assert w.store._item(key)["state"] == "parked"
+        status, response = doors.http("workerA", "POST", "/v1/park", body)
+        assert (status, response["error"]) == (409, "exec_stale")
+        assert owner(w, key) == RUN1
+        return
     assert doors.http("workerA", "POST", "/v1/park", body) == (204, "")
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN2)) == (204, "")
