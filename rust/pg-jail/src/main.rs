@@ -24,6 +24,9 @@ fn run() -> Result<(), i32> {
             }
             Some("--rw") => spec.rw.push(next_path(&mut args)?),
             Some("--ro") => spec.ro.push(next_path(&mut args)?),
+            // Landlock is an allow-list: this never grants and never adds a rule.
+            // pg_jail::apply() rejects a --deny-read path that lies under an
+            // allowed root, because such a path cannot be denied (fail closed).
             Some("--deny-read") => spec.deny_read.push(next_path(&mut args)?),
             Some("--proc-self") => spec.proc_self = true,
             _ => return Err(usage("unexpected argument")),

@@ -1,11 +1,40 @@
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const BIN: &str = env!("CARGO_BIN_EXE_pg-jail");
 
+/// perl's `truncate()` builtin: the bare `truncate(2)` syscall, with no
+/// `open(2)` of the target first.
+///
+/// A `>` redirect or coreutils `truncate` opens the file `O_WRONLY`, which
+/// WRITE_FILE already denies outside the allowed roots even on a ruleset that
+/// does not handle TRUNCATE. Only a bare `truncate(2)` proves that the ABI V3
+/// right itself is enforced.
+const TRUNCATE_PROBE: &str = "truncate($ARGV[0], 0) or die \"truncate: $!\\n\"";
+
+/// Skip policy for this suite: a skip is allowed only when `CI` is unset, and
+/// is always announced with a visible `SKIP:` line. With `CI` set (e.g.
+/// `CI=true`) the same condition fails the test instead of quietly dropping
+/// coverage. `ci` is a parameter so the policy itself can be tested without
+/// mutating the process environment.
+fn skip_or_fail(ci: Option<&OsStr>, reason: &str) {
+    match ci {
+        None => eprintln!("SKIP: {reason}"),
+        Some(ci) => panic!(
+            "CI={} is set: this test must not skip: {reason}",
+            ci.to_string_lossy()
+        ),
+    }
+}
+
 fn landlock_ok() -> bool {
     let Ok(tmp) = tempfile::tempdir() else {
+        skip_or_fail(
+            std::env::var_os("CI").as_deref(),
+            "cannot create a temporary directory for the Landlock probe",
+        );
         return false;
     };
     let status = Command::new(BIN)
@@ -22,13 +51,18 @@ fn landlock_ok() -> bool {
         .arg("--")
         .arg("/bin/true")
         .status();
-    if let Ok(status) = status {
-        if status.code() == Some(78) {
-            eprintln!("SKIP: landlock unsupported");
-            return false;
+    match status {
+        // Fail closed: pg-jail refuses to run when the kernel cannot enforce
+        // Landlock ABI V3, so there is no confinement to test.
+        Ok(status) if status.code() == Some(78) => {
+            skip_or_fail(
+                std::env::var_os("CI").as_deref(),
+                "landlock unsupported (pg-jail exit 78)",
+            );
+            false
         }
+        _ => true,
     }
-    true
 }
 
 fn add_ro(cmd: &mut Command) {
@@ -50,7 +84,10 @@ fn jail(work: &Path, script: &str) -> Command {
 
 fn systemd_scope_ok() -> bool {
     if std::env::var_os("PG_JAIL_TEST_SKIP_RESOURCE_LIMITS").is_some() {
-        eprintln!("SKIP: resource limits explicitly disabled by PG_JAIL_TEST_SKIP_RESOURCE_LIMITS");
+        skip_or_fail(
+            std::env::var_os("CI").as_deref(),
+            "resource limits explicitly disabled by PG_JAIL_TEST_SKIP_RESOURCE_LIMITS",
+        );
         return false;
     }
 
@@ -381,4 +418,116 @@ fn memory_hog_and_fork_bomb() {
         "expected task-limit refusal, got {out:?}"
     );
     assert!(!out.status.success(), "fork bomb unexpectedly succeeded");
+}
+
+#[test]
+fn truncate_outside_rw_root_denied() {
+    if !landlock_ok() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let victim = outside.path().join("victim");
+    fs::write(&victim, "0123456789").unwrap();
+
+    let out = jail(work.path(), "exec perl -e \"$P\" \"$VICTIM\"")
+        .env("P", TRUNCATE_PROBE)
+        .env("VICTIM", victim.as_os_str())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "truncate(2) outside the rw root must fail: {stderr}"
+    );
+    // Landlock refuses with EACCES.
+    assert!(
+        stderr.contains("Permission denied"),
+        "expected EACCES (Permission denied), got: {stderr}"
+    );
+    assert_eq!(
+        fs::metadata(&victim).unwrap().len(),
+        10,
+        "outside file must keep its size"
+    );
+}
+
+#[test]
+fn truncate_inside_rw_root_ok() {
+    if !landlock_ok() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let victim = work.path().join("victim");
+    fs::write(&victim, "0123456789").unwrap();
+
+    let out = jail(work.path(), "exec perl -e \"$P\" \"$VICTIM\"")
+        .env("P", TRUNCATE_PROBE)
+        .env("VICTIM", victim.as_os_str())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "truncate(2) inside the rw root must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(fs::metadata(&victim).unwrap().len(), 0);
+}
+
+#[test]
+fn abi_selection_refuses_below_v3() {
+    use landlock::ABI;
+
+    for kernel_abi in [ABI::Unsupported, ABI::V1, ABI::V2] {
+        assert!(
+            matches!(
+                pg_jail::select_abi(kernel_abi),
+                Err(pg_jail::JailError::Unsupported)
+            ),
+            "ABI {kernel_abi:?} cannot enforce truncate(2) and must be refused"
+        );
+    }
+    assert_eq!(pg_jail::select_abi(ABI::V3).unwrap(), pg_jail::MIN_ABI);
+}
+
+#[test]
+fn ci_true_makes_skip_paths_fail() {
+    // CI unset: skipping stays possible, with a visible SKIP: line.
+    skip_or_fail(None, "skip-policy self-check, not a test skip");
+
+    // Both skip paths named in this suite must fail the test under CI.
+    for reason in [
+        "landlock unsupported (pg-jail exit 78)",
+        "resource limits explicitly disabled by PG_JAIL_TEST_SKIP_RESOURCE_LIMITS",
+    ] {
+        let result = std::panic::catch_unwind(|| skip_or_fail(Some(OsStr::new("true")), reason));
+        assert!(
+            result.is_err(),
+            "CI=true must turn the skip ({reason}) into a failure"
+        );
+    }
+}
+
+#[test]
+fn deny_read_under_allowed_root_is_rejected() {
+    if !landlock_ok() {
+        return;
+    }
+    let work = tempfile::tempdir().unwrap();
+    let file = work.path().join("secret");
+    fs::write(&file, "secret").unwrap();
+
+    let mut cmd = Command::new(BIN);
+    cmd.arg("--rw").arg(work.path());
+    cmd.arg("--deny-read").arg(&file);
+    add_ro(&mut cmd);
+    cmd.arg("--").arg("/bin/true");
+
+    let out = cmd.output().unwrap();
+    assert_eq!(out.status.code(), Some(126), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("deny-read") && stderr.contains("allowed root"),
+        "expected a clear deny-read error, got: {stderr}"
+    );
 }

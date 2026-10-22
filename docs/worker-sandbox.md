@@ -9,6 +9,9 @@ standalone agent mode.
 - Filesystem: `pg-jail` applies a Landlock allow-list before exec. Writes are
   allowed only under the worktree, the attempt's private HOME, and private tmp; system
   paths are read-only where needed. Missing allow-list paths fail closed.
+  The ruleset is built for Landlock ABI V3, which is the ABI that added
+  `truncate` handling; a kernel that cannot enforce V3 is refused with exit 78
+  rather than jailed at a weaker ABI.
 - Resources: the harness runs the jailed child inside a transient
   `systemd-run --user --scope` with `MemoryMax` and `TasksMax`.
 - Agent mode: invoke `opencode run --standalone`. Without `--standalone`, the
@@ -57,6 +60,9 @@ from `osrelease`.
 - Landlock is in the kernel LSM list: `grep -w landlock /sys/kernel/security/lsm`.
 - The jail denies an out-of-tree write and permits an in-tree one with a small
   `pg-jail --rw . --rw /tmp -- true`-style probe.
+- `truncate(2)` on a path outside the allowed roots fails with `EACCES` and
+  leaves the file at its original size, while the same call inside an `--rw`
+  root succeeds (ABI V3 handling).
 - The scope accepts the configured limits:
   `systemd-run --user --scope -p MemoryMax=... -p TasksMax=... true`.
 - The agent command contains `--standalone`.
@@ -64,6 +70,13 @@ from `osrelease`.
 ## Limits
 
 - Landlock restricts filesystem access only.
+- File metadata calls outside the allow-list are not covered: Landlock has no
+  access right for `chmod(2)`/`fchmod(2)` or for the `utime(2)`/`utimes(2)`/
+  `utimensat(2)` family (and no ABI adds one), so a jailed process that can name
+  a path outside the allowed roots can still change that file's mode or
+  timestamps where ordinary file ownership allows it. The jail does not claim
+  coverage for these calls; do not treat file modes or mtimes outside the
+  worktree as protected by this layer.
 - Procfs is restricted: the worker passes `--proc-self`, which allows read-only
   only `/proc/<own pid>` (so `/proc/self`) plus `/proc/{cpuinfo,meminfo,stat,loadavg}`.
   A sibling same-user process's `/proc/<pid>/environ` is refused (covered by the
@@ -73,7 +86,8 @@ from `osrelease`.
   unset; the fail-closed policy is enforced at worker startup, so any other
   entrypoint must call `required_from_env` itself.
 - There is no network egress control in this layer.
-- The kernel must list Landlock in its LSM set; otherwise `pg-jail` fails closed.
+- The kernel must list Landlock in its LSM set and enforce Landlock ABI V3
+  (or newer); otherwise `pg-jail` fails closed with exit 78.
 - The systemd scope limits CPU, memory, and tasks, not files or network.
 - Without `--standalone`, tool calls can escape the jail through the shared host
   service.
