@@ -784,8 +784,16 @@ mod tests {
         let body = r#"{
             "phase": "demo:PH-X",
             "ready": true,
-            "cards": [{"key": "A", "write_set": ["src/a.rs"]}],
-            "route": {"legs": ["l1"]}
+            "cards": [{
+                "key": "A",
+                "write_set": ["src/a.rs"],
+                "route": {
+                    "window_class": "128k",
+                    "harness": "opencode",
+                    "legs": ["l1"]
+                },
+                "extra": 1
+            }]
         }"#;
         let (base, handle) = serve_once(200, "OK", body);
         let keeper = HttpKeeper::new(&base);
