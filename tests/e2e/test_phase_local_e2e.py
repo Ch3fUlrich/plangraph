@@ -287,6 +287,7 @@ def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
     assert result["branch"] == PHASE_BRANCH
     assert result["finish"] is not None
     assert result["finish"]["state"] == "refused"
+    assert "refused phase_finish" in result["finish"]["detail"]
 
     for child_id, desc in children:
         assert _status_name(desc.status).endswith("COMPLETED"), child_id

@@ -230,6 +230,9 @@ impl PhasePlan {
     }
 }
 
+/// ready=false with no blockers means nothing is startable (e.g. every card
+/// claimed), not a stop: PhasePlan::startable already yields no wave then, so
+/// the loop ends via the empty wave and the finish step decides.
 pub fn replan_stop(plan: &PhasePlan, key: &str) -> Option<Vec<String>> {
     if plan.phase != key {
         Some(vec!["plan is for another phase".to_string()])

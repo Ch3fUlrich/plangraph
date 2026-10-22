@@ -38,9 +38,13 @@ def worker_claim(
         raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
 
     row = store.conn.execute(
-        "SELECT state, claimed_by FROM items WHERE key = ?", (key,)
+        "SELECT state, claimed_by, lease_until, project FROM items WHERE key = ?",
+        (key,),
     ).fetchone()
     if row is None:
+        raise Refused("not_found", f"item {key!r} not found")
+    project = row[3]
+    if principal.role == "worker" and project not in (principal.projects or []):
         raise Refused("not_found", f"item {key!r} not found")
 
     card = store.get_card(principal, key)
@@ -69,8 +73,16 @@ def worker_claim(
     if base_sha is None:
         raise Refused("unavailable", "no base to claim from")
 
-    state, claimed_by = row
-    if not (state == "claimed" and claimed_by == principal.name):
+    state, claimed_by, lease_until, _project = row
+    lease_live = False
+    if state == "claimed" and claimed_by == principal.name and lease_until:
+        try:
+            lease_dt = store._parse_iso(lease_until)
+        except (TypeError, ValueError):
+            lease_dt = None
+        if lease_dt is not None and lease_dt.timestamp() > store.now():
+            lease_live = True
+    if not lease_live:
         store.claim(principal, key)
 
     return build_claim(key, card, repo=repo_root, base_sha=base_sha)
