@@ -202,7 +202,7 @@ def test_run_tokens_are_refused_on_every_inbox_route(kp):
     run_id = "run-" + uid().lower()
     (kp.runs_dir / run_id).mkdir(parents=True)
     (kp.runs_dir / run_id / "job.json").write_text(
-        json.dumps({"request": {"title": f"work on {key}"}}), encoding="utf-8")
+        json.dumps({"request": {"title": f"work on {key}", "item_key": key}}), encoding="utf-8")
     token = ok(kp.post("mint_run_token", "router",
                        {"key": key, "role": "writer", "run_id": run_id}), "MintToken")["token"]
     # the gate refuses before the verb runs, so the body never matters

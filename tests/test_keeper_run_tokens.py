@@ -20,7 +20,7 @@ class FakeRuns:
     def job(self, run_id):
         if run_id not in RUNS:
             raise FileNotFoundError(run_id)
-        req = {"title": f"work on {RUNS[run_id]}"}
+        req = {"title": f"work on {RUNS[run_id]}", "item_key": RUNS[run_id]}
         if run_id in FAMILY:
             req["family"] = FAMILY[run_id]
         return {"request": req, "task": ""}
@@ -142,6 +142,63 @@ def test_mint_without_run_record_refused(w):
     to_claimed(w, "demo:A")
     w.store.ctx = None
     assert code(mint, w, "l1main", "demo:A", "writer", "w1") == "evidence_unverified"
+
+
+class JobRuns:
+    def __init__(self, job):
+        self._job = job
+
+    def valid_run_id(self, run_id):
+        return run_id == "w1"
+
+    def job(self, run_id):
+        return dict(self._job)
+
+
+def mint_with_job(w, job):
+    w.store.ctx = {"runs": JobRuns(job)}
+    return mint(w, "l1main", "demo:A", "writer", "w1")
+
+
+def test_check_run_item_key_matches(w):
+    to_claimed(w, "demo:A")
+    assert mint_with_job(w, {"request": {"title": "unrelated",
+                                         "item_key": "demo:A"}, "task": ""})["token"]
+
+
+def test_check_run_item_key_differs_title_contains_key(w):
+    to_claimed(w, "demo:A")
+    assert code(mint_with_job, w, {"request": {
+        "title": "work on demo:A", "item_key": "demo:B"}, "task": ""}) \
+        == "evidence_unverified"
+
+
+def test_check_run_item_key_prefix_collision(w):
+    to_claimed(w, "demo:A")
+    assert code(mint_with_job, w, {"request": {
+        "title": "work on demo:A", "item_key": "demo:AB"}, "task": ""}) \
+        == "evidence_unverified"
+
+
+@pytest.mark.parametrize(
+    "req",
+    [
+        {"title": "work on demo:A"},
+        {"title": "work on demo:A", "item_key": None},
+        {"title": "work on demo:A", "item_key": ""},
+        {"title": "work on demo:A", "item_key": "  "},
+        {"title": "work on demo:A", "item_key": 7},
+        {"title": "work on demo:A", "item_key": ["demo:A"]},
+    ],
+)
+def test_check_run_absent_or_invalid_item_key_refused(w, req):
+    # Reviewer role is only permitted for in_review items; writer role is used as Store._check_run is shared.
+    to_claimed(w, "demo:A")
+    with pytest.raises(Refused) as exc:
+        mint_with_job(w, {"request": req, "task": ""})
+    assert exc.value.code == "evidence_unverified"
+    assert "item_key" in str(exc.value)
+    assert "re-record the run with item_key=demo:A" in str(exc.value)
 
 
 def test_no_principal_named_run(w):

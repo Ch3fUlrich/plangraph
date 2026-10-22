@@ -111,9 +111,15 @@ class VerbsMixin:
                 raise Refused("bad_state", f"{key} has unfinished dependencies")
             epoch = item["epoch"] + 1
             lease = self._iso(now + lease_seconds)
-            self._append(principal, key, "claimed",
-                         {"epoch": epoch, "claimed_by": principal.name,
-                          "lease_until": lease}, now)
+            payload = {
+                "epoch": epoch,
+                "claimed_by": principal.name,
+                "lease_until": lease,
+            }
+            base = self._ref_head(item["project"])
+            if base is not None:
+                payload["base"] = base
+            self._append(principal, key, "claimed", payload, now)
             self.conn.execute(
                 "UPDATE items SET state='claimed', epoch=?, round=0,"
                 " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
@@ -201,6 +207,7 @@ class VerbsMixin:
         if principal.role != "router" and principal.name != item["claimed_by"]:
             raise Refused("forbidden", "only the claimant or router may release")
         self._epoch_ok(item, epoch)
+        base = self._ref_head(item["project"])
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -211,7 +218,8 @@ class VerbsMixin:
             if principal.role != "router" and principal.name != fresh["claimed_by"]:
                 raise Refused("forbidden",
                               "only the claimant or router may release")
-            self._append(principal, key, "released", {}, now)
+            payload = {"base": base} if base is not None else {}
+            self._append(principal, key, "released", payload, now)
             cursor = self.conn.execute(
                 "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
                 " reviewer=NULL, lease_until=NULL, review_waiver=NULL,"
