@@ -389,6 +389,35 @@ def test_phase_branch_rules():
             phase_finish.phase_branch(key)
         assert ei.value.code == "validation"
 
+def test_finish_locked_rejects_merged_pr_with_different_head(tmp_path):
+    branch = "phase/demo-PH-X"
+    head = "a" * 40
+    other = "b" * 40
+    gh = FakeGitHub(pr={"number": 7, "state": "merged", "head": other})
+    with pytest.raises(Refused) as ei:
+        phase_finish._finish_locked(
+            root=tmp_path, base="main", key="demo:PH-X", branch=branch,
+            head=head, cards=[], github=gh,
+        )
+    assert ei.value.code == "conflict"
+    assert gh.calls == [("find_pr", branch)]
+
+def test_finish_locked_opens_pr_for_closed_unmerged(tmp_path):
+    branch = "phase/demo-PH-X"
+    head = "a" * 40
+    gh = FakeGitHub(pr={"number": 7, "state": "closed", "head": "b" * 40})
+    gh.push_branch = lambda *args, **kwargs: None
+    def open_pr(*args, **kwargs):
+        gh.calls.append(("open_pr",) + args)
+        return {"number": 7, "state": "open", "head": head, "url": "u"}
+    gh.open_pr = open_pr
+    gh.ci_green = lambda _head: False
+    phase_finish._finish_locked(
+        root=tmp_path, base="main", key="demo:PH-X", branch=branch,
+        head=head, cards=[], github=gh,
+    )
+    assert any(call[0] == "open_pr" for call in gh.calls)
+
 def test_no_store_write(w, tmp_path):
     gate(w)
     finish_cards(w, "demo:C1", "demo:C2")

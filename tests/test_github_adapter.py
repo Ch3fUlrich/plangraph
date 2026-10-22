@@ -109,16 +109,16 @@ def test_ci_green_only_ci_gate_completed_success(tmp_path):
     head = "c" * 40
     replies = [
         (200, {"check_runs": [
-            {"name": "ci-gate", "status": "completed", "conclusion": "success"},
+            {"id": 1, "name": "ci-gate", "status": "completed", "conclusion": "success", "head_sha": head},
         ]}),
         (200, {"check_runs": [
-            {"name": "other", "status": "completed", "conclusion": "success"},
+            {"id": 2, "name": "other", "status": "completed", "conclusion": "success", "head_sha": head},
         ]}),
         (200, {"check_runs": [
-            {"name": "ci-gate", "status": "in_progress", "conclusion": None},
+            {"id": 3, "name": "ci-gate", "status": "in_progress", "conclusion": None, "head_sha": head},
         ]}),
         (200, {"check_runs": [
-            {"name": "ci-gate", "status": "completed", "conclusion": "failure"},
+            {"id": 4, "name": "ci-gate", "status": "completed", "conclusion": "failure", "head_sha": head},
         ]}),
     ]
     gh, opener = make_github(tmp_path, replies)
@@ -230,3 +230,103 @@ def test_bad_repo_name_raises_value_error(tmp_path):
     for repo in ["owner", "owner/repo/extra", "owner name/repo", "/repo"]:
         with pytest.raises(ValueError):
             RestGitHub(repo, path)
+import os
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def _private_token_umask():
+    # Existing token_file() writes must be private under the new mode check.
+    old = os.umask(0o077)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+def test_ci_green_second_page_success(tmp_path):
+    head = "f" * 40
+    page1 = {
+        "total_count": 101,
+        "check_runs": [
+            {
+                "id": i,
+                "name": "other",
+                "head_sha": head,
+                "status": "completed",
+                "conclusion": "success",
+            }
+            for i in range(1, 101)
+        ],
+    }
+    page2 = {
+        "total_count": 101,
+        "check_runs": [
+            {
+                "id": 101,
+                "name": "ci-gate",
+                "head_sha": head,
+                "status": "completed",
+                "conclusion": "success",
+            }
+        ],
+    }
+    gh, opener = make_github(tmp_path, [(200, page1), (200, page2)])
+    assert gh.ci_green(head) is True
+    assert len(opener.calls) == 2
+    assert "page=2" in opener.calls[1][1]
+
+def test_ci_green_wrong_head_sha_ignored(tmp_path):
+    head = "a" * 40
+    wrong = "b" * 40
+    gh, _ = make_github(
+        tmp_path,
+        [
+            (
+                200,
+                {
+                    "check_runs": [
+                        {
+                            "id": 1,
+                            "name": "ci-gate",
+                            "head_sha": wrong,
+                            "status": "completed",
+                            "conclusion": "success",
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+    assert gh.ci_green(head) is False
+
+def test_find_pr_malformed_reply_raises_github_error(tmp_path):
+    item = {"number": 1, "html_url": "url", "state": "open"}
+    gh, _ = make_github(tmp_path, [(200, [item])])
+    with pytest.raises(GitHubError) as exc:
+        gh.find_pr("phase")
+    assert str(exc.value) == "github malformed reply"
+
+def test_merge_pr_not_confirmed_raises_github_error(tmp_path):
+    head = "d" * 40
+    gh, _ = make_github(tmp_path, [(200, {"merged": False})])
+    with pytest.raises(GitHubError) as exc:
+        gh.merge_pr(9, head)
+    assert str(exc.value) == "github merge not confirmed"
+
+def test_push_branch_env_allowlist_excludes_sentinel(tmp_path, monkeypatch):
+    monkeypatch.setenv("PG_TEST_SENTINEL", "secret")
+    head = "e" * 40
+    runner = FakeGitRunner(code=0)
+    gh, _ = make_github(tmp_path, [], git_runner=runner)
+    gh.push_branch(tmp_path, "phase-2", head)
+    _args, _cwd, env = runner.calls[0]
+    assert "PG_TEST_SENTINEL" not in env
+
+def test_token_file_group_or_other_bits_refused(tmp_path):
+    path = tmp_path / "token.txt"
+    path.write_text(TOKEN, encoding="utf-8")
+    path.chmod(0o644)
+    gh = RestGitHub("owner/repo", path, opener=FakeOpener([]))
+    with pytest.raises(GitHubError) as exc:
+        gh.find_pr("phase")
+    assert str(exc.value) == "github token file unavailable"

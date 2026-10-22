@@ -94,6 +94,9 @@ def _finish_locked(key: str, branch: str, head: str, root: Path,
     try:
         pr = github.find_pr(branch)
         if pr is not None and pr["state"] == "merged":
+            if pr["head"] != head:
+                # a merged PR for another head is a conflict, not our merge
+                raise Refused("conflict", "merged PR head differs from requested head")
             return _result(key, branch, head, "merged", pr, cards)
 
         github.push_branch(root, branch, head)

@@ -33,12 +33,32 @@ def _json_or_empty(raw: bytes) -> Any:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return {}
 
+def _pr_view(item: Any, state: str | None = None) -> dict[str, Any]:
+    try:
+        if not isinstance(item, dict):
+            raise TypeError
+        if state is None:
+            state = "merged" if item.get("merged_at") else item["state"]
+        return {
+            "number": item["number"],
+            "url": item["html_url"],
+            "state": state,
+            "head": item["head"]["sha"],
+        }
+    except (KeyError, TypeError, AttributeError):
+        raise GitHubError("github malformed reply") from None
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
 def _default_opener(
     method: str, url: str, headers: dict[str, str], body: bytes | None
 ) -> tuple[int, Any]:
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
+    opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with opener.open(request, timeout=30) as response:
             status = getattr(response, "status", None) or response.getcode()
             return int(status), _json_or_empty(response.read())
     except urllib.error.HTTPError as exc:
@@ -88,6 +108,8 @@ class RestGitHub:
 
     def _token(self) -> str:
         try:
+            if self.token_file.stat().st_mode & 0o077:
+                raise GitHubError("github token file unavailable")
             token = self.token_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):
             raise GitHubError("github token file unavailable") from None
@@ -112,7 +134,7 @@ class RestGitHub:
             data = json.dumps(body, separators=(",", ":")).encode("utf-8")
             headers["Content-Type"] = "application/json"
         status, parsed = self.opener(method, f"{self.api}{path}", headers, data)
-        if status >= 400:
+        if status >= 300:
             raise GitHubError(f"github {method} {path} -> {status}")
         return parsed
 
@@ -121,16 +143,11 @@ class RestGitHub:
         head = urllib.parse.quote(f"{owner}:{branch}", safe="")
         path = f"/repos/{self.repo}/pulls?head={head}&state=all&per_page=1"
         items = self._request("GET", path)
-        if not isinstance(items, list) or not items:
+        if not isinstance(items, list):
+            raise GitHubError("github malformed reply")
+        if not items:
             return None
-        item = items[0]
-        state = "merged" if item.get("merged_at") else item["state"]
-        return {
-            "number": item["number"],
-            "url": item["html_url"],
-            "state": state,
-            "head": item["head"]["sha"],
-        }
+        return _pr_view(items[0])
 
     def open_pr(self, branch: str, base: str, title: str, body: str) -> dict[str, Any]:
         item = self._request(
@@ -138,33 +155,56 @@ class RestGitHub:
             f"/repos/{self.repo}/pulls",
             {"title": title, "head": branch, "base": base, "body": body},
         )
-        return {
-            "number": item["number"],
-            "url": item["html_url"],
-            "state": "open",
-            "head": item["head"]["sha"],
-        }
+        return _pr_view(item, state="open")
 
     def ci_green(self, head: str) -> bool:
         sha = urllib.parse.quote(head, safe="")
-        data = self._request(
-            "GET", f"/repos/{self.repo}/commits/{sha}/check-runs?per_page=100"
-        )
-        if not isinstance(data, dict):
+        exact: list[dict[str, Any]] = []
+        fetched = 0
+        total_count: int | None = None
+        for page in range(1, 11):
+            suffix = "?per_page=100"
+            if page > 1:
+                suffix += f"&page={page}"
+            data = self._request(
+                "GET", f"/repos/{self.repo}/commits/{sha}/check-runs{suffix}"
+            )
+            if not isinstance(data, dict):
+                return False
+            runs = data.get("check_runs") or []
+            if not isinstance(runs, list):
+                return False
+            if total_count is None:
+                tc = data.get("total_count")
+                if isinstance(tc, int):
+                    total_count = tc
+            for run in runs:
+                if not isinstance(run, dict) or run.get("name") != "ci-gate":
+                    continue
+                if run.get("head_sha") != head:
+                    continue
+                exact.append(run)
+            fetched += len(runs)
+            if len(runs) < 100:
+                break
+            if total_count is not None and fetched >= total_count:
+                break
+        if not exact:
             return False
-        for run in data.get("check_runs") or []:
-            if not isinstance(run, dict) or run.get("name") != "ci-gate":
-                continue
-            run_sha = run.get("head_sha")
-            if run_sha is not None and run_sha != head:
-                continue
-            if run.get("status") == "completed" and run.get("conclusion") == "success":
-                return True
-        return False
+        newest = max(
+            exact,
+            key=lambda run: run.get("id") if isinstance(run.get("id"), int) else -1,
+        )
+        return (
+            newest.get("status") == "completed"
+            and newest.get("conclusion") == "success"
+        )
 
     def merge_pr(self, number: int, head: str) -> dict[str, Any]:
         path = f"/repos/{self.repo}/pulls/{number}/merge"
-        self._request("PUT", path, {"sha": head, "merge_method": "merge"})
+        reply = self._request("PUT", path, {"sha": head, "merge_method": "merge"})
+        if not isinstance(reply, dict) or reply.get("merged") is not True:
+            raise GitHubError("github merge not confirmed")
         return {
             "number": number,
             "url": f"https://github.com/{self.repo}/pull/{number}",
@@ -180,12 +220,26 @@ class RestGitHub:
         header = "Authorization: Basic " + basic
         # Token only travels in git config env, never in argv or error text.
         env = {
-            **os.environ,
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "http.extraheader",
-            "GIT_CONFIG_VALUE_0": header,
+            name: os.environ[name]
+            for name in (
+                "PATH",
+                "HOME",
+                "LANG",
+                "LC_ALL",
+                "SSL_CERT_FILE",
+                "SSL_CERT_DIR",
+                "GIT_SSL_CAINFO",
+            )
+            if name in os.environ
         }
+        env.update(
+            {
+                "GIT_TERMINAL_PROMPT": "0",
+                "GIT_CONFIG_COUNT": "1",
+                "GIT_CONFIG_KEY_0": "http.extraheader",
+                "GIT_CONFIG_VALUE_0": header,
+            }
+        )
         args = ["git", "push", self.remote, f"{head}:refs/heads/{branch}"]
         try:
             code, _stderr = self.git_runner(args, str(repo_root), env)
