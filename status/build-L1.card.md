@@ -13,7 +13,8 @@ TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-work
 | RT-P1-PHASE-RUNNER (HIGH) | spine | S2 MERGED ef4cab7d (GO D-2291, head 02a5b0eb = 4c88ad17 + clean main merge); ciev bg bx1u58lc0 evidence only. S3: spine/phase-runner-s3a (keeper verb phase_finish, D-2227) + s3 (worker). HARDEN: add D-2288 criteria when open |
 | RT-OVERSIGHT-CHECKS | DONE | 5fe070b3 verdict alibaba; timer = operator ask #3 at workst (needs operator OK); was MERGED 5fe070b3 (GO D-2274); ciwait bg b2ansobqb -> evidence+submit; then verdicts qwen/haiku seats/oversight-117d; timer install workst keeper only (D-1854) via workst-L1-autoos; LOW followup leaf -> routing |
 | SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
-| CI-COMMIT-GATE-HARDEN (HIGH) | me | MERGED 1e1a5ec4 (GO D-2290); ciwait bg -> tmp/ci120.log -> evidence+submit -> verdicts qwen/glm final-2209279d (writer deepseek). Next leaf CI-COMMIT-GATE-EDGES (open, dep HARDEN) |
+| CI-COMMIT-GATE-HARDEN | DONE | 1e1a5ec4, verdicts alibaba+zhipu (glm banner gap disclosed) |
+| CI-COMMIT-GATE-EDGES (HIGH) | spawner | claimed by me 20:4xZ; edges (1)-(9), (8)(9) code+test; MERGE-READY -> GO-REQ routing |
 | DEVSTACK-TEST-FLAKE | DONE | #118 7dd85d04, qwen seat |
 | fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
 | PROJECTOR-RUN-UNIT | DONE | qwen r2 PASS 59a5e0e5, verdict alibaba; PH-RT-RUNTIME 13/33 |
