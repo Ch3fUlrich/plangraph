@@ -1,0 +1,1199 @@
+[
+  {
+    "name": "constants",
+    "fn": "constants",
+    "inputs": {},
+    "expect": {
+      "VERSION": "fleet-bus/2",
+      "BODY_MAX": 4096,
+      "TEXT_MAX": 2000,
+      "SKEW_S": 60,
+      "NONCE_CAP": 10000,
+      "RING_CAP": 1000,
+      "RATE_PER_MIN": 30
+    }
+  },
+  {
+    "name": "missing-from",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "missing-to",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "missing-ts",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "missing-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "missing-msg_id",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "missing-text",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-from",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "from": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-from",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "from": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-to",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "to": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-to",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "to": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "kid": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "kid": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-msg_id",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "msg_id": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-msg_id",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "msg_id": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-trace_id",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "trace_id": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-trace_id",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "trace_id": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-key",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "key": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-key",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "key": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-run_id",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "run_id": 65
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-run_id",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "run_id": 64
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "cap-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "nonce": 129
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "cap-boundary-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "repeat_fields": {
+        "nonce": 128
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "type-from",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": 12,
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-to",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": 12,
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": 12,
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-msg_id",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": 12,
+        "text": "hello"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-text",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": 12
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "kid": 12
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-trace_id",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "trace_id": 12
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-key",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "key": 12
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "type-run_id",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "run_id": 12
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-0",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": 0
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-1001",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": 1001
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-True",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": true
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-1.5",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": 1.5
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-1",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": "1"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-None",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": null
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "attempt-boundary-1",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": 1
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "attempt-boundary-1000",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "attempt_n": 1000
+      }
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "unknown-field",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "array-shape",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": [],
+      "signature": "bad"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "invalid-json",
+    "fn": "validate_post",
+    "inputs": {
+      "raw": "{",
+      "signature": "bad"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "oversized-invalid-json-before-parse",
+    "fn": "validate_post",
+    "inputs": {
+      "raw": "{",
+      "padding": 4096,
+      "signature": "bad"
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "step-shape",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "step-size",
+    "fn": "validate_post",
+    "inputs": {
+      "padding": 4096
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "step-skew",
+    "fn": "validate_post",
+    "inputs": {
+      "now": 1700000061
+    },
+    "error": {
+      "code": "skew",
+      "status": 401
+    }
+  },
+  {
+    "name": "step-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "unknown_kid": true
+    },
+    "error": {
+      "code": "unknown_kid",
+      "status": 401
+    }
+  },
+  {
+    "name": "step-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "signature": "bad"
+    },
+    "error": {
+      "code": "bad_signature",
+      "status": 401
+    }
+  },
+  {
+    "name": "step-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true
+    },
+    "error": {
+      "code": "replayed_nonce",
+      "status": 401
+    }
+  },
+  {
+    "name": "step-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true
+    },
+    "error": {
+      "code": "rate_limited",
+      "status": 429
+    }
+  },
+  {
+    "name": "order-shape-before-size",
+    "fn": "validate_post",
+    "inputs": {
+      "padding": 4096,
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-shape-before-skew",
+    "fn": "validate_post",
+    "inputs": {
+      "now": 1700000061,
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-shape-before-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "unknown_kid": true,
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-shape-before-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "signature": "bad",
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-shape-before-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true,
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-shape-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      }
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-size-before-skew",
+    "fn": "validate_post",
+    "inputs": {
+      "now": 1700000061,
+      "padding": 4096
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "order-size-before-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "unknown_kid": true,
+      "padding": 4096
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "order-size-before-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "signature": "bad",
+      "padding": 4096
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "order-size-before-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true,
+      "padding": 4096
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "order-size-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "padding": 4096
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "order-skew-before-kid",
+    "fn": "validate_post",
+    "inputs": {
+      "unknown_kid": true,
+      "now": 1700000061
+    },
+    "error": {
+      "code": "skew",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-skew-before-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "signature": "bad",
+      "now": 1700000061
+    },
+    "error": {
+      "code": "skew",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-skew-before-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true,
+      "now": 1700000061
+    },
+    "error": {
+      "code": "skew",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-skew-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "now": 1700000061
+    },
+    "error": {
+      "code": "skew",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-kid-before-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "signature": "bad",
+      "unknown_kid": true
+    },
+    "error": {
+      "code": "unknown_kid",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-kid-before-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true,
+      "unknown_kid": true
+    },
+    "error": {
+      "code": "unknown_kid",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-kid-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "unknown_kid": true
+    },
+    "error": {
+      "code": "unknown_kid",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-signature-before-nonce",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true,
+      "signature": "bad"
+    },
+    "error": {
+      "code": "bad_signature",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-signature-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "signature": "bad"
+    },
+    "error": {
+      "code": "bad_signature",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-nonce-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "replayed": true
+    },
+    "error": {
+      "code": "replayed_nonce",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-shape-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "extra": "x"
+      },
+      "duplicate": true
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "order-size-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "padding": 4096,
+      "duplicate": true
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "order-skew-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "now": 1700000061,
+      "duplicate": true
+    },
+    "error": {
+      "code": "skew",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-kid-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "unknown_kid": true,
+      "duplicate": true
+    },
+    "error": {
+      "code": "unknown_kid",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-signature-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "signature": "bad",
+      "duplicate": true
+    },
+    "error": {
+      "code": "bad_signature",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-nonce-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "replayed": true,
+      "duplicate": true
+    },
+    "error": {
+      "code": "replayed_nonce",
+      "status": 401
+    }
+  },
+  {
+    "name": "order-rate-before-dedupe",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "duplicate": true
+    },
+    "error": {
+      "code": "rate_limited",
+      "status": 429
+    }
+  },
+  {
+    "name": "skew-inclusive--60",
+    "fn": "validate_post",
+    "inputs": {
+      "now": 1699999940
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  },
+  {
+    "name": "skew-inclusive-60",
+    "fn": "validate_post",
+    "inputs": {
+      "now": 1700000060
+    },
+    "expect": {
+      "dup": false
+    },
+    "subset": true
+  }
+]
