@@ -45,8 +45,11 @@ def test_a_pass_and_a_change_request_each_land_one_qc_accept_row(w, monkeypatch)
 
     jev_on(monkeypatch, fixed_ask("accept"))
     passed = w.store.verdict(w.p("reviewer"), accepted, True, "clean review")
+    from plangraph.planner.jev_shadow import drain
+    drain()
     jev_on(monkeypatch, fixed_ask("reject"))
     asked = w.store.verdict(w.p("reviewer"), changes, False, "racy flush")
+    drain()
 
     # the verdict results are the plain rules results, byte for byte
     assert passed == {"key": accepted, "state": "done", "reviews_passed": 1}
@@ -56,7 +59,7 @@ def test_a_pass_and_a_change_request_each_land_one_qc_accept_row(w, monkeypatch)
         row, = w.store.jev_rows(key)             # exactly ONE row per verdict
         assert (row["kind"], row["rule_answer"]) == ("qc_accept", word)
         assert row["status"] == "ok" and row["attempt"] is None
-        assert row["outcome"] is None and row["decision_id"]
+        assert row["outcome"] == word and row["decision_id"]
         info = w.store.show(router, key)         # the show door
         assert [r["kind"] for r in info["jev_shadow"]] == ["qc_accept"]
         assert [r["rule_answer"] for r in info["jev_shadow"]] == [word]
@@ -99,6 +102,8 @@ def test_a_failing_jev_never_changes_the_verdict_result(w, monkeypatch,
     passed = w.store.verdict(w.p("reviewer"), passing, True, "clean review")
     asked = w.store.verdict(w.p("reviewer"), changing, False, "racy flush")
     elapsed = time.monotonic() - started
+    from plangraph.planner.jev_shadow import drain
+    drain()
 
     assert passed == {"key": passing, "state": "done", "reviews_passed": 1}
     assert asked == {"key": changing, "state": "claimed", "reviews_passed": 0}

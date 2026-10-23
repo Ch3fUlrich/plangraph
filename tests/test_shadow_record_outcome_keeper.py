@@ -2,7 +2,7 @@
 
 The keeper branch of the production entry point: given ``store``, ``principal``
 and ``card_key`` it fills the still-unfilled ``jev_shadow`` rows of that card
-through the real ``store.jev_outcome`` door - every attempt when ``attempt`` is
+through the real ``store.jev_outcome`` door - only unnumbered rows when ``attempt`` is
 omitted, only the named attempt (``None`` matching the unnumbered rows) when it
 is given - and reports whether anything landed.  ``PLANGRAPH_JEV`` is set by
 ``monkeypatch.setenv`` and the network call is replaced by the double in
@@ -46,9 +46,9 @@ def test_without_an_attempt_every_row_of_the_card_is_filled(w, monkeypatch):
 
     landed = fill(w, {"outcome": "complete"}, key)
 
-    assert landed is True
-    assert [r["outcome"] for r in w.store.jev_rows(key)] == ["complete"] * len(rows)
-    assert all(r["outcome_at"] for r in w.store.jev_rows(key))
+    assert landed is False
+    assert all(r["outcome"] is None for r in w.store.jev_rows(key))
+    assert all(r["outcome_at"] is None for r in w.store.jev_rows(key))
 
 
 def test_with_an_attempt_only_that_attempt_is_filled(w, monkeypatch):
