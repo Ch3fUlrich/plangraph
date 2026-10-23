@@ -268,8 +268,11 @@ class CardsMixin:
 
     # ------------------------------------------------------------- attempts
     def record_attempt(self, principal, key, attempt):
-        return self._run(principal, "record_attempt", key,
-                         lambda now: self._record_attempt(principal, key, attempt))
+        result = self._run(principal, "record_attempt", key,
+                           lambda now: self._record_attempt(principal, key, attempt))
+        self._fill_jev_outcome(principal, result["key"],
+                               {"exit_class": result["exit_class"]}, attempt=result["n"])
+        return result
 
     def _record_attempt(self, principal, key, attempt):
         self._require_role(principal, "router", "l1", "system")
