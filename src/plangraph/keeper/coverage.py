@@ -18,10 +18,12 @@ Family names (and the one model-id table) come from
 closed on any writer it cannot resolve: a commit with no ``Writer`` or
 ``Hand-Edit`` trailer, an unknown model id, or a git error raises
 ``Refused('writer_unknown', ...)`` so a closing verdict never rests on a
-guess.  ``Hand-Edit`` with no ``Writer`` counts as ``anthropic``: a hand edit
+guess.  ``Hand-Edit`` also counts as ``anthropic`` alongside any ``Writer``: a hand edit
 is Claude/operator work, not a model writer.
 """
 from __future__ import annotations
+
+import re
 
 from ..review.family import model_family
 from .errors import Refused
@@ -108,24 +110,54 @@ def writer_families(store, item, ctx):
             if writers:
                 for writer in writers:
                     tokens = str(writer).split()
-                    # One model and an optional opaque run id, never a list.
+                    # One model and an optional recognised run id, never a list.
                     # Also reject a model-looking second token (even the same
                     # family): it cannot safely stand for a run identifier.
                     if (len(tokens) > 2 or "," in str(writer)
-                            or (len(tokens) == 2 and not tokens[1].startswith("run-")
-                                and model_family(tokens[1]) is not None)):
+                            or (len(tokens) == 2 and not _run_id(tokens[1]))):
                         raise Refused("writer_unknown",
                                       "Writer value must name one model, not several")
                     model = tokens[0] if tokens else ""
+                    segments = model.split("/")
+                    # A provider/model pair is allowed, but multiple model
+                    # segments (even of one family) are not one writer.
+                    resolved = [model_family(part) for part in segments]
+                    if (not all(segments) or len(segments) > 2
+                            or (len(segments) == 2 and resolved[0] is not None
+                                and segments[0].lower() not in ("mimo", "xiaomi-mimo"))):
+                        raise Refused("writer_unknown", "ambiguous slash-joined writer")
                     family = model_family(model)
                     if family is None:
                         raise Refused("writer_unknown",
                                       f"unknown writer model {model!r}")
                     families.append(family)
-            elif trailer_values(trailer.get("Hand-Edit")):
+            if _key_values(trailer, "Hand-Edit"):
                 families.append("anthropic")
-            else:
+            elif not writers:
                 raise Refused(
                     "writer_unknown",
                     f"commit behind {commit} has neither Writer nor Hand-Edit")
     return families
+
+
+def _run_id(token):
+    """Recognise build-L1 run shapes, never a second model attribution.
+
+    Build-L1 override: the second token is a run id only when it resolves to
+    NO model family and carries a spawner stamp (``\\d{8}-\\d{6}`` anywhere in
+    it), ends ``-<6 hex>`` (autoos title run ids such as
+    ``ui-browser-fix3-r2-382049``), or is at least three lowercase
+    hyphen-separated segments (``keeper-trailer-multi-fix5``); slashes may
+    appear inside the run id (``trailer-multi/20261023-064042-...-0e3d4e``)
+    — the slash rule of finding 1 applies to the MODEL token only.  A
+    ``ses_<alnum>`` session id also stays valid (finding 2's original spec
+    and vector V2; it cannot name a model and the override's refusal list —
+    ``run1``, ``kimi-k2``, any 2-segment word — does not cover it).
+    ``run1``, ``kimi-k2`` and other bare words are refused.
+    """
+    if model_family(token) is not None:
+        return False
+    return bool(re.search(r"[0-9]{8}-[0-9]{6}", token)
+                or re.search(r"-[0-9a-f]{6}$", token)
+                or re.fullmatch(r"[0-9a-z]+(?:-[0-9a-z]+){2,}", token)
+                or re.fullmatch(r"ses_[0-9A-Za-z]+", token))

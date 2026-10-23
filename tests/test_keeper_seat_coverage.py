@@ -102,8 +102,8 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
         evidence_kinds=("commit+ci",), review_tier="high")
-    mixed = {SHA_A: writer("mimo-v2 run1"),       # xiaomi
-             SHA_B: writer("deepseek-r1 run2")}   # deepseek
+    mixed = {SHA_A: writer("mimo-v2 test-run-1"),       # xiaomi
+             SHA_B: writer("deepseek-r1 test-run-2")}   # deepseek
     to_review_with_commits(w, covered, mixed)
     to_review_with_commits(w, refused, mixed)
 
@@ -132,7 +132,7 @@ def test_two_claude_seats_are_one_family(w):
     plain, waived = seed(
         w, [("A", []), ("B", [])],
         evidence_kinds=("commit+ci",), review_tier="high")
-    trailers = {SHA_A: writer("mimo-v2 run1")}   # xiaomi
+    trailers = {SHA_A: writer("mimo-v2 test-run-1")}   # xiaomi
     to_review_with_commits(w, plain, trailers)
     to_review_with_commits(w, waived, trailers)
 
@@ -165,7 +165,7 @@ def test_two_claude_seats_are_one_family(w):
 def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
                   review_tier="high")
-    trailers = {SHA_A: writer("mimo-v2 run1")}
+    trailers = {SHA_A: writer("mimo-v2 test-run-1")}
     to_review_with_commits(w, key, trailers)
     w.store.ctx = make_ctx(
         git=git_with(trailers),
@@ -182,6 +182,22 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
     assert len(verdict_events(w, key)) == 1
 
 
+@pytest.mark.parametrize("with_writer", [False, True])
+def test_fix6_hand_edit_case_and_writer_are_additive(w, with_writer):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",), review_tier="high")
+    trailer = {"hand-edit": "manual correction"}
+    if with_writer:
+        trailer["writer"] = "mimo-v2"
+    to_review_with_commits(w, key, {SHA_A: trailer})
+    assert set(_cov().writer_families(w.store, w.store._item(key), w.store.ctx)) == (
+        {"anthropic", "xiaomi"} if with_writer else {"anthropic"})
+    assert w.store.verdict(w.p("rGoogle"), key, True, "first")["state"] == "in_review"
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rAnthropic1"), key, True, "self cannot cover")
+    assert exc.value.code == "coverage"
+    assert w.store.verdict(w.p("rAlibaba"), key, True, "both covered")["state"] == "done"
+
+
 # --------------------------------------------------------------------------
 # 4. standard item: one seat covers the sole writer, not a mixed pair
 # --------------------------------------------------------------------------
@@ -194,8 +210,8 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
 def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {
-        SHA_A: writer("mimo-v2 run1"),        # xiaomi
-        SHA_B: writer("claude-opus run2"),    # anthropic
+        SHA_A: writer("mimo-v2 test-run-1"),        # xiaomi
+        SHA_B: writer("claude-opus test-run-2"),    # anthropic
     })
 
     if done:
@@ -215,7 +231,7 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
 
 def test_standard_single_writer_claude_seat_is_allowed(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
-    to_review_with_commits(w, key, {SHA_A: writer("deepseek-r1 run1")})
+    to_review_with_commits(w, key, {SHA_A: writer("deepseek-r1 test-run-1")})
     result = w.store.verdict(w.p("rAnthropic1"), key, True, "claude seat")
     assert result["state"] == "done"
     assert result["reviews_passed"] == 1
@@ -233,10 +249,10 @@ def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
         trailers = {SHA_A: {}}
         git = None
     elif case == "unknown_model":
-        trailers = {SHA_A: writer("frob-9 run1")}
+        trailers = {SHA_A: writer("frob-9 test-run-1")}
         git = None
     else:
-        trailers = {SHA_A: writer("mimo-v2 run1")}
+        trailers = {SHA_A: writer("mimo-v2 test-run-1")}
         git = RaisingGit()
     to_review_with_commits(w, key, trailers, git=git)
 
@@ -248,8 +264,8 @@ def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
 
 
 @pytest.mark.parametrize("trailer,family", [
-    ("mimo-v2 run-qwen3-max", "xiaomi"),
-    ("deepseek-r1 run-claude", "deepseek"),
+    ("mimo-v2 test-task-abc123", "xiaomi"),
+    ("deepseek-r1 test-task-def456", "deepseek"),
 ])
 def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
     """The run id may name another family; only ``<model-id>`` decides."""
@@ -280,7 +296,7 @@ def test_decision_only_item_has_no_commit_writers_and_still_closes(w):
 
 def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
-    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})
+    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 test-run-1")})
 
     # The reviewer's own family is the uncovered writer family, but ok=False
     # still just returns the item to claimed.
@@ -297,7 +313,7 @@ def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
 def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
                   review_tier="high")
-    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})
+    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 test-run-1")})
     round_no = w.store._item(key)["round"]
 
     first = w.store.verdict(w.p("rAlibaba"), key, True, "first")
@@ -403,8 +419,8 @@ def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
         evidence_kinds=("commit+ci",), review_tier="high")
-    git = merge_git([writer("mimo-v2 run1"),       # xiaomi
-                     writer("deepseek-r1 run2")])  # deepseek
+    git = merge_git([writer("mimo-v2 test-run-1"),       # xiaomi
+                     writer("deepseek-r1 test-run-2")])  # deepseek
     to_review_merge(w, covered, git)
     to_review_merge(w, refused, git)
     assert set(_cov().writer_families(
@@ -469,7 +485,7 @@ def test_phase_merge_uses_the_flattened_leaf_trailers(w):
         evidence_kinds=("commit+ci",), review_tier="high")
     # Inner PR merges (Plan-Item only) are dropped by the adapter; the leaves
     # remain, and the PHASE merge commit's own trailers are never consulted.
-    leaves = [writer("mimo-v2 run1"), writer("deepseek-r1 run2")]
+    leaves = [writer("mimo-v2 test-run-1"), writer("deepseek-r1 test-run-2")]
     git = merge_git(leaves, sha=PHASE_SHA,
                     merge_trailers={"Plan-Item": "demo:PHASE"})
     to_review_merge(w, covered, git, sha=PHASE_SHA)
@@ -513,7 +529,7 @@ def test_squash_commit_with_several_writer_families_needs_all_covered(w):
     covered, refused = seed(
         w, [("A", []), ("B", [])],
         evidence_kinds=("commit+ci",), review_tier="high")
-    trailers = squash_trailers(["mimo-v2 run1", "deepseek-r1 run2"])
+    trailers = squash_trailers(["mimo-v2 test-run-1", "deepseek-r1 test-run-2"])
     to_review_with_commits(w, covered, trailers, git=git_with(trailers))
     to_review_with_commits(w, refused, trailers, git=git_with(trailers))
     assert set(_cov().writer_families(
@@ -552,8 +568,8 @@ def test_lower_case_writer_key_counts_alongside_the_capitalised_one(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
                   review_tier="high")
     trailers = {SHA_A: {"Plan-Item": "demo:A",
-                        "Writer": "mimo-v2 run1",        # xiaomi
-                        "writer": "deepseek-r1 run2"}}   # deepseek
+                        "Writer": "mimo-v2 test-run-1",        # xiaomi
+                        "writer": "deepseek-r1 test-run-2"}}   # deepseek
     to_review_with_commits(w, key, trailers, git=git_with(trailers))
 
     assert set(_cov().writer_families(
@@ -569,4 +585,3 @@ def test_lower_case_writer_key_counts_alongside_the_capitalised_one(w):
     assert "deepseek" in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
     assert len(verdict_events(w, key)) == 1
-

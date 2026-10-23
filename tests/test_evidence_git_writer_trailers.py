@@ -83,10 +83,10 @@ def adapter() -> GitAdapter:
 # 15. a plain commit, then a --no-ff merge of a two-commit branch
 # --------------------------------------------------------------------------
 
-@pytest.mark.parametrize("subject", ["Writer: deepseek-r1 run2", "**Writer:** deepseek-r1 run2"])
+@pytest.mark.parametrize("subject", ["Writer: deepseek-r1 test-run-2", "**Writer:** deepseek-r1 test-run-2"])
 def test_writer_subject_refuses_partial_family_list(repo, adapter, subject):
-    sha = _commit(repo, subject, {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
-    assert adapter.trailers(str(repo), sha)["Writer"] == "mimo-v2 run1"
+    sha = _commit(repo, subject, {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"})
+    assert adapter.trailers(str(repo), sha)["Writer"] == "mimo-v2 test-run-1"
     assert adapter.writer_trailers(str(repo), sha) == []
     with pytest.raises(Refused) as exc:
         _families(repo, sha)
@@ -95,14 +95,14 @@ def test_writer_subject_refuses_partial_family_list(repo, adapter, subject):
 
 def test_whitespace_paragraph_separator_is_not_writer_continuation(repo, adapter):
     _git(repo, "commit", "--allow-empty", "--cleanup=verbatim", "-q", "-m",
-         "squash\n\nWriter: mimo-v2 run1\n \t \nPlan-Item: demo:A\n")
+         "squash\n\nWriter: mimo-v2 test-run-1\n \t \nPlan-Item: demo:A\n")
     sha = _git(repo, "rev-parse", "HEAD")
     assert adapter.writer_trailers(str(repo), sha) == [
-        {"Writer": "mimo-v2 run1", "Plan-Item": "demo:A"}]
+        {"Writer": "mimo-v2 test-run-1", "Plan-Item": "demo:A"}]
 
 
-@pytest.mark.parametrize("value", ["mimo-v2 deepseek-v4 run1", "mimo-v2, deepseek-v4",
-                                        "mimo-v2 mimo-v3 run1"])
+@pytest.mark.parametrize("value", ["mimo-v2 deepseek-v4 test-run-1", "mimo-v2, deepseek-v4",
+                                        "mimo-v2 mimo-v3 test-run-1"])
 def test_multiple_models_in_one_writer_value_refuse(repo, value):
     sha = _commit(repo, "squash", {"Plan-Item": "demo:A", "Writer": value})
     with pytest.raises(Refused) as exc:
@@ -117,7 +117,7 @@ def test_real_squash_closing_verdict_covers_both_writers(repo, seat_family):
     from plangraph.keeper import auth
 
     _git(repo, "commit", "--allow-empty", "-q", "-m",
-         "squash\n\nPlan-Item: demo:A\nWriter: mimo-v2 run1\nWriter: deepseek-r1 run2\n")
+         "squash\n\nPlan-Item: demo:A\nWriter: mimo-v2 test-run-1\nWriter: deepseek-r1 test-run-2\n")
     sha = _git(repo, "rev-parse", "HEAD")
     world = World(repo.parent / "keeper")
     try:
@@ -143,31 +143,31 @@ def test_real_squash_closing_verdict_covers_both_writers(repo, seat_family):
 
 
 def test_non_merge_commit_returns_its_own_trailers(repo, adapter):
-    sha = _commit(repo, "one", {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
+    sha = _commit(repo, "one", {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"})
 
     assert adapter.writer_trailers(str(repo), sha) == [
-        {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"}]
+        {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"}]
 
 
 def test_merge_returns_the_branch_commits_only(repo, adapter):
-    _commit(repo, "base", {"Plan-Item": "demo:BASE", "Writer": "qwen-max run0"})
+    _commit(repo, "base", {"Plan-Item": "demo:BASE", "Writer": "qwen-max test-run-0"})
     _git(repo, "switch", "-q", "-c", "feat")
-    f1 = _commit(repo, "f1", {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
-    f2 = _commit(repo, "f2", {"Plan-Item": "demo:A", "Writer": "deepseek-r1 run2"})
+    f1 = _commit(repo, "f1", {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"})
+    f2 = _commit(repo, "f2", {"Plan-Item": "demo:A", "Writer": "deepseek-r1 test-run-2"})
     _git(repo, "switch", "-q", "main")
     # Main-side commit made AFTER the branch forked: outside the range.
-    _commit(repo, "side", {"Plan-Item": "demo:SIDE", "Writer": "qwen-max run9"})
+    _commit(repo, "side", {"Plan-Item": "demo:SIDE", "Writer": "qwen-max test-run-9"})
     merge = _merge(repo, "feat", "demo:MERGE")
 
     got = adapter.writer_trailers(str(repo), merge)
     assert len(got) == 2
-    assert {d.get("Writer") for d in got} == {"mimo-v2 run1", "deepseek-r1 run2"}
+    assert {d.get("Writer") for d in got} == {"mimo-v2 test-run-1", "deepseek-r1 test-run-2"}
     # Neither the merge commit (demo:MERGE) nor base/side commits leak in.
     assert {d.get("Plan-Item") for d in got} == {"demo:A"}
     assert adapter.writer_trailers(str(repo), f1) == [
-        {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"}]
+        {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"}]
     assert adapter.writer_trailers(str(repo), f2) == [
-        {"Plan-Item": "demo:A", "Writer": "deepseek-r1 run2"}]
+        {"Plan-Item": "demo:A", "Writer": "deepseek-r1 test-run-2"}]
 
 
 # --------------------------------------------------------------------------
@@ -179,13 +179,13 @@ def test_phase_merge_returns_leaf_trailers_and_skips_inner_merges(repo, adapter)
     _git(repo, "switch", "-q", "-c", "phase")
     # PR 1 branched off the phase branch, merged back with --no-ff.
     _git(repo, "switch", "-q", "-c", "featA")
-    _commit(repo, "a1", {"Plan-Item": "demo:LEAF", "Writer": "mimo-v2 run1"})
-    _commit(repo, "a2", {"Plan-Item": "demo:LEAF", "Writer": "deepseek-r1 run2"})
+    _commit(repo, "a1", {"Plan-Item": "demo:LEAF", "Writer": "mimo-v2 test-run-1"})
+    _commit(repo, "a2", {"Plan-Item": "demo:LEAF", "Writer": "deepseek-r1 test-run-2"})
     _git(repo, "switch", "-q", "phase")
     _merge(repo, "featA", "demo:PR-A")
     # PR 2, then the phase branch itself merges into main.
     _git(repo, "switch", "-q", "-c", "featB")
-    _commit(repo, "b1", {"Plan-Item": "demo:LEAF", "Writer": "claude-opus run1"})
+    _commit(repo, "b1", {"Plan-Item": "demo:LEAF", "Writer": "claude-opus test-run-1"})
     _git(repo, "switch", "-q", "phase")
     _merge(repo, "featB", "demo:PR-B")
     _git(repo, "switch", "-q", "main")
@@ -194,7 +194,7 @@ def test_phase_merge_returns_leaf_trailers_and_skips_inner_merges(repo, adapter)
     got = adapter.writer_trailers(str(repo), phase)
     assert len(got) == 3
     assert {d.get("Writer") for d in got} == {
-        "mimo-v2 run1", "deepseek-r1 run2", "claude-opus run1"}
+        "mimo-v2 test-run-1", "deepseek-r1 test-run-2", "claude-opus test-run-1"}
     # Inner PR merges (demo:PR-A/demo:PR-B) and the PHASE merge are dropped.
     assert {d.get("Plan-Item") for d in got} == {"demo:LEAF"}
 
@@ -209,11 +209,11 @@ def test_octopus_merge_returns_no_writer_trailers(repo, adapter):
     _git(repo, "branch", "b1")
     _git(repo, "branch", "b2")
     _git(repo, "switch", "-q", "b1")
-    _commit(repo, "w1", {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
+    _commit(repo, "w1", {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"})
     _git(repo, "switch", "-q", "b2")
-    _commit(repo, "w2", {"Plan-Item": "demo:A", "Writer": "deepseek-r1 run2"})
+    _commit(repo, "w2", {"Plan-Item": "demo:A", "Writer": "deepseek-r1 test-run-2"})
     _git(repo, "switch", "-q", "main")
-    _commit(repo, "side", {"Plan-Item": "demo:SIDE", "Writer": "qwen-max run9"})
+    _commit(repo, "side", {"Plan-Item": "demo:SIDE", "Writer": "qwen-max test-run-9"})
     # One `git merge` of two branches at once: three parents.
     _git(repo, "merge", "--no-ff", "-q", "-m",
          "Octopus\n\nPlan-Item: demo:OCTOPUS", "b1", "b2")
@@ -244,7 +244,7 @@ def test_writer_block_before_a_separate_trailer_paragraph_is_still_read(repo, ad
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "squash the branch\n\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n"
+         "Writer: mimo-v2 test-run-1\n"
          "\n"
          "Co-Authored-By: Tester <t@example.invalid>")
     sha = _git(repo, "rev-parse", "HEAD")
@@ -254,7 +254,7 @@ def test_writer_block_before_a_separate_trailer_paragraph_is_still_read(repo, ad
     assert "Writer:" not in git_trailers      # git's own view of the message
 
     want = {"Plan-Item": "demo:A",
-            "Writer": "mimo-v2 run1",
+            "Writer": "mimo-v2 test-run-1",
             "Co-Authored-By": "Tester <t@example.invalid>"}
     assert adapter.trailers(str(repo), sha) == want
     assert adapter.writer_trailers(str(repo), sha) == [want]
@@ -269,13 +269,13 @@ def test_two_writer_lines_on_one_commit_keep_every_value(repo, adapter):
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "squash the branch\n\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n"
-         "Writer: deepseek-r1 run2\n")
+         "Writer: mimo-v2 test-run-1\n"
+         "Writer: deepseek-r1 test-run-2\n")
     sha = _git(repo, "rev-parse", "HEAD")
 
     assert adapter.writer_trailers(str(repo), sha) == [{
         "Plan-Item": "demo:A",
-        "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
+        "Writer": ["mimo-v2 test-run-1", "deepseek-r1 test-run-2"],
     }]
 
 
@@ -353,11 +353,11 @@ def _ambiguous_commit(repo: Path) -> str:
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "split the trailers\n\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n"
+         "Writer: mimo-v2 test-run-1\n"
          "\n"
          "This prose separates the two trailer-shaped paragraphs.\n"
          "\n"
-         "Writer: deepseek-r1 run2\n")
+         "Writer: deepseek-r1 test-run-2\n")
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -370,7 +370,7 @@ def test_writer_line_outside_the_trailing_block_refuses_writer_unknown(repo):
 
     # Plan-Item/Writer reading itself is unchanged: the prose paragraph ends
     # the block, so only the final paragraph is parsed.
-    assert adapter.trailers(str(repo), sha) == {"Writer": "deepseek-r1 run2"}
+    assert adapter.trailers(str(repo), sha) == {"Writer": "deepseek-r1 test-run-2"}
     assert adapter.writer_trailers(str(repo), sha) == []
     with pytest.raises(Refused) as exc:
         _families(repo, sha)
@@ -418,12 +418,12 @@ def test_writer_line_outside_the_trailing_block_refuses_the_closing_verdict(repo
 #: commit body.  Each line is a paragraph of its own, OUTSIDE the trailing
 #: trailer block that follows the blank line.
 STRAY_WRITER_SHAPES = [
-    ("indented", "    Writer: mimo-v2 run1"),
-    ("quoted", "> Writer: mimo-v2 run1"),
-    ("nested-quote", ">> Writer: mimo-v2 run1"),
-    ("bullet", "- Writer: mimo-v2 run1"),
-    ("star-bullet", "* Writer: mimo-v2 run1"),
-    ("space-before-colon", "Writer : mimo-v2 run1"),
+    ("indented", "    Writer: mimo-v2 test-run-1"),
+    ("quoted", "> Writer: mimo-v2 test-run-1"),
+    ("nested-quote", ">> Writer: mimo-v2 test-run-1"),
+    ("bullet", "- Writer: mimo-v2 test-run-1"),
+    ("star-bullet", "* Writer: mimo-v2 test-run-1"),
+    ("space-before-colon", "Writer : mimo-v2 test-run-1"),
 ]
 
 
@@ -434,7 +434,7 @@ def _stray_writer_commit(repo: Path, stray: str) -> str:
          f"{stray}\n"
          "\n"
          "Plan-Item: demo:A\n"
-         "Writer: deepseek-r1 run2\n")
+         "Writer: deepseek-r1 test-run-2\n")
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -452,7 +452,7 @@ def test_stray_writer_shape_outside_the_trailing_block_refuses(repo, shape, stra
 
     # The trailing block itself is read normally: the stray line is prose.
     assert adapter.trailers(str(repo), sha) == {
-        "Plan-Item": "demo:A", "Writer": "deepseek-r1 run2"}
+        "Plan-Item": "demo:A", "Writer": "deepseek-r1 test-run-2"}
     assert adapter.writer_trailers(str(repo), sha) == []
     with pytest.raises(Refused) as exc:
         _families(repo, sha)
@@ -464,13 +464,13 @@ def test_trailing_block_alone_still_yields_its_writer_values(repo, adapter):
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "clean trailers\n\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n"
-         "Writer: deepseek-r1 run2\n")
+         "Writer: mimo-v2 test-run-1\n"
+         "Writer: deepseek-r1 test-run-2\n")
     sha = _git(repo, "rev-parse", "HEAD")
 
     assert adapter.writer_trailers(str(repo), sha) == [{
         "Plan-Item": "demo:A",
-        "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
+        "Writer": ["mimo-v2 test-run-1", "deepseek-r1 test-run-2"],
     }]
 
 
@@ -482,11 +482,11 @@ def test_prose_mentioning_writer_without_a_colon_is_not_flagged(repo, adapter):
          "Every writer line below names one model family.\n"
          "\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n")
+         "Writer: mimo-v2 test-run-1\n")
     sha = _git(repo, "rev-parse", "HEAD")
 
     assert adapter.writer_trailers(str(repo), sha) == [
-        {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"}]
+        {"Plan-Item": "demo:A", "Writer": "mimo-v2 test-run-1"}]
 
 
 # --------------------------------------------------------------------------
@@ -526,7 +526,7 @@ WRITER_SHAPE_TEMPLATES = [
 def _shape_then_clean_block_commit(repo: Path, shape_line: str) -> str:
     """A commit carrying *shape_line* first, then a clean trailing block.
 
-    The clean block is the usual ``Plan-Item``/``Writer: mimo-v2 run1``
+    The clean block is the usual ``Plan-Item``/``Writer: mimo-v2 test-run-1``
     paragraph, so the ONLY thing that can make the writers unknowable is the
     shape line above it.
     """
@@ -535,7 +535,7 @@ def _shape_then_clean_block_commit(repo: Path, shape_line: str) -> str:
          f"{shape_line}\n"
          "\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n")
+         "Writer: mimo-v2 test-run-1\n")
     return _git(repo, "rev-parse", "HEAD")
 
 
@@ -550,7 +550,7 @@ def test_writer_shape_before_the_clean_block_refuses_the_family_list(
     ``writer_unknown`` instead of counting the clean block's ``mimo`` alone.
     """
     sha = _shape_then_clean_block_commit(
-        repo, template.format(value="deepseek-r1 run2"))
+        repo, template.format(value="deepseek-r1 test-run-2"))
     adapter = GitAdapter({"demo": str(repo)})
 
     assert adapter.writer_trailers(str(repo), sha) == []
@@ -569,12 +569,12 @@ def test_writer_shaped_continuation_inside_the_block_refuses(repo, after):
     """
     if after == "Writer":
         body = ("Plan-Item: demo:A\n"
-                "Writer: mimo-v2 run1\n"
-                "  Writer: deepseek-r1 run2\n")
+                "Writer: mimo-v2 test-run-1\n"
+                "  Writer: deepseek-r1 test-run-2\n")
     else:
         body = ("Plan-Item: demo:A\n"
-                "  Writer: deepseek-r1 run2\n"
-                "Writer: mimo-v2 run1\n")
+                "  Writer: deepseek-r1 test-run-2\n"
+                "Writer: mimo-v2 test-run-1\n")
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          f"fold a second writer\n\n{body}")
     sha = _git(repo, "rev-parse", "HEAD")
@@ -596,15 +596,15 @@ def test_writer_value_with_a_folded_continuation_refuses(repo):
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "fold a model into the writer value\n\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n"
-         "  deepseek-r1 run2\n")
+         "Writer: mimo-v2 test-run-1\n"
+         "  deepseek-r1 test-run-2\n")
     sha = _git(repo, "rev-parse", "HEAD")
     adapter = GitAdapter({"demo": str(repo)})
 
     # The generic trailer read is unchanged: git's own continuation rule.
     assert adapter.trailers(str(repo), sha) == {
         "Plan-Item": "demo:A",
-        "Writer": "mimo-v2 run1 deepseek-r1 run2",
+        "Writer": "mimo-v2 test-run-1 deepseek-r1 test-run-2",
     }
     assert adapter.writer_trailers(str(repo), sha) == []
     with pytest.raises(Refused) as exc:
@@ -622,11 +622,11 @@ def test_plan_item_continuation_without_a_writer_shape_is_unchanged(repo, adapte
          "point at the tracker\n\n"
          "Plan-Item: demo:A\n"
          "  see the issue tracker for the details\n"
-         "Writer: mimo-v2 run1\n")
+         "Writer: mimo-v2 test-run-1\n")
     sha = _git(repo, "rev-parse", "HEAD")
 
     want = {"Plan-Item": "demo:A see the issue tracker for the details",
-            "Writer": "mimo-v2 run1"}
+            "Writer": "mimo-v2 test-run-1"}
     assert adapter.trailers(str(repo), sha) == want
     assert adapter.writer_trailers(str(repo), sha) == [want]
     assert _families(repo, sha) == ["xiaomi"]
@@ -637,12 +637,93 @@ def test_clean_two_writer_block_still_yields_both_families(repo, adapter):
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "two writers, no ambiguity\n\n"
          "Plan-Item: demo:A\n"
-         "Writer: mimo-v2 run1\n"
-         "Writer: deepseek-r1 run2\n")
+         "Writer: mimo-v2 test-run-1\n"
+         "Writer: deepseek-r1 test-run-2\n")
     sha = _git(repo, "rev-parse", "HEAD")
 
     assert adapter.writer_trailers(str(repo), sha) == [{
         "Plan-Item": "demo:A",
-        "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
+        "Writer": ["mimo-v2 test-run-1", "deepseek-r1 test-run-2"],
     }]
     assert sorted(_families(repo, sha)) == ["deepseek", "xiaomi"]
+
+
+@pytest.mark.parametrize("value", ["mimo-v2/deepseek-r1", "deepseek-r1/mimo-v2",
+                                        "cx/gpt-6.1-sol/mimo-v2", "mimo-v2/mimo-v3"])
+def test_fix6_slash_model_list_refused(repo, value):
+    sha = _commit(repo, "models", {"Writer": value})
+    with pytest.raises(Refused, match="writer_unknown"):
+        _families(repo, sha)
+
+
+@pytest.mark.parametrize("run_id", ["kimi-k2", "run1", "two-words", "run-claude"])
+def test_fix6_unknown_second_token_refused(repo, run_id):
+    sha = _commit(repo, "run", {"Writer": f"mimo-v2 {run_id}"})
+    with pytest.raises(Refused, match="writer_unknown"):
+        _families(repo, sha)
+
+
+@pytest.mark.parametrize("run_id", [
+    "20261023-184701-seat-free-opencode-write-13e736",  # spawner stamp
+    "ses_abc12XYZ",                                     # session id (V2)
+    "keeper-trailer-multi-fix5",                        # >=3 segments (V2/V7)
+])
+def test_fix6_valid_second_token_accepted_as_run_id(repo, run_id):
+    """V2: a recognised run id keeps exactly the model token's family."""
+    sha = _commit(repo, "run-ok", {"Writer": f"mimo-v2 {run_id}"})
+    assert _families(repo, sha) == ["xiaomi"]
+
+
+# Fixed compatibility corpus: this sandbox has no origin/main history. These
+# are the concrete shapes supplied by build-L1, not live-git expectations.
+FIX6_WRITER_SHAPES = [
+    ("omniroute/cx-gpt-6.1-sol keeper-trailer-multi-fix5", "openai"),
+    ("omniroute/cx-gpt-6.1-sol exec-ownership-sq8-sol2-a3a264", "openai"),
+    ("omniroute/cx-gpt-6.1-sol ui-browser-fix3-r2-382049", "openai"),
+    ("cx-gpt-6.1-sol 20261023-184701-seat-free-opencode-write-13e736", "openai"),
+    ("xiaomi-mimo/mimo-v2.6-flash 20261023-134745-trailer-multi-writer-470492", "xiaomi"),
+    ("cx/gpt-6.1-sol trailer-multi/20261023-064042-trailer-multi-writer-0e3d4e", "openai"),
+    ("mimo/mimo-v2.6-flash", "xiaomi"),
+    ("cx/gpt-6.1-sol", "openai"),
+    ("mimo-v2 20261023-123456-task", "xiaomi"),
+]
+
+
+@pytest.mark.parametrize("value,family", FIX6_WRITER_SHAPES)
+def test_fix6_fixed_writer_shapes_resolve_once(repo, value, family):
+    sha = _commit(repo, "compatibility", {"Writer": value})
+    assert _families(repo, sha) == [family]
+
+
+@pytest.mark.parametrize("colon", ["\uff1a", "\ua789", "\u2236"])
+@pytest.mark.parametrize("position", ["prose", "block"])
+def test_fix6_colon_variant_refuses(repo, adapter, colon, position):
+    line = f"Writer{colon} deepseek-r1"
+    body = (f"Prose about attribution.\n{line}\n\n" if position == "prose"
+            else "")
+    body += "Plan-Item: demo:A\nWriter: mimo-v2\n"
+    if position == "block":
+        body += line + "\n"
+    _git(repo, "commit", "--allow-empty", "-q", "-m", f"colon\n\n{body}")
+    sha = _git(repo, "rev-parse", "HEAD")
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused, match="writer_unknown"):
+        _families(repo, sha)
+
+
+@pytest.mark.parametrize("first", ["demo:OTHER", "demo:A"])
+def test_fix6_plan_item_binding_requires_unique_value(repo, adapter, first):
+    from evidence_fakes import make_ctx
+    from plangraph.keeper.evidence import CommitCiVerifier
+
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         f"binding\n\nPlan-Item: {first}\nplan-item: demo:A\nWriter: mimo-v2\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+    # Use real parsing/ancestry; only PR provenance is supplied by the fixture.
+    adapter.repo_path = lambda project: str(repo)
+    adapter.merge_commit_of = lambda *args: (sha, "merge@example.invalid")
+    ctx = make_ctx(git=adapter)
+    ctx.ci.mode = lambda project: "none"
+    result = CommitCiVerifier().verify({"key": "demo:A", "project": "demo"},
+                                      {"commit": sha}, ctx)
+    assert result.ok is (first == "demo:A")

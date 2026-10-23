@@ -126,7 +126,7 @@ def _trailing_trailer_lines(text: str) -> list[str]:
 #: ``- Writer: x``, ``> Writer: x``, ``    Writer: x`` and ``Writer : x`` all
 #: match, while the prose "the writer of this" (no colon) does not.
 _WRITER_SHAPED_RE = re.compile(
-    r"writer[^A-Za-z0-9]*:[ \t]*\S", re.IGNORECASE)
+    r"writer[^A-Za-z0-9]*[:\uff1a\ua789\u2236][ \t]*\S", re.IGNORECASE)
 
 #: A KEY that only *looks* like ``writer``: decoration glued around it
 #: (``-Writer``, ``**Writer``, `` `Writer ``).  Such a key parses as its own

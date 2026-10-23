@@ -63,22 +63,17 @@ __all__ = [
 def _trailer(trailers: Any, name: str) -> str | None:
     """Case-insensitive trailer lookup (git trailer keys are case-insensitive).
 
-    A repeated key keeps every value; this one-value lookup (``Plan-Item``)
-    takes the LAST of them, which is what the old last-value-wins parse
-    returned.
+    Conflicting values cannot unambiguously bind a commit to one item.
     """
     if not isinstance(trailers, dict):
         return None
     target = name.lower()
-    found: Any = None
+    found = []
     for key, value in trailers.items():
         if str(key).lower() == target:
-            found = value
-    if isinstance(found, (list, tuple)):
-        if not found:
-            return None
-        found = found[-1]
-    return str(found) if found is not None else None
+            found.extend(value if isinstance(value, (list, tuple)) else [value])
+    unique = {str(value) for value in found if value is not None}
+    return unique.pop() if len(unique) == 1 else None
 
 
 def _fail(detail: str, ref: dict) -> Result:
