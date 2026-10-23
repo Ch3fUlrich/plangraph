@@ -99,7 +99,7 @@ def test_missing_writer_trailer_fails(repo: Path):
     assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
 
 
-@pytest.mark.parametrize("vector", ["V1", "V2", "V3", "V4"])
+@pytest.mark.parametrize("vector", ["V1", "V2", "V3", "V4", "V5", "V6"])
 def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, vector):
     fork = _head(repo)
     _git(repo, "checkout", "-q", "-b", "lane")
@@ -108,23 +108,90 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
     other = _commit(repo, OK_MSG, files={"other.txt": "other\n"})
     # V1 models main advancing to B after the lane forked.
     base = other if vector == "V1" else fork
+    advanced = _commit(repo, OK_MSG, files={"advance.txt": "advance\n"})
+    if vector == "V6":
+        base = advanced
+    if vector == "V3":
+        _git(repo, "checkout", "-q", "-b", "unrelated", fork)
+        unrelated = _commit(repo, OK_MSG, files={"unrelated.txt": "unrelated\n"})
     _git(repo, "checkout", "-q", "lane")
-    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge other", "other")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge other", other)
     merge = _head(repo)
     heads = tmp_path / "open-heads.txt"
-    heads.write_text("" if vector == "V3" else other + "\n", encoding="utf-8")
+    listed = unrelated if vector == "V3" else advanced if vector in {"V5", "V6"} else other
+    heads.write_text(listed + "\n", encoding="utf-8")
     args = ["check", "--base", base, "--head", merge]
     if vector != "V4":
         args += ["--open-heads", str(heads)]
     monkeypatch.chdir(repo)
     rc = main(args)
     captured = capsys.readouterr()
-    expected = f"{merge}: open_pr_merged {other}\n" if vector == "V2" else ""
-    assert rc == (1 if vector == "V2" else 0)
+    expected = f"{merge}: open_pr_merged {other}\n" if vector in {"V2", "V5"} else ""
+    assert rc == (1 if vector in {"V2", "V5"} else 0)
     assert captured.out == expected
-    notice = "ci-commit-gate: open PR merge check skipped (no --open-heads)\n"
+    notice = ci_commit_gate.OPEN_PR_SKIP_NOTICE
     assert captured.err == (notice if vector == "V4" else "")
-    print(f"{vector}: rc={rc}; {captured.out.strip() or captured.err.strip() or 'allowed'}")
+
+
+def test_open_heads_help_contract(capsys):
+    assert main(["check", "--help"]) == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    for phrase in ("PR head SHA", "speculative", "OPEN PRs only", "regenerated per run", "inert"):
+        assert phrase in help_text
+    assert "open_pr_merged" in ci_commit_gate.__doc__.splitlines()[0]
+
+
+@pytest.mark.parametrize("encoding", ["utf-8", "utf-8-sig"])
+def test_open_heads_octopus_library_and_exempt(repo, tmp_path, encoding):
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "lane")
+    _commit(repo, OK_MSG, files={"lane.txt": "lane\n"})
+    heads = []
+    for branch in ("one", "two"):
+        _git(repo, "checkout", "-q", "-b", branch, base)
+        heads.append(_commit(repo, OK_MSG, files={f"{branch}.txt": branch}))
+    _git(repo, "checkout", "-q", "lane")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge peers", "one", "two")
+    merge = _head(repo)
+    path = tmp_path / "heads.txt"
+    path.write_text("\n" + "\n".join([base, *(sha.upper() for sha in heads)]) + "\n\n", encoding=encoding)
+    exempt = tmp_path / "exempt.txt"
+    exempt.write_text(merge + "\n", encoding="utf-8")
+    assert check(base, merge, cwd=repo, open_heads=path, exempt=exempt) == [
+        f"{merge}: open_pr_merged {sha}" for sha in heads
+    ]
+
+
+@pytest.mark.parametrize("kind", ["malformed", "short", "missing", "empty"])
+def test_open_heads_errors(repo, tmp_path, monkeypatch, capsys, kind):
+    path = tmp_path / "heads.txt"
+    if kind in {"malformed", "short"}:
+        path.write_text("\n" + ("not-a-sha" if kind == "malformed" else "abc1234") + "\n", encoding="utf-8")
+    supplied = "" if kind == "empty" else str(path)
+    base = _head(repo)
+    with pytest.raises(ci_commit_gate.GateError):
+        check(base, base, cwd=repo, open_heads=supplied)
+    monkeypatch.chdir(repo)
+    assert main(["check", "--base", base, "--head", base, "--open-heads", supplied]) == 2
+    captured = capsys.readouterr()
+    assert "open-heads file" in captured.err
+    if kind in {"malformed", "short"}:
+        assert ":2:" in captured.err
+    assert "skipped" not in captured.err
+
+
+@pytest.mark.parametrize("at_base", [False, True])
+def test_exempt_bom_uppercase_and_blanks(repo, tmp_path, at_base):
+    sha = _head(repo)
+    text = "\n# exempt\n" + sha.upper() + "\n\n"
+    path = repo / EXEMPT_REL if at_base else tmp_path / "exempt.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8-sig")
+    if at_base:
+        base = _commit(repo, OK_MSG)
+        assert ci_commit_gate._resolve_exempt(base, EXEMPT_REL, cwd=repo) == {sha}
+    else:
+        assert load_exempt(path) == {sha}
 
 
 def test_valid_writer_passes(repo: Path):
