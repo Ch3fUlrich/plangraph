@@ -17,7 +17,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | #135 BATCH-PRECONDITION | DONE | merged 75a6f7ad, 2/2 |
 | #96 JEV-SHADOW (HIGH) | sweep-keeper | head ba3f0600: qwen PASS, glm FIX+TG yes (no prod caller for QC/outcome keeper path). L1 ruling A: writer wires prod call sites + tests via prod entry, re-seat |
 | KEEPER-RUNTOKEN-CLI-RUNS (HIGH) | L1 | D-2338 created (gate PH-RT-ADAPTERS); after phase-1 items |
-| PG-PUBLIC-READY / FLEET-SID-REFRESH / OCGO-FLEET-BUS | build-L2-close-inreview | PGPR: 67 gitleaks + 6 scrub, writer, each finding fixed/allowlisted + rotation answer before judge. SID: submitted (in_review); seats running -> L1 posts verdicts. OCGO: router re-scopes+closes (D-2327) |
+| PG-PUBLIC-READY / FLEET-SID-REFRESH / OCGO-FLEET-BUS | build-L2-close-inreview | PGPR #136 059dbdd9 MERGE-READY, GO-REQ sent 07:1xZ (judge ACCEPT) -> L1 ready+merge; no live env sets gateway URL. SID DONE 2/2. OCGO: router (D-2327) |
 | RT-P1-BUS-CONTRACT | build-L2-bus (workst, relaunched) | conditional GO impl (push red 28ba998 to origin first); MERGE-READY -> L1 |
 | SEAT-COVERAGE-KEEPER, CI-COMMIT-GATE-EDGES | DONE | |
 Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router-code + spawner moves, prio 8) after RT-P1-E2E green (D-2318 4). Reap timer -> RT-P1-E2E checklist (router edit).
