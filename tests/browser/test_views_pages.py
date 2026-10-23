@@ -5,8 +5,9 @@ Each test asserts the SPEC against the current page (src/plangraph/web): a tag
 whose behaviour is wrong today is ``xfail(strict=True, raises=AssertionError)``
 with the owning item; when a fix lane makes it pass, strict xfail reports XPASS
 as a failure, so that lane removes the marker, and a harness break (timeout,
-KeyError, ...) stays red instead of passing as an expected failure. Sizes
-default to all three SIZES unless the tag names one.
+KeyError, ...) stays red instead of passing as an expected failure. A tag whose
+observable already holds today is an UNMARKED green test (``test_v_dec_3``).
+Sizes default to all three SIZES unless the tag names one.
 Assertions carry measured probe values.
 """
 from __future__ import annotations
@@ -395,10 +396,39 @@ def test_v_dec_1(page, site):
 def test_v_dec_2(page, site):
     """V-DEC-2: an edit shows the previous text, the editor and the time
     (hash-chained event), so the Decisions view needs an edit control and a
-    history surface. Neither exists: no element in the view can produce or
-    show an edit."""
+    history surface. Neither exists.
+
+    The history check runs FIRST and is not vacuous: the fixture carries an
+    edited decision (D-13 with a ``history`` entry, see
+    ``test_fixture_decisions_include_an_edited_record``), and its previous
+    text / editor / time must literally appear in the decisions surface.
+    """
     _load(page, site)
     ctl, st = _decisions_view(page)
+    edited = [d for d in _SNAP["decisions"]
+              if d.get("history") or d.get("edited")]
+    assert edited, (
+        "the fixture carries no edited decision, so V-DEC-2's previous text/"
+        "editor/time cannot be asserted (guard: "
+        "test_fixture_decisions_include_an_edited_record)")
+    surface = page.evaluate(
+        """() => { const p = document.getElementById('panel-qa');
+           return p ? String(p.textContent || '') : ''; }"""
+    )
+    assert surface.strip(), (
+        "the decisions surface is empty, it can show no edit history: "
+        "control=%r view=%r surface=%r" % (ctl, st, surface[:120]))
+    missing: dict[str, list] = {}
+    for d in edited:
+        for ev in (d.get("history") or []):
+            for field in ("previous_text", "editor", "time"):
+                val = ev.get(field)
+                if not val or str(val) not in surface:
+                    missing.setdefault(d["id"], []).append({field: val})
+    assert not missing, (
+        "decisions whose edit history is NOT shown in the Decisions view "
+        "(expected {decision: [{field: value}]} - V-DEC-2 requires the previous "
+        "text, the editor and the time of the hash-chained event): %r" % missing)
     edit = page.evaluate(
         """() => [...document.querySelectorAll('#panel-qa button, #panel-qa a')]
              .map(b => String(b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
@@ -407,28 +437,58 @@ def test_v_dec_2(page, site):
     assert edit, (
         "the Decisions view offers no edit control, so no edit (previous "
         "text, editor, time) can be shown: control=%r view=%r" % (ctl, st))
+
+
+def test_fixture_decisions_include_an_edited_record():
+    """V-DEC-2 coverage guard (unmarked, must stay green): the fixture really
+    carries an edited decision whose history names the previous text, the editor
+    and the time, so ``test_v_dec_2`` can never pass vacuously on a snapshot
+    without history. Fixture source: ``tools/gen_ui_snapshot.py`` (D-13)."""
     edited = [d for d in _SNAP["decisions"]
               if d.get("history") or d.get("edited")]
-    surface = page.evaluate(
-        """() => [...document.querySelectorAll('#panel-qa th, #panel-qa caption, """
-        """#panel-qa [class*=hist], #panel-qa [class*=edit]')]
-             .map(e => String(e.textContent || '').trim()).filter(Boolean)"""
-    )
-    assert surface or not edited, (
-        "no edit-history surface in the Decisions view, previous text/editor/"
-        "time cannot be shown for %r (surface so far: %r)" % (edited, surface))
+    assert edited, (
+        "tests/fixtures/ui_snapshot.json has no edited decision, so the "
+        "V-DEC-2 history assertion has nothing to compare: decisions=%r"
+        % [d.get("id") for d in _SNAP["decisions"]])
+    for d in edited:
+        events = d.get("history") or []
+        assert events, "edited decision %s carries no history event" % d["id"]
+        for ev in events:
+            for field in ("previous_text", "editor", "time"):
+                assert ev.get(field), (
+                    "decision %s history event lacks %r: %r" % (d["id"], field, ev))
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:PG-DEC-EDIT-NOTICE")
 @for_sizes
 def test_v_dec_3(page, site):
-    """V-DEC-3: without the operator principal the edit control is not shown.
+    """V-DEC-3: without the operator principal, the edit control is not shown.
 
-    This session has no principal at all (the operator principal arrives with
-    PG-ANSWER-UI, a dependency of PG-DEC-EDIT-NOTICE), so there is nothing to
-    gate an edit control on - and, as the first assertion insists, the page
-    must keep that principal state instead of trusting a hidden control."""
+    No marker: V-DEC-3's own observable already holds today - this session has
+    no operator principal and no edit control exists - so the test is green and
+    stays green until an edit control appears that is not gated on a principal.
+
+    The page's missing principal STATE is a different assertion and a different
+    owner: ``test_v_dec_3_principal_state`` below, strict xfail for
+    ``plangraph:PG-ANSWER-UI``, the lane the plan names for the write identity
+    (docs/plans/ui/2026-10-17-ui-plan.yaml line 249 "the write identity is the
+    operator principal from PG-ANSWER-UI", depends_on line 252; plan section 5,
+    docs/plans/ui/2026-10-17-ui-plan.md line 86: PG-ANSWER-UI "brings the
+    operator principal through the proxy hop").
+    """
     _load(page, site)
+    st = page.evaluate(
+        """() => { const p = document.getElementById('panel-qa');
+           const t = document.getElementById('decisions-table');
+           return {panel: !!p, table: !!t,
+                   rows: t ? t.querySelectorAll('tbody tr').length : 0}; }"""
+    )
+    assert st["panel"] and st["table"], (
+        "the Decisions surface is gone, V-DEC-3 has nothing to check against "
+        "(a decision row is where an edit control must be withheld): %r" % st)
+    assert st["rows"] == len(_SNAP["decisions"]), (
+        "the decisions surface does not render the fixture's decisions, so the "
+        "edit-control scan would be vacuous: rows=%d, fixture=%d"
+        % (st["rows"], len(_SNAP["decisions"])))
     edit = page.evaluate(
         """() => [...document.querySelectorAll('#panel-qa button, #panel-qa a')]
              .map(b => String(b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
@@ -436,6 +496,24 @@ def test_v_dec_3(page, site):
     )
     assert not edit, (
         "edit control shown without an operator principal: %r" % edit)
+
+
+@for_sizes
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:PG-ANSWER-UI")
+def test_v_dec_3_principal_state(page, site):
+    """V-DEC-3's precondition, split out of ``test_v_dec_3`` (deepseek review:
+    that test must go red - or stay green - on V-DEC-3's own observable, not on
+    an internal principal-store key).
+
+    The page must keep operator-principal state to gate an edit control on.
+    Owner ``plangraph:PG-ANSWER-UI``: the plan makes it the source of the write
+    identity (docs/plans/ui/2026-10-17-ui-plan.yaml line 249 "the write identity
+    is the operator principal from PG-ANSWER-UI", depends_on line 252; plan
+    section 5, docs/plans/ui/2026-10-17-ui-plan.md lines 86-87), and VIEWS.md 6
+    (docs/ui/VIEWS.md line 111) names plangraph:PG-ANSWER-UI for the operator
+    write path. PG-DEC-EDIT-NOTICE (the old marker) owns the edit flow, not the
+    principal."""
+    _load(page, site)
     principal = page.evaluate(
         """() => { const ui = window.PlanUI && PlanUI.app && PlanUI.app.ui;
            if (!ui || typeof ui.get !== 'function') return null;
@@ -448,8 +526,8 @@ def test_v_dec_3(page, site):
     assert principal is not None, (
         "the page keeps no principal/identity state to gate editing on "
         "(checked store keys principal/identity/role/actor/who): principal="
-        "%r, edit control=%r - V-DEC-3's operator-only gate cannot exist yet"
-        % (principal, edit))
+        "%r - V-DEC-3's operator-only gate cannot exist until PG-ANSWER-UI "
+        "supplies the operator principal" % (principal,))
 
 
 # ---------------------------------------------------------- Section 8: Activity
@@ -558,13 +636,22 @@ def test_v_kg_1(page, site):
 
 
 # ------------------------------------------------------------- Section 11: Fleet
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLEET-TAB")
 @for_sizes
 def test_v_fleet_1(page, site):
     """V-FLEET-1: until the fleet API exists the Fleet tab shows its empty
     state with the reason. The shell has no Fleet tab at all, so the empty
-    state can never be reached (owner in the plan: UI-FLAKE-FIXES, whose done
-    criteria name V-FLEET-1)."""
+    state can never be reached.
+
+    Owner ``plangraph:UI-FLEET-TAB``, the lane that builds the tab:
+    docs/plans/ui/2026-10-17-ui-plan.yaml lines 253-254 (``op: edit`` /
+    ``key: plangraph:UI-FLEET-TAB``) with done criteria lines 256-257 ("browser
+    test; per docs/ui/VIEWS.md section 11"), plan section 5
+    (docs/plans/ui/2026-10-17-ui-plan.md line 88: "UI-FLEET-TAB: done criteria
+    point at VIEWS.md 11") and docs/ui/VIEWS.md line 149 ("Built by
+    plangraph:UI-FLEET-TAB"). UI-FLAKE-FIXES (yaml line 161) also lists
+    V-FLEET-1 in its done criteria; the section-11 builder named by the plan
+    and the spec is UI-FLEET-TAB."""
     _load(page, site)
     tab = page.evaluate(
         """() => { const els = [...document.querySelectorAll(
