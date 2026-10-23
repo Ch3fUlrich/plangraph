@@ -17,7 +17,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | BUS-NONCE-FLOOD p4 | L1 | claimed epoch 1; writer E queued workst (after #139, cx 18:46Z+) (lane/bus-nonce-flood @de54bb22) -> CI, qwen+mimo -> merge, submit |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
 | KEEPER-OPERATOR-WAIT-GUARD (p6) | L1 queue | D-2455 standard; operator-wait needs operator dep + edge edit on claimed |
-| RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner | ruling (a) contract C1 multi Plan-Item merge msg / C2 system-card family from writer trailers / C3 atomic idempotent attach; merge after #139 + #140 |
+| RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner | C3 1fee33c local (not pushed); C1/C2 cx stalls (quota) -> ruling (a) relaunch C1 then C2 after 18:55Z; no push of #139 merge f6b4f6c; merge after #139 + #140 |
 | CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | head 042e313f CI green; qwen r2 FIX A,B(H) D(M) H(L) -> ruling opt 1: fix A,B,D,H one writer, F -> 2b; re-seat qwen + non-openai -> MERGE-READY; then 2b GO-REQ, WF-VERSIONING |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
 | RT-P1-BUS-CONTRACT | DONE | #153 merged 432c5377, keeper done (mimo + deepseek r2) |
