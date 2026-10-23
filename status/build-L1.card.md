@@ -12,8 +12,8 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | c61f80 provider-blocked -> ca364b (deepseek, D-2409) -> CI -> Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX (HIGH p8) | L1 | cont writer 1a3af8 (wt pg-public-fix) -> PR, gitleaks 0, CI, 2 seats, merge; then re-seat PG-PUBLIC-READY |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
-| KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; define refused unreachable_goal -> routing asked (item.json seats/close-skip-unverified); writer after slot frees |
-| JEV-ATTEMPT-THREAD p7 | L1 queue | brief seats/jev-attempt-thread/WRITER-BRIEF.md; spawn+claim when slot frees |
+| KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; created D-2412 (edge PH-RT-CONSOLIDATE); sol writer requested from workst-L1-autoos; claim on run id |
+| JEV-ATTEMPT-THREAD p7 | L1 queue | sol writer requested from workst-L1-autoos 11:3xZ (coding.vm cap D-2372); claim on run id |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
 | RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
 | RT95 / CARD-CHECKS / WF-VERSIONING | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
