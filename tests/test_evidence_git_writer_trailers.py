@@ -137,3 +137,30 @@ def test_phase_merge_returns_leaf_trailers_and_skips_inner_merges(repo, adapter)
         "mimo-v2 run1", "deepseek-r1 run2", "claude-opus run1"}
     # Inner PR merges (demo:PR-A/demo:PR-B) and the PHASE merge are dropped.
     assert {d.get("Plan-Item") for d in got} == {"demo:LEAF"}
+
+
+# --------------------------------------------------------------------------
+# 17. an OCTOPUS merge (3+ parents) is out of scope: fail closed, never
+#     ignore the commits behind parents[2:]
+# --------------------------------------------------------------------------
+
+def test_octopus_merge_returns_no_writer_trailers(repo, adapter):
+    _commit(repo, "base", {"Plan-Item": "demo:BASE"})
+    _git(repo, "branch", "b1")
+    _git(repo, "branch", "b2")
+    _git(repo, "switch", "-q", "b1")
+    _commit(repo, "w1", {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
+    _git(repo, "switch", "-q", "b2")
+    _commit(repo, "w2", {"Plan-Item": "demo:A", "Writer": "deepseek-r1 run2"})
+    _git(repo, "switch", "-q", "main")
+    _commit(repo, "side", {"Plan-Item": "demo:SIDE", "Writer": "qwen-max run9"})
+    # One `git merge` of two branches at once: three parents.
+    _git(repo, "merge", "--no-ff", "-q", "-m",
+         "Octopus\n\nPlan-Item: demo:OCTOPUS", "b1", "b2")
+    octopus = _git(repo, "rev-parse", "HEAD")
+    assert len(_git(repo, "rev-list", "--parents", "-n", "1",
+                    octopus).split()) == 4
+
+    # A writer behind parents[2:] must never be silently skipped: the adapter
+    # cannot tell who wrote an octopus, so the keeper gets [] and fails closed.
+    assert adapter.writer_trailers(str(repo), octopus) == []
