@@ -327,6 +327,8 @@ CREATE TABLE items (
     exec_workflow_id TEXT,
     exec_run_id      TEXT,
     exec_attempt     INTEGER,
+    exec_principal   TEXT,
+    exec_retired_runs TEXT,
     created_at     TEXT,
     updated_at     TEXT
 );

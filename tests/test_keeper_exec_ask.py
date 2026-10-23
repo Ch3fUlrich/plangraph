@@ -18,7 +18,7 @@ on the default backend (``World`` follows ``PG_KEEPER_BACKEND``).
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed
+from keeper_util import World, seed, seed_exec_owner
 from plangraph.keeper.errors import Refused
 
 
@@ -159,6 +159,9 @@ def test_store_ask_with_fields_records_the_owner_and_refuses_a_stale_run(w):
 
 def test_store_worker_ask_without_fields_on_an_owned_card_is_refused(w):
     key, = seed(w, [("A", [])])
+    # Only a worker may RECORD an owner now (V2-1): seed it, then let the
+    # run-carrying router move only check the triple.
+    seed_exec_owner(w, key, OWNED)
     w.store.set_state(w.p("router"), key, "running",
                       run=("wf-1", "run-1", 1))
     err = refused("exec_stale", w.store.ask_question, w.p("workerA"), key, "q?")
@@ -169,6 +172,7 @@ def test_store_worker_ask_without_fields_on_an_owned_card_is_refused(w):
 
 def test_store_router_l1_and_system_omit_the_fields_on_an_owned_card(w):
     key, = seed(w, [("A", [])])
+    seed_exec_owner(w, key, OWNED)
     w.store.set_state(w.p("router"), key, "running",
                       run=("wf-1", "run-1", 1))
     asked = w.store.ask_question(w.p("router"), key, "tabs or spaces?")

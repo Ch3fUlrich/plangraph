@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from keeper_util import World, seed
-from test_keeper_exec_ownership import owner
+from test_keeper_exec_ownership import owner, refused, retired_runs
 from test_keeper_exec_reopen import RUN1, RUN2, claimed_owner
 from test_keeper_exec_verbs import park
 from test_keeper_withdraw_review import _decisions
@@ -31,7 +31,7 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
             w.store.verdict(w.p("reviewer"), key, False, "redo")
             # Give the second handback an owner of its own to clear.
             with w.store._write():
-                w.store._exec_record(w.conn, key, *RUN1)
+                w.store._exec_record(w.conn, key, *RUN1, principal=worker)
             w.store.submit(worker, key, epoch)
         assert owner(w, key) == RUN1
         if transition in ("changes", "second_changes"):
@@ -41,6 +41,14 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
         else:
             w.store.withdraw_review(w.p("router"), key, "D-900")
         assert owner(w, key) == (None, None, None)
+        # RT-P1 sq5 fix 2 (V1-1/V5-1): EVERY clear door keeps the retired-run
+        # fence, so a late call from the run it retired is refused -- it cannot
+        # be the first writer at the cleared card any more ...
+        assert (RUN1[0], RUN1[1], RUN1[2]) in retired_runs(w, key)
+        refused("exec_stale", w.store.worker_park, worker,
+                park(key, workflow_id=RUN1[0], run_id=RUN1[1], attempt=RUN1[2]))
+        assert owner(w, key) == (None, None, None)
+        # ... while a NEW run still takes the card.
         assert w.store.worker_park(worker, park(key, **RUN2))["state"] == "parked"
         assert owner(w, key) == ("wf-2", "run-2", 1)
     finally:

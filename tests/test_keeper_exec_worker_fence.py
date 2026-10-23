@@ -1,7 +1,7 @@
 """Worker audit/no-op calls must check ownership without acquiring it."""
 import pytest
 
-from keeper_util import World, seed
+from keeper_util import World, seed, seed_exec_owner
 from plangraph.keeper.errors import Refused
 
 
@@ -35,6 +35,9 @@ def open_alarms(w, key):
                                    {**RUN, "attempt": 1}])
 def test_attempt_checks_existing_owner(w, extra):
     key, = seed(w, [("A", [])])
+    # Only a worker may RECORD an owner (V2-1); the router move below then
+    # only checks the triple it no longer records.
+    seed_exec_owner(w, key, ("wf", "run", 2))
     w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
     # Rust worker report now carries ExecId on worker_attempt, not just lifecycle verbs.
     if extra == RUN:
@@ -51,6 +54,9 @@ def test_attempt_checks_existing_owner(w, extra):
 
 def test_audit_attempt_checks_but_does_not_advance_owner(w):
     key, = seed(w, [("A", [])])
+    # Only a worker may RECORD an owner (V2-1); the router move below then
+    # only checks the triple it no longer records.
+    seed_exec_owner(w, key, ("wf", "run", 2))
     w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
     w.store.worker_attempt(w.p("workerA"),
                            {"card": key, "n": 1, "exit_class": "check_fail",
@@ -165,6 +171,9 @@ def test_refused_complete_does_not_acquire_owner(w, monkeypatch):
                                    {**RUN, "attempt": 1}])
 def test_noop_complete_still_checks_recorded_owner(w, extra):
     key, = seed(w, [("A", [])])
+    # Only a worker may RECORD an owner (V2-1); the router move below then
+    # only checks the triple it no longer records.
+    seed_exec_owner(w, key, ("wf", "run", 2))
     w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
     with w.store._write():
         w.conn.execute("UPDATE items SET state='done' WHERE key=?", (key,))
@@ -229,6 +238,7 @@ def test_a_first_park_with_a_stale_live_set_is_exec_stale_state(w):
 
 def test_a_duplicate_complete_with_a_stale_live_set_is_a_success_noop(w):
     key, = seed(w, [("A", [])])
+    seed_exec_owner(w, key, ("wf", "run", 2))
     w.store.set_state(w.p("router"), key, "waiting", run=("wf", "run", 2))
     body = {"card": key, "merged_sha": "deadbeef",
             "expected_state": "waiting", **RUN}

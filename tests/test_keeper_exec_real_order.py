@@ -1,7 +1,7 @@
 """Worker reports precede projection in production; do not pre-project needs_input."""
 import pytest
 
-from keeper_util import seed, to_claimed
+from keeper_util import seed, seed_exec_owner, to_claimed
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.store_cards import TRANSITIONS, _forward
 from plangraph.projector.apply import Projector
@@ -39,12 +39,23 @@ def test_report_then_ask_before_projection(w, initial):
     worker_call(w, key, "park", LIVE_STATES)
     assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)
     projector = Projector(w.store, w.p("system"), now=w.clock)
-    projector.apply_run(project_history(history("needs_input"),
-                        workflow_id="card:" + key, run_id="run"), run_ord=0)
-    assert snapshot(w, key)[0] == "needs_input"
-    worker_call(w, key, "ask_question", LIVE_STATES)
-    worker_call(w, key, "park", LIVE_STATES)
-    assert snapshot(w, key)[0] == "parked"
+    result = projector.apply_run(project_history(history("needs_input"),
+                                 workflow_id="card:" + key, run_id="run"), run_ord=0)
+    # RT-P1 sq5 fix 3: the late projection would walk an OWNED parked card
+    # backwards (parked -> running, parked -> needs_input), so the state
+    # machine refuses both writes and the projector skips them: the worker's
+    # park and its owner stand instead of being clobbered by stale events.
+    assert (result.states_written, result.states_skipped_state) == (0, 2)
+    assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)
+    # The recorded owner retrying its park is still a success no-op, decided
+    # before the observed-state set the projection made stale ...
+    assert worker_call(w, key, "park", LIVE_STATES) == {
+        "card": key, "state": "parked", "changed": False}
+    # ... while an ask that still expects the pre-park live set is fenced out.
+    with pytest.raises(Refused) as err:
+        worker_call(w, key, "ask_question", LIVE_STATES)
+    assert err.value.code == "exec_stale_state"
+    assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)
 
 
 @pytest.mark.parametrize("verb", ["ask_question", "park"])
@@ -102,7 +113,9 @@ def test_claimed_holder_park_is_exempt_from_forward_table(w, owned, triple):
     if owned:
         # (a) The explicit hand-back to open clears the exec owner (W19), so a
         # parked card revives with a new run: the revived card takes its claim
-        # holder's triple-less park.
+        # holder's triple-less park.  Only a worker may RECORD an owner (V2-1),
+        # so it is seeded before the system run-carrying move that checks it.
+        seed_exec_owner(w, revive, ("card:" + revive, "run", 1))
         w.store.set_state(w.p("system"), revive, "running",
                           run=("card:" + revive, "run", 1))
         w.store.set_state(w.p("system"), revive, "open", hand_back=True)

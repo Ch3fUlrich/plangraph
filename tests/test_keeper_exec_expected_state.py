@@ -2,7 +2,7 @@
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed, to_claimed
+from keeper_util import World, seed, seed_exec_owner, to_claimed
 from test_keeper_exec_verbs import RUN1, complete, owner, park, state
 
 #: The worker's live set: ``waiting`` is in it because the projector writes
@@ -32,6 +32,9 @@ def waiting(w):
     key, = seed(w, [("A", [])])
     # Projector._apply_state does not yet forward exec ids in this checkout.
     run = ("wf-1", "run-1", 1)
+    # Only a worker may RECORD an owner (V2-1): seed it, then let the router
+    # run-carrying moves below only check the triple.
+    seed_exec_owner(w, key, run)
     w.store.set_state(w.p("router"), key, "running", run=run)
     w.clock.advance(10)
     w.store.set_state(w.p("router"), key, "waiting", run=run)

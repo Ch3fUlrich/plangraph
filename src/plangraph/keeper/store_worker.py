@@ -154,18 +154,21 @@ class WorkerMixin:
         if due is not None and due.timestamp() <= now:
             raise Refused("epoch_stale", f"{item['key']}: claim lease expired")
 
-    def _exec_gate(self, key, body, *, record=True):
+    def _exec_gate(self, key, body, principal=None, *, record=True):
         """Check a worker verb body against the card's recorded exec owner.
 
         Recording runs INSIDE the caller's write lock (park's ``guard`` hook and
         complete/alarm's write block) because it may record the owner or bump
         the attempt.  RT-P1-EXEC-OWNERSHIP: a body naming any of
         ``workflow_id``/``run_id``/``attempt`` must present all three and match
-        the owner (``_exec_check``: a first call records it; a stale run or a
-        lower attempt is refused); a body without them keeps the historical
+        the owner (``_exec_check``: a first call records it -- from a worker
+        principal only, bound to it -- a stale run, a retired run or a lower
+        attempt is refused); a body without them keeps the historical
         behaviour unless the card is already owned. ``record=False`` validates
-        an unowned call without acquiring ownership (audit-only or no-op), and
-        permits a plain read for audit-only attempts.
+        without acquiring ownership (audit-only or no-op) -- it still runs the
+        stale and retired-run fence checks, so a late call from a retired run
+        can never slip past a validate-only call, and permits a plain read for
+        audit-only attempts.
         """
         # No router/system exemption: router paths clear the owner instead.
         row = self.conn.execute(
@@ -180,9 +183,9 @@ class WorkerMixin:
             return
         parts = _exec_parts(key, (body.get("workflow_id"), body.get("run_id"),
                                   body.get("attempt")))
-        # Audit-only and no-op calls validate but cannot acquire a first owner.
-        if owned or record:
-            self._exec_check(self.conn, key, *parts, record=record)
+        # Always validate (stale / lower attempt / retired fence / principal);
+        # only ``record`` decides whether an unowned card may be acquired.
+        self._exec_check(self.conn, key, *parts, principal=principal, record=record)
 
     @staticmethod
     def _exec_duplicate(item, body, final):
@@ -228,7 +231,7 @@ class WorkerMixin:
         _count("tokens_out", body.get("tokens_out"))
         _number("cost", body.get("cost"))
         key = self._resolve_scoped(principal, card)
-        self._exec_gate(key, body, record=False)
+        self._exec_gate(key, body, principal, record=False)
         return {"card": key, "n": number, "exit_class": exit_class}
 
     # -------------------------------------------------------------- park
@@ -260,7 +263,7 @@ class WorkerMixin:
             # 1. Stale-run / lower-attempt checks decide first, and only
             #    validate here: a call that fails later must not acquire
             #    ownership (record=False).
-            self._exec_gate(item["key"], body, record=False)
+            self._exec_gate(item["key"], body, principal, record=False)
             # 2. A duplicate park is a success no-op, ahead of expected_state.
             if self._exec_duplicate(item, body, "parked"):
                 return
@@ -268,7 +271,7 @@ class WorkerMixin:
             self._exec_expect_state(item, body.get("expected_state"))
             self._park_guard(principal, item, epoch, now)
             if item["state"] != "parked":
-                self._exec_gate(item["key"], body, record=True)
+                self._exec_gate(item["key"], body, principal, record=True)
 
         result = self._apply_state(principal, key, "parked", why, now,
                                    lambda project: self._may_act_in(principal,
@@ -298,7 +301,7 @@ class WorkerMixin:
             item = self._get_or_refuse(key)
             # 1. Stale-run / lower-attempt checks decide first (validate only,
             #    so a call that fails below acquires nothing).
-            self._exec_gate(key, body, record=False)
+            self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
             if not self._exec_duplicate(item, body, "done"):
                 self._exec_expect_state(item, body.get("expected_state"))
@@ -310,7 +313,7 @@ class WorkerMixin:
                     #    is refused or loses a race, the owner/attempt recorded
                     #    here rolls back with it, so a failed completion never
                     #    leaves a recorded owner (V1-A).
-                    self._exec_gate(key, body, record=True)
+                    self._exec_gate(key, body, principal, record=True)
                     self._guarded_touch(key, (item["state"],), item["epoch"])
         return {"card": key, "merged_sha": merged_sha}
 
@@ -388,7 +391,7 @@ class WorkerMixin:
             row = self.conn.execute(
                 "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
             owned = row is not None and row["exec_run_id"] is not None
-            self._exec_gate(key, body, record=existing is None or owned)
+            self._exec_gate(key, body, principal, record=existing is None or owned)
             self.conn.execute(
                 "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,"
                 "raised_at)"

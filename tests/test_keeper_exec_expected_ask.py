@@ -2,7 +2,7 @@
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed, to_claimed
+from keeper_util import World, seed, seed_exec_owner, to_claimed
 from plangraph.keeper.errors import Refused
 
 #: The worker's live set: ``waiting`` is in it because the projector writes
@@ -27,6 +27,9 @@ def snapshot(w, key):
 
 def waiting(w):
     key, = seed(w, [("A", [])])
+    # Only a worker may RECORD an owner (V2-1); the run-carrying moves below
+    # check it instead of planting it.
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     for state in ("running", "waiting"):
         w.store.set_state(w.p("system"), key, state,
                           run=("wf-1", "run-1", 1))

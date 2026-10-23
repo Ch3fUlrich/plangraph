@@ -398,14 +398,12 @@ impl Card {
                         MergeStep::Merged(sha) => {
                             ctx.execute_activity(
                                 CardActivities::complete,
-                                DoneInput {
-                                    // Projector: merge retry timers can leave waiting; probe paths
-                                    // can retain the attempt's needs_input/waiting state. No fixed CAS.
-                                    expected_state: None,
-                                    card: input.claim.card.clone(),
-                                    merged_sha: sha.clone(),
-                                    attempt: Some(n.max(1)),
-                                },
+                                // Merge retry timers can leave waiting; probe paths
+                                // can retain the attempt's needs_input/waiting
+                                // state -- the live set covers every one of them,
+                                // so the real complete carries a CAS like the
+                                // other worker verbs instead of `None` (sq5 fix 4).
+                                done_input(input.claim.card.clone(), sha.clone(), n),
                                 activity_options(&cfg),
                             )
                             .await?;
@@ -790,6 +788,28 @@ fn once_options(cfg: &Config) -> ActivityOptions {
     ActivityOptions::with_start_to_close_timeout(cfg.start_to_close)
         .retry_policy(retry)
         .build()
+}
+
+/// The input the real `complete` activity gets for a merged attempt.
+///
+/// RT-P1 sq5 fix 4 (deepseek MED, D-2410 HIGH): complete sends the live set the
+/// worker observed instead of `None`, so the keeper's `_worker_complete` writes
+/// with a real state CAS instead of "whatever the card happens to be now".  The
+/// set is [`WORKER_LIVE_STATES`]: merge-retry timers can leave `waiting` and
+/// probe paths can retain the attempt's `needs_input`/`waiting` state, and all
+/// of those are live; `claimed` and the terminal states are not.
+fn done_input(card: String, merged_sha: String, attempt: u32) -> DoneInput {
+    DoneInput {
+        expected_state: Some(
+            WORKER_LIVE_STATES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+        ),
+        card,
+        merged_sha,
+        attempt: Some(attempt.max(1)),
+    }
 }
 
 /// Wait `d` durably, unless the `cancel` signal wins first (`true`).
@@ -1508,6 +1528,30 @@ mod tests {
         }))
         .unwrap();
         assert_eq!((full.question_id, full.key.as_str()), (12, "k"));
+    }
+
+    /// sq5 fix 4 (deepseek, D-2410 HIGH): the real complete activity carries the
+    /// live set the worker observed instead of `None`, so keeper `_worker_complete`
+    /// gets a real CAS instead of "whatever the card happens to be now".
+    #[test]
+    fn complete_sends_the_live_set_as_expected_state() {
+        let input = done_input("c-1".to_string(), "deadbeef".to_string(), 3);
+        let states = input
+            .expected_state
+            .expect("complete must carry the observed live set, not None");
+        assert_eq!(
+            states,
+            WORKER_LIVE_STATES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        );
+        // The merge-retry/probe paths this CAS has to cover live in waiting and
+        // needs_input, so both must be part of what complete accepts.
+        assert!(states.iter().any(|s| s == "waiting"));
+        assert!(states.iter().any(|s| s == "needs_input"));
+        assert_eq!((input.card.as_str(), input.merged_sha.as_str(), input.attempt),
+                   ("c-1", "deadbeef", Some(3)));
     }
 
     #[test]

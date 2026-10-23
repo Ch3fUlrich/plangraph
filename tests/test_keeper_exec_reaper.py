@@ -10,7 +10,7 @@ the default backend (``World`` follows ``PG_KEEPER_BACKEND``).
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed, to_claimed
+from keeper_util import World, seed, seed_exec_owner, to_claimed
 from plangraph.keeper.errors import Refused
 
 
@@ -51,6 +51,9 @@ def test_reaper_leaves_temporal_owned_cards_alone(w):
     keys = seed(w, [(state, []) for state in states] + [("control", [])])
     before = {}
     for key, state in zip(keys, states):
+        # Only a worker may RECORD an owner (V2-1); the run-carrying router
+        # move below checks the seeded triple instead of planting it.
+        seed_exec_owner(w, key, ("wf-1", "run-1", 2))
         w.store.set_state(w.p("router"), key, state, run=("wf-1", "run-1", 2))
         before[key] = snapshot(w, key)
         assert before[key][0] == state
@@ -70,6 +73,7 @@ def test_reaper_leaves_temporal_owned_cards_alone(w):
 @pytest.mark.parametrize("run_id,attempt", [("run-1", 1), ("stale-run", 2)])
 def test_delayed_worker_park_cannot_overwrite_projector(doors, w, run_id, attempt):
     key, = seed(w, [("A", [])])
+    seed_exec_owner(w, key, ("wf-1", "run-1", 2))
     w.store.set_state(w.p("router"), key, "waiting", run=("wf-1", "run-1", 2))
     before = snapshot(w, key)
     body = {"card": key, "tier": "free", "exit_class": "check_fail",

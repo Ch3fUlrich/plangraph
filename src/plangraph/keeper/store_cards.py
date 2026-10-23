@@ -24,7 +24,10 @@ trigger).
   is EXPLICIT: ``set_state(..., hand_back=True)`` that changes the state and
   lands on ``open``/``ready`` frees the exec owner for the next run.  A bare
   run-less move (the projector/planner write path) never clears the owner, so a
-  run-less write cannot free a live run's card (RT-P1 V1-B).
+  run-less write cannot free a live run's card (RT-P1 V1-B); on an OWNED card it
+  must also stay forward -- a bare back move is ``bad_transition`` (RT-P1 sq5
+  fix 3).  Owners are recorded only by a worker principal and are bound to it
+  (sq5 fix 1), and every clear keeps a retired-run fence (sq5 fix 2).
 """
 from __future__ import annotations
 
@@ -381,7 +384,7 @@ class CardsMixin:
             if any(part is not None
                    for part in (exec_workflow_id, exec_run_id, exec_attempt)):
                 self._exec_check(self.conn, key, exec_workflow_id, exec_run_id,
-                                 exec_attempt, now=now)
+                                 exec_attempt, principal=principal, now=now)
             elif principal.role in ("worker", "spawner"):
                 row = self.conn.execute(
                     "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
@@ -500,40 +503,112 @@ class CardsMixin:
                                  run=run, new_run=new_run, hand_back=hand_back)
 
     def _exec_clear(self, conn, key):
-        """Free the exec owner inside the caller's keeper transaction."""
-        conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
-                     " exec_attempt=NULL WHERE key=?", (key,))
+        """Free the exec owner inside the caller's keeper transaction.
 
-    def _exec_record(self, conn, item_id, wf, run, attempt, now=None):
+        RT-P1 sq5 fix 2 (V1-1/V5-1): the clear RETIRES the run it frees -- the
+        ``(workflow_id, run_id, max attempt)`` triple joins the card's
+        retired-run fence (``exec_retired_runs``), kept in the same UPDATE that
+        drops the owner, so a late call from that run is refused ``exec_stale``
+        and cannot reacquire the card as its first writer.  Every clear door
+        (reap, release, both review changes, reopen, withdraw and the explicit
+        ``set_state`` hand-back) goes through here, so the fence is written for
+        all of them at once.
+        """
+        row = conn.execute(
+            "SELECT exec_workflow_id, exec_run_id, exec_attempt, exec_retired_runs"
+            " FROM items WHERE key=?", (key,)).fetchone()
+        if row is None or row["exec_run_id"] is None:
+            # Nothing to retire: an unowned card only drops the (already NULL)
+            # triple and keeps whatever fence earlier clears left behind.
+            conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
+                         " exec_attempt=NULL WHERE key=?", (key,))
+            return
+        retired = [entry for entry in _load_list(row["exec_retired_runs"])
+                   if isinstance(entry, dict)]
+        by_run = [(entry.get("workflow_id"), entry.get("run_id"))
+                  for entry in retired]
+        run_key = (row["exec_workflow_id"], row["exec_run_id"])
+        if run_key in by_run:
+            entry = retired[by_run.index(run_key)]
+            entry["attempt"] = max(entry.get("attempt") or 0,
+                                   row["exec_attempt"] or 0)
+        else:
+            retired.append({"workflow_id": run_key[0], "run_id": run_key[1],
+                            "attempt": row["exec_attempt"]})
+        conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
+                     " exec_attempt=NULL, exec_retired_runs=? WHERE key=?",
+                     (_dump(retired), key))
+
+    def _exec_record(self, conn, item_id, wf, run, attempt, principal=None, now=None):
         """Record the exec owner of *item_id*: the first owner of an unowned card.
 
         Only ``_exec_check`` calls this, and only while no owner is recorded, so
         an existing owner is never replaced here.
+
+        RT-P1 sq5 fix 1 (V2-1): the owner is stored WITH the principal that
+        presented the triple (``exec_principal``), and only a worker principal
+        may record one -- a router/l1/system/spawner token planting a triple on
+        an unowned card is refused, never recorded.
         """
+        if principal is None or getattr(principal, "role", None) != "worker":
+            name = getattr(principal, "name", None) or "<none>"
+            raise Refused("forbidden",
+                          f"{item_id}: only the worker principal may record an"
+                          f" exec owner, not {name}")
         wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
         touch = ", updated_at=?" if now is not None else ""
-        values = (wf, run, attempt)
+        values = (wf, run, attempt, principal.name)
         if now is not None:
             values += (self._iso(now),)
         conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?,"
-                     f" exec_attempt=?{touch} WHERE key=?", (*values, item_id))
+                     f" exec_attempt=?, exec_principal=?{touch} WHERE key=?",
+                     (*values, item_id))
 
-    def _exec_check(self, conn, item_id, wf, run, attempt, now=None, record=True):
+    def _exec_check(self, conn, item_id, wf, run, attempt, principal=None,
+                    now=None, record=True):
         """RT-P1-EXEC-OWNERSHIP: enforce the recorded exec owner of *item_id*.
 
-        An unowned card records ``(wf, run, attempt)``; the same run may only
-        move its attempt forward (never backwards); a different run is stale.
+        An unowned card records ``(wf, run, attempt)`` -- but only from a worker
+        principal (sq5 fix 1, V2-1), bound to that principal, and never for a run
+        the card's retired-run fence holds (sq5 fix 2, V1-1/V5-1): a retired run
+        is refused ``exec_stale`` whether or not the card has an owner, so a
+        clear can never be reacquired by the run it retired.  The same run may
+        only move its attempt forward (never backwards); a different run is
+        stale; a worker other than the owner's principal is refused ``forbidden``
+        (the stale/lower-attempt checks decide first, as everywhere).
         Runs inside the caller's write lock; callers pass ``conn`` (== ``self.conn``)
         so the helper reads as a pure check against one connection.
         """
         wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
-        row = conn.execute("SELECT exec_workflow_id, exec_run_id, exec_attempt"
-                           " FROM items WHERE key=?",
-                           (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT exec_workflow_id, exec_run_id, exec_attempt, exec_principal,"
+            " exec_retired_runs, claimed_by FROM items WHERE key=?",
+            (item_id,)).fetchone()
         recorded = row["exec_run_id"] if row is not None else None
+        retired = [(entry.get("workflow_id"), entry.get("run_id"))
+                   for entry in _load_list(row["exec_retired_runs"] or "[]")
+                   if isinstance(entry, dict)] if row is not None else []
+        is_owner = (recorded is not None
+                    and (wf, run) == (row["exec_workflow_id"], recorded))
+        if not is_owner and (wf, run) in retired:
+            # The fence: whatever the card's state now, this run is done here.
+            raise Refused("exec_stale",
+                          f"{item_id}: run {run!r} is retired by an owner clear"
+                          " and cannot reacquire the card")
         if recorded is None:
-            if record:
-                self._exec_record(conn, item_id, wf, run, attempt, now=now)
+            if not record:
+                return
+            if principal is None or getattr(principal, "role", None) != "worker":
+                name = getattr(principal, "name", None) or "<none>"
+                raise Refused("forbidden",
+                              f"{item_id}: only the worker principal may record"
+                              f" an exec owner, not {name}")
+            holder = row["claimed_by"] if row is not None else None
+            if holder is not None and holder != principal.name:
+                raise Refused("forbidden",
+                              f"{item_id} is held by {holder}: only the holder"
+                              " may record its exec owner")
+            self._exec_record(conn, item_id, wf, run, attempt, principal, now=now)
             return
         if run != recorded or wf != row["exec_workflow_id"]:
             raise Refused("exec_stale",
@@ -542,6 +617,13 @@ class CardsMixin:
         if attempt < at:
             raise Refused("exec_stale",
                           f"{item_id} is at attempt {at}; {attempt} would go backwards")
+        owner_principal = row["exec_principal"]
+        if (principal is not None and owner_principal is not None
+                and principal.role in ("worker", "spawner")
+                and principal.name != owner_principal):
+            raise Refused("forbidden",
+                          f"{item_id} is owned for {owner_principal}, not"
+                          f" {principal.name}")
         if attempt > at and record:
             touch = ", updated_at=?" if now is not None else ""
             values = (attempt,) if now is None else (attempt, self._iso(now))
@@ -566,10 +648,15 @@ class CardsMixin:
         write) clears the exec owner in the same transaction as the state
         UPDATE (``_HAND_BACK_STATES``), so the next run can claim the card.  A
         bare run-less move is never a hand-back: a projector/planner write to
-        ``open``/``ready`` keeps the owner of a live run (RT-P1 V1-B).  No-op
-        moves, run-carrying moves and moves to any other state keep the owner.
+        ``open``/``ready`` keeps the owner of a live run (RT-P1 V1-B).  A bare
+        run-less BACK move on an OWNED card is refused ``bad_transition``
+        (sq5 fix 3): the forward table is not for run-carrying callers only any
+        more, so no admin/projector write can walk an owned card backwards and
+        strand it -- the explicit hand-back door (or ``release_claim``) is the
+        way back.  Unowned cards keep the historical run-less behaviour.
+        No-op moves, run-carrying moves and moves to any other state keep the owner.
         ``new_run`` is accepted and ignored for compatibility. Callers without
-        ``run`` keep the historical, unchecked behaviour.
+        ``run`` keep the historical, unchecked behaviour when no owner is recorded.
         """
         with self._write():
             item = self._get_or_refuse(key)
@@ -585,10 +672,21 @@ class CardsMixin:
                 wf, run_id, attempt_no = _exec_parts(key, run)
                 if _forward(was, state):
                     self._exec_check(self.conn, key, wf, run_id, attempt_no,
-                                     now=now, record=was != state)
+                                     principal=principal, now=now,
+                                     record=was != state)
                 else:
                     raise Refused("bad_transition",
                                   f"{key}: {was} -> {state} is not a forward move")
+            elif (item["exec_run_id"] is not None and was != state
+                  and not hand_back and not release_claim
+                  and not _forward(was, state)):
+                # RT-P1 sq5 fix 3 (deepseek V1): the forward table also guards a
+                # bare run-less move on an OWNED card, so router/l1/system cannot
+                # walk an owned card backwards and strand it open/ready-but-owned.
+                raise Refused("bad_transition",
+                              f"{key}: {was} -> {state} is not a forward move and"
+                              f" {key} is owned; a run-less move must stay forward"
+                              " (hand_back=True is the way back)")
             if was == state:
                 return {"key": key, "state": state, "changed": False}
             payload = {"state": state, "was": was, "reason": why}

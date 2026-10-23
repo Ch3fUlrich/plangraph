@@ -449,10 +449,16 @@ CREATE INDEX idx_jev_shadow_key ON jev_shadow(key);
 #: migration 7 because migration 6 already shipped with the JEV shadow table
 #: (#96, merged first).  The store records the columns when a set-state move
 #: carries a ``(workflow_id, run_id, attempt)`` run; see ``store_cards._exec_check``.
+#: sq5: ``exec_principal`` binds the owner to the worker principal that recorded
+#: it (V2-1) and ``exec_retired_runs`` is the retired-run fence every owner clear
+#: keeps (V1-1) -- both are additive parts of the SAME migration 7 and of the
+#: SQLite v13 upgrade path, so ``LATEST`` stays 7.
 _V7 = """
 ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_workflow_id TEXT COLLATE "C";
 ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_run_id TEXT COLLATE "C";
 ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_attempt BIGINT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_principal TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_retired_runs TEXT COLLATE "C";
 """
 
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
@@ -461,7 +467,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(4, "governor: metrics", _V4),
               Migration(5, "locks: merge_locks", _V5),
               Migration(6, "jev: jev_shadow", _V6),
-              Migration(7, "exec ownership: items exec_workflow_id/exec_run_id/exec_attempt", _V7))
+              Migration(7, "exec ownership: items exec_workflow_id/exec_run_id/exec_attempt"
+                           "/exec_principal/exec_retired_runs", _V7))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)

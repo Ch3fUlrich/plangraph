@@ -23,7 +23,7 @@ import pytest
 
 from keeper_util import World, seed, to_claimed
 from test_keeper_exec_ownership import owner, refused
-from test_keeper_exec_verbs import complete, park
+from test_keeper_exec_verbs import complete, park, state as state_of
 
 
 RUN_A = ("wf-1", "run-1", 1)
@@ -93,7 +93,9 @@ def test_failed_to_ready_hand_back_clears_and_run_b_is_accepted(w):
 
 def test_a_no_op_set_state_open_does_not_clear(w):
     key, = seed(w, [("A", [])])
-    ask(w, key, "router", RUN_A)
+    # V2-1 (sq5 fix 1): only a worker principal may RECORD an owner, so the
+    # seeding ask comes from the worker; the router moves below only check it.
+    ask(w, key, "workerA", RUN_A)
     assert owner(w, key) == RUN_A
     # Re-applying the state the card already has changes nothing: no clear.
     assert w.store.set_state(w.p("router"), key, "open") == {
@@ -109,7 +111,8 @@ def test_a_no_op_set_state_open_does_not_clear(w):
 
 def test_router_moves_to_running_and_waiting_without_a_run_do_not_clear(w):
     key, = seed(w, [("A", [])])
-    ask(w, key, "router", RUN_A)
+    # Seeded by the worker (V2-1); the router run-less moves below must not clear it.
+    ask(w, key, "workerA", RUN_A)
     assert owner(w, key) == RUN_A
     for state in ("running", "waiting"):
         w.store.set_state(w.p("router"), key, state)
@@ -138,19 +141,25 @@ def test_a_stale_run_still_cannot_use_the_revived_card(w):
 def test_a_bare_run_less_set_state_keeps_the_owner(w):
     """V1-B: a bare run-less write is not a hand-back door.
 
-    A projector/planner ``set_state`` to ``open``/``ready`` (no ``run``, no
-    ``hand_back``) changes the state but must NOT free the owner of a live
-    run -- only the explicit ``hand_back=True`` door does.
+    A projector/planner ``set_state`` (no ``run``, no ``hand_back``) that moves
+    an owned card FORWARD changes the state but must NOT free the owner of a
+    live run -- only the explicit ``hand_back=True`` door does.  A bare BACK
+    move on an owned card is refused instead (sq5 fix 3, deepseek V1), so the
+    forward move is the only bare write left that can strand this way.
     """
     key, = seed(w, [("A", [])])
     worker = w.p("workerA")
     assert w.store.worker_park(worker, park(key, **ident(RUN_A)))["state"] == "parked"
     assert owner(w, key) == RUN_A
-    # Bare run-less moves: state changes, owner survives (the V1-B hazard).
+    # A bare run-less FORWARD move changes the state and keeps the owner (the
+    # V1-B hazard): parked cards may still move to failed.
     w.store.set_state(w.p("system"), key, "failed")
     assert owner(w, key) == RUN_A
-    w.store.set_state(w.p("system"), key, "ready")
+    # sq5 fix 3 (deepseek V1): a bare run-less BACK move on an owned card is
+    # refused instead -- failed -> ready is not forward and the card is owned.
+    refused("bad_transition", w.store.set_state, w.p("system"), key, "ready")
     assert owner(w, key) == RUN_A
+    assert state_of(w, key) == "failed"
     # The live run is still fenced out of every exec-checked worker verb ...
     refused("exec_stale", w.store.worker_park, worker, park(key, **ident(RUN_B)))
     assert owner(w, key) == RUN_A

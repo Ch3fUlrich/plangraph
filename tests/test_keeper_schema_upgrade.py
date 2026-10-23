@@ -9,8 +9,11 @@ from plangraph.keeper import auth, db as kdb, events as keeper_events, schema
 from plangraph.keeper.store import Store
 
 NEW = ("cards", "attempts", "decisions", "questions", "answers", "budget")
-#: The RT-P1-EXEC-OWNERSHIP columns on ``items`` (SQLite v13, Postgres migration 7).
-EXEC_COLUMNS = ("exec_workflow_id", "exec_run_id", "exec_attempt")
+#: The RT-P1-EXEC-OWNERSHIP columns on ``items`` (SQLite v13, Postgres migration 7):
+#: the owner triple plus -- sq5 -- the owner principal (fix 1) and the retired-run
+#: fence (fix 2), both installed by the same presence-based v13 upgrade path.
+EXEC_COLUMNS = ("exec_workflow_id", "exec_run_id", "exec_attempt",
+                "exec_principal", "exec_retired_runs")
 
 #: Postgres shape (CI only): ``PG_DSN`` names the service container.
 PG_DSN = os.environ.get("PG_DSN")
@@ -113,15 +116,47 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
 
 def make_main_jev_schema(path):
     """Build a database exactly as **main's** schema installed it (#96 RT-P1-JEV-SHADOW,
-    merged as 0f588e1d): the merged DDL minus the three exec-ownership columns this lane
+    merged as 0f588e1d): the merged DDL minus the exec-ownership columns this lane
     appends to ``items`` -- jev shadow present, exec columns absent."""
     exec_ddl = ("    exec_workflow_id TEXT,\n    exec_run_id      TEXT,\n"
-                "    exec_attempt     INTEGER,\n")
+                "    exec_attempt     INTEGER,\n    exec_principal   TEXT,\n"
+                "    exec_retired_runs TEXT,\n")
     assert exec_ddl in schema.SCHEMA
     assert schema.JEV_DDL in schema.SCHEMA
     raw = sqlite3.connect(str(path), isolation_level=None)
     raw.executescript(schema.SCHEMA.replace(exec_ddl, ""))
     raw.close()
+
+
+def test_v13_db_missing_owner_principal_and_retired_fence_upgrades(tmp_path):
+    """sq5 fix 1/2: main's shipped v13 (exec triple only) gains the owner-principal
+    column and the retired-run fence column when this code opens it -- rows and the
+    event chain survive, and both columns read NULL."""
+    path = tmp_path / "v13-main.db"
+    conn = kdb.open_db(path, create=True)
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token),
+                       [defn("A", [], kind="lane"), defn("GOAL", ["A"], kind="goal")])
+    before = dict(store._item("demo:A"))
+    chain = keeper_events.read_events(conn)
+    conn.close()
+    raw = sqlite3.connect(str(path))
+    for column in ("exec_principal", "exec_retired_runs"):
+        raw.execute(f"ALTER TABLE items DROP COLUMN {column}")
+        before.pop(column)
+    raw.commit()
+    assert not {"exec_principal", "exec_retired_runs"} & {
+        row[1] for row in raw.execute("PRAGMA table_info(items)")}
+    raw.close()
+    conn = kdb.open_db(path)
+    row = dict(Store(conn, clock=Clock())._item("demo:A"))
+    for column in ("exec_principal", "exec_retired_runs"):
+        assert column in row and row.pop(column) is None
+    assert row == before
+    assert keeper_events.read_events(conn) == chain
+    assert keeper_events.verify_chain(conn) == []
+    conn.close()
 
 
 def items_columns(conn):

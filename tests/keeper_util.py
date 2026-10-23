@@ -152,6 +152,22 @@ def seed_stranded_claim(world, key, note=""):
     return key
 
 
+def seed_exec_owner(world, key, run, who="workerA"):
+    """Write *run* as the card's exec owner, the way a recording worker left it.
+
+    RT-P1 sq5 fix 1 (V2-1): only a worker principal may RECORD an owner now, so
+    a test that needs a pre-owned card before a router/l1/system run-carrying
+    ``set_state`` writes the triple (plus ``exec_principal``) directly -- setup,
+    not behaviour.  ``tests/test_keeper_exec_ownership.py`` pins who may record.
+    """
+    workflow_id, run_id, attempt = run
+    world.conn.execute(
+        "UPDATE items SET exec_workflow_id=?, exec_run_id=?, exec_attempt=?,"
+        " exec_principal=? WHERE key=?",
+        (workflow_id, run_id, attempt, who, key))
+    world.conn.commit()
+
+
 def to_claimed(world, key, who="l1main", lease_s=7200):
     result = world.store.claim(world.p(who), key, lease_s=lease_s)
     return result["epoch"]

@@ -1,6 +1,7 @@
 """Postgres backend units that need no server: translation, rows, selection, schema parity."""
 import re
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -185,13 +186,33 @@ def test_migrations_are_versioned_contiguously():
 
 
 def test_exec_columns_are_only_added_by_migration_7():
-    columns = {"exec_workflow_id", "exec_run_id", "exec_attempt"}
+    # sq5: the owner principal (fix 1) and the retired-run fence (fix 2) land in
+    # the SAME Postgres migration 7 as the exec triple -- never in a shipped one.
+    columns = {"exec_workflow_id", "exec_run_id", "exec_attempt",
+               "exec_principal", "exec_retired_runs"}
     for migration in schema_pg.MIGRATIONS[:6]:
         assert not any(column in migration.sql for column in columns)
     migration = schema_pg.MIGRATIONS[6]
     assert migration.version == 7
     for column in columns:
         assert f"ALTER TABLE items ADD COLUMN IF NOT EXISTS {column} " in migration.sql
+
+
+def test_changelog_migration_numbering_is_postgres_7():
+    """V3-1 (haiku): the notes operators migrate from must name Postgres migration 7.
+
+    The exec columns live in migration 7 (migration 6 shipped the JEV shadow), so
+    no line may send an operator at migration 6 for them, and the new owner
+    principal + retired-run fence columns need their own "Migration 7" section.
+    """
+    text = (Path(__file__).resolve().parents[1] / "CHANGELOG.md").read_text(
+        encoding="utf-8")
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "migration 6" in lowered:
+            assert not ("exec" in lowered and "migration 7" not in lowered), line
+    assert "Migration 7" in text, "CHANGELOG needs a Migration 7 section"
+    assert "exec_principal" in text and "exec_retired_runs" in text
 
 
 def test_design3_tables_are_in_both_schemas():

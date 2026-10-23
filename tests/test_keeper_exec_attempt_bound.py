@@ -2,7 +2,7 @@
 import pytest
 
 from door_util import Doors
-from keeper_util import World, seed
+from keeper_util import World, seed, seed_exec_owner
 from plangraph.keeper.errors import Refused
 
 
@@ -55,6 +55,10 @@ def test_worker_park_refuses_invalid_attempt(doors, w, attempt):
 def test_maximum_attempt_is_accepted(doors, w, door):
     key, = seed(w, [("A", [])])
     if door == "set_state":
+        # Only a worker may RECORD an owner (V2-1), so the run starts owned at
+        # attempt 1; the router run-carrying move then advances it to the
+        # signed 32-bit maximum, which is what this bound pins.
+        seed_exec_owner(w, key, ("wf-1", "run-1", 1))
         w.store.set_state(w.p("router"), key, "running",
                           run=("wf-1", "run-1", 2**31 - 1))
     else:

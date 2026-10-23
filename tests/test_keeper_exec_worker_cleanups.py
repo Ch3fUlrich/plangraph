@@ -1,7 +1,7 @@
 """Worker null-state symmetry and read-only attempt ownership checks."""
 import pytest
 
-from keeper_util import World, seed
+from keeper_util import World, seed, seed_exec_owner
 from plangraph.keeper.errors import Refused
 
 
@@ -25,6 +25,9 @@ RUN = {"workflow_id": "wf", "run_id": "run", "attempt": 2}
 def test_null_expected_state_is_omitted(w, verb, body, owned):
     key, = seed(w, [("A", [])])
     if owned:
+        # Only a worker may RECORD an owner now (V2-1): seed it, the router
+        # run-carrying move below only checks the triple it no longer plants.
+        seed_exec_owner(w, key, ("wf", "run", 2))
         w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
     result = getattr(w.store, verb)(
         w.p("workerA"), {"card": key, **body, **RUN, "expected_state": None})
@@ -39,6 +42,9 @@ def test_null_expected_state_is_omitted(w, verb, body, owned):
 def test_attempt_owner_check_is_read_only(w, monkeypatch, extra, owned):
     key, = seed(w, [("A", [])])
     if owned:
+        # Only a worker may RECORD an owner now (V2-1): seed it, the router
+        # run-carrying move below only checks the triple it no longer plants.
+        seed_exec_owner(w, key, ("wf", "run", 2))
         w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
 
     def snapshot():
