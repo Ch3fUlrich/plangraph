@@ -41,7 +41,7 @@ def count(w, table):
 
 
 # ------------------------------------------------------------------- cards
-@pytest.mark.parametrize("path", ["/etc/passwd", "../a", "a/../b", "", " ",
+@pytest.mark.parametrize("path", ["/abs/path", "../a", "a/../b", "", " ",
                                   "\\root", "C:\\root", "C:relative", "."])
 def test_check_reads_refuses_unsafe_paths(w, path):
     (key,) = seed(w, [("A", [])])

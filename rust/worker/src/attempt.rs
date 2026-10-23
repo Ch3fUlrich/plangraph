@@ -1195,7 +1195,7 @@ mod tests {
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::ContractDefect);
-        assert!(res.check_tail.contains("unknown check_kind"));
+        assert!(res.output_tail.contains("unknown check_kind"));
         assert_eq!(h.runs(), 0);
     }
 
