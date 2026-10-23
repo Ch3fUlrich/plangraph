@@ -313,14 +313,18 @@ def test_smoke_checks_default_dry_run(tmp_path):
         "python -m pytest tests/missing.py: missing test path: tests/missing.py"),)
 
 
-@pytest.mark.parametrize("entry", ["", "  ", None, 3])
+@pytest.mark.parametrize("entry", ["", "  ", None, 3, "f(x) -> str", "a", ":run",
+    "a:", "a:run:extra", "a:b:run", "/a:run", "\\a:run", "C:\\a:run",
+    "../a:run", "src/../a:run", "src\\..\\a:run", "a:1run", "a:run-it",
+    "a: run", "a:run ", " a:run", "a b:run", "a:²run"])
 def test_bad_export(tmp_path, entry):
     assert gate(tmp_path, good_card(exports=[entry])).codes() == ["bad_export"]
     assert "bad_export" in rd.CODES
 
 
 def test_exports_are_signatures_not_paths(tmp_path):
-    assert gate(tmp_path, good_card(exports=["pkg.mod:func", "f(x) -> str"])).ready
+    assert gate(tmp_path, good_card(exports=["pkg.mod:func", "src/a.py:_run2",
+                                            "src\\a.rs:Run", "a:é"])).ready
 
 
 @pytest.mark.parametrize("cmd,want", [

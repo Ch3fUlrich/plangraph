@@ -212,7 +212,7 @@ fn run_attempt_inner(
         return defect_result(&dest, &claim.base_sha, &branch, &wt.head, why);
     }
     // The base check is untrusted card code too: use the same jail and private
-    // tmp as the harness and post-attempt check, even if red-first parks early.
+    // tmp isolation as the harness and post-attempt check, even if it parks early.
     let tmp = attempt_tmp()?;
     let jail = crate::harness::JailConfig::from_env()
         .map_err(std::io::Error::other)?
@@ -220,7 +220,9 @@ fn run_attempt_inner(
             jail.tmp = tmp.path().to_path_buf();
             jail
         });
-    if claim.check_kind != "regression" {
+    if claim.check_kind != "regression" && !claim.check_cmd.trim().is_empty() {
+        // Base-check state must never be visible to the writer.
+        let base_tmp = attempt_tmp()?;
         // Capture the pristine diff before the check can create scratch files.
         let base_diff_hash = confine::diff_hash(&dest, &claim.base_sha)?;
         let pre = check::run_check_scoped(
@@ -229,12 +231,14 @@ fn run_attempt_inner(
             cfg.start_to_close,
             cfg.check_tail_lines,
             jail.as_ref()
-                .map(|j| (j.bin.as_path(), &j.limits, j.tmp.as_path())),
+                .map(|j| (j.bin.as_path(), &j.limits, base_tmp.path())),
             &|| false,
-        )?;
+        );
         // Base-check scratch is not writer work, even when the check parks.
         worker_git(&dest, &["checkout", "--", "."])?;
-        worker_git(&dest, &["clean", "-fdq"])?;
+        worker_git(&dest, &["clean", "-fdxq"])?;
+        drop(base_tmp);
+        let pre = pre?;
         if pre.passed() {
             let mut result = cancelled_result(&branch, &wt.head, String::new());
             result.exit_class = ExitClass::ContractDefect;
@@ -958,6 +962,44 @@ mod tests {
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn base_check_scratch_is_absent_when_writer_runs() {
+        let (r, _) = repo();
+        write(r.path(), ".gitignore", "ignored\n");
+        let base = commit_all(r.path(), "ignore check scratch");
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "if test ! -f out.txt; then echo scratch > ignored; echo scratch > \"${TMPDIR:-.}/base-only\"; exit 1; fi",
+        );
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new(
+            "test ! -e ignored && test ! -e \"${TMPDIR:-.}/base-only\" && echo hi > out.txt",
+        );
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(h.runs(), 1);
+        assert_eq!(res.exit_class, ExitClass::Ok);
+    }
+
+    #[test]
+    fn blank_change_check_does_not_park_writer() {
+        for cmd in ["", " \t\n"] {
+            let (r, base) = repo();
+            let root = tempfile::tempdir().unwrap();
+            let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], cmd);
+            c.check_kind = "change".into();
+            let inp = input(c, 1, root.path());
+            let h = Fake::new("echo hi > out.txt");
+            let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+            assert_eq!(h.runs(), 1);
+            assert_eq!(res.exit_class, ExitClass::Ok);
+            assert!(!res.check_tail.starts_with("red-first:"));
         }
     }
 

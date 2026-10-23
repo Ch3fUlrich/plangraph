@@ -29,8 +29,8 @@ USABLE_FRACTION = 0.55
 #: Every finding code ``check_card`` can emit.
 CODES = ("no_check", "check_not_runnable", "read_missing", "write_overlap",
          "estimate_missing", "estimate_too_big", "leg_request_too_big", "no_risk_tags",
-          "no_window_class", "bad_path", "no_heldout", "bad_smoke_check",
-          "smoke_not_runnable", "bad_export")
+         "no_window_class", "bad_path", "no_heldout", "bad_smoke_check",
+         "smoke_not_runnable", "bad_export")
 
 _GLOB_CHARS = "*?["
 _ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
@@ -315,6 +315,18 @@ def _as_list(value: object) -> list:
     return [value]
 
 
+def _bad_export(entry: object) -> bool:
+    """Mirror worker exports::verify's syntax only, without reading source files."""
+    if not isinstance(entry, str) or entry.count(":") != 1:
+        return True
+    path, symbol = entry.split(":")
+    return (not path or path.startswith(("/", "\\"))
+            or any(c.isspace() for c in entry)
+            or ".." in path.replace("\\", "/").split("/")
+            or not symbol or symbol[0].isnumeric()
+            or not all(c.isalnum() or c == "_" for c in symbol))
+
+
 def _read_exists(entry: str, repo_root: Path) -> bool:
     entry = entry.strip()
     if not _is_glob(entry):
@@ -402,7 +414,7 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
                 add("smoke_not_runnable", f"{entry}: {reason}")
 
     for entry in _as_list(card.get("exports")):
-        if not isinstance(entry, str) or not entry.strip():
+        if _bad_export(entry):
             add("bad_export", f"exports: {entry!r}")
 
     risk_tags = card.get("risk_tags")

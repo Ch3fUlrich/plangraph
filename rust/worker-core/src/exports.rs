@@ -10,6 +10,7 @@ pub fn verify(exports: &[String], read_file: &dyn Fn(&str) -> Option<String>) ->
             };
             let word = |c: char| c.is_alphanumeric() || c == '_';
             if path.is_empty()
+                || entry.chars().any(char::is_whitespace)
                 || symbol.is_empty()
                 || !symbol.chars().all(word)
                 || symbol.starts_with(|c: char| c.is_numeric())
@@ -73,7 +74,15 @@ mod tests {
 
     #[test]
     fn malformed_entry() {
-        for entry in ["a", ":run", "a:", "a:run:extra"] {
+        for entry in [
+            "a",
+            ":run",
+            "a:",
+            "a:run:extra",
+            " a:run",
+            "a b:run",
+            "a\t:run",
+        ] {
             assert_eq!(
                 verify(&[entry.into()], &|_| panic!("must not read")),
                 vec![entry]

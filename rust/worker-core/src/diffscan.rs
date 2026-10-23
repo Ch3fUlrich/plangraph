@@ -105,10 +105,12 @@ impl Patch {
         let mut asserts = Vec::new();
         let mut added_asserts = 0;
         let mut candidates = Vec::new();
+        let mut first_statement = false;
         for (sign, line) in &self.lines {
             if *sign == '@' {
                 old_test = false;
                 new_test = false;
+                first_statement = false;
                 continue;
             }
             let text = line.trim();
@@ -121,16 +123,26 @@ impl Patch {
             }
             if *sign != '-' {
                 if let Some(name) = test_fn(text, &mut new_test) {
+                    first_statement = true;
                     if *sign == '+' {
                         added.push(name.to_owned());
                     }
+                } else if first_statement
+                    && !text.is_empty()
+                    && !text.starts_with('#')
+                    && !text.starts_with("//")
+                {
+                    if *sign == '+' && matches!(text, "return" | "return;") {
+                        candidates.push(finding(FindingKind::SkippedTest, line));
+                    }
+                    first_statement = false;
                 }
             }
             if *sign == '-' && is_assert(text) {
                 asserts.push(line);
             }
             if *sign == '+' {
-                if is_assert(text) {
+                if is_assert(text) && !vacuous_assert(text) {
                     added_asserts += 1;
                 }
                 if text.contains("pytest.mark.xfail") {
@@ -191,6 +203,23 @@ fn is_assert(text: &str) -> bool {
     }) || text.starts_with("assert_eq!")
         || text.starts_with("assert_ne!")
         || text.starts_with("self.assert")
+        || text.starts_with("assertTrue(")
+}
+
+fn vacuous_assert(text: &str) -> bool {
+    let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact = compact.trim_end_matches(';');
+    if matches!(
+        compact,
+        "assertTrue" | "assert1" | "assert!(true)" | "assertTrue(True)" | "self.assertTrue(True)"
+    ) {
+        return true;
+    }
+    compact
+        .strip_prefix("assert_eq!(")
+        .and_then(|s| s.strip_suffix(')'))
+        .and_then(|s| s.split_once(','))
+        .is_some_and(|(left, right)| !left.is_empty() && left == right)
 }
 
 /// Return a stable, single-line check-failure summary, bounded to 300 UTF-8 bytes.
@@ -357,6 +386,37 @@ mod tests {
     #[test]
     fn assertion_replaced() {
         assert!(kinds("tests/x.py", "-assert x\n+assert y").is_empty());
+    }
+    #[test]
+    fn vacuous_assertions_do_not_replace_checks() {
+        for assertion in [
+            "assert True",
+            "assert 1",
+            "self.assertTrue(True)",
+            "assertTrue(True)",
+            "assert!(true);",
+            "assert_eq!(x, x);",
+            "assert_eq!(1, 1);",
+        ] {
+            assert_eq!(
+                kinds("tests/x.py", &format!("-assert x\n+{assertion}")),
+                vec![FindingKind::RemovedAssert],
+                "{assertion}"
+            );
+        }
+        assert!(kinds("tests/x.rs", "-assert!(x);\n+assert_eq!(x, y);").is_empty());
+    }
+    #[test]
+    fn first_statement_return_disables_test() {
+        for body in [
+            " def test_x():\n+    return\n     assert x",
+            " #[test]\n fn works() {\n+    return;\n     assert!(x);",
+            "+def test_x():\n+    # comment\n+    return",
+        ] {
+            assert_eq!(kinds("tests/x.rs", body), vec![FindingKind::SkippedTest]);
+        }
+        assert!(kinds("tests/x.py", " def test_x():\n     setup()\n+    return").is_empty());
+        assert!(kinds("tests/x.py", " def helper():\n+    return").is_empty());
     }
     #[test]
     fn net_assert_drop() {
