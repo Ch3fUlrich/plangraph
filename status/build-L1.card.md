@@ -9,7 +9,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | Item | Owner | State / next |
 |---|---|---|
 | KEEPER-OPTASK-CLOSE | DONE | evidence b79eea55 (#132), verdicts qwen+glm 2/2 |
-| KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | main merged cd8ff51f (pushed). r2 writer 20261023-054153-opclaim-r2-writer-36d71a (mimo) brief seats/opclaim-127/r2/WRITER-BRIEF.md (KEEP exemption + terminal test + deepseek r1 items + PG). Next: verify, push, re-seat qwen+glm-free full diff, GO-REQ, merge; then server:OP-DOCKHAND-EVENTS |
+| KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | r2 head 01dbea7f (writer 36d71a, 4671 passed) CI dispatched; seats qwen+glm r2 queued on mem (bg b1uq301v5) -> merge (D-2330 ok) -> OP-DOCKHAND-EVENTS router |
 | RT-P1-EXEC-OWNERSHIP #133 (HIGH) | L1 | squash 8fd739b7 CI green; sq1 qwen PASS, glm FIX 3 MED (complete gate txn, run-less hand-back, PG behaviour test) -> fix writer 20261023-055023-exec-sq-fix1-43adad brief seats/exec-ownership/sq1/FIX-BRIEF.md -> re-seat qwen + deepseek (zhipu is a writer family: c129069f,f722147e) -> GO-REQ -> merge, close #112 |
 | RT-P1-PHASE-RUNNER (HIGH) | spine (relaunched) | S3c MERGED f25cc546 (evidence on). S3d red spine/phase-runner-s3d @ 76904e43 (D-2326 lane reading, 3-way bypass guard, attach_merge_evidence after merge to main) -> impl after #112 signal. Then S4. HARDEN items 1-12 |
 | RT-P1-ATTEMPT-SANDBOX #100 | build-L2-sandbox (workst) | owes WB merge + main + CI + MERGE-READY (stall 7.6h, pinged 05:1xZ); no reply -> give to sweep-runtime |
@@ -24,3 +24,6 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 - Never dump environ. Never push site strings/seat prompts to GitHub. Never touch .claude/worktrees/proposal. Keeper LIVE from live-2d61e281 (never ff).
 - D-2315: no age-only deletes; clean only terminal-marker runs.
 - TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
+| KEEPER-TRAILER-MULTI (HIGH) | L1 | D-2332 created+claimed; writer QUEUED (mem) brief seats/trailer-multi/WRITER-BRIEF.md; gate edge -> PH-RT-RUNTIME |
+| #130 OVERSIGHT-FOLLOWUP | L1 | D-2331 cond GO: full-diff qwen re-seat oversight-fu/r2 running -> PASS -> merge |
+| #100 SANDBOX | sweep-runtime | handed over D-2332 |
