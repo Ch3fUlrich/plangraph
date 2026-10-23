@@ -36,6 +36,11 @@ short-circuits before ``expected_state``.  A retried park whose response was
 lost therefore succeeds instead of failing every retry with
 ``exec_stale_state``; a different run is still ``exec_stale``.
 
+An open ``worker_alarm`` row is a DUPLICATE FACT, never a fence: ``alarm``
+records on an OWNED card even when that row already exists -- the attempt
+advances, a stale run or a backwards attempt is refused as ``exec_stale`` --
+while on an UNOWNED card an existing open alarm still acquires no owner.
+
 All SQL is portable (``?`` placeholders, ids assigned as ``MAX(id)+1`` inside
 the write lock) so it runs unchanged on SQLite and Postgres.
 """
@@ -319,7 +324,19 @@ class WorkerMixin:
                 "SELECT 1 FROM projector_alarms WHERE kind='worker_alarm'"
                 " AND workflow_id='' AND key=? AND cleared_at IS NULL",
                 (key,)).fetchone()
-            self._exec_gate(key, body, record=existing is None)
+            # The open alarm is only a DUPLICATE FACT -- the INSERT below is
+            # ``ON CONFLICT DO NOTHING`` -- so it never freezes the fence on an
+            # OWNED card: a run-carrying alarm always RECORDS there, advancing
+            # the recorded attempt (or refusing a stale run / a backwards
+            # attempt as ``exec_stale``), otherwise a later call carrying an
+            # older attempt of the same run would pass.  On an UNOWNED card an
+            # open alarm stays what it was: a fact that acquires no owner
+            # (``existing is None``), so a duplicate alarm of a new run still
+            # records nothing.
+            row = self.conn.execute(
+                "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
+            owned = row is not None and row["exec_run_id"] is not None
+            self._exec_gate(key, body, record=existing is None or owned)
             self.conn.execute(
                 "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,"
                 "raised_at)"
