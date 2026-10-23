@@ -9,7 +9,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | Item | Owner | State / next |
 |---|---|---|
 | KEEPER-OPTASK-CLOSE | DONE | evidence b79eea55 (#132), verdicts qwen+glm 2/2 |
-| KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | 01dbea7f CI green, seats r2 qwen+glm PASS -> GO-REQ sent -> mergepath -> evidence/submit/verdicts -> OP-DOCKHAND line to routing |
+| KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | GO D-2335 @01dbea7f; mergepath after #130 merge-cont (bg bwdtcb2bk) -> evidence/submit/verdicts qwen+glm r2 -> OP-DOCKHAND line: router `pg legacy server:OP-DOCKHAND-EVENTS in_review "<note>"` -> add_evidence_router decision -> deepseek seat verdict (D-2283) |
 | RT-P1-EXEC-OWNERSHIP #133 (HIGH) | L1 | squash 8fd739b7 CI green; sq1 qwen PASS, glm FIX 3 MED (complete gate txn, run-less hand-back, PG behaviour test) -> fix writer 20261023-055023-exec-sq-fix1-43adad brief seats/exec-ownership/sq1/FIX-BRIEF.md -> re-seat qwen + deepseek (zhipu is a writer family: c129069f,f722147e) -> GO-REQ -> merge, close #112 |
 | RT-P1-PHASE-RUNNER (HIGH) | spine STOPPED D-2334 (card plangraph-worktrees/spine-card.md); L2-LAUNCH to routing when #133 merged for S3d impl | S3c MERGED f25cc546 (evidence on). S3d red spine/phase-runner-s3d @ 76904e43 (D-2326 lane reading, 3-way bypass guard, attach_merge_evidence after merge to main) -> impl after #112 signal. Then S4. HARDEN items 1-12 |
 | RT-P1-ATTEMPT-SANDBOX #100 | build-L2-sandbox (workst) | owes WB merge + main + CI + MERGE-READY (stall 7.6h, pinged 05:1xZ); no reply -> give to sweep-runtime |
@@ -25,5 +25,5 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 - D-2315: no age-only deletes; clean only terminal-marker runs.
 - TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
 | KEEPER-TRAILER-MULTI (HIGH) | L1 | writer 20261023-064042-trailer-multi-writer-0e3d4e (wt trailer-multi off main 75a6f7ad) -> verify, PR, CI, seats qwen+glm (non-xiaomi) -> GO-REQ |
-| #130 OVERSIGHT-FOLLOWUP | L1 | qwen full-diff PASS (oversight-fu/r2) -> mergepath queued after #135 (bg byjsg2esa) -> evidence -> submit -> verdict qwen (1 seat) |
+| #130 OVERSIGHT-FOLLOWUP | L1 | CHANGELOG union f02bc80e, merge-cont running -> evidence -> submit -> verdict qwen oversight-fu/r2 (writer deepseek) |
 | #100 SANDBOX | sweep-runtime | handed over D-2332 |
