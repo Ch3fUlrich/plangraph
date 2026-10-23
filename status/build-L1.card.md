@@ -6,10 +6,10 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 34382a1d (#147). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq9 9663be84 + main (import conflict workflow.rs resolved by me, merge commit) = cb0303ac pushed, CI dispatched; delta seats qwen + Haiku running (seats/exec-ownership/sq9) -> GO-REQ; EXEC-PHASE-LEASE leaf proposed to routing |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq9 seats qwen PASS + Haiku PASS (seats/exec-ownership/sq9); cb0303ac rust-worker RED (semantic merge: #147 4-arg park_and_alarm) -> Hand-Edit cc563b1e pushed, CI running -> green: GO-REQ |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix6 sol RUNNING workst run 20261023-201425-...-374d98 (base 9fd6cfae, run-id override + V7) -> CI -> 1-2 delta seats -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix6 84b49a36 CI green; qwen delta FIX (over-refusal 175/280 main shapes, run- grammar, slash vendor list, Writer key case, colon) -> fix7 brief seats/trailer-multi/fix7 sent workst 23:3xZ (cx after 23:45Z else mimo) -> seat qwen delta -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
@@ -29,7 +29,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | OCGO-PROBE / OCGO-L1-FALLBACK | released D-2409 | trigger OS-OCL1-ENV |
 - D-2418: plangraph CI stays GitHub-hosted (public repo, D-1718); no runs-on change; BUS-RUST windows build = GitHub-hosted windows.
 ## Traps
-- D-2466: remove coding.vm ~/.claude/CLAUDE.md mimo block when SEAT-FREE-OPENCODE merges.
+- D-2466: remove coding.vm ~/.claude/CLAUDE.md mimo block when SEAT-FREE-OPENCODE merges (21:4xZ: not on AutoOS main; prepush r2 writer fixing 33-documentation modelID check; B1 waits).
 - Keeper refuses reviewer-anthropic verdicts on build-L1 claims (same_family): Haiku seats cannot be recorded; ruling asked 12:4xZ.
 - Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
 - ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.
