@@ -25,10 +25,13 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 - D-2315: no age-only deletes; clean only terminal-marker runs.
 - TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
 | KEEPER-TRAILER-MULTI (HIGH) | L1 | PR #139 7676dedf CI green; r1 glm PASS, qwen FIX (%b prose). fix writer 20261023-084226-trailer-multi-fix1-9bb8c2 running (brief FIX1-BRIEF.md) -> take, r2 qwen+glm -> GO-REQ |
-| #100 SANDBOX | sweep-runtime | MERGE-READY 988665b4 (qwen r3 PASS + glm r4 PASS); 3 MED obs -> routing BLOCKED 08:4xZ, *merge + follow-up leaf RT-P1-SANDBOX-JAIL-E2E |
+| #100 SANDBOX | L1 | D-2369 ACCEPT: mergepath.sh 100 988665b4 running (merge, CI main, evidence) -> submit + verdicts qwen r3/glm r4. Follow-up RT-P1-SANDBOX-JAIL-E2E (HIGH p6, mine, dep AGENT-JAIL) |
 | RT95-EMPTY-RUN-FIXTURE | L1 | claimed; #137 merged -> spawn writer to capture a real opencode empty run when MemAvailable > 5 GB (D-2332; was 4.3 GB) |
 | KEEPER-LEGACY-HUMAN-FAMILY (low) | L1 queue | D-2348: keeper rule legacy/operator claimant -> family 'human' (+test: non-legacy unknown still refused); bundle in keeper batch riding LIVE-SYNC-9 after SPAWNER-ITEM-KEY; then router re-posts OP-DOCKHAND deepseek 438f9e |
 | PG-PUBLIC-READY r3 | L1 | deepseek FAIL verdict POSTED (D-2349, item back to claimed). Re-seat on PG-PUBLIC-FIX merge. Gate PG-REPUBLISH-FRESH deps [READY, FIX] |
 | PG-PUBLIC-FIX (HIGH prio 8) | L1 | writer 20261023-084625-pg-public-fix-writer-7bf42d running (wt pg-public-fix, brief seats/pg-public-fix/WRITER-BRIEF.md) -> PR, CI, seats qwen+glm+deepseek |
 | PG-OMNIROUTE-CONFIG-HOME (prio 6) | L1 queue | D-2359: operator combos (names, members, order, strategy) = PUBLIC in plangraph, export via gateway API only (R-coord-15), scrub scan; keys/account ids/hosts stay private. >=2 tasks -> L2-LAUNCH (OpenCode sol) after PH-RT-RUNTIME items |
-| UI-BROWSER-TESTS (prio 1) | build-L2-ui-browser (workst, SONNET fallback D-2270) | claimed epoch 2; branch lane/ui-browser-tests-r2 off cbf21431, salvages old lane/ui-browser-tests 6fd8de3; Sonnet-vs-D-2265 -> routing BLOCKED |
+| UI-BROWSER-TESTS (prio 1) | build-L2-ui-browser (workst, Sonnet orchestrator-only D-2370) | recycle to OpenCode sol after PG-BOOTSTRAP-FLEET-ENV lands; branch lane/ui-browser-tests-r2 |
+
+| KEEPER-MCP-UTF8 (p9, FIRST) | L1 | claimed ep1; wt mcp-utf8 (lane/keeper-mcp-utf8 @ cbf21431); brief seats/mcp-utf8/WRITER-BRIEF.md; spawn at next free slot (share 3/3); 1 seat; workst-L1-autoos Windows confirm |
+| PG-BOOTSTRAP-FLEET-ENV (HIGH p9, secrets) | L1 queue | bootstrap.ps1+.sh fleet-env step, CSPRNG pw owner-only file + AUTOOS_OCL1_PW_FILE, never printed, --DryRun; dep autoos:AO-OCL1-PW-FILE; after MCP-UTF8 |
