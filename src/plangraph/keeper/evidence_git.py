@@ -118,14 +118,47 @@ def _trailing_trailer_lines(text: str) -> list[str]:
     return text.splitlines()[start:]
 
 
-#: Any way a Writer key is written on a line: optional indentation, an
-#: optional run of quote/bullet markers, the key (case-insensitive, as git's
-#: trailer keys are), optional spaces before the colon, and a non-empty value.
-#: A bare ``^writer:\\s*\\S`` missed the same dropped family when the line was
-#: indented, quoted (``>``/``>>``), bulleted (``-``/``*``) or used
-#: ``Writer : x``.
+#: A line that names a writer the way a human writes one: the key ``writer``
+#: (case-insensitive, as git's trailer keys are), any non-alphanumeric
+#: decoration around it, a colon, and a non-space value.  Deliberately LOOSE
+#: and unanchored — it spells out no list of shapes — so ``**Writer:** x``,
+#: ``1. Writer: x``, ```Writer: x` ``, ``| Writer: x |``, ``-Writer: x``,
+#: ``- Writer: x``, ``> Writer: x``, ``    Writer: x`` and ``Writer : x`` all
+#: match, while the prose "the writer of this" (no colon) does not.
 _WRITER_SHAPED_RE = re.compile(
-    r"^[ \t]*(?:[>*-]+[ \t]+)*writer[ \t]*:[ \t]*\S", re.IGNORECASE)
+    r"writer[^A-Za-z0-9]*:[ \t]*\S", re.IGNORECASE)
+
+#: A KEY that only *looks* like ``writer``: decoration glued around it
+#: (``-Writer``, ``**Writer``, `` `Writer ``).  Such a key parses as its own
+#: trailer key, so ``parse_trailers`` keeps the value under ``-Writer`` (say)
+#: and drops it from the writer set — a partial family list again.
+_WRITER_DECORATED_KEY_RE = re.compile(
+    r"^[^A-Za-z0-9]*writer[^A-Za-z0-9]*$", re.IGNORECASE)
+
+
+def _writer_like_key(key: str) -> bool:
+    """True when *key* looks like the git trailer key ``writer``.
+
+    Covers both spellings a dropped writer key hides behind: decoration glued
+    around the word (``-Writer``, ``**Writer``, `` `Writer ``) and a key that
+    merely starts with it (``Writers``, ``Writer-Notes``).  The exact key
+    ``writer`` is included — callers decide whether that one is readable.
+    """
+    key = key.strip()
+    return key.lower().startswith("writer") or bool(
+        _WRITER_DECORATED_KEY_RE.match(key))
+
+
+def _writer_named(raw: str) -> bool:
+    """True when *raw* names a writer instead of merely mentioning writing.
+
+    Either the loose Writer-shaped pattern (a ``writer`` key, decorated or
+    not, followed by ``:`` and a non-space value) or a line whose KEY only
+    looks like ``writer`` — its value is never read as a writer either way.
+    """
+    if _WRITER_SHAPED_RE.search(raw):
+        return True
+    return ":" in raw and _writer_like_key(raw.partition(":")[0])
 
 
 def stray_writer_line(text: str) -> bool:
@@ -138,15 +171,72 @@ def stray_writer_line(text: str) -> bool:
     ambiguous: the dropped line may name a writer that no reviewer seat
     covers.  The keeper must fail closed instead of closing on a PARTIAL
     family list, so ANY Writer-shaped line outside the trailing block makes
-    the writer set unknowable: indented (``    Writer: x``), quoted
+    the writer set unknowable.  The test is the loose :data:`_WRITER_SHAPED_RE`
+    pattern, not a list of spellings: indented (``    Writer: x``), quoted
     (``> Writer: x``, ``>> Writer: x``), bulleted (``- Writer: x``,
-    ``* Writer: x``) and spaced-before-colon (``Writer : x``) forms all count,
-    not only the bare ``Writer: x`` line (see :data:`_WRITER_SHAPED_RE`).
+    ``* Writer: x``), marker-glued (``-Writer: x``), spaced-before-colon
+    (``Writer : x``), markdown (``**Writer:** x``), numbered
+    (``1. Writer: x``), backticked (``` `Writer: x` ```), tabular
+    (``| Writer: x |``) and any other decoration all count, while prose that
+    only uses the word "writer" (no colon) does not.
     """
     start = _trailing_trailer_start(text)
     lines = text.splitlines()
     outside = lines if start is None else lines[:start]
-    return any(_WRITER_SHAPED_RE.match(raw) for raw in outside)
+    return any(_writer_named(raw) for raw in outside)
+
+
+def hidden_writer_line(text: str) -> bool:
+    """True when the TRAILING trailer block itself hides a writer line.
+
+    Two ways a block can look complete while dropping a writer, both refused
+    here:
+
+    * a Writer-shaped line that is NOT the plain ``Writer: x`` trailer of
+      the block: ``**Writer:** x``, ``-Writer: x`` and ``` `Writer: x` ```
+      are trailer-shaped lines, so the paragraph JOINS the trailing block
+      and the value is parsed under the junk key ``-Writer``; the same is
+      true of a writer-looking key that is not the git key (``Writers: x``)
+      and of a Writer-shaped value under any other key (``Reviewed-By:
+      Writer: x``).  None of them reaches the writer set, so each refuses;
+    * a CONTINUATION (leading space/tab), which ``parse_trailers`` folds onto
+      the trailer before it: a continuation that is itself Writer-shaped (V1)
+      hides a whole ``Writer:`` line, and any continuation folded onto a
+      ``Writer`` key (V3) turns two models into one value the family rule
+      reads a single token from.
+
+    A continuation that is neither writer-shaped nor attached to a ``Writer``
+    key — a ``Plan-Item`` note, say — is left alone, and so is a plain
+    ``Writer: x`` trailer line of the block.
+    """
+    start = _trailing_trailer_start(text)
+    if start is None:
+        return False
+    last: str | None = None
+    for raw in text.splitlines()[start:]:
+        if raw[:1] in (" ", "\t"):
+            if _writer_named(raw):
+                return True
+            if last is not None and last.lower() == "writer":
+                return True
+            continue
+        line = raw.strip()
+        if not line or ":" not in line:
+            last = None
+            continue
+        key = line.partition(":")[0].strip()
+        if not key:
+            last = None
+            continue
+        if key.lower() != "writer" and _writer_named(raw):
+            # `**Writer:** x` / `-Writer: x` / ```Writer: x``` parse under a
+            # junk key, `Writers: x` is not the git key either, and a
+            # Writer-shaped value under any other key (`Reviewed-By: Writer:
+            # x`) is kept under a key the seat-coverage check never reads —
+            # each of them would leave the family list short a writer.
+            return True
+        last = key
+    return False
 
 
 def parse_trailers(text: str) -> dict[str, str | list[str]]:
@@ -169,7 +259,11 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
 
     An indented line continues the trailer before it (git's own continuation
     rule), which ``%(trailers)`` used to unfold for us; a blank line ends a
-    paragraph, so nothing continues across one.
+    paragraph, so nothing continues across one.  That fold is harmless for a
+    ``Plan-Item`` note, but it is never a writer list: a continuation that
+    touches a ``Writer`` key is refused one level up (``writer_trailers``
+    returns no writers at all rather than one value naming two models, see
+    :func:`hidden_writer_line`).
     """
     values: dict[str, list[str]] = {}
     last: str | None = None
@@ -577,13 +671,16 @@ class GitAdapter:
     def _leaf_trailers(self, repo: str, sha: str) -> dict[str, str | list[str]] | None:
         """Trailers of ONE writer-bearing commit; None when it is unknowable.
 
-        None covers both a git failure and a ``Writer:`` line outside the
-        trailing trailer block: in either case the writer families cannot be
-        read without guessing, so the caller fails closed instead of handing
-        the seat-coverage check a partial family list.
+        None covers both a git failure and a writer line the parse cannot
+        return whole: :func:`stray_writer_line` (a Writer-shaped line outside
+        the trailing block) or :func:`hidden_writer_line` (a writer-shaped
+        junk key, or a continuation folded into a ``Writer`` value, inside
+        it).  In every one of those cases the writer families cannot be read
+        without guessing, so the caller fails closed instead of handing the
+        seat-coverage check a partial family list.
         """
         body = self._commit_body(repo, sha)
-        if body is None or stray_writer_line(body):
+        if body is None or stray_writer_line(body) or hidden_writer_line(body):
             return None
         return parse_trailers(body)
 
@@ -621,10 +718,13 @@ class GitAdapter:
         kept (a squashed leaf may name several writer families).  An octopus
         merge (3+ parents) has no single second-parent range, so it returns no
         writers at all.  Failure returns an empty list, which the keeper treats
-        as fail-closed ``writer_unknown`` — as does a ``Writer:`` line outside
-        the commit's trailing trailer block (see :func:`stray_writer_line`):
-        the dropped line may name a writer no seat covers, so a partial
-        family list is never returned.
+        as fail-closed ``writer_unknown`` — and so is any commit whose writer
+        lines the parse cannot return whole: a Writer-shaped line OUTSIDE the
+        trailing trailer block (see :func:`stray_writer_line`), a
+        writer-shaped junk key inside it, a Writer-shaped continuation, or a
+        continuation folded onto a ``Writer`` value (see
+        :func:`hidden_writer_line`).  Each of those names a writer no seat
+        may cover, so a partial family list is never returned.
         """
         if not valid_commit_ref(sha):
             return []

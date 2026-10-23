@@ -428,3 +428,162 @@ def test_prose_mentioning_writer_without_a_colon_is_not_flagged(repo, adapter):
 
     assert adapter.writer_trailers(str(repo), sha) == [
         {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"}]
+
+
+# --------------------------------------------------------------------------
+# 23. (FIX4) fail-closed BY CONSTRUCTION: writer_trailers never yields a
+#     PARTIAL writer family list.  Instead of enumerating spellings, ANY line
+#     that looks like a Writer key is either read as one (a plain `Writer:`
+#     trailer of the trailing block) or refuses the whole family set.
+#     V2: a loose Writer-shaped line OUTSIDE the trailing block is stray.
+#     V1: a Writer-shaped CONTINUATION inside the block is refused, never
+#         folded into the previous value.
+#     V3: a Writer value extended by ANY folded continuation is refused.
+# --------------------------------------------------------------------------
+
+#: One (shape id, template) pair per way a Writer-shaped line is written in a
+#: commit body.  ``{value}`` is substituted, and each line is a paragraph of
+#: its own BEFORE the clean trailing block, which names the ``mimo`` writer.
+#: The pattern the shapes must hit is loose — ``writer`` + optional
+#: non-alphanumeric decoration + ``:`` + a non-space value — so it covers
+#: every fix3 spelling (indent, quote, nested quote, bullet, star bullet,
+#: space before the colon) plus the ones an anchored regex missed: markdown
+#: bold, numbered list, backticks, table pipe and a marker glued to the key.
+WRITER_SHAPE_TEMPLATES = [
+    ("indented", "    Writer: {value}"),
+    ("quoted", "> Writer: {value}"),
+    ("nested-quote", ">> Writer: {value}"),
+    ("bullet", "- Writer: {value}"),
+    ("star-bullet", "* Writer: {value}"),
+    ("space-before-colon", "Writer : {value}"),
+    ("markdown-bold", "**Writer:** {value}"),
+    ("numbered", "1. Writer: {value}"),
+    ("backticked", "`Writer: {value}`"),
+    ("table-pipe", "| Writer: {value} |"),
+    ("marker-joined", "-Writer: {value}"),
+]
+
+
+def _shape_then_clean_block_commit(repo: Path, shape_line: str) -> str:
+    """A commit carrying *shape_line* first, then a clean trailing block.
+
+    The clean block is the usual ``Plan-Item``/``Writer: mimo-v2 run1``
+    paragraph, so the ONLY thing that can make the writers unknowable is the
+    shape line above it.
+    """
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "quote a writer line\n\n"
+         f"{shape_line}\n"
+         "\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("shape,template", WRITER_SHAPE_TEMPLATES,
+                         ids=[shape for shape, _ in WRITER_SHAPE_TEMPLATES])
+def test_writer_shape_before_the_clean_block_refuses_the_family_list(
+        repo, shape, template):
+    """V2: one commit per shape -> ``writer_trailers == []``, never one family.
+
+    The dropped line names ``deepseek-r1``; the keeper must not close on a
+    seat that never covered it, so ``coverage.writer_families`` refuses
+    ``writer_unknown`` instead of counting the clean block's ``mimo`` alone.
+    """
+    sha = _shape_then_clean_block_commit(
+        repo, template.format(value="deepseek-r1 run2"))
+    adapter = GitAdapter({"demo": str(repo)})
+
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+@pytest.mark.parametrize("after", ["Writer", "Plan-Item"],
+                         ids=["after-writer", "after-plan-item"])
+def test_writer_shaped_continuation_inside_the_block_refuses(repo, after):
+    """V1: an indented Writer-shaped line is refused, never folded in.
+
+    Folding it into the value before it would keep ONE family of the two the
+    body names (the review's exact partial-list failure).
+    """
+    if after == "Writer":
+        body = ("Plan-Item: demo:A\n"
+                "Writer: mimo-v2 run1\n"
+                "  Writer: deepseek-r1 run2\n")
+    else:
+        body = ("Plan-Item: demo:A\n"
+                "  Writer: deepseek-r1 run2\n"
+                "Writer: mimo-v2 run1\n")
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         f"fold a second writer\n\n{body}")
+    sha = _git(repo, "rev-parse", "HEAD")
+    adapter = GitAdapter({"demo": str(repo)})
+
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+def test_writer_value_with_a_folded_continuation_refuses(repo):
+    """V3: a continuation joined onto a ``Writer`` key is refused (``[]``).
+
+    ``parse_trailers`` keeps git's continuation rule (the value below stays
+    folded), but one value naming two models must never reach the family
+    rule, which reads only its first token.
+    """
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "fold a model into the writer value\n\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n"
+         "  deepseek-r1 run2\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+    adapter = GitAdapter({"demo": str(repo)})
+
+    # The generic trailer read is unchanged: git's own continuation rule.
+    assert adapter.trailers(str(repo), sha) == {
+        "Plan-Item": "demo:A",
+        "Writer": "mimo-v2 run1 deepseek-r1 run2",
+    }
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+def test_plan_item_continuation_without_a_writer_shape_is_unchanged(repo, adapter):
+    """Negative: a non-Writer-shaped continuation still joins its own key.
+
+    Refusing here would fail closed on a body that names its writer plainly
+    and completely, so the continuation rules must be Writer-specific.
+    """
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "point at the tracker\n\n"
+         "Plan-Item: demo:A\n"
+         "  see the issue tracker for the details\n"
+         "Writer: mimo-v2 run1\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    want = {"Plan-Item": "demo:A see the issue tracker for the details",
+            "Writer": "mimo-v2 run1"}
+    assert adapter.trailers(str(repo), sha) == want
+    assert adapter.writer_trailers(str(repo), sha) == [want]
+    assert _families(repo, sha) == ["xiaomi"]
+
+
+def test_clean_two_writer_block_still_yields_both_families(repo, adapter):
+    """Negative: a clean block is unaffected — BOTH writers reach coverage."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "two writers, no ambiguity\n\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n"
+         "Writer: deepseek-r1 run2\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    assert adapter.writer_trailers(str(repo), sha) == [{
+        "Plan-Item": "demo:A",
+        "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
+    }]
+    assert sorted(_families(repo, sha)) == ["deepseek", "xiaomi"]
