@@ -83,6 +83,65 @@ def adapter() -> GitAdapter:
 # 15. a plain commit, then a --no-ff merge of a two-commit branch
 # --------------------------------------------------------------------------
 
+@pytest.mark.parametrize("subject", ["Writer: deepseek-r1 run2", "**Writer:** deepseek-r1 run2"])
+def test_writer_subject_refuses_partial_family_list(repo, adapter, subject):
+    sha = _commit(repo, subject, {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
+    assert adapter.trailers(str(repo), sha)["Writer"] == "mimo-v2 run1"
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+def test_whitespace_paragraph_separator_is_not_writer_continuation(repo, adapter):
+    _git(repo, "commit", "--allow-empty", "--cleanup=verbatim", "-q", "-m",
+         "squash\n\nWriter: mimo-v2 run1\n \t \nPlan-Item: demo:A\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+    assert adapter.writer_trailers(str(repo), sha) == [
+        {"Writer": "mimo-v2 run1", "Plan-Item": "demo:A"}]
+
+
+@pytest.mark.parametrize("value", ["mimo-v2 deepseek-v4 run1", "mimo-v2, deepseek-v4",
+                                        "mimo-v2 mimo-v3 run1"])
+def test_multiple_models_in_one_writer_value_refuse(repo, value):
+    sha = _commit(repo, "squash", {"Plan-Item": "demo:A", "Writer": value})
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+@pytest.mark.parametrize("seat_family", ["xiaomi", "google"])
+def test_real_squash_closing_verdict_covers_both_writers(repo, seat_family):
+    from evidence_fakes import make_ctx
+    from keeper_util import World, seed
+    from plangraph.keeper import auth
+
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "squash\n\nPlan-Item: demo:A\nWriter: mimo-v2 run1\nWriter: deepseek-r1 run2\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+    world = World(repo.parent / "keeper")
+    try:
+        token = auth.add_principal(world.conn, "squashReviewer", "reviewer", ["demo"],
+                                   family=seat_family)
+        reviewer = auth.authenticate(world.conn, token)
+        (key,) = seed(world, [("A", [])], evidence_kinds=("commit+ci",))
+        world.store.ctx = make_ctx(git=GitAdapter({"demo": str(repo)}))
+        epoch = world.store.claim(world.p("workerA"), key, lease_s=7200)["epoch"]
+        assert world.store.add_evidence(world.p("workerA"), key, epoch,
+                                        "commit+ci", {"commit": sha})["verified"]
+        world.store.submit(world.p("workerA"), key, epoch)
+        if seat_family == "xiaomi":
+            with pytest.raises(Refused) as exc:
+                world.store.verdict(reviewer, key, True, "reviewed")
+            assert exc.value.code == "coverage"
+            assert world.store._item(key)["state"] == "in_review"
+        else:
+            world.store.verdict(reviewer, key, True, "reviewed")
+            assert world.store._item(key)["state"] == "done"
+    finally:
+        world.close()
+
+
 def test_non_merge_commit_returns_its_own_trailers(repo, adapter):
     sha = _commit(repo, "one", {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"})
 

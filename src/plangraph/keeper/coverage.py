@@ -108,6 +108,14 @@ def writer_families(store, item, ctx):
             if writers:
                 for writer in writers:
                     tokens = str(writer).split()
+                    # One model and an optional opaque run id, never a list.
+                    # Also reject a model-looking second token (even the same
+                    # family): it cannot safely stand for a run identifier.
+                    if (len(tokens) > 2 or "," in str(writer)
+                            or (len(tokens) == 2 and not tokens[1].startswith("run-")
+                                and model_family(tokens[1]) is not None)):
+                        raise Refused("writer_unknown",
+                                      "Writer value must name one model, not several")
                     model = tokens[0] if tokens else ""
                     family = model_family(model)
                     if family is None:

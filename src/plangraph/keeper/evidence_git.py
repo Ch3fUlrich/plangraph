@@ -214,6 +214,9 @@ def hidden_writer_line(text: str) -> bool:
         return False
     last: str | None = None
     for raw in text.splitlines()[start:]:
+        if not raw.strip():
+            last = None
+            continue
         if raw[:1] in (" ", "\t"):
             if _writer_named(raw):
                 return True
@@ -680,7 +683,14 @@ class GitAdapter:
         seat-coverage check a partial family list.
         """
         body = self._commit_body(repo, sha)
-        if body is None or stray_writer_line(body) or hidden_writer_line(body):
+        # Scan the subject too, but never parse it as a trailer: even a
+        # trailer-shaped subject is not part of git's body trailer block.
+        message = self._run(
+            repo, ["show", "-s", "--format=%B", "--end-of-options", sha]
+        )
+        subject = message.stdout.split("\n", 1)[0]
+        if (body is None or message.returncode != 0 or _writer_named(subject)
+                or stray_writer_line(message.stdout) or hidden_writer_line(body)):
             return None
         return parse_trailers(body)
 
