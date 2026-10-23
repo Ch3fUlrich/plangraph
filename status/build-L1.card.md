@@ -16,7 +16,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | #137 OPENCODE-HARDEN | DONE | merged 4fb18030, 2/2 (notes cite D-2339 + RT95 leaf); #95 closed |
 | #96 JEV-SHADOW (HIGH) | sweep-keeper | head ba3f0600: qwen PASS, glm FIX+TG yes (no prod caller for QC/outcome keeper path). L1 ruling A: writer wires prod call sites + tests via prod entry, re-seat |
 | KEEPER-RUNTOKEN-CLI-RUNS (HIGH) | L1 | D-2338 created (gate PH-RT-ADAPTERS); after phase-1 items |
-| PG-PUBLIC-READY / OCGO-FLEET-BUS | L1 / close-inreview | #136 MERGED 2cc0666a (judge ACCEPT D-2342); bg mergepath -> evidence; then verdicts from seats/pr136/r2 (qwen sv.py writer family per PR, glm reviewer-zhipu). Public flip gated: fresh history cut + gitleaks 0 (close-inreview). FLEET-SID-REFRESH DONE |
+| PG-PUBLIC-READY | L1 | #136 MERGED cbf21431 (CI green). evidence refused (in_review); qwen verdict 1/2 on OLD evidence 115379e8 (writer alibaba) -> glm refused coverage. BLOCKED A sent: router withdraw_review -> L1 evidence cbf21431 -> submit -> repost qwen+glm from seats/pr136/r2. Flip gated on history cut + gitleaks 0 (close-inreview) |
 | RT-P1-BUS-CONTRACT | build-L2-bus (workst, relaunched) | conditional GO impl (push red 28ba998 to origin first); MERGE-READY -> L1 |
 Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router-code + spawner moves, prio 8) after RT-P1-E2E green (D-2318 4). Reap timer -> RT-P1-E2E checklist (router edit).
 ## Traps
