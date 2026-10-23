@@ -82,13 +82,39 @@ def test_malformed_ids_are_skipped(tmp_path, reader, field):
 
 
 @pytest.mark.parametrize("reader", [metrics.iter_usage, metrics.iter_usage_first])
-def test_idless_records_are_never_merged(tmp_path, reader):
+def test_mixed_timestamps_skip_undated_records(tmp_path, reader):
+    _write_jsonl(tmp_path / "p" / "s.jsonl", [
+        _assistant("same", "r", None, inp=99),
+        _assistant("same", "r", "invalid", inp=98),
+        _assistant("same", "r", "2024-01-02T00:00:00Z", inp=2),
+        _assistant("early", "r", "2024-01-01T00:00:00Z", inp=1),
+    ])
+    records = reader(tmp_path)
+    assert [r["input"] for r in records] == [1, 2]
+    assert metrics.daily_weighted(records) == {"2024-01-01": 1.0, "2024-01-02": 2.0}
+
+
+def test_idless_records_are_never_merged(tmp_path):
     _write_jsonl(tmp_path / "p" / "s.jsonl", [
         _assistant(None, None, "2024-01-01T00:00:00Z", inp=i)
         for i in (1, 2)])
-    records = reader(tmp_path)
+    records = metrics.iter_usage_first(tmp_path)
     assert len(records) == 2
     assert metrics.ctx_report(records)["groups"][0]["calls"] == 2
+
+
+@pytest.mark.parametrize("request_id", [None, "shared-request"])
+def test_weighted_idless_records_keep_largest_per_request(tmp_path, request_id):
+    _write_jsonl(tmp_path / "p" / "s.jsonl", [
+        _assistant(None, request_id, "2024-01-01T00:00:00Z", inp=i)
+        for i in (1, 2, 1)])
+    records = metrics.iter_usage(tmp_path)
+    assert len(records) == 1
+    assert records[0]["input"] == 2
+    assert metrics.daily_weighted(records) == {"2024-01-01": 2.0}
+    ctx_records = metrics.iter_usage_first(tmp_path)
+    assert len(ctx_records) == 3
+    assert metrics.ctx_report(ctx_records)["groups"][0]["calls"] == 3
 
 
 def test_dedup_keeps_higher_total(tmp_path):

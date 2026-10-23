@@ -45,7 +45,9 @@ Dedup here is **first usage record per message id** (`message.id`, else the tran
 `uuid`): a later duplicate of that id is ignored, and a record without an id is never merged with
 another. That is the reference scan's rule (`metrics.iter_usage_first`), and it deliberately
 differs from `metrics.iter_usage`, which keeps the *largest* record per `(message id, requestId)`
-for the weighted/daily totals - neither rule changes the other.
+for the weighted/daily totals, including pairs with a missing message id (or both ids missing).
+Neither rule changes the other. Both transcript readers skip
+missing or invalid timestamps, consistent with daily aggregation's exclusion of undated usage.
 
 | field | meaning |
 |---|---|

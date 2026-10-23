@@ -126,7 +126,8 @@ def _scan_usage(
 ) -> list[dict]:
     """Parse usage records in timestamp, relative-file, line order, without dedup.
 
-    Malformed lines and files are skipped. Each record carries ``ts``,
+    Malformed lines and files, and missing or invalid timestamps, are skipped.
+    Each record carries ``ts``,
     ``session``, ``model``, ``host``, ``session_class``, the four token
     counts, and the dedup keys ``message_id`` (``message.id``, else the
     line's ``uuid``) and ``request_id``.
@@ -167,6 +168,7 @@ def _scan_usage(
                             continue
                         ts = parse_ts(d.get("timestamp") or msg.get("timestamp"))
                         if ts is None:
+                            # Like daily_weighted, undated usage cannot enter a day.
                             continue
                         input_tokens = _as_int(usage.get("input_tokens"))
                         output_tokens = _as_int(usage.get("output_tokens"))
@@ -205,16 +207,12 @@ def _scan_usage(
 def _dedup_largest(records: list[dict]) -> list[dict]:
     """Keep the highest-token record per ``(message id, requestId)``.
 
-    First record wins a tie; records without a message id are never merged.
+    First record wins a tie; missing ids remain part of the legacy pair key.
     """
     best: dict[tuple, dict] = {}
     totals: dict[tuple, int] = {}
     for rec in records:
         key = (rec.get("message_id"), rec.get("request_id"))
-        if not key[0]:
-            # No identity means no evidence that two calls are duplicates.
-            best[(None, len(best))] = rec
-            continue
         total = rec["input"] + rec["output"] + rec["cache_read"] + rec["cache_write"]
         if key not in best or total > totals[key]:
             best[key] = rec
