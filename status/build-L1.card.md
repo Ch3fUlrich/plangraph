@@ -22,7 +22,7 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 [62798f] (adopted 09:5xZ) | head 458621be CI red; fix4 writer scope-fix4m; glm PASS; 2nd seat != qoder (D-2389) on final head -> expect MERGE-READY/GO-REQ |
 | GOV-CTX-METRICS (p9) | L1 | claimed ep1; writer 20261023-092955-gov-ctx-metrics-writer-8928df (brief seats/gov-ctx-metrics); PG-BOOTSTRAP blocked on autoos:AO-OCL1-PW-FILE |
 ## Traps
-- D-2389: qoder qwen 429 all accounts until ~10-24 15:30Z: seats skip qoder (record skip) -> opencode glm/deepseek free > OR free > agy gemini > mimo; no nemotron/kilocode
+- D-2399 seats ONLY: luna cx/gpt-6-luna (openai, never over cx/sol), Haiku 5.5 (never over Claude), mimo/mimo-v2.6-flash, qwen qodercli (429 to 10-24 15:30Z), omniroute/deepseek-direct-flash; HIGH = 2 fam >=1 non-Claude; NO opencode free/OR free/agy
 - zsh: use bash for `${H}:refs/...`; `echo ===` fails; pkill -f PATTERN kills own shell if pattern in cmd; `while pgrep -f X` matches itself.
 - Never dump environ. Never push site strings/seat prompts to GitHub. Never touch .claude/worktrees/proposal. Keeper LIVE from live-2d61e281 (never ff; LIVE-SYNC-9 = HIGH GO-REQ after item_key fix + mint smoke).
 - D-2315: no age-only deletes; clean only terminal-marker runs.
@@ -34,7 +34,7 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 | PG-PUBLIC-READY r3 | L1 | deepseek FAIL verdict POSTED (D-2349, item back to claimed). Re-seat on PG-PUBLIC-FIX merge. Gate PG-REPUBLISH-FRESH deps [READY, FIX] |
 | PG-PUBLIC-FIX (HIGH prio 8) | L1 | writer 20261023-084625-pg-public-fix-writer-7bf42d running (wt pg-public-fix, brief seats/pg-public-fix/WRITER-BRIEF.md) -> PR, CI, seats qwen+glm+deepseek |
 | PG-OMNIROUTE-CONFIG-HOME (prio 6) | L1 queue | D-2359: operator combos (names, members, order, strategy) = PUBLIC in plangraph, export via gateway API only (R-coord-15), scrub scan; keys/account ids/hosts stay private. >=2 tasks -> L2-LAUNCH (OpenCode sol) after PH-RT-RUNTIME items |
-| UI-BROWSER-TESTS (prio 1) | build-L2-ui-browser (workst) | BLOCKED commit gate -> L1 ruled (a): L2 spawns cx writer for patch, Gate-Edit D-323 tests.yml, GO push lane/ui-browser-tests-r2, seats != openai |
+| UI-BROWSER-TESTS | L1 | GO D-2400: merging #143 574ba275 (Gate-Edit D-2388 merge trailer) -> evidence, verdicts deepseek+anthropic (seat files on workst C:\fleet\handoff); leaf UI-BROWSER-HARDEN sent; RELOAD-FREEZE cancelled |
 
 | KEEPER-MCP-UTF8 | done | #142 e50a9e91, verdict done, Windows CONFIRMED by workst-L1-autoos |
 | PG-BOOTSTRAP-FLEET-ENV (HIGH p9, secrets) | L1 queue | bootstrap.ps1+.sh fleet-env step, CSPRNG pw owner-only file + AUTOOS_OCL1_PW_FILE, never printed, --DryRun; dep autoos:AO-OCL1-PW-FILE; after MCP-UTF8 |
