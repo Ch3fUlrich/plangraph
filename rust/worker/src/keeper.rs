@@ -43,6 +43,14 @@ pub struct Claim {
     /// Repo-relative check inputs, protected unless explicitly allowed.
     #[serde(default)]
     pub check_reads: Vec<String>,
+    #[serde(default)]
+    pub smoke_checks: Vec<String>,
+    #[serde(default)]
+    pub exports: Vec<String>,
+    #[serde(default)]
+    pub heldout_cmd: String,
+    #[serde(default)]
+    pub risk_tagged: bool,
     pub allow: Vec<String>,
     pub forbid: Vec<String>,
     pub prompt: String,
@@ -654,6 +662,10 @@ mod tests {
         let c: Claim = serde_json::from_str(old).unwrap();
         assert!(c.check_kind.is_empty());
         assert!(c.check_reads.is_empty());
+        assert!(c.smoke_checks.is_empty());
+        assert!(c.exports.is_empty());
+        assert!(c.heldout_cmd.is_empty());
+        assert!(!c.risk_tagged);
     }
 
     fn report() -> AttemptReport {

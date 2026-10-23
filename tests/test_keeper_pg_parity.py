@@ -19,6 +19,24 @@ DSN = os.environ.get("PG_DSN")
 needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service container)")
 
 
+@needs_pg
+def test_existing_cards_gain_check_columns_idempotently(tmp_path):
+    from plangraph.keeper import db_pg
+
+    w = World(tmp_path, backend="postgres", dsn=DSN)
+    try:
+        w.conn._raw.execute("ALTER TABLE cards DROP COLUMN check_kind")
+        w.conn._raw.execute("ALTER TABLE cards DROP COLUMN check_reads")
+        for _ in range(2):
+            db_pg.migrate(w.conn._raw, w.conn.schema)
+            cols = {r[0] for r in w.conn.execute(
+                "SELECT column_name FROM information_schema.columns"
+                " WHERE table_schema=current_schema() AND table_name='cards'")}
+            assert {"check_kind", "check_reads"} <= cols
+    finally:
+        w.close()
+
+
 def replay_legacy(w):
     """A mixed workload: create, claim, evidence, review, edit, cancel, refusals, a rollback."""
     router, lead = w.p("router"), w.p("l1main")

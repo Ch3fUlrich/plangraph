@@ -37,10 +37,10 @@ QUESTION_TAGS = RISK_TAGS + ("public-release",)
 #: design 4.8: a question carrying one of these has no default and is never timed out.
 NO_DEFAULT_TAGS = frozenset({"auth", "secrets", "money", "live-step", "public-release"})
 
-_CARD_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks")
+_CARD_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks", "check_reads")
 _CARD_TEXT = ("check_cmd", "heldout_check")
 _CARD_KEYS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
-                        *_CARD_LISTS, *_CARD_TEXT))
+                        "check_kind", *_CARD_LISTS, *_CARD_TEXT))
 _ATTEMPT_KEYS = frozenset((
     "n", "harness", "model", "combo", "class", "started_at", "ended_at", "exit_class",
     "tokens_in", "tokens_out", "cost", "run_id", "workflow_id", "log_ref"))
@@ -154,7 +154,11 @@ class CardsMixin:
         window = card.get("window_class")
         if window is not None and window not in WINDOW_CLASSES:
             raise Refused("validation", f"window_class must be one of {list(WINDOW_CLASSES)}")
+        check_kind = card.get("check_kind", "change")
+        if check_kind not in ("change", "regression"):
+            raise Refused("validation", "check_kind must be change or regression")
         values = {
+            "check_kind": check_kind,
             "outcome": _text("outcome", card.get("outcome"), required=True, key=key),
             "check_cmd": _text("check_cmd", card.get("check_cmd"), key=key),
             "heldout_check": _text("heldout_check", card.get("heldout_check"), key=key),
@@ -169,7 +173,7 @@ class CardsMixin:
             item = self._get_or_refuse(key)
             self._may_write_for(principal, item["project"])
             self._assert_unlocked(item)
-            cols = ["outcome", *_CARD_LISTS, "check_cmd", "heldout_check",
+            cols = ["outcome", *_CARD_LISTS, "check_kind", "check_cmd", "heldout_check",
                     "window_class", "risk_tags", "estimate_tokens"]
             marks = ",".join("?" for _ in cols)
             sets = ",".join(f"{c}=excluded.{c}" for c in cols)

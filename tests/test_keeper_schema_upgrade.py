@@ -10,6 +10,23 @@ from plangraph.keeper.store import Store
 NEW = ("cards", "attempts", "decisions", "questions", "answers", "budget")
 
 
+def test_old_cards_gain_check_columns_idempotently(tmp_path):
+    path = tmp_path / "keeper.db"
+    raw = sqlite3.connect(path)
+    ddl = schema.SCHEMA
+    for line in ddl.splitlines(keepends=True):
+        if "check_kind " in line or "check_reads " in line:
+            ddl = ddl.replace(line, "")
+    raw.executescript(ddl)
+    raw.close()
+    for _ in range(2):
+        conn = kdb.open_db(path)
+        cols = {r[1]: r for r in conn.execute("PRAGMA table_info(cards)")}
+        assert cols["check_kind"][4] == "'change'"
+        assert cols["check_reads"][4] == "'[]'"
+        conn.close()
+
+
 def make_v9(path):
     """Build a database exactly as schema v9 installed it: today's DDL minus the design-3 part."""
     assert schema.DESIGN3_DDL in schema.SCHEMA

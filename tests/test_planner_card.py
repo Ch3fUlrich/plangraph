@@ -29,8 +29,9 @@ def test_valid_roundtrip_to_store():
     out = card.to_store()
     assert set(out) == {"outcome", "read_set", "write_set", "exports", "forbid_paths",
                         "smoke_checks", "check_cmd", "heldout_check", "window_class",
-                        "risk_tags", "estimate_tokens"}
-    assert "check_kind" not in out
+                        "risk_tags", "estimate_tokens", "check_kind", "check_reads"}
+    assert out["check_kind"] == "change"
+    assert out["check_reads"] == []
     assert out["write_set"] == ["src/a.py"] and isinstance(out["write_set"], list)
     assert out["exports"] == [] and out["heldout_check"] is None
     assert parse_card(out) == card
@@ -47,10 +48,7 @@ def test_check_kind_default_and_roundtrip():
     for kind in ("change", "regression"):
         card = parse_card(raw(check_kind=kind))
         assert card.check_kind == kind
-        if kind == "change":
-            assert "check_kind" not in card.to_store()
-        else:
-            assert card.to_store()["check_kind"] == "regression"
+        assert card.to_store()["check_kind"] == kind
         assert parse_card(card.to_store()) == card
 
 
@@ -300,8 +298,9 @@ def test_apply_cards_real_store_roundtrip(tmp_path):
     world = keeper_util.World(tmp_path)
     try:
         (key,) = keeper_util.seed(world, [("A", [])])
-        card = parse_card(raw(exports=["f"], smoke_checks=["s"], forbid_paths=["docs"]))
-        assert "check_kind" not in card.to_store()
+        card = parse_card(raw(exports=["f"], smoke_checks=["s"], forbid_paths=["docs"],
+                              check_kind="regression", check_reads=["tests/check.py"]))
+        assert card.to_store()["check_kind"] == "regression"
         assert apply_cards(world.store, world.p("router"), {key: card}) == [key]
         got = world.store.get_card(world.p("reader"), key)
         want = card.to_store()

@@ -31,8 +31,8 @@ __all__ = ["Card", "CardError", "parse_card", "cards_from_batch", "strip_cards",
 _TEXT_CAP = 2000
 _LIST_CAP = 500
 _ITEM_CAP = 500
-_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks")
-_PATH_LISTS = ("read_set", "write_set", "forbid_paths")
+_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks", "check_reads")
+_PATH_LISTS = ("read_set", "write_set", "forbid_paths", "check_reads")
 _TEXTS = ("check_cmd", "heldout_check", "check_kind")
 _FIELDS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
                      *_LISTS, *_TEXTS))
@@ -65,9 +65,10 @@ class Card:
     risk_tags: tuple[str, ...] = ()
     estimate_tokens: int | None = None
     check_kind: str = "change"
+    check_reads: tuple[str, ...] = ()
 
     def to_store(self) -> dict[str, Any]:
-        """Serialize lists as lists, omitting the legacy-compatible default check kind."""
+        """Serialize all keeper fields, including explicit check defaults."""
         out = {
             "outcome": self.outcome,
             "read_set": list(self.read_set),
@@ -80,10 +81,9 @@ class Card:
             "window_class": self.window_class,
             "risk_tags": list(self.risk_tags),
             "estimate_tokens": self.estimate_tokens,
+            "check_kind": self.check_kind,
+            "check_reads": list(self.check_reads),
         }
-        # Keeper does not yet accept check_kind; preserve its legacy default wire shape.
-        if self.check_kind != "change":
-            out["check_kind"] = self.check_kind
         return out
 
     @classmethod

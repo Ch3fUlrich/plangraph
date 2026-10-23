@@ -105,7 +105,9 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
                   ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"),
-                  ("items", "kg_refs", "TEXT"))
+                  ("items", "kg_refs", "TEXT"),
+                  ("cards", "check_kind", "TEXT NOT NULL DEFAULT 'change'"),
+                  ("cards", "check_reads", "TEXT NOT NULL DEFAULT '[]'"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
@@ -133,7 +135,8 @@ def _upgrade(conn):
     """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        if column not in have:
+        # A pre-design-3 database has no cards yet; its CREATE below adds defaults.
+        if have and column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.executescript(ALIASES_DDL)
     conn.executescript(RUN_TOKENS_DDL)

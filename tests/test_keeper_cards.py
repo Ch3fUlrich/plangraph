@@ -53,6 +53,17 @@ def test_put_and_get_card_roundtrip(w):
     assert got["risk_tags"] == ["migration"]
     assert got["window_class"] == "128k" and got["estimate_tokens"] == 40000
     assert got["heldout_check"] is None
+    assert got["check_kind"] == "change"
+    assert got["check_reads"] == []
+
+
+def test_regression_check_roundtrip(w):
+    (key,) = seed(w, [("A", [])])
+    w.store.put_card(w.p("router"), key, card(
+        check_kind="regression", check_reads=["tests/test_existing.py"]))
+    got = w.store.get_card(w.p("reader"), key)
+    assert got["check_kind"] == "regression"
+    assert got["check_reads"] == ["tests/test_existing.py"]
 
 
 def test_put_card_replaces(w):
@@ -71,6 +82,7 @@ def test_put_card_replaces(w):
     {"window_class": "512k"}, {"risk_tags": ["vibes"]}, {"estimate_tokens": -1},
     {"estimate_tokens": True}, {"write_set": "src/a.py"}, {"write_set": [""]},
     {"outcome": "  "}, {"unknown_field": 1}, {"check_cmd": 7},
+    {"check_kind": "other"}, {"check_reads": "tests/a.py"},
 ])
 def test_put_card_validates(w, bad):
     (key,) = seed(w, [("A", [])])

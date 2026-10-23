@@ -1108,6 +1108,7 @@ mod tests {
     }
 
     #[test]
+    // Real-jail base-check coverage runs only in the Rust CI job.
     fn red_first_check_is_jailed_in_card_worktree() {
         if std::env::var_os("PG_JAIL_BIN").is_none() {
             // rust-worker CI runs unjailed by design; the rust job exercises

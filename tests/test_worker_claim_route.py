@@ -103,6 +103,33 @@ def test_worker_claim_ok(doors, w, repo, gate, monkeypatch):
     assert body["check_cmd"] == "test -f x.txt"
     assert body["allow"] == ["x.txt"]
     assert body["forbid"] == []
+    assert body["check_kind"] == "change"
+    assert body["check_reads"] == []
+    assert body["smoke_checks"] == []
+    assert body["exports"] == []
+    assert body["heldout_cmd"] == ""
+    assert body["risk_tagged"] is False
+
+
+def test_worker_claim_check_metadata_from_real_store(doors, w, repo, gate, monkeypatch):
+    root, _main_tip, _phase_tip = repo
+    w.store.put_card(w.p("router"), "demo:C1", {
+        "outcome": "fix", "check_cmd": "pytest tests/check.py",
+        "write_set": ["src/a.py"], "check_kind": "regression",
+        "check_reads": ["fixtures/data.json"], "forbid_paths": ["secrets"],
+        "smoke_checks": ["smoke"], "exports": ["api"],
+        "heldout_check": "heldout", "risk_tags": ["migration"],
+    })
+    monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(root))
+    status, body = _post(doors, "workerA", {"card": "demo:C1"})
+    assert status == 200
+    assert body["check_kind"] == "regression"
+    assert body["check_reads"] == ["fixtures/data.json"]
+    assert body["forbid"] == ["secrets", "tests/check.py", "fixtures/data.json"]
+    assert body["smoke_checks"] == ["smoke"]
+    assert body["exports"] == ["api"]
+    assert body["heldout_cmd"] == "heldout"
+    assert body["risk_tagged"] is True
 
 def test_system_claims_through_the_door(doors, w, repo, gate, monkeypatch):
     root, _main_tip, phase_tip = repo
