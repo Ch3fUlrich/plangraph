@@ -33,7 +33,7 @@ _LIST_CAP = 500
 _ITEM_CAP = 500
 _LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks")
 _PATH_LISTS = ("read_set", "write_set", "forbid_paths")
-_TEXTS = ("check_cmd", "heldout_check")
+_TEXTS = ("check_cmd", "heldout_check", "check_kind")
 _FIELDS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
                      *_LISTS, *_TEXTS))
 _DRIVE_RE = re.compile(r"[A-Za-z]:")
@@ -64,10 +64,11 @@ class Card:
     window_class: str | None = None
     risk_tags: tuple[str, ...] = ()
     estimate_tokens: int | None = None
+    check_kind: str = "change"
 
     def to_store(self) -> dict[str, Any]:
-        """The card dict ``Store.put_card`` accepts (lists as lists, every key present)."""
-        return {
+        """Serialize lists as lists, omitting the legacy-compatible default check kind."""
+        out = {
             "outcome": self.outcome,
             "read_set": list(self.read_set),
             "write_set": list(self.write_set),
@@ -80,6 +81,10 @@ class Card:
             "risk_tags": list(self.risk_tags),
             "estimate_tokens": self.estimate_tokens,
         }
+        # Keeper does not yet accept check_kind; preserve its legacy default wire shape.
+        if self.check_kind != "change":
+            out["check_kind"] = self.check_kind
+        return out
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Card":
@@ -191,7 +196,10 @@ def parse_card(raw: Any, key: str | None = None) -> Card:
                                  allowed=RISK_TAGS),
     }
     for name in _TEXTS:
-        values[name] = _check_text(name, raw.get(name), problems)
+        values[name] = _check_text(name, raw.get(name, "change") if name == "check_kind"
+                                   else raw.get(name), problems)
+    if values["check_kind"] not in ("change", "regression"):
+        problems.append("check_kind must be one of ['change', 'regression']")
     for name in _LISTS:
         values[name] = _check_list(name, raw.get(name), problems, paths=name in _PATH_LISTS)
     if problems:
