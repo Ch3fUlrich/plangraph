@@ -25,6 +25,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | PG-OMNIROUTE-CONFIG-HOME (p6) | L1 queue | D-2359, L2 after PH-RT-RUNTIME |
 | #100 SANDBOX | sweep-runtime | Gate-Edit squash pending |
 | OCGO-PROBE / OCGO-L1-FALLBACK | released D-2409 | trigger OS-OCL1-ENV |
+- CI host note (workst 11:4xZ): plangraph tests.yml runs-on ubuntu-24.04 = GitHub-hosted (public repo), not workst/ci.vm (D-1436); moving it = workflow Gate-Edit, routing decides. Not acting.
 ## Traps
 - Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
 - ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.
