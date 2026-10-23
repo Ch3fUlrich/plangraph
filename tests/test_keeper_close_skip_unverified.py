@@ -62,12 +62,15 @@ def test_close_refuses_unverified_d_id_alone(world):
 
 
 @pytest.mark.parametrize("router", [True, False])
-@pytest.mark.parametrize("ref", [{"d_id": "D-2411"}, {}, {"id": 2411},
+@pytest.mark.parametrize("ref", ["D-2411", {"d_id": "D-2411"}, {}, {"id": 2411},
                                   {"id": None}, {"id": ""}, {"id": "  "}])
 def test_decision_write_requires_string_id(tmp_path, router, ref):
     w = World(tmp_path)
     try:
-        w.store.create_items(w.p("router"), [defn("A"), defn("G", ["A"], kind="goal")])
+        w.store.create_items(w.p("router"), [
+            defn("A", evidence_kinds=["decision"]),
+            defn("G", ["A"], kind="goal"),
+        ])
         epoch = to_claimed(w, "demo:A")
         with pytest.raises(Refused) as exc:
             if router:
@@ -75,6 +78,7 @@ def test_decision_write_requires_string_id(tmp_path, router, ref):
             else:
                 w.store.add_evidence(w.p("l1main"), "demo:A", epoch, "decision", ref)
         assert exc.value.code == "validation"
+        assert exc.value.msg == "decision ref requires a non-empty string id"
         assert not w.store._evidence("demo:A")
     finally:
         w.close()
