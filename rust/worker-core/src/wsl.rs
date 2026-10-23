@@ -58,6 +58,18 @@ pub fn is_wsl(osrelease: &str) -> bool {
     osrelease.to_ascii_lowercase().contains("microsoft")
 }
 
+/// The warnings to print at worker startup: nothing on a non-WSL kernel, and
+/// on WSL one entry per [`wsl_findings`] finding (empty when both defaults are
+/// hardened). The caller owns the `warning: WSL ` prefix and the destination;
+/// this is the whole rule, so a test can reach every branch without touching
+/// `/proc` or `/etc`.
+pub fn startup_warnings(osrelease: &str, wsl_conf: Option<&str>) -> Vec<String> {
+    if !is_wsl(osrelease) {
+        return Vec::new();
+    }
+    wsl_findings(wsl_conf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,6 +124,35 @@ mod tests {
         let conf = "# [automount]\n; enabled=false\n[interop]\n# enabled=false\n";
         assert_eq!(
             wsl_findings(Some(conf)),
+            expected(&["automount enabled", "interop enabled"])
+        );
+    }
+
+    #[test]
+    fn startup_is_silent_off_wsl() {
+        // Not WSL, whatever the conf says: the conf is not even read.
+        assert!(startup_warnings("Linux 6.1.0-generic", None).is_empty());
+        assert!(startup_warnings(
+            "Linux 6.1.0-generic",
+            Some("[automount]\nenabled=false\n[interop]\nenabled=false\n")
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn startup_is_silent_on_wsl_with_both_disabled() {
+        assert!(startup_warnings(
+            "Linux 5.15.0-microsoft-standard-WSL2",
+            Some("[automount]\nenabled=false\n[interop]\nenabled=false\n")
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn startup_without_a_conf_reports_two_warnings() {
+        let warnings = startup_warnings("Linux 5.15.0-microsoft-standard-WSL2", None);
+        assert_eq!(
+            warnings,
             expected(&["automount enabled", "interop enabled"])
         );
     }

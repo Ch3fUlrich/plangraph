@@ -54,7 +54,9 @@ enabled=false
 
 This is an operator step. Run `wsl --shutdown` to apply it. `wsl_findings`
 reports these defaults from the conf text; `is_wsl` identifies a WSL kernel
-from `osrelease`.
+from `osrelease`. The worker checks both at startup: on a WSL kernel it reads
+`/etc/wsl.conf` (`None` when absent) and prints one
+`warning: WSL <finding>` line per remaining finding; off WSL it prints nothing.
 
 ## Verification
 
