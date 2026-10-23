@@ -7,9 +7,9 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | Item | Owner | State / next |
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | D-2410 A: fix writer 3c26b3 mimo (seats/exec-ownership/sq5/FIX-BRIEF.md) -> push sq2 -> CI -> seats deepseek+Haiku -> re-GO-REQ |
-| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix1 cd8772 ended WIP (patch seats/pr143/cd8772-wip.patch) -> continuation 20261023-123259-ui-browser-fix1-cont-504805 (mimo) -> PR, CI, re-seat deepseek+haiku -> merge -> submit |
+| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix1 PR #152 head 27da2078 (504805 mimo, gate rc0) -> CI; seats deepseek bifma25hg + Haiku/luna -> merge -> submit |
 | GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head f2ddac80 (main merged, CHANGELOG-only); Haiku PASS, luna FIX HIGH stray_writer_line indented/quoted (workst answer pr139-luna.answer.md e4b5d49a) -> fix3 deepseek writer requested from workst -> re-seat Haiku+luna -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix3 ab7ab5e8 (cdd102 deepseek) + main merge -> head 43a16a90 gate rc0; CI; Haiku seat running, luna asked workst ~13:53Z -> GO-REQ (Haiku record via D-2430) |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats: deepseek FIX only MED names-list scan unverified (V1-V4 ok; re-run seat once scan line arrives), luna asked workst; names-list scan: NO agent holds words file -> BLOCKED routing = operator Q (D-2433); luna r4 workst builds prompt, runs ~13:52Z -> submit, verdicts, GO-REQ |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
