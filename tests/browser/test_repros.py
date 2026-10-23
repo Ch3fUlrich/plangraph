@@ -365,7 +365,7 @@ def test_r8_knowledge_export_requested_only_when_present(page, site):
 @pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
 def test_r9_expand_draws_no_invalid_endpoint_warnings(console_page):
     """R9 (UI-FLAKE-FIXES): expanding harbor and then harbor|P1 at 1440x900 logs no
-    cytoscape 'invalid endpoints' warning (V-GRAPH-7)."""
+    cytoscape 'invalid endpoints' warning (V-GRAPH-12)."""
     pg, log = console_page()
     probes.wait_layout_idle(pg)
     pg.wait_for_timeout(400)
@@ -382,7 +382,7 @@ def test_r9_expand_draws_no_invalid_endpoint_warnings(console_page):
 @pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
 def test_r10_graph_failure_is_logged(console_page):
     """R10 (UI-FLAKE-FIXES): a failing layout logs the reason to the console and the
-    canvas says so instead of failing silently (V-GRAPH-8)."""
+    canvas says so instead of failing silently (V-GRAPH-11)."""
     pg, log = console_page(elk_fails=True, hash=OPEN_ORCHARD_T1)
     try:  # bounded wait for the failure surface (replaces a blind 2000 ms sleep)
         pg.wait_for_function(

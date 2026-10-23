@@ -1,3 +1,5 @@
+This license applies to elk.bundled.js in this directory: elkjs 0.9.3 (https://github.com/kieler/elkjs, npm package elkjs@0.9.3), bundled for the browser tests (plan item UI-BROWSER-TESTS).
+
 # Eclipse Public License - v 2.0
 
 THE ACCOMPANYING PROGRAM IS PROVIDED UNDER THE TERMS OF THIS ECLIPSE
