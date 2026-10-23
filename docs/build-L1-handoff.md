@@ -8,8 +8,9 @@ CARD status/build-L1.card.md = lane table (read first). GO-REQ/BLOCKED -> `routi
 - D-2455/2463/2467/2471 PG-PUBLIC-READY: names scan waived; criteria = D-2471 (repo already public; no squash/flip; real find -> STOP, operator rotates). Writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep). Seats luna + opencode glm (after SEAT-FREE-OPENCODE); Haiku not counted. KEEPER-OPERATOR-WAIT-GUARD p6 mine (incl. dep edit on claimed items).
 - Bash guard denies unquoted heredoc with $(...): build prompts with python scripts.
 ## Immediate next (order)
-1. #139: CI on 9fd6cfae (bg wait was bucpscysl) + seats qwen (retry) + Haiku -> both pass -> GO-REQ routing (Haiku path+sha).
-2. #152: CI on 3ae5ad14 + qwen r3 -> pass -> mergepath.sh 152 <HEAD40> plangraph:UI-BROWSER-TESTS title -> submit.
+1. #139: CI on 9fd6cfae ALL GREEN. Haiku fix5 = FIX (seats/trailer-multi/fix5/haiku/review.txt: HIGH slash-joined Writer value -> 1 family; MED unknown 2nd token taken as run id; MED Writer+Hand-Edit drops anthropic (coverage.py elif); LOW fullwidth colon; LOW repeated Plan-Item last-wins evidence.py:_trailer; PG not run). qwen retry (NO-tools header) was running -> read seats/trailer-multi/fix5/qwen/review.txt, then ONE fix6 sol writer brief with ALL findings of both seats + vectors (D-2458/D-2472) via workst-L1-autoos; re-seat 1 seat on delta (non-openai).
+2. #152: qwen r3 delta seat PASS (seats/pr152/r3, head 3ae5ad14). CI on 3ae5ad14 was still starting at 19:4xZ -> green: mergepath.sh 152 <HEAD40 3ae5ad14f4435d168a65d33193905d1fca8852c7> plangraph:UI-BROWSER-TESTS title -> submit + verdict qwen.
+2b. build-L2-phase-runner: C1-C3 local on spine/phase-runner-s3d; waits for #139+#140 on main -> ping it "#139 ON MAIN <sha>" when #139 merges.
 3. #140 sq8 sol a3a264 running workst -> on push: mergemain.sh exec-own-sq lane/rt-p1-exec-ownership-sq2, CI, seat delta (1 seat, family != openai) -> GO-REQ; then "#140 ON MAIN <sha>" to build-L2-flow-oversight-3; EXEC-OBSERVED-STATE after.
 4. #147 build-L2-rt-cards fixing A,B,D,F,H (head e2af86ac) -> expect MERGE-READY. #150 build-L2-phase-runner relaunch C1 then C2 (after 18:55Z), merge after #139+#140.
 5. Queue workst after model-routing items: #139 done -> PG-PUBLIC F2+F3 -> BUS-NONCE-FLOOD.
