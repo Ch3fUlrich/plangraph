@@ -9,10 +9,12 @@ exists.
 
 Spec (flow-oversight-spec.md): findings sorted by (rule, key); ``digest``
 byte-identical over two runs of one snapshot with the sha256 recorded in
-``digest.sha256``; ``raise_alarms`` dedupes by reason and clears vanished rows;
+``digest.sha256`` and the pair committed atomically by ``digest.pair.json`` so
+``read_digest`` never returns a torn pair; ``raise_alarms`` dedupes by
+``(kind, key)``, refreshes a changed detail in place and clears vanished rows;
 ``run_checks`` lists the idle claimed P1 lanes; oversight.py imports no
 LLM/network stack; the timer fires every 30 minutes; ``oversight-check
---out-dir DIR`` on a tmp db writes both digest files and exits 0.
+--out-dir DIR`` on a tmp db writes the digest files and exits 0.
 
 The oversight imports inside the tests read ``import plangraph.keeper.oversight
 as oversight`` (and ``... cli_oversight ...``): the keeper package's lazy
@@ -115,6 +117,39 @@ def test_raise_alarms_dedupes_and_clears_vanished_rows(w):
     assert overdue["reason"] in rows[1]["detail"]
 
 
+def test_raise_alarms_refreshes_the_detail_of_an_open_row(w):
+    """A changed finding detail updates the open row and keeps ``raised_at``.
+
+    Dedupe stays on ``(kind, key)``: the finding is the same open alarm, only
+    its explanation moved (for R1 that stamp never moves, but R6's alarm detail
+    is the projector's own text).  A refresh must not open a second row.
+    """
+    import plangraph.keeper.oversight as oversight   # red: ModuleNotFoundError
+    now = w.clock()
+    finding = {"rule": "R5", "kind": "question_overdue", "key": "demo:Q1",
+               "reason": "R5:question_overdue:demo:Q1",
+               "detail": "deadline passed", "ts": w.store._iso(now)}
+    assert oversight.raise_alarms(w.conn, [finding], now) == 1
+    first = w.conn.execute(
+        "SELECT id, detail, raised_at FROM projector_alarms"
+        " WHERE workflow_id='oversight'").fetchone()
+
+    later = w.clock.advance(HOUR)
+    changed = dict(finding, detail="deadline passed, now 1h overdue",
+                   ts=w.store._iso(later))
+    assert oversight.raise_alarms(w.conn, [changed], later) == 0   # no new row
+
+    rows = w.conn.execute(
+        "SELECT id, detail, raised_at, cleared_at FROM projector_alarms"
+        " WHERE workflow_id='oversight'").fetchall()
+    assert len(rows) == 1, "a changed detail must not open a second alarm row"
+    assert rows[0]["id"] == first["id"]
+    assert rows[0]["detail"] == (
+        "R5:question_overdue:demo:Q1: deadline passed, now 1h overdue")
+    assert rows[0]["raised_at"] == first["raised_at"]   # the alarm's age stays
+    assert rows[0]["cleared_at"] is None
+
+
 # --------------------------------------------------- run_checks / P1 lanes
 def test_run_checks_lists_the_idle_claimed_p1_lanes(w):
     import plangraph.keeper.oversight as oversight     # red: ModuleNotFoundError
@@ -137,6 +172,36 @@ def test_oversight_source_imports_no_llm_or_network_stack():
     source = OVERSIGHT_SRC.read_text(encoding="utf-8")
     hits = sorted({m.group(0) for m in BANNED.finditer(source)})
     assert hits == [], f"oversight.py must stay stdlib-only, found {hits}"
+
+
+# ------------------------------------------------ _table_exists error path
+class _NoCatalogue:
+    """A connection whose table probe always raises (catalogue unavailable)."""
+
+    def __init__(self, backend="sqlite"):
+        self.backend = backend
+
+    def execute(self, *args, **kwargs):
+        raise RuntimeError("catalogue unavailable")
+
+
+def test_table_exists_treats_a_raising_catalogue_query_as_no_table():
+    """Defined behaviour: an unreadable catalogue means "the table is absent".
+
+    Both the sqlite and the postgres query shapes are behind the same guard, so
+    a snapshot without a usable catalogue degrades instead of failing the pass.
+    """
+    import plangraph.keeper.oversight as oversight
+    for backend in ("sqlite", "postgres"):
+        assert oversight._table_exists(_NoCatalogue(backend), "questions") is False
+
+
+def test_rules_probing_tables_return_no_findings_when_the_probe_raises():
+    """R6/R7 read the helper's ``False`` as "skip me", never as an exception."""
+    import plangraph.keeper.oversight as oversight
+    conn = _NoCatalogue("postgres")
+    assert oversight.r6_projector(conn, 0.0) == []
+    assert oversight.r7_burn(conn, "2026-10-22", 0.0) == []
 
 
 # ------------------------------------------------------------- systemd units
@@ -195,10 +260,109 @@ def test_oversight_check_writes_both_digest_files_and_exits_0(
     findings = json.loads(payload)
     assert findings and all(FINDING_KEYS <= set(f) for f in findings)
     assert any(f["key"] == key for f in findings)
+    # The compatible pair is committed by a third, last, atomic file; the
+    # reader helper returns exactly the pair the two legacy files record.
+    assert (out / "digest.pair.json").is_file()
+    assert cli_oversight.read_digest(out) == (
+        payload.decode("ascii"), recorded.group(0))
     printed = capsys.readouterr().out
     assert re.search(
         rf"oversight: \d+ findings, \d+ new alarms, sha256 {recorded.group(0)}\b",
         printed)
+
+
+# ------------------------------------------- atomic digest pair (follow-up)
+def _consistent(text, sha):
+    """True when (*text*, *sha*) describe one payload."""
+    return hashlib.sha256(text.encode("ascii")).hexdigest() == sha
+
+
+def _torn_writer(real, fail_on):
+    """``_atomic_write`` that performs *fail_on* writes then dies.
+
+    The interruption stands in for power loss between two file writes: every
+    earlier write really landed, every later one never happens.
+    """
+    state = {"done": 0}
+
+    def write(path, data):
+        if state["done"] >= fail_on:
+            raise OSError("simulated crash")
+        real(path, data)
+        state["done"] += 1
+
+    return write
+
+
+def test_digest_pair_is_never_torn_when_a_write_dies_before_the_sha(tmp_path,
+                                                                   monkeypatch):
+    """A crash between ``digest.json`` and ``digest.sha256`` leaves a good pair.
+
+    The reader must return the last complete pair (here the old one), never the
+    new json beside the old sha.
+    """
+    import plangraph.keeper.cli_oversight as cli_oversight  # red: no module
+    out = tmp_path / "out"
+    out.mkdir()
+    real = cli_oversight._atomic_write
+    old_text = '{"run":"old"}\n'
+    old_sha = hashlib.sha256(old_text.encode("ascii")).hexdigest()
+    cli_oversight.write_digest(out, old_text, old_sha)
+
+    new_text = '{"run":"new"}\n'
+    new_sha = hashlib.sha256(new_text.encode("ascii")).hexdigest()
+    monkeypatch.setattr(cli_oversight, "_atomic_write",
+                        _torn_writer(real, fail_on=1))
+    with pytest.raises(OSError):
+        cli_oversight.write_digest(out, new_text, new_sha)
+
+    text, sha = cli_oversight.read_digest(out)
+    assert _consistent(text, sha), "read_digest must never return a torn pair"
+    assert (text, sha) == (old_text, old_sha)
+
+
+def test_digest_pair_is_never_torn_when_a_write_dies_before_the_pair_commit(
+        tmp_path, monkeypatch):
+    """A crash after both compatibility files but before the atomic pair commit.
+
+    The pair file is the commit record written last, so a reader still sees one
+    self-consistent payload (the previous run's) instead of the half-published
+    new pair.
+    """
+    import plangraph.keeper.cli_oversight as cli_oversight  # red: no module
+    out = tmp_path / "out"
+    out.mkdir()
+    real = cli_oversight._atomic_write
+    old_text = '{"run":"old"}\n'
+    old_sha = hashlib.sha256(old_text.encode("ascii")).hexdigest()
+    cli_oversight.write_digest(out, old_text, old_sha)
+
+    new_text = '{"run":"new"}\n'
+    new_sha = hashlib.sha256(new_text.encode("ascii")).hexdigest()
+    monkeypatch.setattr(cli_oversight, "_atomic_write",
+                        _torn_writer(real, fail_on=2))
+    with pytest.raises(OSError):
+        cli_oversight.write_digest(out, new_text, new_sha)
+
+    text, sha = cli_oversight.read_digest(out)
+    assert _consistent(text, sha), "read_digest must never return a torn pair"
+    assert (text, sha) == (old_text, old_sha)
+    # A later complete write is readable again: the crash did not wedge it.
+    monkeypatch.setattr(cli_oversight, "_atomic_write", real)
+    cli_oversight.write_digest(out, new_text, new_sha)
+    assert cli_oversight.read_digest(out) == (new_text, new_sha)
+
+
+def test_read_digest_refuses_a_mismatched_legacy_pair(tmp_path):
+    """Without the pair file, the two compatibility files are cross-checked."""
+    import plangraph.keeper.cli_oversight as cli_oversight  # red: no module
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "digest.json").write_text('{"run":"new"}\n', encoding="ascii")
+    (out / "digest.sha256").write_text(
+        "0" * 64 + "  digest.json\n", encoding="ascii")
+    with pytest.raises(cli_oversight.DigestPairError):
+        cli_oversight.read_digest(out)
 
 
 # ---------------------------------------- cli-level R4 with a real git repo

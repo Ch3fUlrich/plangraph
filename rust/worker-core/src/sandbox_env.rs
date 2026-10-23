@@ -378,6 +378,43 @@ mod tests {
         }
     }
 
+    /// `OPENCODE_CONFIG_CONTENT` is how the opencode harness hardens one
+    /// attempt (paths outside the worktree denied, nothing ever "ask"). It is
+    /// deliberately *not* on the allowlist: it reaches a child only when the
+    /// harness sets it on its own `Command`, which `confine_with` re-applies.
+    #[test]
+    #[serial_test::serial(env)]
+    fn harness_config_survives_only_when_the_harness_sets_it() {
+        let home = tempfile::tempdir().unwrap();
+        let cfg = r#"{"permission":{"external_directory":"deny"}}"#;
+        assert!(!is_passed("OPENCODE_CONFIG_CONTENT"));
+        assert!(!is_passed_check("OPENCODE_CONFIG_CONTENT"));
+        // Ambient in the worker: neither child may inherit it — not the check,
+        // and not a harness that did not set its own.
+        std::env::set_var("OPENCODE_CONFIG_CONTENT", "ambient-sentinel");
+        for confine in [confine_harness, confine_check] {
+            let lines = child_env_with(confine, |_| {}, home.path());
+            assert!(
+                !lines.iter().any(|l| {
+                    l.starts_with("OPENCODE_CONFIG_CONTENT=") || l.contains("ambient-sentinel")
+                }),
+                "{lines:?}"
+            );
+        }
+        // Set explicitly on the harness's own Command: kept, config and all.
+        let lines = child_env(
+            |c| {
+                c.env("OPENCODE_CONFIG_CONTENT", cfg);
+            },
+            home.path(),
+        );
+        assert!(
+            lines.contains(&format!("OPENCODE_CONFIG_CONTENT={cfg}")),
+            "{lines:?}"
+        );
+        std::env::remove_var("OPENCODE_CONFIG_CONTENT");
+    }
+
     #[test]
     fn home_guard_creates_and_removes_only_what_it_owns() {
         let root = tempfile::tempdir().unwrap();

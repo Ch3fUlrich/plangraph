@@ -42,7 +42,7 @@ OP_ALLOWED = {
     "add_dep": {"op", "key", "dep"},
     "remove_dep": {"op", "key", "dep"},
 }
-TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops"}
+TOP_ALLOWED = {"batch", "principal", "source", "source_sha256", "ops", "base_seq"}
 PIN_MISMATCH_MARK = "sha256 mismatch"
 LEGACY_STATES = ("claimed", "in_review")
 # \Z ensures end of string; [^:@/\s] excludes whitespace (including newline)
@@ -99,6 +99,10 @@ def load_batch(path):
     ops = data.get("ops")
     if not isinstance(ops, list) or not ops:
         raise BatchError("ops must be a non-empty list")
+    if "base_seq" in data:
+        base_seq = data["base_seq"]
+        if isinstance(base_seq, bool) or not isinstance(base_seq, int) or base_seq < 0:
+            raise BatchError("base_seq must be a non-negative integer")
     return data
 def op_key(op):
     """Display key: a create lists every item key."""
@@ -158,6 +162,19 @@ def validate_op(op):
     key = op.get("key")
     if key is not None and not KEY_RE.match(str(key)):
         raise BatchError(f"key {key!r} must be 'project:ID'")
+    if name == "edit" and isinstance(op.get("fields"), dict) and "depends_on" in op["fields"]:
+        deps = op["fields"]["depends_on"]
+        if isinstance(deps, dict):
+            if not deps or (set(deps) - {"add", "remove"}):
+                raise BatchError("edit: depends_on takes only add/remove lists of keys")
+            for k, v in deps.items():
+                if not isinstance(v, list) or not all(isinstance(x, str) and not isinstance(x, bool) for x in v):
+                    raise BatchError("edit: depends_on takes only add/remove lists of keys")
+        elif isinstance(deps, list):
+            if not all(isinstance(x, str) and not isinstance(x, bool) for x in deps):
+                raise BatchError("edit: depends_on takes only add/remove lists of keys")
+        else:
+            raise BatchError("edit: depends_on takes only add/remove lists of keys")
 def build_request(op, source, digest):
     name = op["op"]
     if name == "create":
@@ -262,7 +279,7 @@ def read_token(path):
     return token
 def print_help(out):
     out.write("usage: apply_batch.py BATCH.yaml --url URL --token-file PATH "
-              "[--dry-run] [--from N] [--per-op] [--allow-no-whoami] "
+              "[--dry-run] [--preview] [--from N] [--per-op] [--allow-no-whoami] "
               "[--queue-line TEXT --queue-file PATH]\n")
 def main(argv=None, out=None, err=None):
     args_in = list(sys.argv[1:] if argv is None else argv)
@@ -273,6 +290,7 @@ def main(argv=None, out=None, err=None):
     parser.add_argument("--url", default=None)
     parser.add_argument("--token-file", required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--preview", action="store_true")
     parser.add_argument("--from", dest="from_n", default=None)
     parser.add_argument("--allow-no-whoami", action="store_true")
     parser.add_argument("--per-op", action="store_true")
@@ -320,6 +338,14 @@ def main(argv=None, out=None, err=None):
         err.write("error: --queue-line must be a single line\n")
         line("error: --queue-line must be a single line", refusal=True)
         return _done(2)
+    if opts.preview and not opts.dry_run:
+        err.write("error: --preview needs --dry-run\n")
+        line("error: --preview needs --dry-run", refusal=True)
+        return _done(2)
+    if opts.preview and opts.per_op:
+        err.write("error: --preview needs the atomic mode (drop --per-op)\n")
+        line("error: --preview needs the atomic mode (drop --per-op)", refusal=True)
+        return _done(2)
     if not opts.batch_file:
         print_help(err)
         if queue_mode:
@@ -350,6 +376,11 @@ def main(argv=None, out=None, err=None):
         return _done(1)
     try:
         data = load_batch(opts.batch_file)
+        base_seq = data.get("base_seq")
+        if opts.per_op and base_seq is not None:
+            err.write("error: base_seq needs the atomic mode (drop --per-op)\n")
+            line("error: base_seq needs the atomic mode (drop --per-op)", refusal=True)
+            return _done(2)
         ops = data["ops"]
         total = len(ops)
         if start < 1 or start > total:
@@ -393,13 +424,16 @@ def main(argv=None, out=None, err=None):
                 return fail(n, name, key, "error", str(exc))
             except (TypeError, ValueError) as exc:
                 return fail(n, name, key, "error", f"cannot encode {verb}: {exc.__class__.__name__}")
-        if opts.dry_run:
+        if opts.dry_run and not opts.preview:
             for n, op in enumerate(ops, 1):
                 if n < start:
                     continue
                 name = op.get("op") if isinstance(op, dict) else "?"
                 key = op_key(op) if isinstance(op, dict) else "-"
                 line(f"plan {n} {op.get('op')} {key}")
+                if (name == "edit" and isinstance(op.get("fields"), dict)
+                        and isinstance(op["fields"].get("depends_on"), list)):
+                    line(f"note {n} edit {key}: depends_on list REPLACES the whole list (use {{add: [...], remove: [...]}} to keep others)")
             counts = Counter(op.get("op") for op in ops[start - 1:]
                              if isinstance(op, dict))
             line("dry run: " + (", ".join(f"{name} {counts[name]}"
@@ -437,7 +471,10 @@ def main(argv=None, out=None, err=None):
     if not opts.per_op:
         try:
             code, report = atomic.send(session, ops, start, source, digest,
-                                       (ApiError, BatchError), op_key)
+                                       (ApiError, BatchError), op_key,
+                                       base_seq=base_seq,
+                                       dry_run=opts.preview,
+                                       batch_label=data.get("batch"))
         except Exception as exc:
             if not queue_mode:
                 raise
@@ -447,6 +484,9 @@ def main(argv=None, out=None, err=None):
         # refusal_lines()/send() put the error first, so index 0 is the refusal.
         for i, text in enumerate(report):
             line(text, refusal=bool(code and i == 0))
+        if opts.preview:
+            line("preview: nothing applied (dry run on the keeper)")
+            return _done(code)
         if code:
             return _done(code)
     for n, op in enumerate(ops, 1):

@@ -1,8 +1,11 @@
 """OmniRoute ACP-First Client Adapter with Tailnet Coexistence.
 
-All model providers route first through OmniRoute's ACP/Gateway (http://127.0.0.1:20128/v1)
-via opencode run (or omniroute run). Standalone direct CLI spawning (agy, qodercli, codex,
-claude) is reserved strictly as an offline emergency fallback when gateway_online=False.
+All model providers route first through the local model gateway; its base URL is
+deployment config (``OMNIROUTE_BASE_URL``, ``PLANGRAPH_GATEWAY_URL`` or the
+spawner/keeper config, see ``effective_gateway_base_url``), never a source
+literal. Standalone direct CLI spawning (agy,
+qodercli, codex, claude) is reserved strictly as an offline emergency fallback
+when gateway_online=False.
 
 Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 BUG-B).
 """
@@ -12,7 +15,44 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-DEFAULT_GATEWAY_URL = "http://127.0.0.1:20128/v1"
+#: Environment variable naming the model gateway base URL (see ``gateway_url``).
+GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
+
+#: Environment variable naming the provider-level gateway base URL override.
+OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
+
+
+def gateway_url(env: Mapping[str, str] | None = None,
+                config: Mapping[str, Any] | None = None) -> str | None:
+    """Base URL of the model gateway, or ``None`` when no source names one.
+
+    Sources, in order: ``PLANGRAPH_GATEWAY_URL`` in *env* (the process
+    environment by default), then ``gateway_url`` in the spawner/keeper *config*
+    mapping.  The endpoint is deployment data, so there is no built-in default:
+    a caller that has none supplies its own value (tests do).
+    """
+    source = os.environ if env is None else env
+    for candidate in ((source or {}).get(GATEWAY_URL_ENV_VAR),
+                      (config or {}).get("gateway_url")):
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def effective_gateway_base_url(env: Mapping[str, str] | None = None,
+                               config: Mapping[str, Any] | None = None) -> str | None:
+    """Base URL actually handed to gateway clients, or ``None`` when unset.
+
+    Precedence is the one ``build_child_env`` applies when it writes ``baseURL``
+    into the child provider config: ``OMNIROUTE_BASE_URL`` in *env* (the process
+    environment by default) wins, else ``gateway_url`` (``PLANGRAPH_GATEWAY_URL``,
+    then the *config* mapping's ``gateway_url`` key).  ``build_child_env`` and
+    the ``plangraph_agent_health`` report both call this helper, so the reported
+    URL cannot diverge from the effective one.
+    """
+    source = os.environ if env is None else env
+    override = ((source or {}).get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip()
+    return override or gateway_url(source, config)
 
 
 @dataclass(frozen=True)
@@ -41,8 +81,15 @@ CLIENTS: dict[str, Client] = {
 def build_child_env(
     extra_env: Mapping[str, str] | None = None,
     headers: Mapping[str, str] | None = None,
+    config: Mapping[str, Any] | None = None,
 ) -> dict[str, str]:
     """Build subprocess environment preserving critical OS and Tailnet variables.
+
+    The gateway base URL written into the child's provider config comes from
+    ``effective_gateway_base_url`` (``OMNIROUTE_BASE_URL`` wins, else
+    ``gateway_url``: env ``PLANGRAPH_GATEWAY_URL``, else the *config* mapping's
+    ``gateway_url`` key); when no source names one, no ``baseURL`` key is written
+    at all -- this module ships no default endpoint.
 
     On Windows (os.name == 'nt'), ALWAYS preserves:
       - SystemRoot / SYSTEMROOT
@@ -79,7 +126,9 @@ def build_child_env(
         elif "SYSTEMROOT" not in env and "SystemRoot" in env:
             env["SYSTEMROOT"] = env["SystemRoot"]
 
-    base_url = env.get("OMNIROUTE_BASE_URL") or DEFAULT_GATEWAY_URL
+    # Deployment endpoint: provider-specific override, else the configured
+    # gateway URL (never a source default -- unset means "no baseURL written").
+    base_url = effective_gateway_base_url(env, config) or ""
     existing_cfg: dict[str, Any] = {}
     raw_cfg = env.get("OPENCODE_CONFIG_CONTENT")
     if raw_cfg:
@@ -95,7 +144,7 @@ def build_child_env(
     omni_prov.setdefault("env", ["AUTOOS_OMNIROUTE_KEY"])
     omni_prov.setdefault("package", "@opencode/ai/providers/openai-compatible")
     omni_settings = omni_prov.setdefault("settings", {})
-    if isinstance(omni_settings, dict):
+    if isinstance(omni_settings, dict) and base_url:
         omni_settings.setdefault("baseURL", base_url)
 
     if headers:
