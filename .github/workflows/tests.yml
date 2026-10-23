@@ -123,6 +123,13 @@ jobs:
         run: python -m playwright install --with-deps chromium
       - name: browser tests
         run: python -m pytest -q tests/browser -m browser
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: out/ui-shots/*.png
+          if-no-files-found: warn
 
   pytest-postgres:
     needs: select
