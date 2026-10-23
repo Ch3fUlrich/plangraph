@@ -124,13 +124,17 @@ regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----(?:\r?\nA{64})+\r?\n-----END TE
 # Reason: before the fixture became a single literal, the same two tests built the fake block
 # programmatically, so in git history the private-key match starts at the header STRING LITERAL
 # and runs on through the builder code (`.to_string()];`, the `for _ in 0..body_lines` loop,
-# `"A".repeat(64)`) to the footer literal.  This entry waives exactly that historical shape:
-# the TEST header immediately closed by `".to_string()];` -- never a PEM header line, which is
-# always followed by a newline, so a real key (base64 body) under this header is not waived here
-# and stays reported by the entry above's absence.  Same two paths, same rule, AND condition.
+# `"A".repeat(64)`) to the footer literal.  This entry waives exactly that historical shape --
+# and NOTHING after its opening: the regex is pinned token by token from the header literal all
+# the way to the footer literal and ends there (`$`, no open-ended `.*`), because gitleaks'
+# private-key match spans header..first footer, so a prefix-only regex would waive a real
+# base64 body dropped in anywhere before that footer.  A real key under this header is not
+# waived here (test_real_key_inside_the_historical_shape_is_still_reported), nor by the entry
+# above's absence.  Same two paths, same rule, AND condition.  The "\s*" spellings keep this
+# config's own text from ever matching the rule it exempts.
 description = "pre-fix programmatic fake-PEM builder in the worker-core check/redact tests, git history only (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["private-key"]
 paths = ['''^rust/worker-core/src/check\.rs$''',
          '''^rust/worker-core/src/redact\.rs$''']
-regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----"\.to_string\(\)\];\s+for _ in 0\.\.body_lines''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----"\.to_string\(\)\];\s+for _ in 0\.\.body_lines\s*\{\s+v\.push\("A"\.repeat\(64\)\);\s+\}\s+v\.push\("-----END TEST\s*PRIVATE KEY-----$''']

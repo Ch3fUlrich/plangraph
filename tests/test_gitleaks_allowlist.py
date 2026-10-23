@@ -172,6 +172,19 @@ HISTORICAL_PEM = (
     '        v.push("' + _PEM_FOOTER + '".to_string());\n'
 )
 
+#: The historical shape with REAL key material pushed before the footer: every token the
+#: config waives (header literal, builder, footer literal) is still there in order, but a
+#: base64 body sits inside the header..footer span.  A waiver that only pins the opening
+#: prefix of the match would exempt this whole block, so it must stay a finding.
+HISTORICAL_PEM_WITH_REAL_BODY = (
+    '    let mut v = vec!["' + _PEM_HEADER + '".to_string()];\n'
+    "        for _ in 0..body_lines {\n"
+    '            v.push("' + REAL_PEM_BODY + '");\n'
+    '            v.push("A".repeat(64));\n'
+    "        }\n"
+    '        v.push("' + _PEM_FOOTER + '".to_string());\n'
+)
+
 _PEM_REL = "rust/worker-core/src/check.rs"
 
 
@@ -222,3 +235,26 @@ def test_pre_fix_history_shape_is_waived(tmp_path):
         f"the historical fixture must be a finding without the config: {bare}"
     rc, findings = _scan(exe, tree, CONFIG)
     assert rc == 0, f"the pre-fix fixture must stay waived so history scans clean: {findings}"
+
+
+def test_real_key_inside_the_historical_shape_is_still_reported(tmp_path):
+    """Real key material spliced into the historical builder must NOT be waived.
+
+    The waiver pins that shape; it must pin all of it.  A regex that only checks the
+    opening prefix (header + builder prologue) would exempt a real base64 body dropped in
+    before the footer, because gitleaks' private-key match spans header..first footer.
+
+    Without the config the rule fires on the planted body (so the assertion below is not
+    vacuous); with the config it must STILL fire, while the untouched historical shape
+    stays waived (test_pre_fix_history_shape_is_waived).
+    """
+    exe = _gitleaks()
+    tree = _make_pem_tree(tmp_path, HISTORICAL_PEM_WITH_REAL_BODY)
+    rc0, bare = _scan(exe, tree, None)
+    assert rc0 == 1 and any(f["RuleID"] == "private-key" for f in bare), \
+        f"the planted body must be a private-key finding without the config: {bare}"
+    assert any(REAL_PEM_BODY in f.get("Secret", "") for f in bare if f["RuleID"] == "private-key"), \
+        f"the finding must cover the real body that was spliced in: {bare}"
+    rc, findings = _scan(exe, tree, CONFIG)
+    assert rc == 1 and any(f["RuleID"] == "private-key" for f in findings), \
+        f"a real key inside the historical builder shape must never be waived: {findings}"
