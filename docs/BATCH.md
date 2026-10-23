@@ -14,6 +14,7 @@ the first refusal.
 ```yaml
 batch: X7d-demo            # label
 principal: router          # recorded owner; must match the token's whoami
+base_seq: <int>            # optional: event seq the author read the plan at
 source: plan/batch.md      # hashed source file (relative => batch file's dir)
 source_sha256: <hex>       # sha256 of `source`; mismatch => refuse, exit 1
 ops:                       # applied in order
@@ -30,6 +31,13 @@ ops:                       # applied in order
   - {op: remove_dep, key: project:ID, dep: <key or bare id>}        # unlink one dependency (router)
 ```
 
+Top-level optional `base_seq: <int>` (the event seq the author read the plan
+at). Edit/cancel ops whose item has any event with seq > base_seq make the whole
+atomic batch refuse with `conflict`, msg
+`base_seq <n>: changed after base_seq: <keys>`, listing ALL stale keys, nothing
+applied; not available with `--per-op` (exit 2); other ops are not checked;
+keys created earlier in the batch are never stale.
+
 `rehome` only moves OPEN, non-done items (the keeper refuses others) and records an alias `old -> new`.
 
 `add_dep`/`remove_dep` change exactly ONE entry of `key`'s `depends_on` (a bare
@@ -42,6 +50,12 @@ the resulting list with `warning: dropped cancelled dependency <key>` instead
 of refusing (a full `edit` of `depends_on` drops it the same way); an unknown
 dep key is refused as before.
 
+`edit` fields.depends_on may be a list (replaces the whole list, as before) or
+{add: [...], remove: [...]} applied to the item's current deps in the
+transaction; result carries `dropped_deps` (deps no longer present after the
+edit, including cancelled ones dropped); apply_batch prints
+`dropped dependency <dep> from <key>`.
+
 Only the keys shown above are allowed (per op and top level); duplicate YAML
 keys are refused. Keys are `project:ID`. A multi-item `create` lists every
 item key in `plan`/`ok` lines. `--token-file` is required and never printed.
@@ -50,10 +64,13 @@ item key in `plan`/`ok` lines. `--token-file` is required and never printed.
 
 ```
 python3 tools/apply_batch.py BATCH.yaml --url http://127.0.0.1:8787 \
-    --token-file PATH [--dry-run] [--from N] [--per-op] [--allow-no-whoami]
+    --token-file PATH [--dry-run] [--preview] [--from N] [--per-op] [--allow-no-whoami]
 ```
 
-`--dry-run` validates every op and prints the plan without any API call.
+`--dry-run` stays offline and notes list-replacement of depends_on;
+`--dry-run --preview` runs the batch on the keeper in a transaction that is
+rolled back and prints what would be dropped / refused; ends
+`preview: nothing applied (dry run on the keeper)`.
 `--from N` resumes at op N (1..ops, else exit 2). A live run first prints
 `acting as <name> (<role>)` from `whoami` and refuses on principal/role
 mismatch. Whoami failures (including no-route) refuse with exit 2 unless

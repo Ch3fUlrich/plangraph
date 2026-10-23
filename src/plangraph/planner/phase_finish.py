@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from plangraph.keeper.errors import Refused
+from plangraph.planner import gitenv
 
 __all__ = ["GitHub", "GitHubError", "finish_phase", "phase_branch"]
 
@@ -47,17 +48,10 @@ def phase_branch(key: str) -> str:
     return f"phase/{clean}"
 
 def _check_local_tip(root: Path, branch: str, head: str) -> None:
-    cmd = ["git", "-C", str(root), "rev-parse", "--verify", f"refs/heads/{branch}"]
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30, check=False
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise Refused("unavailable", f"git rev-parse failed: {exc}")
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip()
-        raise Refused("unavailable", f"git rev-parse failed: {detail}")
-    if proc.stdout.strip() != head:
+    tip = gitenv.rev_parse(root, f"refs/heads/{branch}")
+    if tip is None:
+        raise Refused("unavailable", "local phase branch is missing")
+    if tip != head:
         raise Refused("conflict", "local branch tip differs from head")
 
 def _acquire_lock(root: Path, lock_path: Path | str | None) -> TextIO:
