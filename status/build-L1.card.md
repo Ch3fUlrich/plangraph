@@ -18,7 +18,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
 | KEEPER-OPERATOR-WAIT-GUARD (p6) | L1 queue | D-2455 standard; operator-wait needs operator dep + edge edit on claimed |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner | ruling (a) contract C1 multi Plan-Item merge msg / C2 system-card family from writer trailers / C3 atomic idempotent attach; merge after #139 + #140 |
-| CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | ruling (2): fix unjailed base check + diffscan renames, re-seat qwen/opencode free, MERGE-READY; lane 2b wiring + findings 2,4,5,6,8 (HIGH GO-REQ); then WF-VERSIONING |
+| CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | head 042e313f CI green; qwen r2 FIX A,B(H) D(M) H(L) -> ruling opt 1: fix A,B,D,H one writer, F -> 2b; re-seat qwen + non-openai -> MERGE-READY; then 2b GO-REQ, WF-VERSIONING |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
 | RT-P1-BUS-CONTRACT | DONE | #153 merged 432c5377, keeper done (mimo + deepseek r2) |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
