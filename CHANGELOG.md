@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-23
+
+- **SEAT-COVERAGE-KEEPER:** keeper `verdict` now refuses to close an item until every writer family of its current-epoch verified `commit+ci` evidence is covered by the round's reviewer seats (`Refused('coverage', ...)`, pure `plangraph.keeper.coverage.uncovered` mirroring `tools/seat_verdict.coverage`; `need=1` standard, `2` high with a non-anthropic seat, two Claude seats counting once); fail-closed `writer_unknown` for a missing/unknown `Writer`, a trailers error, or a commit with neither `Writer` nor `Hand-Edit` (a `Hand-Edit` commit is `anthropic`); new `GitAdapter.writer_trailers` reads the non-merge commits in `merge-base(p1,p2)..p2`, so PR/PHASE merge evidence takes writers from the leaf branch commits and ignores the merge commit; `ok=False` and non-closing high verdicts are unchanged.
+
 ## 2026-10-22
 
 - **RT-P1-EXEC-OWNERSHIP reconciliation:** claimed holder parks are exempt from forward reachability, with or without exec fields, while retaining claim/lease and exec-owner checks; missing or mismatched identity on an owned claim refuses `exec_stale`. `tests/test_keeper_exec_reopen.py::test_lapsed_lease_first_writer_wins_even_for_late_run` explicitly covers first-writer ownership after reopen, including a late previous run reacquiring the cleared owner (known limit, not a retired-run fence).
@@ -9,6 +13,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 - **RT-P1-EXEC-OWNERSHIP:** keeper schema v12 -> v13 (`exec_workflow_id`/`exec_run_id`/`exec_attempt`); new refusal codes `exec_stale` and `bad_transition` (HTTP 409); worker verbs park/complete/ask_question/alarm/attempt carry `(workflow_id, run_id, attempt)`; reaper reopen and release clear the owner. **Contract change:** the ask route gained optional `workflow_id`/`run_id`/`attempt`. Deploy keeper first, then worker. Audit-only attempts and no-op worker calls do not acquire a first owner; audit-only calls also do not advance an existing owner's attempt. PostgreSQL adds the columns only in migration 6 (`ADD COLUMN IF NOT EXISTS`), leaving shipped migration 1 unchanged; column names match SQLite regardless of declaration order.
 - **RT-P1-EXEC-OWNERSHIP:** regression tests that the reaper leaves running/waiting/needs_input cards alone and a delayed worker park with an older attempt or stale run leaves a newer projector waiting state intact (tests/test_keeper_exec_reaper.py).
+- **SEAT-COVERAGE-KEEPER (tests only):** red tests in `tests/test_keeper_seat_coverage.py` for the keeper refusing to close an item until every `Writer:` family of its current-epoch commit+ci evidence is covered by the posted reviewer families (mixed writers, two Claude seats counting as one family, sensitive high items, standard tier, missing/unknown trailers and `trailers()` errors failing closed as `writer_unknown`, decision-only items unchanged, `ok=False` exempt, and atomic refusals), plus a `trailers_by_sha` extension to `FakeGit` in `tests/evidence_fakes.py`; the keeper-side check is not implemented yet.
 - **RT-P1-FLOW-UNBLOCK (follow-up):** tests only: non-router `add_dep` via `apply_ops` on a claimed item is refused (`forbidden`); the router's add_dep on a claimed item asserts its `item_defined` event; length assert in the claim-without-base test.
 
 ## 2026-10-19

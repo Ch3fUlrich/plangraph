@@ -93,8 +93,13 @@ class VerbsMixin:
         return self._run(principal, "claim", key,
                          lambda now: self._claim(principal, key, lease_s, now))
 
-    def _claim(self, principal, key, lease_s, now):
-        self._require_role(principal, "l1", "worker")
+    def worker_claim_lease(self, principal, key, lease_s=None):
+        return self._run(principal, "claim", key,
+                         lambda now: self._claim(principal, key, lease_s, now, allow_system=True))
+
+    def _claim(self, principal, key, lease_s, now, *, allow_system=False):
+        # Only the worker_claim door admits the system principal (the phase worker runs as it); /v1/claim stays l1/worker.
+        self._require_role(principal, *(("l1", "worker", "system") if allow_system else ("l1", "worker")))
         lease_seconds = self._lease_seconds(lease_s)
         with self._write():
             item = self._item(key)

@@ -6,7 +6,8 @@
 //!
 //! | Method | Path           | Request body             | Success response   |
 //! |--------|----------------|--------------------------|--------------------|
-//! | POST   | `/v1/claim`    | `{"worker": ..,"card"?: ..}` | 200 `Claim` \| 204 |
+//! | POST   | `/v1/claim`    | `{"worker": ..}`          | 200 `Claim` \| 204 |
+//! | POST   | `/v1/worker_claim` | `{"worker": ..,"card": ..}` | 200 `Claim` \| 204 |
 //! | POST   | `/v1/phase_plan` | `{"key"}`              | 200 `PhasePlan`    |
 //! | POST   | `/v1/phase_finish` | `{"key","branch","head"}` | 200 `PhaseFinish` |
 //! | POST   | `/v1/attempts` | `AttemptReport` + `workflow_id`/`run_id`/`attempt` (all three or none; no `expected_state`) | 204 |
@@ -198,8 +199,12 @@ pub struct HttpKeeper {
 }
 
 impl HttpKeeper {
-    fn claim_with(&self, payload: serde_json::Value) -> Result<Option<Claim>, KeeperError> {
-        let url = self.url("/v1/claim");
+    fn claim_with(
+        &self,
+        path: &str,
+        payload: serde_json::Value,
+    ) -> Result<Option<Claim>, KeeperError> {
+        let url = self.url(path);
         match self.post(&url).send_json(payload) {
             Ok(resp) => match resp.status() {
                 200 => {
@@ -281,7 +286,10 @@ impl HttpKeeper {
 
 impl Keeper for HttpKeeper {
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
-        self.claim_with(serde_json::json!({ "worker": worker, "card": card }))
+        self.claim_with(
+            "/v1/worker_claim",
+            serde_json::json!({ "worker": worker, "card": card }),
+        )
     }
 
     fn phase_plan(&self, key: &str) -> Result<crate::phase::PhasePlan, KeeperError> {
@@ -315,7 +323,7 @@ impl Keeper for HttpKeeper {
     }
 
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError> {
-        self.claim_with(serde_json::json!({ "worker": worker }))
+        self.claim_with("/v1/claim", serde_json::json!({ "worker": worker }))
     }
 
     fn report_attempt(&self, r: &AttemptReport, exec: &ExecId) -> Result<(), KeeperError> {
@@ -1037,7 +1045,7 @@ mod tests {
         let captured = handle.join().expect("server thread");
 
         assert_eq!(captured.method, "POST");
-        assert_eq!(captured.path, "/v1/claim");
+        assert_eq!(captured.path, "/v1/worker_claim");
         let sent: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
         assert_eq!(sent, serde_json::json!({"worker": "w-1", "card": "c-9"}));
         assert_eq!(got, Some(claim()));
@@ -1052,7 +1060,7 @@ mod tests {
         let captured = handle.join().expect("server thread");
 
         assert_eq!(captured.method, "POST");
-        assert_eq!(captured.path, "/v1/claim");
+        assert_eq!(captured.path, "/v1/worker_claim");
         assert_eq!(got, None);
     }
 
