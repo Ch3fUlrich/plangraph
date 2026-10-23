@@ -29,3 +29,4 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 | KEEPER-TRAILER-MULTI (HIGH) | L1 | writer 20261023-064042-trailer-multi-writer-0e3d4e (wt trailer-multi off main 75a6f7ad) -> verify, PR, CI, seats qwen+glm (non-xiaomi) -> GO-REQ |
 | #130 OVERSIGHT-FOLLOWUP | L1 | CHANGELOG union f02bc80e, merge-cont running -> evidence -> submit -> verdict qwen oversight-fu/r2 (writer deepseek) |
 | #100 SANDBOX | sweep-runtime | handed over D-2332 |
+| RT95-EMPTY-RUN-FIXTURE | L1 | D-2340 created+claimed (gate PH-RT-RUNTIME); after #137 merges: writer capture real empty run (needs opencode on host) |
