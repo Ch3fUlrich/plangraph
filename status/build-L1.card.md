@@ -30,7 +30,7 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 
 - oc-harden #95: writer 20261022-204611-...ec818f running on workst (no_change migration); then seats mimo + non-OpenAI 2nd family -> GO-REQ routing. Workst queue: card-checks writer next, then bus.
 - sandbox #100 fix: WA run 20261022-204430-...759ac4 (mimo, wt attempt-sandbox-wA) -> push lane/attempt-sandbox-wA; WB next (wt attempt-sandbox-wB, brief in transcript: git hardening attempt.rs + walk); WC = L2 on workst (sol). L2 cherry-picks + CI; I re-seat glm+deepseek.
-- KEEPER-OPCLAIM-CLOSE (HIGH): PR #127 head 65c39584 (7cbec2f4+fb1bc633+main), CI dispatched; seats qwen+deepseek r1 seats/opclaim-127/r1 (bg b2zvj585r); then GO-REQ; after merge legacy B -> server:OP-DOCKHAND-EVENTS in_review.
+- KEEPER-OPCLAIM-CLOSE (HIGH): PR #127 65c39584; r1 qwen PASS, deepseek FIX (5 HIGH: operator_task door, predicate item_defined, PG, guard, tests) -> fix run 20261023-034204-opclaim-r1-fix-round-55a32e; then re-seat both; GO-REQ; post-merge legacy B -> server:OP-DOCKHAND-EVENTS.
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
