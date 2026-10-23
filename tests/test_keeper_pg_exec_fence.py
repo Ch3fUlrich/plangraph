@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from keeper_util import World, seed, seed_exec_owner
+from keeper_util import World, seed, seed_exec_owner, to_claimed
 from plangraph.keeper.errors import Refused
 
 DSN = os.environ.get("PG_DSN")
@@ -68,6 +68,7 @@ def test_open_alarm_on_an_owned_card_advances_the_attempt(tmp_path):
     try:
         key, = seed(w, [("A", [])])
         alarm = {"card": key, "reason": "stuck"}
+        to_claimed(w, key, "workerA")
         # A first alarm opens the fact and records run R at attempt 1.
         w.store.worker_alarm(w.p("workerA"),
                              {**alarm, "workflow_id": "wf", "run_id": "run",

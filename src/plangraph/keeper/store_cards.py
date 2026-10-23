@@ -495,12 +495,13 @@ class CardsMixin:
     def _set_state(self, principal, key, state, reason, now, run=None, new_run=False,
                     hand_back=False):
         self._require_role(principal, "router", "l1", "system")
+        if hand_back:
+            self._require_role(principal, "router", "system")
         if new_run:
             raise Refused("validation", "new_run is removed; use requeue")
         if hand_back:
             if run is not None or state not in _HAND_BACK_STATES:
                 raise Refused("validation", "hand_back requires no run and an open/ready target")
-            self._require_role(principal, "router", "system")
         if state not in SETTABLE_STATES:
             raise Refused("validation",
                           f"state must be one of {list(SETTABLE_STATES)}; claim, review,"

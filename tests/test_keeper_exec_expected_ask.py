@@ -131,3 +131,13 @@ def test_live_set_ask_refuses_a_card_outside_the_live_states(w, outside):
     assert snapshot(w, key) == before
     assert w.conn.execute("SELECT COUNT(*) FROM questions WHERE key=?",
                           (key,)).fetchone()[0] == 0
+
+
+def test_live_set_ask_accepts_claimed_holder(w):
+    key, = seed(w, [("A", [])])
+    to_claimed(w, key, "workerA")
+    question = w.store.ask_question(w.p("workerA"), key, "continue?",
+        exec_workflow_id="wf-1", exec_run_id="run-1", exec_attempt=1,
+        expected_state=LIVE_SET)
+    assert question["state"] == "open"
+    assert snapshot(w, key) == ("claimed", "wf-1", "run-1", 1)

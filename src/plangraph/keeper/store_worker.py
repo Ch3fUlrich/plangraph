@@ -123,6 +123,10 @@ class WorkerMixin:
                         and item["state"] == "claimed"
                         and principal is not None and principal.role == "worker"
                         and item["claimed_by"] == principal.name)
+        if phase_holder:
+            # The live-set exception must not revive a dead claim on ask or
+            # complete; park already enforces this same lease rule.
+            self._park_guard(principal, item, None, self.clock())
         if item["state"] not in states and not phase_holder:
             raise Refused("exec_stale_state",
                           f"{item['key']}: expected {expected!r}, is {item['state']!r}")

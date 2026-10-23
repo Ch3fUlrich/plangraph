@@ -114,6 +114,14 @@ the exact worker live-set expectation on a claimed card only for a worker
 principal matching `claimed_by`, for ask, park and complete. A non-holder
 (including a delegate or administrator) still gets `exec_stale_state`. Narrower
 expectations are not expanded. The claim and exec identity guards still apply.
+The live-set holder exception checks the claim lease on ask, park and complete:
+a null lease is allowed; a lease at or before the current time is refused as
+`epoch_stale`. The shared park guard supplies this rule so asks and completion
+cannot revive an expired claim. Hand-back checks the router/system role before
+validating its target and run fields, so l1 callers always get `forbidden`.
+The sq8 tests use `keeper_util.World` and portable SQL, and run unchanged with
+`PG_KEEPER_BACKEND=postgres`; no backend exception is needed. The HTTP flow
+covers both still-claimed ask/complete and ask/park/complete after claim release.
 The state comparison runs inside the same write transaction, before any write
 or ownership recording/attempt bump; mismatch refuses `exec_stale_state` (HTTP
 409) without changing state, owner or `updated_at`. Null `expected_state` is

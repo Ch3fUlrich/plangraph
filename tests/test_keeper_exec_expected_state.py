@@ -132,7 +132,7 @@ def test_live_set_refuses_a_card_that_left_the_live_states(w, doors, verb, body,
 
 @pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])
 @pytest.mark.parametrize("who", ["workerA", "workerB"])
-def test_live_set_refuses_a_claimed_card(w, doors, verb, body, who):
+def test_claimed_live_set_accepts_only_the_holder(w, doors, verb, body, who):
     key, = seed(w, [("A", [])])
     to_claimed(w, key, "workerA")
     before = dict(w.store._item(key))
