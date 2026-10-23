@@ -422,20 +422,34 @@ CREATE TABLE merge_locks (
 """
 
 #: Logical twin of ``schema.JEV_DDL`` (SQLite schema v13, RT-P1-JEV-SHADOW): the
-#: audit-only Jev shadow rows.  Main's half of the merge: this migration stays
-#: ``_V6`` / version 6 unchanged; the oversight tables moved up to 7.
+#: Jev shadow rows - one per card/attempt plus the design-D18 audit columns.
+#: Main's half of the merge: this migration stays ``_V6`` / version 6 unchanged;
+#: the oversight tables moved up to 7.  Column names, order and NOT NULL flags
+#: mirror the SQLite table exactly (the parity tests compare them).
 _V6 = """
 CREATE TABLE jev_shadow (
-    id            BIGINT PRIMARY KEY,
-    decision_id   TEXT COLLATE "C" NOT NULL UNIQUE,
-    card_key      TEXT COLLATE "C",
-    kind          TEXT COLLATE "C" NOT NULL CHECK (kind IN ('decision','outcome')),
-    status        TEXT COLLATE "C" NOT NULL CHECK (status IN ('pending','agree','disagree','error')),
-    rules_route   TEXT COLLATE "C",
-    shadow_answer TEXT COLLATE "C",
-    shadow_error  TEXT COLLATE "C",
-    outcome       TEXT COLLATE "C",
-    ts            TEXT COLLATE "C" NOT NULL
+    id                BIGINT PRIMARY KEY,
+    key               TEXT COLLATE "C",
+    attempt           BIGINT,
+    decision_id       TEXT COLLATE "C",
+    input_hash        TEXT COLLATE "C",
+    kind              TEXT COLLATE "C" NOT NULL CHECK (kind IN ('harness','window','budget','review','qc_accept','decision','outcome')),
+    status            TEXT COLLATE "C" NOT NULL CHECK (status IN ('ok','timeout','unavailable','error','pending','agree','disagree')),
+    rule_answer       TEXT COLLATE "C",
+    jev_answer        TEXT COLLATE "C",
+    jev_probabilities TEXT COLLATE "C",
+    jev_confidence    DOUBLE PRECISION,
+    reason            TEXT COLLATE "C",
+    outcome           TEXT COLLATE "C",
+    jev_model         TEXT COLLATE "C",
+    latency_ms        BIGINT,
+    created_at        TEXT COLLATE "C",
+    outcome_at        TEXT COLLATE "C",
+    card_key          TEXT COLLATE "C",
+    ts                TEXT COLLATE "C",
+    rules_route       TEXT COLLATE "C",
+    shadow_answer     TEXT COLLATE "C",
+    shadow_error      TEXT COLLATE "C"
 );
 CREATE INDEX idx_jev_shadow_card ON jev_shadow(card_key, ts);
 CREATE INDEX idx_jev_shadow_kind ON jev_shadow(kind, ts);

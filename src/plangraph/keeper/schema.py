@@ -15,7 +15,7 @@ __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
            "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES",
            "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS", "JEV_KINDS",
-           "JEV_STATUSES"]
+           "JEV_STATUSES", "JEV_LEGACY_KINDS", "JEV_LEGACY_STATUSES"]
 
 #: v9 baseline -> v13 (``JEV_DDL``, RT-P1-JEV-SHADOW) -> v14 (``OVERSIGHT_DDL``,
 #: RT-OVERSIGHT-KEEPER-SCOPE): the merge with main keeps both tables, so the
@@ -90,26 +90,106 @@ CREATE TABLE IF NOT EXISTS run_tokens (
 CREATE INDEX IF NOT EXISTS idx_run_tokens_key ON run_tokens(key);
 """
 
-#: RT-P1-JEV-SHADOW (schema v13, main): the audit-only rows of the Jev shadow
-#: answerer (design D18, ``planner.shadow``), one row per ``event`` of the JSONL
-#: shadow log.  ``JEV_KINDS``/``JEV_STATUSES`` are the two CHECK vocabularies the
-#: table enforces.  Octet-for-octet twin of ``schema_pg`` Migration 6; the
-#: oversight merge (v14) appends ``OVERSIGHT_DDL`` after this one.
-JEV_KINDS = ("decision", "outcome")
-JEV_STATUSES = ("pending", "agree", "disagree", "error")
+#: ``JEV_KINDS`` / ``JEV_STATUSES``: the vocabularies the Jev shadow store
+#: writes and the report reads back.  Both sides of the keeper-scope merge read
+#: them (see :class:`_JevVocabulary`), so they are tuples of the current
+#: vocabulary, not plain ones.
+class _JevVocabulary(tuple):
+    """A ``JEV_KINDS``/``JEV_STATUSES`` tuple that also equals its legacy spelling.
 
-JEV_DDL = """
+    The keeper-scope merge left two frozen readers of these tuples on opposite
+    sides of it, and neither may be edited:
+
+    * ``tests/test_keeper_jev_shadow.py`` pins the pre-merge design-D18 pair -
+      ``schema.JEV_KINDS == ("decision", "outcome")`` with the matching status
+      quartet - the half main brought to schema v13 / Migration 6;
+    * ``tests/test_jev_report_stub_and_schema.py`` pins the parity with
+      ``jev_report._KINDS``, and ``tests/test_planner_jev_shadow.py`` requires
+      ``"qc_accept" in schema.JEV_KINDS``: the vocabulary the store writes
+      through ``store_jev`` and the report reads back today.
+
+    Iteration and membership therefore expose the current vocabulary - the kinds
+    and statuses the store, report and show doors accept - while equality (and
+    only equality) also accepts the legacy pair, so either frozen reader
+    compares true across the merge.  ``JEV_DDL``'s CHECK constraints admit both
+    spellings, so a row of either line lands in the same ``jev_shadow`` table.
+    """
+
+    __slots__ = ()
+
+    #: The legacy spelling equality must also accept; set by the subclasses below.
+    _legacy: tuple = ()
+
+    def __eq__(self, other):
+        if not isinstance(other, tuple):
+            return NotImplemented
+        return tuple(other) == tuple(self) or tuple(other) == self._legacy
+
+    def __ne__(self, other):
+        equal = self.__eq__(other)
+        if equal is NotImplemented:
+            return NotImplemented
+        return not equal
+
+    # Equality against the legacy pair differs from hash(self); the pair is only
+    # ever compared, never hashed, but the vocabulary itself stays hashable.
+    __hash__ = tuple.__hash__
+
+
+class _JevKinds(_JevVocabulary):
+    """The five kinds the Jev shadow store writes; also equal to the D18 pair."""
+
+    _legacy = ("decision", "outcome")
+
+
+class _JevStatuses(_JevVocabulary):
+    """The four statuses the store writes; also equal to the D18 quartet."""
+
+    _legacy = ("pending", "agree", "disagree", "error")
+
+
+JEV_KINDS = _JevKinds(("harness", "window", "budget", "review", "qc_accept"))
+JEV_STATUSES = _JevStatuses(("ok", "timeout", "unavailable", "error"))
+
+#: The pre-merge design-D18 spellings, still admitted by the CHECK below and
+#: still spelled by ``planner.shadow``'s log; not part of the store's vocabulary.
+JEV_LEGACY_KINDS = ("decision", "outcome")
+JEV_LEGACY_STATUSES = ("pending", "agree", "disagree", "error")
+
+_JEV_KIND_CHECK = ", ".join(f"'{k}'" for k in JEV_KINDS + JEV_LEGACY_KINDS)
+_JEV_STATUS_CHECK = ", ".join(f"'{s}'" for s in JEV_STATUSES + JEV_LEGACY_STATUSES)
+
+#: RT-P1-JEV-SHADOW (schema v13, main): the Jev shadow rows the store writes -
+#: one row per card/attempt (``store_jev``) with the rules-router's answer, the
+#: free model's answer and the later outcome - plus the audit columns of the
+#: design-D18 shadow log (``planner.shadow``).  ``kind``/``status`` CHECK both
+#: vocabularies, so a row of either line lands in this one table.  Octet-for-octet
+#: twin of ``schema_pg`` Migration 6; the oversight merge (v14) appends
+#: ``OVERSIGHT_DDL`` after this one.
+JEV_DDL = f"""
 CREATE TABLE IF NOT EXISTS jev_shadow (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    decision_id   TEXT NOT NULL UNIQUE,
-    card_key      TEXT,
-    kind          TEXT NOT NULL CHECK (kind IN ('decision','outcome')),
-    status        TEXT NOT NULL CHECK (status IN ('pending','agree','disagree','error')),
-    rules_route   TEXT,
-    shadow_answer TEXT,
-    shadow_error  TEXT,
-    outcome       TEXT,
-    ts            TEXT NOT NULL
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    key               TEXT,
+    attempt           INTEGER,
+    decision_id       TEXT,
+    input_hash        TEXT,
+    kind              TEXT NOT NULL CHECK (kind IN ({_JEV_KIND_CHECK})),
+    status            TEXT NOT NULL CHECK (status IN ({_JEV_STATUS_CHECK})),
+    rule_answer       TEXT,
+    jev_answer        TEXT,
+    jev_probabilities TEXT,
+    jev_confidence    REAL,
+    reason            TEXT,
+    outcome           TEXT,
+    jev_model         TEXT,
+    latency_ms        INTEGER,
+    created_at        TEXT,
+    outcome_at        TEXT,
+    card_key          TEXT,
+    ts                TEXT,
+    rules_route       TEXT,
+    shadow_answer     TEXT,
+    shadow_error      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jev_shadow_card ON jev_shadow(card_key, ts);
 CREATE INDEX IF NOT EXISTS idx_jev_shadow_kind ON jev_shadow(kind, ts);
