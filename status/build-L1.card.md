@@ -8,11 +8,11 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | D-2410 A: fix writer 3c26b3 mimo (seats/exec-ownership/sq5/FIX-BRIEF.md) -> push sq2 -> CI -> seats deepseek+Haiku -> re-GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix1 cd8772 ended WIP (patch seats/pr143/cd8772-wip.patch) -> continuation 20261023-123259-ui-browser-fix1-cont-504805 (mimo) -> PR, CI, re-seat deepseek+haiku -> merge -> submit |
-| GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 sol writer requested workst -> re-seat r3 -> merge |
+| GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head f2ddac80 (main merged, CHANGELOG-only); Haiku PASS, luna FIX HIGH stray_writer_line indented/quoted (workst answer pr139-luna.answer.md e4b5d49a) -> fix3 deepseek writer requested from workst -> re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX (HIGH p8) | L1 | MERGED c218b921 (D-2425), in_review, deepseek verdict ok; Haiku verdict refused same_family -> BLOCKED routing (*A waive_second_family standing) | -> GO-REQ; then re-seat PG-PUBLIC-READY |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
-| KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; PR #148 head 6eb507f8 (sol d1d2b2; workst 4900 pass, 1 pre-existing contract fail on main too); Haiku PASS, deepseek FIX MED test hits kind check + LOW CHANGELOG; CONFLICTING main -> fix1 sol writer requested workst -> re-seat |
+| KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; PR #148 head 6eb507f8 (sol d1d2b2; workst 4900 pass, 1 pre-existing contract fail on main too); Haiku PASS, deepseek FIX MED test hits kind check + LOW CHANGELOG; CONFLICTING main -> fix1 workst run 20261023-115337-keeper-close-fix1-2b54ea -> re-seat |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | claimed; workst writer 20261023-112202-jev-attempt-thread-write-f55fce running |
 | BUS-NONCE-FLOOD p4 | L1 queue | D-2422 created (PH-RT-CONSOLIDATE); unclaimed, starts after P1 writers free |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
