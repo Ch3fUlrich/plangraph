@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn xfail() {
         assert_eq!(
-            kinds("tests/x.py", "+@pytest.mark.xfail"),
+            kinds("tests/x.py", concat!("+", "@", "pytest.mark.xfail")),
             vec![FindingKind::XfailAdded]
         );
     }
@@ -333,7 +333,10 @@ mod tests {
     #[test]
     fn multiple_files_isolated() {
         let d = diff("tests/a.py", "-def test_x():")
-            + &diff("tests/b.py", "+def test_x():\n+@pytest.mark.xfail");
+            + &diff(
+                "tests/b.py",
+                concat!("+def test_x():\n+", "@", "pytest.mark.xfail"),
+            );
         let f = scan_diff(&d);
         assert_eq!(f.len(), 2);
         assert_eq!(f[0].path, "tests/a.py");

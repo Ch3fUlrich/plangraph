@@ -67,8 +67,8 @@ class Card:
     check_kind: str = "change"
 
     def to_store(self) -> dict[str, Any]:
-        """The card dict ``Store.put_card`` accepts (lists as lists, every key present)."""
-        return {
+        """Serialize lists as lists, omitting the legacy-compatible default check kind."""
+        out = {
             "outcome": self.outcome,
             "read_set": list(self.read_set),
             "write_set": list(self.write_set),
@@ -77,11 +77,14 @@ class Card:
             "smoke_checks": list(self.smoke_checks),
             "check_cmd": self.check_cmd,
             "heldout_check": self.heldout_check,
-            "check_kind": self.check_kind,
             "window_class": self.window_class,
             "risk_tags": list(self.risk_tags),
             "estimate_tokens": self.estimate_tokens,
         }
+        # Keeper does not yet accept check_kind; preserve its legacy default wire shape.
+        if self.check_kind != "change":
+            out["check_kind"] = self.check_kind
+        return out
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Card":
