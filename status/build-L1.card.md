@@ -11,7 +11,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5: mimo 503 x3, sol 615435 STUCK cx 429; cx next free slot (after SEAT-FREE-OPENCODE operator top prio) -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
-| PG-PUBLIC-READY (HIGH) | L1 | OPERATOR 18:5xZ: names scan waived (all names fine), words writer cancelled, list deleted -> r5 seats qwen + non-openai on c218b921 w/ waiver D-row, submit, GO-REQ |
+| PG-PUBLIC-READY (HIGH) | L1 | D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 on c218b921 18:50Z pending |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD p4 | L1 | claimed epoch 1; writer E queued workst (after #139, cx 18:46Z+) (lane/bus-nonce-flood @de54bb22) -> CI, qwen+mimo -> merge, submit |
@@ -29,6 +29,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | OCGO-PROBE / OCGO-L1-FALLBACK | released D-2409 | trigger OS-OCL1-ENV |
 - D-2418: plangraph CI stays GitHub-hosted (public repo, D-1718); no runs-on change; BUS-RUST windows build = GitHub-hosted windows.
 ## Traps
+- D-2466: remove coding.vm ~/.claude/CLAUDE.md mimo block when SEAT-FREE-OPENCODE merges.
 - Keeper refuses reviewer-anthropic verdicts on build-L1 claims (same_family): Haiku seats cannot be recorded; ruling asked 12:4xZ.
 - Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
 - ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.
