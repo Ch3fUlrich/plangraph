@@ -944,6 +944,8 @@ mod tests {
             repo: repo.to_string(),
             base_sha: base.to_string(),
             check_cmd: check_cmd.to_string(),
+            // Most tests exercise attempt behavior, not the red-first gate.
+            check_kind: "regression".to_string(),
             allow: allow.iter().map(|s| s.to_string()).collect(),
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),

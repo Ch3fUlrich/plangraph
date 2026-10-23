@@ -1305,7 +1305,8 @@ echo attempt > seed.txt"#;
             return;
         };
         let card = "e2e-rebase-conflict";
-        let claim = env.claim(card, &["seed.txt"], "test -f seed.txt");
+        let mut claim = env.claim(card, &["seed.txt"], "test -f seed.txt");
+        claim.check_kind = "regression".into(); // seed.txt already exists on base.
         let id = format!("e2e-rebase-conflict-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1413,7 +1414,8 @@ fi"#;
             return;
         };
         let card = "e2e-gate-blocks";
-        let claim = env.claim(card, &["out.txt"], &check_cmd);
+        let mut claim = env.claim(card, &["out.txt"], &check_cmd);
+        claim.check_kind = "regression".into(); // Keep the counter's first run in the attempt.
         let id = format!("e2e-gate-blocks-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1554,7 +1556,8 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
             return;
         };
         let card = "e2e-gate-secret";
-        let claim = env.claim(card, &["out.txt"], &check_cmd);
+        let mut claim = env.claim(card, &["out.txt"], &check_cmd);
+        claim.check_kind = "regression".into(); // Keep the counter's first run in the attempt.
         let id = format!("e2e-gate-secret-{}", unique());
         let handle = env.start(&id, claim).await;
 
