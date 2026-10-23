@@ -5,7 +5,7 @@ HIGH = 2 non-writer-family PASS + routing GO per sha. glm verdict: `PGTOK=review
 SEAT-COVERAGE-KEEPER now ON MAIN: verdict refuses until every Writer family of leaf commits (merge-base..p2) is covered; Hand-Edit=anthropic; missing Writer = writer_unknown.
 Spawn: MCP spawn BROKEN (deleted uv interpreter) -> CLI `python3 /home/s/code/AutoOS/tools/autoos-agent.py run --client opencode --model omniroute/mimo-v2.6-flash --card '{"complexity":"hard","privacy":"public","role":"implement"}' --isolate --title T "<task>"` (nohup &). Sandbox = history-less snapshot: commit conflicted merge as WIP first, rebuild merge via commit-tree. rc=7 LEAK on moved lane/seat-coverage-keeper refs = false positive.
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE (handles main-already-in) / merge-cont.sh PR KEY TITLE after a manual CHANGELOG union. Evidence needs FULL 40-hex sha. Kind `commit` = router-only.
-## Main = f25cc546 (#125 S3c) ; f6b0053a (#128) ; #129 merging (b7t7bx78a)
+## Main = 9200bd7e (#129) ; f25cc546 (#125 S3c) ; f6b0053a (#128)
 | Item | Owner | State / next |
 |---|---|---|
 | KEEPER-OPTASK-CLOSE #129 (HIGH) | flow-oversight-3 | GO D-2324; merge-cont running (merge-129 wt, CHANGELOG union) -> evidence -> submit -> verdicts qwen (seats/optask-129/qwen) + glm (seats/optask-129/r2/glmfree, sha 3b0a487a) |
