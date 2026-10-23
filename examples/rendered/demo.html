@@ -7892,6 +7892,9 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     td(tr, "tc-key", "ID", a);
 
     var tc = td(tr, "tc-title", "Title", el("span", "ny-tt", r.title || ""));
+    if (r.ref && r.ref.kind === "operator_wait_unlinked") {
+      tc.appendChild(el("span", "tc-badge", "Operator wait unlinked"));
+    }
     var wk = r.type === "question" ? "answer" : (r.type === "task" ? r.ref && r.ref.wait : "");
     if (wk) {   // D-677
       var bd = el("span", "tc-badge", wk === "answer" ? "Needs your answer" : "Needs your task");
@@ -7965,6 +7968,13 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     var now = Date.now();
     var all = NP.rows(vm, now);
+    if (vm.items && vm.items.forEach) vm.items.forEach(function (it) {
+      if (it.state !== "claimed" && it.state !== "in_review") return;
+      if (!/\boperator\b|\bOS-/i.test(it.doneCriteria || "")) return;
+      if ((it.deps || []).some(function (k) { var d = vm.items.get(k); return d && d.operator && d.state === "open"; })) return;
+      all.push({type:"task", id:it.key, key:it.key, title:it.title, project:it.project,
+        priority:it.priority, state:it.state, ref:{kind:"operator_wait_unlinked"}});
+    });
     var list = NP.sort(NP.filter(all, f, now), sort);
     while (host.firstChild) host.removeChild(host.firstChild);
     host.appendChild(el("h2", "ny-h", "Needs you (" + list.length + " of " + all.length + ")"));
