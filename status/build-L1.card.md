@@ -14,7 +14,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | RT-P1-PHASE-RUNNER (HIGH) | spine STOPPED D-2334 (card plangraph-worktrees/spine-card.md); L2-LAUNCH to routing when #133 merged for S3d impl | S3c MERGED f25cc546 (evidence on). S3d red spine/phase-runner-s3d @ 76904e43 (D-2326 lane reading, 3-way bypass guard, attach_merge_evidence after merge to main) -> impl after #112 signal. Then S4. HARDEN items 1-12 |
 | RT-P1-ATTEMPT-SANDBOX #100 | build-L2-sandbox (workst) | owes WB merge + main + CI + MERGE-READY (stall 7.6h, pinged 05:1xZ); no reply -> give to sweep-runtime |
 | #95 OPENCODE-HARDEN | build-L2-sweep-runtime | in progress; #71 CLOSED (D-2325) |
-| #135 BATCH-PRECONDITION (HIGH) | L1 | 2238fce3 verified, seats pr134/r1 qwen+glm PASS, GO-REQ sent -> mergepath -> evidence -> submit -> verdicts. #96 JEV-SHADOW: sweep-keeper on QC commits |
+| #135 BATCH-PRECONDITION | DONE | merged 75a6f7ad, verdicts qwen+glm 2/2. #96 JEV-SHADOW: sweep-keeper on QC commits |
 | PG-PUBLIC-READY / FLEET-SID-REFRESH / OCGO-FLEET-BUS | build-L2-close-inreview | PGPR: 67 gitleaks + 6 scrub, writer, each finding fixed/allowlisted + rotation answer before judge. SID: submitted (in_review); seats running -> L1 posts verdicts. OCGO: router re-scopes+closes (D-2327) |
 | RT-P1-BUS-CONTRACT | build-L2-bus (workst, relaunched) | conditional GO impl (push red 28ba998 to origin first); MERGE-READY -> L1 |
 | SEAT-COVERAGE-KEEPER, CI-COMMIT-GATE-EDGES | DONE | |
