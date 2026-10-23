@@ -7,7 +7,7 @@ CARD status/build-L1.card.md = full lane table + tools + traps (read first). Mai
 - D-2323: router stall heartbeat every 30 min; reply per item next action + ETA; parallelise via L2s (sweep-keeper, sweep-runtime, close-inreview launched 05:2xZ, Claude Sonnet fallback D-2270, TTL 6h).
 - D-2326: S3d design GO (lane reading, 3-way bypass guard). D-2325 #71 closed. D-2327 OCGO B / SID A.
 ## Open with routing
-- #96 / #97 BLOCKED rulings (L1 default A each) -> forward to build-L2-sweep-keeper.
+- #96 / #97: D-2328 A both, relayed to sweep-keeper (96: QC axis + prod call sites + removal-fail test; 97: squash new PR + Hand-Edit, {} fix, PG test, close #97).
 - RT-P1-BUS-CONTRACT conditional GO relayed to build-L2-bus (queued; workst offline at send).
 ## Immediate next
 1. #129 merge-cont (bg) -> evidence -> `ops/pg.sh submit plangraph:KEEPER-OPTASK-CLOSE` -> verdicts qwen + glm -> DONE to routing.
