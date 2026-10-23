@@ -1,6 +1,6 @@
 # build-L1 card · gen-24 · 2026-10-23 17:2xZ · NO cron · hb loop = job-tmp hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
 Handoff #24 = docs/build-L1-handoff.md top (order list). Control repo LOCAL ONLY (D-1751): `git push control build-L1`.
-Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo. Never Claude writers. D-2442 close idle own sessions.
+Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats D-2449/2450: qwen qodercli (job-tmp qseat.sh; efficient fallback ok), Haiku (Agent haiku), mimo, luna (workst); deepseek API OUT (402).
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
 ## Main = 2aaaf35f (#144 GOV-CTX DONE). LIVE keeper = live-2d61e281 (never ff)
