@@ -6,10 +6,10 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 92f041d3 (#143). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | head cc0e266d (Mig7 renumber + main), suite 5116 green, CI running; seats sq4 deepseek+haiku running -> RE-GO-REQ -> merge |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | head cc0e266d CI green; sq4 deepseek+haiku FIX (HIGH) -> GO-REQ/BLOCKED sent, *A fix writer |
 | UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed (not submitted). D-2406 A: fix writer cd8772 (seats/pr143/FIX1-BRIEF.md, wt ui-fix1) -> re-seat 2 -> merge -> submit -> verdicts |
 | GOV-CTX-METRICS #144 | L1 | both seats fix (dedup, persist) -> fix writer 1d6c24 -> CI -> re-seat |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix2 writer c61f80 -> CI -> deepseek+haiku -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | c61f80 provider-blocked -> ca364b (deepseek, D-2409) -> CI -> Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX (HIGH p8) | L1 | cont writer 1a3af8 (wt pg-public-fix) -> PR, gitleaks 0, CI, 2 seats, merge; then re-seat PG-PUBLIC-READY |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
@@ -22,7 +22,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | PG-BOOTSTRAP-FLEET-ENV (HIGH) | L1 queue | blocked autoos:AO-OCL1-PW-FILE |
 | PG-OMNIROUTE-CONFIG-HOME (p6) | L1 queue | D-2359, L2 after PH-RT-RUNTIME |
 | #100 SANDBOX | sweep-runtime | Gate-Edit squash pending |
-| OCGO-PROBE / OCGO-L1-FALLBACK | routing+workst | gated operator login |
+| OCGO-PROBE / OCGO-L1-FALLBACK | released D-2409 | trigger OS-OCL1-ENV |
 ## Traps
 - Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
 - ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.

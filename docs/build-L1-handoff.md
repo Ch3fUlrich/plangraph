@@ -6,13 +6,14 @@ CARD status/build-L1.card.md = lane table (read first). Main = 92f041d3 (#143 UI
 - Writers: spawn MCP model omniroute/mimo-v2.6-flash, card implement/standard/128k/public/free-ok, isolate, cwd = lane worktree (cx/gpt-6.1-sol not served on coding.vm: skip recorded).
 - D-2406: #143 option A (fix writer, re-seat both, no revert, no waiver). D-2396: #96 HIGHs -> JEV-ATTEMPT-THREAD p7. D-2403: claims stay with build-L1.
 ## Immediate next (order)
-1. #140 EXEC-OWNERSHIP (HIGH) head cc0e266d (exec = PG Migration 7, main merged, suite 5116 green). Seats seats/exec-ownership/sq4/{deepseek,haiku} running -> both pass -> RE-GO-REQ (D-2386 was on 9b9b0571; head changed by renumber) -> mergepath -> submit -> verdicts (reviewer-deepseek, reviewer-anthropic).
+1. #140 EXEC-OWNERSHIP (HIGH) head cc0e266d (Mig7, main merged, suite 5116 + CI green). sq4 seats BOTH FIX (deepseek HIGH run-less set_state bypass; haiku HIGH unbound owner triple + retired-run reacquire, MED CHANGELOG Mig6). GO-REQ/BLOCKED sent 11:2xZ (*A fix writer mimo all HIGH + CHANGELOG) -> act on routing ruling.
 2. #143 UI-BROWSER-TESTS: merged, item CLAIMED (never submitted; --changes verdict refused bad_state). Fix writer 20261023-110332-ui-browser-fix1-cd8772 (brief seats/pr143/FIX1-BRIEF.md, wt plangraph-worktrees/ui-fix1, branch lane/ui-browser-tests-fix1) -> push, PR, CI, re-seat deepseek+haiku -> merge -> submit -> verdicts.
 3. #144 GOV-CTX-METRICS (wt gov-ctx, lane/gov-ctx-metrics): both seats fix (dedup first-usage per message.id; persist ctx file). Fix writer 20261023-110256-gov-ctx-fix1-1d6c24 (seats/gov-ctx-metrics/FIX1-BRIEF.md) -> CI -> re-seat seats/pr144/r2 -> merge.
-4. #139 TRAILER-MULTI (HIGH): fix2 writer 20261023-105851-trailer-multi-fix2-c61f80 (seats/trailer-multi/FIX2-BRIEF.md, wt trailer-multi) -> CI -> deepseek+haiku -> GO-REQ.
+4. #139 TRAILER-MULTI (HIGH): fix2 writer c61f80 provider-blocked (D-2409 A) -> respawn 20261023-111347-trailer-multi-fix2b-ca364b (deepseek); seats Haiku + luna; (seats/trailer-multi/FIX2-BRIEF.md, wt trailer-multi) -> CI -> deepseek+haiku -> GO-REQ.
 5. PG-PUBLIC-FIX: cont writer 20261023-105917-pg-public-fix-cont-1a3af8 (wt pg-public-fix) -> PR, gitleaks 0, CI, 2 seats, merge, re-seat PG-PUBLIC-READY.
 6. Spawn when free: JEV-ATTEMPT-THREAD (p7, PH-RT-RUNTIME), EXEC-OBSERVED-STATE (after #140).
-7. Expect MERGE-READY from L2s: build-L2-phase-runner, build-L2-rt-cards, build-L2-flow-oversight-3 (#138), build-L2-bus (BUS-CONTRACT; watch: it planned qwen seats = 429).
+7. D-2407: every beat each claim has a running writer/seat id or report IDLE+trigger. OCGO x2 released (D-2409). L2 runs: rt-cards RT95 371c36, CARD-CHECKS 2cbb35; oversight-3 5551bc (told renumber to Mig8); bus seats on 154bb47; phase-runner id pending.
+8. Expect MERGE-READY from L2s: build-L2-phase-runner, build-L2-rt-cards, build-L2-flow-oversight-3 (#138), build-L2-bus (BUS-CONTRACT; watch: it planned qwen seats = 429).
 ## Traps
 - mergepath waitci lives on lines 4-7: NEVER eval a range of mergepath.sh (ran whole script -> stray merge- worktree).
 - Item states: mergepath does not submit; verdict needs in_review.
