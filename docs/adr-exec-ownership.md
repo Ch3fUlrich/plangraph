@@ -4,8 +4,9 @@ Status: Accepted (2026-10-22)
 
 ## Follow-up: worker binding and revival
 
-An unclaimed card defaults to refusing ownership recording. It must have a
-delegate matching the worker principal; a claimed card requires its holder.
+An unclaimed card refuses ownership recording (`forbidden`). No production
+verb delegates an unclaimed card: delegation requires a claim and cannot
+authorize first-owner recording. A claimed card requires its worker holder.
 Router-only API/MCP `requeue` revives a parked card to open using the explicit
 hand-back path. Store hand-back is restricted to router and system, not l1.
 Run-less projector resumes from waiting or needs_input to running preserve the
@@ -32,7 +33,7 @@ worker that holds the card's Temporal workflow): the recording principal is
 stored in `exec_principal` beside the triple; a router/l1/system/spawner token
 presenting a triple on an unowned card is refused `forbidden` and records
 nothing; on a claimed card the holder must be that principal, and an unclaimed
-card requires a matching delegate. Once
+card cannot record an owner. Once
 recorded, a *worker* or *spawner* principal whose name differs from
 `exec_principal` is refused `forbidden` on that card. Audit-only attempts and
 no-op calls do not acquire a first owner. An existing owner still requires stale
@@ -83,8 +84,8 @@ its own run left it in and the event is still marked applied. The park
 forward-table block is removed as dead: every table state reaches `parked`, so
 it supplies no state protection. The live-set CAS below supplies that
 protection instead. Claim/lease guards and exec identity checks still apply.
-A claim holder may still park without `expected_state`; this legacy lease path
-does not authorize Temporal on a claimed card.
+A claim holder may still park without `expected_state`; the phase workflow
+also uses the holder-bound live-set CAS described below.
 
 An exec attempt must be an integer in `[1, 2**31-1]`; invalid attempts are
 `validation` (HTTP 400). `worker_attempt` is a read-only check, with no write
@@ -106,10 +107,13 @@ before the projector pass; asks and parks must work both then and after
 projection to `needs_input`. The run/attempt fence protects against stale
 retries; state CAS only prevents overwriting a newer actor's `parked`,
 `failed`, or `done`, plus `waiting` for any expectation that does not name it
-(the live set names it). `claimed` is excluded from the live set. A worker-run
-card is never `claimed`: that is the agent lease path, which the projector
-skips. Temporal on a claimed card is a misconfiguration refused with
-`exec_stale_state` for live-set ask/park.
+(the live set names it). `claimed` remains excluded from the Rust live set. Phase dispatch calls
+`worker_claim` before starting the child Card run, so these worker-run cards
+remain claimed while the projector skips their state writes. Keeper accepts
+the exact worker live-set expectation on a claimed card only for a worker
+principal matching `claimed_by`, for ask, park and complete. A non-holder
+(including a delegate or administrator) still gets `exec_stale_state`. Narrower
+expectations are not expanded. The claim and exec identity guards still apply.
 The state comparison runs inside the same write transaction, before any write
 or ownership recording/attempt bump; mismatch refuses `exec_stale_state` (HTTP
 409) without changing state, owner or `updated_at`. Null `expected_state` is
@@ -173,3 +177,16 @@ audit does not change the lifecycle columns compared by that fold. Both storage
 backends use the shared event-type registry. Historical event hashes are not
 rewritten: the legacy replay opts out of the newer shared seeder's delegation
 events, preserving its original operation sequence and unchanged hash pins.
+
+## sq8 validation and audit follow-up
+
+Owner clears carry the acting principal and the enclosing verb timestamp,
+including an explicit reaper time, so the chained audit says who cleared it
+and when. `hand_back=True` with a run or a target other than open/ready is
+validation failure, not an ignored flag. The planner leaves owned needs_input
+cards alone: readiness cannot move a live execution backwards to ready.
+
+The shared seed helper no longer fabricates delegation. Tests needing a
+delegate use claim then the real delegate verb; acquisition tests use real
+worker claims. Tests of already-owned projected states explicitly seed the
+prior execution owner rather than pretending an unclaimed delegate can acquire.

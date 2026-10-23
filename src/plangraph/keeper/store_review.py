@@ -346,5 +346,5 @@ class ReviewMixin:
                     (principal.name, lease, self._iso(now), key, item["epoch"]))
             self._race_guard(cursor, key, "in_review", item["epoch"])
             # Both outcomes hand back new work, even when the claimant stays.
-            self._exec_clear(self.conn, key)
+            self._exec_clear(self.conn, key, principal, now)
         return {"key": key, "state": state, "reviews_passed": 0}

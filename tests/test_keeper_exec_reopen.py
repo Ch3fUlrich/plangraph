@@ -124,7 +124,9 @@ def test_null_exec_keys_behave_as_omitted(w):
     assert w.store.worker_park(w.p("workerA"), park(
         key, workflow_id=None, run_id=None, attempt=None))["state"] == "parked"
     assert owner(w, key) == (None, None, None)
-    # Acquire on a fact-writing call, not the removed back-move takeover.
+    # A new run must take a real claim before recording.
+    w.store.requeue(w.p("router"), key)
+    to_claimed(w, key, "workerA")
     w.store.worker_complete(w.p("workerA"), complete(
         key, workflow_id=RUN1[0], run_id=RUN1[1], attempt=RUN1[2]))
     assert owner(w, key) == RUN1
@@ -140,6 +142,8 @@ def test_null_exec_keys_behave_as_omitted(w):
 @pytest.mark.parametrize("verb", ["park", "complete", "ask"])
 def test_null_expected_state_behaves_as_omitted(w, verb):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-2", "run-2", 1))
     worker = w.p("workerA")
     if verb == "park":
         assert w.store.worker_park(worker, park(
@@ -157,6 +161,8 @@ def test_null_expected_state_behaves_as_omitted(w, verb):
 
 def test_workflow_mismatch_is_stale_even_with_same_run(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, RUN1)
     seed_owner(w, key, RUN1)
     refused("exec_stale", w.store.set_state, w.p("router"), key, "waiting",
             run=("other-wf", RUN1[1], 3))
@@ -166,6 +172,8 @@ def test_workflow_mismatch_is_stale_even_with_same_run(w):
 @pytest.mark.parametrize("attempt", [1, 2])
 def test_new_run_requires_owner_clear_before_acquiring(w, attempt):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, RUN1)
     w.store.worker_park(w.p("workerA"), park(key, workflow_id=RUN1[0],
                                               run_id=RUN1[1],
                                               attempt=RUN1[2]))
@@ -205,6 +213,8 @@ def test_noop_records_no_owner_and_checks_existing_owner(w):
 
 def test_first_owner_and_attempt_bump_touch_updated_at(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     for attempt in (1, 2):
         before = w.store._item(key)["updated_at"]
         w.clock.advance(10)
@@ -238,5 +248,5 @@ def test_exec_helpers_without_now_preserve_timestamp_and_clear_owner(w):
         w.store._exec_check(w.conn, key, "wf-1", "run-1", 3, w.p("workerA"))
         assert owner(w, key) == ("wf-1", "run-1", 3)
         assert w.store._item(key)["updated_at"] == before
-        w.store._exec_clear(w.conn, key)
+        w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
         assert owner(w, key) == (None, None, None)

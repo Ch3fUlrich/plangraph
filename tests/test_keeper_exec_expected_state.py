@@ -131,12 +131,18 @@ def test_live_set_refuses_a_card_that_left_the_live_states(w, doors, verb, body,
 
 
 @pytest.mark.parametrize("verb,body", [("park", park), ("complete", complete)])
-def test_live_set_refuses_a_claimed_card(w, doors, verb, body):
+@pytest.mark.parametrize("who", ["workerA", "workerB"])
+def test_live_set_refuses_a_claimed_card(w, doors, verb, body, who):
     key, = seed(w, [("A", [])])
     to_claimed(w, key, "workerA")
     before = dict(w.store._item(key))
-    status, response = doors.http("workerA", "POST", f"/v1/{verb}",
+    status, response = doors.http(who, "POST", f"/v1/{verb}",
                                   body(key, expected_state=LIVE_SET, **RUN1))
+    if who == "workerA":
+        assert (status, response) == (204, "")
+        assert owner(w, key) == ("wf-1", "run-1", 1)
+        assert state(w, key) == ("parked" if verb == "park" else "claimed")
+        return
     assert (status, response["error"]) == (409, "exec_stale_state")
     assert state(w, key) == "claimed"
     assert owner(w, key) == (None, None, None)     # checked before any ownership

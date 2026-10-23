@@ -24,6 +24,8 @@ RUN = {"workflow_id": "wf", "run_id": "run", "attempt": 2}
 @pytest.mark.parametrize("owned", [False, True])
 def test_null_expected_state_is_omitted(w, verb, body, owned):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf", "run", 1))
     if owned:
         # Only a worker may RECORD an owner now (V2-1): seed it, the router
         # run-carrying move below only checks the triple it no longer plants.

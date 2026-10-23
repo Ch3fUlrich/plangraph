@@ -115,7 +115,7 @@ def test_ask_rejects_invalid_any_of_before_writes(w, expected):
 def test_live_set_ask_refuses_a_card_outside_the_live_states(w, outside):
     key, = seed(w, [("A", [])])
     if outside == "claimed":
-        to_claimed(w, key, "workerA")
+        to_claimed(w, key, "workerB")
     elif outside == "done":                  # done has its own verb, not set_state
         w.conn.execute("UPDATE items SET state=? WHERE key=?", (outside, key))
         w.conn.commit()

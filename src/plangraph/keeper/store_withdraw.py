@@ -73,5 +73,5 @@ class WithdrawMixin:
                 " WHERE key=? AND state='in_review' AND epoch=?",
                 (lease, self._iso(now), key, item["epoch"]))
             self._race_guard(cursor, key, "in_review", item["epoch"])
-            self._exec_clear(self.conn, key)
+            self._exec_clear(self.conn, key, principal, now)
         return {"key": key, "state": "claimed", "epoch": item["epoch"], "lease_until": lease}

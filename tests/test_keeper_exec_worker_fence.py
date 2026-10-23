@@ -112,6 +112,8 @@ def test_open_alarm_on_an_owned_card_still_advances_the_attempt(w):
     side and is unchanged.
     """
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf", "run", 1))
     alarm = {"card": key, "reason": "stuck"}
     # 1. A first alarm of run R at attempt 1 opens the fact and records R.
     w.store.worker_alarm(w.p("workerA"),
@@ -153,6 +155,8 @@ def test_refused_complete_does_not_acquire_owner(w, monkeypatch):
     failed completion never leaves a recorded owner.
     """
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     before = dict(w.store._item(key))
 
     def lost_race(self, cursor, item_key, expected_state, expected_epoch):
@@ -194,6 +198,8 @@ def park_body(key, **extra):
 
 def test_a_duplicate_park_with_a_stale_live_set_is_a_success_noop(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf", "run", 1))
     w.store.set_state(w.p("router"), key, "running")
     # The live-set the worker observed before its first park succeeded.
     body = park_body(key, expected_state="running", **RUN)
@@ -210,6 +216,8 @@ def test_a_duplicate_park_with_a_stale_live_set_is_a_success_noop(w):
 
 def test_a_parked_card_retried_by_another_run_is_exec_stale(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf", "run", 1))
     w.store.set_state(w.p("router"), key, "running")
     body = park_body(key, expected_state="running", **RUN)
     w.store.worker_park(w.p("workerA"), body)

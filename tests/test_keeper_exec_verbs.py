@@ -77,6 +77,8 @@ RUN2 = {"workflow_id": "wf-2", "run_id": "run-2", "attempt": 1}
 # ---------------------------------------------------------------------- park
 def test_park_with_fields_records_the_exec_owner(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     assert doors.http("workerA", "POST", "/v1/park", park(key, **RUN1)) == (204, "")
     assert owner(w, key) == ("wf-1", "run-1", 1)
     assert state(w, key) == "parked"
@@ -107,6 +109,8 @@ def test_a_claimed_owned_card_refuses_park_by_a_stale_run(doors, w):
 
 def test_park_with_a_different_run_is_refused_and_changes_nothing(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/park", park(key, **RUN1)) == (204, "")
     was = state(w, key)
     status, body = doors.http("workerA", "POST", "/v1/park", park(key, **RUN2))
@@ -117,6 +121,8 @@ def test_park_with_a_different_run_is_refused_and_changes_nothing(doors, w):
 
 def test_park_with_a_lower_attempt_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/park",
                       park(key, **RUN1_A2)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/park", park(key, **RUN1))
@@ -126,6 +132,8 @@ def test_park_with_a_lower_attempt_is_refused(doors, w):
 
 def test_park_without_fields_on_an_owned_card_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/park", park(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/park", park(key))
     assert (status, body["error"]) == (409, "exec_stale")
@@ -144,6 +152,8 @@ def test_park_without_fields_on_an_unowned_card_works_as_before(doors, w):
 # ------------------------------------------------------------------ complete
 def test_complete_with_fields_records_the_exec_owner(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN1)) == (204, "")
     assert owner(w, key) == ("wf-1", "run-1", 1)
@@ -151,6 +161,8 @@ def test_complete_with_fields_records_the_exec_owner(doors, w):
 
 def test_complete_with_a_different_run_is_refused_and_changes_nothing(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN1)) == (204, "")
     was = state(w, key)
@@ -163,6 +175,8 @@ def test_complete_with_a_different_run_is_refused_and_changes_nothing(doors, w):
 
 def test_complete_with_a_lower_attempt_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN1_A2)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/complete",
@@ -173,6 +187,8 @@ def test_complete_with_a_lower_attempt_is_refused(doors, w):
 
 def test_complete_without_fields_on_an_owned_card_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/complete", complete(key))
@@ -193,6 +209,8 @@ def test_complete_without_fields_on_an_unowned_card_works_as_before(doors, w):
 # --------------------------------------------------------------------- alarm
 def test_alarm_with_fields_records_the_exec_owner(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     assert doors.http("workerA", "POST", "/v1/alarms",
                       alarm(key, **RUN1)) == (204, "")
     assert owner(w, key) == ("wf-1", "run-1", 1)
@@ -200,6 +218,8 @@ def test_alarm_with_fields_records_the_exec_owner(doors, w):
 
 def test_alarm_with_a_different_run_is_refused_and_raises_nothing(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/alarms",
                       alarm(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/alarms",
@@ -211,6 +231,8 @@ def test_alarm_with_a_different_run_is_refused_and_raises_nothing(doors, w):
 
 def test_alarm_with_a_lower_attempt_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/alarms",
                       alarm(key, **RUN1_A2)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/alarms",
@@ -221,6 +243,8 @@ def test_alarm_with_a_lower_attempt_is_refused(doors, w):
 
 def test_alarm_without_fields_on_an_owned_card_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/alarms",
                       alarm(key, **RUN1)) == (204, "")
     status, body = doors.http("workerA", "POST", "/v1/alarms", alarm(key))

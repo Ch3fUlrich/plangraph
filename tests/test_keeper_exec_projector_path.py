@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from keeper_util import World, seed
+from keeper_util import World, seed, seed_exec_owner
 from plangraph.keeper.errors import Refused
 from plangraph.projector.apply import Projector
 from plangraph.projector.history import project_history
@@ -80,6 +80,7 @@ def test_needs_input_timer_preserves_projected_state_and_worker_cas(w, verb):
         worker_call(w, key, verb, "running")
     assert exc.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
+    seed_exec_owner(w, key, ("card:" + key, "run", 1))
     worker_call(w, key, verb, before[0])
     assert snapshot(w, key)[:4] == (
         "needs_input" if verb == "ask_question" else "parked", "card:" + key, "run", 1)
@@ -95,6 +96,7 @@ def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
     assert projector.apply_run(running, run_ord=0).states_written == 1
     assert snapshot(w, key)[0] == "running"
     # First run-carrying worker fact claims ownership; projector does not yet forward run ids.
+    seed_exec_owner(w, key, ("card:" + key, "run", 1))
     w.store.worker_alarm(w.p("workerA"), {
         "card": key, "reason": "retry", "workflow_id": "card:" + key,
         "run_id": "run", "attempt": 1})

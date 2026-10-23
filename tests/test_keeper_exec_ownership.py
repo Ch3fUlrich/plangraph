@@ -64,11 +64,15 @@ def seed_owner(w, key, run, who="workerA"):
     ownership through an exec-carrying ask from the worker principal instead
     of a router ``set_state(run=...)``.
     """
+    if w.store._item(key)["claimed_by"] is None:
+        to_claimed(w, key, who)
     w.store.ask_question(w.p(who), key, "Which path?",
                          exec_workflow_id=run[0], exec_run_id=run[1],
                          exec_attempt=run[2])
     assert owner(w, key) == run
     assert owner_principal(w, key) == who
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (key,))
+    w.conn.commit()
 
 
 RUN1 = ("wf-1", "run-1", 1)
@@ -78,6 +82,8 @@ RUN1_A2 = ("wf-1", "run-1", 2)
 # -------------------------------------------------------------- ownership
 def test_an_unowned_card_records_its_first_owner(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     assert owner(w, key) == (None, None, None)      # bare moves never record
     w.store.ask_question(w.p("workerA"), key, "Which path?",
                          exec_workflow_id=RUN1[0], exec_run_id=RUN1[1],
@@ -88,6 +94,8 @@ def test_an_unowned_card_records_its_first_owner(w):
 
 def test_a_stale_run_is_refused(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     seed_owner(w, key, RUN1)
     refused("exec_stale", w.store.set_state, w.p("router"), key, "needs_input",
             run=("wf-2", "run-2", 1))
@@ -96,6 +104,8 @@ def test_a_stale_run_is_refused(w):
 
 def test_a_lower_attempt_is_refused(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     seed_owner(w, key, RUN1_A2)
     refused("exec_stale", w.store.set_state, w.p("router"), key, "running",
             run=RUN1)
@@ -104,6 +114,8 @@ def test_a_lower_attempt_is_refused(w):
 
 def test_a_higher_attempt_is_accepted_and_recorded(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     seed_owner(w, key, RUN1)
     w.store.set_state(w.p("router"), key, "needs_input", run=("wf-1", "run-1", 3))
     assert owner(w, key) == ("wf-1", "run-1", 3)
@@ -114,6 +126,8 @@ def test_a_higher_attempt_is_accepted_and_recorded(w):
 @pytest.mark.parametrize("target", ["open", "ready"])
 def test_a_back_move_is_refused_even_with_a_new_run(w, terminal, target):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     seed_owner(w, key, RUN1)
     w.store.set_state(w.p("router"), key, "running", run=RUN1)
     w.store.set_state(w.p("router"), key, terminal, run=RUN1)
@@ -147,6 +161,8 @@ def test_a_bare_back_move_on_an_owned_card_is_refused(w):
     door remains the way back.
     """
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert w.store.worker_park(w.p("workerA"),
                                park(key, workflow_id=RUN1[0],
                                    run_id=RUN1[1],
@@ -219,6 +235,8 @@ def test_a_different_worker_cannot_record_on_an_unowned_card(w):
 def test_the_owner_is_bound_to_its_recording_principal(w):
     """A different worker presenting the recorded run on an owned card is refused."""
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     seed_owner(w, key, RUN1)                # workerA records
     # workerB naming the recorded run: refused, the owner principal differs
     refused("forbidden", w.store.ask_question, w.p("workerB"), key,
@@ -255,9 +273,9 @@ def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
     calls = []
     clear = w.store._exec_clear
 
-    def tracked_clear(conn, item_key):
+    def tracked_clear(conn, item_key, principal, now):
         calls.append((conn, item_key))
-        clear(conn, item_key)
+        clear(conn, item_key, principal, now)
 
     monkeypatch.setattr(w.store, "_exec_clear", tracked_clear)
     if door == "release":

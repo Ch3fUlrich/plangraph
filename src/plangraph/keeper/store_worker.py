@@ -108,7 +108,7 @@ class WorkerMixin:
     """The worker-facing verbs for :class:`plangraph.keeper.store.Store`."""
 
     # ------------------------------------------------------------- helpers
-    def _exec_expect_state(self, item, expected) -> None:
+    def _exec_expect_state(self, item, expected, principal=None) -> None:
         """Check observed state inside the write lock, before recording ownership."""
         if expected is None:
             return
@@ -118,7 +118,12 @@ class WorkerMixin:
                        for s in states)):
             raise Refused("validation",
                           f"expected_state must be a state or non-empty list from {list(SETTABLE_STATES)}")
-        if item["state"] not in states:
+        phase_holder = (isinstance(expected, list)
+                        and set(states) == {"open", "ready", "running", "waiting", "needs_input"}
+                        and item["state"] == "claimed"
+                        and principal is not None and principal.role == "worker"
+                        and item["claimed_by"] == principal.name)
+        if item["state"] not in states and not phase_holder:
             raise Refused("exec_stale_state",
                           f"{item['key']}: expected {expected!r}, is {item['state']!r}")
 
@@ -271,7 +276,7 @@ class WorkerMixin:
             if self._exec_duplicate(item, body, "parked"):
                 return
             # 3. Observed-state CAS, then the claim binding, then ownership.
-            self._exec_expect_state(item, body.get("expected_state"))
+            self._exec_expect_state(item, body.get("expected_state"), principal)
             self._park_guard(principal, item, epoch, now)
             if item["state"] != "parked":
                 self._exec_gate(item["key"], body, principal, record=True)
@@ -307,7 +312,7 @@ class WorkerMixin:
             self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
             if not self._exec_duplicate(item, body, "done"):
-                self._exec_expect_state(item, body.get("expected_state"))
+                self._exec_expect_state(item, body.get("expected_state"), principal)
                 if item["state"] != "done":
                     # 3. Ownership, then the completion write -- a state/epoch
                     #    CAS (``_guarded_touch``) in the SAME transaction as the

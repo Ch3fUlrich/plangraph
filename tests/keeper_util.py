@@ -101,7 +101,7 @@ def defn(pid, deps=(), project="demo", kind="lane", evidence_kinds=("any",),
     return item
 
 
-def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True, delegate=True,
+def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True, delegate=False,
          **tier):
     """Create ``lanes`` plus a goal that depends on every lane.
 
@@ -118,13 +118,10 @@ def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True, deleg
                           kind="goal", **tier))
     world.store.create_items(world.p("router"), items)
     if delegate:
-        with world.store._write():
-            for pid, _ in lanes:
-                key = f"{project}:{pid}"
-                world.store._append(world.p("router"), key, "delegated",
-                                    {"worker": "workerA"}, world.clock())
-                world.conn.execute("UPDATE items SET delegate='workerA' WHERE key=?",
-                                   (key,))
+        for pid, _ in lanes:
+            key = f"{project}:{pid}"
+            world.store.claim(world.p("l1main"), key)
+            world.store.delegate(world.p("l1main"), key, "workerA")
     return [f"{project}:{pid}" for pid, _ in lanes]
 
 

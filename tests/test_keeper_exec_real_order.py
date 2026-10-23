@@ -34,6 +34,7 @@ def test_report_then_ask_before_projection(w, initial):
     w.store.worker_attempt(w.p("workerA"), {
         "card": key, "n": 1, "exit_class": "needs_input", **identity})
     assert snapshot(w, key)[:4] == (initial, None, None, None)
+    seed_exec_owner(w, key, ("card:" + key, "run", 1))
     worker_call(w, key, "ask_question", LIVE_STATES)
     assert snapshot(w, key)[0] == initial
     worker_call(w, key, "park", LIVE_STATES)
@@ -62,6 +63,7 @@ def test_report_then_ask_before_projection(w, initial):
 @pytest.mark.parametrize("initial", ["open", "ready"])
 def test_projected_waiting_refuses_delayed_any_of(w, verb, initial):
     key = seed_in_state(w, initial)
+    seed_exec_owner(w, key, ("card:" + key, "run", 1))
     worker_call(w, key, "ask_question", LIVE_STATES)
     projector = Projector(w.store, w.p("system"), now=w.clock)
     projector.apply_run(project_history(history("usage_limit"),
@@ -83,11 +85,9 @@ def test_projected_waiting_refuses_delayed_any_of(w, verb, initial):
 def test_claimed_holder_live_set_is_stale(w, verb):
     key, = seed(w, [("A", [])])
     to_claimed(w, key, "workerA")
-    before = dict(w.store._item(key))
-    with pytest.raises(Refused) as err:
-        worker_call(w, key, verb, LIVE_STATES)
-    assert err.value.code == "exec_stale_state"
-    assert dict(w.store._item(key)) == before
+    worker_call(w, key, verb, LIVE_STATES)
+    assert snapshot(w, key)[:4] == (
+        "parked" if verb == "park" else "claimed", "card:" + key, "run", 1)
 
 
 @pytest.mark.parametrize("verb", ["ask_question", "park"])
@@ -167,6 +167,7 @@ def test_forward_closure_reaches_parked_from_every_table_state():
 def test_exec_park_forward_reachability_and_noop(w, state):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("system"), key, state)
+    seed_exec_owner(w, key, ("card:" + key, "run", 1))
     before = dict(w.store._item(key))
     result = worker_call(w, key, "park", [state])
     assert result["changed"] is (state != "parked")

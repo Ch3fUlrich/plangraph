@@ -74,6 +74,8 @@ OWNED = ("wf-1", "run-1", 1)
 # -------------------------------------------------- over the HTTP door
 def test_worker_ask_with_fields_records_the_exec_owner(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     status, body = doors.http("workerA", "POST", "/v1/ask_question",
                               ask(key, **RUN1))
     assert (status, body["state"], body["key"]) == (200, "open", key)
@@ -83,6 +85,8 @@ def test_worker_ask_with_fields_records_the_exec_owner(doors, w):
 
 def test_worker_ask_with_a_different_run_is_refused_and_inserts_no_question(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/ask_question",
                       ask(key, **RUN1))[0] == 200
     status, body = doors.http("workerA", "POST", "/v1/ask_question",
@@ -94,6 +98,8 @@ def test_worker_ask_with_a_different_run_is_refused_and_inserts_no_question(door
 
 def test_worker_ask_with_a_lower_attempt_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/ask_question",
                       ask(key, **RUN1_A2))[0] == 200
     status, body = doors.http("workerA", "POST", "/v1/ask_question",
@@ -114,6 +120,8 @@ def test_worker_ask_with_partial_fields_is_refused(doors, w):
 
 def test_worker_ask_without_fields_on_an_owned_card_is_refused(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/ask_question",
                       ask(key, **RUN1))[0] == 200
     status, body = doors.http("workerA", "POST", "/v1/ask_question", ask(key))
@@ -133,6 +141,8 @@ def test_worker_ask_without_fields_on_an_unowned_card_works_as_before(doors, w):
 
 def test_router_ask_without_fields_on_an_owned_card_still_works(doors, w):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     assert doors.http("workerA", "POST", "/v1/ask_question",
                       ask(key, **RUN1))[0] == 200  # the card gets an owner
     status, body = doors.http("router", "POST", "/v1/ask_question", ask(key))
@@ -144,6 +154,8 @@ def test_router_ask_without_fields_on_an_owned_card_still_works(doors, w):
 # ------------------------------------------------------ store-level verbs
 def test_store_ask_with_fields_records_the_owner_and_refuses_a_stale_run(w):
     key, = seed(w, [("A", [])])
+    from keeper_util import to_claimed
+    to_claimed(w, key, "workerA")
     worker = w.p("workerA")
     asked = w.store.ask_question(worker, key, "first?", exec_workflow_id="wf-1",
                                  exec_run_id="run-1", exec_attempt=2)

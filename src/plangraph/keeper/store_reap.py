@@ -32,7 +32,7 @@ class ReapMixin:
                              " review_waiver=NULL,"
                             " updated_at=? WHERE key=?",
                              (self._iso(now), item["key"]))
-                        self._exec_clear(self.conn, item["key"])
+                        self._exec_clear(self.conn, item["key"], principal, now)
                         expired.append(item["key"])
                 elif item["state"] == "in_review":
                     since = self._parse_iso(item["updated_at"])

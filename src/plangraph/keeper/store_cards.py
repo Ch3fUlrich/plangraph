@@ -377,7 +377,7 @@ class CardsMixin:
             self._assert_unlocked(item)
             # Compare the observed state before _exec_check can record an owner.
             if expected_state is not None:
-                self._exec_expect_state(item, expected_state)
+                self._exec_expect_state(item, expected_state, principal)
             # RT-P1-EXEC-OWNERSHIP: an ask carrying any exec field is checked
             # against the recorded owner (a first ask records it; a stale run
             # or a backwards attempt is refused and inserts no question).  A
@@ -498,6 +498,8 @@ class CardsMixin:
         if new_run:
             raise Refused("validation", "new_run is removed; use requeue")
         if hand_back:
+            if run is not None or state not in _HAND_BACK_STATES:
+                raise Refused("validation", "hand_back requires no run and an open/ready target")
             self._require_role(principal, "router", "system")
         if state not in SETTABLE_STATES:
             raise Refused("validation",
@@ -522,7 +524,7 @@ class CardsMixin:
                                      guard=guard, hand_back=True)
         return self._run(principal, "requeue", key, apply)
 
-    def _exec_clear(self, conn, key):
+    def _exec_clear(self, conn, key, principal, now):
         """Free the exec owner inside the caller's keeper transaction.
 
         RT-P1 sq5 fix 2 (V1-1/V5-1): the clear RETIRES the run it frees -- the
@@ -558,8 +560,8 @@ class CardsMixin:
         conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
                      " exec_attempt=NULL, exec_principal=NULL, exec_retired_runs=? WHERE key=?",
                      (_dump(retired[-16:]), key))
-        self._append(None, key, "exec_owner_changed",
-                     {"action": "clear", "retired": retired[-16:]}, self.clock())
+        self._append(principal, key, "exec_owner_changed",
+                     {"action": "clear", "retired": retired[-16:]}, now)
 
     def _exec_record(self, conn, item_id, wf, run, attempt, principal=None, now=None):
         """Record the exec owner of *item_id*: the first owner of an unowned card.
@@ -629,7 +631,7 @@ class CardsMixin:
                               f"{item_id}: only the worker principal may record"
                               f" an exec owner, not {name}")
             holder = row["claimed_by"] if row is not None else None
-            if (holder if holder is not None else row["delegate"]) != principal.name:
+            if holder is None or holder != principal.name:
                 raise Refused("forbidden",
                               f"{item_id} is held by {holder}: only the holder"
                               " may record its exec owner")
@@ -737,5 +739,5 @@ class CardsMixin:
                 # RT-P1-EXEC-OWNERSHIP: the explicit hand-back door frees the
                 # owner for the next run, in the same transaction as the move
                 # above; a bare run-less move never reaches this line (V1-B).
-                self._exec_clear(self.conn, key)
+                self._exec_clear(self.conn, key, principal, now)
         return {"key": key, "state": state, "changed": True}

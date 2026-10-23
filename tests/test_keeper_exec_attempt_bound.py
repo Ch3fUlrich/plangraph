@@ -54,6 +54,8 @@ def test_worker_park_refuses_invalid_attempt(doors, w, attempt):
 @pytest.mark.parametrize("door", ["set_state", "park"])
 def test_maximum_attempt_is_accepted(doors, w, door):
     key, = seed(w, [("A", [])])
+    from keeper_util import seed_exec_owner
+    seed_exec_owner(w, key, ("wf-1", "run-1", 1))
     if door == "set_state":
         # Only a worker may RECORD an owner (V2-1), so the run starts owned at
         # attempt 1; the router run-carrying move then advances it to the

@@ -15,8 +15,7 @@ def test_unassigned_worker_cannot_plant_owner(tmp_path):
                 "workflow_id": "wf", "run_id": "foreign", "attempt": 1})
         assert exc.value.code == "forbidden"
         assert w.store._item(key)["exec_run_id"] is None
-        w.conn.execute("UPDATE items SET delegate='workerA' WHERE key=?", (key,))
-        w.conn.commit()
+        w.store.claim(w.p("workerA"), key)
         w.store.worker_alarm(w.p("workerA"), {"card": key, "reason": "stuck",
             "workflow_id": "wf", "run_id": "real", "attempt": 1})
         assert w.store._item(key)["exec_run_id"] == "real"
@@ -52,6 +51,7 @@ def test_router_requeue(tmp_path):
     w = World(tmp_path)
     try:
         key, = seed(w, [("A", [])])
+        w.store.claim(w.p("workerA"), key)
         w.store.worker_park(w.p("workerA"), {"card": key, "tier": "free",
             "exit_class": "check_fail", "workflow_id": "wf", "run_id": "run",
             "attempt": 1})
@@ -77,13 +77,14 @@ def test_owner_changes_are_chained_and_retirement_is_bounded(tmp_path):
     w = World(tmp_path)
     try:
         key, = seed(w, [("A", [])])
+        w.store.claim(w.p("workerA"), key)
         for n in range(18):
             with w.store._write():
                 w.store._exec_check(w.conn, key, "wf", f"run-{n}", 1,
                                     w.p("workerA"), now=w.clock())
                 w.store._exec_check(w.conn, key, "wf", f"run-{n}", 2,
                                     w.p("workerA"), now=w.clock())
-                w.store._exec_clear(w.conn, key)
+                w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
         row = w.conn.execute("SELECT exec_retired_runs FROM items WHERE key=?",
                              (key,)).fetchone()
         retired = json.loads(row[0])
