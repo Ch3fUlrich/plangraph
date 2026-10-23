@@ -115,6 +115,7 @@ class OpsMixin:
         """Run one batch and, for oversight, record the denial after rollback."""
         oversight = principal.role == "oversight"
         self._oversight_fail = None
+        self._oversight_ops = list(ops) if isinstance(ops, list) else []
         try:
             return self._apply_ops(principal, ops, batch_ref, now)
         except Refused as exc:
@@ -299,7 +300,7 @@ class OpsMixin:
                for op in ops]
         if oversight:
             self._oversight_budget(principal, now)
-            self._oversight_gate(principal, ops, batch_ref)
+            self._oversight_gate(principal, ops)
         batch = OpBatch()
         self._prelock(ops, batch_ref, batch, now)
         results = []
@@ -308,7 +309,7 @@ class OpsMixin:
         try:
             before = self._all_items()
             if oversight:
-                self._oversight_gate(principal, ops, batch_ref, before)
+                self._oversight_gate(principal, ops, before)
             for index, op in enumerate(ops):
                 batch.current = index
                 before_seq = self.conn.execute(
@@ -330,11 +331,11 @@ class OpsMixin:
             self._batch = None
         return {"applied": len(results), "results": results}
 
-    def _oversight_gate(self, principal, ops, batch_ref, items=None):
+    def _oversight_gate(self, principal, ops, items=None):
         """The one policy check, run pre-lock and again in-lock."""
         graph = self._all_items() if items is None else items
         items_by_key = {item["key"]: item for item in graph}
-        for verdict in oversight_policy.check_batch(items_by_key, ops, batch_ref):
+        for verdict in oversight_policy.check_batch(items_by_key, ops):
             self._oversight_fail = {
                 "index": verdict.index, "op": ops[verdict.index],
                 "key": None if verdict.key == "-" else verdict.key,

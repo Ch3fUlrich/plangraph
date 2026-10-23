@@ -982,3 +982,87 @@ def test_copy_to_pg_includes_both_oversight_tables():
     assert {"oversight_tokens", "oversight_ops"} <= set(copy_to_pg.TABLES)
     order = list(copy_to_pg.TABLES)
     assert order.index("oversight_tokens") < order.index("oversight_ops")
+
+
+# ------------------------- every refusal is audited (fix round 1, MEDIUM)
+def _denied_rows(w):
+    return list(w.conn.execute(
+        "SELECT * FROM oversight_ops WHERE outcome='denied' ORDER BY id"))
+
+
+def _open_guard_alarms(w):
+    return list(w.conn.execute(
+        "SELECT * FROM projector_alarms WHERE kind='oversight_denied'"
+        " AND workflow_id='oversight-guard' AND cleared_at IS NULL"))
+
+
+def assert_audited_refusal(w, err, *, op_name, key):
+    """One denied row with the refusal's code/message/finding, one alarm."""
+    rows = _denied_rows(w)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    row = rows[0]
+    assert row["principal"] == OPP
+    assert row["batch_ref"] == BATCH
+    assert (row["op"], row["key"]) == (op_name, key)
+    assert row["code"] == err.code
+    assert row["reason"] == err.msg
+    assert row["finding_id"] == FINDING
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1, [dict(a) for a in alarms]
+    assert "oversight:" in alarms[0]["detail"]
+    assert FINDING in alarms[0]["detail"]
+
+
+def test_cycle_refusal_writes_a_denied_row_and_alarm(w, monkeypatch):
+    """A cycle is raised by the shared store validation, not the policy gate."""
+    token, principal = live(w, monkeypatch)
+    err = refusal(apply, w, principal, [
+        op("add_dep", key="plangraph:HOST", dep="plangraph:LINK"),   # allowed
+        op("add_dep", key="plangraph:OTHER", dep="plangraph:HOST"),  # cycle
+    ])
+    assert err.code == "cycle"
+    assert_audited_refusal(w, err, op_name="add_dep",
+                           key="plangraph:HOST")
+    dump = (str([dict(r) for r in _denied_rows(w)])
+            + str([dict(a) for a in _open_guard_alarms(w)]))
+    assert token not in dump                       # never the plaintext token
+
+
+def test_bad_state_refusal_writes_a_denied_row_and_alarm(w, monkeypatch):
+    """``bad_state`` carries its own code/message into the audit row."""
+    w.store.claim(w.p("l1pg"), "plangraph:CLAIMED")
+    _, principal = live(w, monkeypatch)
+    err = refusal(apply, w, principal,
+                  [op("edit", key="plangraph:CLAIMED",
+                      fields={"note": "while claimed"})])
+    assert err.code == "bad_state"
+    assert_audited_refusal(w, err, op_name="edit", key="plangraph:CLAIMED")
+
+
+def test_validation_refusal_writes_a_denied_row_and_alarm(w, monkeypatch):
+    """A shape validation refusal from the shared planner is audited too."""
+    _, principal = live(w, monkeypatch)
+    err = refusal(apply, w, principal,
+                  [op("priority", key="plangraph:OTHER", priority="high")])
+    assert err.code == "validation"
+    assert_audited_refusal(w, err, op_name="priority",
+                           key="plangraph:OTHER")
+
+
+def test_shared_machinery_denials_count_toward_the_denied_budget(
+        w, monkeypatch):
+    """Rows from the shared machinery are ledger entries: the cap sees them."""
+    from plangraph.keeper import oversight_policy
+
+    _, principal = live(w, monkeypatch)
+    cap = _denied_cap(oversight_policy)
+    assert cap > 0
+    for i in range(cap):
+        err = refusal(apply, w, principal, [op(
+            "priority", key="plangraph:OTHER", priority=f"nope-{i}")])
+        assert err.code == "validation"
+    assert len(_denied_rows(w)) == cap
+    assert len(_open_guard_alarms(w)) == 1         # kept as one open alarm
+    err = refusal(apply, w, principal, [op(
+        "priority", key="plangraph:OTHER", priority=3)])
+    assert err.code == "forbidden" and has("rate_limited", err.msg)

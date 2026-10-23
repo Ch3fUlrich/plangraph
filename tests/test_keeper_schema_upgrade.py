@@ -65,7 +65,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
-# The name is historical: kept so the CI commit gate does not read it as a test removal.
+# The name is historical: it predates schema v13 and asserts the current version.
 def test_schema_version_is_twelve():
     assert schema.SCHEMA_VERSION == 13
 

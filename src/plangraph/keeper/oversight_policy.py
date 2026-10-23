@@ -248,7 +248,7 @@ def _check_add_dep(index, op, items):
     return []
 
 
-def check_batch(items_by_key, ops, batch_ref):
+def check_batch(items_by_key, ops):
     """Return the deny verdicts for *ops*; empty means the batch is granted.
 
     *items_by_key* is the graph as it is BEFORE the batch (the store passes

@@ -18,8 +18,12 @@ The principal's ``active=0`` revoke is already enforced by
 
 Audit rows are written by the store: applied rows inside the batch transaction
 (so an audit row exists iff the mutation exists) and denied rows after the
-rollback (so a denial survives the batch).  Crossing the derived hourly caps is
-alarm-only; only an explicit ``pg admin revoke`` kills the identity (R4).
+rollback (so a denial survives the batch).  *Every* refusal an oversight
+principal earns is audited -- the policy's own ``oversight:<reason>`` verdict
+and any refusal the shared store machinery raises later (cycle, bad_state,
+validation, conflict, ...) -- so the denied budget counts them all.  Crossing
+the derived hourly caps is alarm-only; only an explicit ``pg admin revoke``
+kills the identity (R4).
 """
 from __future__ import annotations
 
@@ -29,20 +33,34 @@ import re
 import secrets
 
 from . import auth, events
-from .credential_guard import guard
+from .credential_guard import guard, mask as _mask_credentials
 from .errors import Refused
 
-__all__ = ["OversightMixin", "OVERSIGHT_TOKEN_TTL_S", "OVERSIGHT_ROTATE_AFTER_S",
+__all__ = ["OversightMixin", "OVERSIGHT_TOKEN_TTL_S",
            "OVERSIGHT_PREFIX", "GRANT_SCOPE", "grants"]
 
 OVERSIGHT_PREFIX = auth.OVERSIGHT_PREFIX
 OVERSIGHT_TOKEN_TTL_S = 3600
-OVERSIGHT_ROTATE_AFTER_S = 3300
 GRANT_SCOPE = "oversight-live"
 _REASON_CAP = 200
 _FINDING_CAP = 120
+#: a denial's message is store-generated, but it is still bounded and masked.
+_DENIAL_TEXT_CAP = 500
 _REASON_RE = re.compile(r"oversight:([a-z_]+)")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+#: the ``op <n> <name> <key>: `` prefix ``store_ops._fail`` puts on a refusal.
+_OP_FAIL_RE = re.compile(r"^op (\d+) (\S+) (\S+): ")
+#: a plaintext oversight token must never reach the audit ledger.
+_TOKEN_RE = re.compile(re.escape(OVERSIGHT_PREFIX) + r"[A-Za-z0-9_-]{8,}")
+
+
+def _audit_text(value):
+    """Bounded, control-free audit text with secrets and tokens masked."""
+    text = "" if value is None else str(value)
+    text = _CONTROL_RE.sub(" ", text)
+    text = _TOKEN_RE.sub("[redacted]", text)
+    text, _ = _mask_credentials(text)
+    return text[:_DENIAL_TEXT_CAP]
 
 
 def _waives(row) -> list:
@@ -236,17 +254,29 @@ class OversightMixin:
              meta.get("finding", ""), meta.get("reason", ""), event_seq))
 
     def _record_oversight_denied(self, principal, batch_ref, exc, now):
-        """One denied row + one open alarm after the batch has rolled back."""
-        if "oversight:" not in str(getattr(exc, "msg", "") or ""):
-            return
+        """One denied row + one open alarm after the batch has rolled back.
+
+        Runs for EVERY refusal an oversight principal earns, not only the
+        policy's ``oversight:<reason>`` verdicts.  A refusal the shared store
+        machinery raises (a cycle in ``_final_validation``, a ``bad_state``
+        from a verb, a ``validation`` from the shape check, ...) has no policy
+        verdict behind it, so the row names the failing op from the ``op <n>
+        ...`` prefix and stores the exception's own code and message.
+        """
+        msg = str(getattr(exc, "msg", "") or "")
         fail = getattr(self, "_oversight_fail", None) or {}
-        op = fail.get("op") or {"op": "apply_ops"}
-        index = fail.get("index", 0)
-        key = fail.get("key") or (oversight_policy_key(op)
-                                  if oversight_policy_key(op) != "-" else None)
-        reason = fail.get("reason") or self._reason_from_msg(exc.msg)
-        finding = fail.get("finding", "")
-        code = f"oversight:{reason}"
+        index, op, key, finding, input_reason = self._denial_context(exc, fail)
+        policy_reason = self._reason_from_msg(msg) if "oversight:" in msg else None
+        code = getattr(exc, "code", None) or "op_denied"
+        if policy_reason is not None and code == "forbidden":
+            # A forbidden policy denial has no other specific code; the audit
+            # keeps naming the granted-scope reason (the contract tests pin
+            # this shape) and the op's own reason as its human text.
+            code = f"oversight:{policy_reason}"
+            stored_reason = input_reason
+        else:
+            # Everything else stores the contract code and the actual message.
+            stored_reason = _audit_text(msg)
         self.conn.execute(
             "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
             "batch_ref,op_index,op,key,finding_id,reason,outcome,code,event_seq)"
@@ -254,8 +284,8 @@ class OversightMixin:
             "?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
             (self._iso(now), principal.token_id, principal.name,
              principal.generation, batch_ref or "", index + 1,
-             op.get("op"), key, finding, fail.get("input_reason", ""), code))
-        detail = (f"oversight:{reason} principal={principal.name}"
+             op.get("op"), key, finding, stored_reason, code))
+        detail = (f"oversight:{policy_reason or code} principal={principal.name}"
                   f" gen={principal.generation} op={op.get('op')}"
                   f" finding={finding}")
         self.conn.execute(
@@ -266,10 +296,43 @@ class OversightMixin:
             " DO NOTHING",
             (finding, detail, self._iso(now)))
 
+    def _denial_context(self, exc, fail):
+        """``(index, op, key, finding, input_reason)`` for a denied batch.
+
+        A policy verdict (``_oversight_fail``) already names them; a refusal
+        from the shared machinery carries only the ``op <n> <name> <key>:``
+        prefix, so the op is recovered from the batch the caller passed.
+        """
+        if isinstance(fail.get("op"), dict):
+            op = fail["op"]
+            return (int(fail.get("index") or 0), op,
+                    fail.get("key") or _policy_key(op),
+                    _audit_text(fail.get("finding", "")),
+                    _audit_text(fail.get("input_reason", "")))
+        ops = getattr(self, "_oversight_ops", None) or []
+        match = _OP_FAIL_RE.match(str(getattr(exc, "msg", "") or ""))
+        index = 0
+        op = {"op": "apply_ops"}
+        key = None
+        if match is not None:
+            index = max(int(match.group(1)) - 1, 0)
+            raw = ops[index] if index < len(ops) else None
+            op = raw if isinstance(raw, dict) else {"op": match.group(2)}
+            key = None if match.group(3) == "-" else match.group(3)
+        return (index, op, key or _policy_key(op),
+                _audit_text(op.get("finding", "")),
+                _audit_text(op.get("reason", "")))
+
     @staticmethod
     def _reason_from_msg(msg):
         match = _REASON_RE.search(str(msg or ""))
         return match.group(1) if match else "op_denied"
+
+
+def _policy_key(op):
+    """The op's key when it names one, else ``None`` (never the ``-`` marker)."""
+    key = oversight_policy_key(op)
+    return None if key == "-" else key
 
 
 def oversight_policy_key(op):
