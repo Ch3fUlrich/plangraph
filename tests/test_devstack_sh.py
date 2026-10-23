@@ -17,6 +17,7 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="devstack.sh is a pos
 TEMPORAL_FAKE = """\
 #!/bin/bash
 TMP="{tmp}"
+if [ "${{1:-}}" = server ] && [ -n "${{FAKE_SERVER_DELAY:-}}" ]; then sleep "$FAKE_SERVER_DELAY"; fi
 l=temporal; for a in "$@"; do l="$l $a"; done; printf '%s\n' "$l" >>"$TMP/calls.log"
 case "${{1:-}}" in
   server)
@@ -29,6 +30,7 @@ case "${{1:-}}" in
     exec -a "temporal server start-dev" sleep 300 ;;
   operator)
     if [ "${{FAKE_HEALTH_FAIL:-}}" = 1 ]; then exit 1; fi
+    [ -e "$TMP/temporal_child.pid" ] || exit 1
     exit 0 ;;
   worker)
     if [ "${{FAKE_SETCUR_FAIL:-}}" = 1 ]; then exit 1; fi
@@ -140,6 +142,19 @@ def test_start_is_idempotent(stack):
     second = stack.lines()[first:]
     assert not any("start-dev" in l for l in second)
     assert not any(l.startswith("docker run") for l in second)
+
+
+def test_start_waits_for_server_before_reporting_healthy(stack):
+    # Race: start must not report healthy until the fake server has logged start-dev.
+    r = stack.run("start", extra_env={"FAKE_SERVER_DELAY": "1"})
+    assert r.returncode == 0
+    dev = [l for l in stack.lines() if l.startswith("temporal server start-dev")]
+    assert len(dev) == 1
+
+    r = stack.run("start", extra_env={"FAKE_SERVER_DELAY": "1"})
+    assert r.returncode == 0
+    dev = [l for l in stack.lines() if l.startswith("temporal server start-dev")]
+    assert len(dev) == 1
 
 
 def test_status_reports_running_then_stopped_after_stop(stack):

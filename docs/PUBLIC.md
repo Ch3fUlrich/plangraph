@@ -12,6 +12,13 @@ paths, router or project names, plans or decisions. The code reads every such va
 keeper config (below), so the two repos only meet at run time. Decision ids (D-NNN) may appear
 bare; decision titles or text are never quoted here.
 
+One worked example is the model-gateway endpoint the spawner hands to spawned agents: it is read
+at run time from the environment — `OMNIROUTE_BASE_URL` wins over `PLANGRAPH_GATEWAY_URL`
+(`plangraph.spawner.clients.effective_gateway_base_url()`) — and no source file carries a
+default value — unset simply means "no endpoint configured". The `gateway_url()` helper also
+accepts a config mapping whose `gateway_url` key would supply the value, but no production
+caller passes one today; that argument is for callers that do.
+
 ## What the public repo contains
 
 Exactly the paths allow-listed in `tools/split/manifest.toml` (`[public]`): `src/`, `tests/`,

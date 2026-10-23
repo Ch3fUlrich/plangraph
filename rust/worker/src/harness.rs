@@ -33,6 +33,12 @@ pub trait Harness: Send + Sync {
     fn binary(&self) -> Option<&str> {
         None
     }
+    /// True when the harness prints the opencode `--format json` event stream,
+    /// so the attempt can read provider errors, an empty run and token counts
+    /// from the output itself. A plain-text harness leaves it at `false`.
+    fn json_events(&self) -> bool {
+        false
+    }
     /// Refuse a run whose arguments could be parsed as options by the CLI
     /// (option smuggling). The prompt is safe because it follows `--`; a
     /// model name has no such protection.
@@ -49,6 +55,33 @@ fn reject_option_like(what: &str, value: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Env var carrying the per-attempt opencode config.
+///
+/// Opencode reads it ahead of its config files, so it is the one knob that
+/// applies to a single attempt without touching the operator's own config.
+pub const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
+
+/// The per-attempt opencode permission policy, as the JSON the CLI expects.
+///
+/// Every key is `allow` or `deny`, never `ask`: no human is watching an
+/// attempt, so an `ask` would block the agent until the stall watchdog kills
+/// it. A path outside the worktree is denied, which makes the worktree — and
+/// only the worktree — the agent's write set.
+pub fn opencode_permission_config() -> String {
+    r#"{"permission":{"external_directory":"deny","edit":"allow","bash":"allow","webfetch":"deny","doom_loop":"deny"}}"#
+        .to_string()
+}
+
+/// The options every `opencode run` leg carries: the JSON event stream the
+/// attempt classifies, no self-update (it would replace the very binary we
+/// supervise) and the per-attempt permission policy.
+fn opencode_options(cmd: &mut Command) {
+    cmd.arg("--format")
+        .arg("json")
+        .env("OPENCODE_DISABLE_AUTOUPDATE", "1")
+        .env(OPENCODE_CONFIG_ENV, opencode_permission_config());
 }
 
 /// The `opencode run` CLI.
@@ -80,19 +113,22 @@ impl Harness for Opencode {
         Some(&self.bin)
     }
 
+    fn json_events(&self) -> bool {
+        true
+    }
+
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
         // No shell: the prompt is a single argv element, so nothing in it is parsed.
-        cmd.arg("run")
-            .arg("-m")
+        cmd.arg("run");
+        opencode_options(&mut cmd);
+        cmd.arg("-m")
             .arg(run.model)
             // `--` ends options: a prompt starting with `-` stays the prompt.
             .arg("--")
             .arg(run.prompt)
             .current_dir(run.workdir)
-            .stdin(Stdio::null())
-            // A self-update mid-run would replace the very binary we supervise.
-            .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
+            .stdin(Stdio::null());
         cmd
     }
 }
@@ -220,18 +256,22 @@ impl Harness for OpencodeServer {
         Some(&self.bin)
     }
 
+    fn json_events(&self) -> bool {
+        true
+    }
+
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
-        cmd.arg("run")
-            .arg("--attach")
+        cmd.arg("run");
+        opencode_options(&mut cmd);
+        cmd.arg("--attach")
             .arg(&self.url)
             .arg("-m")
             .arg(run.model)
             .arg("--")
             .arg(run.prompt)
             .current_dir(run.workdir)
-            .stdin(Stdio::null())
-            .env("OPENCODE_DISABLE_AUTOUPDATE", "1");
+            .stdin(Stdio::null());
         cmd
     }
 
@@ -304,8 +344,15 @@ pub fn run_harness(
 }
 
 /// Env var pinning harness versions, `name=version` pairs separated by commas
-/// (for example `opencode=1.2.3,claude=2.0.1`). Unset means no pin.
+/// (for example `opencode=1.2.3,claude=2.0.1`). Unset or empty verifies
+/// [`DEFAULT_PINS`]; a set value replaces them entirely. `name=*` explicitly
+/// unpins that name.
 pub const VERSIONS_ENV: &str = "PG_HARNESS_VERSIONS";
+
+/// The versions verified when [`VERSIONS_ENV`] is unset: a CLI upgrade is a
+/// behaviour change, so the worker refuses to start on a drift instead of
+/// discovering it in a retry loop.
+pub const DEFAULT_PINS: &[(&str, &str)] = &[("opencode", "2.0.32")];
 
 /// Why the startup version pin refused to start the worker.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -419,16 +466,30 @@ pub fn verify_pins(reg: &HarnessRegistry, pins: &[(String, String)]) -> Result<(
     Ok(())
 }
 
-/// Apply [`VERSIONS_ENV`] (already read by the caller) to `reg`. `None` or an
-/// empty value is "no pin": the caller logs a warning and goes on.
+/// Resolve which harness versions to verify, then do it.
+///
+/// An unset or empty [`VERSIONS_ENV`] verifies [`DEFAULT_PINS`] for every name
+/// this worker registered with a binary; a name that is unregistered (or is a
+/// binary-less test double) is skipped, never refused. A set value replaces the
+/// defaults entirely, as before. `name=*` is an explicit "do not pin": the
+/// entry is dropped before the probe. `Ok(true)` means at least one pin was
+/// verified, `Ok(false)` that none was.
 pub fn check_version_pins(reg: &HarnessRegistry, spec: Option<&str>) -> Result<bool, PinError> {
-    match spec.map(str::trim) {
+    let pins: Vec<(String, String)> = match spec.map(str::trim) {
         Some(s) if !s.is_empty() => {
-            verify_pins(reg, &parse_pins(s)?)?;
-            Ok(true)
+            let mut pins = parse_pins(s)?;
+            // `*` never reaches the probe: it means "explicitly unpinned".
+            pins.retain(|(_, version)| version.as_str() != "*");
+            pins
         }
-        _ => Ok(false),
-    }
+        _ => DEFAULT_PINS
+            .iter()
+            .filter(|(name, _)| reg.get(name).is_some_and(|h| h.binary().is_some()))
+            .map(|(name, version)| ((*name).to_string(), (*version).to_string()))
+            .collect(),
+    };
+    verify_pins(reg, &pins)?;
+    Ok(!pins.is_empty())
 }
 
 /// Errors from the symlink sandbox check.
@@ -551,7 +612,18 @@ mod tests {
             .get_args()
             .map(|a| a.to_string_lossy().into_owned())
             .collect();
-        assert_eq!(args, ["run", "-m", "some/model", "--", "fix the bug"]);
+        assert_eq!(
+            args,
+            [
+                "run",
+                "--format",
+                "json",
+                "-m",
+                "some/model",
+                "--",
+                "fix the bug"
+            ]
+        );
         assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
         assert_eq!(
             c.get_envs()
@@ -559,6 +631,53 @@ mod tests {
                 .and_then(|(_, v)| v),
             Some(OsStr::new("1"))
         );
+        let cfg = c
+            .get_envs()
+            .find(|(k, _)| k.to_str() == Some(OPENCODE_CONFIG_ENV))
+            .and_then(|(_, v)| v)
+            .expect("per-attempt permission config is set");
+        assert_eq!(cfg, OsStr::new(&opencode_permission_config()));
+    }
+
+    #[test]
+    fn permission_config_is_json_that_never_asks() {
+        let raw = opencode_permission_config();
+        let cfg: serde_json::Value = serde_json::from_str(&raw).expect("config is JSON");
+        assert_eq!(cfg["permission"]["external_directory"], "deny", "{raw}");
+        let permission = cfg["permission"].as_object().expect("permission object");
+        // No human is watching an attempt: an `ask` would block until the stall
+        // watchdog kills the run, so no key may ever be `ask`.
+        assert!(
+            permission.values().all(|v| v.as_str() != Some("ask")),
+            "{raw}"
+        );
+        for (key, value) in permission {
+            let decision = value.as_str().unwrap_or("");
+            assert!(
+                decision == "allow" || decision == "deny",
+                "{key} is {value}, not allow/deny"
+            );
+        }
+    }
+
+    /// The real command through the real confinement: the config the harness
+    /// sets on its own `Command` is, by construction, the only one the CLI sees.
+    #[test]
+    fn the_opencode_config_survives_the_env_scrub() {
+        let home = tempfile::tempdir().unwrap();
+        let run = HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "some/model",
+            prompt: "p",
+        };
+        let mut c = Opencode::new().command(&run);
+        pg_worker_core::sandbox_env::confine_harness(&mut c, home.path());
+        let got = c
+            .get_envs()
+            .find(|(k, _)| k.to_str() == Some(OPENCODE_CONFIG_ENV))
+            .and_then(|(_, v)| v)
+            .map(|v| v.to_string_lossy().into_owned());
+        assert_eq!(got.as_deref(), Some(opencode_permission_config().as_str()));
     }
 
     fn argv(c: &Command) -> Vec<String> {
@@ -605,6 +724,8 @@ mod tests {
             argv(&c),
             [
                 "run",
+                "--format",
+                "json",
                 "--attach",
                 "http://127.0.0.1:4096",
                 "-m",
@@ -614,6 +735,14 @@ mod tests {
             ]
         );
         assert_eq!(c.get_current_dir(), Some(Path::new("/tmp/w")));
+        assert_eq!(
+            c.get_envs()
+                .find(|(k, _)| k.to_str() == Some(OPENCODE_CONFIG_ENV))
+                .and_then(|(_, v)| v)
+                .map(|v| v.to_string_lossy().into_owned())
+                .as_deref(),
+            Some(opencode_permission_config().as_str())
+        );
     }
 
     #[test]
@@ -814,6 +943,16 @@ mod tests {
     }
 
     #[test]
+    fn only_the_opencode_legs_emit_json_events() {
+        assert!(Opencode::new().json_events());
+        assert!(OpencodeServer::new("http://127.0.0.1:4096").json_events());
+        // Claude prints text and a test double prints whatever it likes: neither
+        // stream may be parsed as opencode events.
+        assert!(!ClaudeCode::new().json_events());
+        assert!(!Fake { script: "" }.json_events());
+    }
+
+    #[test]
     fn pins_parse_and_reject_garbage() {
         assert_eq!(
             parse_pins("opencode=1.2.3, claude=2.0.1,").unwrap(),
@@ -922,6 +1061,81 @@ mod tests {
         let reg = HarnessRegistry::new();
         assert_eq!(check_version_pins(&reg, None), Ok(false));
         assert_eq!(check_version_pins(&reg, Some("  ")), Ok(false));
+    }
+
+    #[test]
+    fn default_pin_accepts_a_match_and_refuses_a_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let matched = registry_with(fake_bin(d.path(), "ok", "opencode 2.0.32", 0));
+        assert_eq!(check_version_pins(&matched, None), Ok(true));
+        let drifted = registry_with(fake_bin(d.path(), "old", "opencode 2.0.31", 0));
+        assert_eq!(
+            check_version_pins(&drifted, None),
+            Err(PinError::Mismatch {
+                name: "opencode".into(),
+                want: "2.0.32".into(),
+                found: "opencode 2.0.31".into(),
+            })
+        );
+        // An empty value means the same as unset, and refuses the same drift.
+        assert!(matches!(
+            check_version_pins(&drifted, Some("  ")),
+            Err(PinError::Mismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn default_pins_apply_only_to_registered_binaries() {
+        // `opencode` registered without a binary (a test double): the default
+        // is skipped rather than refused, and nothing was verified.
+        struct Binless;
+        impl Harness for Binless {
+            fn name(&self) -> &str {
+                "opencode"
+            }
+            fn command(&self, _run: &HarnessRun) -> Command {
+                Command::new("true")
+            }
+        }
+        let reg = HarnessRegistry::new().with("opencode", Arc::new(Binless));
+        assert_eq!(check_version_pins(&reg, None), Ok(false));
+        // A registered binary with no default pin (claude) is not demanded.
+        let reg = HarnessRegistry::new().with("claude", Arc::new(ClaudeCode::new()));
+        assert_eq!(check_version_pins(&reg, None), Ok(false));
+    }
+
+    #[test]
+    fn star_unpins_a_name() {
+        let d = tempfile::tempdir().unwrap();
+        let reg = registry_with(fake_bin(d.path(), "drift", "opencode 9.9.9", 0));
+        // `opencode=*` is an explicit "do not pin": the drift is not checked,
+        // and it does not fall back to the default pin either.
+        assert_eq!(check_version_pins(&reg, Some("opencode=*")), Ok(false));
+    }
+
+    #[test]
+    fn versions_env_replaces_the_defaults() {
+        let d = tempfile::tempdir().unwrap();
+        let reg = HarnessRegistry::new()
+            .with(
+                "opencode",
+                Arc::new(Opencode {
+                    bin: fake_bin(d.path(), "drift", "opencode 9.9.9", 0),
+                }),
+            )
+            .with(
+                "claude",
+                Arc::new(ClaudeCode {
+                    bin: fake_bin(d.path(), "cl", "claude 2.0.1", 0),
+                }),
+            );
+        // Only the named pin is verified, so the default opencode pin is gone.
+        assert_eq!(check_version_pins(&reg, Some("claude=2.0.1")), Ok(true));
+        // Unset falls back to the default, which refuses the drift.
+        assert!(matches!(
+            check_version_pins(&reg, None),
+            Err(PinError::Mismatch { .. })
+        ));
     }
 
     #[test]

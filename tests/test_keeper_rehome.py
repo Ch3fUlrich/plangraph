@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from keeper_util import World, defn, seed, to_done, to_claimed
+from keeper_util import (World, defn, seed, seed_stranded_claim, to_claimed,
+                         to_done)
 from plangraph import views
 from plangraph.keeper import auth, fmt, mcp
 from plangraph.keeper.errors import Refused
@@ -280,7 +281,9 @@ def test_closes_token_naming_the_old_key_counts_for_the_new_key(w, tmp_path):
                     f"| D-5 | close | Closes: {OLD} |\n", encoding="utf-8")
     w.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
     _rehome(w)
-    w.store.set_legacy_state(w.p("router"), NEW, "claimed")
+    # The pre-fix stranded-claim row the close proof sits on; one shared seeder
+    # for this file and tests/test_keeper_legacy_state.py (KEEPER-OPCLAIM-CLOSE).
+    seed_stranded_claim(w, NEW)
     w.store.add_evidence_router(w.p("router"), NEW, "decision", {"id": "D-5"})
     item = w.store._item(NEW)
     _rows, named = w.store._decision_evidence(NEW, item, w.store.now())

@@ -131,6 +131,22 @@ def test_apply_ops_is_router_only(w):
     assert ei.value.code == "forbidden"
     assert ("demo:A", "demo:B") not in _edges(w)
 
+def test_apply_ops_add_dep_on_a_claimed_item_is_refused_for_non_router(w):
+    to_claimed(w, "demo:A")
+    epoch = w.store._item("demo:A")["epoch"]
+    snapshot = _snapshot(w)
+    for who in ("l1main", "reviewer"):
+        with pytest.raises(Refused) as ei:
+            w.store.apply_ops(w.p(who),
+                              [{"op": "add_dep", "key": "demo:A",
+                                "dep": "demo:B"}])
+        assert ei.value.code == "forbidden"
+    assert _snapshot(w) == snapshot
+    assert ("demo:A", "demo:B") not in _edges(w)
+    item = w.store._item("demo:A")
+    assert item["state"] == "claimed"
+    assert item["epoch"] == epoch
+
 # --------------------------------------------------- cancelled dependencies
 def test_edit_drops_cancelled_dependency_with_warning(w):
     w.store.cancel(w.p("router"), "demo:C", "superseded")
@@ -177,6 +193,10 @@ def test_add_dep_on_a_claimed_item_is_a_router_edit(w):
                                   "dep": "demo:B"}])
     assert results["results"][0]["key"] == "demo:A"
     assert ("demo:A", "demo:B") in _edges(w)
+    event = w.conn.execute(
+        "SELECT type FROM events WHERE key=? ORDER BY seq DESC LIMIT 1",
+        ("demo:A",)).fetchone()
+    assert event[0] == "item_defined"
     item = w.store._item("demo:A")
     assert (item["state"], item["epoch"]) == ("claimed", epoch + 1)
     assert item["round"] == 1          # the active-edit bump (D-434/F4; epoch bumped too)

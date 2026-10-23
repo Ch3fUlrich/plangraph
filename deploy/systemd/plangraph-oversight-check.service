@@ -1,0 +1,11 @@
+[Unit]
+Description=plangraph keeper: oversight check (digest + alarms) every 30 min (RT-OVERSIGHT-CHECKS)
+After=plangraph-keeper.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph/.claude/worktrees/proposal
+Environment=PYTHONPATH=%h/code/plangraph/.claude/worktrees/proposal/src
+ExecStart=/usr/bin/python3 -m plangraph.keeper.cli --config %h/.local/share/plangraph/keeper.json oversight-check --out-dir %h/.local/share/plangraph/oversight
+TimeoutStartSec=5min
+# exit 0 even with findings (they are digest rows and projector_alarms); non-zero only on a config/runtime failure.

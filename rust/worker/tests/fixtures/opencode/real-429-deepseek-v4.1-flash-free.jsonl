@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1792335123165,"sessionID":"ses_synthetic002","part":{"id":"prt_synthetic002","sessionID":"ses_synthetic002","messageID":"msg_synthetic002","type":"step-start"}}
+{"type":"error","timestamp":1792335123172,"sessionID":"ses_synthetic002","error":{"type":"provider.quota","message":"Rate limit exceeded. Please try again later.","status":429,"response":{"body":"{\"type\":\"error\",\"error\":{\"type\":\"FreeUsageLimitError\",\"message\":\"Rate limit exceeded. Please try again later.\"}}"}}}

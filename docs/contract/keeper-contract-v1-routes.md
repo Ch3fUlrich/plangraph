@@ -202,8 +202,9 @@ Router. `{key, state: "claimed"|"in_review"[, note]}` on an `open` item; epoch
 [Legacy]. `400 bad_state` unless open.
 
 ### `POST /v1/apply_ops`
-Router. `{ops:[Op], batch_ref?}`, 1..500 ops, all or nothing (contract section
-7). `200 {applied: N, results:[...]}` [ApplyOps]. A refusal returns the failing
+Router. `{ops:[Op], batch_ref?, base_seq?, dry_run?}`, 1..500 ops, all or nothing (contract section
+7). `base_seq?` (non-negative int), `dry_run?` (bool). `200 {applied: N, results:[...]}` [ApplyOps];
+dry_run reply `{applied, results, dry_run:true}`. `409 conflict` for stale base_seq. A refusal returns the failing
 op's status and code with `msg` = `op <n> <op> <key>: <code> <message>`.
 
 ### `POST /v1/migrate_descriptions`
