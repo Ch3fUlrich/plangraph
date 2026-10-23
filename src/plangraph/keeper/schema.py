@@ -23,10 +23,10 @@ STATES = ("open", "ready", "claimed", "in_review", "done", "cancelled", "running
           "needs_input", "waiting", "failed", "parked")
 
 #: design 4.5: how an attempt ended.
-EXIT_CLASSES = ("ok", "check_fail", "flaky_check", "usage_limit", "outage",
-                "lease_lost", "worker_crash", "stall", "timeout", "rebase_conflict",
-                "merge_refused", "probe_fail", "contract_defect", "needs_input",
-                "cancelled")
+EXIT_CLASSES = ("ok", "check_fail", "no_change", "flaky_check", "usage_limit",
+                "outage", "lease_lost", "worker_crash", "stall", "timeout",
+                "rebase_conflict", "merge_refused", "probe_fail",
+                "contract_defect", "needs_input", "cancelled")
 
 WINDOW_CLASSES = ("128k", "256k", "1m")
 RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-step")
