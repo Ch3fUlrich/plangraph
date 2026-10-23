@@ -1090,24 +1090,7 @@ async fn gate_step(
     let r: GateResult = match ctx
         .execute_activity(
             CardActivities::gate,
-            GateInput {
-                workroot: input.workroot.clone(),
-                // The same worktree `merge_step` hands the merge: the gate must
-                // judge the tree that will land, not a fresh checkout of it.
-                workdir: format!(
-                    "{}/{}",
-                    input.workroot,
-                    AttemptId::new(input.claim.card.clone(), n).dir_name()
-                ),
-                checks,
-                base_sha: Some(
-                    input
-                        .base_sha
-                        .clone()
-                        .unwrap_or_else(|| base_sha.to_string()),
-                ),
-                exports: input.exports.clone(),
-            },
+            gate_input(input, base_sha, n, checks),
             gate_options(cfg),
         )
         .await
@@ -1127,6 +1110,21 @@ async fn gate_step(
         }
     };
     Ok(map_gate_result(r, base_sha))
+}
+
+fn gate_input(input: &CardInput, base_sha: &str, n: u32, checks: Vec<GateCheck>) -> GateInput {
+    GateInput {
+        workroot: input.workroot.clone(),
+        // Judge the tree that will land, against its current attempt base.
+        workdir: format!(
+            "{}/{}",
+            input.workroot,
+            AttemptId::new(input.claim.card.clone(), n).dir_name()
+        ),
+        checks,
+        base_sha: Some(base_sha.to_string()),
+        exports: input.exports.clone(),
+    }
 }
 
 /// Map a gate result to the step the run loop acts on: `None` when the gate
@@ -1480,6 +1478,14 @@ mod tests {
         assert!(input.smoke_checks.is_empty());
         assert!(input.exports.is_empty());
         assert!(input.base_sha.is_none());
+    }
+
+    #[test]
+    fn gate_diff_uses_current_attempt_base_not_stale_wire_base() {
+        let (_root, mut input) = card_input(vec![]);
+        input.base_sha = Some("stale-wire-base".into());
+        let gate = gate_input(&input, "current-attempt-base", 2, gate_checks(&input));
+        assert_eq!(gate.base_sha.as_deref(), Some("current-attempt-base"));
     }
 
     #[test]

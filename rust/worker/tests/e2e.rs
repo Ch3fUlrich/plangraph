@@ -1626,8 +1626,7 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
     .await;
 }
 
-/// A leg naming a harness this worker never registered is the plan's fault:
-/// the card goes back to the planner instead of crashing or retrying.
+/// A passing base check parks without retrying or invoking the writer.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn red_first_parks_without_retry_or_harness() {
     in_local(async {
@@ -1657,6 +1656,8 @@ async fn red_first_parks_without_retry_or_harness() {
     .await;
 }
 
+/// A leg naming a harness this worker never registered is the plan's fault:
+/// the card goes back to the planner instead of crashing or retrying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn unknown_harness_goes_to_planner() {
     in_local(async {

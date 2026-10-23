@@ -232,6 +232,9 @@ fn run_attempt_inner(
                 .map(|j| (j.bin.as_path(), &j.limits, j.tmp.as_path())),
             &|| false,
         )?;
+        // Base-check scratch is not writer work, even when the check parks.
+        worker_git(&dest, &["checkout", "--", "."])?;
+        worker_git(&dest, &["clean", "-fdq"])?;
         if pre.passed() {
             let mut result = cancelled_result(&branch, &wt.head, String::new());
             result.exit_class = ExitClass::ContractDefect;
@@ -965,25 +968,92 @@ mod tests {
         let mut c = claim(
             &r.path().to_string_lossy(),
             &base,
-            &["out.txt", "marker"],
-            "if test ! -f out.txt; then echo scoped > marker; exit 1; fi",
+            &["out.txt"],
+            "test -f README.md || exit 0; if test ! -f out.txt; then echo scoped > marker; exit 1; fi",
         );
         c.check_kind = "change".into();
         let inp = input(c, 1, root.path());
-        // Only the base check writes the marker; the harness must see it before
-        // the post-attempt check can run, so that check cannot mask a wrong cwd.
-        let h = Fake::new("test \"$(cat marker)\" = scoped && echo hi > out.txt");
+        let h = Fake::new("test ! -e marker && echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         let dest = root
             .path()
             .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
-        assert_eq!(
-            std::fs::read_to_string(dest.join("marker")).unwrap(),
-            "scoped\n"
-        );
+        assert!(!dest.join("marker").exists());
+        assert_eq!(git(&dest, &["diff", "--name-only", &base, "HEAD"]), "out.txt");
         assert!(!r.path().join("marker").exists());
         assert_eq!(h.runs(), 1);
         assert_eq!(res.exit_class, ExitClass::Ok);
+    }
+
+    #[test]
+    fn red_first_untracked_file_outside_allow_is_not_writer_work() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "if test ! -f out.txt; then echo scratch > outside; exit 1; fi",
+        );
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("test ! -e outside && echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+        assert!(!dest.join("outside").exists());
+        assert_eq!(git(&dest, &["diff", "--name-only", &base, "HEAD"]), "out.txt");
+    }
+
+    #[test]
+    fn red_first_base_check_uses_fake_jail() {
+        // Isolate env overrides in a child test process: other parallel tests
+        // must never observe the fake jail or systemd launcher.
+        if std::env::var_os("PG_FAKE_JAIL_TEST").is_some() {
+            let (r, base) = repo();
+            let root = tempfile::tempdir().unwrap();
+            let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true");
+            c.check_kind = "change".into();
+            let inp = input(c, 1, root.path());
+            let h = Fake::new("exit 99");
+            let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+            assert_eq!(res.exit_class, ExitClass::ContractDefect);
+            assert!(res.check_tail.starts_with("red-first:"));
+            assert_eq!(h.runs(), 0);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let tools = tempfile::tempdir().unwrap();
+        let marker = tools.path().join("invoked");
+        let jail = tools.path().join("fake-jail");
+        for (path, script) in [
+            (
+                tools.path().join("systemd-run"),
+                "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
+            ),
+            (
+                jail.clone(),
+                "#!/bin/sh\nprintf invoked > \"$PG_FAKE_JAIL_TEST\"\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
+            ),
+        ] {
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut paths = vec![tools.path().to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "attempt::tests::red_first_base_check_uses_fake_jail"])
+            .env("PG_FAKE_JAIL_TEST", &marker)
+            .env("PG_JAIL_BIN", &jail)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "invoked");
     }
 
     #[test]
@@ -1010,10 +1080,7 @@ mod tests {
         let dest = root
             .path()
             .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
-        assert_eq!(
-            std::fs::read_to_string(dest.join("marker")).unwrap(),
-            "scoped\n"
-        );
+        assert!(!dest.join("marker").exists());
         assert_eq!(res.exit_class, ExitClass::ContractDefect);
         assert!(res.check_tail.starts_with("red-first:"));
         assert_eq!(h.runs(), 0);
@@ -1024,7 +1091,12 @@ mod tests {
         for kind in ["", "change"] {
             let (r, base) = repo();
             let root = tempfile::tempdir().unwrap();
-            let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true");
+            let mut c = claim(
+                &r.path().to_string_lossy(),
+                &base,
+                &["out.txt"],
+                "echo changed > README.md; echo scratch > marker; true",
+            );
             c.check_kind = kind.into();
             let inp = input(c, 1, root.path());
             let h = Fake::new("echo hi > out.txt");
@@ -1032,6 +1104,14 @@ mod tests {
             assert_eq!(res.exit_class, ExitClass::ContractDefect);
             assert_eq!(h.runs(), 0);
             assert_eq!(res.head, base);
+            let dest = root
+                .path()
+                .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+            assert!(!dest.join("marker").exists());
+            assert_eq!(
+                std::fs::read_to_string(dest.join("README.md")).unwrap(),
+                "hello\n"
+            );
             assert_eq!(res.diff_hash, confine::diff_hash(r.path(), &base).unwrap());
             assert_eq!(
                 res.check_tail,

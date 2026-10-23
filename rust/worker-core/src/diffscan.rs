@@ -80,7 +80,13 @@ impl Patch {
         if !(self.path.contains("tests/")
             || (name.starts_with("test_") && name.ends_with(".py"))
             || name.ends_with("_test.py")
-            || name.ends_with("_test.rs"))
+            || name.ends_with("_test.rs")
+            || (name.ends_with(".rs")
+                && self.lines.iter().any(|(_, line)| {
+                    ["#[test]", "#[ignore", "#[tokio::test", "mod tests"]
+                        .iter()
+                        .any(|marker| line.contains(marker))
+                })))
         {
             return;
         }
@@ -156,7 +162,7 @@ impl Patch {
 }
 
 fn test_fn<'a>(text: &'a str, rust_test: &mut bool) -> Option<&'a str> {
-    let marked = *rust_test || text.contains("#[test]");
+    let marked = *rust_test || text.contains("#[test]") || text.contains("#[tokio::test");
     if text.starts_with("#[") {
         *rust_test = marked;
     } else if !text.is_empty() && !text.starts_with("//") {
@@ -265,6 +271,32 @@ mod tests {
             kinds("x_test.rs", "-#[test]\n-fn works() {"),
             vec![FindingKind::DeletedTestFn]
         );
+    }
+    #[test]
+    fn deleted_inline_rust_test() {
+        for attribute in ["#[test]", "#[tokio::test]"] {
+            assert_eq!(
+                kinds(
+                    "rust/worker/src/activities.rs",
+                    &format!(" mod tests {{\n-{attribute}\n-fn works() {{}}")
+                ),
+                vec![FindingKind::DeletedTestFn]
+            );
+        }
+    }
+    #[test]
+    fn plain_src_rust_function_is_not_a_test() {
+        assert!(kinds("rust/worker/src/activities.rs", "-fn helper() {}").is_empty());
+    }
+    #[test]
+    fn inline_rust_markers_in_context_or_additions() {
+        for body in [
+            " #[test]\n-fn works() {}",
+            "+#[ignore = \"flaky\"]",
+            " mod tests {\n-assert!(true);",
+        ] {
+            assert!(!kinds("src/lib.rs", body).is_empty());
+        }
     }
     #[test]
     fn moved_rust_fn() {
