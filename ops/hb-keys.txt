@@ -4,7 +4,6 @@ plangraph:RT-P1-WF-VERSIONING
 plangraph:OCGO-PROBE
 plangraph:OCGO-L1-FALLBACK
 plangraph:RT-OVERSIGHT-KEEPER-SCOPE
-plangraph:RT-P1-ATTEMPT-SANDBOX
 plangraph:RT-P1-CARD-CHECKS
 plangraph:RT-P1-BUS-CONTRACT
 plangraph:RT-P1-PHASE-RUNNER
