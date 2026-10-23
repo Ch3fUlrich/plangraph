@@ -115,6 +115,7 @@ D-1984 (Q19): read item + named docs before asking anyone. D-1985: Jev key only 
 - CI: tests.yml has NO push trigger: after every merge `gh workflow run tests.yml --ref main`, watch, then attach commit+ci.
 
 ## IN FLIGHT (act in this order)
+#22 (gen-20 -> gen-21, 2026-10-23 ~10:1xZ, recycle per routing 09:49Z): card status/build-L1.card.md = ground truth. Order: (1) restart hb bg loop (one bg wait, ops/hb-keys.txt); (2) #140: collect d87d07 merge3 (exec=PG Mig7, SQLite choice) -> push lane/rt-p1-exec-ownership-sq2 -> CI -> 2 seats non-qoder (D-2389) != openai/xiaomi/zhipu (deepseek gateway + agy sonnet stream-json) -> re-GO-REQ (D-2386 was on 9b9b0571) -> mergepath -> verdicts; (3) #96: agy sonnet seat r5 -> verdict (PGTOK=reviewer-anthropic) -> keeper closes on 2 families (D-2394); (4) collect 8928df GOV-CTX-METRICS + 7bf42d PG-PUBLIC-FIX -> PR, CI, 2 seats, merge; (5) adopted L2s: flow-oversight-3 #138, ui-browser (D-2388 Gate-Edit scope); (6) queue: JEV-ATTEMPT-THREAD, EXEC-OBSERVED-STATE, UI-GRAPH-RELOAD-FREEZE, RT-P1-SANDBOX-JAIL-E2E, PG-BOOTSTRAP (dep autoos:AO-OCL1-PW-FILE). Traps: never eval pieces of mergepath.sh (waitci is one line; the range ran the whole script); use bash -c with pipefail for chains; zsh '=' word expansion breaks echo ===x.
 #21 (gen-19 -> gen-20, 2026-10-23 07:25Z): the card status/build-L1.card.md is the ground truth; read it first. Order: (1) restart the hb bg loop; (2) PG-PUBLIC-READY: wait for router withdraw_review (BLOCKED A), then evidence cbf21431 + submit + qwen+glm verdicts from seats/pr136/r2; (3) #133: collect writer 43adad -> squash with ONE trailer block -> CI -> seats qwen + deepseek -> GO-REQ; (4) KEEPER-TRAILER-MULTI writer 0e3d4e -> PR -> seats; (5) RT95 writer when memory allows; (6) await L2 MERGE-READYs (#96 sweep-keeper, #100 sweep-runtime, KEEPER-SCOPE flow-oversight-3, BUS-CONTRACT). Live keeper = live-2d61e281 (LIVE-SYNC-8 rolled back D-2345: strict request.item_key in run-token check; fix-forward first, see card).
 1. md-sync (D-1990 blocker, GO D-1992): cause tools/md_sync_plan.py:27-30 hard-codes routing:PH-OPERATOR (rehomed to
    plangraph:PH-OPERATOR by D-1834). F7 at rt-side-2 (alias resolve + --gate). On F7 MERGE-READY: merge, CI, seat PASS, then
@@ -137,6 +138,7 @@ D-1984 (Q19): read item + named docs before asking anyone. D-1985: Jev key only 
 8. CLASS-COMBOS: workst-L1-autoos owns.
 
 ## Recipes
+- agy seat (no tools): `python3 -c 'json.dumps({"event":"user","message":{"content":PROMPT}})' | agy --print= --input-format stream-json --output-format stream-json --model claude-sonnet-5-5-medium --mode plan` -> result.response; file-in-workspace mode fails (tool denied headless). Gemini agy 429 until ~10-23 23:00Z.
 - Merge: `gh api -X PUT repos/Ch3fUlrich/plangraph/pulls/N/merge -f sha=<head40> -f merge_method=merge -f commit_title=...
   -f commit_message="Plan-Item: plangraph:KEY"` (trailer ONLY) -> dispatch CI on main -> `ops/pg.sh evidence K --kind commit+ci
   --commit <merge40>` -> submit -> `python3 ~/.local/share/plangraph/tools-l1/sv.py --key K --seat-dir D --writer-family W
