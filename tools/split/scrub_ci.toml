@@ -1278,3 +1278,231 @@ path = "rust/worker-core/src/redact.rs"
 rule = "token-shape"
 value_sha256 = "28804bcd4506d512ee74283280f3b3b59a33366afb657b8898155b2183c65869"
 why = "test-only PEM fixture (pem_block), body 64x A, not a key (mod tests)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "053b41802f71811ea559fe324859cc5e29a5b7370be3039ea786913cc37747cf"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "041e028213a22cfb47a6c5a5fb2a619feeafb2495c408d13232bec4df53cff26"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "0d0f81742c38650d3c01bd3eec279e3ab0e2a34066443ab159e1607a7f855ac8"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "0fe5e08386a9026c7fc5cec2df4fda0f88f16646dc9c3b279dd6e6f25dbdb3e7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "0fe5e08386a9026c7fc5cec2df4fda0f88f16646dc9c3b279dd6e6f25dbdb3e7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "2bd6c9f17dade3dc313d924f1f38d7fec4e05621f31e46da82587d7346674dbd"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "11e9e2a0b902f07c707c9c57973920d948000e42e293642fa79ba9a93084400c"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "32ede991a0404d71e774a46cca8475c7a989ddabe8a12671b11d012f567faf39"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "162e44026d57cbec1db3169275ca81295437814c95d3b2f3607d72212f133c59"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "45009b960edd1cefdd9c1d6dbf94f741b090d770f8e4bd35ed09bac2040a8dee"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "193f517c0f38209f09029577d1f63fc618dcf0b805c8f18a9522dfc3fa1733bb"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "67d932d2bce86c2f17712ddfcce6813eddf860d4f8e2d5e72f112f22b3d48377"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "1d803ca52cacf4fc5725fdc8420e43d1759dc77e59b8e9105e23fb42ea83b24d"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "6b82a8671c74e5ebf37457af870263d0b1cf9909e35117ab448234fb02e31226"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "235344eae509c9cd17bef6db2743c7a5c72c742162e422f11094f057d3f3cbd1"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "6de9667621477009de4eb72f3c30cc0fe34c8a5cca3196f8e1f86e146ecc748a"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "320b7eb721cc6ec08079c96e21fd08fa35a81c3ea7434783ed0278f605904830"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "7b3cf4f7ff0d616c1ba22863e272a403c93e07a6d1581dabef420ce84ab9edd7"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "3405c5f5c849ef70cb861b2734d1f816bb75cda23773b37ec8b989ddf7892221"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "81919187849961416dd6193181ebe3dadaba21e3e472871b2c560f32f06add90"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "4fc7c319116a1cd74cecb2bb42ecdc55329a881c14da438131843a67d27a9ffa"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "9c65f9d05778812203247f399dba87a079932fa560c0736d715d679d5e58e195"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "a8d629c65e89aad889dba9e66e931966ca7bf6e8329b3f4b36bc02e054277376"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "abbe92fda386ff35be085c9ac8055cac366a13747ed7ae68b6efdaaf1e3eeb30"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "ab0b584a138041b9f496074b8e17ac75f2bdf238a13287b9876ba6d4ee733d4c"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "aef97a7d1bcceb1166e4be436a130222fa8c7116643478589e3952f938ee2837"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "ad20dcb6a096812a41dcc97a93ca69f1aaa75affa01963003a1756614e914390"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "b31af5a0947f0d3d4b745695e2af5e109291976d7fb03d91954fd4555357d7d2"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "aea72d9326ee6680734279f97606ad4b1a9bb98d89e8b4984a3598d07e1b31a0"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "c915ffc2c571321cf68062e04aeec3e32781a3c9ed29c506c544dc86ae2302aa"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "b2b26b27c241f06584e608c177e08d25b9b3e73decdd7bfed95244439e64c827"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "caf978f30c0d5d9eeff4dd991feb849a85a4aae4d39a0b3c196758b5af49d117"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "c1482526df0362ffdf400f9a79ccce4902e98fd798f8662561f6acdd58309f5a"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "dcd47e63168b2347cdff3e03ad2fdfc5e8be48406acab2d15394f84b0f6aa57a"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "d1dbbc2bb9eb04ef66a9e1a946c8279ae6590dd7bd06749c1c63a67da9e78954"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_two_cards.json"
+rule = "high-entropy"
+value_sha256 = "ec3afbd96524f43f2836635be0a4f50646b6f23709e00ff334ab89e63cb89bd8"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "e634982f168458c61878f9b0b7322eb52651b8a888bb22868f0e3494c05a3ff4"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"
+
+[[scrub.allow_value]]
+path = "rust/worker/tests/fixtures/phase_defer.json"
+rule = "high-entropy"
+value_sha256 = "eb6473f3fbe9f708378a75fa6fee314608fa537bea9a60b30f329aa33ab13792"
+why = "recorded Temporal history test fixture: random UUIDs and base64 test payloads (decoded payloads scan clean)"

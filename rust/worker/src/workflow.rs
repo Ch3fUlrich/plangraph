@@ -1269,6 +1269,7 @@ async fn run_janitor(
                 workroot: input.workroot.clone(),
                 check_cmd: input.claim.check_cmd.clone(),
                 base_sha: base_sha.to_string(),
+                card: input.claim.card.clone(),
             },
             janitor_options(cfg),
         )
@@ -1392,6 +1393,7 @@ fn exit_name(class: ExitClass) -> &'static str {
     match class {
         ExitClass::Ok => "ok",
         ExitClass::CheckFail => "check_fail",
+        ExitClass::NoChange => "no_change",
         ExitClass::FlakyCheck => "flaky_check",
         ExitClass::UsageLimit => "usage_limit",
         ExitClass::Outage => "outage",

@@ -1,0 +1,11 @@
+[Unit]
+Description=plangraph keeper: oversight check every 30 minutes (RT-OVERSIGHT-CHECKS)
+
+[Timer]
+OnCalendar=*:0/30
+RandomizedDelaySec=1min
+Persistent=true
+Unit=plangraph-oversight-check.service
+
+[Install]
+WantedBy=timers.target

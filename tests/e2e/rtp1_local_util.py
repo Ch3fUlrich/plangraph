@@ -115,6 +115,17 @@ class WorkerProc:
     """``pg-worker`` as a subprocess with its own session; log kept for the failure message."""
 
     def __init__(self, binary: str, env: dict, log: Path) -> None:
+        env = env.copy()
+        if "PG_JAIL_BIN" not in env and "PG_JAIL" not in env:
+            jail = Path(binary).resolve().with_name("pg-jail")
+            if jail.is_file():
+                env["PG_JAIL_BIN"] = str(jail.resolve())
+            else:
+                # Test profile only: production startup must still fail closed.
+                if os.environ.get("CI"):
+                    raise RuntimeError(f"pg-jail helper missing next to {binary}: refusing an unjailed e2e run in CI")
+                env["PG_JAIL"] = "off"
+                env["PG_TEST_ALLOW_UNJAILED"] = "1"
         self.log = log
         self.out = open(log, "wb")
         self.proc = subprocess.Popen([binary], env=env, stdout=self.out, stderr=subprocess.STDOUT,

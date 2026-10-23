@@ -13,9 +13,10 @@ from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
+           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "STATES", "EXIT_CLASSES",
+           "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -23,13 +24,20 @@ STATES = ("open", "ready", "claimed", "in_review", "done", "cancelled", "running
           "needs_input", "waiting", "failed", "parked")
 
 #: design 4.5: how an attempt ended.
-EXIT_CLASSES = ("ok", "check_fail", "flaky_check", "usage_limit", "outage",
-                "lease_lost", "worker_crash", "stall", "timeout", "rebase_conflict",
-                "merge_refused", "probe_fail", "contract_defect", "needs_input",
-                "cancelled")
+EXIT_CLASSES = ("ok", "check_fail", "no_change", "flaky_check", "usage_limit",
+                "outage", "lease_lost", "worker_crash", "stall", "timeout",
+                "rebase_conflict", "merge_refused", "probe_fail",
+                "contract_defect", "needs_input", "cancelled")
 
 WINDOW_CLASSES = ("128k", "256k", "1m")
 RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-step")
+
+#: Jev shadow (schema v13): the kind of decision Jev shadowed and how its free
+#: model answered.  ``outcome`` records the rules' later verdict.  ``qc_accept``
+#: is the QC axis (router ruling D-2328): the accept decision of
+#: ``review.actions.plan_actions`` (accept = verdict pass, reject = fix/halt).
+JEV_KINDS = ("harness", "window", "budget", "review", "qc_accept")
+JEV_STATUSES = ("ok", "timeout", "unavailable", "error")
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
 
@@ -232,6 +240,36 @@ CREATE TABLE IF NOT EXISTS merge_locks (
     owner      TEXT NOT NULL DEFAULT '',
     expires_at INTEGER NOT NULL DEFAULT 0
 );
+"""
+
+#: Jev shadow (schema v13): one row per card/attempt storing the rules-router answer,
+#: the free-model (Jev) answer and the eventual outcome.  ``outcome`` is the one column
+#: filled in later -- first write wins, no other column is ever updated.  ``id`` is
+#: assigned by the store as MAX(id)+1 inside the write lock (like ``projector_alarms``),
+#: so no AUTOINCREMENT; ``key`` carries no foreign key so a ``rehome`` cannot break the
+#: history.  ``schema_pg`` Migration 6 is the logical twin.  ``IF NOT EXISTS`` so
+#: ``db._upgrade`` installs it on a v12 database.
+JEV_DDL = f"""
+CREATE TABLE IF NOT EXISTS jev_shadow (
+    id                INTEGER PRIMARY KEY,
+    key               TEXT NOT NULL,
+    attempt           INTEGER,
+    decision_id       TEXT,
+    input_hash        TEXT,
+    kind              TEXT NOT NULL CHECK (kind IN ({_in(JEV_KINDS)})),
+    rule_answer       TEXT NOT NULL,
+    jev_answer        TEXT,
+    jev_probabilities TEXT,
+    jev_confidence    REAL,
+    status            TEXT NOT NULL CHECK (status IN ({_in(JEV_STATUSES)})),
+    reason            TEXT NOT NULL DEFAULT '',
+    outcome           TEXT,
+    jev_model         TEXT NOT NULL DEFAULT '',
+    latency_ms        INTEGER,
+    created_at        TEXT NOT NULL,
+    outcome_at        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jev_shadow_key ON jev_shadow(key);
 """
 
 TABLES = """
@@ -465,4 +503,4 @@ CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
-          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL)
+          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL)

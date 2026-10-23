@@ -158,14 +158,24 @@ def test_rehome_moves_an_open_item_and_leaves_an_alias(kp):
 def test_set_legacy_state_moves_an_open_item_into_an_active_state(kp):
     plan = make_plan(kp, 2, owner="legacy-owner")
     first, second = plan.lanes
+    high = make_plan(kp, owner="legacy-owner", review_tier="high").key
+    none = make_plan(kp, owner="legacy-owner", review_tier="none").key
     for who in ("lead", "worker1"):
         err(kp.post("set_legacy_state", who, {"key": first, "state": "claimed"}), 403, "forbidden")
     err(kp.post("set_legacy_state", "router", {"key": first, "state": "done"}), 400, "validation")
-    out = ok(kp.post("set_legacy_state", "router", {"key": first, "state": "claimed", "note": "n"}), "Legacy")
-    assert out == {"key": first, "state": "claimed", "claimed_by": "legacy-owner"}
-    row = show(kp, first)
-    assert row["state"] == "claimed" and row["epoch"] == 1 and row["lease_until"] is None
+    # `claimed` is refused on every tier that still runs review: nobody would
+    # hold the claimant token, so the row would strand (KEEPER-OPCLAIM-CLOSE).
+    err(kp.post("set_legacy_state", "router", {"key": first, "state": "claimed"}), 400, "bad_state")  # standard
+    err(kp.post("set_legacy_state", "router", {"key": high, "state": "claimed"}), 400, "bad_state")    # high
+    # a real claim is not the stranded legacy row the verb recovers, so a
+    # second legacy move off an active item stays refused ...
+    claim(kp, first)
     err(kp.post("set_legacy_state", "router", {"key": first, "state": "in_review"}), 400, "bad_state")
+    # ... while tier `none` still takes the move and the open row goes active.
+    out = ok(kp.post("set_legacy_state", "router", {"key": none, "state": "claimed", "note": "n"}), "Legacy")
+    assert out == {"key": none, "state": "claimed", "claimed_by": "legacy-owner"}
+    row = show(kp, none)
+    assert row["state"] == "claimed" and row["epoch"] == 1 and row["lease_until"] is None
     assert ok(kp.post("set_legacy_state", "router", {"key": second, "state": "in_review"}), "Legacy")["state"] == "in_review"
 
 

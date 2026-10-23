@@ -101,6 +101,36 @@ jobs:
       - name: pytest
         run: python -m pytest -q -n auto --dist loadgroup --durations=30 tests
 
+  # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
+  # committed local assets, so the job never needs network access to a CDN.
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: python -m pip install --quiet -r requirements-ci.txt
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: browser tests
+        run: python -m pytest -q tests/browser -m browser
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: out/ui-shots/*.png
+          if-no-files-found: warn
+
   pytest-postgres:
     needs: select
     if: needs.select.outputs.pytest-postgres == 'true'
@@ -191,7 +221,11 @@ jobs:
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: Build pg-jail helper
+        run: cargo build -p pg-jail
       - name: cargo test
+        env:
+          PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
         run: cargo test
 
   rust-worker:
@@ -245,6 +279,9 @@ jobs:
       - name: cargo test
         env:
           PG_TEMPORAL_ADDR: http://127.0.0.1:17233
+          # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
+          PG_JAIL: "off"
+          PG_TEST_ALLOW_UNJAILED: "1"
         run: cargo test
       - name: Dev server log tail
         if: always()
@@ -286,6 +323,29 @@ jobs:
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: python3 tools/ci_select.py gate --needs "$NEEDS_JSON"
+      # The gate runs from the BASE copy so a PR cannot weaken the gate that judges it;
+      # removing the ci-gate job itself is caught only at merge (L1 merges only when
+      # the ci-gate check-run exists and is green).
       - name: Commit trailers
-        if: ${{ always() && github.event_name == 'pull_request' }}
-        run: python3 tools/ci_commit_gate.py check --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}" --exempt tools/ci_commit_exempt.txt
+        if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            BASE="$PR_BASE"
+            HEAD="$PR_HEAD"
+          else
+            BASE="$PUSH_BEFORE"
+            HEAD="$PUSH_AFTER"
+          fi
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "new ref: nothing to check"
+            exit 0
+          fi
+          git show "$BASE:tools/ci_commit_gate.py" > "$RUNNER_TEMP/ci_commit_gate_base.py"
+          python3 "$RUNNER_TEMP/ci_commit_gate_base.py" check --base "$BASE" --head "$HEAD" --exempt tools/ci_commit_exempt.txt

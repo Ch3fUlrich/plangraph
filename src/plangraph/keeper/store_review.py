@@ -39,9 +39,49 @@ class ReviewMixin:
 
     # ----------------------------------------------------------- verdict
     def verdict(self, principal, key, ok, reason=""):
-        return self._run(principal, "verdict", key,
-                         lambda now: self._verdict(principal, key, ok, reason,
-                                                   now))
+        result = self._run(principal, "verdict", key,
+                           lambda now: self._verdict(principal, key, ok, reason,
+                                                     now))
+        # RT-P1-JEV-SHADOW: post-commit, outside ``_write`` - see the helper.
+        self._shadow_qc_accept(principal, key, ok, reason)
+        return result
+
+    def _shadow_qc_accept(self, principal, key, ok, reason):
+        """Record ONE observe-only ``qc_accept`` row for the verdict just landed.
+
+        The keeper's own accept/reject decision, shadowed exactly like
+        ``review.actions.plan_actions`` shadows the planner's: through
+        :func:`plangraph.planner.shadow.qc_with_shadow`, so the same switch
+        (``PLANGRAPH_JEV``, off is a cheap no-op with no ask and no network),
+        the same redaction, the same single guarded ask
+        (``jev_client.MAX_TIMEOUT_S``) and the same ``[]``-on-failure rules
+        apply.  ``ok`` is the rule's answer - ``accept`` for a pass, ``reject``
+        for a change request - and only the verdict's evidence (reason) is
+        handed to the state builder, never the word itself.
+
+        It runs AFTER the verdict's write transaction has committed and outside
+        it, because the guarded ask may take up to ~10s and the write lock must
+        never be held for it.  The verdict's own result is returned unchanged
+        and every escape is swallowed, so a slow, broken or disabled Jev can
+        never fail, reorder or delay a verdict beyond that guard.
+
+        The row is filed by :func:`plangraph.keeper.store_jev._jev_writer`, the
+        shared writer mapping the worker verbs' outcome fill also uses: a
+        verdict can only come from a ``reviewer``, who may not write
+        ``jev_shadow``, so the keeper's own observation of the verdict rides on
+        a principal that may.
+        """
+        try:
+            # Local imports: the planner is only loaded when a hook can run, and
+            # ``store_jev`` (which owns the writer mapping) is loaded with it.
+            from plangraph.planner import shadow as shadow_mod
+            from .store_jev import _jev_writer
+            verdict = {"verdict": "pass" if ok else "fix", "reason": reason}
+            shadow_mod.qc_with_shadow(verdict, "review", key,
+                                      store=self,
+                                      principal=_jev_writer(principal))
+        except Exception:  # noqa: BLE001 - a shadow failure never breaks a verdict
+            pass
 
     def _waiver_active(self, item):
         """D-217 hook: a verified waiver lets the two verdicts share a family."""
@@ -157,6 +197,10 @@ class ReviewMixin:
                 # D-228: ``_reviewer_family_ok`` above already proved this
                 # reviewer is a distinct principal of a distinct, non-blank
                 # family from the writer's, so one verdict closes the review.
+                # Seat coverage is the closing gate: the sole standard seat
+                # must cover every writer family of the item's commits.
+                self._check_coverage(principal, fresh, prior, need=1,
+                                     sensitive=False, now=now)
                 self._append(principal, key, "review_verdict",
                              self._verdict_payload(principal, fresh), now)
                 return self._pass(principal, key, reason, fresh, now,
@@ -172,6 +216,11 @@ class ReviewMixin:
                 if auth.norm_family(principal.family) == first_family:
                     raise Refused("same_family",
                                   "second reviewer shares a family")
+            if len(prior) + 1 >= 2:
+                # Only the verdict that would close a high item is checked;
+                # a refusal appends nothing and leaves the round intact.
+                self._check_coverage(principal, fresh, prior, need=2,
+                                     sensitive=True, now=now)
             self._append(principal, key, "review_verdict",
                          self._verdict_payload(principal, fresh), now)
             passed = len(prior) + 1
@@ -179,6 +228,25 @@ class ReviewMixin:
                 return self._pass(principal, key, reason, fresh, now,
                                   reviews_passed=passed)
         return {"key": key, "state": "in_review", "reviews_passed": passed}
+
+    def _check_coverage(self, principal, item, prior, *, need, sensitive, now):
+        """Refuse a closing verdict whose writer families are not covered.
+
+        Runs inside the verdict write lock, after every existing gate, on the
+        verdict that would close the item only.  ``writer_families`` may raise
+        ``writer_unknown`` (fail closed); ``Refused('coverage', ...)`` names
+        the uncovered families and, because nothing has been appended yet,
+        leaves the item's state, round and verdict history untouched.
+        """
+        from .coverage import uncovered, writer_families
+
+        writers = writer_families(self, item, self._ctx(item, now))
+        seats = [v.get("family") for v in prior]
+        seats.append(auth.norm_family(principal.family))
+        missing = uncovered(writers, seats, need=need, sensitive=sensitive)
+        if missing:
+            raise Refused("coverage",
+                          f"writer families not covered: {missing}")
 
     @staticmethod
     def _verdict_payload(principal, item):

@@ -7,6 +7,7 @@ within its size budget as new doors (``close_on_decision``,
 """
 from __future__ import annotations
 
+import os
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -14,11 +15,12 @@ from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
            "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS",
-           "WORKER_VERBS", "worker_write"]
+           "WORKER_VERBS", "worker_write", "JEV_VERBS", "jev_write"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
-              "answers", "progress", "changelog", "audit-meta", "metrics"}
+              "answers", "progress", "changelog", "audit-meta", "metrics",
+              "jev_report"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
@@ -26,8 +28,14 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                "withdraw_review", "reopen", "set_kind", "set_metrics",
-               "governor_override",
-               "attempts", "park", "complete", "alarms", "locks"}
+               # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
+               "governor_override", "phase_plan",
+               # phase_finish mutates only GitHub, never the store; transport is POST
+               "phase_finish",
+               # worker_claim is POST transport: it returns a Claim to a worker
+               "worker_claim",
+               "attempts", "park", "complete", "alarms", "locks",
+               "jev_shadow", "jev_outcome"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -41,6 +49,7 @@ READ_CALLS = {
     "needs_you": lambda store, who, project: store.needs_you(who, project=project),
     "answers": lambda store, who, project: store.answers(who, project=project),
     "progress": lambda store, who, project: store.progress(who, project=project),
+    "jev_report": lambda store, who, project: store.jev_report(who, project=project),
 }
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
@@ -95,6 +104,24 @@ def worker_write(store, principal, name, extra, body):
     raise Refused("not_found", f"unknown locks route /v1/locks/{extra}")
 
 
+#: RT-P1-JEV-SHADOW: the Jev shadow write verbs.  The store resolves the card
+#: from ``body["card"]`` itself, so the handler must NOT rewrite ``body["key"]``.
+JEV_VERBS = frozenset({"jev_shadow", "jev_outcome"})
+
+
+def jev_write(store, principal, name, body):
+    """The Jev shadow writes; the store answers ``{id,card,kind}`` / ``{card,updated}``.
+
+    The role is checked by the store BEFORE the body is validated, so a reader
+    gets 403 rather than 400 for a malformed body.
+    """
+    if not isinstance(body, dict):
+        raise Refused("validation", "body must be a JSON object")
+    if name == "jev_shadow":
+        return store.jev_record(principal, body)
+    return store.jev_outcome(principal, body)
+
+
 # Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is
 # the handler's required-field reader.
 def _close_on_decision(store, principal, body, need):
@@ -124,7 +151,9 @@ def _set_kind(store, principal, body, need):
 
 
 def _apply_ops(store, principal, body, need):
-    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"))
+    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
+                           base_seq=body.get("base_seq"),
+                           dry_run=body.get("dry_run"))
 
 
 def _migrate_descriptions(store, principal, body, need):
@@ -166,6 +195,52 @@ def _replay(store, principal, body, need):
     return store.replay(principal, body.get("entries"))   # M2B-OUTBOX: principal checked first (403)
 
 
+def _phase_plan(store, principal, body, need):
+    # Role first: a non-router/system principal gets 403 before env or key checks.
+    store._require_role(principal, "router", "system")
+    from ..planner.phase import plan_phase   # local import: keeps keeper leaf-free
+    key = need(body, "key")
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    if not repo_root or not os.path.isdir(repo_root):
+        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+    # repo_root is server-side only; plan_phase also re-checks the role first.
+    return plan_phase(store, principal, key, repo_root=repo_root, now=None)
+
+#: Seam for tests: the keeper's own GitHub adapter, built from the server environment only.
+def _github_from_env():
+    from ..planner.github_adapter import RestGitHub   # local import: keeps keeper leaf-free
+    return RestGitHub.from_env()
+
+def _phase_finish(store, principal, body, need):
+    # Role first: a non-router/system principal gets 403 before env, key or GitHub access checks.
+    store._require_role(principal, "router", "system")
+    from ..planner.phase_finish import finish_phase
+    key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    if not repo_root or not os.path.isdir(repo_root):
+        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+    github = _github_from_env()
+    if github is None:
+        raise Refused("unavailable", "phase_finish GitHub access is not configured")
+    # repo_root, the repo slug and the token file come from the server environment only, never the body.
+    return finish_phase(store, principal, key, branch, head, repo_root=repo_root, github=github)
+
+def _worker_claim(store, principal, body, need):
+    # Role first: a non-worker principal gets 403 before key or env access checks.
+    # The phase runner's system principal also claims cards, so this is not worker-only.
+    store._require_role(principal, "worker", "system")
+    key = need(body, "card")
+    # body.worker is informational (a worker process id) and is ignored.
+    # The calling principal from the token is the only identity.
+    # Repo root and base branch come from the server environment only, never the body.
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    base_branch = os.environ.get("PG_PHASE_BASE_BRANCH") or "main"
+    from ..planner.worker_claim import worker_claim
+    return worker_claim(
+        store, principal, key, repo_root=repo_root, base_branch=base_branch
+    )
+
+
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
@@ -183,4 +258,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
-                      "governor_override": _governor_override}
+                      "governor_override": _governor_override,
+                      "phase_plan": _phase_plan,
+                      "phase_finish": _phase_finish,
+                      "worker_claim": _worker_claim}
