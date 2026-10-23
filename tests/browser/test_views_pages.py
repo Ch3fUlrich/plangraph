@@ -430,7 +430,7 @@ def test_v_dec_2(page, site):
         "(expected {decision: [{field: value}]} - V-DEC-2 requires the previous "
         "text, the editor and the time of the hash-chained event): %r" % missing)
     edit = page.evaluate(
-        """() => [...document.querySelectorAll('#panel-qa button, #panel-qa a')]
+        """() => [...document.querySelectorAll('#decisions-table tbody button, #decisions-table tbody a')]
              .map(b => String(b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
              .filter(t => /\\bedit\\b/i.test(t))"""
     )
@@ -476,6 +476,11 @@ def test_v_dec_3(page, site):
     operator principal through the proxy hop").
     """
     _load(page, site)
+    _assert_no_decision_edit_control(page)
+
+
+def _assert_no_decision_edit_control(page):
+    """Question answer editing must not count as decision editing."""
     st = page.evaluate(
         """() => { const p = document.getElementById('panel-qa');
            const t = document.getElementById('decisions-table');
@@ -490,12 +495,24 @@ def test_v_dec_3(page, site):
         "edit-control scan would be vacuous: rows=%d, fixture=%d"
         % (st["rows"], len(_SNAP["decisions"])))
     edit = page.evaluate(
-        """() => [...document.querySelectorAll('#panel-qa button, #panel-qa a')]
+        """() => [...document.querySelectorAll('#decisions-table tbody button, #decisions-table tbody a')]
              .map(b => String(b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
              .filter(t => /\\bedit\\b/i.test(t))"""
     )
     assert not edit, (
         "edit control shown without an operator principal: %r" % edit)
+
+
+@for_sizes
+def test_v_dec_3_with_local_question_answer(page, site):
+    """A question's local-answer Edit control is outside V-DEC-3's scope."""
+    _load(page, site)
+    qid = _SNAP["questions"][0]["id"]
+    page.evaluate("(id) => PlanUI.QAPage.setAnswer(id, 'Scope regression answer')", qid)
+    question_edit = page.locator("#qa-table").get_by_role(
+        "button", name="Edit", exact=True, include_hidden=True)
+    assert question_edit.count() == 1, "seeded local answer rendered no question Edit button"
+    _assert_no_decision_edit_control(page)
 
 
 @for_sizes
