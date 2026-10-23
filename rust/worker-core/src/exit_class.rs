@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub enum ExitClass {
     Ok,
     CheckFail,
+    /// Exited cleanly with a passing (or absent) check but changed nothing.
+    NoChange,
     FlakyCheck,
     UsageLimit,
     Outage,
@@ -39,6 +41,14 @@ pub struct Signals {
     /// Terminating signal, if it was killed.
     pub signal: Option<i32>,
     pub check: Option<CheckOutcome>,
+    /// The provider reported a rate limit or exhausted quota.
+    pub provider_rate_limited: bool,
+    /// The provider reported any other error (transport, unknown, ...).
+    pub provider_error: bool,
+    /// The harness produced no output at all on a clean exit.
+    pub empty_output: bool,
+    /// Exited cleanly but left the worktree unchanged: nothing to merge.
+    pub no_change: bool,
     pub timed_out: bool,
     pub stalled: bool,
     pub cancelled: bool,
@@ -116,7 +126,9 @@ impl Default for Patterns {
 
 impl Patterns {
     /// Decide the exit class. Explicit orchestration flags win, then
-    /// timeouts/stalls, then stderr patterns for failed processes, then the check.
+    /// timeouts/stalls, then the provider's own error stream (a provider error
+    /// is never `ok`, whatever the harness exit code says), then stderr
+    /// patterns for failed processes, then a no-op run, then the check.
     pub fn classify(&self, s: &Signals) -> Classification {
         let failed_process = s.signal.is_some() || s.exit_code.is_some_and(|c| c != 0);
         let overflow = failed_process && self.context_overflow.is_match(&s.stderr);
@@ -138,12 +150,25 @@ impl Patterns {
             ExitClass::Timeout
         } else if s.stalled {
             ExitClass::Stall
+        } else if s.provider_rate_limited {
+            // The provider's own event stream outranks the exit code: a quota
+            // error that still exits 0 is a limit, not success.
+            ExitClass::UsageLimit
+        } else if s.provider_error || s.empty_output {
+            // A broken provider, or a silent run that never got going, is the
+            // provider's fault whatever the exit code says.
+            ExitClass::Outage
         } else if failed_process && self.usage_limit.is_match(&s.stderr) {
             ExitClass::UsageLimit
         } else if failed_process && self.outage.is_match(&s.stderr) {
             ExitClass::Outage
         } else if failed_process {
             ExitClass::WorkerCrash
+        } else if s.no_change {
+            // A clean run that changed nothing did not do the work. It must not
+            // reach `ok` (nothing to merge) nor a check verdict the check never
+            // reached, so it gets its own class before the check match.
+            ExitClass::NoChange
         } else {
             match s.check {
                 Some(CheckOutcome::Fail) => ExitClass::CheckFail,
@@ -344,6 +369,45 @@ mod tests {
         }
     }
 
+    /// A provider error or an empty run is never `ok`, even when the harness
+    /// exits 0 and the check passed.
+    #[test]
+    fn provider_signals_and_no_change_outrank_a_clean_exit() {
+        let p = Patterns::default();
+        let cases = [
+            (
+                "rate limited",
+                with(|s| s.provider_rate_limited = true),
+                ExitClass::UsageLimit,
+            ),
+            (
+                "provider error",
+                with(|s| s.provider_error = true),
+                ExitClass::Outage,
+            ),
+            (
+                "empty output",
+                with(|s| s.empty_output = true),
+                ExitClass::Outage,
+            ),
+        ];
+        for (name, sig, want) in cases {
+            assert_eq!(sig.exit_code, Some(0));
+            assert_eq!(sig.check, Some(CheckOutcome::Pass));
+            assert_eq!(p.classify(&sig).class, want, "{name}");
+        }
+        assert_eq!(
+            p.classify(&with(|s| s.no_change = true)).class,
+            ExitClass::NoChange
+        );
+        // A crashing harness also changed nothing, but the crash explains it.
+        let mut crashed = with(|s| s.no_change = true);
+        crashed.exit_code = Some(1);
+        assert_eq!(p.classify(&crashed).class, ExitClass::WorkerCrash);
+        // The all-clear case is still Ok.
+        assert_eq!(p.classify(&base()).class, ExitClass::Ok);
+    }
+
     #[test]
     fn context_overflow_flag() {
         let p = Patterns::default();
@@ -380,5 +444,9 @@ mod tests {
         assert_eq!(j, "\"rebase_conflict\"");
         let back: ExitClass = serde_json::from_str("\"usage_limit\"").unwrap();
         assert_eq!(back, ExitClass::UsageLimit);
+        let j = serde_json::to_string(&ExitClass::NoChange).unwrap();
+        assert_eq!(j, "\"no_change\"");
+        let back: ExitClass = serde_json::from_str("\"no_change\"").unwrap();
+        assert_eq!(back, ExitClass::NoChange);
     }
 }

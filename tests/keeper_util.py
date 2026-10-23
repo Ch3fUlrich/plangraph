@@ -120,6 +120,38 @@ def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True,
     return [f"{project}:{pid}" for pid, _ in lanes]
 
 
+def seed_stranded_claim(world, key, note=""):
+    """Write the claimed row the *pre-fix* ``set_legacy_state(claimed)`` wrote.
+
+    KEEPER-OPCLAIM-CLOSE's recovery tests need a row in the shape the
+    pre-fix verb produced, and the verb itself now refuses to produce it on a
+    tier that still runs review for a reviewed kind — so the row is rebuilt
+    event-for-row here, once, inside the store's own write transaction: one
+    ``legacy_state_set`` carrying the owner, epoch and round plus the matching
+    cache UPDATE, all shaped so ``fold`` agrees from the first check.  The
+    single seeder shared by ``tests/test_keeper_legacy_state.py`` and
+    ``tests/test_keeper_rehome.py``.
+    """
+    item = world.store._item(key)
+    owner = item["owner"]
+    epoch = int(item["epoch"]) + 1
+    round_no = int(item.get("round") or 0) + 1
+    now = world.clock()
+    with world.store._write():
+        world.store._append(world.p("router"), key, "legacy_state_set",
+                            {"state": "claimed", "note": note or "",
+                             "legacy": True, "claimed_by": owner,
+                             "epoch": epoch, "round": round_no}, now)
+        cursor = world.conn.execute(
+            "UPDATE items SET state='claimed', epoch=?, round=?, claimed_by=?,"
+            " delegate=NULL, reviewer=NULL, lease_until=NULL,"
+            " review_waiver=NULL, updated_at=? WHERE key=? AND state='open'",
+            (epoch, round_no, owner, world.store._iso(now), key))
+        assert cursor.rowcount == 1, "stranded seed: item was not open"
+    assert world.store.verify_integrity() == [], "stranded seed must fold clean"
+    return key
+
+
 def to_claimed(world, key, who="l1main", lease_s=7200):
     result = world.store.claim(world.p(who), key, lease_s=lease_s)
     return result["epoch"]

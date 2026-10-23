@@ -32,6 +32,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "governor_override", "phase_plan",
                # phase_finish mutates only GitHub, never the store; transport is POST
                "phase_finish",
+               # worker_claim is POST transport: it returns a Claim to a worker
+               "worker_claim",
                "attempts", "park", "complete", "alarms", "locks",
                "jev_shadow", "jev_outcome"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
@@ -149,7 +151,9 @@ def _set_kind(store, principal, body, need):
 
 
 def _apply_ops(store, principal, body, need):
-    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"))
+    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
+                           base_seq=body.get("base_seq"),
+                           dry_run=body.get("dry_run"))
 
 
 def _migrate_descriptions(store, principal, body, need):
@@ -221,6 +225,21 @@ def _phase_finish(store, principal, body, need):
     # repo_root, the repo slug and the token file come from the server environment only, never the body.
     return finish_phase(store, principal, key, branch, head, repo_root=repo_root, github=github)
 
+def _worker_claim(store, principal, body, need):
+    # Role first: a non-worker principal gets 403 before key or env access checks.
+    # The phase runner's system principal also claims cards, so this is not worker-only.
+    store._require_role(principal, "worker", "system")
+    key = need(body, "card")
+    # body.worker is informational (a worker process id) and is ignored.
+    # The calling principal from the token is the only identity.
+    # Repo root and base branch come from the server environment only, never the body.
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    base_branch = os.environ.get("PG_PHASE_BASE_BRANCH") or "main"
+    from ..planner.worker_claim import worker_claim
+    return worker_claim(
+        store, principal, key, repo_root=repo_root, base_branch=base_branch
+    )
+
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
@@ -241,4 +260,5 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
-                      "phase_finish": _phase_finish}
+                      "phase_finish": _phase_finish,
+                      "worker_claim": _worker_claim}

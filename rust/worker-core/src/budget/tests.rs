@@ -102,6 +102,7 @@ fn terminal_and_routing_rules() {
 fn retryable_classes_retry_until_budget() {
     for class in [
         CheckFail,
+        NoChange,
         WorkerCrash,
         Stall,
         Timeout,
@@ -321,6 +322,30 @@ fn quarantine_on_identical_failures_with_unchanged_diff() {
     assert_eq!(simple(&l), Action::Quarantine);
     // a single failure never quarantines
     assert_eq!(simple(&same[..1]), Action::Retry);
+}
+
+#[test]
+fn no_change_consumes_budget_and_quarantines_like_a_failed_check() {
+    // One no-change attempt is an ordinary retryable failure, not a success ...
+    assert_eq!(simple(&fails(NoChange, Tier::Trial, 1)), Action::Retry);
+    assert_eq!(simple(&fails(NoChange, Tier::Trial, 2)), Action::Retry);
+    // ... it uses up the tier budget like a check failure ...
+    assert_eq!(
+        simple(&fails(NoChange, Tier::Trial, 3)),
+        Action::Promote { tier: Tier::Free }
+    );
+    assert!(at(NoChange, "l", Tier::Free).consumes_attempt());
+    // ... and repeating the same empty diff is the same dead end as a check
+    // that keeps failing.
+    let repeated = [at(NoChange, "l", Tier::Free), at(NoChange, "l", Tier::Free)];
+    assert_eq!(simple(&repeated), Action::Quarantine);
+    // ... but a failed check and a no-change are different failure kinds even
+    // when the synthetic hashes match; in production they never match at all.
+    let mixed = [
+        at(CheckFail, "l", Tier::Free),
+        at(NoChange, "l", Tier::Free),
+    ];
+    assert_ne!(simple(&mixed), Action::Quarantine);
 }
 
 #[test]

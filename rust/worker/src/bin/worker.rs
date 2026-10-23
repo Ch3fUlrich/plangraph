@@ -12,9 +12,10 @@
 //! set on a live deployment. With a keeper URL, `PG_KEEPER_TOKEN` (the worker
 //! role bearer token) must be set and non-empty.
 //!
-//! `PG_HARNESS_VERSIONS` (`name=version,...`) pins the agent CLIs. Unset is only
-//! a startup warning, not an error, so live deployments MUST set it: without it
-//! a CLI upgrade changes agent behaviour unnoticed.
+//! `PG_HARNESS_VERSIONS` (`name=version,...`) pins the agent CLIs and replaces
+//! the built-in [`harness::DEFAULT_PINS`]: a CLI that reports any other version
+//! stops the worker at startup. `name=*` unpins one name; unset verifies the
+//! defaults for every harness this worker registered with a binary.
 //!
 //! `PG_OPENCODE_SERVER_URL` is a bare `http(s)://host[:port]` URL: userinfo
 //! (`user:pass@`) and other schemes are rejected at startup. Tokens go through
@@ -133,14 +134,35 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let harnesses = build_registry();
     println!("harnesses: {}", harnesses.names().join(", "));
-    // Fail closed on a harness version drift; unset means no pin.
+    match harness::JailConfig::required_from_env() {
+        Ok(Some(_)) => println!("attempt jail on"),
+        Ok(None) => eprintln!("warning: PG_JAIL=off; attempts run unjailed"),
+        Err(e) => anyhow::bail!("attempt jail: {e}"),
+    }
+    // WSL defaults widen the host exposure of every attempt below
+    // (docs/worker-sandbox.md): say which ones are still on, once, at startup.
+    // Off WSL the conf is never read and nothing is printed.
+    let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let wsl_conf = pg_worker_core::wsl::is_wsl(&osrelease)
+        .then(|| std::fs::read_to_string("/etc/wsl.conf").ok())
+        .flatten();
+    for finding in pg_worker_core::wsl::startup_warnings(&osrelease, wsl_conf.as_deref()) {
+        eprintln!("warning: WSL {finding}");
+    }
+    // Fail closed on a harness version drift. Unset means the built-in default
+    // pins; `Ok(false)` means nothing was verified, so say why.
     let pins = std::env::var(harness::VERSIONS_ENV).ok();
+    let unset = match pins.as_deref() {
+        None => true,
+        Some(spec) => spec.trim().is_empty(),
+    };
     match harness::check_version_pins(&harnesses, pins.as_deref()) {
         Ok(true) => println!("harness versions pinned and verified"),
-        Ok(false) => eprintln!(
-            "warning: {} is unset; harness versions are not pinned",
+        Ok(false) if unset => eprintln!(
+            "warning: {} is unset; no harness pin was verified",
             harness::VERSIONS_ENV
         ),
+        Ok(false) => eprintln!("{} set; no harness pinned", harness::VERSIONS_ENV),
         Err(e) => anyhow::bail!("harness version pin: {e}"),
     }
     let deps = Deps {

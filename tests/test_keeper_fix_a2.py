@@ -63,7 +63,11 @@ def test_waive_on_none_tier_is_bad_state(world):
 
 # ------------------------------------------------- S4: legacy move hygiene
 def test_legacy_move_bumps_epoch_fresh_round_clears(world):
-    key = _mk(world, owner="ext-team", owner_family="teamX")
+    # Tier ``none`` is the only tier that still accepts the legacy ``claimed``
+    # move (KEEPER-OPCLAIM-CLOSE); the epoch/round/column bookkeeping below is
+    # what the test pins, and it is identical on that tier.
+    key = _mk(world, owner="ext-team", owner_family="teamX",
+              review_tier="none", evidence_kinds=["decision"])
     before = world.store._item(key)
     assert (before["epoch"], before["round"]) == (0, 0)
     result = world.store.set_legacy_state(world.p("router"), key, "claimed")
@@ -80,7 +84,10 @@ def test_legacy_move_bumps_epoch_fresh_round_clears(world):
 
 
 def test_reaper_leaves_legacy_claim_alone(world):
-    key = _mk(world, owner="ext-team", owner_family="teamX")
+    # A legacy claim carries no lease, so the reaper must not touch it; tier
+    # ``none`` is where that claim can still be made (KEEPER-OPCLAIM-CLOSE).
+    key = _mk(world, owner="ext-team", owner_family="teamX",
+              review_tier="none", evidence_kinds=["decision"])
     world.store.set_legacy_state(world.p("router"), key, "claimed")
     world.clock.advance(30 * 24 * 3600)
     out = world.store.reap(world.p("system"))

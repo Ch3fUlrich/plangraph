@@ -5,13 +5,16 @@ and no keeper import beyond this module's own HTTP client: every tool call is on
 request to the keeper API (base URL ``PG_URL``) carrying the bearer token read
 from the file named by ``PG_TOKEN_FILE``.  Token values are never logged or
 returned.  Protocol version is ``2025-06-18`` and is echoed back when the client
-asks for a different one.  Entry point: ``python -m plangraph.keeper.mcp``.
+asks for a different one.  Entry point: ``python -m plangraph.keeper.mcp``:
+``main()`` switches stdin/stdout to UTF-8 first, since Windows stdio defaults
+to cp1252 and a non-ASCII item title would otherwise kill the server.
 
 Tool failures (a refused verb or an unreachable API) are MCP results with
 ``isError`` true — JSON-RPC errors are reserved for a broken request envelope.
 """
 from __future__ import annotations
 
+import io
 import ipaddress
 import json
 import os
@@ -87,7 +90,9 @@ TOOLS = (
            "note": {"type": "string"}}, ("key", "state")),
     _tool("apply_ops", "Router: apply a list of BATCH.md ops atomically (one transaction).",
           {"ops": {"type": "array", "items": {"type": "object"}},
-           "batch_ref": {"type": "string"}}, ("ops",)),
+           "batch_ref": {"type": "string"},
+           "base_seq": {"type": "integer"},
+           "dry_run": {"type": "boolean"}}, ("ops",)),
     _tool("cancel", "Cancel an active item.",
           {"key": {"type": "string"}, "reason": {"type": "string"}}, ("key",)),
     _tool("priority", "Set router-owned priority.",
@@ -332,8 +337,35 @@ def _default_client():
     return HttpKeeper(url, os.environ.get("PG_TOKEN_FILE", ""))
 
 
+def _utf8(stream, errors):
+    """Return *stream* switched to UTF-8 — Windows stdio defaults to cp1252.
+
+    ``TextIOWrapper.reconfigure`` where the stream offers it (the real
+    ``sys.stdin``/``sys.stdout``), a fresh wrapper over ``stream.buffer`` where
+    it does not, and *stream* unchanged when it is a plain text stream: a
+    ``StringIO`` handed straight to ``serve()`` carries no encoding at all.
+    ``reconfigure`` failures (a detached, closed or mid-read stream) leave the
+    stream as it was rather than killing the server.
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is not None:
+        try:
+            reconfigure(encoding="utf-8", errors=errors)
+        except (ValueError, OSError, RuntimeError):
+            pass
+        return stream
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        return stream
+    return io.TextIOWrapper(buffer, encoding="utf-8", errors=errors)
+
+
 def main(argv=None):
-    serve(sys.stdin, sys.stdout, _default_client())
+    # cp1252 stdout would raise UnicodeEncodeError on any non-ASCII title and
+    # drop the MCP client; utf-8 in, utf-8 out, with the reader never fatal
+    # ("replace") and the writer never fatal ("backslashreplace").
+    serve(_utf8(sys.stdin, "replace"), _utf8(sys.stdout, "backslashreplace"),
+          _default_client())
     return 0
 
 

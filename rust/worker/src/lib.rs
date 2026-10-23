@@ -6,6 +6,7 @@ pub mod buildid;
 pub mod harness;
 pub mod keeper;
 pub mod mergelock;
+pub mod opencode_events;
 pub mod phase;
 pub mod phase_workflow;
 pub mod question;
