@@ -12,6 +12,7 @@ Enforces:
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -31,6 +32,7 @@ ROLE_ALPHA: dict[str, float] = {
     "implement": 1.0,
     "worker": 1.0,
     "l2-worker": 1.0,
+    "drive": 1.1,
     "driver": 1.1,
     "l3-driver": 1.1,
     "orchestrate": 1.1,
@@ -45,6 +47,7 @@ ROLE_TRAJECTORY_FACTORS: dict[str, float] = {
     "implement": 1.5,
     "worker": 1.5,
     "l2-worker": 1.5,
+    "drive": 1.3,
     "driver": 1.3,
     "l3-driver": 1.3,
     "orchestrate": 1.3,
@@ -209,7 +212,8 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
 ]
 
 _DEFAULT_CATALOG_DB: Any = None
-
+_MISSING = object()
+_VALID_RISKS = frozenset({"low", "normal", "high", "critical"})
 
 def _get_default_catalog_db() -> Any:
     global _DEFAULT_CATALOG_DB
@@ -219,6 +223,79 @@ def _get_default_catalog_db() -> Any:
         _DEFAULT_CATALOG_DB = inst
     return _DEFAULT_CATALOG_DB
 
+def _validate_risk(risk: str) -> str:
+    risk_l = str(risk).strip().lower() if risk is not None else ""
+    if risk_l not in _VALID_RISKS or risk_l not in RISK_MIN_INTELLIGENCE:
+        raise ValueError(f"unknown risk band: {risk!r}")
+    return risk_l
+
+def _validate_role(role: str) -> str:
+    role_l = str(role).strip().lower() if role is not None else ""
+    if role_l not in ROLE_ALPHA or role_l not in ROLE_TRAJECTORY_FACTORS:
+        raise ValueError(f"unknown role: {role!r}")
+    return role_l
+
+def _validate_need_tokens(need_tokens: Any) -> int:
+    if isinstance(need_tokens, bool) or not isinstance(need_tokens, (int, float)):
+        raise ValueError(f"need_tokens must be a positive finite number: {need_tokens!r}")
+    if isinstance(need_tokens, float):
+        if not math.isfinite(need_tokens) or not need_tokens.is_integer():
+            raise ValueError(f"need_tokens must be a positive finite number: {need_tokens!r}")
+    tokens = int(need_tokens)
+    if tokens <= 0:
+        raise ValueError(f"need_tokens must be a positive finite number: {need_tokens!r}")
+    return tokens
+
+def _validated_metric(
+    model: Mapping[str, Any],
+    field_name: str,
+    *,
+    default: Any = _MISSING,
+    none_as_default: bool = False,
+) -> float:
+    if field_name not in model:
+        if default is _MISSING:
+            raise ValueError(f"missing required numeric field: {field_name}")
+        return float(default)
+
+    value = model[field_name]
+    if value is None:
+        if none_as_default:
+            if default is _MISSING:
+                return 0.0
+            return float(default)
+        raise ValueError(f"missing numeric field: {field_name}")
+
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid numeric field {field_name}: {value!r}") from exc
+
+    if not math.isfinite(number):
+        raise ValueError(f"non-finite numeric field {field_name}: {value!r}")
+    if number < 0.0:
+        raise ValueError(f"negative numeric field {field_name}: {value!r}")
+    return number
+
+def _speed_for_model(model: Mapping[str, Any]) -> float:
+    for field_name in ("verified_tok_per_s", "tok_per_s"):
+        if field_name in model:
+            value = model[field_name]
+            if value is not None:
+                number = _validated_metric(model, field_name)
+                if number != 0.0:
+                    return number
+    return 0.0
+
+def _raw_speed(model: Mapping[str, Any]) -> float:
+    for field_name in ("verified_tok_per_s", "tok_per_s"):
+        if field_name in model:
+            value = model[field_name]
+            if value is not None:
+                number = float(value)
+                if number != 0.0:
+                    return number
+    return 0.0
 
 def detect_model_family(model_id: str) -> str:
     """Detect the canonical model family: claude, gemini, gpt, mimo, qwen, deepseek, muse, glm, kimi."""
@@ -245,7 +322,6 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
-
 def is_model_available(model: Mapping[str, Any]) -> bool:
     """Check if model is eligible and available.
 
@@ -262,7 +338,6 @@ def is_model_available(model: Mapping[str, Any]) -> bool:
         return False
     return True
 
-
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
 
@@ -273,7 +348,6 @@ def clamp_effort(model_id: str, requested_effort: str) -> str:
     if ("claude-sonnet-5-5" in mid or "sonnet-5-5" in mid) and eff == "max":
         return "xhigh"
     return requested_effort
-
 
 def score_model(
     model: Mapping[str, Any],
@@ -290,31 +364,37 @@ def score_model(
     Decoupled risk parameters:
       - low:      I_min = 37.5, I_target = 41.0, gamma_cost = 15.0, beta_excess = 0.2
       - normal:   I_min = 44.0, I_target = 47.0, gamma_cost = 10.0, beta_excess = 0.4
-      - high:     I_min = 46.0, I_target = 50.0, gamma_cost = 4.0,  beta_excess = 2.0
-      - critical: I_min = 50.0, I_target = 54.0, gamma_cost = 1.5,  beta_excess = 2.5
+      - high:     I_min = 46.0, I_target = 50.0, gamma_cost = 4.0,  beta_excess = 0.6
+      - critical: I_min = 50.0, I_target = 54.0, gamma_cost = 4.0,  beta_excess = 0.6
 
     Role multipliers (alpha_role):
       - implement / worker: 1.0
-      - driver / orchestrator: 1.1
+      - drive / driver / orchestrator: 1.1
       - review / reviewer: 1.2
 
     Tier weights (W_tier):
       trial (0): +14.0, free (1): +10.5, credit (2): +7.0, subscription (3): +3.5, paid (4): 0.0, unknown: -35.0
     """
-    intel = float(model.get("aa_intelligence") or 40.0)
-    cost = float(model.get("cost_per_task_usd") if model.get("cost_per_task_usd") is not None else 0.20)
-    burn = float(model.get("pool_burn_weight") or 1.0)
+    need_tokens = _validate_need_tokens(need_tokens)
+    risk_l = _validate_risk(risk)
+    role_l = _validate_role(role)
+
+    intel = _validated_metric(model, "aa_intelligence")
+    cost = _validated_metric(model, "cost_per_task_usd", default=0.20)
+    burn = _validated_metric(model, "pool_burn_weight", default=1.0)
+    _speed_for_model(model)
+
     tier = str(model.get("tier") or "paid").lower()
 
     # Fail-closed unknown tier -> 99
     tier_rung = TIER_RUNG.get(tier, 99)
     tier_bonus = (4 - tier_rung) * 3.5 if tier_rung <= 4 else -35.0
 
-    i_min = RISK_MIN_INTELLIGENCE.get(risk, 44.0)
-    i_target = RISK_TARGET_INTELLIGENCE.get(risk, 47.0)
-    gamma_cost = RISK_GAMMA_COST.get(risk, 10.0)
-    beta_excess = RISK_BETA_EXCESS.get(risk, 0.4)
-    alpha_role = ROLE_ALPHA.get(role.lower(), 1.0)
+    i_min = RISK_MIN_INTELLIGENCE[risk_l]
+    i_target = RISK_TARGET_INTELLIGENCE[risk_l]
+    gamma_cost = RISK_GAMMA_COST[risk_l]
+    beta_excess = RISK_BETA_EXCESS[risk_l]
+    alpha_role = ROLE_ALPHA[role_l]
 
     # Decoupled intelligence utility
     base_intel = min(intel - i_min, i_target - i_min)
@@ -326,7 +406,6 @@ def score_model(
     u_core = u_intel - (cost * gamma_cost) - (burn * 1.0) + tier_bonus
     return round(u_core, 4)
 
-
 def rank_candidates(
     candidates: Sequence[Mapping[str, Any]],
     role: str = "implement",
@@ -336,28 +415,39 @@ def rank_candidates(
     """Rank candidates using two-stage lexicographic optimization.
 
     Stage 1: Primary utility score U_core(M) based on intelligence, cost, burn, and tier.
-    Stage 2: Lexicographic equivalence band (epsilon = 0.3 for high/critical, 0.5 for low/normal).
-             Within each equivalence band, resolve ties using verified throughput (Speed(M)).
+    Stage 2: Absolute equivalence band in utility points (0.3 for high/critical,
+             0.5 for low/normal). The band is calibrated and quantified by the
+             committed sensitivity sweep. Within each band, resolve ties using
+             verified throughput (Speed(M)); an existing test pins that a score
+             gap <= 0.5 is tied and ordered by speed.
     """
+    need_tokens = _validate_need_tokens(need_tokens)
+    risk_l = _validate_risk(risk)
+    role_l = _validate_role(role)
+
     if not candidates:
         return []
 
-    remaining: list[tuple[dict[str, Any], float, float]] = []
+    # Validate every candidate before entering the ranking loop.  This keeps the
+    # loop finite even when a caller passes a malformed later candidate.
+    prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
         d = dict(c)
-        score = score_model(d, role=role, risk=risk, need_tokens=need_tokens)
-        speed = float(d.get("verified_tok_per_s") or d.get("tok_per_s") or 0.0)
-        remaining.append((d, score, speed))
+        score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)
+        speed = _raw_speed(d)
+        prepared.append((d, score, speed))
 
-    epsilon = 0.3 if risk in ("high", "critical") else 0.5
+    remaining = prepared
+    epsilon = 0.3 if risk_l in ("high", "critical") else 0.5
     ranked: list[dict[str, Any]] = []
 
     while remaining:
         u_max = max(item[1] for item in remaining)
+
         in_band: list[tuple[dict[str, Any], float, float]] = []
         out_band: list[tuple[dict[str, Any], float, float]] = []
         for item in remaining:
-            if (u_max - item[1]) <= epsilon:
+            if (u_max - item[1]) <= epsilon + 1e-12:
                 in_band.append(item)
             else:
                 out_band.append(item)
@@ -382,7 +472,6 @@ def select_top_candidate(
     ranked = rank_candidates(candidates, role=role, risk=risk, need_tokens=need_tokens)
     return ranked[0] if ranked else None
 
-
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
     if "id" not in d and "model_id" in d:
@@ -390,7 +479,6 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
     return d
-
 
 def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
     """Retrieve models from SQLite CatalogDB (or fallback dictionary if unavailable)."""
@@ -407,24 +495,47 @@ def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
 
     return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS]
 
-
 def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
     """Check if model satisfies context window and price cliff limits.
 
     Multiplies need_tokens by role trajectory factor (1.5x worker, 1.3x driver, 1.1x reviewer)
-    before checking against price_cliff_tokens so multi-turn tool loops do not cross the price cliff mid-task.
+    before checking against both context_window and price_cliff_tokens so multi-turn tool loops
+    do not cross the price cliff or overflow the effective context window mid-task.
     """
-    ctx = int(m.get("context_window") or m.get("context_tokens") or 128000)
-    if ctx < need_tokens:
+    need_tokens = _validate_need_tokens(need_tokens)
+    role_l = str(role).strip().lower() if role is not None else "implement"
+    factor = ROLE_TRAJECTORY_FACTORS.get(role_l, 1.5)
+
+    ctx_value = m.get('context_window')
+    if ctx_value is None:
+        ctx_value = m.get('context_tokens')
+    if ctx_value is None:
+        ctx = 128000
+    else:
+        if isinstance(ctx_value, bool) or not isinstance(ctx_value, (int, float)):
+            raise ValueError(f'invalid context_window: {ctx_value!r}')
+        if isinstance(ctx_value, float) and not math.isfinite(ctx_value):
+            raise ValueError(f'invalid context_window: {ctx_value!r}')
+        if ctx_value <= 0:
+            raise ValueError(f'invalid context_window: {ctx_value!r}')
+        ctx = int(ctx_value)
+
+    required_ctx = int(need_tokens * factor)
+    if ctx < required_ctx:
         return False
-    cliff = m.get("price_cliff_tokens")
+
+    cliff = m.get('price_cliff_tokens')
     if cliff is not None:
-        factor = ROLE_TRAJECTORY_FACTORS.get(role.lower(), 1.5)
+        if isinstance(cliff, bool) or not isinstance(cliff, (int, float)):
+            raise ValueError(f'invalid price_cliff_tokens: {cliff!r}')
+        if isinstance(cliff, float) and not math.isfinite(cliff):
+            raise ValueError(f'invalid price_cliff_tokens: {cliff!r}')
+        if cliff < 0:
+            raise ValueError(f'invalid price_cliff_tokens: {cliff!r}')
         trajectory_tokens = int(need_tokens * factor)
         if trajectory_tokens > int(cliff):
             return False
     return True
-
 
 def resolve_review_plan(
     writer_model: str,
@@ -443,9 +554,12 @@ def resolve_review_plan(
       - Emits exact X-OmniRoute-* envelope headers for each reviewer targeting the combo:
           Rev 1: X-OmniRoute-Task-Role: review, X-OmniRoute-Exclude-Family: <writer_family>
           Rev 2: X-OmniRoute-Task-Role: review, X-OmniRoute-Exclude-Family: <writer_family>,<family_1>
+      - Raises ValueError if no eligible reviewer exists.
     """
+    need_tokens = _validate_need_tokens(need_tokens)
+    risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
-    reviewer_count = 2 if risk in ("high", "critical") else 1
+    reviewer_count = 2 if risk_l in ("high", "critical") else 1
 
     all_models = get_catalog_models(db)
 
@@ -457,7 +571,11 @@ def resolve_review_plan(
     if target_db is not None and hasattr(target_db, "get_route_legs") and combo_name:
         route_legs = target_db.get_route_legs(combo_name, active_only=True)
         if route_legs:
-            candidates = [_normalize_catalog_row(r) for r in route_legs if _passes_context_and_cliff(r, need_tokens, role="review")]
+            candidates = [
+                _normalize_catalog_row(r)
+                for r in route_legs
+                if _passes_context_and_cliff(r, need_tokens, role="review")
+            ]
             combo_priority_legs = True
 
     if not candidates:
@@ -471,45 +589,62 @@ def resolve_review_plan(
                 continue
             candidates.append(m)
 
-    min_intelligence = RISK_MIN_INTELLIGENCE.get(risk, 44.0)
+    min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
 
-    # Rank Reviewer 1 candidates (family != writer_family)
-    rev1_candidates = [
-        c for c in candidates
-        if detect_model_family(c["id"]) != writer_family
-    ]
-    if not rev1_candidates:
-        # Emergency relaxation outside combo, still enforcing availability, context, and price cliff
-        rev1_candidates = [
-            c for c in all_models
-            if is_model_available(c)
-            and _passes_context_and_cliff(c, need_tokens, role="review")
-            and detect_model_family(c["id"]) != writer_family
+    def _pick_reviewer(
+        pool: Sequence[Mapping[str, Any]],
+        excluded_families: set[str],
+    ) -> dict[str, Any] | None:
+        eligible = [
+            dict(c)
+            for c in pool
+            if detect_model_family(str(c.get("id") or c.get("model_id") or ""))
+            not in excluded_families
         ]
 
-    if combo_priority_legs:
-        qual_rev1 = [c for c in rev1_candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
-        reviewer_1 = qual_rev1[0] if qual_rev1 else (rev1_candidates[0] if rev1_candidates else None)
-    else:
-        ranked_rev1 = rank_candidates(rev1_candidates, role="review", risk=risk, need_tokens=need_tokens)
-        reviewer_1 = ranked_rev1[0] if ranked_rev1 else None
+        if not eligible:
+            # Emergency relaxation outside combo, still enforcing availability,
+            # context/price cliff, and family exclusions.
+            eligible = [
+                dict(c)
+                for c in all_models
+                if is_model_available(c)
+                and _passes_context_and_cliff(c, need_tokens, role="review")
+                and detect_model_family(str(c.get("id") or c.get("model_id") or ""))
+                not in excluded_families
+            ]
 
-    if not reviewer_1:
-        reviewer_1 = {
-            "id": "mimo/mimo-v2.6-pro",
-            "family": "mimo",
-            "aa_intelligence": 46.0,
-            "verified_tok_per_s": 51.0,
-            "cost_per_task_usd": 0.13,
-            "pool_burn_weight": 0.5,
-            "tier": "subscription",
-            "context_window": 1000000,
-        }
-    family_1 = detect_model_family(reviewer_1["id"])
+        if not eligible:
+            return None
+
+        if combo_priority_legs:
+            qualifying = []
+            for c in eligible:
+                try:
+                    intel = _validated_metric(c, "aa_intelligence")
+                except ValueError:
+                    continue
+                if intel >= min_intelligence:
+                    qualifying.append(c)
+            if qualifying:
+                return qualifying[0]
+            return eligible[0]
+
+        ranked = rank_candidates(
+            eligible, role="review", risk=risk_l, need_tokens=need_tokens
+        )
+        return ranked[0] if ranked else None
+
+    reviewer_1 = _pick_reviewer(candidates, {writer_family})
+    if reviewer_1 is None:
+        raise ValueError("no eligible reviewer family distinct from writer")
+
+    reviewer_1_id = str(reviewer_1.get("id") or reviewer_1.get("model_id") or "")
+    family_1 = detect_model_family(reviewer_1_id)
 
     headers_1 = build_routing_envelope_headers(
         role="review",
-        risk=risk,
+        risk=risk_l,
         min_intelligence=min_intelligence,
         required_context=need_tokens,
         exclude_families=[writer_family],
@@ -520,50 +655,27 @@ def resolve_review_plan(
     reviewers: list[dict[str, Any]] = [
         {
             "index": 1,
-            "model": reviewer_1["id"],
+            "model": reviewer_1_id,
             "family": family_1,
             "combo": combo_name,
             "headers": headers_1,
-            "score": score_model(reviewer_1, role="review", risk=risk, need_tokens=need_tokens),
+            "score": score_model(
+                reviewer_1, role="review", risk=risk_l, need_tokens=need_tokens
+            ),
         }
     ]
 
     if reviewer_count == 2:
-        rev2_candidates = [
-            c for c in candidates
-            if detect_model_family(c["id"]) not in (writer_family, family_1)
-        ]
-        if not rev2_candidates:
-            rev2_candidates = [
-                c for c in all_models
-                if is_model_available(c)
-                and _passes_context_and_cliff(c, need_tokens, role="review")
-                and detect_model_family(c["id"]) not in (writer_family, family_1)
-            ]
+        reviewer_2 = _pick_reviewer(candidates, {writer_family, family_1})
+        if reviewer_2 is None:
+            raise ValueError("no eligible second reviewer family")
 
-        if combo_priority_legs:
-            qual_rev2 = [c for c in rev2_candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
-            reviewer_2 = qual_rev2[0] if qual_rev2 else (rev2_candidates[0] if rev2_candidates else None)
-        else:
-            ranked_rev2 = rank_candidates(rev2_candidates, role="review", risk=risk, need_tokens=need_tokens)
-            reviewer_2 = ranked_rev2[0] if ranked_rev2 else None
-
-        if not reviewer_2:
-            reviewer_2 = {
-                "id": "opencode-go/muse-spark-1.3-contributor",
-                "family": "muse",
-                "aa_intelligence": 45.0,
-                "verified_tok_per_s": 287.0,
-                "cost_per_task_usd": 1.37,
-                "pool_burn_weight": 1.0,
-                "tier": "subscription",
-                "context_window": 200000,
-            }
-        family_2 = detect_model_family(reviewer_2["id"])
+        reviewer_2_id = str(reviewer_2.get("id") or reviewer_2.get("model_id") or "")
+        family_2 = detect_model_family(reviewer_2_id)
 
         headers_2 = build_routing_envelope_headers(
             role="review",
-            risk=risk,
+            risk=risk_l,
             min_intelligence=min_intelligence,
             required_context=need_tokens,
             exclude_families=[writer_family, family_1],
@@ -571,25 +683,69 @@ def resolve_review_plan(
             author_model=writer_model,
         )
 
-        reviewers.append({
-            "index": 2,
-            "model": reviewer_2["id"],
-            "family": family_2,
-            "combo": combo_name,
-            "headers": headers_2,
-            "score": score_model(reviewer_2, role="review", risk=risk, need_tokens=need_tokens),
-        })
+        reviewers.append(
+            {
+                "index": 2,
+                "model": reviewer_2_id,
+                "family": family_2,
+                "combo": combo_name,
+                "headers": headers_2,
+                "score": score_model(
+                    reviewer_2, role="review", risk=risk_l, need_tokens=need_tokens
+                ),
+            }
+        )
 
     return {
         "writer_model": writer_model,
         "writer_family": writer_family,
-        "risk": risk,
+        "risk": risk_l,
         "combo": combo_name,
         "need_tokens": need_tokens,
         "reviewer_count": reviewer_count,
         "reviewers": reviewers,
     }
 
+# New helper name: _risk_envelope_intelligence
+def _risk_envelope_intelligence(
+    *,
+    role: str,
+    risk_l: str,
+    combo_name: str,
+    need_tokens: int,
+    exclude_families: Sequence[str],
+    effort: str,
+    author_model: str | None,
+    db: Any,
+) -> float | None:
+    order = ("low", "normal", "high", "critical")
+    if risk_l not in order:
+        return None
+
+    picked: list[float] = []
+    for lower_risk in order[: order.index(risk_l)]:
+        try:
+            lower = resolve_model_for_task(
+                role=role,
+                risk=lower_risk,
+                combo_name=combo_name,
+                need_tokens=need_tokens,
+                exclude_families=exclude_families,
+                effort=effort,
+                author_model=author_model,
+                db=db,
+                relax_floor=True,
+                relax_reason="monotone-envelope",
+                _envelope=False,
+            )
+        except ValueError:
+            continue
+
+        candidate = lower.get("candidate")
+        if isinstance(candidate, Mapping):
+            picked.append(_validated_metric(candidate, "aa_intelligence"))
+
+    return max(picked) if picked else None
 
 def resolve_model_for_task(
     role: str = "implement",
@@ -600,77 +756,131 @@ def resolve_model_for_task(
     effort: str = "medium",
     author_model: str | None = None,
     db: Any = None,
+    relax_floor: bool = False,
+    relax_reason: str = "",
+    _envelope: bool = True,
 ) -> dict[str, Any]:
     """Resolve the optimal model candidate for a given task role and risk band.
 
     Enforces:
       - 5-rung tier ladder (subscription prioritized over paid)
       - Model utility scoring (mimo/mimo-v2.6-pro prioritized over qwen3.8-max)
-      - Minimum intelligence threshold for the risk band
+      - Minimum intelligence threshold for the risk band; high/critical fail closed
       - Availability and gated model exclusion
       - Family exclusion (including author_model family)
       - Context window and price cliff limits (with role trajectory factor buffer)
       - Two-stage lexicographic tie-breaker via rank_candidates
       - Vendor effort clamping (Sonnet 5.5 max -> xhigh)
+      - Best-effort risk-monotone intelligence envelope across low<normal<high<critical
     """
-    excluded = {f.lower().strip() for f in exclude_families if f.strip()}
+    need_tokens = _validate_need_tokens(need_tokens)
+    role_l = _validate_role(role)
+    risk_l = _validate_risk(risk)
+
+    exclude_families_seq = tuple(exclude_families or ())
+    excluded = {
+        str(f).lower().strip()
+        for f in exclude_families_seq
+        if f is not None and str(f).strip()
+    }
     if author_model:
         excluded.add(detect_model_family(author_model))
 
-    min_intelligence = RISK_MIN_INTELLIGENCE.get(risk, 44.0)
+    envelope_intelligence: float | None = None
+    if _envelope:
+        envelope_intelligence = _risk_envelope_intelligence(
+            role=role_l,
+            risk_l=risk_l,
+            combo_name=combo_name,
+            need_tokens=need_tokens,
+            exclude_families=exclude_families_seq,
+            effort=effort,
+            author_model=author_model,
+            db=db,
+        )
+
+    min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
     all_models = get_catalog_models(db)
 
-    # 1. Filter candidates within combo
-    candidates: list[dict[str, Any]] = []
-    for m in all_models:
+    def _eligible(m: Mapping[str, Any], require_combo: bool) -> bool:
         if not is_model_available(m):
-            continue
+            return False
         combos = m.get("combos")
-        if combo_name and combos and combo_name not in combos:
-            continue
-        if detect_model_family(m["id"]) in excluded:
-            continue
-        if not _passes_context_and_cliff(m, need_tokens, role=role):
-            continue
-        candidates.append(m)
+        if require_combo and combo_name and combos and combo_name not in combos:
+            return False
+        mid = str(m.get("id") or m.get("model_id") or "")
+        if detect_model_family(mid) in excluded:
+            return False
+        if not _passes_context_and_cliff(m, need_tokens, role=role_l):
+            return False
+        return True
 
-    # Filter by min intelligence if possible, or relax if empty
-    high_intel = [c for c in candidates if float(c.get("aa_intelligence", 0)) >= min_intelligence]
-    if high_intel:
-        candidates = high_intel
+    # 1. Filter candidates within combo
+    candidates: list[dict[str, Any]] = [
+        dict(m) for m in all_models if _eligible(m, require_combo=True)
+    ]
+
+    # Fallback: relax combo constraint while keeping all exclusions, availability,
+    # context, and price-cliff guards.
+    if not candidates:
+        candidates = [
+            dict(m) for m in all_models if _eligible(m, require_combo=False)
+        ]
 
     if not candidates:
-        # Relax combo constraint while keeping availability, excluded families, and context/cliff
-        for m in all_models:
-            if not is_model_available(m):
-                continue
-            if detect_model_family(m["id"]) in excluded:
-                continue
-            if not _passes_context_and_cliff(m, need_tokens, role=role):
-                continue
-            candidates.append(m)
+        raise ValueError("no eligible model candidates")
 
-    # Rank candidates using two-stage lexicographic optimization
-    ranked_candidates = rank_candidates(candidates, role=role, risk=risk, need_tokens=need_tokens)
+    if envelope_intelligence is not None:
+        envelope_candidates = [
+            c
+            for c in candidates
+            if _validated_metric(c, "aa_intelligence") >= envelope_intelligence
+        ]
+        if envelope_candidates:
+            candidates = envelope_candidates
+        # If none can meet the envelope, keep the previous behaviour for this
+        # band (floor rules and ValueError/relax as now).
 
-    selected = ranked_candidates[0] if ranked_candidates else {
-        "id": "mimo/mimo-v2.6-pro",
-        "family": "mimo",
-        "aa_intelligence": 46.0,
-        "verified_tok_per_s": 51.0,
-        "cost_per_task_usd": 0.13,
-        "pool_burn_weight": 0.5,
-        "tier": "subscription",
-        "context_window": 1000000,
-    }
+    qualifying: list[dict[str, Any]] = []
+    for c in candidates:
+        if _validated_metric(c, "aa_intelligence") >= min_intelligence:
+            qualifying.append(c)
 
-    selected_id = selected["id"]
+    relaxed = False
+    reason = str(relax_reason or "").strip()
+
+    if qualifying:
+        candidates = qualifying
+    else:
+        if risk_l in ("high", "critical"):
+            if not relax_floor or not reason:
+                raise ValueError("no candidate meets risk intelligence floor")
+            relaxed = True
+
+        # For explicit high/critical relaxation, and for low/normal floor misses,
+        # keep the highest-intelligence slice.  This preserves risk-monotone
+        # intelligence even when the floor cannot be met.
+        max_intel = max(_validated_metric(c, "aa_intelligence") for c in candidates)
+        candidates = [
+            c
+            for c in candidates
+            if abs(_validated_metric(c, "aa_intelligence") - max_intel) <= 1e-12
+        ]
+
+    ranked_candidates = rank_candidates(
+        candidates, role=role_l, risk=risk_l, need_tokens=need_tokens
+    )
+    if not ranked_candidates:
+        raise ValueError("no eligible model candidates")
+
+    selected = ranked_candidates[0]
+    selected_id = str(selected.get("id") or selected.get("model_id") or "")
     selected_family = detect_model_family(selected_id)
     clamped_effort = clamp_effort(selected_id, effort)
 
     headers = build_routing_envelope_headers(
-        role=role,
-        risk=risk,
+        role=role_l,
+        risk=risk_l,
         min_intelligence=min_intelligence,
         required_context=need_tokens,
         exclude_families=list(excluded),
@@ -682,10 +892,14 @@ def resolve_model_for_task(
         "model": selected_id,
         "family": selected_family,
         "tier": str(selected.get("tier", "subscription")).lower(),
-        "score": score_model(selected, role=role, risk=risk, need_tokens=need_tokens),
+        "score": score_model(
+            selected, role=role_l, risk=risk_l, need_tokens=need_tokens
+        ),
         "combo": combo_name,
         "effort": clamped_effort,
         "headers": headers,
         "candidate": selected,
+        "relaxed": relaxed,
+        "relax_reason": reason if relaxed else "",
+        "envelope_intelligence": envelope_intelligence,
     }
-

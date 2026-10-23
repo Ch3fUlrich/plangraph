@@ -10,18 +10,26 @@ directly from ``claimed``/``in_review`` to ``done`` on two pieces of proof:
   can open, that resolves inside one of the configured ``batch_roots``
   directories and whose bytes hash to exactly that digest.
 
+KEEPER-OPTASK-CLOSE (D-2201/D-2206) widens the verb for ``operator_task``:
+that kind is never agent-reviewed, so the router may close it from
+``claimed``/``in_review`` at *any* review tier, including ``standard`` and
+``high``.  Above ``none`` the hashed batch file is not proof enough — the
+decision must name the key in a whole ``Closes: <project:ID>`` token.  Every
+other kind at a non-``none`` tier is still refused ``bad_state``, and the
+kind/tier pair is re-checked under the write lock.
+
 If any of those decisions carries a ``Closes: <project:ID>`` token then *key*
 must be one of the named items — the same whole-token rule as ``Waives:``
-(X6c3); with no ``Closes:`` token anywhere, the hashed batch file alone
-authorises the close.  Everything is fail-closed: a traversal or a symlink that
-lands outside ``batch_roots``, an unreadable file, a digest mismatch or an
-absent decisions file all refuse.
+(X6c3); at tier ``none``, with no ``Closes:`` token anywhere, the hashed batch
+file alone authorises the close.  Everything is fail-closed: a traversal or a
+symlink that lands outside ``batch_roots``, an unreadable file, a digest
+mismatch or an absent decisions file all refuse.
 
 As in ``waive_second_family`` and ``add_evidence_router``, the slow I/O
 (filesystem, git, decisions file) runs *before* ``BEGIN IMMEDIATE``; inside the
 write lock the row is re-read and its state, epoch and decision-evidence id set
 must match what was verified outside it.  Since X7-FIX-B the batch file digest,
-the decisions-file checks and ``review_tier=='none'`` are re-verified *under*
+the decisions-file checks and the kind/tier pair are re-verified *under*
 the write lock too, closing the window between the pre-lock check and the
 commit.  The ``closed_on_decision`` event then
 locks the key exactly the way ``review_passed`` does, and is attributed to the
@@ -124,11 +132,14 @@ class CloseMixin:
                           "no decisions adapter is configured")
         return decisions
 
-    def _decision_evidence(self, key, item, now):
+    def _decision_evidence(self, key, item, now, require_named=False):
         """Verify every attached ``decision`` row pre-lock; return the rows.
 
         Returns ``(rows, named_keys)`` where ``named_keys`` is the union of the
         whole ``Closes:`` tokens across those rows (empty when none carries one).
+        ``require_named`` (set for a non-``none`` tier) makes a decision with no
+        ``Closes:`` token at all a refusal: the hashed batch file cannot stand
+        in for the operator naming the key.
         """
         rows = [e for e in self._evidence(key)
                 if e["epoch"] == item["epoch"] and e["kind"] == "decision"]
@@ -165,6 +176,9 @@ class CloseMixin:
         if named and key not in named:
             raise Refused("evidence_unverified",
                           f"the decision closes {sorted(named)}, not {key}")
+        if require_named and not named:
+            raise Refused("evidence_unverified",
+                          f"the decision does not close {key} by name")
         return rows, named
 
     def _closes_token_sha(self, key, rows, item=None, now=None):
@@ -286,11 +300,17 @@ class CloseMixin:
             # An open item has never been worked; it must be moved into an
             # active state first (``set_legacy_state``, a later task).
             raise Refused("bad_state", f"{key} is {item['state']}, not active")
-        if item.get("review_tier") != "none":
+        tier = item.get("review_tier")
+        if tier != "none" and item.get("kind") != "operator_task":
             raise Refused("bad_state",
-                          f"{key} is review_tier={item.get('review_tier')},"
+                          f"{key} is review_tier={tier},"
                           " only 'none' closes on a decision")
-        rows, named = self._decision_evidence(key, item, now)
+        # An operator_task above ``none`` is never agent-reviewed, so the router
+        # may close it -- but only when the decision names this key; the batch
+        # file alone is enough at ``none`` only.
+        require_named = tier != "none"
+        rows, named = self._decision_evidence(key, item, now,
+                                              require_named=require_named)
         tok = self._closes_token_sha(key, rows, item, now)
         commit_rows = (self._check_commit_evidence(key, item, now, tok)
                        if "commit" in (item.get("evidence_kinds") or [])
@@ -307,6 +327,12 @@ class CloseMixin:
             if int(fresh["epoch"]) != int(item["epoch"]):
                 raise Refused("conflict",
                               f"{key} changed epoch under the transaction")
+            if fresh.get("review_tier") != tier:
+                raise Refused("conflict",
+                              f"{key} changed review_tier under the transaction")
+            if fresh.get("kind") != item.get("kind"):
+                raise Refused("conflict",
+                              f"{key} changed kind under the transaction")
             again = frozenset(e["id"] for e in self._evidence(key)
                               if e["epoch"] == fresh["epoch"]
                               and e["kind"] == "decision")
@@ -317,13 +343,11 @@ class CloseMixin:
             # re-run every file-backed check inside it (small files, a
             # router-only verb) so nothing can change between the two.
             sha = self._read_batch(batch_ref)
-            again_rows, again_named = self._decision_evidence(key, fresh, now)
+            again_rows, again_named = self._decision_evidence(
+                key, fresh, now, require_named=require_named)
             if again_named != named:
                 raise Refused("evidence_unverified",
                               "the Closes: set changed under the transaction")
-            if fresh.get("review_tier") != "none":
-                raise Refused("conflict",
-                              f"{key} changed review_tier under the transaction")
             if set(fresh.get("evidence_kinds") or []) != set(item.get("evidence_kinds") or []):
                 raise Refused("conflict",
                               f"{key} changed evidence_kinds under the transaction")

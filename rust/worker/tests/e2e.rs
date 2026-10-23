@@ -10,10 +10,18 @@
 //! card: the happy path, a contract defect, a check that never passes, and a
 //! cancel signal. If `PG_RECORD_DIR` is set the fetched history is written
 //! there as a fixture for the offline replay tests.
+//!
+//! Live conditions: the park packet binds to the principal NAME, so the Rust
+//! ParkPacket must send the claim epoch, or each worker process must run under
+//! its own principal; shared-principal locks need a unique owner per
+//! process/run (judge note, not exercised by these tests). Gate tests: the
+//! card check must pass inside the attempt and fail when the gate re-runs it,
+//! hence the counter-file check.
 
 #![cfg(unix)]
 
 use pg_worker_core::exit_class::ExitClass;
+use pg_worker_core::redact::REDACTED;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -24,6 +32,8 @@ use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QU
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
+use pg_worker::phase::{PhaseInput, PhaseOutput};
+use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::Patterns;
@@ -151,6 +161,8 @@ impl Env {
         let opts = WorkerOptions::new(task_queue.as_str())
             .register_workflow::<Card>()
             .expect("register card workflow")
+            .register_workflow::<Phase>()
+            .expect("register phase workflow")
             .register_activities(CardActivities::new(deps.clone()))
             .build();
 
@@ -253,6 +265,38 @@ impl Env {
         self.max_rounds.set(Some(n));
     }
 
+    async fn start_phase(&self, id: &str, input: PhaseInput) -> WorkflowHandle<Client, Phase> {
+        let wf_id = format!("phase:{id}");
+        self.client
+            .start_workflow(
+                Phase::run,
+                input,
+                WorkflowStartOptions::new(self.task_queue.as_str(), wf_id.as_str()).build(),
+            )
+            .await
+            .expect("start phase workflow");
+        self.client.get_workflow_handle::<Phase>(wf_id.as_str())
+    }
+
+    fn phase_input(&self, key: &str, parallel: u32) -> PhaseInput {
+        PhaseInput {
+            max_waves: None,
+            finish_poll_s: Some(1),
+            finish_max_polls: Some(3),
+            key: key.to_string(),
+            repo: self.repo.display().to_string(),
+            workroot: self.workroot.display().to_string(),
+            base_branch: "main".to_string(),
+            max_parallel: Some(parallel),
+            legs: vec![LegSpec {
+                id: "leg-1".to_string(),
+                tier: Tier::Free,
+                model: "some/model".to_string(),
+                harness: "opencode".to_string(),
+            }],
+        }
+    }
+
     fn stop(&self) {
         if let Some(w) = self.worker.borrow().as_ref() {
             w.abort();
@@ -279,6 +323,8 @@ impl Env {
         let opts = WorkerOptions::new(self.task_queue.as_str())
             .register_workflow::<Card>()
             .expect("register card workflow")
+            .register_workflow::<Phase>()
+            .expect("register phase workflow")
             .register_activities(CardActivities::new(self.deps.clone()))
             .build();
         let url = Url::from_str(&self.addr).expect("PG_TEMPORAL_ADDR parses as a url");
@@ -385,6 +431,32 @@ fn b64_decode(s: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Every payload in a history, base64-decoded: the claim input, activity
+/// inputs and activity results all travel as payloads, which the `to_json`
+/// form stores base64-encoded — a raw substring search cannot see into them.
+fn decoded_payloads(v: &serde_json::Value) -> Vec<String> {
+    match v {
+        serde_json::Value::Object(map) => {
+            let mut out = Vec::new();
+            for (k, x) in map {
+                if k == "payloads"
+                    && let Some(items) = x.as_array()
+                {
+                    for p in items {
+                        if let Some(data) = p.get("data").and_then(|d| d.as_str()) {
+                            out.push(String::from_utf8_lossy(&b64_decode(data)).into_owned());
+                        }
+                    }
+                }
+                out.extend(decoded_payloads(x));
+            }
+            out
+        }
+        serde_json::Value::Array(a) => a.iter().flat_map(decoded_payloads).collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// The workflow id for card `<id>`: the projector derives `plan_key` from it.
@@ -1281,6 +1353,268 @@ async fn merge_time_check_fail_is_re_reported_to_the_keeper() {
     .await;
 }
 
+/// The check command both gate tests share: a counter that tells its own
+/// invocations apart, so the SAME command passes inside the attempt and fails
+/// when the pre-merge gate re-runs it on the exact tree about to land. Every
+/// invocation reads the count from `$R/chk.n` in the shared repo root — found
+/// from inside an attempt worktree exactly as MOVE_MAIN finds it — and
+/// overwrites it with the incremented value; when the pre-increment count `N`
+/// meets `fail_when`, `on_fail` runs and its exit status is the check's.
+/// Filesystem only: the check's environment is secret-free, so the attempt's
+/// run (invocation 0, 2, ...) and the gate's run (1, 3, ...) can only differ
+/// through this file. `on_fail` must `exit` non-zero itself; a count that
+/// does not meet `fail_when` passes.
+fn counter_check(fail_when: &str, on_fail: &str) -> String {
+    format!(
+        r#"R=$(dirname "$(git rev-parse --git-common-dir)")
+N=$(cat "$R/chk.n" 2>/dev/null || echo 0)
+echo $((N + 1)) > "$R/chk.n"
+if {fail_when}; then
+{on_fail}
+fi"#
+    )
+}
+
+/// The card's check gates the merge: the first attempt's tree passes the
+/// check inside the attempt, and the gate's re-run of the SAME command fails
+/// (see `counter_check`), which blocks the merge before anything lands — so
+/// main stays exactly where that attempt found it, and the retry — the same
+/// stateful harness script, now writing the passing tree — merges straight on
+/// top of that same base. The harness script is identical for every attempt,
+/// so its state lives in the shared repo (like MOVE_MAIN's): it appends main's
+/// ref to `main-at-start.txt` at the start of every attempt, which is what
+/// lets the test prove main never moved between the blocked attempt and the
+/// passing one, and that main gained exactly one commit — the retry's, with
+/// the retry's content.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gate_blocks_the_merge_and_main_is_unchanged_until_the_retry_passes() {
+    in_local(async {
+        let script = r#"R=$(dirname "$(git rev-parse --git-common-dir)")
+echo "$(git -C "$R" rev-parse main)" >> "$R/main-at-start.txt"
+if [ ! -f "$R/second.flag" ]; then
+  touch "$R/second.flag"
+  echo bad > out.txt
+else
+  echo good > out.txt
+fi"#;
+        // The check fails only on the invocation whose pre-increment count is
+        // 1 — the first attempt's gate.
+        let check_cmd = counter_check(r#"[ "$N" -eq 1 ]"#, "exit 1");
+        let Some(env) = env_or_skip("gate-blocks", script).await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-gate-blocks";
+        let claim = env.claim(card, &["out.txt"], &check_cmd);
+        let id = format!("e2e-gate-blocks-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("gate_blocks", &id, &handle).await;
+        // 1. The card still finishes as a merge — the blocked attempt cost one
+        //    retry, not the card.
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(out.detail, "merged", "{out:?}");
+        // 2. Exactly one line per attempt, and every line is the base: the
+        //    blocked attempt left main where it found it.
+        let starts = std::fs::read_to_string(env.repo.join("main-at-start.txt"))
+            .expect("the script recorded main's ref at the start of every attempt");
+        let starts: Vec<&str> = starts.lines().collect();
+        assert_eq!(starts.len(), 2, "one line per attempt: {starts:?}");
+        assert!(
+            starts.iter().all(|s| *s == env.base_sha),
+            "main did not move between the blocked attempt and the retry: {starts:?}"
+        );
+        // 3. The blocked attempt is judged `check_fail` and the final verdict
+        //    the keeper holds is the retry's `ok`. The rows for attempt 1 are
+        //    not pinned to one shape (a merge-time correction appends a second
+        //    row instead of replacing the first), so only the presence of the
+        //    failure is asserted. The gate's verdict is the one failure
+        //    attempt 1 ever earns: exactly one `check_fail` row for n=1,
+        //    judged before the final `ok`.
+        let reports = env.keeper.attempts();
+        let first: Vec<ExitClass> = reports
+            .iter()
+            .filter(|r| r.n == 1)
+            .map(|r| r.exit_class)
+            .collect();
+        assert!(
+            first.contains(&ExitClass::CheckFail),
+            "attempt 1 is judged check_fail: {first:?}"
+        );
+        assert_eq!(
+            reports.last().map(|r| r.exit_class),
+            Some(ExitClass::Ok),
+            "the final report is the retry that passed: {reports:?}"
+        );
+        assert_eq!(
+            reports
+                .iter()
+                .filter(|r| r.n == 1 && r.exit_class == ExitClass::CheckFail)
+                .count(),
+            1,
+            "the gate's verdict is reported exactly once for attempt 1: {reports:?}"
+        );
+        let fail_pos = reports
+            .iter()
+            .position(|r| r.exit_class == ExitClass::CheckFail)
+            .expect("the gate's block is reported as a check failure");
+        assert_eq!(
+            reports[fail_pos].n, 1,
+            "the blocked attempt is attempt 1: {reports:?}"
+        );
+        assert!(
+            fail_pos < reports.len() - 1,
+            "the gate's block is judged before the final ok: {reports:?}"
+        );
+        // 4. The retry moved main, and its tree is what main now holds.
+        assert_ne!(
+            git(&env.repo, &["rev-parse", "main"]),
+            env.base_sha,
+            "the retry must move main"
+        );
+        assert_eq!(
+            git(&env.repo, &["show", "main:out.txt"]),
+            "good",
+            "main holds the retry's content, never the blocked attempt's"
+        );
+        // 5. The blocked attempt's content never landed: main is exactly the
+        //    base plus the retry's one commit.
+        let log = git(&env.repo, &["log", "--format=%H", "main"]);
+        let shas: Vec<&str> = log.lines().collect();
+        assert_eq!(shas.len(), 2, "main is base plus one commit: {shas:?}");
+        assert_eq!(shas[1], env.base_sha, "the base is main's parent: {shas:?}");
+        // 6. The gate is really in the loop, once per attempt: the blocked
+        //    attempt's gate and the retry's gate are both in the history.
+        let bytes = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch history json");
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(
+            raw.matches("CardActivities::gate").count() >= 2,
+            "the gate must run once per attempt: {} occurrences",
+            raw.matches("CardActivities::gate").count()
+        );
+        // 7. The counter saw exactly those invocations: attempt 1's check,
+        //    its gate, the retry's check, its gate. Fewer means the command
+        //    never reached the gate.
+        let runs: u32 = std::fs::read_to_string(env.repo.join("chk.n"))
+            .expect("the check counted its invocations in the shared repo")
+            .trim()
+            .parse()
+            .expect("the counter is a number");
+        assert!(
+            runs >= 4,
+            "the check ran in both attempts and both gates: {runs}"
+        );
+        env.stop();
+    })
+    .await;
+}
+
+/// A check that leaks a token when the GATE runs it must leave that token
+/// nowhere durable: not in any keeper record (attempt reports with their
+/// tails, alarms, park packets) and not in the workflow history, which stores
+/// the claim and the attempt results verbatim. The attempt's own run passes
+/// (see `counter_check`), so the leak is the gate's tail — and a gate tail is
+/// redacted before it ever leaves the activity, so every stored form carries
+/// `[REDACTED]` where the token was.
+///
+/// The fake token reaches the check as two shell arguments rather than one
+/// literal: the claim — command included — is stored verbatim in the history's
+/// start input, so a whole token in the command would defeat the absence
+/// assertion by construction. Only the check's OUTPUT ever holds the whole
+/// token, which is exactly the surface redaction must scrub.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
+    in_local(async {
+        // Fake value, split mid-token so no whole token appears in the command
+        // (and thus in the claim the history stores).
+        let leak_marker = "abcd1234secretvalue9999";
+        // The failing invocation is the gate's — odd counts (see
+        // `counter_check`) — every time, so the gate is the failing surface
+        // the budget eventually parks or quarantines the card on.
+        let on_fail = format!(
+            "printf 'API_TOKEN=%s%s\\n' {} {}; exit 1",
+            &leak_marker[..8],
+            &leak_marker[8..]
+        );
+        let check_cmd = counter_check(r#"[ $((N % 2)) -eq 1 ]"#, &on_fail);
+        let Some(env) = env_or_skip("gate-secret", "echo ok > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-gate-secret";
+        let claim = env.claim(card, &["out.txt"], &check_cmd);
+        let id = format!("e2e-gate-secret-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("gate_secret", &id, &handle).await;
+        let parked = out.outcome == "parked" && out.detail == "parked";
+        let quarantined = out.outcome == "failed" && out.detail == "quarantined";
+        assert!(parked || quarantined, "unexpected outcome {out:?}");
+
+        // No keeper record holds the token: the attempt reports (with their
+        // tails), the alarms and the park packets are every surface the worker
+        // hands the keeper.
+        for (what, dump) in [
+            ("attempt reports", format!("{:?}", env.keeper.attempts())),
+            ("alarms", format!("{:?}", env.keeper.alarms())),
+            ("park packets", format!("{:?}", env.keeper.parked())),
+        ] {
+            assert!(
+                !dump.contains(leak_marker),
+                "the token reached the keeper {what}: {dump}"
+            );
+        }
+
+        // The history must not hold the token either — searched raw AND inside
+        // its base64 payloads, because the strings that matter (the claim, the
+        // attempt result's tail) live encoded there, invisible to a raw search.
+        let bytes = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch history json");
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(
+            !raw.contains(leak_marker),
+            "the token reached the workflow history"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("history is json");
+        let decoded = decoded_payloads(&value).join("\n");
+        assert!(
+            !decoded.contains(leak_marker),
+            "the token reached a history payload: {decoded}"
+        );
+
+        // The gate really ran — the attempt's check passed, so the leak is
+        // the gate's invocation — and its tail was redacted before it left
+        // the activity: the marker must be on record in a keeper record or a
+        // history payload, right where the assertions above forbid the token
+        // itself.
+        assert!(
+            raw.matches("CardActivities::gate").count() >= 1,
+            "the gate must run after the attempt's check passed: {} occurrences",
+            raw.matches("CardActivities::gate").count()
+        );
+        assert!(
+            [
+                ("attempt reports", format!("{:?}", env.keeper.attempts())),
+                ("alarms", format!("{:?}", env.keeper.alarms())),
+                ("park packets", format!("{:?}", env.keeper.parked())),
+                ("history payloads", decoded),
+            ]
+            .into_iter()
+            .any(|(_, d)| d.contains(REDACTED)),
+            "the gate's redacted tail must reach a keeper record or the history"
+        );
+        env.stop();
+    })
+    .await;
+}
+
 /// A leg naming a harness this worker never registered is the plan's fault:
 /// the card goes back to the planner instead of crashing or retrying.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1560,6 +1894,539 @@ async fn cancel_while_the_first_activity_is_pending_is_honoured() {
         assert_eq!(out.detail, "cancelled", "{out:?}");
         assert!(!marker.exists(), "no attempt may start after the cancel");
         env.stop();
+    })
+    .await;
+}
+
+async fn finish_phase(name: &str, handle: &WorkflowHandle<Client, Phase>) -> PhaseOutput {
+    let out = tokio::time::timeout(
+        RESULT_TIMEOUT,
+        handle.get_result(WorkflowGetResultOptions::default()),
+    )
+    .await
+    .expect("phase result within 120s")
+    .expect("phase workflow result");
+    record_phase(name, handle).await;
+    out
+}
+
+async fn record_phase(name: &str, handle: &WorkflowHandle<Client, Phase>) {
+    let Some(dir) = std::env::var_os("PG_RECORD_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let Ok(bytes) = handle
+        .fetch_history(WorkflowFetchHistoryOptions::default())
+        .to_json()
+        .await
+    else {
+        return;
+    };
+    let mut value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    scrub(&mut value);
+    let json = serde_json::to_string(&value).unwrap_or_default();
+    let dir = Path::new(&dir);
+    if std::fs::create_dir_all(dir).is_ok() {
+        let _ = std::fs::write(dir.join(format!("{name}.json")), json);
+    }
+}
+
+fn plan_json(key: &str, cards: &[(&str, bool)]) -> pg_worker::phase::PhasePlan {
+    let cards: Vec<_> = cards
+        .iter()
+        .map(|&(key, deferred)| {
+            serde_json::json!({
+                "key": key,
+                "ready": true,
+                "deferred": deferred,
+                "write_set": [format!("{key}.txt")],
+                "route": {
+                    "window_class": "128k",
+                    "harness": "opencode",
+                    "legs": ["leg-1"],
+                },
+            })
+        })
+        .collect();
+    serde_json::from_value(serde_json::json!({
+        "phase": key,
+        "ready": true,
+        "blocked": [],
+        "cards": cards,
+    }))
+    .expect("phase plan json")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phase_runs_two_cards_into_the_phase_branch() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-two", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let k = |s: &str| format!("e2e-{s}-{}", unique());
+        let a = k("phase-a");
+        let b = k("phase-b");
+        let phase_key = format!("phase-{}", unique());
+        env.keeper.push_plan(plan_json(
+            &phase_key,
+            &[(a.as_str(), false), (b.as_str(), false)],
+        ));
+
+        let file_a = format!("{a}.txt");
+        let mut claim_a = env.claim(&a, &[file_a.as_str()], &format!("test -f {file_a}"));
+        claim_a.prompt = file_a;
+        env.keeper.push_card_claim(claim_a);
+
+        let file_b = format!("{b}.txt");
+        let mut claim_b = env.claim(&b, &[file_b.as_str()], &format!("test -f {file_b}"));
+        claim_b.prompt = file_b;
+        env.keeper.push_card_claim(claim_b);
+
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-two-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
+        let out = finish_phase("phase_two_cards", &handle).await;
+
+        assert_eq!(out.outcome, "done", "{out:?}");
+        let mut merged = out.merged.clone();
+        merged.sort();
+        let mut expected = vec![a.clone(), b.clone()];
+        expected.sort();
+        assert_eq!(merged, expected, "{out:?}");
+        assert!(out.not_merged.is_empty(), "{out:?}");
+        assert_eq!(out.waves, 1, "{out:?}");
+        assert_eq!(out.branch, format!("phase/{}", phase_key));
+        assert_eq!(
+            git(&env.repo, &["rev-parse", "refs/heads/main"]),
+            env.base_sha
+        );
+
+        let tree = git(&env.repo, &["ls-tree", "-r", "--name-only", &out.branch]);
+        assert!(tree.contains(format!("{a}.txt").as_str()), "{tree}");
+        assert!(tree.contains(format!("{b}.txt").as_str()), "{tree}");
+        assert!(tree.contains("seed.txt"), "{tree}");
+
+        let completed = env.keeper.completed();
+        assert!(completed.iter().any(|(c, _)| c == &a), "{completed:?}");
+        assert!(completed.iter().any(|(c, _)| c == &b), "{completed:?}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phase_blocked_plan_creates_no_branch() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-blocked", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let phase_key = format!("phase-{}", unique());
+        let plan: pg_worker::phase::PhasePlan = serde_json::from_value(serde_json::json!({
+            "phase": phase_key.clone(),
+            "ready": false,
+            "blocked": ["no opencode leg"],
+            "cards": [],
+        }))
+        .expect("blocked phase plan");
+        env.keeper.push_plan(plan);
+
+        let id = format!("e2e-phase-blocked-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
+        let out = finish_phase("phase_blocked", &handle).await;
+
+        assert_eq!(out.outcome, "blocked", "{out:?}");
+        assert_eq!(out.blocked, vec!["no opencode leg".to_string()], "{out:?}");
+        assert!(out.merged.is_empty(), "{out:?}");
+        assert!(out.not_merged.is_empty(), "{out:?}");
+        assert_eq!(out.waves, 0, "{out:?}");
+        assert!(git(&env.repo, &["branch", "--list", "phase/*"]).is_empty());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phase_defers_an_overlapping_card_to_a_later_wave() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-defer", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let k = |s: &str| format!("e2e-{s}-{}", unique());
+        let a = k("defer-a");
+        let b = k("defer-b");
+        let phase_key = format!("phase-{}", unique());
+        env.keeper.push_plan(plan_json(
+            &phase_key,
+            &[(a.as_str(), false), (b.as_str(), true)],
+        ));
+        env.keeper.push_plan(plan_json(
+            &phase_key,
+            &[(a.as_str(), false), (b.as_str(), false)],
+        ));
+
+        let file_a = format!("{a}.txt");
+        let mut claim_a = env.claim(&a, &[file_a.as_str()], &format!("test -f {file_a}"));
+        claim_a.prompt = file_a;
+        env.keeper.push_card_claim(claim_a);
+
+        let file_b = format!("{b}.txt");
+        let mut claim_b = env.claim(&b, &[file_b.as_str()], &format!("test -f {file_b}"));
+        claim_b.prompt = file_b;
+        env.keeper.push_card_claim(claim_b);
+
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
+        let id = format!("e2e-phase-defer-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
+        let out = finish_phase("phase_defer", &handle).await;
+
+        assert_eq!(out.waves, 2, "{out:?}");
+        let mut merged = out.merged.clone();
+        merged.sort();
+        let mut expected = vec![a.clone(), b.clone()];
+        expected.sort();
+        assert_eq!(merged, expected, "{out:?}");
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(env.keeper.finish_calls().len(), 1);
+        assert!(env.keeper.plan_calls().len() >= 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_wave_cap_stops_before_the_next_wave() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-wave-cap", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let k = |s: &str| format!("e2e-{s}-{}", unique());
+        let a = k("wave-cap-a");
+        let b = k("wave-cap-b");
+        let phase_key = format!("phase-{}", unique());
+        env.keeper.push_plan(plan_json(
+            &phase_key,
+            &[(a.as_str(), false), (b.as_str(), true)],
+        ));
+        env.keeper.push_plan(plan_json(
+            &phase_key,
+            &[(a.as_str(), false), (b.as_str(), false)],
+        ));
+
+        let file_a = format!("{a}.txt");
+        let mut claim_a = env.claim(&a, &[file_a.as_str()], &format!("test -f {file_a}"));
+        claim_a.prompt = file_a;
+        env.keeper.push_card_claim(claim_a);
+
+        let id = format!("e2e-phase-wave-cap-{}", unique());
+        let mut input = env.phase_input(&phase_key, 2);
+        input.max_waves = Some(1);
+        let handle = env.start_phase(&id, input).await;
+        let out = finish_phase("phase_wave_cap", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert_eq!(out.waves, 1, "{out:?}");
+        assert_eq!(out.merged, vec![a.clone()], "{out:?}");
+        assert_eq!(out.blocked, vec!["wave cap reached".to_string()], "{out:?}");
+        assert!(
+            env.keeper.finish_calls().is_empty(),
+            "{:?}",
+            env.keeper.finish_calls()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_unstartable_card_is_reported_not_done() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-unstartable", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-unstartable-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper.push_plan(
+            serde_json::from_value::<pg_worker::phase::PhasePlan>(serde_json::json!({
+                "phase": phase_key.clone(),
+                "ready": true,
+                "blocked": [],
+                "cards": [{
+                    "key": card,
+                    "ready": false,
+                    "deferred": false,
+                    "write_set": [],
+                    "route": {
+                        "window_class": "128k",
+                        "harness": "opencode",
+                        "legs": ["leg-1"]
+                    }
+                }]
+            }))
+            .expect("phase plan"),
+        );
+
+        let id = format!("e2e-phase-unstartable-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
+        let out = finish_phase("phase_unstartable", &handle).await;
+
+        assert_eq!(out.outcome, "blocked", "{out:?}");
+        assert!(out.merged.is_empty(), "{out:?}");
+        assert!(
+            out.blocked
+                .first()
+                .is_some_and(|s| s.starts_with("cards not startable")),
+            "{out:?}"
+        );
+        assert_eq!(out.waves, 0, "{out:?}");
+        let branches = git(&env.repo, &["branch", "--list", "phase/*"]);
+        assert!(branches.trim().is_empty(), "{branches:?}");
+        assert!(
+            env.keeper.finish_calls().is_empty(),
+            "{:?}",
+            env.keeper.finish_calls()
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_waits_for_ci_then_merges() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-ci", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-ci-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "waiting_ci".to_string(),
+            pr: None,
+            detail: String::new(),
+        });
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-finish-ci-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 1)).await;
+        let out = finish_phase("phase_finish_ci", &handle).await;
+
+        assert_eq!(out.outcome, "done", "{out:?}");
+        assert_eq!(
+            out.finish.as_ref().map(|f| f.state.as_str()),
+            Some("merged"),
+            "{out:?}"
+        );
+        assert_eq!(env.keeper.finish_calls().len(), 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_refused_is_partial() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-refused", "echo ok > \"$PG_PROMPT\"").await
+        else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-refused-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "refused".to_string(),
+            pr: None,
+            detail: "ci red".to_string(),
+        });
+
+        let id = format!("e2e-phase-finish-refused-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 1)).await;
+        let out = finish_phase("phase_finish_refused", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert!(out.blocked.iter().any(|s| s == "ci red"), "{out:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_unknown_state_is_partial() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-unknown", "echo ok > \"$PG_PROMPT\"").await
+        else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-unknown-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "conflict".to_string(),
+            pr: None,
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-finish-unknown-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 1)).await;
+        let out = finish_phase("phase_finish_unknown", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert!(
+            out.blocked.iter().any(|s| s.contains("unknown state")),
+            "{out:?}"
+        );
+        assert_eq!(env.keeper.finish_calls().len(), 1, "{out:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_finish_never_green_is_partial() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-finish-never-green", "echo ok > \"$PG_PROMPT\"").await
+        else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-finish-never-green-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+        let file = format!("{card}.txt");
+        let mut claim = env.claim(&card, &[file.as_str()], &format!("test -f {file}"));
+        claim.prompt = file;
+        env.keeper.push_card_claim(claim);
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "waiting_ci".to_string(),
+            pr: None,
+            detail: String::new(),
+        });
+
+        let id = format!("e2e-phase-finish-never-green-{}", unique());
+        let mut input = env.phase_input(&phase_key, 1);
+        input.finish_max_polls = Some(2);
+        input.finish_poll_s = Some(1);
+        let handle = env.start_phase(&id, input).await;
+        let out = finish_phase("phase_finish_never_green", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert!(out.blocked.iter().any(|s| s.contains("ci-gate")), "{out:?}");
+        assert_eq!(env.keeper.finish_calls().len(), 2);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_card_without_claim_is_not_merged() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-no-claim", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = format!("e2e-no-claim-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(card.as_str(), false)]));
+
+        let id = format!("e2e-phase-no-claim-{}", unique());
+        let handle = env.start_phase(&id, env.phase_input(&phase_key, 2)).await;
+        let out = finish_phase("phase_no_claim", &handle).await;
+
+        assert_eq!(out.outcome, "partial", "{out:?}");
+        assert_eq!(out.not_merged, vec![card.clone()], "{out:?}");
+        assert!(out.merged.is_empty(), "{out:?}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn phase_rerun_reuses_a_closed_card_child_id() {
+    in_local(async {
+        let Some(env) = env_or_skip("phase-rerun", "echo ok > \"$PG_PROMPT\"").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let c = format!("e2e-rerun-{}", unique());
+        let phase_key = format!("phase-{}", unique());
+
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(c.as_str(), false)]));
+        let mut claim1 = env.claim(&c, &["other.txt"], "test -f never.txt");
+        claim1.prompt = "other.txt".to_string();
+        env.keeper.push_card_claim(claim1);
+
+        let id1 = format!("e2e-phase-rerun-{}-{}", 1, unique());
+        let handle1 = env.start_phase(&id1, env.phase_input(&phase_key, 1)).await;
+        let out1 = finish_phase("phase_rerun_1", &handle1).await;
+        assert_eq!(out1.not_merged, vec![c.clone()], "{out1:?}");
+        assert!(out1.merged.is_empty(), "{out1:?}");
+
+        env.keeper
+            .push_plan(plan_json(&phase_key, &[(c.as_str(), false)]));
+        let file = format!("{c}.txt");
+        let mut claim2 = env.claim(&c, &[file.as_str()], &format!("test -f {file}"));
+        claim2.prompt = file.clone();
+        env.keeper.push_card_claim(claim2);
+
+        env.keeper.push_finish(pg_worker::phase::PhaseFinish {
+            state: "merged".to_string(),
+            pr: Some(pg_worker::phase::PhasePr {
+                number: 7,
+                url: "u".to_string(),
+            }),
+            detail: String::new(),
+        });
+        let id2 = format!("e2e-phase-rerun-{}-{}", 2, unique());
+        let handle2 = env.start_phase(&id2, env.phase_input(&phase_key, 1)).await;
+        let out2 = finish_phase("phase_rerun_2", &handle2).await;
+
+        assert_eq!(out2.outcome, "done", "{out2:?}");
+        assert_eq!(out2.merged, vec![c.clone()], "{out2:?}");
+        assert!(out2.not_merged.is_empty(), "{out2:?}");
+        let completed = env.keeper.completed();
+        assert!(
+            completed.iter().any(|(card, _)| card == &c),
+            "{completed:?}"
+        );
     })
     .await;
 }

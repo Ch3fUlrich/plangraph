@@ -134,8 +134,8 @@ By decoupling $I_{\text{target}} > I_{\min}$, the intelligence ramp rewards mode
 |---|---|---|---|---|---|---|
 | `low` | 37.5 | 41.0 | 15.0 | 0.2 | 0.5 | 0–1 |
 | `normal` | 44.0 | 47.0 | 10.0 | 0.4 | 0.5 | 1 |
-| `high` | 46.0 | 50.0 | 4.0 | 2.0 | 0.3 | 2 |
-| `critical` | 50.0 | 54.0 | 1.5 | 2.5 | 0.3 | 2 |
+| `high` | 46.0 | 50.0 | 4.0 | 0.6 | 0.3 | 2 |
+| `critical` | 50.0 | 54.0 | 4.0 | 0.6 | 0.3 | 2 |
 
 #### Role Multiplier ($\alpha_{\text{role}}$)
 
@@ -169,6 +169,27 @@ Linear throughput bonuses in primary utility scoring previously allowed fast mod
    $$M^* = \arg\max_{M \in \mathcal{C}_{\text{top}}} \text{Speed}(M)$$
 
 Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can **never** win solely by virtue of generation speed.
+
+---
+
+### Input Contract, Fail-Closed Rules and Sensitivity
+
+- Numeric inputs are validated before scoring. NaN, +inf, -inf, negative values, and None are rejected with ValueError; a missing intelligence value is rejected with ValueError. A missing or None `context_window`/`context_tokens` falls back to 128000 and a missing or None speed counts as 0 (unmeasured, tie-break only); a present but invalid context window or `price_cliff_tokens` raises ValueError.
+- Absent-field defaults (field missing, not None for required numerics): `cost_per_task_usd` 0.20 USD per task, `pool_burn_weight` 1.0, `context_window`/`context_tokens` 128000, speed 0 (unmeasured). `aa_intelligence` has no default and a missing value raises ValueError.
+- `need_tokens` must be a positive finite number (an int or integral float); bools, non-numeric values, NaN/inf, non-integral floats, and values <= 0 raise ValueError.
+- Unknown risk and unknown role values raise ValueError. The role `"drive"` is accepted and uses alpha 1.1 and trajectory factor 1.3.
+- For high and critical risk bands, a candidate below `I_min` fails closed. The only escape is `relax_floor=True` with a non-empty `relax_reason`; when applied, result keys `relaxed` and `relax_reason` are set. A blank reason is not accepted.
+- For low and normal risk bands a floor miss does not raise: the highest-intelligence candidates are kept and ranked, and `relaxed` stays false.
+- There is no hardcoded fallback model. If no candidate is eligible, both `resolve_review_plan` and `resolve_model_for_task` raise instead of returning a default.
+- Exclusions (family/author/gated/availability) are applied in every fallback path, including relaxed-floor paths.
+- The context gate requires `ctx >= need_tokens * trajectory_factor`; role trajectory factors are applied consistently.
+- Risk monotonicity uses `envelope_intelligence` as a best-effort envelope: candidates are filtered to intelligence at or above the best lower-band pick; when that leaves none, resolution falls back to the floor rules, so the envelope cannot be met in every case.
+- Tie-breaking uses an epsilon band with absolute utility thresholds of 0.5 and 0.3 utility points.
+- Stability is measured by tools/spawner_sensitivity.py over several seeds (key `stability_seeds` in docs/spawner-sensitivity.json); high/critical beta_excess 0.6 and critical gamma_cost 4.0 keep the intelligence +-1 pick flip rate <= 0.10 on every listed seed; the flips that remain at critical are the cost of the hard risk-monotone envelope (critical's intelligence floor is the best lower-band pick, a hard filter), and the strict monotone guarantee (1e-9) is kept.
+- The committed sensitivity artifact is `docs/spawner-sensitivity.json`. Regenerate it with `python3 tools/spawner_sensitivity.py --out docs/spawner-sensitivity.json --catalogs 200`. Flip-rate numbers are read from that file; do not invent numbers — see the file.
+- The `cost_per_task_usd` field is the catalogued price in USD per task. Utility subtracts `cost_per_task_usd * gamma_cost` in utility points.
+- Absolute cost scale matters on purpose: a 10x price change may reorder near-ties inside the epsilon band because cost is real money. Outside the band the order follows utility at any cost scale (proved by `test_order_follows_utility_outside_epsilon_band_any_cost_scale`).
+- Speed-scale invariance (`test_speed_scale_invariance`) holds because speed is only a relative tie-break inside the band.
 
 ---
 

@@ -37,6 +37,7 @@ use pg_worker::activities::{CardActivities, Deps, TASK_QUEUE};
 use pg_worker::buildid;
 use pg_worker::harness::{self, ClaudeCode, HarnessRegistry, Opencode, OpencodeServer};
 use pg_worker::keeper::{HttpKeeper, Keeper, StubKeeper};
+use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
 use pg_worker_core::config::Config;
 use pg_worker_core::exit_class::Patterns;
@@ -167,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
 
     let builder = WorkerOptions::new(TASK_QUEUE)
         .register_workflow::<Card>()?
+        .register_workflow::<Phase>()?
         .register_activities(CardActivities::new(deps));
     let opts = match buildid::from_env() {
         Some((deployment, build)) => {
