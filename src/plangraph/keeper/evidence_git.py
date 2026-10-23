@@ -419,6 +419,54 @@ class GitAdapter:
             return {}
         return parse_trailers(proc.stdout)
 
+    def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str]]:
+        """Trailer dicts of the commits that authored the change behind *sha*.
+
+        L1 attaches ``commit+ci`` evidence to the PR merge commit, which carries
+        only ``Plan-Item``.  For a merge (or a PHASE merge whose second-parent
+        range holds inner PR merges) the writers are the NON-merge commits in
+        ``merge-base(parent1, parent2)..parent2``: the merge commit itself,
+        main-side commits and inner merges are never consulted.  A non-merge
+        commit stands for itself.  Failure returns an empty list, which the
+        keeper treats as fail-closed ``writer_unknown``.
+        """
+        if not valid_commit_ref(sha):
+            return []
+        proc = self._run(
+            repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]
+        )
+        if proc.returncode != 0:
+            return []
+        lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+        if not lines:
+            return []
+        tokens = lines[0].split()
+        if not tokens:
+            return []
+        parents = tokens[1:]
+        if len(parents) < 2:
+            return [self.trailers(repo, sha)]
+        base = self._run(
+            repo, ["merge-base", "--end-of-options", parents[0], parents[1]]
+        )
+        base_sha = base.stdout.strip().lower() if base.returncode == 0 else ""
+        if not valid_commit_ref(base_sha):
+            return []
+        rev = self._run(
+            repo,
+            ["rev-list", "--no-merges", "--end-of-options",
+             f"{base_sha}..{parents[1]}"],
+        )
+        if rev.returncode != 0:
+            return []
+        out: list[dict[str, str]] = []
+        for line in rev.stdout.splitlines():
+            commit = line.strip().lower()
+            if not valid_commit_ref(commit):
+                continue
+            out.append(self.trailers(repo, commit))
+        return out
+
     def commit_times(self, repo: str, sha: str) -> tuple[float | None, float | None]:
         """Return ``(author_epoch, committer_epoch)`` or ``(None, None)``.
 

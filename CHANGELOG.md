@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-23
+
+- **SEAT-COVERAGE-KEEPER:** keeper `verdict` now refuses to close an item until every writer family of its current-epoch verified `commit+ci` evidence is covered by the round's reviewer seats (`Refused('coverage', ...)`, pure `plangraph.keeper.coverage.uncovered` mirroring `tools/seat_verdict.coverage`; `need=1` standard, `2` high with a non-anthropic seat, two Claude seats counting once); fail-closed `writer_unknown` for a missing/unknown `Writer`, a trailers error, or a commit with neither `Writer` nor `Hand-Edit` (a `Hand-Edit` commit is `anthropic`); new `GitAdapter.writer_trailers` reads the non-merge commits in `merge-base(p1,p2)..p2`, so PR/PHASE merge evidence takes writers from the leaf branch commits and ignores the merge commit; `ok=False` and non-closing high verdicts are unchanged.
+
 ## 2026-10-22
 
 - **SEAT-COVERAGE-KEEPER (tests only):** red tests in `tests/test_keeper_seat_coverage.py` for the keeper refusing to close an item until every `Writer:` family of its current-epoch commit+ci evidence is covered by the posted reviewer families (mixed writers, two Claude seats counting as one family, sensitive high items, standard tier, missing/unknown trailers and `trailers()` errors failing closed as `writer_unknown`, decision-only items unchanged, `ok=False` exempt, and atomic refusals), plus a `trailers_by_sha` extension to `FakeGit` in `tests/evidence_fakes.py`; the keeper-side check is not implemented yet.
