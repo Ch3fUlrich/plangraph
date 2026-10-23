@@ -76,16 +76,14 @@ def node_in_canvas(page, key, margin=0):
 def wait_layout_idle(page):
     """Wait for the ``window.__pgLayoutIdle`` hook, then await one idle round.
 
-    Both steps are bounded at 10 s: a hook that never appears fails through
-    ``wait_for_function``'s timeout; a promise that never settles fails via
-    the ``Promise.race`` rejecter (syncPromise hanging forever).
+    Both steps are bounded at 10 s by Playwright's client-side timeout, so a
+    page whose main thread is stuck (where an in-page ``setTimeout`` could
+    never fire) still fails the test instead of hanging the suite.
     """
     page.wait_for_function("() => typeof window.__pgLayoutIdle === 'function'",
                            timeout=10000)
-    page.evaluate(
-        "() => Promise.race([window.__pgLayoutIdle(),"
-        " new Promise((_, reject) => setTimeout(() => reject(new Error("
-        "'__pgLayoutIdle did not settle within 10s')), 10000))])")
+    page.wait_for_function("() => window.__pgLayoutIdle().then(() => true)",
+                           timeout=10000)
 
 
 def model_positions(page):

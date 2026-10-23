@@ -233,7 +233,7 @@ def test_v_need_4(page, site, size):
 
 
 # ------------------------------------------------------ Section 7: Decisions page
-@pytest.mark.skip(reason="plangraph:PG-DEC-ATTRIBUTION")
+@pytest.mark.xfail(strict=True, reason="plangraph:PG-DEC-ATTRIBUTION")
 @for_sizes
 def test_v_dec_1(page, site):
     """V-DEC-1: attribute (human/agent) and actor come from keeper decision
@@ -241,7 +241,7 @@ def test_v_dec_1(page, site):
     raise NotImplementedError("plangraph:PG-DEC-ATTRIBUTION: body lands with the feature")
 
 
-@pytest.mark.skip(reason="plangraph:PG-DEC-EDIT-NOTICE")
+@pytest.mark.xfail(strict=True, reason="plangraph:PG-DEC-EDIT-NOTICE")
 @for_sizes
 def test_v_dec_2(page, site):
     """V-DEC-2: an edit shows previous text, editor and time (hash-chained).
@@ -249,7 +249,7 @@ def test_v_dec_2(page, site):
     raise NotImplementedError("plangraph:PG-DEC-EDIT-NOTICE: body lands with the feature")
 
 
-@pytest.mark.skip(reason="plangraph:PG-DEC-EDIT-NOTICE")
+@pytest.mark.xfail(strict=True, reason="plangraph:PG-DEC-EDIT-NOTICE")
 @for_sizes
 def test_v_dec_3(page, site):
     """V-DEC-3: without the operator principal the edit control is not shown.
@@ -363,7 +363,7 @@ def test_v_kg_1(page, site):
 
 
 # ------------------------------------------------------------- Section 11: Fleet
-@pytest.mark.skip(reason="plangraph:UI-FLEET-TAB")
+@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLEET-TAB")
 @for_sizes
 def test_v_fleet_1(page, site):
     """V-FLEET-1: until the fleet API exists the Fleet tab shows its empty state

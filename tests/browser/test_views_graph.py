@@ -225,7 +225,7 @@ def test_v_graph_5_focus_centres_target(page, site, size):
 
 # --------------------------------------------------------------------- 6 ----
 
-@pytest.mark.skip(reason=f"plangraph:{OWNER_EXPAND}: the page has no busy "
+@pytest.mark.xfail(strict=True, reason=f"plangraph:{OWNER_EXPAND}: the page has no busy "
                          "indicator at all (no [aria-busy]/busy/spinner element "
                          "in src/plangraph/web, measured busyEls=[] at 100 ms "
                          "into a relayout at all three sizes)")

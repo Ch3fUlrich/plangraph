@@ -194,7 +194,7 @@ def test_v_all_7(browser, site, size, vendor_assets):
         assert sel is None, \
             "'n' on the Progress page selected %r while the graph is hidden" % sel
 
-@pytest.mark.parametrize("size", _sizes("UI-VERSION-STAMP"), indirect=True)
+@pytest.mark.parametrize("size", _sizes(), indirect=True)
 def test_v_shell_1(page, site, size):
     """V-SHELL-1: build stamp with code sha + head_seq, plus a meta tag."""
     _goto(page, site)
@@ -225,7 +225,7 @@ def test_v_shell_3(page, site, size):
     hidden = page.evaluate("() => document.getElementById('tab-knowledge').hidden")
     assert not hidden, "Knowledge tab hidden (no data); spec: visible with reason"
 
-@pytest.mark.parametrize("size", _sizes("UI-VERSION-STAMP"), indirect=True)
+@pytest.mark.parametrize("size", _sizes(), indirect=True)
 def test_v_shell_4(page, site, size):
     """V-SHELL-4: data older than 15 min gets an amber age indicator."""
     _goto(page, site)
