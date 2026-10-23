@@ -783,8 +783,8 @@ mod tests {
     const OK_TOOL_TOKENS: &str =
         include_str!("../tests/fixtures/opencode/real-ok-tool-tokens.jsonl");
     const OK_TEXT: &str = include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
-    /// A run that only announced its first step and then stopped.
-    const STEP_ONLY: &str = r#"{"type":"step_start","part":{"type":"step-start"}}"#;
+    /// Recorded empty run: exit zero after announcing only its first step.
+    const EMPTY_RUN: &str = include_str!("../tests/fixtures/opencode/real-empty-run.jsonl");
 
     /// A JSON-emitting harness that prints a recorded stream, optionally writes
     /// `out.txt`, and exits with `code` (the code opencode returned for it).
@@ -1173,8 +1173,8 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_only_started_a_step_is_an_empty_run() {
-        let res = json_attempt(STEP_ONLY, 0, false, "true");
+    fn a_real_empty_run_is_classified_outage_never_ok() {
+        let res = json_attempt(EMPTY_RUN, 0, false, "true");
         assert_eq!(res.exit_class, ExitClass::Outage);
         assert_eq!(res.check_hash, "");
     }
