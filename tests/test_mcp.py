@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import plangraph.keeper.mcp as mcp
 from plangraph.keeper.mcp import (
     PROTOCOL_VERSION, TOOLS, HttpKeeper, serve,
 )
@@ -248,3 +249,37 @@ def test_module_entry_point(api):
     (reply,) = replies(process.stdout)
     assert reply["result"]["protocolVersion"] == PROTOCOL_VERSION
     assert TOKEN not in process.stdout + process.stderr
+
+
+# ------------------------------------------- windows stdio (cp1252 -> utf-8)
+
+class ArrowTitleClient:
+    """Client stub whose answer carries cp1252-unencodable characters."""
+
+    def call(self, method, verb, args):
+        assert (method, verb) == ("GET", "show")
+        return '{"key": "demo:A", "title": "→ 漢"}', False
+
+
+def test_main_serves_utf8_over_cp1252_stdout(monkeypatch):
+    """PG-MCP-UTF8: a cp1252 ``sys.stdout`` must still carry readable utf-8.
+
+    On Windows the stdio streams default to the ANSI code page (cp1252), so an
+    arrow or a CJK character in an item title would raise ``UnicodeEncodeError``
+    and drop the MCP client.  Driven through ``main()``, the production entry.
+    """
+    request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "show",
+                                     "arguments": {"key": "demo:A"}}})
+    wire = io.BytesIO()
+    out = io.TextIOWrapper(wire, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(request + "\n"))
+    monkeypatch.setattr(sys, "stdout", out)
+    monkeypatch.setattr(mcp, "_default_client", lambda: ArrowTitleClient())
+
+    assert mcp.main() == 0
+
+    payload = wire.getvalue().decode("utf-8")  # never cp1252, never undecodable
+    (reply,) = replies(payload)
+    assert reply["result"]["isError"] is False
+    assert "→ 漢" in reply["result"]["content"][0]["text"]
