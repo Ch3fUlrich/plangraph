@@ -12,10 +12,10 @@ HARD RULES this module exists to enforce:
 
 * Jev NEVER changes a decision.  The routing hook returns *rows*, never a route,
   and deep-copies its inputs, so Jev can never mutate the caller's card or route.
-* A slow, failing or unavailable Jev NEVER blocks.  Every ask runs in a daemon
+* Production hooks dispatch observations without waiting. Every ask runs in a daemon
   thread bounded by a hard deadline (:func:`guarded`), a timeout is reported as
   ``timeout`` and an exception as ``error`` (class name only, never the message),
-  and the hook wraps its whole body so an internal bug returns ``[]`` instead
+  and the runner wraps its whole body so an internal bug returns ``[]`` instead
   of raising.
 * The flag defaults to ``off``: nothing runs, no thread starts, no request is made.
 
@@ -45,6 +45,28 @@ __all__ = ["Sink", "store_sink", "guarded", "shadow_routing", "fill_outcome",
 _REASON_CAP = 200
 #: Sentinel that distinguishes "no attempt given" from "attempt given as None".
 _UNSET = object()
+_THREADS = set()
+
+
+def background(fn):
+    """Dispatch an observation without waiting for its network deadline."""
+    def run():
+        try:
+            fn()
+        finally:
+            _THREADS.discard(threading.current_thread())
+    thread = threading.Thread(target=run, daemon=True)
+    _THREADS.add(thread)
+    thread.start()
+
+
+def drain():
+    """Wait for dispatched observations at shutdown or in deterministic tests."""
+    for thread in list(_THREADS):
+        if thread is threading.current_thread():
+            continue
+        thread.join()
+        _THREADS.discard(thread)
 
 
 class Sink:
@@ -106,6 +128,17 @@ def guarded(fn, timeout_s):
     return ("ok", box.get("value"), "")
 
 
+def observer_connection(store):
+    """Capture connection configuration on the owner thread; open per observer."""
+    from plangraph.keeper import db, db_pg
+    if isinstance(store.conn, db_pg.PgConnection):
+        dsn = store.conn._raw.info.dsn
+        schema = store.conn.schema
+        return lambda: db_pg.open_pg(None, dsn=dsn, schema=schema)
+    database = store.conn.execute("PRAGMA database_list").fetchone()[2]
+    return lambda: db.open_db(database, backend="sqlite")
+
+
 def store_sink(store, principal) -> Sink:
     """A sink that writes each row with ``store.jev_record``; swallows every error.
 
@@ -114,12 +147,30 @@ def store_sink(store, principal) -> Sink:
     ``False`` here, so a hook never breaks because the keeper refused a row.
     """
     def _sink(row: dict) -> bool:
+        conn = None
         try:
-            store.jev_record(principal, row)
+            # SQLite connections must not be used concurrently by the API and
+            # background observations (including their authorizer callbacks).
+            from plangraph.keeper.store import Store
+            conn = connect()
+            observer = Store(conn, clock=store.clock)
+            observer.jev_record(principal, row)
+            # The execution may finish before a slow shadow answer arrives.
+            if row.get("attempt") is not None and row["kind"] in jev_questions.ROUTING_KINDS:
+                finished = conn.execute(
+                    "SELECT exit_class FROM attempts WHERE key=? AND n=?",
+                    (row["card"], row["attempt"])).fetchone()
+                if finished is not None:
+                    fill_outcome(observer, principal, row["card"], finished[0],
+                                 attempt=row["attempt"], kind=row["kind"])
         except Exception:  # noqa: BLE001 - a refused row is just a row that did not land
             return False
+        finally:
+            if conn is not None:
+                conn.close()
         return True
 
+    connect = observer_connection(store)
     return _sink
 
 
@@ -312,7 +363,7 @@ def qc_hook(*, store=None, principal=None, sink=None, cfg=None, env=None):
     return hook
 
 
-def fill_outcome(store, principal, card_key, outcome, *, attempt=_UNSET) -> int:
+def fill_outcome(store, principal, card_key, outcome, *, attempt=_UNSET, kind=None) -> int:
     """Fill the later outcome on Jev rows for ``card_key``; returns the rows updated.
 
     ``attempt`` is forwarded only when given: omit it to fill every attempt, pass it
@@ -325,6 +376,8 @@ def fill_outcome(store, principal, card_key, outcome, *, attempt=_UNSET) -> int:
     """
     try:
         body = {"card": card_key, "outcome": outcome}
+        if kind is not None:
+            body["kind"] = kind
         if attempt is not _UNSET:
             body["attempt"] = attempt
         result = store.jev_outcome(principal, body)

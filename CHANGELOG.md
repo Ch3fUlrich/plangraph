@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **JEV-ATTEMPT-THREAD (#96):** dispatch routing and keeper QC observations without waiting for Jev; use independent observer connections, record QC outcomes, bind routing observations and execution fills to numbered attempts and routing kinds, honour `pass_allowed`, omit router answers from model state, document single-axis QC scope, and remove the unused axis formatter. Jev remains default-off and its test network guard is unchanged.
 - **RT-P1-BUS-CONTRACT:** complete read-side JSON conformance vectors, pin bounded leading-zero limit syntax and normalized signing, and reject non-wire POST inputs with validation errors.
 
 - **KEEPER-CLOSE-SKIP-UNVERIFIED:** decision close ignores stored unverified decision rows (including legacy `d_id` refs), still requires at least one verified row and rechecks the verified evidence-id set under the write lock. Both evidence write verbs reject decision refs without a non-empty string `id`; SQLite/Postgres contract tests cover the operator-task rotation shape and fail-closed unverified-only evidence.
