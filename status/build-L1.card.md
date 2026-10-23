@@ -9,9 +9,9 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq7 b9a378b7 CI green; Haiku BLOCKER -> sq8 mimo 12aa4f failed 503 (flapping); sq8 cx SCHEDULED 18:47Z workst -> mergemain, CI, qwen+Haiku -> GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | PR #152 head 32051a6a; fix3 6836f4 STUCK cx 429, WIP patch saved; relaunch 18:46Z cx (pr152/FIX3-BRIEF.md) -> CI, qwen+Haiku re-seat -> merge, submit |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5: mimo 503 x3, sol 615435 STUCK cx 429; relaunch 18:46Z cx -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5: mimo 503 x3, sol 615435 STUCK cx 429; cx next free slot (after SEAT-FREE-OPENCODE operator top prio) -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
-| PG-PUBLIC-READY (HIGH) | L1 | words --check run 18:4xZ (operator-approved list ~/private/plangraph-words.txt): exit 1, 3 hits router-name alias md_sync_dclose.py:74 + test -> writer lane/pg-public-words queued workst (configurable aliases, env PG_ROUTER_BY_ALIASES; live md-sync needs env before live) -> re-check, seats qwen + non-openai, submit, GO-REQ |
+| PG-PUBLIC-READY (HIGH) | L1 | OPERATOR 18:5xZ: names scan waived (all names fine), words writer cancelled, list deleted -> r5 seats qwen + non-openai on c218b921 w/ waiver D-row, submit, GO-REQ |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD p4 | L1 | claimed epoch 1; writer E queued workst (after #139, cx 18:46Z+) (lane/bus-nonce-flood @de54bb22) -> CI, qwen+mimo -> merge, submit |
