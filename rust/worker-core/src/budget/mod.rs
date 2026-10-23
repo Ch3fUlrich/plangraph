@@ -63,16 +63,15 @@ impl Attempt {
         !self.consumes_attempt()
     }
 
-    /// A no-change run and a failed check are the same dead end: the work is
-    /// unfinished, the provider is healthy, and the attempt consumed budget.
+    /// Two attempts are the same dead end only when they failed the same way:
+    /// both `CheckFail` or both `NoChange` — the work is unfinished, the
+    /// provider is healthy, and the attempt consumed budget. The classes must
+    /// be equal: a `CheckFail` and a `NoChange` are different outcomes, and
+    /// in production they can never share `diff_hash` / `check_hash` anyway
+    /// (a no-change run leaves both empty), so a mixed pair is not one kind.
     fn same_failure_kind(&self, other: &Attempt) -> bool {
-        matches!(
-            (self.exit_class, other.exit_class),
-            (
-                ExitClass::CheckFail | ExitClass::NoChange,
-                ExitClass::CheckFail | ExitClass::NoChange
-            )
-        )
+        self.exit_class == other.exit_class
+            && matches!(self.exit_class, ExitClass::CheckFail | ExitClass::NoChange)
     }
 }
 

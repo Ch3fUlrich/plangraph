@@ -339,11 +339,13 @@ fn no_change_consumes_budget_and_quarantines_like_a_failed_check() {
     // that keeps failing.
     let repeated = [at(NoChange, "l", Tier::Free), at(NoChange, "l", Tier::Free)];
     assert_eq!(simple(&repeated), Action::Quarantine);
+    // ... but a failed check and a no-change are different failure kinds even
+    // when the synthetic hashes match; in production they never match at all.
     let mixed = [
         at(CheckFail, "l", Tier::Free),
         at(NoChange, "l", Tier::Free),
     ];
-    assert_eq!(simple(&mixed), Action::Quarantine);
+    assert_ne!(simple(&mixed), Action::Quarantine);
 }
 
 #[test]
