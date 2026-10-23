@@ -7,12 +7,15 @@ accident.
 """
 import json
 import re
+import time
 from contextlib import contextmanager
+from datetime import datetime
 from urllib.parse import urlparse
 
 import pytest
 from browser import probes
 from browser.conftest import SIZES, SNAPSHOT_PATH, _allowed_warning_res
+from plangraph.render import build_sha
 
 pytestmark = pytest.mark.browser
 SEL_KEY = "orchard:OR-3"          # open lane, phase orchard|T2
@@ -23,7 +26,7 @@ def _sizes(xfail=None):
     out = []
     for name, val in SIZES.items():
         r = xfail if isinstance(xfail, str) else (xfail or {}).get(name)
-        marks = [pytest.mark.xfail(strict=True, reason="plangraph:" + r)] if r else ()
+        marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:" + r)] if r else ()
         out.append(pytest.param(val, id=name, marks=marks))
     return out
 
@@ -162,7 +165,8 @@ def test_v_all_5(page, site, size):
     assert len1 >= len0 + 2, "history entries %d -> %d for 2 selections" % (len0, len1)
 
 @pytest.mark.parametrize("size", [pytest.param(SIZES["phone"], id="phone",
-    marks=pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES"))], indirect=True)
+    marks=pytest.mark.xfail(strict=True, raises=AssertionError,
+                            reason="plangraph:UI-NARROW-LAYOUT"))], indirect=True)
 def test_v_all_6(page, site, size):
     """V-ALL-6: touch targets >= 40 px at 390 px wide, no horizontal overflow."""
     _goto(page, site)
@@ -193,21 +197,41 @@ def test_v_all_7(browser, site, size, vendor_assets):
         sel = pg.evaluate("() => PlanUI.app.ui.get('sel')")
         assert sel is None, \
             "'n' on the Progress page selected %r while the graph is hidden" % sel
+        # the shortcut run must also stay inside the console budget (V-ALL-1)
+        bad = _console_bad(seen)
+        assert not bad and not errs and not stray, \
+            "console: bad=%r pageerrors=%r stray=%r" % (bad[:3], errs[:1], stray[:1])
 
 @pytest.mark.parametrize("size", _sizes(), indirect=True)
 def test_v_shell_1(page, site, size):
-    """V-SHELL-1: build stamp with code sha + head_seq, plus a meta tag."""
+    """V-SHELL-1: build stamp with the renderer's git code sha, the snapshot time
+    and the exact ``head_seq``, and the same sha in a ``<meta name=plangraph-build>``
+    tag. The code sha is compared byte for byte with ``render.build_sha()`` (the
+    renderer git sha) - never with a hex-looking token, which would also match the
+    keeper head hash the spec excludes."""
     _goto(page, site)
     meta = page.evaluate("() => { const m ="
         " document.querySelector('meta[name=\"plangraph-build\"]');"
         " return m ? m.content : null; }")
-    stamp = page.text_content("#meta-line") or ""
+    stamp = (page.text_content("#meta-line") or "").strip()
     assert meta is not None, "no <meta name=plangraph-build>; stamp text %r" % stamp
-    blob = (meta or "") + " " + stamp
-    assert str(_SNAP["head_seq"]) in blob, "head_seq missing in stamp %r" % blob
-    assert re.search(r"[0-9a-f]{7,40}", blob), "no sha-like token in %r" % blob
+    want_sha = build_sha()            # what render.py stamps (UI-VERSION-STAMP)
+    m = re.match(r"^code (\S+) \u00b7 data (\S+) \u00b7 seq (\S+)", stamp)
+    assert m, "stamp does not start 'code <sha> \u00b7 data <time> \u00b7 seq <n>': %r" % stamp
+    code, data, seq = m.groups()
+    assert code == want_sha, \
+        "stamp code sha %r is not the renderer git sha %r" % (code, want_sha)
+    assert meta == want_sha, \
+        "meta plangraph-build %r is not the renderer git sha %r" % (meta, want_sha)
+    assert data == _SNAP["generated"], \
+        "snapshot time %r != fixture generated %r" % (data, _SNAP["generated"])
+    assert seq == str(_SNAP["head_seq"]), \
+        "head_seq %r != fixture head_seq %r (stamp %r)" % (seq, _SNAP["head_seq"], stamp)
+    head = _SNAP.get("head")
+    assert head is None or code != str(head)[:len(code)], \
+        "code sha %r is the keeper head hash %r, not the renderer git sha" % (code, head)
 
-@pytest.mark.parametrize("size", _sizes("UI-FLAKE-FIXES"), indirect=True)
+@pytest.mark.parametrize("size", _sizes("UI-NARROW-LAYOUT"), indirect=True)
 def test_v_shell_2(page, site, size):
     """V-SHELL-2: the header stays constant across pages (no reflow)."""
     _goto(page, site)
@@ -225,16 +249,57 @@ def test_v_shell_3(page, site, size):
     hidden = page.evaluate("() => document.getElementById('tab-knowledge').hidden")
     assert not hidden, "Knowledge tab hidden (no data); spec: visible with reason"
 
+def _stamp_age_minutes(stamp):
+    """Age in minutes the stamp states ('... · age 42 min' or '... · age 305h 12m'),
+    or None when the stamp states no age at all."""
+    m = re.search(r"\u00b7 age (\d+) min", stamp)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\u00b7 age (\d+)h (\d+)m", stamp)
+    if m:
+        return int(m.group(1)) * 60 + int(m.group(2))
+    return None
+
+
 @pytest.mark.parametrize("size", _sizes(), indirect=True)
 def test_v_shell_4(page, site, size):
-    """V-SHELL-4: data older than 15 min gets an amber age indicator."""
+    """V-SHELL-4: the data age is shown, and a snapshot older than 15 min turns the
+    stamp amber *and* says why (the stated age has to be the snapshot's real age,
+    and the amber class has to change the rendered colour)."""
+    generated = _SNAP["generated"]
+    try:
+        gen_ms = datetime.fromisoformat(str(generated).replace("Z", "+00:00")).timestamp() * 1000
+    except ValueError:
+        pytest.fail("snapshot generated %r is not an ISO timestamp, V-SHELL-4 "
+                    "cannot compute the data age" % generated)
+    t0 = time.time() * 1000
     _goto(page, site)
     stamp = (page.text_content("#meta-line") or "").strip()
-    age = page.evaluate("() => !!document.querySelector("
-                        "'[data-age], .data-age, .stale, .age-warn')")
-    shown = bool(age or re.search(r"(stale|\bage\b|\bago\b)", stamp, re.I))
-    assert shown, ("snapshot generated %s (>>15 min old) but header stamp is %r, "
-                   "no age element" % (_SNAP["generated"], stamp))
+    cls = page.evaluate("() => document.getElementById('meta-line').className")
+    colour = page.evaluate(
+        "() => getComputedStyle(document.getElementById('meta-line')).color")
+    t1 = time.time() * 1000
+    lo, hi = int((t0 - gen_ms) // 60000), int((t1 - gen_ms) // 60000)
+    assert lo > 15, (
+        "fixture snapshot %s is %d min old, the >15 min clause is not exercised"
+        % (generated, lo))
+    shown = _stamp_age_minutes(stamp)
+    assert shown is not None, (
+        "snapshot is %d-%d min old (>>15 min) but the stamp states no age: %r"
+        % (lo, hi, stamp))
+    assert lo <= shown <= hi, (
+        "stamp states an age of %d min, the snapshot was %d-%d min old when the "
+        "page rendered: %r" % (shown, lo, hi, stamp))
+    assert "stamp-stale" in cls.split(), (
+        "snapshot is %d min old but #meta-line carries no stamp-stale (amber) "
+        "class: className %r, stamp %r" % (lo, cls, stamp))
+    fresh = page.evaluate(
+        "() => { const e = document.getElementById('meta-line');"
+        " e.classList.remove('stamp-stale');"
+        " return getComputedStyle(e).color; }")
+    assert colour != fresh, (
+        "stamp-stale does not turn the stamp amber: stale colour %s, colour "
+        "without the class %s (stamp %r)" % (colour, fresh, stamp))
 
 @pytest.mark.parametrize("size", _sizes({"tablet": "UI-NARROW-LAYOUT"}), indirect=True)
 def test_v_side_1(page, site, size):
@@ -254,7 +319,7 @@ def test_v_side_1(page, site, size):
     assert not scrim, "scrim visible at load, stealing the first click"
     assert hit == "cy", "canvas centre click would hit %r, not the graph" % hit
 
-@pytest.mark.parametrize("size", _sizes({"tablet": "UI-FLAKE-FIXES"}), indirect=True)
+@pytest.mark.parametrize("size", _sizes({"tablet": "UI-NARROW-LAYOUT"}), indirect=True)
 def test_v_side_2(page, site, size):
     """V-SIDE-2: opening the details panel never collapses or hides the tree."""
     if size == SIZES["phone"]:
@@ -286,18 +351,45 @@ def test_v_side_3(page, site, size):
         " #project-tree .selected, #project-tree [data-selected]').length")
     assert marked >= 1, "tree rows marking the selection: %d (expected 1)" % marked
 
+def _harbor_nodes(page):
+    """Every cytoscape node id that belongs to the harbor project (p:/ph:/pc:/phc:/t:)."""
+    return page.evaluate(
+        "() => { const cy = PlanUI.GraphView.getCy(); if (!cy) return [];"
+        " return cy.nodes().map(n => n.id()).filter(i => i.indexOf('harbor') >= 0); }")
+
+
 @pytest.mark.parametrize("size", _sizes("UI-URL-HISTORY"), indirect=True)
 def test_v_side_4(page, site, size):
-    """V-SIDE-4: eye state survives reload and the tree agrees with the graph."""
+    """V-SIDE-4: eye state survives reload and the tree agrees with the graph.
+
+    The graph opens on the collapsed project overview, so ``p:harbor`` does not
+    exist until harbor is expanded: the toggle is asserted on a node that was
+    actually drawn, and its disappearance is checked against the nodes that were
+    there before (an empty lookup would pass with a broken eye)."""
     _goto(page, site)
+    probes.click_node(page, "pc:harbor")          # draw harbor, then toggle its eye
+    probes.wait_layout_idle(page)
+    drawn = _harbor_nodes(page)
+    assert "p:harbor" in drawn, \
+        "harbor never expanded, there is nothing to toggle: %r" % sorted(drawn)
+    others_before = _cy_len(page, "pc:lighthouse") + _cy_len(page, "p:lighthouse")
+    assert others_before > 0, "precondition: no lighthouse card drawn to compare against"
     page.evaluate(_EYE_HARBOR)
     probes.wait_layout_idle(page)
     hash_a = page.evaluate("() => location.hash")
     assert "fpr=" in hash_a, "filter state not in URL: %r" % hash_a
-    assert _cy_len(page, "p:harbor") == 0, "harbor compound still drawn after eye-off"
+    left = _harbor_nodes(page)
+    assert not left, \
+        "%d harbor node(s) still drawn after eye-off of %d: %r" % (
+            len(left), len(drawn), sorted(left))
+    others_after = _cy_len(page, "pc:lighthouse") + _cy_len(page, "p:lighthouse")
+    assert others_after == others_before, (
+        "eye-off on harbor changed the other projects: %d -> %d cards"
+        % (others_before, others_after))
     page.reload()
     probes.wait_layout_idle(page)
-    assert _cy_len(page, "p:harbor") == 0, "harbor reappeared after reload"
+    left = _harbor_nodes(page)
+    assert not left, "harbor reappeared after reload: %r" % sorted(left)
     pressed = page.evaluate(
         "() => { const r = [...document.querySelectorAll('#project-tree"
         " .pt-project-row')].find(x => x.textContent.includes('harbor'));"
@@ -345,7 +437,7 @@ def test_v_det_1(page, site, size):
         assert m["pos"] in ("sticky", "relative") and m["x"] + m["width"] > m["vw"] - 3 \
             and 200 < m["width"] < 0.5 * m["vw"], "at %d px expected dock, got %r" % (w, m)
 
-@pytest.mark.parametrize("size", _sizes("UI-FLAKE-FIXES"), indirect=True)
+@pytest.mark.parametrize("size", _sizes("UI-GRAPH-CLICK"), indirect=True)
 def test_v_det_2(page, site, size):
     """V-DET-2: a dependency key link selects the dep AND focuses it in the graph."""
     _goto(page, site)
@@ -357,7 +449,7 @@ def test_v_det_2(page, site, size):
     assert box is not None, \
         "graph never revealed/focused %s (node absent from canvas)" % DEP_KEY
 
-@pytest.mark.parametrize("size", _sizes("UI-FLAKE-FIXES"), indirect=True)
+@pytest.mark.parametrize("size", _sizes("UI-GRAPH-CLICK"), indirect=True)
 def test_v_det_3(page, site, size):
     """V-DET-3: details text is readable — no [object Object] / undefined."""
     _goto(page, site)
@@ -368,7 +460,7 @@ def test_v_det_3(page, site, size):
         junk = text.lower().count("[object object]") + text.count("undefined")
         assert junk == 0, "details for %s has %d junk tokens; text %r" % (key, junk, text[:120])
 
-@pytest.mark.parametrize("size", _sizes("UI-FLAKE-FIXES"), indirect=True)
+@pytest.mark.parametrize("size", _sizes("UI-GRAPH-CLICK"), indirect=True)
 def test_v_det_4(page, site, size):
     """V-DET-4: one selection renders the panel exactly once."""
     _goto(page, site)
@@ -381,7 +473,7 @@ def test_v_det_4(page, site, size):
     n = page.evaluate("() => window.__h2")
     assert n == 1, "panel rebuilt %d times per selection (h2 count)" % n
 
-@pytest.mark.parametrize("size", _sizes("UI-FLAKE-FIXES"), indirect=True)
+@pytest.mark.parametrize("size", _sizes("UI-GRAPH-CLICK"), indirect=True)
 def test_v_det_5(page, site, size):
     """V-DET-5: closes on Escape/close-button/page-switch; stays on Graph and Table."""
     _goto(page, site)

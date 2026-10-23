@@ -2,10 +2,11 @@
 
 One test per tag; every assertion carries measured values (px, zoom, counts)
 from ``probes``. Where the current page violates the spec that size is marked
-``xfail(strict=True, reason="plangraph:<OWNER>")`` (owner in the reason,
-measured value in the assertion message); when a fix lane makes it pass,
-strict xfail reports XPASS as a failure, so that lane removes the marker.
-A feature absent from the page altogether is ``skip``ped.
+``xfail(strict=True, raises=AssertionError, reason="plangraph:<OWNER>")`` (owner
+in the reason, measured value in the assertion message); when a fix lane makes
+it pass, strict xfail reports XPASS as a failure, so that lane removes the
+marker, and a harness break (timeout, KeyError, ...) stays red instead of
+counting as an expected failure.
 
 All tests load ``#so=0`` (drawer closed): below 1200 px the sidebar starts open
 and a full-screen scrim eats the first graph click (repro R1, owner
@@ -13,16 +14,18 @@ plangraph:UI-NARROW-LAYOUT, tested in that lane) and must not block these.
 """
 from __future__ import annotations
 
+import re
+from urllib.parse import urlparse
+
 import pytest
 
 from browser import probes
-from browser.conftest import CDN_ELK_URL, SIZES
+from browser.conftest import CDN_ELK_URL, SIZES, _allowed_warning_res
 
 pytestmark = pytest.mark.browser
 
 OWNER_CLICK = "UI-GRAPH-CLICK"
 OWNER_EXPAND = "UI-GRAPH-EXPAND"
-OWNER_URL = "UI-URL-HISTORY"
 OWNER_FLAKE = "UI-FLAKE-FIXES"
 ALL_SIZES = ("desktop", "tablet", "phone")
 
@@ -33,7 +36,7 @@ def _sizes(fail=None, only=None):
     fail = fail or {}
     params = []
     for name in (only or ALL_SIZES):
-        marks = [pytest.mark.xfail(strict=True, reason=f"plangraph:{fail[name]}")] \
+        marks = [pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"plangraph:{fail[name]}")] \
             if name in fail else []
         params.append(pytest.param(SIZES[name], id=name, marks=marks))
     return pytest.mark.parametrize("size", params, indirect=True)
@@ -72,7 +75,11 @@ def test_v_graph_1_selecting_moves_no_node(page, site, size):
     _boot(page, site, "lighthouse", "T1")
     key = probes.first_task_node(page)
     assert key, "no task node after expanding lighthouse/T1"
-    probes.pan_node_frac(page, key, 0.4, 0.4)      # the user pans, then selects
+    # A precondition, not a dodge: without the pan the node sits outside the
+    # tablet/phone viewport (measured centre y=931 > 768 and x=486 > 390), so
+    # there is no visible node to click. The first-selection viewport behaviour
+    # itself is R3/test_r3 (owner plangraph:UI-GRAPH-CLICK), asserted unpanned.
+    probes.pan_node_frac(page, key, 0.4, 0.4)
     page.wait_for_timeout(150)
     before, vp0 = probes.task_model_pos(page), probes.viewport(page)
     centre = probes.node_center(page, key)
@@ -225,7 +232,7 @@ def test_v_graph_5_focus_centres_target(page, site, size):
 
 # --------------------------------------------------------------------- 6 ----
 
-@pytest.mark.xfail(strict=True, reason=f"plangraph:{OWNER_EXPAND}: the page has no busy "
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason=f"plangraph:{OWNER_EXPAND}: the page has no busy "
                          "indicator at all (no [aria-busy]/busy/spinner element "
                          "in src/plangraph/web, measured busyEls=[] at 100 ms "
                          "into a relayout at all three sizes)")
@@ -250,7 +257,7 @@ def test_v_graph_6_click_during_layout_lands_by_key(page, site, size):
 
 # --------------------------------------------------------------------- 7 ----
 
-@_sizes(fail={n: OWNER_FLAKE for n in ALL_SIZES})
+@_sizes(fail={n: OWNER_CLICK for n in ALL_SIZES})
 def test_v_graph_7_selection_dims_the_rest(page, site, size):
     """[V-GRAPH-7] The selected node is highlighted, its direct deps and
     dependents emphasised, the rest dimmed."""
@@ -271,7 +278,7 @@ def test_v_graph_7_selection_dims_the_rest(page, site, size):
 
 # --------------------------------------------------------------------- 8 ----
 
-@_sizes(fail={"phone": OWNER_URL})
+@_sizes(fail={"phone": OWNER_EXPAND})
 def test_v_graph_8_selection_survives_reload(page, site, size):
     """[V-GRAPH-8] Selection survives collapse/re-expand, page switches and
     reload; after a reload the task's phase is expanded and it is in view."""
@@ -301,7 +308,7 @@ def test_v_graph_8_selection_survives_reload(page, site, size):
 
 # --------------------------------------------------------------------- 9 ----
 
-@_sizes(fail={n: OWNER_FLAKE for n in ALL_SIZES})
+@_sizes(fail={n: OWNER_CLICK for n in ALL_SIZES})
 def test_v_graph_9_double_click_equals_single(page, site, size):
     """[V-GRAPH-9] A double click does exactly what a single click does."""
     _boot(page, site, "lighthouse", "T1")
@@ -346,26 +353,60 @@ def test_v_graph_10_phone_expanded_phase_boxes(page, site, size):
 # -------------------------------------------------------------------- 11 ----
 
 @_sizes(fail={n: OWNER_FLAKE for n in ALL_SIZES})
-def test_v_graph_11_layout_failure_is_reported(page, site, size):
+def test_v_graph_11_layout_failure_is_reported(browser, site, size, vendor_assets):
     """[V-GRAPH-11] If the graph library or the layout fails, the canvas shows
-    "graph unavailable: <reason>" and the console has the error."""
-    seen = probes.watch_console(page)
-    # Deliberately broken dependency: the layout library request is aborted, so
-    # the expected resource error is allowed for this test only (R10 owner).
-    page.pg_allow_console("error", "net::ERR_FAILED")
-    page.pg_allow_console("error", "Failed to load resource")
-    page.route(CDN_ELK_URL, lambda route: route.abort())
-    page.goto(site + "#so=0")
-    page.wait_for_timeout(2500)
-    text = probes.engine_message(page)
-    errors = [t for kind, t in seen if kind == "error"
-              and "Failed to load resource" not in t]
-    assert "graph unavailable" in text["text"], (
-        f"the layout library is blocked but nothing says 'graph unavailable: "
-        f"<reason>' — canvas text {text['canvas']!r}, banner {text['banner']!r}")
-    assert errors, (
-        f"the swallowed layout failure logged no error line (console errors: "
-        f"{len(errors)}; canvas {text['canvas']!r})")
+    "graph unavailable: <reason>" and the console has the error.
+
+    This test provokes *and* asserts on a console error, so it runs on its own
+    page with its own capture: nothing is added to the shared fixture's
+    allow-list (no per-test allow of the error it asserts on), the claim and
+    the console handling are the same capture, and the shared teardown can
+    never double-count the failure this test deliberately causes."""
+    ctx = browser.new_context(viewport={"width": size[0], "height": size[1]})
+    pg = ctx.new_page()
+    seen, errs, stray = [], [], []
+    pg.on("console", lambda m: seen.append((m.type, m.text)))
+    pg.on("pageerror", lambda e: errs.append(str(e)))
+
+    def _route(route):
+        u = route.request.url
+        if urlparse(u).hostname == "127.0.0.1":
+            if u.endswith("/favicon.ico"):
+                route.fulfill(status=204, content_type="image/x-icon", body=b"")
+            else:
+                route.continue_()
+        elif u in vendor_assets:
+            route.fulfill(status=200, content_type="application/javascript",
+                          body=vendor_assets[u].read_bytes())
+        else:
+            stray.append(u)
+            route.abort()
+
+    pg.route("**/*", _route)
+    try:
+        pg.route(CDN_ELK_URL, lambda route: route.abort())   # induced failure
+        pg.goto(site + "#so=0")
+        pg.wait_for_timeout(2500)
+        text = probes.engine_message(pg)
+        errors = [t for kind, t in seen if kind == "error"]
+        allow = _allowed_warning_res()
+        warn = [t for kind, t in seen
+                if kind in ("warning", "warn") and not any(r.search(t) for r in allow)]
+        # the error this test caused has to be about the blocked layout engine
+        ours = [t for t in errors if re.search(
+            r"elk|ERR_FAILED|failed to load resource|unavailable|layout", t, re.I)]
+        other = [t for t in errors if t not in ours]
+        assert "graph unavailable" in text["text"], (
+            f"the layout library is blocked but nothing says 'graph unavailable: "
+            f"<reason>' — canvas text {text['canvas']!r}, banner {text['banner']!r}")
+        assert ours, (
+            f"the swallowed layout failure logged no error line (console errors: "
+            f"{errors!r}; canvas {text['canvas']!r})")
+        assert not other and not warn and not errs and not stray, (
+            f"console unrelated to the induced failure: other={other[:3]} "
+            f"warnings={warn[:3]} pageerrors={errs[:1]} stray={stray[:2]}")
+    finally:
+        ctx.close()
 
 
 # -------------------------------------------------------------------- 12 ----
