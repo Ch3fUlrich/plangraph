@@ -275,6 +275,45 @@ def test_shadow_hook_off_writes_no_file(w, repo, tmp_path, monkeypatch):
     assert all(c["shadow_id"] is None for c in plan["cards"])
     assert after == before
 
+def test_jev_routing_rows_land_in_the_keeper(w, repo, monkeypatch):
+    """The routing production call site records through the real store.
+
+    Fails if ``plan_phase`` stops handing ``store``/``principal`` to
+    ``shadow.route_with_shadow`` (or drops that call): with no sink the Jev rows
+    are built and thrown away, so the keeper stays empty.  The stub leg is the
+    fake Jev -- deterministic, offline, no network.
+    """
+    make_phase(w)
+    w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
+    w.store.put_card(w.p("router"), "demo:C2", card(write_set=["src/b.py"]))
+    monkeypatch.setenv("PLANGRAPH_JEV", "stub")
+
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+
+    rows = w.store.jev_rows("demo:C1")
+    assert [r["kind"] for r in rows] == ["harness", "window", "budget", "review"]
+    assert all(r["status"] == "ok" for r in rows)
+    assert all(r["attempt"] is None for r in rows)
+    assert all(r["jev_model"] == "stub" for r in rows)
+    assert len({r["decision_id"] for r in rows}) == 1        # one decision per card
+    assert len({r["input_hash"] for r in rows}) == 1
+
+    rows2 = w.store.jev_rows("demo:C2")
+    assert [r["kind"] for r in rows2] == ["harness", "window", "budget", "review"]
+    assert {r["decision_id"] for r in rows} != {r["decision_id"] for r in rows2}
+
+    # Jev changed nothing: the plan still carries the rules' route, no legacy id
+    c1, = [c for c in plan["cards"] if c["key"] == "demo:C1"]
+    assert c1["route"]["harness"] == "opencode"
+    assert c1["route"]["window_class"] == "128k"
+    assert c1["shadow_id"] is None
+
+    # the rows are on show for that card
+    shown = w.store.show(w.p("router"), "demo:C1")
+    assert [r["kind"] for r in shown["jev_shadow"]] == ["harness", "window",
+                                                        "budget", "review"]
+
+
 def test_terminal_gate_is_bad_state(w, repo):
     make_phase(w)
     w.store.cancel(w.p("router"), "demo:PH-X", "test")
