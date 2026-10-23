@@ -7,7 +7,7 @@
 //! instead of burning retry budget. The worktree is left in place — the janitor
 //! probes and removes dead attempts, so nothing here destroys evidence.
 
-use crate::harness::{self, run_harness, Harness, HarnessRun, SandboxError};
+use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
 use crate::opencode_events::{self, ProviderErrorKind};
 use crate::question::{self, Question, Scan};
@@ -15,7 +15,7 @@ use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::confine::{self, ConfineError, Violation};
 use pg_worker_core::exit_class::{CheckOutcome, ExitClass, Patterns, Signals};
-use pg_worker_core::git::{check_rev, GitError};
+use pg_worker_core::git::{GitError, check_rev};
 use pg_worker_core::stall::Opts;
 use pg_worker_core::worktree::{self, AttemptId};
 use serde::{Deserialize, Serialize};
@@ -773,8 +773,8 @@ mod tests {
     }
     use super::*;
     use std::process::{Command, Stdio};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -1811,10 +1811,11 @@ mod tests {
         assert_eq!(res.harness.as_deref(), Some("no-such"));
         assert_eq!(res.combo.as_deref(), Some("leg-1"));
         // The worktree exists so the probe that follows has something to look at.
-        assert!(root
-            .path()
-            .join(AttemptId::new("c1", 3).dir_name())
-            .is_dir());
+        assert!(
+            root.path()
+                .join(AttemptId::new("c1", 3).dir_name())
+                .is_dir()
+        );
     }
 
     #[test]
