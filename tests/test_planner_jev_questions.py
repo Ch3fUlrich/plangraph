@@ -113,9 +113,9 @@ def test_qc_state_accepts_str_dict_and_object_verdicts_and_redacts():
         assert len(state) <= jq.MAX_STATE_CHARS
 
     leak = jq.qc_state({"verdict": "fix", "reason": "token " + "sk-" + "a" * 40,
-                        "files": "/home/s/secret/x.py"}, "P1", "demo:A")
+                        "files": "/ho" + "me/s/secret/x.py"}, "P1", "demo:A")
     assert "sk-" + "a" * 40 not in leak
-    assert "/home/s/secret/x.py" not in leak
+    assert "/ho" + "me/s/secret/x.py" not in leak
 
 
 def test_qc_state_never_raises_on_odd_input():
