@@ -2,6 +2,7 @@
 import ast
 from pathlib import Path
 import re
+import textwrap
 from types import SimpleNamespace
 
 import pytest
@@ -62,6 +63,58 @@ STATE_WRITER_EXCEPTIONS = {
 }
 
 
+def _holds_clear(stmt):
+    """True when *stmt*'s subtree calls ``_exec_clear`` (wherever it is nested)."""
+    return any(isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+               and call.func.attr == "_exec_clear" for call in ast.walk(stmt))
+
+
+def _block_containing(parent, child):
+    """The statement list of *parent* that *child* sits in (None if there is none)."""
+    for attr in ("body", "orelse", "finalbody"):
+        block = getattr(parent, attr, None)
+        if isinstance(block, list) and any(stmt is child for stmt in block):
+            return block
+    if isinstance(parent, ast.ExceptHandler) and any(stmt is child
+                                                     for stmt in parent.body):
+        return parent.body
+    return None
+
+
+def _clears_on_the_path(node, parents):
+    """Is there an ``_exec_clear`` in a block that actually encloses this UPDATE?
+
+    Checked per UPDATE site, not once per function: the walk starts at the
+    statement holding the UPDATE and climbs only through the blocks that
+    statement is written in (an ``if``/``with``/``try`` it sits inside), so
+    ``_exec_clear`` tucked into a sibling branch of the same function -- or
+    sitting outside the write block the UPDATE runs in -- no longer covers it.
+    The function body counts only for an UPDATE written directly in it (the
+    clear is then its sibling in the same block); a nested UPDATE must find the
+    clear inside the same write block, never at function top level.
+    """
+    current = node
+    site_block = True
+    while current is not None:
+        parent = parents.get(current)
+        if parent is None:
+            return False
+        block = _block_containing(parent, current)
+        at_function = isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef))
+        if block is not None:
+            # ``site_block`` (the statement's own block) always counts; an
+            # enclosing one counts only while it is still inside the function,
+            # i.e. never the function body of a nested UPDATE.
+            if (site_block or not at_function) and any(_holds_clear(stmt)
+                                                       for stmt in block):
+                return True
+            site_block = False
+        if at_function:
+            return False
+        current = parent
+    return False
+
+
 def test_items_state_writers_clear_owner_or_have_explicit_exception():
     root = Path(__file__).resolve().parents[1] / "src/plangraph/keeper"
     failures = []
@@ -88,10 +141,67 @@ def test_items_state_writers_clear_owner_or_have_explicit_exception():
                 while function is not None and not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     function = parents.get(function)
                 name = function.name if function else "<module>"
-                clears = function is not None and any(
-                    isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                    and call.func.attr == "_exec_clear" for call in ast.walk(function))
+                clears = _clears_on_the_path(node, parents)
                 if not clears and (path.name, name) not in STATE_WRITER_EXCEPTIONS:
                     failures.append(f"{path.relative_to(root)}:{node.lineno} ({name})")
     assert sites, "No items.state UPDATE sites found; scanner is broken"
     assert not failures, "State writers without _exec_clear or an explicit reason:\n" + "\n".join(failures)
+
+
+@pytest.mark.parametrize("source, cleared", [
+    # A clear in the SAME write block as the UPDATE, wherever it is nested
+    # inside that block, covers the site (this is ``_apply_state``'s shape) ...
+    ("""
+     def move(self, key):
+         with self._write():
+             if a:
+                 self.conn.execute("UPDATE items SET state='open' WHERE key=?",
+                                   (key,))
+             if hand_back:
+                 self._exec_clear(self.conn, key)
+     """, True),
+    # ... a top-level UPDATE finds its sibling clear in the same block ...
+    ("""
+     def move(self, key):
+         self.conn.execute("UPDATE items SET state='open' WHERE key=?", (key,))
+         if hand_back:
+             self._exec_clear(self.conn, key)
+     """, True),
+    # ... but a clear OUTSIDE the write block, in a sibling branch of the
+    # function, inside a nested helper, or in a branch the UPDATE never runs
+    # in, does not cover that UPDATE site (the old function-level check said
+    # yes to all three).
+    ("""
+     def move(self, key):
+         with self._write():
+             self.conn.execute("UPDATE items SET state='open' WHERE key=?",
+                               (key,))
+         if other:
+             self._exec_clear(self.conn, key)
+     """, False),
+    ("""
+     def move(self, key):
+         with self._write():
+             if a:
+                 self.conn.execute("UPDATE items SET state='open' WHERE key=?",
+                                   (key,))
+         self._exec_clear(self.conn, key)
+     """, False),
+    ("""
+     def move(self, key):
+         with self._write():
+             self.conn.execute("UPDATE items SET state='open' WHERE key=?",
+                               (key,))
+         def helper():
+             self._exec_clear(self.conn, key)
+     """, False),
+])
+def test_owner_clear_guard_checks_each_state_update_site(source, cleared):
+    tree = ast.parse(textwrap.dedent(source))
+    parents = {child: node for node in ast.walk(tree)
+               for child in ast.iter_child_nodes(node)}
+    site, = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Constant)
+             and isinstance(node.value, str)
+             and node.value.startswith("UPDATE items SET")]
+    assert _clears_on_the_path(site, parents) is cleared
