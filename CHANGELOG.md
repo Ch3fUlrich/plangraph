@@ -4,7 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
-- **GOV-CTX-METRICS-FIX3:** restore weighted/daily largest-record deduplication by `(message id, requestId)` even when the message id is absent; ctx alone keeps every id-less record. Pin both transcript readers skipping missing/invalid timestamps, consistent with daily aggregation, so undated usage cannot disrupt timestamp ordering.
+- **GOV-CTX-METRICS-FIX3:** restore weighted/daily largest-record deduplication by `(message id, requestId)` even when the message id is absent; ctx alone keeps every id-less record. Pin both transcript readers skipping missing/invalid timestamps, consistent with daily aggregation, so undated usage cannot disrupt timestamp ordering. A record with a non-string/int `message.id` or `requestId` is skipped alone (previously the rest of its transcript file was dropped); ties keep `(ts, file, line)` order.
 - **RT-P1-BUS-CONTRACT:** complete read-side JSON conformance vectors, pin bounded leading-zero limit syntax and normalized signing, and reject non-wire POST inputs with validation errors.
 
 - **KEEPER-CLOSE-SKIP-UNVERIFIED:** decision close ignores stored unverified decision rows (including legacy `d_id` refs), still requires at least one verified row and rechecks the verified evidence-id set under the write lock. Both evidence write verbs reject decision refs without a non-empty string `id`; SQLite/Postgres contract tests cover the operator-task rotation shape and fail-closed unverified-only evidence.

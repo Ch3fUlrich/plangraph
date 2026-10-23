@@ -48,6 +48,9 @@ differs from `metrics.iter_usage`, which keeps the *largest* record per `(messag
 for the weighted/daily totals, including pairs with a missing message id (or both ids missing).
 Neither rule changes the other. Both transcript readers skip
 missing or invalid timestamps, consistent with daily aggregation's exclusion of undated usage.
+Both also skip a record whose `message.id` or `requestId` is present but not a string or int
+(only that record; earlier versions dropped the rest of the file), and records are taken in
+`(ts, file, line)` order, so which of two equal duplicates survives is deterministic.
 
 | field | meaning |
 |---|---|
