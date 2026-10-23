@@ -2,6 +2,10 @@
 
 Merged and pushed changes only (D-630, D-653). Newest first.
 
+## 2026-10-23
+
+- **KEEPER-OPTASK-CLOSE:** tests only (red): `tests/test_keeper_optask_close.py` pins that a claimed/in_review `operator_task` closes through `close_on_decision` at `standard` or `high` only when a decision row names the key in a whole `Closes: <project:ID>` token, that lane/question/goal at a non-`none` tier still refuse `bad_state`, that non-router callers stay `forbidden`, that a decision naming another key is `evidence_unverified`, that a kind/tier flip under the write lock is `conflict`, and that the same close works inside `apply_ops` while a non-operator refusal rolls the whole batch back.
+
 ## 2026-10-22
 
 - **RT-P1-FLOW-UNBLOCK (follow-up):** tests only: non-router `add_dep` via `apply_ops` on a claimed item is refused (`forbidden`); the router's add_dep on a claimed item asserts its `item_defined` event; length assert in the claim-without-base test.
