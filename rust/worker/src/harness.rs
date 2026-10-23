@@ -11,6 +11,7 @@
 //! the path it was written to looks confined. Such links are resolved purely
 //! lexically, so a broken link is judged the same as a working one.
 
+use pg_worker_core::scope::{self, Jail, ScopeLimits, system_ro};
 use pg_worker_core::stall::{Opts, Supervised, supervise_with_cancel};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -120,7 +121,12 @@ impl Harness for Opencode {
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
         // No shell: the prompt is a single argv element, so nothing in it is parsed.
-        cmd.arg("run");
+        cmd.arg("run")
+            // Tools run in this process tree, not the shared host service (which
+            // would sit outside the attempt jail and the worker's confined env).
+            .arg("--standalone");
+        // The JSON event stream, no self-update and the per-attempt permission
+        // policy every `opencode run` leg carries.
         opencode_options(&mut cmd);
         cmd.arg("-m")
             .arg(run.model)
@@ -212,6 +218,7 @@ pub enum HarnessConfigError {
 pub struct OpencodeServer {
     pub bin: String,
     pub url: String,
+    pub allow_attach: bool,
 }
 
 impl OpencodeServer {
@@ -219,16 +226,37 @@ impl OpencodeServer {
         OpencodeServer {
             bin: "opencode".into(),
             url: url.into(),
+            allow_attach: false,
         }
     }
 
+    /// Allow the attach leg for an attended run: its tools run outside the jail.
+    pub fn with_attach_allowed(mut self) -> Self {
+        self.allow_attach = true;
+        self
+    }
+
     /// Build from `PG_OPENCODE_SERVER_URL`; an unset or empty value is an error.
+    /// The attach leg is allowed only when `PG_ALLOW_ATTACH=1`.
     pub fn from_env() -> Result<Self, HarnessConfigError> {
-        Self::from_value(std::env::var(OPENCODE_SERVER_ENV).ok().as_deref())
+        let allow = Self::attach_allowed(std::env::var("PG_ALLOW_ATTACH").ok().as_deref());
+        Self::from_value_with(std::env::var(OPENCODE_SERVER_ENV).ok().as_deref(), allow)
     }
 
     /// The env lookup without the env, so it is testable without mutating it.
+    #[cfg(test)]
     fn from_value(value: Option<&str>) -> Result<Self, HarnessConfigError> {
+        Self::from_value_with(value, false)
+    }
+
+    fn attach_allowed(value: Option<&str>) -> bool {
+        value == Some("1")
+    }
+
+    fn from_value_with(
+        value: Option<&str>,
+        allow_attach: bool,
+    ) -> Result<Self, HarnessConfigError> {
         match value.map(str::trim) {
             Some(url) if !url.is_empty() => {
                 let lower = url.to_ascii_lowercase();
@@ -240,7 +268,9 @@ impl OpencodeServer {
                 if authority.contains('@') {
                     return Err(HarnessConfigError::ServerUrlUserinfo(OPENCODE_SERVER_ENV));
                 }
-                Ok(Self::new(url))
+                let mut server = Self::new(url);
+                server.allow_attach = allow_attach;
+                Ok(server)
             }
             _ => Err(HarnessConfigError::MissingServerUrl(OPENCODE_SERVER_ENV)),
         }
@@ -262,11 +292,11 @@ impl Harness for OpencodeServer {
 
     fn command(&self, run: &HarnessRun) -> Command {
         let mut cmd = Command::new(&self.bin);
-        cmd.arg("run");
+        cmd.arg("run").arg("--server").arg(&self.url);
+        // The JSON event stream, no self-update and the per-attempt permission
+        // policy every `opencode run` leg carries.
         opencode_options(&mut cmd);
-        cmd.arg("--attach")
-            .arg(&self.url)
-            .arg("-m")
+        cmd.arg("-m")
             .arg(run.model)
             .arg("--")
             .arg(run.prompt)
@@ -276,6 +306,13 @@ impl Harness for OpencodeServer {
     }
 
     fn validate(&self, run: &HarnessRun) -> Result<(), String> {
+        if !self.allow_attach {
+            return Err(
+                "attach leg refused for unattended cards: its tools run outside \
+                        the attempt jail (set PG_ALLOW_ATTACH=1 for an attended run)"
+                    .into(),
+            );
+        }
         reject_option_like("model", run.model)?;
         reject_option_like("server url", &self.url)
     }
@@ -335,12 +372,129 @@ pub fn run_harness(
     home: &Path,
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
+    jail: Option<&JailConfig>,
 ) -> std::io::Result<Supervised> {
     h.validate(run)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     let mut cmd = h.command(run);
     pg_worker_core::sandbox_env::confine_harness(&mut cmd, home);
+    if let Some(j) = jail {
+        cmd.env("TMPDIR", &j.tmp);
+        let mut ro = system_ro();
+        if let Some(binary) = h.binary() {
+            ro.extend(scope::binary_ro(binary)?);
+        }
+        cmd = scope::wrap(
+            cmd,
+            &j.limits,
+            &Jail {
+                bin: &j.bin,
+                rw: vec![
+                    run.workdir.to_path_buf(),
+                    home.to_path_buf(),
+                    j.tmp.clone(),
+                    PathBuf::from("/dev/null"),
+                ],
+                ro,
+            },
+        );
+    }
     supervise_with_cancel(cmd, opts, cancelled)
+}
+
+/// Env var naming the Landlock jail helper binary.
+pub const JAIL_BIN_ENV: &str = "PG_JAIL_BIN";
+/// `PG_JAIL=off` is the explicit dev override for running attempts unjailed.
+pub const JAIL_OFF_ENV: &str = "PG_JAIL";
+
+/// Filesystem jail and resource limits for one attempt.
+#[derive(Debug, Clone)]
+pub struct JailConfig {
+    pub bin: PathBuf,
+    pub limits: ScopeLimits,
+    pub tmp: PathBuf,
+}
+
+impl JailConfig {
+    /// Require a jail unless the explicit test-only override is set.
+    pub fn from_env() -> Result<Option<JailConfig>, String> {
+        Self::required_from_env()
+    }
+
+    /// Startup policy of the worker binary: jailed or explicitly disabled.
+    pub fn required_from_env() -> Result<Option<JailConfig>, String> {
+        Self::required_from_lookup(|k| std::env::var(k).ok())
+    }
+
+    fn from_lookup<F>(lookup: F) -> Result<Option<JailConfig>, String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let Some(bin) = lookup(JAIL_BIN_ENV) else {
+            return Ok(None);
+        };
+        let bin = bin.trim();
+        if bin.is_empty() {
+            return Err(format!(
+                "{JAIL_BIN_ENV} is empty; expected an absolute file path"
+            ));
+        }
+        let path = Path::new(bin);
+        if !path.is_absolute() {
+            return Err(format!("{JAIL_BIN_ENV} {bin:?} must be an absolute path"));
+        }
+        let bin = std::fs::canonicalize(path)
+            .map_err(|e| format!("{JAIL_BIN_ENV} {bin:?}: cannot canonicalize: {e}"))?;
+        if !bin.is_file() {
+            return Err(format!("{JAIL_BIN_ENV} {bin:?} is not a file"));
+        }
+        Ok(Some(JailConfig {
+            bin,
+            limits: Self::limits_from_lookup(&lookup)?,
+            tmp: std::env::temp_dir(),
+        }))
+    }
+
+    fn required_from_lookup<F>(lookup: F) -> Result<Option<JailConfig>, String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        if lookup(JAIL_BIN_ENV).is_some() {
+            let cfg = Self::from_lookup(&lookup)?.ok_or_else(|| {
+                format!("{JAIL_BIN_ENV} is empty; refusing to run attempts unjailed")
+            })?;
+            return Ok(Some(cfg));
+        }
+        if lookup(JAIL_OFF_ENV).as_deref() == Some("off")
+            && lookup("PG_TEST_ALLOW_UNJAILED").as_deref() == Some("1")
+        {
+            return Ok(None);
+        }
+        Err(format!(
+            "{JAIL_BIN_ENV} is not set; refusing to run attempts unjailed \
+             (tests require {JAIL_OFF_ENV}=off and PG_TEST_ALLOW_UNJAILED=1)"
+        ))
+    }
+
+    fn limits_from_lookup<F>(lookup: &F) -> Result<ScopeLimits, String>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let mut limits = ScopeLimits::default();
+        if let Some(v) = lookup("PG_ATTEMPT_MEMORY_MAX") {
+            let v = v.trim();
+            if !v.is_empty() {
+                limits.memory_max = v.to_string();
+            }
+        }
+        if let Some(v) = lookup("PG_ATTEMPT_TASKS_MAX") {
+            let v = v.trim();
+            limits.tasks_max = v
+                .parse::<u32>()
+                .map_err(|e| format!("PG_ATTEMPT_TASKS_MAX {v:?}: {e}"))?;
+        }
+        Ok(limits)
+    }
 }
 
 /// Env var pinning harness versions, `name=version` pairs separated by commas
@@ -533,20 +687,29 @@ fn walk(
 ) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        // Only the worktree's own top-level `.git` is repo metadata, never part
-        // of the write set. A `.git` deeper down may be a symlink an agent could
-        // use to escape, so it must still be checked.
-        if top && entry.file_name().to_str() == Some(".git") {
-            continue;
-        }
         let path = entry.path();
         // file_type comes from symlink_metadata: it never follows the link.
         let ft = entry.file_type()?;
+        let top_git = top && entry.file_name().to_str() == Some(".git");
+        // The worktree's own top-level `.git` is repo metadata, never part of
+        // the write set: git makes it a directory (a checkout) or a plain
+        // gitfile (a linked worktree), so skipping it leaves every normal
+        // commit untouched. Git never makes `.git` a symlink, though — one at
+        // the top level was planted to redirect git at some other repository,
+        // and that is a violation wherever it points. A `.git` deeper down
+        // never had the exemption.
+        if top_git && !ft.is_symlink() {
+            continue;
+        }
         if ft.is_symlink() {
             let rel = path
                 .strip_prefix(root)
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|_| path.clone());
+            if top_git {
+                out.push(rel);
+                continue;
+            }
             let parent = base.join(rel.parent().unwrap_or(Path::new("")));
             let target = std::fs::read_link(&path)?;
             let resolved = if target.is_absolute() {
@@ -616,6 +779,7 @@ mod tests {
             args,
             [
                 "run",
+                "--standalone",
                 "--format",
                 "json",
                 "-m",
@@ -724,10 +888,10 @@ mod tests {
             argv(&c),
             [
                 "run",
+                "--server",
+                "http://127.0.0.1:4096",
                 "--format",
                 "json",
-                "--attach",
-                "http://127.0.0.1:4096",
                 "-m",
                 "some/model",
                 "--",
@@ -811,12 +975,17 @@ mod tests {
         for h in [
             &Opencode::new() as &dyn Harness,
             &ClaudeCode::new(),
-            &OpencodeServer::new("http://127.0.0.1:4096"),
+            &OpencodeServer::new("http://127.0.0.1:4096").with_attach_allowed(),
         ] {
             assert!(h.validate(&bad).is_err(), "{}", h.name());
             assert!(h.validate(&ok).is_ok(), "{}", h.name());
         }
-        assert!(OpencodeServer::new("--evil").validate(&ok).is_err());
+        assert!(
+            OpencodeServer::new("--evil")
+                .with_attach_allowed()
+                .validate(&ok)
+                .is_err()
+        );
         let home = tempfile::tempdir().unwrap();
         let e = run_harness(
             &Opencode::new(),
@@ -824,6 +993,7 @@ mod tests {
             home.path(),
             &Opts::default(),
             &|| false,
+            None,
         )
         .unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
@@ -869,6 +1039,7 @@ mod tests {
             home.path(),
             &Opts::default(),
             &|| false,
+            None,
         )
         .unwrap();
         assert_eq!(r.code, Some(0));
@@ -893,6 +1064,7 @@ mod tests {
             home.path(),
             &Opts::default(),
             &|| false,
+            None,
         )
         .unwrap();
         let out = String::from_utf8_lossy(&r.output).into_owned();
@@ -930,7 +1102,7 @@ mod tests {
                 c
             }
         }
-        let r = run_harness(&Own, &run, home.path(), &Opts::default(), &|| false).unwrap();
+        let r = run_harness(&Own, &run, home.path(), &Opts::default(), &|| false, None).unwrap();
         assert!(String::from_utf8_lossy(&r.output).contains("auto=1"));
     }
 
@@ -1210,5 +1382,142 @@ mod tests {
             vec![PathBuf::from("sub/.git")]
         );
         assert!(matches!(check_sandbox(w), Err(SandboxError::Escape(_))));
+    }
+
+    #[test]
+    fn top_level_dot_git_symlink_is_a_violation_wherever_it_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        // The target sits *inside* the worktree: a top-level `.git` link is
+        // refused because git must never follow one, not because it escapes.
+        std::fs::write(w.join("elsewhere"), "gitdir: /somewhere").unwrap();
+        link(w, ".git", "elsewhere");
+        assert_eq!(
+            find_escaping_symlinks(w).unwrap(),
+            vec![PathBuf::from(".git")]
+        );
+        assert!(matches!(check_sandbox(w), Err(SandboxError::Escape(_))));
+    }
+
+    #[test]
+    fn top_level_dot_git_gitfile_stays_exempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        // What `git worktree add` writes is a plain file, never a link, and
+        // every normal commit goes through it.
+        std::fs::write(w.join(".git"), "gitdir: ../main/.git/worktrees/w\n").unwrap();
+        assert!(find_escaping_symlinks(w).unwrap().is_empty());
+        assert!(check_sandbox(w).is_ok());
+    }
+
+    fn attach_run() -> HarnessRun<'static> {
+        HarnessRun {
+            workdir: Path::new("/tmp/w"),
+            model: "some/model",
+            prompt: "p",
+        }
+    }
+
+    #[test]
+    fn attach_leg_is_refused_by_default() {
+        let e = OpencodeServer::new("http://127.0.0.1:4096")
+            .validate(&attach_run())
+            .unwrap_err();
+        assert!(e.contains("attach leg refused"), "{e}");
+    }
+
+    #[test]
+    fn attach_leg_can_be_allowed() {
+        assert!(
+            OpencodeServer::new("http://127.0.0.1:4096")
+                .with_attach_allowed()
+                .validate(&attach_run())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn attach_allow_follows_the_env_value() {
+        let url = Some("http://127.0.0.1:4096");
+        let refused =
+            OpencodeServer::from_value_with(url, OpencodeServer::attach_allowed(None)).unwrap();
+        assert!(refused.validate(&attach_run()).is_err());
+        let allowed =
+            OpencodeServer::from_value_with(url, OpencodeServer::attach_allowed(Some("1")))
+                .unwrap();
+        assert!(allowed.validate(&attach_run()).is_ok());
+        assert!(!OpencodeServer::attach_allowed(Some("0")));
+    }
+
+    #[test]
+    fn jail_is_off_when_the_binary_is_unset() {
+        assert!(JailConfig::from_lookup(|_| None).unwrap().is_none());
+    }
+
+    #[test]
+    fn required_jail_refuses_unset_without_the_override() {
+        let e = JailConfig::required_from_lookup(|_| None).unwrap_err();
+        assert!(e.contains("PG_JAIL_BIN is not set"), "{e}");
+    }
+
+    #[test]
+    fn required_jail_allows_explicit_off() {
+        assert!(
+            JailConfig::required_from_lookup(|k| (k == JAIL_OFF_ENV).then(|| "off".to_string()))
+                .is_err()
+        );
+        let r = JailConfig::required_from_lookup(|k| match k {
+            JAIL_OFF_ENV => Some("off".into()),
+            "PG_TEST_ALLOW_UNJAILED" => Some("1".into()),
+            _ => None,
+        });
+        assert!(r.unwrap().is_none());
+    }
+
+    #[test]
+    fn jail_rejects_a_bad_tasks_value() {
+        let bin = tempfile::NamedTempFile::new().unwrap();
+        let e = JailConfig::from_lookup(|k| match k {
+            JAIL_BIN_ENV => Some(bin.path().to_string_lossy().into_owned()),
+            "PG_ATTEMPT_TASKS_MAX" => Some("many".to_string()),
+            _ => None,
+        })
+        .unwrap_err();
+        assert!(e.contains("PG_ATTEMPT_TASKS_MAX"), "{e}");
+    }
+
+    #[test]
+    fn jail_binary_must_be_an_existing_absolute_file() {
+        let dir = tempfile::tempdir().unwrap();
+        for path in [
+            PathBuf::from("pg-jail"),
+            dir.path().join("missing"),
+            dir.path().to_path_buf(),
+        ] {
+            for required in [false, true] {
+                let lookup =
+                    |k: &str| (k == JAIL_BIN_ENV).then(|| path.to_string_lossy().into_owned());
+                let result = if required {
+                    JailConfig::required_from_lookup(lookup)
+                } else {
+                    JailConfig::from_lookup(lookup)
+                };
+                assert!(result.unwrap_err().contains(JAIL_BIN_ENV));
+            }
+        }
+    }
+
+    #[test]
+    fn jail_binary_is_stored_canonicalized() {
+        let bin = tempfile::NamedTempFile::new().unwrap();
+        let alias = bin.path().with_extension("link");
+        symlink(bin.path(), &alias).unwrap();
+        let cfg = JailConfig::from_lookup(|k| {
+            (k == JAIL_BIN_ENV).then(|| alias.to_string_lossy().into_owned())
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(cfg.bin, std::fs::canonicalize(bin.path()).unwrap());
+        std::fs::remove_file(alias).unwrap();
     }
 }

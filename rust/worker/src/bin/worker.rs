@@ -134,6 +134,21 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let harnesses = build_registry();
     println!("harnesses: {}", harnesses.names().join(", "));
+    match harness::JailConfig::required_from_env() {
+        Ok(Some(_)) => println!("attempt jail on"),
+        Ok(None) => eprintln!("warning: PG_JAIL=off; attempts run unjailed"),
+        Err(e) => anyhow::bail!("attempt jail: {e}"),
+    }
+    // WSL defaults widen the host exposure of every attempt below
+    // (docs/worker-sandbox.md): say which ones are still on, once, at startup.
+    // Off WSL the conf is never read and nothing is printed.
+    let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let wsl_conf = pg_worker_core::wsl::is_wsl(&osrelease)
+        .then(|| std::fs::read_to_string("/etc/wsl.conf").ok())
+        .flatten();
+    for finding in pg_worker_core::wsl::startup_warnings(&osrelease, wsl_conf.as_deref()) {
+        eprintln!("warning: WSL {finding}");
+    }
     // Fail closed on a harness version drift. Unset means the built-in default
     // pins; `Ok(false)` means nothing was verified, so say why.
     let pins = std::env::var(harness::VERSIONS_ENV).ok();
