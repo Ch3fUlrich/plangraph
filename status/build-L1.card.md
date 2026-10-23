@@ -18,7 +18,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | BUS-NONCE-FLOOD p4 | L1 queue | D-2422 created (PH-RT-CONSOLIDATE); unclaimed, starts after P1 writers free |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
 | RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
-| CARD-CHECKS / WF-VERSIONING (RT95 done 5671ac77) | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
+| CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards (workst) | ruling b-variant: re-run seat2, MERGE-READY #147 (wiring inert); lane 2b wiring same item HIGH; then WF-VERSIONING |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
 | RT-P1-BUS-CONTRACT (HIGH) | L1 | vectors PR #153 head ee86215f CI green; seats deepseek+mimo RUNNING (seats/pr153) -> GO-REQ, merge, submit |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
