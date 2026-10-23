@@ -196,6 +196,7 @@ mod tests {
     const TRANSPORT: &str =
         include_str!("../tests/fixtures/opencode/real-provider-transport-error.jsonl");
     const OK_TEXT: &str = include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
+    const EMPTY_RUN: &str = include_str!("../tests/fixtures/opencode/real-empty-run.jsonl");
     const OK_TOOL_TOKENS: &str =
         include_str!("../tests/fixtures/opencode/real-ok-tool-tokens.jsonl");
     const DENIED: &str =
@@ -250,6 +251,14 @@ mod tests {
         let s = summarize(DENIED);
         assert!(s.permission_denied >= 1);
         assert_eq!(s.tool_calls, 2);
+    }
+
+    #[test]
+    fn a_real_empty_run_has_no_text_or_tool_calls() {
+        let s = summarize(EMPTY_RUN);
+        assert!(s.is_empty_run());
+        assert!(!s.saw_text);
+        assert_eq!(s.tool_calls, 0);
     }
 
     #[test]

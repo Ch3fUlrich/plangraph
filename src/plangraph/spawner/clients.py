@@ -11,6 +11,7 @@ Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 
 """
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
@@ -55,6 +56,66 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
     return override or gateway_url(source, config)
 
 
+#: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
+#: unparsable content, or a provider block ``build_child_env`` builds from scratch.
+_ABSENT = object()
+
+
+def _child_settings(env: Mapping[str, str]) -> Any:
+    """The ``providers.omniroute.settings`` node the child's config already holds.
+
+    Whatever JSON value sits under ``settings`` is returned as-is: a ``dict`` is
+    what ``build_child_env`` merges into with ``setdefault``, any other value
+    blocks the ``baseURL`` write outright.  ``_ABSENT`` means there is nothing
+    to honour yet, so the deployment-config sources decide instead.
+    """
+    raw = (env or {}).get("OPENCODE_CONFIG_CONTENT")
+    if not isinstance(raw, str) or not raw.strip():
+        return _ABSENT
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return _ABSENT
+    node: Any = parsed
+    for key in ("providers", "omniroute", "settings"):
+        if not isinstance(node, dict) or key not in node:
+            return _ABSENT
+        node = node[key]
+    return node
+
+
+def effective_child_base_url(env: Mapping[str, str] | None = None,
+                             config: Mapping[str, Any] | None = None) -> str | None:
+    """Base URL the spawned child ends up using, or ``None`` when it uses none.
+
+    The precedence is exactly the one ``build_child_env`` applies when it writes
+    ``baseURL`` into the child provider config:
+
+    1. an ``OPENCODE_CONFIG_CONTENT`` that already carries
+       ``providers.omniroute.settings.baseURL`` keeps it -- ``setdefault`` never
+       displaces a configured value, whatever the environment says;
+    2. a config whose ``settings`` is not an object gets no ``baseURL`` written
+       at all;
+    3. only a config without that key falls back to
+       ``effective_gateway_base_url`` (``OMNIROUTE_BASE_URL`` over
+       ``PLANGRAPH_GATEWAY_URL`` / ``config['gateway_url']``; this module ships
+       no default endpoint).
+
+    ``build_child_env`` and the ``plangraph_agent_health`` report both read this
+    one helper, so the reported URL cannot diverge from the effective one.
+    """
+    source = os.environ if env is None else env
+    settings = _child_settings(source or {})
+    if settings is _ABSENT:
+        return effective_gateway_base_url(source, config)
+    if not isinstance(settings, dict):
+        return None                      # setdefault never runs: no baseURL
+    if "baseURL" in settings:
+        value = settings["baseURL"]
+        return value if isinstance(value, str) else None
+    return effective_gateway_base_url(source, config)
+
+
 @dataclass(frozen=True)
 class Client:
     """Client CLI adapter specification."""
@@ -86,10 +147,12 @@ def build_child_env(
     """Build subprocess environment preserving critical OS and Tailnet variables.
 
     The gateway base URL written into the child's provider config comes from
-    ``effective_gateway_base_url`` (``OMNIROUTE_BASE_URL`` wins, else
+    ``effective_child_base_url``: a config content that already carries
+    ``settings.baseURL`` keeps it (``setdefault`` never displaces it), else the
+    deployment sources decide (``OMNIROUTE_BASE_URL`` wins, else
     ``gateway_url``: env ``PLANGRAPH_GATEWAY_URL``, else the *config* mapping's
-    ``gateway_url`` key); when no source names one, no ``baseURL`` key is written
-    at all -- this module ships no default endpoint.
+    ``gateway_url`` key).  When no source names one, no ``baseURL`` key is
+    written at all -- this module ships no default endpoint.
 
     On Windows (os.name == 'nt'), ALWAYS preserves:
       - SystemRoot / SYSTEMROOT
@@ -98,8 +161,6 @@ def build_child_env(
       - TEMP (and TMP)
     preventing the Windows opencode serve port-in-use crash (D-2090 BUG-B).
     """
-    import json as _json
-
     env = dict(os.environ)
 
     if os.name == "nt":
@@ -126,14 +187,17 @@ def build_child_env(
         elif "SYSTEMROOT" not in env and "SystemRoot" in env:
             env["SYSTEMROOT"] = env["SystemRoot"]
 
-    # Deployment endpoint: provider-specific override, else the configured
-    # gateway URL (never a source default -- unset means "no baseURL written").
-    base_url = effective_gateway_base_url(env, config) or ""
+    # Deployment endpoint: a base URL the child's config already holds wins
+    # (setdefault keeps it), else the provider-specific override or the
+    # configured gateway URL (never a source default -- unset means "no baseURL
+    # written"); ``effective_child_base_url`` is the one helper the health
+    # report reads too.
+    base_url = effective_child_base_url(env, config) or ""
     existing_cfg: dict[str, Any] = {}
     raw_cfg = env.get("OPENCODE_CONFIG_CONTENT")
     if raw_cfg:
         try:
-            parsed = _json.loads(raw_cfg)
+            parsed = json.loads(raw_cfg)
             if isinstance(parsed, dict):
                 existing_cfg = parsed
         except ValueError:
@@ -148,7 +212,7 @@ def build_child_env(
         omni_settings.setdefault("baseURL", base_url)
 
     if headers:
-        env["OMNIROUTE_ENVELOPE_HEADERS"] = _json.dumps(dict(headers), sort_keys=True)
+        env["OMNIROUTE_ENVELOPE_HEADERS"] = json.dumps(dict(headers), sort_keys=True)
         for k, v in headers.items():
             env_key = k.upper().replace("-", "_")
             env[env_key] = str(v)
@@ -156,7 +220,7 @@ def build_child_env(
         if isinstance(omni_headers, dict):
             omni_headers.update({str(k): str(v) for k, v in headers.items()})
 
-    env["OPENCODE_CONFIG_CONTENT"] = _json.dumps(existing_cfg, sort_keys=True)
+    env["OPENCODE_CONFIG_CONTENT"] = json.dumps(existing_cfg, sort_keys=True)
 
     if extra_env:
         env.update(extra_env)

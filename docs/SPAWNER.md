@@ -364,17 +364,19 @@ python -m plangraph.spawner.mcp
    - `family` (string, optional): Filter by model family (e.g. `mimo`, `claude`).
    - `min_intelligence` (number, optional): Minimum AA Intelligence floor.
 6. `plangraph_agent_health`:
-   - Reports spawner version, active/total jobs, catalog model counts, and the effective gateway base URL (empty when none is configured).
+   - Reports spawner version, active/total jobs, catalog model counts, and the effective base URL the child receives (empty when none is configured).
 
 #### Gateway endpoint setting
 
-The base URL every gateway client uses is deployment config, read at run time by
-`plangraph.spawner.clients.effective_gateway_base_url()`; no default ships in the
-source. The only sources wired today are environment variables — `OMNIROUTE_BASE_URL`
-wins over `PLANGRAPH_GATEWAY_URL`:
+The base URL every gateway client uses is deployment config, read at run time; no
+default ships in the source. Two helpers divide the work: `effective_child_base_url()`
+is the URL a spawned child ends up using — and the one `plangraph_agent_health`
+reports — while `effective_gateway_base_url()` resolves the environment sources, where
+`OMNIROUTE_BASE_URL` wins over `PLANGRAPH_GATEWAY_URL`:
 
-| source | key |
+| source, in the order it is honoured | key |
 |---|---|
+| the child's own `OPENCODE_CONFIG_CONTENT` (kept by `setdefault`, see below) | `providers.omniroute.settings.baseURL` |
 | environment (provider-level override, wins when set) | `OMNIROUTE_BASE_URL` |
 | environment (gateway default) | `PLANGRAPH_GATEWAY_URL` |
 
@@ -382,10 +384,14 @@ wins over `PLANGRAPH_GATEWAY_URL`:
 production caller passes one today: that argument exists for callers that do pass it
 (the tests exercise it).
 
-With neither environment variable set, `build_child_env` writes no `baseURL` into the
-child provider config (a caller that needs a value supplies its own), and
-`plangraph_agent_health` reports `gateway_default_url` as `""`. The same helper computes
-both, so the reported URL always matches the effective one.
+`build_child_env` merges into whatever `OPENCODE_CONFIG_CONTENT` already carries using
+`setdefault`, so a child config that already sets `settings.baseURL` keeps that value
+and no environment source displaces it. With no such key and neither environment
+variable set, `build_child_env` writes no `baseURL` into the child provider config (a
+caller that needs a value supplies its own), and `plangraph_agent_health` reports
+`gateway_default_url` as `""`. Both sides read the same one helper,
+`plangraph.spawner.clients.effective_child_base_url()`, so the reported URL always
+matches the effective one.
 
 ### SQLite Catalog DB CLI (`src/plangraph/spawner/catalog_db.py`)
 
