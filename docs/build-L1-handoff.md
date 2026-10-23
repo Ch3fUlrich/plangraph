@@ -11,7 +11,7 @@ CARD status/build-L1.card.md = full lane table + tools + traps (read first). Mai
 - RT-P1-BUS-CONTRACT conditional GO relayed to build-L2-bus (queued; workst offline at send).
 ## Immediate next
 1. #129 merge-cont (bg) -> evidence -> `ops/pg.sh submit plangraph:KEEPER-OPTASK-CLOSE` -> verdicts qwen + glm -> DONE to routing.
-2. #112: b9386bb9 pytest 4860 green, dispatch CI green, PR-event ci-gate RED (10 old commits no Writer, c129069f test removal no Test-Removal). Q to routing *A squash new PR (D-2328 #97 pattern) / B waiver -> then seats -> GO-REQ.
+2. #112: b9386bb9 pytest 4860 green, dispatch CI green, PR-event ci-gate RED (10 old commits no Writer, c129069f test removal no Test-Removal). D-2329 A: new branch, ONE squashed commit (Plan-Item + Writer trailers of squashed commits + Hand-Edit for untrailered + `Test-Removal: D-2329`), new PR supersedes #112, re-seat qwen+glm-free full diff, GO-REQ. If gate still flags c129069f (it HAS Writer opencode-go/glm ses_...) send routing the exact gate line = parser bug.
 3. #127: relaunch writer per card (KEEP exemption; WIP patch ~/.local/share/plangraph/tools-l1/job-tmp/opclaim-r1-fix-wip.patch).
 4. FLEET-SID-REFRESH verdicts when close-inreview sends seat paths.
 
