@@ -1000,20 +1000,22 @@ def test_denied_budget_is_alarm_only_not_auto_revoke(w, monkeypatch):
 
 
 # ------------------------------------------------------- schema / parity
-def test_schema_is_v13_and_carries_the_oversight_ddl():
+def test_schema_is_v14_and_carries_the_oversight_ddl():
     from plangraph.keeper import schema
 
-    assert schema.SCHEMA_VERSION == 13
+    assert schema.SCHEMA_VERSION == 14
     assert "oversight_tokens" in schema.OVERSIGHT_DDL
     assert "oversight_ops" in schema.OVERSIGHT_DDL
     assert schema.OVERSIGHT_DDL in schema.SCHEMA
+    # the merge keeps main's JEV half at v13 and appends ours after it
+    assert schema.SCHEMA.index(schema.JEV_DDL) < schema.SCHEMA.index(schema.OVERSIGHT_DDL)
     for trigger in ("trg_oversight_tokens_revoke_only_update",
                     "trg_oversight_ops_append_only_update",
                     "trg_oversight_ops_append_only_delete"):
         assert trigger in schema.OVERSIGHT_DDL
 
 
-def test_pg_migration_6_matches_the_sqlite_ddl():
+def test_pg_migration_7_matches_the_sqlite_ddl():
     from plangraph.keeper import schema, schema_pg
 
     sqlite_tables = schema_pg.parse_tables(schema.SCHEMA)
@@ -1025,13 +1027,13 @@ def test_pg_migration_6_matches_the_sqlite_ddl():
             [c for c, _ in pg_tables[table]], table
         assert [bool(nn) for _, nn in sqlite_tables[table]] == \
             [bool(nn) for _, nn in pg_tables[table]], table
-    assert schema_pg.LATEST >= 6
-    six = [m for m in schema_pg.MIGRATIONS if m.version == 6]
-    assert six, "Postgres Migration 6 must carry the oversight tables"
-    six_tables = schema_pg.parse_tables(six[0].sql)
-    assert {"oversight_tokens", "oversight_ops"} <= set(six_tables)
+    assert schema_pg.LATEST >= 7
+    seven = [m for m in schema_pg.MIGRATIONS if m.version == 7]
+    assert seven, "Postgres Migration 7 must carry the oversight tables"
+    seven_tables = schema_pg.parse_tables(seven[0].sql)
+    assert {"oversight_tokens", "oversight_ops"} <= set(seven_tables)
     earlier = schema_pg.parse_tables(
-        "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version < 6))
+        "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version < 7))
     assert not {"oversight_tokens", "oversight_ops"} & set(earlier)
 
 
@@ -1374,14 +1376,14 @@ def test_null_columns_are_null_safe_across_a_revoke(w, monkeypatch):
 def test_token_guard_columns_and_delete_trigger_are_in_both_ddls():
     from plangraph.keeper import schema, schema_pg
 
-    six = "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version == 6)
-    for ddl, label in ((schema.OVERSIGHT_DDL, "sqlite"), (six, "pg")):
+    seven = "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version == 7)
+    for ddl, label in ((schema.OVERSIGHT_DDL, "sqlite"), (seven, "pg")):
         assert "trg_oversight_tokens_append_only_delete" in ddl, label
         trigger = ddl.split("trg_oversight_tokens_revoke_only_update", 1)[1]
         for column in ("created_at", "minted_by", "go_decision", "mint_reason"):
             assert f"OLD.{column}" in trigger, (label, column)
             assert f"NEW.{column}" in trigger, (label, column)
-    assert "trg_oversight_tokens_append_only_truncate" in six
+    assert "trg_oversight_tokens_append_only_truncate" in seven
 
 
 # =========================================================================

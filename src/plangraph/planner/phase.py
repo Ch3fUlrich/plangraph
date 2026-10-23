@@ -2,10 +2,12 @@
 
 Reads the phase gate by key, its card edges and the cards; routes and gates
 every card; reports intra-plan write-set overlaps and startability.
-``plan_phase`` performs no store write; the only side effect is the shadow audit
-row when the shadow hook is enabled by the environment (a file append, via
-:func:`plangraph.planner.shadow.route_with_shadow`); the keeper's own ``_run``
-audit of the call is the store's normal read audit.
+``plan_phase`` performs no store write of its own: the only side effects are the
+shadow audit row when the shadow hook is enabled by the environment (a file
+append, via :func:`plangraph.planner.shadow.route_with_shadow`) and that hook's
+observe-only Jev rows in the keeper's ``jev_shadow`` table (when ``PLANGRAPH_JEV``
+is on; they never change a route); the keeper's own ``_run`` audit of the call is
+the store's normal read audit.
 """
 from __future__ import annotations
 
@@ -67,9 +69,11 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
                initiator: str = "agent") -> dict:
     """Plan the cards of the phase gate ``key``.
 
-    ``plan_phase`` performs no store write.  The only side effect is the shadow
-    audit row when the shadow hook is enabled by the environment (a file append,
-    via :func:`plangraph.planner.shadow.route_with_shadow`); the keeper's own
+    ``plan_phase`` performs no store write of its own.  The only side effects are
+    the shadow audit row when the shadow hook is enabled by the environment (a
+    file append, via :func:`plangraph.planner.shadow.route_with_shadow`) and that
+    hook's observe-only Jev rows in the keeper's ``jev_shadow`` table (when
+    ``PLANGRAPH_JEV`` is on; they never change a route); the keeper's own
     ``_run`` audit of the call is the store's normal read audit.
     """
     # Role first, before reading anything at all.
@@ -132,7 +136,8 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         shadow_id = None
         try:
             route, shadow_id = shadow.route_with_shadow(
-                card, answerer=answerer, legs=legs, unavailable=unavailable)
+                card, answerer=answerer, legs=legs, unavailable=unavailable,
+                store=store, principal=principal)
         except ValueError as exc:  # RouteError is a ValueError
             route = None
             shadow_id = None

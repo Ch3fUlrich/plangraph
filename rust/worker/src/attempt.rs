@@ -15,11 +15,12 @@ use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::confine::{self, ConfineError, Violation};
 use pg_worker_core::exit_class::{CheckOutcome, ExitClass, Patterns, Signals};
-use pg_worker_core::git::{GitError, git};
+use pg_worker_core::git::{GitError, check_rev};
 use pg_worker_core::stall::Opts;
 use pg_worker_core::worktree::{self, AttemptId};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// One provider leg a card may run on: an id, its tier, and the model to hand
 /// to the harness.
@@ -100,6 +101,8 @@ pub struct AttemptResult {
 pub enum AttemptError {
     #[error(transparent)]
     Git(#[from] GitError),
+    #[error("refusing worktree git directory: {0}")]
+    GitDir(String),
     #[error(transparent)]
     Confine(#[from] ConfineError),
     #[error(transparent)]
@@ -218,11 +221,18 @@ fn run_attempt_inner(
     // goes away with the attempt. The check below gets its own HOME, so a login
     // the harness persisted here never reaches the check child.
     let mut home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
+    let tmp = attempt_tmp()?;
     // Harness auth travels as staged files in this HOME, never by env (the
     // confined env carries no credential names; see sandbox_env). The guard
     // removes what it staged when the attempt ends.
     home.stage_harness_auth()?;
-    let sup = run_harness(h, &run, home.path(), &opts, cancelled)?;
+    let jail = crate::harness::JailConfig::from_env()
+        .map_err(std::io::Error::other)?
+        .map(|mut jail| {
+            jail.tmp = tmp.path().to_path_buf();
+            jail
+        });
+    let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
 
@@ -277,20 +287,26 @@ fn run_attempt_inner(
         );
     }
 
+    // Nothing is staged, committed or hashed until the worktree's own git
+    // directory has proved it is still the one git made: a `.git` the harness
+    // rewrote would send every git call below — and every hash taken from it —
+    // to some other repository.
+    verify_git_dir(&dest, repo, &claim.base_sha)?;
+
     // Whether the work changed decides both the commit and `NoChange`, so it
     // is read once from git rather than inferred later.
     let mut changed = false;
     if clean {
-        git(&dest, &["add", "-A"])?;
+        worker_git(&dest, &["add", "-A"])?;
         // `--quiet` implies `--exit-code`: a non-zero exit means something is
         // staged. A clean tree must not create an empty commit.
-        let staged = git(&dest, &["diff", "--cached", "--quiet"]).is_err();
+        let staged = worker_git(&dest, &["diff", "--cached", "--quiet"]).is_err();
         // The harness may have committed its own work: the index then matches
         // HEAD with nothing staged, but the tree sits past the claim's base,
         // so the staged diff alone would miss it and call the run `NoChange`.
-        let committed = git(&dest, &["rev-parse", "HEAD"])? != claim.base_sha;
+        let committed = worker_git(&dest, &["rev-parse", "HEAD"])? != claim.base_sha;
         if staged {
-            git(
+            worker_git(
                 &dest,
                 &[
                     "-c",
@@ -306,7 +322,7 @@ fn run_attempt_inner(
         }
         changed = staged || committed;
     }
-    let head = git(&dest, &["rev-parse", "HEAD"])?;
+    let head = worker_git(&dest, &["rev-parse", "HEAD"])?;
 
     // Confinement is judged before the check: a write outside the set is a
     // contract defect however the check would have gone, so the check is
@@ -328,7 +344,7 @@ fn run_attempt_inner(
     // check would judge work the run never attempted.
     let check_allowed = clean && !contract && question.is_none() && !provider_failed && !no_change;
     let (outcome, check_hash, check_tail) = if check_allowed {
-        let (o, last) = check_with_rerun(&claim.check_cmd, &dest, cfg)?;
+        let (o, last) = check_with_rerun(&claim.check_cmd, &dest, cfg, jail.as_ref())?;
         (Some(o), last.output_hash, last.tail)
     } else if let Some(why) = &malformed {
         (None, String::new(), why.clone())
@@ -509,12 +525,28 @@ fn check_with_rerun(
     cmd: &str,
     dest: &Path,
     cfg: &Config,
+    jail: Option<&crate::harness::JailConfig>,
 ) -> Result<(CheckOutcome, CheckResult), AttemptError> {
-    let first = check::run_check(cmd, dest, cfg.start_to_close, cfg.check_tail_lines)?;
+    let jail = jail.map(|j| (j.bin.as_path(), &j.limits, j.tmp.as_path()));
+    let first = check::run_check_scoped(
+        cmd,
+        dest,
+        cfg.start_to_close,
+        cfg.check_tail_lines,
+        jail,
+        &|| false,
+    )?;
     if first.passed() {
         return Ok((CheckOutcome::Pass, first));
     }
-    let second = check::run_check(cmd, dest, cfg.start_to_close, cfg.check_tail_lines)?;
+    let second = check::run_check_scoped(
+        cmd,
+        dest,
+        cfg.start_to_close,
+        cfg.check_tail_lines,
+        jail,
+        &|| false,
+    )?;
     let outcome = if second.passed() {
         CheckOutcome::Flaky
     } else {
@@ -540,8 +572,169 @@ fn clear_dest(repo: &Path, dest: &Path) -> Result<(), AttemptError> {
     }
 }
 
+// Never grant an attempt write access to the shared system temp root.
+fn attempt_tmp() -> std::io::Result<tempfile::TempDir> {
+    tempfile::Builder::new().prefix("pg-attempt-").tempdir()
+}
+
+/// Environment names a worker-side git child may inherit. Everything else in
+/// the worker's own process environment is dropped: every `PG_*` credential, a
+/// `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` override, an injected
+/// `GIT_CONFIG_*` — none of it reaches a git process.
+const GIT_ENV_PASS: &[&str] = &["PATH", "LANG", "TERM"];
+
+/// Every git call this module makes: `git [flags] <args>` in `dir`.
+///
+/// * the environment is scrubbed down to [`GIT_ENV_PASS`] (no `PG_*`), so a
+///   credential in the worker's environment is invisible to git;
+/// * `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`, so neither the
+///   machine's nor the user's config extends or redirects the command;
+/// * `core.hooksPath=/dev/null` before every subcommand and `--no-verify` on
+///   every `commit`, so no hook planted in the repository ever runs as the
+///   worker — a hook is code from the worktree, not from this plan.
+fn git_command(dir: &Path, args: &[&str]) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.env_clear();
+    for name in GIT_ENV_PASS {
+        if let Some(v) = std::env::var_os(name) {
+            cmd.env(name, v);
+        }
+    }
+    cmd.env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null");
+    for a in args {
+        cmd.arg(*a);
+        if *a == "commit" {
+            cmd.arg("--no-verify");
+        }
+    }
+    cmd
+}
+
+/// Run `git <args>` in `dir` under [`git_command`] and return trimmed stdout.
+fn worker_git(dir: &Path, args: &[&str]) -> Result<String, GitError> {
+    let out = git_command(dir, args).output()?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(GitError::Failed {
+            args: args.join(" "),
+            code: out.status.code(),
+            stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        })
+    }
+}
+
+/// `path` as git reports it: canonical when it can be resolved, lexical
+/// otherwise. Comparisons built on it are fail-closed — a path that will not
+/// resolve compares unequal to anything it merely resembles.
+fn canonical(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The worktree's own git directory, judged immediately before anything is
+/// staged.
+///
+/// Everything after this call — the add, the commit, the diff hash,
+/// confinement — runs through git in `dest`, so a `.git` the harness rewrote
+/// would send all of it, and every hash taken from it, to some other
+/// repository. Checked here:
+///
+/// * `.git` at the worktree root is a file (the gitfile `git worktree add`
+///   writes) or a directory — never a symlink, which only a harness could
+///   have planted, and never anything else;
+/// * git resolves the git directory into the claim repository's own worktree
+///   storage, `<common dir>/worktrees/…` — the one place `git worktree add`
+///   registers a linked worktree, and the only place [`worktree::create`]
+///   creates one. "Under `dest`" or "under `repo`" is deliberately not enough:
+///   a harness that deletes the gitfile and runs `git init` gets a real
+///   `.git` directory under `dest` (or a gitfile pointing under `dest` or at
+///   `repo/.git`), which passes those looser tests while making git operate on
+///   a repository the harness chose — its base, ancestry and history, however
+///   they were grafted together;
+/// * git sees `dest` as the top of the worktree it is standing in, and
+///   `HEAD` still descends from the claim's `base`, so the commit below
+///   extends the branch that was claimed rather than some other line.
+///
+/// Any failure fails the attempt: nothing is staged on a guess.
+fn verify_git_dir(dest: &Path, repo: &Path, base: &str) -> Result<(), AttemptError> {
+    let refuse = |why: &str| AttemptError::GitDir(format!("{}: {why}", dest.display()));
+
+    // Lstat, not stat: a symlink that resolves to a directory reads as a
+    // directory through the usual metadata call, and redirecting git at some
+    // other repository is exactly what this refuses.
+    let dotgit = dest.join(".git");
+    let md = std::fs::symlink_metadata(&dotgit)
+        .map_err(|_| refuse(".git is missing at the worktree root"))?;
+    if md.file_type().is_symlink() {
+        return Err(refuse(".git is a symlink"));
+    }
+    if !md.is_dir() && !md.is_file() {
+        return Err(refuse(".git is neither a directory nor a gitfile"));
+    }
+
+    // Git must agree about where its own directory lives: in the claim
+    // repository's own linked-worktree storage. `dest` is always built by
+    // `worktree::create` → `git worktree add`, which registers exactly one
+    // place, `<common dir>/worktrees/<name>`, and a `git init` under `dest`
+    // can never land there — so anything outside it is a repository the
+    // harness chose (its own base, ancestry and history), whatever it merely
+    // resembles: under `dest`, under `repo`, or under `repo/.git` itself.
+    let git_dir = worker_git(dest, &["rev-parse", "--absolute-git-dir"])
+        .map_err(|e| refuse(&format!("git refuses this worktree: {e}")))?;
+    let resolved = canonical(Path::new(&git_dir));
+    let common = worker_git(repo, &["rev-parse", "--git-common-dir"])
+        .map_err(|e| refuse(&format!("claim repository has no git dir: {e}")))?;
+    // A relative answer is relative to git's own cwd, which is `repo`.
+    let common = if Path::new(&common).is_absolute() {
+        PathBuf::from(&common)
+    } else {
+        repo.join(&common)
+    };
+    let common = canonical(&common);
+    let storage = common.join("worktrees");
+    if !resolved.starts_with(&storage) {
+        return Err(refuse(&format!(
+            "git directory {git_dir} is not in the claim repository's worktree storage {}",
+            storage.display()
+        )));
+    }
+    // …and it must see `dest` as the top of the worktree it is standing in.
+    let top = worker_git(dest, &["rev-parse", "--show-toplevel"])
+        .map_err(|e| refuse(&format!("git refuses this worktree: {e}")))?;
+    if canonical(Path::new(&top)) != canonical(dest) {
+        return Err(refuse(&format!("worktree top {top} is not the worktree")));
+    }
+
+    // The claimed base must exist (and not read as an option) and still be an
+    // ancestor of HEAD.
+    check_rev(base).map_err(|e| refuse(&format!("claim base {base:?}: {e}")))?;
+    if worker_git(dest, &["merge-base", "--is-ancestor", base, "HEAD"]).is_err() {
+        return Err(refuse(&format!(
+            "HEAD does not descend from claim base {base}"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(all(test, unix))]
 mod tests {
+    #[test]
+    fn attempts_have_private_tmp_directories() {
+        let first = super::attempt_tmp().unwrap();
+        let second = super::attempt_tmp().unwrap();
+        assert_ne!(first.path(), second.path());
+        assert_ne!(first.path(), std::env::temp_dir());
+        assert_ne!(second.path(), std::env::temp_dir());
+        let path = first.path().to_path_buf();
+        drop(first);
+        assert!(!path.exists());
+    }
     use super::*;
     use std::process::{Command, Stdio};
     use std::sync::Arc;
@@ -743,6 +936,202 @@ mod tests {
             class: String::new(),
             answers: Vec::new(),
         }
+    }
+
+    /// The `.git` rule is the only thing standing between a healthy worktree
+    /// and a redirected one below: git happily follows the planted link, and
+    /// every other check still passes — so a test that runs without the
+    /// symlink rule fails here.
+    #[test]
+    fn verify_refuses_a_worktree_whose_dot_git_is_a_symlink() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let id = AttemptId::new("c1", 1);
+        let dest = root.path().join(id.dir_name());
+        worktree::create(r.path(), &base, &dest, &id).unwrap();
+        // What git made passes as it is: the worktree's `.git` is a gitfile.
+        super::verify_git_dir(&dest, r.path(), &base).unwrap();
+
+        // Redirect `.git` at the claim repository's own git directory.
+        std::fs::remove_file(dest.join(".git")).unwrap();
+        std::os::unix::fs::symlink(r.path().join(".git"), dest.join(".git")).unwrap();
+        // Git follows the link without complaint, and HEAD still descends
+        // from the base: nothing but the symlink itself is refused.
+        assert_eq!(
+            super::worker_git(&dest, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap(),
+            "main"
+        );
+        assert!(super::worker_git(&dest, &["merge-base", "--is-ancestor", &base, "HEAD"]).is_ok());
+        let err = super::verify_git_dir(&dest, r.path(), &base).unwrap_err();
+        assert!(
+            matches!(&err, AttemptError::GitDir(m) if m.contains("symlink")),
+            "{err:?}"
+        );
+    }
+
+    /// A hook in the repository is code from the worktree, never from this
+    /// plan: the worker's commit must not run it, while an ordinary commit
+    /// still does — the control below proves the hook is planted and live.
+    #[test]
+    fn a_planted_pre_commit_hook_never_runs_as_the_worker() {
+        use std::os::unix::fs::PermissionsExt;
+        let (r, base) = repo();
+        let hook = r.path().join(".git/hooks");
+        std::fs::create_dir_all(&hook).unwrap();
+        let hook = hook.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\nprintf ran > HOOK_RAN\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Control: the very same hook fires for a plain git commit.
+        write(r.path(), "control.txt", "x");
+        commit_all(r.path(), "control");
+        assert!(
+            r.path().join("HOOK_RAN").exists(),
+            "the planted hook must be live for this test to mean anything"
+        );
+        std::fs::remove_file(r.path().join("HOOK_RAN")).unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        assert_ne!(res.head, base, "the worker did commit");
+        let dest = root.path().join(AttemptId::new("c1", 1).dir_name());
+        assert!(
+            !dest.join("HOOK_RAN").exists(),
+            "the worker's commit ran a hook from the repository"
+        );
+    }
+
+    /// The credential is in the worker's own environment — that is the point
+    /// of the scrub — and a git child still cannot see it.
+    #[test]
+    fn pg_keeper_token_is_invisible_to_a_worker_git_child() {
+        let (r, _base) = repo();
+        // SAFETY: `set_var` races with other threads reading the environment.
+        // The canary below is read by no other test, and is removed again
+        // before this test returns.
+        unsafe { std::env::set_var("PG_KEEPER_TOKEN", "keeper-canary") };
+        assert_eq!(std::env::var("PG_KEEPER_TOKEN").unwrap(), "keeper-canary");
+
+        // An alias that prints the child's own environment: the leak is
+        // visible if, and only if, the scrub lets the variable through.
+        git(r.path(), &["config", "alias.envdump", "!env"]);
+        let seen = super::worker_git(r.path(), &["envdump"]).expect("alias runs");
+        unsafe { std::env::remove_var("PG_KEEPER_TOKEN") };
+        assert!(
+            seen.contains("PATH="),
+            "control: the alias must run: {seen}"
+        );
+        assert!(!seen.contains("PG_KEEPER_TOKEN"), "{seen}");
+        assert!(seen.lines().all(|l| !l.starts_with("PG_")), "{seen}");
+    }
+
+    /// Both halves of the hook kill-switch travel on every worker git call:
+    /// `core.hooksPath=/dev/null` for everything, `--no-verify` for `commit`.
+    #[test]
+    fn worker_git_never_leaves_a_hook_a_way_in() {
+        let args = |a: &[&str]| -> Vec<String> {
+            super::git_command(Path::new("."), a)
+                .get_args()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect()
+        };
+        let add = args(&["add", "-A"]);
+        let at = add.iter().position(|a| a == "-c").expect("-c for hooks");
+        assert_eq!(add[at + 1], "core.hooksPath=/dev/null", "{add:?}");
+        let commit = args(&["commit", "-m", "x"]);
+        let at = commit.iter().position(|a| a == "commit").unwrap();
+        assert_eq!(commit[at + 1], "--no-verify", "{commit:?}");
+        assert!(
+            commit.iter().any(|a| a == "core.hooksPath=/dev/null"),
+            "{commit:?}"
+        );
+    }
+
+    /// End to end: a harness that replaces the worktree's `.git` with a link
+    /// never gets a commit — the link is a confine violation wherever it
+    /// points, even at a target inside the worktree.
+    #[test]
+    fn harness_that_swaps_dot_git_for_a_symlink_gets_no_commit() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        let h = Fake::new("mv .git .git.real && ln -s .git.real .git");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(
+            res.exit_class,
+            ExitClass::ContractDefect,
+            "{}",
+            res.output_tail
+        );
+        assert!(res.output_tail.contains(".git"), "{}", res.output_tail);
+        assert_eq!(res.head, base, "a commit was made on the swapped worktree");
+    }
+
+    /// The same redirect as a repository git accepts: deleting the gitfile and
+    /// running `git init` leaves a real `.git` directory under `dest`, which
+    /// the old containment ("under `dest` or under `repo`") allowed — and the
+    /// harness can fetch the claim's base through the gitfile it just read, so
+    /// its own repository's `HEAD` even descends from the base. The attempt
+    /// must refuse that repository before anything is staged, and must leave
+    /// the claim's branch untouched.
+    #[test]
+    fn harness_that_replaces_the_gitfile_with_git_init_gets_no_commit() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        // Read the gitfile before deleting it, then build a repository of the
+        // harness's own on top of the claim's base and commit in it: with a
+        // `.git` directory under `dest`, every old check passes.
+        let h = Fake::new(
+            "src=$(sed 's/^gitdir: //' .git) && rm .git && git init -q \
+             && git fetch -q \"$src\" HEAD && git reset --hard -q FETCH_HEAD \
+             && echo pwned > out.txt && git add -A \
+             && git -c user.name=harness -c user.email=harness@localhost \
+             commit -q -m owned",
+        );
+        let dest = root.path().join(AttemptId::new("c1", 1).dir_name());
+        let err = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap_err();
+        assert!(
+            matches!(&err, AttemptError::GitDir(m) if m.contains("worktree storage")),
+            "{err:?}"
+        );
+        // Control: the recipe really ran and really produced a commit past the
+        // base — the refusal is about where that repository lives, not about a
+        // harness command that failed.
+        assert!(dest.join(".git").is_dir(), "the harness's git init ran");
+        let own = worker_git(&dest, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(own, base, "control: the harness committed in its own repo");
+        // …and the attempt committed nothing: the claim's branch still sits at
+        // the base, so no attacker-chosen head can be reported or merged.
+        let branch = AttemptId::new("c1", 1).branch();
+        assert_eq!(
+            git(r.path(), &["rev-parse", &branch]),
+            base,
+            "the attempt branch moved"
+        );
+        assert_eq!(
+            git(r.path(), &["rev-parse", "HEAD"]),
+            base,
+            "the claim repository gained a commit"
+        );
     }
 
     #[test]

@@ -10,6 +10,7 @@ import json
 
 from .. import views
 from ..views_progress import progress
+from . import jev_report
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
@@ -159,6 +160,13 @@ class ReadMixin:
             "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
+        # RT-P1-JEV-SHADOW: the Jev shadow rows, only when the card has any, so
+        # a card without them keeps its exact previous show output (the keys are
+        # optional in the frozen Show schema).
+        rows = self.jev_rows(key)
+        if rows:
+            info["jev_shadow"] = [jev_report.row_view(r) for r in rows]
+            info["jev_agreement"] = jev_report.agreement_report(rows)["overall"]
         info.update(self._run_derived(key, item))
         return info
 

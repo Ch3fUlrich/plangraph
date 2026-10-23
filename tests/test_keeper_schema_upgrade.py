@@ -65,9 +65,16 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
-# The name is historical: it predates schema v13 and asserts the current version.
+# The name is historical: it was written for an older schema and asserts the
+# current version.
 def test_schema_version_is_twelve():
-    assert schema.SCHEMA_VERSION == 13
+    assert schema.SCHEMA_VERSION == 14
+
+
+# Main's name for the same pin (RT-P1-JEV-SHADOW era); the oversight merge kept
+# it, so no version-test name from either side is dropped.
+def test_schema_version_is_thirteen():
+    assert schema.SCHEMA_VERSION == 14
 
 
 def test_open_without_create_still_refuses_a_non_keeper_file(tmp_path):

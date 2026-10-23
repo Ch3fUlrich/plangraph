@@ -15,11 +15,12 @@ from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
            "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS",
-           "WORKER_VERBS", "worker_write"]
+           "WORKER_VERBS", "worker_write", "JEV_VERBS", "jev_write"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
-              "answers", "progress", "changelog", "audit-meta", "metrics"}
+              "answers", "progress", "changelog", "audit-meta", "metrics",
+              "jev_report"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
@@ -33,7 +34,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "phase_finish",
                # worker_claim is POST transport: it returns a Claim to a worker
                "worker_claim",
-               "attempts", "park", "complete", "alarms", "locks"}
+               "attempts", "park", "complete", "alarms", "locks",
+               "jev_shadow", "jev_outcome"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -47,6 +49,7 @@ READ_CALLS = {
     "needs_you": lambda store, who, project: store.needs_you(who, project=project),
     "answers": lambda store, who, project: store.answers(who, project=project),
     "progress": lambda store, who, project: store.progress(who, project=project),
+    "jev_report": lambda store, who, project: store.jev_report(who, project=project),
 }
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
@@ -99,6 +102,24 @@ def worker_write(store, principal, name, extra, body):
         store.lock_release(principal, repo, body)
         return None
     raise Refused("not_found", f"unknown locks route /v1/locks/{extra}")
+
+
+#: RT-P1-JEV-SHADOW: the Jev shadow write verbs.  The store resolves the card
+#: from ``body["card"]`` itself, so the handler must NOT rewrite ``body["key"]``.
+JEV_VERBS = frozenset({"jev_shadow", "jev_outcome"})
+
+
+def jev_write(store, principal, name, body):
+    """The Jev shadow writes; the store answers ``{id,card,kind}`` / ``{card,updated}``.
+
+    The role is checked by the store BEFORE the body is validated, so a reader
+    gets 403 rather than 400 for a malformed body.
+    """
+    if not isinstance(body, dict):
+        raise Refused("validation", "body must be a JSON object")
+    if name == "jev_shadow":
+        return store.jev_record(principal, body)
+    return store.jev_outcome(principal, body)
 
 
 # Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is

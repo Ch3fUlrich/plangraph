@@ -13,10 +13,14 @@ from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
-           "WINDOW_CLASSES", "RISK_TAGS"]
+           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES",
+           "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS", "JEV_KINDS",
+           "JEV_STATUSES"]
 
-SCHEMA_VERSION = 13
+#: v9 baseline -> v13 (``JEV_DDL``, RT-P1-JEV-SHADOW) -> v14 (``OVERSIGHT_DDL``,
+#: RT-OVERSIGHT-KEEPER-SCOPE): the merge with main keeps both tables, so the
+#: oversight half of ``SCHEMA`` moved one version up.
+SCHEMA_VERSION = 14
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -86,10 +90,35 @@ CREATE TABLE IF NOT EXISTS run_tokens (
 CREATE INDEX IF NOT EXISTS idx_run_tokens_key ON run_tokens(key);
 """
 
-#: RT-OVERSIGHT-KEEPER-SCOPE (schema v13): the scoped oversight principal's
+#: RT-P1-JEV-SHADOW (schema v13, main): the audit-only rows of the Jev shadow
+#: answerer (design D18, ``planner.shadow``), one row per ``event`` of the JSONL
+#: shadow log.  ``JEV_KINDS``/``JEV_STATUSES`` are the two CHECK vocabularies the
+#: table enforces.  Octet-for-octet twin of ``schema_pg`` Migration 6; the
+#: oversight merge (v14) appends ``OVERSIGHT_DDL`` after this one.
+JEV_KINDS = ("decision", "outcome")
+JEV_STATUSES = ("pending", "agree", "disagree", "error")
+
+JEV_DDL = """
+CREATE TABLE IF NOT EXISTS jev_shadow (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id   TEXT NOT NULL UNIQUE,
+    card_key      TEXT,
+    kind          TEXT NOT NULL CHECK (kind IN ('decision','outcome')),
+    status        TEXT NOT NULL CHECK (status IN ('pending','agree','disagree','error')),
+    rules_route   TEXT,
+    shadow_answer TEXT,
+    shadow_error  TEXT,
+    outcome       TEXT,
+    ts            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jev_shadow_card ON jev_shadow(card_key, ts);
+CREATE INDEX IF NOT EXISTS idx_jev_shadow_kind ON jev_shadow(kind, ts);
+"""
+
+#: RT-OVERSIGHT-KEEPER-SCOPE (schema v14): the scoped oversight principal's
 #: one-shot tokens and its append-only op audit.  Octet-for-octet twin of
-#: ``schema_pg`` Migration 6 (same columns in the same order).  ``IF NOT EXISTS``
-#: so ``db._upgrade`` can install it at open on a v12 database.
+#: ``schema_pg`` Migration 7 (same columns in the same order).  ``IF NOT EXISTS``
+#: so ``db._upgrade`` can install it at open on a v13 database.
 OVERSIGHT_DDL = """
 CREATE TABLE IF NOT EXISTS oversight_tokens (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -531,4 +560,4 @@ CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
-          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + OVERSIGHT_DDL)
+          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL)

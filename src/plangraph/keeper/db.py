@@ -18,8 +18,8 @@ from pathlib import Path
 
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
-from .schema import (ALIASES_DDL, DESIGN3_DDL, LOCKS_DDL, METRICS_DDL, OUTBOX_DDL,
-                     OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
+from .schema import (ALIASES_DDL, DESIGN3_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
+                     OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
 
@@ -141,10 +141,13 @@ def _upgrade(conn):
     conn.executescript(DESIGN3_DDL)
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
-    # The oversight-token guard grew four columns and a DELETE guard after the
-    # v13 DDL shipped.  ``OVERSIGHT_DDL`` is CREATE ... IF NOT EXISTS, so an
-    # older database would keep the weaker trigger body forever: drop the two
-    # guards first and let the shared script recreate them (DDL only, no data).
+    # Main's ``JEV_DDL`` (schema v13) installs before the oversight half (v14),
+    # exactly as ``SCHEMA`` composes them.  The oversight-token guard grew four
+    # columns and a DELETE guard after the oversight DDL first shipped.
+    # ``OVERSIGHT_DDL`` is CREATE ... IF NOT EXISTS, so an older database would
+    # keep the weaker trigger body forever: drop the two guards first and let the
+    # shared script recreate them (DDL only, no data).
+    conn.executescript(JEV_DDL)
     conn.executescript(
         "DROP TRIGGER IF EXISTS trg_oversight_tokens_revoke_only_update;\n"
         "DROP TRIGGER IF EXISTS trg_oversight_tokens_append_only_delete;")

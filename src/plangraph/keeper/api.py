@@ -295,6 +295,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 raise Refused("validation", "body must be a JSON object")
         if name in api_routes.WORKER_VERBS:   # RT-P1-KEEPER: the store resolves the card
             return api_routes.worker_write(store, principal, name, extra, body)
+        if name in api_routes.JEV_VERBS:      # RT-P1-JEV-SHADOW: the store resolves card
+            return api_routes.jev_write(store, principal, name, body)
         if isinstance(body.get("key"), str):  # old (rehomed) keys resolve
             body["key"] = store.resolve_key(body["key"])
         if name in inbox.routes.WRITE_VERBS:

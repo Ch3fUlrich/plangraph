@@ -15,6 +15,8 @@ budget) and the append-only triggers on attempts, decisions and answers.
 
 A later change appends a new ``Migration`` to ``MIGRATIONS``; never edit one that
 shipped.  ``db_pg.migrate`` applies the pending ones under an advisory lock.
+Migration 6 is the twin of SQLite schema v13 (``schema.JEV_DDL``, ``jev_shadow``)
+and Migration 7 of schema v14 (``schema.OVERSIGHT_DDL``, the oversight tables).
 """
 from __future__ import annotations
 
@@ -419,9 +421,29 @@ CREATE TABLE merge_locks (
 );
 """
 
-#: Logical twin of ``schema.OVERSIGHT_DDL`` (SQLite schema v13).  ``id`` carries no
-#: sequence (the store assigns MAX(id)+1 inside the write lock, like run_tokens).
+#: Logical twin of ``schema.JEV_DDL`` (SQLite schema v13, RT-P1-JEV-SHADOW): the
+#: audit-only Jev shadow rows.  Main's half of the merge: this migration stays
+#: ``_V6`` / version 6 unchanged; the oversight tables moved up to 7.
 _V6 = """
+CREATE TABLE jev_shadow (
+    id            BIGINT PRIMARY KEY,
+    decision_id   TEXT COLLATE "C" NOT NULL UNIQUE,
+    card_key      TEXT COLLATE "C",
+    kind          TEXT COLLATE "C" NOT NULL CHECK (kind IN ('decision','outcome')),
+    status        TEXT COLLATE "C" NOT NULL CHECK (status IN ('pending','agree','disagree','error')),
+    rules_route   TEXT COLLATE "C",
+    shadow_answer TEXT COLLATE "C",
+    shadow_error  TEXT COLLATE "C",
+    outcome       TEXT COLLATE "C",
+    ts            TEXT COLLATE "C" NOT NULL
+);
+CREATE INDEX idx_jev_shadow_card ON jev_shadow(card_key, ts);
+CREATE INDEX idx_jev_shadow_kind ON jev_shadow(kind, ts);
+"""
+
+#: Logical twin of ``schema.OVERSIGHT_DDL`` (SQLite schema v14).  ``id`` carries no
+#: sequence (the store assigns MAX(id)+1 inside the write lock, like run_tokens).
+_V7 = """
 CREATE TABLE oversight_tokens (
     id           BIGINT PRIMARY KEY,
     token_sha256 TEXT COLLATE "C" NOT NULL UNIQUE,
@@ -486,7 +508,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
               Migration(4, "governor: metrics", _V4),
               Migration(5, "locks: merge_locks", _V5),
-              Migration(6, "oversight: tokens, ops audit", _V6))
+              Migration(6, "jev: shadow audit", _V6),
+              Migration(7, "oversight: tokens, ops audit", _V7))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\);", re.S)

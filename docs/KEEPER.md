@@ -8,7 +8,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 ## Modules
 | file | content |
 |---|---|
-| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` |
+| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` = 14 (v13 = main's `JEV_DDL`, v14 = the oversight `OVERSIGHT_DDL` appended after it) |
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
 | `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`, `spawner`, `oversight`. `add_oversight_principal(conn, name, projects)` provisions the revocable row (no token); a `pgo1_` token authenticates as `OversightPrincipal` and `add_principal` refuses `role="oversight"`. |
@@ -24,8 +24,9 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
+`jev_shadow(id PK, decision_id UNIQUE, card_key, kind CHECK kind IN ('decision','outcome'), status CHECK status IN ('pending','agree','disagree','error'), rules_route, shadow_answer, shadow_error, outcome, ts)` — audit-only rows of the Jev shadow answerer (design D18; schema v13 / PG migration 6) ·
 `oversight_tokens(id PK, token_sha256 UNIQUE, principal, generation, scope, minted_by, go_decision, mint_reason, created_at, expires_at, revoked_at)` — revoke-only: one `UPDATE` may only set `revoked_at` NULL→non-NULL and must leave every other column (including `created_at`/`minted_by`/`go_decision`/`mint_reason`, NULL-safe) unchanged; `DELETE` (and PG `TRUNCATE`) abort ·
-`oversight_ops(id PK, ts, token_id, principal, generation, batch_ref, op_index, op, key, finding_id, reason, outcome, code, event_seq)` — append-only (trigger), never reaped ·
+`oversight_ops(id PK, ts, token_id, principal, generation, batch_ref, op_index, op, key, finding_id, reason, outcome, code, event_seq)` — append-only (trigger), never reaped; both oversight tables are SQLite schema v14 / PG migration 7 ·
 `items(key PK, project, id, title, kind, track, owner, estimate_h, estimate_src, done_criteria, evidence_kinds json, operator,
 priority, source, note, description, host, corrects, state, epoch, claimed_by, delegate, lease_until, reviewer, model, created_at, updated_at)` ·
 `edges(src, dst, rel CHECK rel IN ('depends_on'))` (`corrects` lives on the item; `src` depends on `dst`) ·

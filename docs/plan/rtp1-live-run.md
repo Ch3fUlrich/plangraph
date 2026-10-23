@@ -35,6 +35,7 @@ export PLANGRAPH_TEMPORAL_NAMESPACE=<namespace>
 export PG_KEEPER_URL=https://<keeper-host>             # required: the worker refuses to start without it
 export PG_KEEPER_TOKEN=<worker-role token>             # required with a URL; set-but-empty is a startup error
 # PG_KEEPER_STUB=1 would allow an in-memory keeper, but only with PG_KEEPER_URL unset: never for a live run.
+export PG_JAIL_BIN=<absolute path to built pg-jail>      # required: the worker fails closed without it (cargo build -p pg-jail); see docs/worker-sandbox.md
 export PG_HARNESS_VERSIONS=opencode=<version>,claude=<version>  # pin; a drifted binary stops the worker
 export PG_OPENCODE_SERVER_URL=<opencode server url>    # worker leg `opencode-server` (fallback family)
 export PLANGRAPH_OPENCODE_SERVER_URL=<same url>        # review seat opencode leg adds --attach
