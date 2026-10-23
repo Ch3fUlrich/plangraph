@@ -8,7 +8,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | D-2410 A: fix writer 3c26b3 mimo (seats/exec-ownership/sq5/FIX-BRIEF.md) -> push sq2 -> CI -> seats deepseek+Haiku -> re-GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed (not submitted). D-2406 A: fix writer cd8772 (seats/pr143/FIX1-BRIEF.md, wt ui-fix1) -> re-seat 2 -> merge -> submit -> verdicts |
-| GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 Haiku FIX 2 MED (glob order, write-fail tests) + LOW tmp name; deepseek running -> fix2 writer |
+| GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 sol writer requested workst -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head f2ddac80 (main merged, CHANGELOG-only); Haiku PASS, luna FIX HIGH stray_writer_line indented/quoted (workst answer pr139-luna.answer.md e4b5d49a) -> fix3 deepseek writer requested from workst -> re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX (HIGH p8) | L1 | 1a3af8 done; PR #149 head ec8cadd0 (tree == old WIP), gitleaks 0; deepseek PASS, CI green; Haiku FIX MED allowlist regex prefix-only -> fix2 writer 20261023-115511-pg-public-fix2-a28382 (mimo) -> re-seat Haiku; GO-REQ -> GO-REQ; then re-seat PG-PUBLIC-READY |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
