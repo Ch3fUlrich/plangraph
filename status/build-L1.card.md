@@ -7,7 +7,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | Item | Owner | State / next |
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq2 head b2b5293f CI red (PG fence test forbidden, cargo fmt); sq5 seats deepseek+Haiku FIX (3 HIGH: PG test, unclaimed owner plant, no parked revive) -> sq6 sol writer on workst (brief seats/exec-ownership/sq5/FIX-BRIEF-sq6.md) -> CI, seats -> re-GO-REQ |
-| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix PR #152 head 27da2078, CI green (browser pending); deepseek FIX HIGH v_dec_3 owner/observable + 3 MED -> fix2 mimo fb8747 (seats/pr152/FIX2-BRIEF.md) -> CI, re-seat deepseek+2nd -> merge -> submit |
+| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix PR #152 head 32051a6a (fix2 fb8747 done) -> CI, re-seat deepseek+2nd -> merge -> submit |
 | GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 43a16a90; Haiku r3 FIX 2 HIGH (in-block indented Writer fold; **/1./`/| shapes) -> fix4 7329ee ended WIP (patch saved) -> cont 470492 mimo -> push, CI, re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
