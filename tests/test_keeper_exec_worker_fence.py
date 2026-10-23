@@ -24,6 +24,13 @@ def owner(w, key):
     return tuple(row)
 
 
+def open_alarms(w, key):
+    """How many open ``worker_alarm`` rows *key* carries (a duplicate fact)."""
+    return w.conn.execute(
+        "SELECT COUNT(*) FROM projector_alarms WHERE kind='worker_alarm'"
+        " AND key=? AND cleared_at IS NULL", (key,)).fetchone()[0]
+
+
 @pytest.mark.parametrize("extra", [RUN, {}, {**RUN, "run_id": "stale"},
                                    {**RUN, "attempt": 1}])
 def test_attempt_checks_existing_owner(w, extra):
@@ -85,6 +92,42 @@ def test_existing_unowned_fact_does_not_acquire_owner(w, verb, body):
     call(w.p("workerA"), {"card": key, **body})
     call(w.p("workerA"), {"card": key, **body, **RUN})
     assert owner(w, key) == (None, None, None)
+
+
+def test_open_alarm_on_an_owned_card_still_advances_the_attempt(w):
+    """An alarm records on an OWNED card even when an open alarm already exists.
+
+    ``_worker_alarm`` used to gate on ``existing is None``, so a run-carrying
+    alarm whose (duplicate) row already existed only VALIDATED: the recorded
+    attempt never advanced, and the older attempt of the same run then passed
+    the fence.  The alarm fact is still de-duplicated (one open row); only the
+    fence moves.  On an UNOWNED card an open alarm stays a fact that acquires no
+    owner -- ``test_existing_unowned_fact_does_not_acquire_owner`` pins that
+    side and is unchanged.
+    """
+    key, = seed(w, [("A", [])])
+    alarm = {"card": key, "reason": "stuck"}
+    # 1. A first alarm of run R at attempt 1 opens the fact and records R.
+    w.store.worker_alarm(w.p("workerA"),
+                         {**alarm, "workflow_id": "wf", "run_id": "run",
+                          "attempt": 1})
+    assert owner(w, key) == ("wf", "run", 1)
+    assert open_alarms(w, key) == 1
+    # 2. The same run at attempt 2 while that alarm is still open: the row is a
+    #    duplicate fact, the recorded attempt is not -- it advances to 2.
+    w.store.worker_alarm(w.p("workerA"),
+                         {**alarm, "workflow_id": "wf", "run_id": "run",
+                          "attempt": 2})
+    assert owner(w, key) == ("wf", "run", 2)
+    assert open_alarms(w, key) == 1
+    # 3. ... so the older attempt of the same run can no longer touch the card.
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"),
+                            {"card": key, "tier": "free",
+                             "exit_class": "check_fail",
+                             "workflow_id": "wf", "run_id": "run", "attempt": 1})
+    assert exc.value.code == "exec_stale"
+    assert owner(w, key) == ("wf", "run", 2)
 
 
 def test_refused_park_does_not_acquire_owner(w):
