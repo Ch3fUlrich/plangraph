@@ -277,15 +277,19 @@ fn run_attempt_inner(
         );
     }
 
-    // Whether the tree changed decides both the commit and `NoChange`, so it
+    // Whether the work changed decides both the commit and `NoChange`, so it
     // is read once from git rather than inferred later.
     let mut changed = false;
     if clean {
         git(&dest, &["add", "-A"])?;
         // `--quiet` implies `--exit-code`: a non-zero exit means something is
         // staged. A clean tree must not create an empty commit.
-        changed = git(&dest, &["diff", "--cached", "--quiet"]).is_err();
-        if changed {
+        let staged = git(&dest, &["diff", "--cached", "--quiet"]).is_err();
+        // The harness may have committed its own work: the index then matches
+        // HEAD with nothing staged, but the tree sits past the claim's base,
+        // so the staged diff alone would miss it and call the run `NoChange`.
+        let committed = git(&dest, &["rev-parse", "HEAD"])? != claim.base_sha;
+        if staged {
             git(
                 &dest,
                 &[
@@ -300,6 +304,7 @@ fn run_attempt_inner(
                 ],
             )?;
         }
+        changed = staged || committed;
     }
     let head = git(&dest, &["rev-parse", "HEAD"])?;
 
@@ -310,9 +315,10 @@ fn run_attempt_inner(
         confine::check_confinement(&dest, &claim.base_sha, &claim.allow, &claim.forbid)?;
     let contract = !violations.is_empty() || malformed.is_some();
 
-    // A clean run that changed nothing did not do the work. It is `NoChange`
-    // for every harness, not only the JSON ones, so it comes from the tree; a
-    // question or a defect already explains the run better.
+    // A clean run that changed nothing — neither staged nor committed past the
+    // base — did not do the work. It is `NoChange` for every harness, not only
+    // the JSON ones, so it comes from git; a question or a defect already
+    // explains the run better.
     let no_change = clean && !changed && question.is_none() && !contract && !provider_failed;
 
     // Hashed before the check so a check's own scratch files never pollute the
@@ -810,6 +816,30 @@ mod tests {
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::NoChange);
         assert_eq!(res.check_hash, "");
+        assert_eq!(h.runs(), 1);
+    }
+
+    #[test]
+    fn work_the_agent_committed_itself_is_not_no_change() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        // The harness commits its own work, so the index matches HEAD with
+        // nothing staged: only HEAD having left `base` shows there is work.
+        let h = Fake::new(
+            "printf 'hi\\n' > out.txt && git add out.txt && \
+             git -c user.name=agent -c user.email=agent@localhost \
+             commit -q -m 'agent work'",
+        );
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_ne!(res.exit_class, ExitClass::NoChange);
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        assert!(!res.check_hash.is_empty());
         assert_eq!(h.runs(), 1);
     }
 
