@@ -150,9 +150,14 @@ def _run_jev_hook(card, rules, *, log_path, env: Mapping | None, store, principa
     there is no sink.  Any escape is swallowed (the runner itself already never raises).
     """
     try:
+        cfg = jev_cfg or jev_shadow.jev_client.config_from_env(env)
+        if not jev_shadow.jev_client.enabled(cfg):
+            return
         sink = _jev_sink(log_path, env, store, principal)
-        jev_shadow.shadow_routing(card, rules, sink=sink, attempt=attempt,
-                                  cfg=jev_cfg, env=env)
+        observed = copy.deepcopy(card)
+        observed_rules = copy.deepcopy(rules)
+        jev_shadow.background(lambda: jev_shadow.shadow_routing(
+            observed, observed_rules, sink=sink, attempt=attempt, cfg=cfg, env=env))
     except Exception:  # noqa: BLE001 - belt and braces: the hook itself never raises
         pass
 
@@ -251,18 +256,17 @@ def record_outcome(decision_id, outcome: Mapping, *, log_path=None,
     log path).  Independently, when ``store``, ``principal`` and ``card_key`` are given
     the keeper Jev rows for that card are filled via
     :func:`plangraph.planner.jev_shadow.fill_outcome`; ``attempt`` is forwarded only
-    when given (omitting it fills every attempt).  That fill depends on neither the
+    when given (omitting it fills only unnumbered routing rows). That fill depends on neither the
     flags nor ``decision_id``.  True when either write landed.
     """
     legacy = _legacy_outcome(decision_id, outcome, log_path, env)
     filled = 0
     if store is not None and principal is not None and card_key is not None:
         text = _outcome_text(outcome)
-        if attempt is _UNSET:
-            filled = jev_shadow.fill_outcome(store, principal, card_key, text)
-        else:
-            filled = jev_shadow.fill_outcome(store, principal, card_key, text,
-                                             attempt=attempt)
+        filled = sum(jev_shadow.fill_outcome(
+            store, principal, card_key, text,
+            attempt=None if attempt is _UNSET else attempt, kind=kind)
+            for kind in jev_shadow.jev_questions.ROUTING_KINDS)
     return legacy or filled > 0
 
 
