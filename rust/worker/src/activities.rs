@@ -323,6 +323,10 @@ fn classify(e: &crate::keeper::KeeperError) -> Failure {
     }
 }
 
+fn finish_is_refusal(e: &crate::keeper::KeeperError) -> bool {
+    classify(e) == Failure::Refused || matches!(e, crate::keeper::KeeperError::Status(400))
+}
+
 /// Pauses between the tries of a keeper call that failed transiently, so a call
 /// is made at most `1 + len` times.
 const TRANSIENT_BACKOFF: [Duration; 3] = [
@@ -1154,7 +1158,8 @@ impl CardActivities {
         settle_refusal(res, "ask_question")
     }
 
-    /// Ask the keeper to land the finished phase branch; a refusal is data, not an error.
+    /// Ask the keeper to land the finished phase branch; a refusal (including
+    /// KeeperError::Status(400)) is data, not an error.
     #[activity]
     pub async fn phase_finish(
         self: Arc<Self>,
@@ -1171,7 +1176,7 @@ impl CardActivities {
                 .map_err(activity_error)?;
         match res {
             Ok(f) => Ok(f),
-            Err(e) if classify(&e) == Failure::Refused => Ok(crate::phase::PhaseFinish {
+            Err(e) if finish_is_refusal(&e) => Ok(crate::phase::PhaseFinish {
                 state: crate::phase::FINISH_REFUSED.to_string(),
                 pr: None,
                 detail: format!("keeper refused phase_finish: {e}"),
@@ -2626,6 +2631,23 @@ mod tests {
 
         assert_eq!(do_phase_plan(&keeper, "p1").unwrap(), plan);
         assert_eq!(keeper.plan_calls(), vec!["p1".to_string()]);
+    }
+
+    #[test]
+    fn finish_is_refusal_maps_400_and_refusal_statuses() {
+        for status in [400, 401, 403, 409, 422] {
+            assert!(finish_is_refusal(&crate::keeper::KeeperError::Status(
+                status
+            )));
+        }
+        for status in [404, 500, 503] {
+            assert!(!finish_is_refusal(&crate::keeper::KeeperError::Status(
+                status
+            )));
+        }
+        assert!(!finish_is_refusal(&crate::keeper::KeeperError::Decode(
+            "x".into()
+        )));
     }
 
     #[test]
