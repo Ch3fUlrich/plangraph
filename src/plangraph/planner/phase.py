@@ -137,7 +137,10 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         try:
             route, shadow_id = shadow.route_with_shadow(
                 card, answerer=answerer, legs=legs, unavailable=unavailable,
-                store=store, principal=principal)
+                store=store, principal=principal,
+                attempt=store.conn.execute(
+                    "SELECT COALESCE(MAX(n), 0)+1 FROM attempts WHERE key=?", (dst,)
+                ).fetchone()[0])
         except ValueError as exc:  # RouteError is a ValueError
             route = None
             shadow_id = None

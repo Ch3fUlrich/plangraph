@@ -147,7 +147,7 @@ def routing_state(card: Mapping, route: Any) -> str:
 
     Built only from the card's key/title/outcome, ``estimate_tokens``, ``risk_tags``,
     its stored ``window_class``, the number of subtasks (when a list) and the count of
-    ``write_set`` entries, plus the rules' eligible legs and reasons.  Never the rules'
+    ``write_set`` entries. Never the rules' eligible legs, reasons or
     own choice, and never ``heldout_check``, ``check_cmd``, the write set or any other
     card field.
     """
@@ -168,20 +168,7 @@ def routing_state(card: Mapping, route: Any) -> str:
     write_set = card.get("write_set")
     if isinstance(write_set, (list, tuple)):
         lines.append(f"write files: {len(write_set)}")
-    legs = getattr(route, "legs", ()) or ()
-    for leg in list(legs)[:12]:
-        lines.append("leg: %s %s %s %s %s %s %s" % (
-            redact(getattr(leg, "id", ""), 100),
-            getattr(leg, "tier", ""),
-            getattr(leg, "harness", ""),
-            redact(getattr(leg, "family", ""), 50),
-            "|".join(getattr(leg, "windows", ()) or ()),
-            getattr(leg, "max_request_tokens", ""),
-            getattr(leg, "trains_on_data", ""),
-        ))
-    reasons = getattr(route, "reasons", ()) or ()
-    for reason in list(reasons)[:8]:
-        lines.append(f"reason: {redact(reason, 200)}")
+    # Rules-selected legs and reasons reveal the answer, not independent evidence.
     return "\n".join(lines)[:MAX_STATE_CHARS]
 
 
@@ -277,7 +264,7 @@ def rule_qc_answer(verdict: Any) -> str | None:
     """
     word = _verdict_word(verdict)
     if word == "pass":
-        return "accept"
+        return "accept" if _field(verdict, "pass_allowed", True) else "reject"
     if word is not None:
         return "reject"
     return None

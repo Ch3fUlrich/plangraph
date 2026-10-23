@@ -84,4 +84,6 @@ def seed_jev_rows(w, key, monkeypatch, attempt=None, ask=None):
     jev_on(monkeypatch, ask)
     shadow_mod.route_with_shadow(card(key=key), store=w.store,
                                  principal=w.p("router"), attempt=attempt)
+    from plangraph.planner.jev_shadow import drain
+    drain()
     return w.store.jev_rows(key)
