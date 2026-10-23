@@ -116,7 +116,14 @@ def test_read_missing_or_bad_signature_never_discloses_text(c):
         with pytest.raises(c.BusError) as err:
             c.check_read(lambda kid: SECRET, headers, "", NOW, fleet_state(c))
         assert err.value.status == 401
-        assert "text" not in c.error_body(err.value)
+        assert c.error_body(err.value) == {
+            "error": {"code": "bad_signature", "message": "Request rejected"}}
+
+
+def test_validate_post_non_dict_input_is_validation_error(c):
+    with pytest.raises(c.BusError) as err:
+        c.validate_post(lambda kid: SECRET, "not a wire object", "", NOW, fleet_state(c))
+    assert (err.value.code, err.value.status) == ("bad_request", 400)
 
 
 @pytest.mark.parametrize("limit,expected", [(None, 100), (1, 1), (200, 200)])

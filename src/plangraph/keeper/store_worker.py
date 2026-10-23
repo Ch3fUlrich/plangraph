@@ -114,8 +114,11 @@ class WorkerMixin:
 
     # ----------------------------------------------------------- attempts
     def worker_attempt(self, principal, body):
-        return self._run(principal, "worker_attempt", _card_name(body),
-                         lambda now: self._worker_attempt(principal, body, now))
+        result = self._run(principal, "worker_attempt", _card_name(body),
+                           lambda now: self._worker_attempt(principal, body, now))
+        self._fill_jev_outcome(principal, result["card"],
+                               {"exit_class": result["exit_class"]}, attempt=result["n"])
+        return result
 
     def _worker_attempt(self, principal, body, now):
         _check_body(body, _ATTEMPT_KEYS, "worker_attempt")
@@ -187,14 +190,15 @@ class WorkerMixin:
         return {"card": key, "merged_sha": merged_sha}
 
     # -------------------------------------------------------- jev outcome
-    def _fill_jev_outcome(self, principal, card, outcome):
+    def _fill_jev_outcome(self, principal, card, outcome, *, attempt=None):
         """Fill the outcome of this card's Jev rows; observe-only, never raises.
 
         RT-P1-JEV-SHADOW: ``worker_park`` and ``worker_complete`` call this AFTER
         their own write transaction has committed and outside it, because the fill
-        is a separate write.  Neither body carries an attempt number, so every
-        still-unfilled attempt of the card is filled (``store.jev_outcome`` is
-        first-write-wins), with the same ``exit_class``/``outcome`` text
+        is a separate write. Numbered attempt notifications fill only that
+        attempt's routing kinds; legacy park/complete notifications without a
+        number fill only NULL-attempt routing rows (never all attempts), with
+        the same ``exit_class``/``outcome`` text
         :func:`plangraph.planner.shadow.record_outcome` derives for the planner.
 
         The row is filed by :func:`plangraph.keeper.store_jev._jev_writer`, the
@@ -226,7 +230,7 @@ class WorkerMixin:
             from plangraph.planner import shadow as shadow_mod
             shadow_mod.record_outcome(None, outcome, store=self,
                                       principal=_jev_writer(principal),
-                                      card_key=card)
+                                      card_key=card, attempt=attempt)
         except Exception:  # noqa: BLE001 - a Jev outcome never breaks a worker verb
             pass
 
