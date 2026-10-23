@@ -183,6 +183,8 @@ def _authenticate(resolve_key, ts, nonce, sender, kid, canonical, signature, now
 
 def validate_post(resolve_key, body, signature, now, state):
     """Validate a wire POST and return its original or newly assigned ack."""
+    if not isinstance(body, (bytes, bytearray)):
+        raise BusError("bad_request")
     try:
         envelope = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeError, RecursionError):

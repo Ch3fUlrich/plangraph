@@ -38,8 +38,11 @@ def test_vector(case):
                 envelope[field] = "x" * length
             body = inputs.get("raw", json.dumps(envelope, ensure_ascii=False)).encode("utf-8")
             body += b" " * inputs.get("padding", 0)
+            if "body_size" in inputs:
+                assert len(body) <= inputs["body_size"]
+                body += b" " * (inputs["body_size"] - len(body))
             # Invalid shapes still reach validate_post, not canonical_post.
-            fields = ["fleet-bus/2", "post", str(envelope.get("ts", "")),
+            fields = ["fleet-bus/2", "post", str(inputs.get("normalized_ts", envelope.get("ts", ""))),
                       str(envelope.get("nonce", "")), str(envelope.get("from", "")),
                       str(envelope.get("to", "")), str(envelope.get("msg_id", "")),
                       str(envelope.get("kid", "")),
@@ -54,6 +57,21 @@ def test_vector(case):
             if inputs.get("duplicate"):
                 state.msg_ids[(envelope["from"], envelope["msg_id"])] = {"id": "1700000000000-000001", "ts": NOW, "msg_id": envelope["msg_id"], "dup": False}
             return c.validate_post(lambda kid: None if inputs.get("unknown_kid") else SECRET, body, sig, inputs.get("now", NOW), state)
+        if fn == "check_read":
+            state = fleet_state(c)
+            headers = dict(inputs["headers"])
+            cursor = inputs.get("cursor", "")
+            if inputs.get("rate_full"):
+                for n in range(30):
+                    prior = dict(headers, **{"X-Fleet-Nonce": f"prior-{n}"})
+                    prior["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(
+                        prior["X-Fleet-Ts"], prior["X-Fleet-Nonce"], prior["X-Fleet-From"]))
+                    c.check_read(lambda kid: SECRET, prior, "", NOW, state)
+            return c.check_read(lambda kid: SECRET, headers, cursor, inputs.get("now", NOW), state)
+        if fn == "read_records":
+            state = fleet_state(c)
+            state.ring.extend(inputs.get("records", []))
+            return c.read_records(state, inputs.get("cursor", ""), inputs.get("limit", 100))
         if fn == "sign":
             return c.sign(inputs["secret"].encode("utf-8"), inputs["canonical"])
         if fn == "canonical_post":
