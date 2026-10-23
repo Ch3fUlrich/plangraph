@@ -32,6 +32,40 @@ Keeper access: `GET /v1/metrics?day=&since=&metric=` (any authenticated role); `
 (router or system); `POST /v1/governor_override` (router, l1, system, spawner). Both writes are audited;
 an override or fallback is one extra `audit_log` row with action `governor_override`.
 
+## Context / cache report (`ctx`)
+
+The daily job's JSON output gains a `ctx` section beside the unchanged `day`, `items` and
+`posted` keys: `{"day": ..., "groups": [...]}`, one group per `(host, session_class)` for that
+UTC day. It is printed only - the keeper `metrics` table is flat rows, so nothing is posted for
+it.
+
+| field | meaning |
+|---|---|
+| `calls` | deduplicated assistant calls in the group |
+| `weighted` | the existing `weighted()` sum (cache reads at one tenth) |
+| `share_cache_read`, `share_cache_write`, `share_output` | each part of the *raw* token total `input+output+cache_read+cache_write` |
+| `input_from_cache` | `cache_read / (input + cache_read + cache_write)` |
+| `ctx_p50`, `ctx_p90`, `ctx_p99` | nearest-rank percentiles of the per-call context `input+cache_read+cache_write` |
+| `share_over_200k` | fraction of calls whose context is over 200 000 tokens |
+| `cost_usd` | price table below; cache reads cost `read multiplier x input price` |
+
+`host` is `--host`, else `PLANGRAPH_HOST`, else `socket.gethostname()`. `session_class` is
+`subagent` for a transcript under a `subagents/` directory or a record with `isSidechain` true,
+otherwise `main` - refined to `router`/`L1`/`judge`/`worker` (or whatever the launch record
+says) only by `--session-classes PATH`, a JSON `{session_id: class}` file; a session no launch
+record names stays `main`, and a session name is never interpreted.
+
+Prices in USD per million tokens `(input, output, cache_write)`, matched on the model id with
+`DEFAULT_PRICE` `(3.0, 15.0, 3.75)` for an unmatched model: `opus` `(15, 75, 18.75)`,
+`sonnet` `(3, 15, 3.75)`, `haiku` `(1, 5, 1.25)`. Cache reads bill at `0.05 x` the input price
+for a model id containing `opus-5-5` or `sonnet-5-5`, at `0.1 x` otherwise.
+
+```
+python -m plangraph.governor metrics daily --date 2026-10-15 \
+    --projects-dir "$PLANGRAPH_CLAUDE_PROJECTS_DIR" --host "$PLANGRAPH_HOST" \
+    --session-classes /etc/plangraph/session_classes.json --dry-run
+```
+
 ## Daily job
 
 ```
@@ -41,7 +75,9 @@ python -m plangraph.governor metrics daily --date 2026-10-15 \
 
 Idempotent: a re-run of the same date upserts the same rows. `--dry-run` prints without posting.
 Environment: `PG_URL`, `PG_TOKEN_FILE` (keeper client), `PLANGRAPH_CLAUDE_PROJECTS_DIR`,
-`PLANGRAPH_WEEKLY_CAP_WEIGHTED`, `PLANGRAPH_PROVIDER_QUOTA` (`provider=tokens,...`).
+`PLANGRAPH_WEEKLY_CAP_WEIGHTED`, `PLANGRAPH_PROVIDER_QUOTA` (`provider=tokens,...`),
+`PLANGRAPH_HOST` (host name of the `ctx` report above when `--host` is absent; else the local
+hostname).
 Without a weekly cap no burn index is written and the governor fails open (`burn_unknown`).
 
 Timer unit (install is a separate, operator step; this repo installs nothing):
