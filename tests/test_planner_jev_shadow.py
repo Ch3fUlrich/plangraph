@@ -288,11 +288,20 @@ def test_the_hook_swallows_an_internal_error(monkeypatch):
     assert jev_shadow.shadow_routing(card(), route_for(), cfg=stub_cfg(), env={}) == []
 
 
-def test_qc_hooks_and_shadow_param_removed():
-    assert not hasattr(jev_shadow, "qc_hook")
-    assert not hasattr(jev_shadow, "shadow_qc_accept")
+def test_qc_hooks_and_shadow_param_are_present():
+    """Router ruling D-2328: the QC axis is RESTORED (the absence test inverted).
+
+    ``plan_actions`` shadows its accept decision through ``jev_shadow``'s QC
+    hooks and exposes the seam as its ``shadow`` parameter.
+    """
+    assert callable(getattr(jev_shadow, "qc_hook", None))
+    assert callable(getattr(jev_shadow, "shadow_qc_accept", None))
     sig = inspect.signature(plan_actions)
-    assert "shadow" not in sig.parameters
+    assert "shadow" in sig.parameters
+    assert "qc_accept" in jev_questions.QC_KINDS
+    from plangraph.keeper import jev_report, schema
+    assert "qc_accept" in schema.JEV_KINDS
+    assert "qc_accept" in jev_report._KINDS
 
 
 # ----------------------------------------------------------- keeper roundtrip

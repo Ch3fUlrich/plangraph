@@ -17,7 +17,7 @@ __all__ = ["agrees", "row_view", "agreement_report", "render"]
 # These mirror plangraph.keeper.schema.JEV_KINDS / JEV_STATUSES.  The schema
 # names are added by a parallel writer, so we cannot import them yet; a test
 # elsewhere asserts these tuples stay equal to the schema constants.
-_KINDS = ("harness", "window", "budget", "review")
+_KINDS = ("harness", "window", "budget", "review", "qc_accept")
 _STATUSES = ("ok", "timeout", "unavailable", "error")
 
 # Fields of the public row view, in display order.  ``key`` is internal routing

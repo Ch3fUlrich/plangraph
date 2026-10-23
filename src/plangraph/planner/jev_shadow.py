@@ -39,7 +39,7 @@ from datetime import datetime, timezone
 from . import jev_client, jev_questions
 
 __all__ = ["Sink", "store_sink", "guarded", "shadow_routing", "fill_outcome",
-           "jsonl_sink"]
+           "jsonl_sink", "shadow_qc_accept", "qc_hook"]
 
 #: Cap on a row's ``reason`` before it is handed to a sink (``store_jev`` clips to 200 too).
 _REASON_CAP = 200
@@ -252,6 +252,64 @@ def shadow_routing(card, route, *, sink=None, attempt=None, cfg=None,
         return rows
     except Exception:  # noqa: BLE001 - an internal bug must never break routing
         return []
+
+
+def shadow_qc_accept(verdict, phase, key=None, *, sink=None, cfg=None,
+                     env=None) -> list[dict]:
+    """Shadow the QC accept/reject decision of ``review.actions.plan_actions``.
+
+    OFF by default: with ``cfg`` unset the mode comes from ``env`` (``PLANGRAPH_JEV``)
+    and a disabled mode returns ``[]`` immediately - no thread, no request.  A verdict
+    the rules cannot decide (no usable word, see :func:`jev_questions.rule_qc_answer`)
+    is not shadowed at all: ``[]``, no row.  Otherwise one state/question pair is built
+    from a deep copy of the verdict, Jev is asked ONCE under the same hard deadline as
+    the routing questions, and exactly one ``qc_accept`` row is built with
+    ``attempt=None`` plus a fresh ``decision_id``/``input_hash`` pair.  The row goes to
+    ``sink`` when the card key is a non-empty string.  The return value is the rows -
+    never a plan: the decision is unchanged, and every failure returns ``[]``.
+    """
+    try:
+        cfg = cfg or jev_client.config_from_env(env)
+        if not jev_client.enabled(cfg):
+            return []
+        rule = jev_questions.rule_qc_answer(verdict)
+        if rule is None:
+            return []
+        verdict_copy = copy.deepcopy(verdict)
+        state = jev_questions.qc_state(verdict_copy, phase, key)
+        questions = {jev_questions.QC_KIND: jev_questions.qc_question()}
+        kinds_to_rule = {jev_questions.QC_KIND: rule}
+        decision_id = uuid.uuid4().hex
+        input_hash = hashlib.sha256(state.encode()).hexdigest()
+        status, answers, reason = _ask_guarded(state, questions, cfg, env)
+        if status != "ok":
+            answers = _fallback_answers(kinds_to_rule, status, reason)
+        rows = _rows_from(answers, kinds_to_rule, None, key, cfg,
+                          decision_id=decision_id, input_hash=input_hash)
+        if _recordable(key):
+            _deliver(rows, sink)
+        return rows
+    except Exception:  # noqa: BLE001 - an internal bug must never break the caller
+        return []
+
+
+def qc_hook(*, store=None, principal=None, sink=None, cfg=None, env=None):
+    """Build the QC hook ``hook(verdict, phase, key) -> rows`` - the ``shadow=`` seam.
+
+    The bound hook shadows one accept decision exactly like
+    :func:`shadow_qc_accept` (same switch, same hard deadline, deep copy, ``[]`` on
+    any failure), sending the row to ``sink`` when one is given, else to the keeper
+    ``store`` when a ``principal`` is given, else nowhere.  A caller that resolves
+    its own sink (the JSONL log, e.g. :func:`plangraph.planner.shadow.qc_with_shadow`)
+    passes it in here so every QC hook shares one runner.
+    """
+    if sink is None and store is not None and principal is not None:
+        sink = store_sink(store, principal)
+
+    def hook(verdict, phase, key=None) -> list[dict]:
+        return shadow_qc_accept(verdict, phase, key, sink=sink, cfg=cfg, env=env)
+
+    return hook
 
 
 def fill_outcome(store, principal, card_key, outcome, *, attempt=_UNSET) -> int:

@@ -60,6 +60,69 @@ def test_every_question_has_one_line_instructions_and_descriptions():
             assert "\n" not in description
 
 
+# --- QC axis (the ``qc_accept`` question) ---------------------------------------------
+
+def test_qc_question_is_the_qc_kind_choice_question():
+    assert jq.QC_KIND == "qc_accept"
+    question = jq.qc_question()
+    assert question["type"] == "choice"
+    assert list(question["criteria"]) == list(jq.QC_OPTIONS)
+    assert jq.validate_questions({jq.QC_KIND: question}) == []
+    assert jq.validate_questions({"qc_accept": jq.qc_question()}) == []
+
+
+def test_rule_qc_answer_is_exactly_what_plan_actions_decides():
+    assert jq.QC_OPTIONS == ("accept", "reject")
+    assert jq.rule_qc_answer({"verdict": "pass"}) == "accept"
+    assert jq.rule_qc_answer("pass") == "accept"
+    assert jq.rule_qc_answer({"verdict": "fix"}) == "reject"
+    assert jq.rule_qc_answer({"verdict": "halt"}) == "reject"
+    assert jq.rule_qc_answer("halt") == "reject"
+
+    class Verdict:
+        verdict = "fix"
+
+    assert jq.rule_qc_answer(Verdict()) == "reject"
+    for unusable in ({"verdict": None}, {"verdict": "maybe"}, {"reason": "x"},
+                     "maybe", None, 5):
+        assert jq.rule_qc_answer(unusable) is None
+
+
+def test_qc_state_carries_the_evidence_but_never_the_rules_word():
+    verdict = {"verdict": "fix", "reason": "racy flush",
+               "findings": [{"finding": "drops a write", "files": ["src/a.py"]}],
+               "files": ["src/a.py"], "risk_tags": ["auth"]}
+    state = jq.qc_state(verdict, "P2", "demo:A")
+    assert "demo:A" in state and "P2" in state
+    assert "racy flush" in state and "drops a write" in state
+    assert "findings: 1" in state
+    for word in ("fix", "accept", "reject", "verdict", "pass"):
+        assert word not in state
+    assert len(state) <= jq.MAX_STATE_CHARS
+
+
+def test_qc_state_accepts_str_dict_and_object_verdicts_and_redacts():
+    class Verdict:
+        verdict = "halt"
+        reason = "scope is wrong " + "x" * 60
+        risk_tags = ["secrets"]
+
+    for verdict in ("halt", {"verdict": "halt", "reason": "scope"}, Verdict()):
+        state = jq.qc_state(verdict, "P1", "demo:A")
+        assert "demo:A" in state and "P1" in state
+        assert len(state) <= jq.MAX_STATE_CHARS
+
+    leak = jq.qc_state({"verdict": "fix", "reason": "token " + "sk-" + "a" * 40,
+                        "files": "/home/s/secret/x.py"}, "P1", "demo:A")
+    assert "sk-" + "a" * 40 not in leak
+    assert "/home/s/secret/x.py" not in leak
+
+
+def test_qc_state_never_raises_on_odd_input():
+    for verdict in (None, 42, [], object()):
+        assert isinstance(jq.qc_state(verdict, "P1"), str)
+
+
 # --- validation --------------------------------------------------------------------
 
 def test_validate_accepts_builder_output():

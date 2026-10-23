@@ -12,11 +12,13 @@ agreement) and ``record_outcome`` later appends the attempt outcome for the same
 The **Jev hook** (RT-P1-JEV-SHADOW) runs beside that legacy one, on its OWN switch:
 ``PLANGRAPH_JEV=off|stub|api`` (default ``off``), driven by
 :mod:`plangraph.planner.jev_shadow`.  The routing hook here (``route_with_shadow``)
-is the one Jev call site in the repo.  It asks the free Jev decision model the four
+is the Jev call site for routing, and the second call site is the QC hook
+:func:`qc_with_shadow`, called from the review accept decision in
+``review.actions.plan_actions``.  It asks the free Jev decision model the four
 routing questions (harness, window class, attempt budget, review level) in shadow and
 sends the rows to a sink: the keeper store when ``store``/``principal`` are given, else
-the same JSONL log (rows with ``event="jev"``).  It runs regardless of
-``PLANGRAPH_PLANNER_SHADOW`` and is a cheap no-op when Jev is off.  ``record_outcome``
+the same JSONL log (rows with ``event="jev"``).  Both hooks run regardless of
+``PLANGRAPH_PLANNER_SHADOW`` and are a cheap no-op when Jev is off.  ``record_outcome``
 also fills the keeper outcome for the card when a ``store``, a ``principal`` and a
 ``card_key`` are given.
 
@@ -51,7 +53,8 @@ from . import jev_shadow
 from .routing import Route, route_card
 
 __all__ = ["ENV_FLAG", "ENV_LOG", "Answerer", "enabled", "route_with_shadow",
-           "record_outcome", "read_rows", "summarize", "summarize_jev", "main"]
+           "record_outcome", "read_rows", "summarize", "summarize_jev", "main",
+           "qc_with_shadow"]
 
 #: Master switch: the shadow hook runs only when this reads ``1/true/yes/on``.
 ENV_FLAG = "PLANGRAPH_PLANNER_SHADOW"
@@ -152,6 +155,25 @@ def _run_jev_hook(card, rules, *, log_path, env: Mapping | None, store, principa
                                   cfg=jev_cfg, env=env)
     except Exception:  # noqa: BLE001 - belt and braces: the hook itself never raises
         pass
+
+
+def qc_with_shadow(verdict, phase, key=None, *, log_path=None,
+                   env: Mapping | None = None, store=None, principal=None,
+                   cfg=None) -> list[dict]:
+    """Shadow the ``plan_actions`` accept/reject decision; rows only, never raises.
+
+    The QC twin of :func:`_run_jev_hook`, called from the plan's own call site: the
+    sink prefers the keeper store when ``store`` and ``principal`` are given, else the
+    resolved JSONL log path (``log_path`` or ``PLANGRAPH_PLANNER_SHADOW_LOG``), else
+    there is no sink.  Independent of ``PLANGRAPH_PLANNER_SHADOW``: Jev's own switch
+    (``PLANGRAPH_JEV``) decides, and a disabled mode is a cheap no-op.  Any escape is
+    swallowed and returns ``[]``, so the plan can never change.
+    """
+    try:
+        sink = _jev_sink(log_path, env, store, principal)
+        return jev_shadow.qc_hook(sink=sink, cfg=cfg, env=env)(verdict, phase, key)
+    except Exception:  # noqa: BLE001 - the hook itself never raises
+        return []
 
 
 def route_with_shadow(card: Mapping, *, answerer: Answerer | None = None,

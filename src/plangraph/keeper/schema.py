@@ -33,8 +33,10 @@ WINDOW_CLASSES = ("128k", "256k", "1m")
 RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-step")
 
 #: Jev shadow (schema v13): the kind of decision Jev shadowed and how its free
-#: model answered.  ``outcome`` records the rules-router's later verdict.
-JEV_KINDS = ("harness", "window", "budget", "review")
+#: model answered.  ``outcome`` records the rules' later verdict.  ``qc_accept``
+#: is the QC axis (router ruling D-2328): the accept decision of
+#: ``review.actions.plan_actions`` (accept = verdict pass, reject = fix/halt).
+JEV_KINDS = ("harness", "window", "budget", "review", "qc_accept")
 JEV_STATUSES = ("ok", "timeout", "unavailable", "error")
 
 ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")

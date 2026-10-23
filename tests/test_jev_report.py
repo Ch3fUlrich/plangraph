@@ -106,7 +106,8 @@ def test_row_view_agree_false_and_none():
 
 def test_report_all_kinds_always_present_even_when_empty():
     rep = jr.agreement_report([])
-    assert set(rep["kinds"]) == {"harness", "window", "budget", "review"}
+    assert set(rep["kinds"]) == {"harness", "window", "budget", "review",
+                                 "qc_accept"}
     for stats in rep["kinds"].values():
         assert stats["total"] == 0
         assert stats["agreement_rate"] is None
@@ -120,6 +121,25 @@ def test_report_all_kinds_always_present_even_when_empty():
     assert rep["overall"]["confusion"] == {}
     assert rep["overall"]["labels"] == []
     assert rep["overall"]["no_answer"] == 0
+
+
+def test_report_counts_the_qc_accept_axis_with_kappa():
+    """The QC axis (plan_actions' accept/reject) is a first-class report axis."""
+    rows = [
+        _row(id=8, kind="qc_accept", status="ok", rule_answer="accept",
+             jev_answer="accept"),
+        _row(id=9, kind="qc_accept", status="ok", rule_answer="reject",
+             jev_answer="accept"),
+    ]
+    rep = jr.agreement_report(rows)
+    qc = rep["kinds"]["qc_accept"]
+    assert (qc["total"], qc["ok"], qc["agree"], qc["disagree"]) == (2, 2, 1, 1)
+    assert qc["agreement_rate"] == 0.5
+    assert qc["labels"] == ["accept", "reject"]
+    assert qc["confusion"] == {"accept": {"accept": 1, "reject": 0},
+                               "reject": {"accept": 1, "reject": 0}}
+    assert rep["overall"]["total"] == 2
+    assert "qc_accept" in jr.render(rep)
 
 
 def test_report_mixed_counts_and_rates():
