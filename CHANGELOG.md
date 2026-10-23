@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## 2026-10-23
 
+- **KEEPER-OPTASK-CLOSE:** a claimed/in_review `operator_task` now closes through `close_on_decision` at any review tier (`standard` or `high`) when the router calls it, the decision evidence verifies, and a decision row names the key in a whole `Closes: <project:ID>` token — a non-`none` tier is never authorised by the hashed batch file alone. Tier `none` behaviour is unchanged (a `Closes:` token is still optional there), lane/question/goal at a non-`none` tier still refuse `bad_state`, a decision naming another key is still `evidence_unverified`, non-router callers stay `forbidden`, and the kind/tier pair is re-checked under the write lock so a change between pre-lock and commit is `conflict` (`src/plangraph/keeper/store_close.py`).
 - **KEEPER-OPTASK-CLOSE:** tests only (red): `tests/test_keeper_optask_close.py` pins that a claimed/in_review `operator_task` closes through `close_on_decision` at `standard` or `high` only when a decision row names the key in a whole `Closes: <project:ID>` token, that lane/question/goal at a non-`none` tier still refuse `bad_state`, that non-router callers stay `forbidden`, that a decision naming another key is `evidence_unverified`, that a kind/tier flip under the write lock is `conflict`, and that the same close works inside `apply_ops` while a non-operator refusal rolls the whole batch back.
 
 ## 2026-10-22
