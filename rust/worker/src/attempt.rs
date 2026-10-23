@@ -645,13 +645,20 @@ fn canonical(path: &Path) -> PathBuf {
 /// would send all of it, and every hash taken from it, to some other
 /// repository. Checked here:
 ///
-/// * `.git` at the worktree root is git's own: a directory (a checkout) or
-///   the gitfile `git worktree add` writes — never a symlink, which only a
-///   harness could have planted, and never anything else;
-/// * git resolves a git directory under `dest` itself or under the claim's
-///   `repo` (a linked worktree keeps its git dir in `repo/.git/worktrees/…`),
-///   and sees `dest` as the top of the worktree it is in;
-/// * `HEAD` still descends from the claim's `base`, so the commit below
+/// * `.git` at the worktree root is a file (the gitfile `git worktree add`
+///   writes) or a directory — never a symlink, which only a harness could
+///   have planted, and never anything else;
+/// * git resolves the git directory into the claim repository's own worktree
+///   storage, `<common dir>/worktrees/…` — the one place `git worktree add`
+///   registers a linked worktree, and the only place [`worktree::create`]
+///   creates one. "Under `dest`" or "under `repo`" is deliberately not enough:
+///   a harness that deletes the gitfile and runs `git init` gets a real
+///   `.git` directory under `dest` (or a gitfile pointing under `dest` or at
+///   `repo/.git`), which passes those looser tests while making git operate on
+///   a repository the harness chose — its base, ancestry and history, however
+///   they were grafted together;
+/// * git sees `dest` as the top of the worktree it is standing in, and
+///   `HEAD` still descends from the claim's `base`, so the commit below
 ///   extends the branch that was claimed rather than some other line.
 ///
 /// Any failure fails the attempt: nothing is staged on a guess.
@@ -671,14 +678,30 @@ fn verify_git_dir(dest: &Path, repo: &Path, base: &str) -> Result<(), AttemptErr
         return Err(refuse(".git is neither a directory nor a gitfile"));
     }
 
-    // Git must agree about where its own directory lives: inside the
-    // worktree, or inside the claim's repository — never anywhere else.
+    // Git must agree about where its own directory lives: in the claim
+    // repository's own linked-worktree storage. `dest` is always built by
+    // `worktree::create` → `git worktree add`, which registers exactly one
+    // place, `<common dir>/worktrees/<name>`, and a `git init` under `dest`
+    // can never land there — so anything outside it is a repository the
+    // harness chose (its own base, ancestry and history), whatever it merely
+    // resembles: under `dest`, under `repo`, or under `repo/.git` itself.
     let git_dir = worker_git(dest, &["rev-parse", "--absolute-git-dir"])
         .map_err(|e| refuse(&format!("git refuses this worktree: {e}")))?;
     let resolved = canonical(Path::new(&git_dir));
-    if !resolved.starts_with(canonical(dest)) && !resolved.starts_with(canonical(repo)) {
+    let common = worker_git(repo, &["rev-parse", "--git-common-dir"])
+        .map_err(|e| refuse(&format!("claim repository has no git dir: {e}")))?;
+    // A relative answer is relative to git's own cwd, which is `repo`.
+    let common = if Path::new(&common).is_absolute() {
+        PathBuf::from(&common)
+    } else {
+        repo.join(&common)
+    };
+    let common = canonical(&common);
+    let storage = common.join("worktrees");
+    if !resolved.starts_with(&storage) {
         return Err(refuse(&format!(
-            "git directory {git_dir} is outside the worktree and its repository"
+            "git directory {git_dir} is not in the claim repository's worktree storage {}",
+            storage.display()
         )));
     }
     // …and it must see `dest` as the top of the worktree it is standing in.
@@ -1055,6 +1078,60 @@ mod tests {
         );
         assert!(res.output_tail.contains(".git"), "{}", res.output_tail);
         assert_eq!(res.head, base, "a commit was made on the swapped worktree");
+    }
+
+    /// The same redirect as a repository git accepts: deleting the gitfile and
+    /// running `git init` leaves a real `.git` directory under `dest`, which
+    /// the old containment ("under `dest` or under `repo`") allowed — and the
+    /// harness can fetch the claim's base through the gitfile it just read, so
+    /// its own repository's `HEAD` even descends from the base. The attempt
+    /// must refuse that repository before anything is staged, and must leave
+    /// the claim's branch untouched.
+    #[test]
+    fn harness_that_replaces_the_gitfile_with_git_init_gets_no_commit() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        // Read the gitfile before deleting it, then build a repository of the
+        // harness's own on top of the claim's base and commit in it: with a
+        // `.git` directory under `dest`, every old check passes.
+        let h = Fake::new(
+            "src=$(sed 's/^gitdir: //' .git) && rm .git && git init -q \
+             && git fetch -q \"$src\" HEAD && git reset --hard -q FETCH_HEAD \
+             && echo pwned > out.txt && git add -A \
+             && git -c user.name=harness -c user.email=harness@localhost \
+             commit -q -m owned",
+        );
+        let dest = root.path().join(AttemptId::new("c1", 1).dir_name());
+        let err = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap_err();
+        assert!(
+            matches!(&err, AttemptError::GitDir(m) if m.contains("worktree storage")),
+            "{err:?}"
+        );
+        // Control: the recipe really ran and really produced a commit past the
+        // base — the refusal is about where that repository lives, not about a
+        // harness command that failed.
+        assert!(dest.join(".git").is_dir(), "the harness's git init ran");
+        let own = worker_git(&dest, &["rev-parse", "HEAD"]).unwrap();
+        assert_ne!(own, base, "control: the harness committed in its own repo");
+        // …and the attempt committed nothing: the claim's branch still sits at
+        // the base, so no attacker-chosen head can be reported or merged.
+        let branch = AttemptId::new("c1", 1).branch();
+        assert_eq!(
+            git(r.path(), &["rev-parse", &branch]),
+            base,
+            "the attempt branch moved"
+        );
+        assert_eq!(
+            git(r.path(), &["rev-parse", "HEAD"]),
+            base,
+            "the claim repository gained a commit"
+        );
     }
 
     #[test]
