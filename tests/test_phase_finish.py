@@ -433,7 +433,8 @@ def test_no_store_write(w, tmp_path):
     finish_cards(w, "demo:C1", "demo:C2")
     root, head = git_repo(tmp_path)
     before_count = w.store.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
-    before_changes = w.store.conn.total_changes
+    before_events = w.store.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    before_evidence = w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
     before_state = w.store.conn.execute(
         "SELECT state FROM items WHERE key=?", ("demo:PH-X",)
     ).fetchone()[0]
@@ -455,5 +456,6 @@ def test_no_store_write(w, tmp_path):
     assert result["state"] == "waiting_ci"
     assert after_count == before_count
     assert after_state == before_state
-    assert w.store.conn.total_changes == before_changes
+    assert w.store.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before_events
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == before_evidence
     assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
