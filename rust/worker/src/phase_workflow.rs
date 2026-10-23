@@ -11,14 +11,14 @@ use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::{ActivityOptions, ChildWorkflowOptions, WorkflowContext, WorkflowResult};
 
 use crate::activities::{
-    CardActivities, CardInput, ClaimCardInput, PhaseBranchInput, PhaseBranchResult, PhasePlanInput,
+    CardActivities, ClaimCardInput, PhaseBranchInput, PhaseBranchResult, PhasePlanInput,
 };
 use crate::keeper::Claim;
 use crate::phase::{
     OUTCOME_BLOCKED, OUTCOME_DONE, OUTCOME_PARTIAL, PhaseInput, PhaseOutput, PhasePlan,
     card_workflow_id, next_wave, phase_branch, replan_gate, select_legs,
 };
-use crate::workflow::Card;
+use crate::workflow::{Card, CardInput};
 
 #[workflow]
 #[derive(Default)]
@@ -183,12 +183,19 @@ impl Phase {
                 };
 
                 let card_input = CardInput {
-                    claim,
-                    legs,
-                    workroot: input.workroot.clone(),
-                    main_branch: branch.clone(),
-                    question_wait_cap_s: None,
-                    max_question_rounds: None,
+                    legacy: crate::activities::CardInput {
+                        claim,
+                        legs,
+                        workroot: input.workroot.clone(),
+                        main_branch: branch.clone(),
+                        question_wait_cap_s: None,
+                        max_question_rounds: None,
+                    },
+                    risk_tagged: false,
+                    heldout_cmd: String::new(),
+                    smoke_checks: Vec::new(),
+                    exports: Vec::new(),
+                    base_sha: None,
                 };
 
                 let child_id = card_workflow_id(input.key.as_str(), card.key.as_str(), 1);
