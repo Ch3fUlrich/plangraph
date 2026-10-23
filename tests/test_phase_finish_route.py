@@ -62,6 +62,7 @@ def test_router_lands_phase_through_the_door(doors, w, tmp_path, monkeypatch):
     assert status == 200
     assert response["state"] == "merged"
     assert response["pr"]["number"] == 7
+    assert response["merge_sha"] == "a" * 40
 
     fake.pr = {"number": 7, "url": "https://example.invalid/pr/7", "state": "merged", "head": head}
     status, response = _post(doors, "router", body)
@@ -94,6 +95,7 @@ def test_body_cannot_redirect_repo_or_credential(doors, w, tmp_path, monkeypatch
     assert response["pr"]["number"] == 7
 
     push = next(c for c in fake.calls if c[0] == "push_branch")
+    assert response["merge_sha"] == "a" * 40
     assert str(push[1]) == str(root)
 
 def test_not_done_cards_is_409_or_validation_mapped(doors, w, tmp_path, monkeypatch):

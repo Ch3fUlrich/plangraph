@@ -134,12 +134,14 @@ def test_ci_green_only_ci_gate_completed_success(tmp_path):
 
 def test_merge_pr_sends_sha_and_maps_conflict(tmp_path):
     head = "d" * 40
-    gh, opener = make_github(tmp_path, [(200, {"merged": True})])
+    merge_sha = "a" * 40
+    gh, opener = make_github(tmp_path, [(200, {"merged": True, "sha": merge_sha})])
     assert gh.merge_pr(9, head) == {
         "number": 9,
         "url": "https://github.com/owner/repo/pull/9",
         "state": "merged",
         "head": head,
+        "merge_sha": merge_sha,
     }
     method, url, _headers, body = opener.calls[0]
     assert method == "PUT"
