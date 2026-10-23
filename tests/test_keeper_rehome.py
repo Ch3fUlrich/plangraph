@@ -3,7 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from keeper_util import World, defn, seed, to_done, to_claimed
+from keeper_util import (World, defn, seed, seed_stranded_claim, to_claimed,
+                         to_done)
 from plangraph import views
 from plangraph.keeper import auth, fmt, mcp
 from plangraph.keeper.errors import Refused
@@ -39,33 +40,6 @@ def doors(w, tmp_path):
 
 def _rehome(w, key=OLD, project="plangraph", host="workstation", who="router"):
     return w.store.rehome(w.p(who), key, project, host)
-
-
-def _seed_legacy_claim(w, key):
-    """Write the claimed row a pre-existing legacy claim sits on (its setup).
-
-    ``set_legacy_state(claimed)`` refuses a tiered lane now, and this file's
-    shared fixture has to stay standard-tier for its review/waiver tests, so
-    the row is rebuilt event-for-row inside the store's own write transaction
-    -- the shape ``test_keeper_legacy_state._stranded`` builds (KEEPER-OPCLAIM-CLOSE).
-    """
-    item = w.store._item(key)
-    owner = item["owner"]
-    epoch = int(item["epoch"]) + 1
-    round_no = int(item.get("round") or 0) + 1
-    now = w.clock()
-    with w.store._write():
-        w.store._append(w.p("router"), key, "legacy_state_set",
-                        {"state": "claimed", "note": "", "legacy": True,
-                         "claimed_by": owner, "epoch": epoch,
-                         "round": round_no}, now)
-        cursor = w.conn.execute(
-            "UPDATE items SET state='claimed', epoch=?, round=?, claimed_by=?,"
-            " delegate=NULL, reviewer=NULL, lease_until=NULL,"
-            " review_waiver=NULL, updated_at=? WHERE key=? AND state='open'",
-            (epoch, round_no, owner, w.store._iso(now), key))
-        assert cursor.rowcount == 1, "legacy claim seed: item was not open"
-    assert verify_integrity(w.conn) == [], "legacy claim seed must fold clean"
 
 
 def _edges(w):
@@ -307,7 +281,9 @@ def test_closes_token_naming_the_old_key_counts_for_the_new_key(w, tmp_path):
                     f"| D-5 | close | Closes: {OLD} |\n", encoding="utf-8")
     w.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(path))
     _rehome(w)
-    _seed_legacy_claim(w, NEW)
+    # The pre-fix stranded-claim row the close proof sits on; one shared seeder
+    # for this file and tests/test_keeper_legacy_state.py (KEEPER-OPCLAIM-CLOSE).
+    seed_stranded_claim(w, NEW)
     w.store.add_evidence_router(w.p("router"), NEW, "decision", {"id": "D-5"})
     item = w.store._item(NEW)
     _rows, named = w.store._decision_evidence(NEW, item, w.store.now())
