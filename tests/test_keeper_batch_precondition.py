@@ -218,6 +218,39 @@ def test_depends_on_add_remove_forms(w):
     assert _item(w, "demo:GOAL")["depends_on"] == ["demo:A"]
 
 
+def test_depends_on_empty_form_refused_no_side_effects(w):
+    """(g2) a depends_on dict with neither add nor remove (``{}``) is refused
+    with the form's own validation message, no event is written and the whole
+    batch (the earlier, valid op included) is rolled back."""
+    before_events = _events(w)
+    before = {k: _item(w, k) for k in ("demo:A", "demo:C", "demo:GOAL")}
+
+    for bad in ({}, {"set": ["demo:A"]}):
+        with pytest.raises(Refused) as ei:
+            w.store.apply_ops(w.p("router"), [
+                {"op": "edit", "key": "demo:C",
+                 "fields": {"title": "title C early"}},
+                {"op": "edit", "key": "demo:GOAL",
+                 "fields": {"depends_on": bad}},
+            ])
+        assert ei.value.code == "validation"
+        assert ei.value.msg == (
+            "op 2 edit demo:GOAL: validation depends_on form takes only "
+            "add/remove lists of keys")
+        # nothing written: no events, the earlier op did not stick, items identical
+        assert _events(w) == before_events
+        for key, item in before.items():
+            assert _item(w, key) == item
+
+    # the good forms still apply afterwards
+    res = w.store.apply_ops(w.p("router"), [
+        {"op": "edit", "key": "demo:GOAL",
+         "fields": {"depends_on": {"remove": ["demo:C"]}}},
+    ])
+    assert res["applied"] == 1
+    assert verify_integrity(w.conn) == []
+
+
 def test_full_list_replace_reports_dropped_deps(w):
     """(h) full-list replace reports dropped_deps; empty when none dropped."""
     res = w.store.apply_ops(w.p("router"), [
