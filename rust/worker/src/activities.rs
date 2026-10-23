@@ -694,7 +694,14 @@ pub(crate) fn do_gate(
                 );
                 let diff = git(
                     &dir,
-                    &["diff", "--no-ext-diff", "--no-textconv", &range, "--"],
+                    &[
+                        "diff",
+                        "--no-renames",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        &range,
+                        "--",
+                    ],
                 )
                 .map_err(std::io::Error::other)?;
                 let findings = pg_worker_core::diffscan::scan_diff(&diff);
@@ -2135,6 +2142,30 @@ mod tests {
             do_gate(&tiny(), &input, &|| false).unwrap_err().kind(),
             std::io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn gate_diffscan_moved_test_is_a_deletion() {
+        let (r, _) = repo();
+        std::fs::create_dir(r.path().join("tests")).unwrap();
+        std::fs::create_dir(r.path().join("docs")).unwrap();
+        write(
+            r.path(),
+            "tests/test_a.py",
+            "def test_a():\n    assert True\n",
+        );
+        let base = commit_all(r.path(), "test");
+        git(r.path(), &["mv", "tests/test_a.py", "docs/check_a.py"]);
+        commit_all(r.path(), "move test out of tests");
+        let mut scan = named_check("scan", "exit 99", None);
+        scan.builtin = Some("diffscan".into());
+        let mut input = gate_input(r.path(), vec![scan]);
+        input.base_sha = Some(base);
+        let result = run(&tiny(), &input);
+        assert!(!result.passed);
+        assert!(result.checks[0]
+            .tail
+            .contains("deleted test file in tests/test_a.py"));
     }
 
     #[test]

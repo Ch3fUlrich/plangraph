@@ -129,14 +129,13 @@ impl Patch {
                 }
                 if text.contains("pytest.mark.xfail") {
                     candidates.push(finding(FindingKind::XfailAdded, line));
-                } else if [
-                    "pytest.mark.skip",
-                    "unittest.skip",
-                    "#[ignore]",
-                    "pytest.skip(",
-                ]
-                .iter()
-                .any(|s| text.contains(s))
+                } else if ["pytest.mark.skip", "unittest.skip", "pytest.skip("]
+                    .iter()
+                    .any(|s| text.contains(s))
+                    || text
+                        .split("#[ignore")
+                        .skip(1)
+                        .any(|rest| rest.trim_start().starts_with(['=', '(', ']']))
                 {
                     candidates.push(finding(FindingKind::SkippedTest, line));
                 }
@@ -290,6 +289,18 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn rust_ignore_arguments() {
+        for line in [
+            "+#[ignore = \"flaky\"]",
+            "+#[ignore(reason)]",
+            "+#[ignore ]",
+        ] {
+            assert_eq!(kinds("tests/x.rs", line), vec![FindingKind::SkippedTest]);
+        }
+        assert!(kinds("tests/x.rs", "+#[ignored]").is_empty());
+    }
+
     #[test]
     fn xfail() {
         assert_eq!(

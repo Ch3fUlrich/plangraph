@@ -211,14 +211,26 @@ fn run_attempt_inner(
     if let Err(why) = h.validate(&run) {
         return defect_result(&dest, &claim.base_sha, &branch, &wt.head, why);
     }
+    // The base check is untrusted card code too: use the same jail and private
+    // tmp as the harness and post-attempt check, even if red-first parks early.
+    let tmp = attempt_tmp()?;
+    let jail = crate::harness::JailConfig::from_env()
+        .map_err(std::io::Error::other)?
+        .map(|mut jail| {
+            jail.tmp = tmp.path().to_path_buf();
+            jail
+        });
     if claim.check_kind != "regression" {
         // Capture the pristine diff before the check can create scratch files.
         let base_diff_hash = confine::diff_hash(&dest, &claim.base_sha)?;
-        let pre = check::run_check(
+        let pre = check::run_check_scoped(
             &claim.check_cmd,
             &dest,
             cfg.start_to_close,
             cfg.check_tail_lines,
+            jail.as_ref()
+                .map(|j| (j.bin.as_path(), &j.limits, j.tmp.as_path())),
+            &|| false,
         )?;
         if pre.passed() {
             let mut result = cancelled_result(&branch, &wt.head, String::new());
@@ -238,17 +250,10 @@ fn run_attempt_inner(
     // goes away with the attempt. The check below gets its own HOME, so a login
     // the harness persisted here never reaches the check child.
     let mut home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
-    let tmp = attempt_tmp()?;
     // Harness auth travels as staged files in this HOME, never by env (the
     // confined env carries no credential names; see sandbox_env). The guard
     // removes what it staged when the attempt ends.
     home.stage_harness_auth()?;
-    let jail = crate::harness::JailConfig::from_env()
-        .map_err(std::io::Error::other)?
-        .map(|mut jail| {
-            jail.tmp = tmp.path().to_path_buf();
-            jail
-        });
     let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
@@ -951,6 +956,37 @@ mod tests {
             prompt: "do the thing".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn red_first_check_is_jailed_in_card_worktree() {
+        if std::env::var_os("PG_JAIL_BIN").is_none() {
+            assert!(std::env::var_os("CI").is_none(), "CI requires PG_JAIL_BIN");
+            return;
+        }
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        let command = format!(
+            "test -f README.md && echo scoped > marker && ! sh -c 'echo escaped > \"{}\"'",
+            outside.display()
+        );
+        let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], &command);
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert!(!outside.exists(), "base check escaped the attempt jail");
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+        assert_eq!(
+            std::fs::read_to_string(dest.join("marker")).unwrap(),
+            "scoped\n"
+        );
+        assert_eq!(res.exit_class, ExitClass::ContractDefect);
+        assert!(res.check_tail.starts_with("red-first:"));
+        assert_eq!(h.runs(), 0);
     }
 
     #[test]
