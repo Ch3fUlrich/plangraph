@@ -3,9 +3,11 @@
 One test per measured problem: it replays the row's "Repro" steps at the
 viewport that row names and asserts the *fixed* behaviour with numbers taken
 through ``tests/browser/probes.py``. Red against the current code carries
-``xfail(strict=True, reason="plangraph:<OWNER>")``; when a fix lane makes it
-pass, strict xfail reports XPASS as a failure, so that lane removes the
-marker. Owner + observed value are in the lane REPORT. Expanded views open
+``xfail(strict=True, raises=AssertionError, reason="plangraph:<OWNER>")``;
+when a fix lane makes it pass, strict xfail reports XPASS as a failure, so
+that lane removes the marker, while a harness break (timeout, KeyError, ...)
+stays red instead of counting as an expected failure.
+Owner + observed value are in the lane REPORT. Expanded views open
 through the URL hash (``#cpr=..&cph=..``, page_store.js) instead of clicking,
 because clicking a project first moves the viewport (R4) and would mask the
 behaviour under test.
@@ -150,7 +152,7 @@ def console_page(browser, site, vendor_assets):
         context.close()
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-NARROW-LAYOUT")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-NARROW-LAYOUT")
 @pytest.mark.parametrize("size", [TABLET], ids=["tablet"], indirect=["size"])
 def test_r1_scrim_and_sidebar_at_1024(page, site):
     """R1 (UI-NARROW-LAYOUT): at 1024x768 no scrim, sidebar starts closed, and the
@@ -184,7 +186,7 @@ def test_r1_scrim_and_sidebar_at_1024(page, site):
         % json.dumps(before["collapsedProjects"]))
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-GRAPH-CLICK")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-GRAPH-CLICK")
 def test_r2_panel_keeps_node_visible(page, site):
     """R2 (UI-GRAPH-CLICK): clicking a task in the right 320 px docks the panel and
     pans so the node stays at least 24 px inside the visible canvas (V-GRAPH-2)."""
@@ -213,7 +215,7 @@ def test_r2_panel_keeps_node_visible(page, site):
         % (keys[0], (bbox["x1"] + bbox["w"]) - rect_after["width"], rect_after["width"], json.dumps(bbox)))
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-GRAPH-CLICK")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-GRAPH-CLICK")
 def test_r3_first_click_no_viewport_reset(page, site):
     """R3 (UI-GRAPH-CLICK): the first task click opens the panel without resetting
     zoom or pan and without moving a node (V-GRAPH-1, V-GRAPH-4)."""
@@ -239,7 +241,7 @@ def test_r3_first_click_no_viewport_reset(page, site):
     assert not moved, "nodes moved in model coordinates: %s" % json.dumps(moved)
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-GRAPH-EXPAND")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-GRAPH-EXPAND")
 def test_r4_expand_keeps_header_position(page, site):
     """R4 (UI-GRAPH-EXPAND): expanding a project and then a phase keeps the clicked
     header at the same screen position within 4 px (V-GRAPH-3)."""
@@ -252,7 +254,7 @@ def test_r4_expand_keeps_header_position(page, site):
         assert max(abs(d) for d in jump) <= 4.0, "%s header jumped %s px (%s)" % (kind, json.dumps(jump), where)
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-GRAPH-EXPAND")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-GRAPH-EXPAND")
 @pytest.mark.parametrize("gap_ms", [100, 300])
 def test_r5_click_during_relayout(page, site, gap_ms):
     """R5 (UI-GRAPH-EXPAND): a click that lands while a relayout runs is applied to
@@ -283,37 +285,71 @@ def test_r5_click_during_relayout(page, site, gap_ms):
     assert "orchard" in after["collapsedProjects"], "the click landed on another project"
 
 
-# Unmarked on purpose: it passes against this fixture snapshot; the measured live
-# repro is not reproducible here, so no xfail owner applies.
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-GRAPH-EXPAND")
 @pytest.mark.parametrize("size", [PHONE], ids=["phone"], indirect=["size"])
 def test_r6_phone_expanded_phase_has_tasks(page, site):
-    """R6 (UI-GRAPH-EXPAND): at 390x844 expanding the fixture's >50-task phase
-    (harbor|P1) draws every task at real size and no project box overlaps (V-GRAPH-10)."""
+    """R6 (UI-GRAPH-EXPAND): at 390x844 expand a project, then a phase - the repro
+    steps of plan section 3, without touching the viewport in between. The phase
+    must draw every task at real size (it measured as a 59x33 stub with zero-size
+    tasks), no project box may overlap another, and the phase must actually show
+    its tasks on the phone canvas (V-GRAPH-10)."""
     items = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))["items"]
     expected = sum(1 for i in items if i["project"] == "harbor" and i["phase"] == "P1")
     page.goto(site)
     probes.wait_layout_idle(page)
     page.wait_for_timeout(300)
-    expand(page, "pc:harbor")
-    # the expanded card lands off-canvas; pan it to the middle like a user would
-    probes.pan_node_to(page, "phc:harbor|P1", {"x": {"centre": True}, "y": {"centre": True}})
-    page.wait_for_timeout(400)
-    expand(page, "phc:harbor|P1")
+    # Repro step 1: expand the project where it sits (no panning).
+    project = header_point(page, "pc:harbor")
+    assert project is not None, "harbor project card is not rendered at 390x844"
+    click_point(page, project)
+    page.wait_for_timeout(1500)
+    probes.wait_layout_idle(page)
+    # Repro step 2: expand the phase where it sits (the measured 59x33 stub).
+    stub = probes.rendered_bbox(page, "phc:harbor|P1")
+    assert stub is not None, "harbor|P1 phase card is missing after expanding the project"
+    phase = header_point(page, "phc:harbor|P1")
+    assert phase is not None, "harbor|P1 phase card has no clickable header"
+    click_point(page, phase)
+    page.wait_for_timeout(1500)
+    probes.wait_layout_idle(page)
 
     boxes = probes.rendered_boxes(
         page, ".project-compound, .project-collapsed, .task-node")
+    card = probes.rendered_bbox(page, "ph:harbor|P1") or stub
     tasks = [b for b in boxes if b["id"].startswith("t:")]
-    assert len(tasks) == expected, "expanded phase draws %d task nodes, expected %d" % (len(tasks), expected)
+    assert len(tasks) == expected, (
+        "expanded phase draws %d task nodes, expected %d (phase card measured "
+        "%.0fx%.0f px at (%.0f, %.0f), stub was %.0fx%.0f px)"
+        % (len(tasks), expected, card["w"], card["h"], card["x1"], card["y1"],
+           stub["w"], stub["h"]))
     degenerate = [{"id": t["id"], "w": round(t["w"], 1), "h": round(t["h"], 1)}
                   for t in tasks if not (t["w"] > 1 and t["h"] > 1)]
-    assert not degenerate, "zero-size task nodes: %s" % json.dumps(degenerate[:5])
+    assert not degenerate, (
+        "zero-size task nodes: the phase stayed a %.0fx%.0f px stub, tasks %s"
+        % (card["w"], card["h"], json.dumps(degenerate[:5])))
     cards = [b for b in boxes if b["id"].split(":")[0] in ("p", "pc")]
-    pairs = [(a["id"], b["id"]) for i, a in enumerate(cards) for b in cards[i + 1:]
+    pairs = [(a["id"], b["id"], round(min(a["x2"], b["x2"]) - max(a["x1"], b["x1"])),
+              round(min(a["y2"], b["y2"]) - max(a["y1"], b["y1"])))
+             for i, a in enumerate(cards) for b in cards[i + 1:]
              if a["x1"] < b["x2"] and b["x1"] < a["x2"] and a["y1"] < b["y2"] and b["y1"] < a["y2"]]
-    assert not pairs, "project boxes overlap: %s" % json.dumps(pairs)
+    assert not pairs, "project boxes overlap (phase card %.0fx%.0f): %s" % (
+        card["w"], card["h"], json.dumps(pairs))
+    # V-GRAPH-10: the expanded phase *shows* its tasks at 390x844 - they must be
+    # on the canvas, not laid out in a strip that runs off the phone screen.
+    canvas = probes.canvas_rect(page)
+    tol = 2.0
+    shown = [t for t in tasks
+             if t["x1"] >= -tol and t["y1"] >= -tol
+             and t["x2"] <= canvas["width"] + tol and t["y2"] <= canvas["height"] + tol]
+    assert len(shown) >= 0.9 * len(tasks), (
+        "the expanded phase card is %.0fx%.0f px on a %.0fx%.0f px canvas: only "
+        "%d of %d task nodes are shown (V-GRAPH-10: 'an expanded phase shows its "
+        "tasks'); phase card box %s"
+        % (card["w"], card["h"], canvas["width"], canvas["height"],
+           len(shown), len(tasks), json.dumps({k: round(card[k], 1) for k in card})))
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-URL-HISTORY")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-URL-HISTORY")
 def test_r7_back_stays_in_app(page, site):
     """R7 (UI-URL-HISTORY): after expand + select, Back moves to the previous app
     step instead of leaving the app (V-ALL-5)."""
@@ -337,7 +373,7 @@ def test_r7_back_stays_in_app(page, site):
     assert page.evaluate("() => !!document.getElementById('cy')"), "graph canvas gone"
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_r8_knowledge_export_requested_only_when_present(page, site):
     """R8 (UI-FLAKE-FIXES): without a rendered export the page never asks for
     kg-export.json (so it can never 404) and the Knowledge tab stays visible with
@@ -362,7 +398,7 @@ def test_r8_knowledge_export_requested_only_when_present(page, site):
     assert tab["width"] > 0, "Knowledge tab is hidden (%s)" % json.dumps(tab)
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_r9_expand_draws_no_invalid_endpoint_warnings(console_page):
     """R9 (UI-FLAKE-FIXES): expanding harbor and then harbor|P1 at 1440x900 logs no
     cytoscape 'invalid endpoints' warning (V-GRAPH-12)."""
@@ -379,7 +415,7 @@ def test_r9_expand_draws_no_invalid_endpoint_warnings(console_page):
     assert not bad, "%d 'invalid endpoints' warning(s) over %s: %s" % (len(bad), json.dumps(drawn), json.dumps(bad[:2]))
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_r10_graph_failure_is_logged(console_page):
     """R10 (UI-FLAKE-FIXES): a failing layout logs the reason to the console and the
     canvas says so instead of failing silently (V-GRAPH-11)."""
