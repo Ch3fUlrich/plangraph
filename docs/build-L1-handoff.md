@@ -1,3 +1,22 @@
+# build-L1 handoff #22 (gen-20 end, 2026-10-23 ~11:15Z; routing RECYCLE order 09:49Z)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (old loop b6h0tgz70 dies with gen-20); caveman; effort medium.
+CARD status/build-L1.card.md = lane table (read first). Main = 92f041d3 (#143 UI-BROWSER-TESTS). Router handed off at 11:0xZ: GO-REQs go to its SUCCESSOR (name `routing`).
+## Rules new this gen
+- D-2399 seats ONLY: mimo/mimo-v2.6-flash (xiaomi), omniroute/deepseek-direct-flash = gateway id deepseek/deepseek-flash via `sh ops/seat.sh deepseek/deepseek-flash PROMPT OUT TITLE` (deepseek), Claude Haiku 5.5 via Agent tool model haiku (anthropic, never over Claude code), cx/gpt-6-luna (openai, never over cx/sol), qwen qodercli (429 until 10-24 15:30Z). NO opencode free / OR free / agy. HIGH = 2 fam, >=1 non-Claude, != writer fam.
+- Writers: spawn MCP model omniroute/mimo-v2.6-flash, card implement/standard/128k/public/free-ok, isolate, cwd = lane worktree (cx/gpt-6.1-sol not served on coding.vm: skip recorded).
+- D-2406: #143 option A (fix writer, re-seat both, no revert, no waiver). D-2396: #96 HIGHs -> JEV-ATTEMPT-THREAD p7. D-2403: claims stay with build-L1.
+## Immediate next (order)
+1. #140 EXEC-OWNERSHIP (HIGH) head cc0e266d (exec = PG Migration 7, main merged, suite 5116 green). Seats seats/exec-ownership/sq4/{deepseek,haiku} running -> both pass -> RE-GO-REQ (D-2386 was on 9b9b0571; head changed by renumber) -> mergepath -> submit -> verdicts (reviewer-deepseek, reviewer-anthropic).
+2. #143 UI-BROWSER-TESTS: merged, item CLAIMED (never submitted; --changes verdict refused bad_state). Fix writer 20261023-110332-ui-browser-fix1-cd8772 (brief seats/pr143/FIX1-BRIEF.md, wt plangraph-worktrees/ui-fix1, branch lane/ui-browser-tests-fix1) -> push, PR, CI, re-seat deepseek+haiku -> merge -> submit -> verdicts.
+3. #144 GOV-CTX-METRICS (wt gov-ctx, lane/gov-ctx-metrics): both seats fix (dedup first-usage per message.id; persist ctx file). Fix writer 20261023-110256-gov-ctx-fix1-1d6c24 (seats/gov-ctx-metrics/FIX1-BRIEF.md) -> CI -> re-seat seats/pr144/r2 -> merge.
+4. #139 TRAILER-MULTI (HIGH): fix2 writer 20261023-105851-trailer-multi-fix2-c61f80 (seats/trailer-multi/FIX2-BRIEF.md, wt trailer-multi) -> CI -> deepseek+haiku -> GO-REQ.
+5. PG-PUBLIC-FIX: cont writer 20261023-105917-pg-public-fix-cont-1a3af8 (wt pg-public-fix) -> PR, gitleaks 0, CI, 2 seats, merge, re-seat PG-PUBLIC-READY.
+6. Spawn when free: JEV-ATTEMPT-THREAD (p7, PH-RT-RUNTIME), EXEC-OBSERVED-STATE (after #140).
+7. Expect MERGE-READY from L2s: build-L2-phase-runner, build-L2-rt-cards, build-L2-flow-oversight-3 (#138), build-L2-bus (BUS-CONTRACT; watch: it planned qwen seats = 429).
+## Traps
+- mergepath waitci lives on lines 4-7: NEVER eval a range of mergepath.sh (ran whole script -> stray merge- worktree).
+- Item states: mergepath does not submit; verdict needs in_review.
+
 # build-L1 handoff #20 (gen-18 end, 2026-10-23 ~05:50Z; compacted 2x -> recycle per routing heartbeat)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt (FIRST; the current loop b9n1ob9cm dies with this session); caveman; effort medium.
 CARD status/build-L1.card.md = full lane table + tools + traps (read first). Main f25cc546 (+ #129 merging).

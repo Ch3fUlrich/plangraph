@@ -1,39 +1,30 @@
-# build-L1 card · gen-20 · 2026-10-23 09:55Z/10:00Z · NO cron · hb bg loop b6h0tgz70 (25m x16) over ops/hb-keys.txt
-Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers: cx/gpt-6.1-sol not on coding.vm -> omniroute/mimo-v2.6-flash > deepseek (record skip). Never Claude writers.
-Seats (D-2318/2322): qwen via qodercli (stdin, no-tools header) + opencode/glm-5.3-flash-free (opencode ZEN path, zhipu; opencode-go free = 429). FULL diff incl tests (D-2324). Prompt = done_criteria from `ops/pg.sh show` + diff, no rulings (D-302/2295).
-HIGH = 2 non-writer-family PASS + routing GO per sha. glm verdict: `PGTOK=reviewer-zhipu ops/pg.sh verdict K --pass --reason "<record path, banner, sha256>"`; qwen: sv-dry-1dbc4f26 tools/seat_verdict.py.
-SEAT-COVERAGE-KEEPER now ON MAIN: verdict refuses until every Writer family of leaf commits (merge-base..p2) is covered; Hand-Edit=anthropic; missing Writer = writer_unknown.
-Spawn: MCP autoos-agent spawn WORKS again (gen-19, run 36d71a). CLI fallback: python3 /home/s/code/AutoOS/tools/autoos-agent.py run ... --isolate. Sandbox = history-less snapshot.
-Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE (handles main-already-in) / merge-cont.sh PR KEY TITLE after a manual CHANGELOG union. Evidence needs FULL 40-hex sha. Kind `commit` = router-only.
-## Main = 0f588e1d (#96 JEV-SHADOW) ; e50a9e91 (#142 MCP-UTF8) ; 94b9ef35 (#141). LIVE keeper = live-2d61e281 (LIVE-SYNC-8 rolled back D-2345)
+# build-L1 card · gen-20 end · 2026-10-23 ~11:15Z · NO cron · hb loop b6h0tgz70 (dies w/ gen-20; restart FIRST) over ops/hb-keys.txt
+Handoff #22 = docs/build-L1-handoff.md top (order list). Control repo LOCAL ONLY (D-1751): `git push control build-L1`.
+Writers: omniroute/mimo-v2.6-flash via autoos-agent spawn (cx/gpt-6.1-sol not served coding.vm, skip). Never Claude writers.
+Seats D-2399: deepseek (`sh ops/seat.sh deepseek/deepseek-flash`), Haiku (Agent model haiku), mimo, luna, qwen (429 to 10-24 15:30Z). No opencode free/OR free/agy.
+Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
+## Main = 92f041d3 (#143). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| KEEPER-OPTASK-CLOSE | DONE | evidence b79eea55 (#132), verdicts qwen+glm 2/2 |
-| KEEPER-OPCLAIM-CLOSE #127 | L1 | DONE 827724f5 2/2. LIVE-SYNC-8 ROLLED BACK (D-2345): 827724f5 store_tokens F2 strict item_key refused all new run tokens (AutoOS spawner writes no item_key). Live = live-2d61e281 PID 3040646. Fix-forward: AutoOS spawner records item_key (workst-L1-autoos lane) OR keeper title fallback; LIVE-SYNC-9 only after merge + mint smoke. OP-DOCKHAND waits on it |
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | GO D-2386 on 9b9b0571 BUT schema conflict vs #96 (both PG Mig6/SQLite v13) -> merge3 writer 20261023-094746-exec-merge3-writer-d87d07 (exec=Mig7); then re-seat 2 fam (no qoder D-2389) + re-GO-REQ; follow-up EXEC-OBSERVED-STATE |
-| RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst Sonnet tab D-2270, launched 10:53Z, D-2403) | brief briefs/phase-runner-s3d.md; S3d impl (merge main after #140) -> MERGE-READY; then S4 |
-| #137 OPENCODE-HARDEN | DONE | merged 4fb18030, 2/2 (notes cite D-2339 + RT95 leaf); #95 closed |
-| #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review (qwen pass). D-2396: H1-H4+MEDIUM -> JEV-ATTEMPT-THREAD p7 (async Jev ask + hanging-Jev latency test); flag OFF; close after that lane w/ 1 seat != xiaomi/alibaba/zhipu on combined diff (gemini or full-input sonnet) |
-| KEEPER-RUNTOKEN-CLI-RUNS (HIGH) | L1 | D-2338 created (gate PH-RT-ADAPTERS); after phase-1 items |
-| PG-PUBLIC-READY | L1 | D-2345 opt B: deepseek seat (gateway deepseek-flash) on r2 full diff -> seats/pr136/r3; then post verdict. #136 MERGED cbf21431 (CI green). evidence refused (in_review); qwen verdict 1/2 on OLD evidence 115379e8 (writer alibaba) -> glm refused coverage. BLOCKED A sent: router withdraw_review -> L1 evidence cbf21431 -> submit -> repost qwen+glm from seats/pr136/r2. Flip gated on history cut + gitleaks 0 (close-inreview) |
-| RT-P1-BUS-CONTRACT | build-L2-bus (workst, relaunched) | conditional GO impl (push red 28ba998 to origin first); MERGE-READY -> L1 |
-Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router-code + spawner moves, prio 8) after RT-P1-E2E green (D-2318 4). Reap timer -> RT-P1-E2E checklist (router edit).
-| RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 [62798f] (adopted 09:5xZ) | head 458621be CI red; fix4 writer scope-fix4m; glm PASS; 2nd seat != qoder (D-2389) on final head -> expect MERGE-READY/GO-REQ |
-| GOV-CTX-METRICS (p9) | L1 | claimed ep1; writer 20261023-092955-gov-ctx-metrics-writer-8928df (brief seats/gov-ctx-metrics); PG-BOOTSTRAP blocked on autoos:AO-OCL1-PW-FILE |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | head cc0e266d (Mig7 renumber + main), suite 5116 green, CI running; seats sq4 deepseek+haiku running -> RE-GO-REQ -> merge |
+| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed (not submitted). D-2406 A: fix writer cd8772 (seats/pr143/FIX1-BRIEF.md, wt ui-fix1) -> re-seat 2 -> merge -> submit -> verdicts |
+| GOV-CTX-METRICS #144 | L1 | both seats fix (dedup, persist) -> fix writer 1d6c24 -> CI -> re-seat |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix2 writer c61f80 -> CI -> deepseek+haiku -> GO-REQ |
+| PG-PUBLIC-FIX (HIGH p8) | L1 | cont writer 1a3af8 (wt pg-public-fix) -> PR, gitleaks 0, CI, 2 seats, merge; then re-seat PG-PUBLIC-READY |
+| #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
+| EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
+| RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d -> MERGE-READY; merge main after #140 |
+| RT95 / CARD-CHECKS / WF-VERSIONING | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
+| RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | expect MERGE-READY/GO-REQ |
+| RT-P1-BUS-CONTRACT | build-L2-bus | expect MERGE-READY (watch qwen 429) |
+| KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
+| KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |
+| PG-BOOTSTRAP-FLEET-ENV (HIGH) | L1 queue | blocked autoos:AO-OCL1-PW-FILE |
+| PG-OMNIROUTE-CONFIG-HOME (p6) | L1 queue | D-2359, L2 after PH-RT-RUNTIME |
+| #100 SANDBOX | sweep-runtime | Gate-Edit squash pending |
+| OCGO-PROBE / OCGO-L1-FALLBACK | routing+workst | gated operator login |
 ## Traps
-- D-2399 seats ONLY: luna cx/gpt-6-luna (openai, never over cx/sol), Haiku 5.5 (never over Claude), mimo/mimo-v2.6-flash, qwen qodercli (429 to 10-24 15:30Z), omniroute/deepseek-direct-flash; HIGH = 2 fam >=1 non-Claude; NO opencode free/OR free/agy
-- zsh: use bash for `${H}:refs/...`; `echo ===` fails; pkill -f PATTERN kills own shell if pattern in cmd; `while pgrep -f X` matches itself.
-- Never dump environ. Never push site strings/seat prompts to GitHub. Never touch .claude/worktrees/proposal. Keeper LIVE from live-2d61e281 (never ff; LIVE-SYNC-9 = HIGH GO-REQ after item_key fix + mint smoke).
-- D-2315: no age-only deletes; clean only terminal-marker runs.
-- TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | c95fb135 CI green; r2 seats (D-2399): Haiku FIX 2 MED (Writer before prose dropped silently; case-sens key), deepseek/deepseek-flash running -> fix writer -> GO-REQ |
-| #100 SANDBOX | sweep-runtime | NOT MERGED: PR ci-gate red (run 39923865296: tests.yml hand-edit af92fc84 w/o Gate-Edit; 27076751 hand-edit >10 lines). L2 squash same tree -> lane/attempt-sandbox-sq on Gate-Edit D-id from routing (BLOCKED 09:1xZ). Seats r3/r4 valid by tree equality. Then mergepath + submit + verdicts |
-| RT95 / RT-P1-CARD-CHECKS / RT-P1-WF-VERSIONING | build-L2-rt-cards (workst, L2-LAUNCH sent 10:5xZ) | brief briefs/rt-cards-wfv-rt95.md; claims stay L1; OCGO-PROBE gated login; OCGO-L1-FALLBACK -> routing+workst |
-| KEEPER-LEGACY-HUMAN-FAMILY (low) | L1 queue | D-2348: keeper rule legacy/operator claimant -> family 'human' (+test: non-legacy unknown still refused); bundle in keeper batch riding LIVE-SYNC-9 after SPAWNER-ITEM-KEY; then router re-posts OP-DOCKHAND deepseek 438f9e |
-| PG-PUBLIC-READY r3 | L1 | deepseek FAIL verdict POSTED (D-2349, item back to claimed). Re-seat on PG-PUBLIC-FIX merge. Gate PG-REPUBLISH-FRESH deps [READY, FIX] |
-| PG-PUBLIC-FIX (HIGH prio 8) | L1 | writer 20261023-084625-pg-public-fix-writer-7bf42d running (wt pg-public-fix, brief seats/pg-public-fix/WRITER-BRIEF.md) -> PR, CI, seats qwen+glm+deepseek |
-| PG-OMNIROUTE-CONFIG-HOME (prio 6) | L1 queue | D-2359: operator combos (names, members, order, strategy) = PUBLIC in plangraph, export via gateway API only (R-coord-15), scrub scan; keys/account ids/hosts stay private. >=2 tasks -> L2-LAUNCH (OpenCode sol) after PH-RT-RUNTIME items |
-| UI-BROWSER-TESTS | L1 | GO D-2400: merging #143 574ba275 (Gate-Edit D-2388 merge trailer) -> evidence, verdicts deepseek+anthropic (seat files on workst C:\fleet\handoff); leaf UI-BROWSER-HARDEN sent; RELOAD-FREEZE cancelled |
-
-| PG-BOOTSTRAP-FLEET-ENV (HIGH p9, secrets) | L1 queue | bootstrap.ps1+.sh fleet-env step, CSPRNG pw owner-only file + AUTOOS_OCL1_PW_FILE, never printed, --DryRun; dep autoos:AO-OCL1-PW-FILE; after MCP-UTF8 |
-- Workstation 09:06Z: ui-browser L2 taskkill /IM python.exe killed MCPs/runs; briefs must say "kill only PIDs you started, never taskkill /IM". mergepath.sh: PR-event ci-gate check is authoritative, dispatch run skips commit-trailer gate.
+- Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
+- ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.
+- zsh: use bash -c for chains; never dump environ; never push site strings/seat prompts to GitHub; never touch .claude/worktrees/proposal.
+- D-2315 no age-only deletes; D-2378 kill recorded PIDs only (never taskkill /IM).
