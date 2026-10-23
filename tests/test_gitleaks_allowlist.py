@@ -101,3 +101,44 @@ def test_other_key_shaped_string_in_same_path_is_reported(tmp_path, rel):
     assert planted in secrets
     waived = {WAIVED_PROMPT_SECRET, WAIVED_PLAN_SECRET}
     assert not secrets & waived, f"known strings leaked into findings: {secrets & waived}"
+
+
+# --- PG-PUBLIC-FIX: credential-guard fixtures are plain literals, waived by value only ------
+
+#: The files whose synthetic guard value is a plain literal in the source.  `.gitleaks.toml`
+#: waives exactly that value in exactly that path (per-file, per-regex, reason recorded
+#: there), so the fixtures may be readable literals without opening the gate up.
+GUARD_FIXTURES = ("tests/test_keeper_estimate_src_edit.py",
+                  "tests/test_keeper_guard_key.py")
+
+
+@pytest.mark.parametrize("rel", GUARD_FIXTURES)
+def test_guard_fixture_value_is_waived_but_nothing_else(tmp_path, rel):
+    """The fixture's synthetic value is waived by value alone; new values still fail.
+
+    The file is copied verbatim into a tree at the same relative path (the waiver is
+    path-scoped) and given one freshly planted key-shaped line:
+
+    * without the config both the fixture value and the planted one are findings --
+      so the waiver below is live, not a no-op over a literal that stopped matching;
+    * with the config ONLY the planted one survives -- so the entry is value-scoped and
+      another credential-shaped string in the same file is never exempt.
+    """
+    exe = _gitleaks()
+    tree = tmp_path / "tree"
+    target = tree / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    planted = _fake_secret(("Vk7", "qP2", "mR9x", "Tl4b", "Zr")) + Path(rel).name[:2]
+    target.write_text((ROOT / rel).read_text(encoding="utf-8")
+                      + f"\napi key = {planted}\n", encoding="utf-8")
+
+    rc0, bare = _scan(exe, tree, None)
+    bare_secrets = {f["Secret"] for f in bare if f["RuleID"] == "generic-api-key"}
+    assert rc0 == 1 and planted in bare_secrets, bare_secrets
+    assert bare_secrets - {planted}, \
+        f"{rel} must still carry a credential-shaped finding of its own: {bare_secrets}"
+
+    rc, findings = _scan(exe, tree, CONFIG)
+    secrets = {f["Secret"] for f in findings if f["RuleID"] == "generic-api-key"}
+    assert rc == 1 and secrets == {planted}, \
+        f"only the planted value may be reported in {rel}: {secrets}"

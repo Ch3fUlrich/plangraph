@@ -48,16 +48,24 @@ paths = ['''^tests/test_keeper_credential_guard\.py$''']
 regexes = ['''^svcacct/Zq9xk2LmPw$''']
 
 [[allowlists]]
-# Same fake credential, reused by the keeper estimate/src-edit guard tests.
-description = "synthetic secret in the estimate-src-edit guard test (reviewed 2026-10-17)"
+# Reason: the estimate/src-edit guard test asserts that "login " plus exactly this synthetic
+# pair is refused (and never echoed), so the value has to sit in the source as one plain
+# literal the leak gate can read -- no splitting/reassembling around the scanner.  Fake, no
+# credential of any kind.  Scope is this file AND this exact value only (condition = AND):
+# any other credential-shaped string written into the same file is still reported.
+description = "synthetic credential the estimate-src-edit guard refuses (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_keeper_estimate_src_edit\.py$''']
 regexes = ['''^svcacct/Zq9xk2LmPw$''']
 
 [[allowlists]]
-# Fake credential in the refusal corpus the key-guard test expects to be rejected.
-description = "synthetic password in the key-guard test (reviewed 2026-10-17)"
+# Reason: the key-guard refusal corpus (REAL) is the set of credential pairs the guard must
+# refuse and the mask tests must mask, so the slash pair sits there as one plain literal the
+# leak gate can read -- no splitting/reassembling around the scanner.  Fake, no credential of
+# any kind.  Scope is this file AND this exact value only (condition = AND): any other
+# credential-shaped string written into the same file is still reported.
+description = "synthetic password the key-guard refusal corpus expects refused (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_keeper_guard_key\.py$''']
