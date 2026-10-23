@@ -196,7 +196,8 @@ class OpsMixin:
     # ------------------------------------------------------------ applying
     def _deps_from_form(self, item, spec):
         """Compute new depends_on list from {'add': [...], 'remove': [...]} form."""
-        if not isinstance(spec, dict) or set(spec) - {"add", "remove"}:
+        if not isinstance(spec, dict) or set(spec) - {"add", "remove"} \
+                or not set(spec) & {"add", "remove"}:
             raise Refused("validation",
                           "depends_on form takes only add/remove lists of keys")
         add_list = spec.get("add", [])
