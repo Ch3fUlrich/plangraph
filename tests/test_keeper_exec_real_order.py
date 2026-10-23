@@ -6,10 +6,14 @@ from plangraph.keeper.errors import Refused
 from plangraph.keeper.store_cards import TRANSITIONS, _forward
 from plangraph.projector.apply import Projector
 from plangraph.projector.history import project_history
-from test_keeper_exec_projector_path import w, history, snapshot, worker_call
+from test_keeper_exec_projector_path import LIVE_SET, w, history, snapshot, worker_call
 
-
-LIVE_STATES = ["open", "ready", "running", "needs_input"]
+# The live set the worker pins (waiting joined it: the projector writes
+# waiting after usage_limit/outage and on a timer, so the cap-park must land).
+LIVE_STATES = LIVE_SET
+#: The live set as it stood before ``waiting`` joined it: any expectation that
+#: excludes the observed state is refused with ``exec_stale_state``.
+STALE_SET = ["open", "ready", "running", "needs_input"]
 
 
 def seed_in_state(w, initial):
@@ -53,10 +57,15 @@ def test_projected_waiting_refuses_delayed_any_of(w, verb, initial):
                         workflow_id="card:" + key, run_id="run"), run_ord=0)
     before = snapshot(w, key)
     assert before[0] == "waiting"
+    # A delayed verb whose expectation excludes the observed waiting state
+    # (the pre-waiting live set) is still refused, and writes nothing ...
     with pytest.raises(Refused) as err:
-        worker_call(w, key, verb, LIVE_STATES)
+        worker_call(w, key, verb, STALE_SET)
     assert err.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
+    # ... while the live set, which carries waiting now, is accepted.
+    worker_call(w, key, verb, LIVE_STATES)
+    assert snapshot(w, key)[0] == ("waiting" if verb == "ask_question" else "parked")
 
 
 @pytest.mark.parametrize("verb", ["ask_question", "park"])
@@ -70,20 +79,55 @@ def test_claimed_holder_live_set_is_stale(w, verb):
     assert dict(w.store._item(key)) == before
 
 
+@pytest.mark.parametrize("verb", ["ask_question", "park"])
+@pytest.mark.parametrize("left", ["parked", "failed", "done"])
+def test_live_set_refuses_a_card_that_left_the_live_states(w, verb, left):
+    key, = seed(w, [("A", [])])
+    if left == "done":                       # done has its own verb, not set_state
+        w.conn.execute("UPDATE items SET state=? WHERE key=?", (left, key))
+        w.conn.commit()
+    else:
+        w.store.set_state(w.p("system"), key, left)
+    before = snapshot(w, key)
+    with pytest.raises(Refused) as err:
+        worker_call(w, key, verb, LIVE_STATES)
+    assert err.value.code == "exec_stale_state"
+    assert snapshot(w, key) == before
+
+
 @pytest.mark.parametrize("owned", [False, True])
 @pytest.mark.parametrize("triple", [False, True])
 def test_claimed_holder_park_is_exempt_from_forward_table(w, owned, triple):
-    key, = seed(w, [("A", [])])
+    key, revive = seed(w, [("A", []), ("B", [])])
     if owned:
-        w.store.set_state(w.p("system"), key, "running",
-                          run=("card:" + key, "run", 1))
-        w.store.set_state(w.p("system"), key, "open")
-    to_claimed(w, key, "workerA")
+        # (a) The run-less hand-back to open clears the exec owner (W19), so a
+        # parked card revives with a new run: the revived card takes its claim
+        # holder's triple-less park.
+        w.store.set_state(w.p("system"), revive, "running",
+                          run=("card:" + revive, "run", 1))
+        w.store.set_state(w.p("system"), revive, "open")
+        assert snapshot(w, revive)[1:4] == (None, None, None)
+        to_claimed(w, revive, "workerA")
+        result = w.store.worker_park(w.p("workerA"),
+                                     {"card": revive, "exit_class": "needs_input"})
+        assert result == {"card": revive, "state": "parked", "changed": True}
+        assert snapshot(w, revive)[0] == "parked"
+        # (b) The owner is still recorded while the card is claimed: a
+        # run-carrying worker fact (complete) records it after the claim and
+        # neither verb clears it.
+        to_claimed(w, key, "workerA")
+        w.store.worker_complete(w.p("workerA"), {
+            "card": key, "merged_sha": "deadbeef",
+            "workflow_id": "card:" + key, "run_id": "run", "attempt": 1})
+        assert snapshot(w, key)[1:4] == ("card:" + key, "run", 1)
+    else:
+        to_claimed(w, key, "workerA")
     body = {"card": key, "exit_class": "needs_input"}
     if triple:
         body.update(workflow_id="card:" + key, run_id="run", attempt=1)
     before = dict(w.store._item(key))
     if owned and not triple:
+        # The recorded owner names no triple here: refused before any write.
         with pytest.raises(Refused) as err:
             w.store.worker_park(w.p("workerA"), body)
         assert err.value.code == "exec_stale"

@@ -41,6 +41,12 @@ def history(exit_class):
     ]}
 
 
+#: The worker's live set (RT-P1-EXEC-OWNERSHIP).  ``waiting`` belongs to it:
+#: the projector writes ``waiting`` after usage_limit/outage and on a timer, so
+#: the cap-park must still land there.
+LIVE_SET = ["open", "ready", "running", "needs_input", "waiting"]
+
+
 def snapshot(w, key):
     return tuple(w.conn.execute(
         "SELECT state, exec_workflow_id, exec_run_id, exec_attempt, updated_at"
@@ -96,9 +102,23 @@ def test_projector_waiting_refuses_delayed_same_run_park(w, expected):
     assert projector.apply_run(waiting, run_ord=0).states_written == 1
     before = snapshot(w, key)
     assert before[:4] == ("waiting", "card:" + key, "run", 1)
+
+    # A park from another run is stale before any state compare: exec_stale.
+    with pytest.raises(Refused) as exc:
+        w.store.worker_park(w.p("workerA"), {
+            "card": key, "exit_class": "needs_input", "expected_state": "waiting",
+            "workflow_id": "card:" + key, "run_id": "other-run", "attempt": 1})
+    assert exc.value.code == "exec_stale"
+    assert snapshot(w, key) == before
+
+    # Same run, but an expectation that excludes the observed waiting state --
+    # including the live set as it stood before waiting joined it -- is still
+    # refused, and changes nothing.
     with pytest.raises(Refused) as exc:
         worker_call(w, key, "park", expected)
     assert exc.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
-    worker_call(w, key, "park", "waiting")
-    assert snapshot(w, key)[0] == "parked"
+
+    # The live set carries waiting now, so the delayed cap-park lands.
+    worker_call(w, key, "park", LIVE_SET)
+    assert snapshot(w, key)[:4] == ("parked", "card:" + key, "run", 1)

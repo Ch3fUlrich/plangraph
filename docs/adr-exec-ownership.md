@@ -17,7 +17,12 @@ run and backwards-attempt checks, even on a no-op. Audit-only calls with
 
 Owner clear-on-reopen is the **only door to a new run**: reaper lease expiry,
 release, review change requests 1 and 2, reopen, and withdraw clear the owner.
-The `new_run` takeover is removed; a different run cannot replace a live owner.
+A `set_state` hand-back is the same door for lifecycle moves: a run-less move
+that changes the state and lands on `open`/`ready` clears the owner in the
+same transaction as the state update, so a parked card revives with a new run
+(a run-carrying move, a no-op move and a move to any other state keep the
+owner). The `new_run` takeover is removed; a different run cannot replace a
+live owner.
 Worker
 verbs never take over ownership **while an owner exists**; an unowned card is
 claimed by the first run-carrying verb that records a fact (not audit-only or
@@ -46,21 +51,35 @@ Worker park, complete and ask_question may carry optional `expected_state`, a
 string or non-empty list of strings from `SETTABLE_STATES` (any-of). When supplied,
 the card's current state must equal the string or be in the list, and the exec
 identity/attempt checks must still pass. Every list element is validated.
-The worker sends the live set `["open", "ready", "running", "needs_input"]` for
-`ask_question`, question parks, and generic park. Complete and alarm send none.
-The attempt report writes no state, so the card is still seeded `open` or `ready`
-before the projector pass; asks and parks must work both then and after projection
-to `needs_input`. The run/attempt fence protects against stale retries; state CAS
-only prevents overwriting a newer actor's `waiting`, `parked`, `failed`, or `done`.
-`waiting` and `claimed` are excluded. A worker-run card is never `claimed`:
-that is the agent lease path, which the projector skips. Temporal on a claimed
-card is a misconfiguration refused with `exec_stale_state` for live-set ask/park.
+The worker sends the live set `["open", "ready", "running", "needs_input",
+"waiting"]` for `ask_question`, question parks, and generic park. Complete and
+alarm send none. `waiting` belongs to the set: the projector writes `waiting`
+after usage_limit/outage and on a timer, so the cap-park must still land on a
+waiting card instead of being refused `exec_stale_state` on every retry. The
+attempt report writes no state, so the card is still seeded `open` or `ready`
+before the projector pass; asks and parks must work both then and after
+projection to `needs_input`. The run/attempt fence protects against stale
+retries; state CAS only prevents overwriting a newer actor's `parked`,
+`failed`, or `done`, plus `waiting` for any expectation that does not name it
+(the live set names it). `claimed` is excluded from the live set. A worker-run
+card is never `claimed`: that is the agent lease path, which the projector
+skips. Temporal on a claimed card is a misconfiguration refused with
+`exec_stale_state` for live-set ask/park.
 The state comparison runs inside the same write transaction, before any write
 or ownership recording/attempt bump; mismatch refuses `exec_stale_state` (HTTP
 409) without changing state, owner or `updated_at`. Null `expected_state` is
 treated as omitted on ask, park and complete. Omitting it preserves the
 historical behavior. The shared `_exec_expect_state(item, expected)` helper is
 also the ask_question integration point.
+
+Inside the park/complete guards the stale-run and lower-attempt checks decide
+first (validating only), then a **duplicate park is a success no-op decided
+before the state expectation**: if the card already reached `parked` and the
+body names the recorded owner (or, on an unowned card, names no triple), a
+retry whose response was lost succeeds rather than failing `exec_stale_state`
+on every retry. A different run is still `exec_stale`, because that check runs
+ahead of the duplicate decision. A duplicate complete against `done` is
+ordered the same way.
 
 ## Rollout
 
