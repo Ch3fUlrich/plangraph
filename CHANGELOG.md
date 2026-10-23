@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **RT-P1-BUS-CONTRACT:** complete read-side JSON conformance vectors, pin bounded leading-zero limit syntax and normalized signing, and reject non-wire POST inputs with validation errors.
+
 - **RT-P1-BUS-CONTRACT:** implement the stdlib-only fleet-bus/2 wire contract and versioned specification, with deterministic signing, ordered validation, bounded replay/delivery state, signed reads, per-sender rate limiting and fail-closed cursors; allow the exact synthetic HMAC test-vector value in CI and public-split scrub rules; document the pre-auth pipe-cursor shape exception and cover signed reads, cross-operation replay, logical ID boundaries, skew, exact body size and evicted-cursor delivery; reject surrogate cursors and Unicode whitespace in identifiers as pre-auth shape errors, with regression coverage for surrogate identifiers, nonce, kid and text and signature-header precedence.
 - **RT95-EMPTY-RUN-FIXTURE:** replace the worker's synthetic step-only empty-run fixture with a scrubbed opencode v2.1.1 capture; parser coverage pins no text/tool calls and attempt coverage keeps exit-zero empty runs classified as outage with no check hash. Document the capture command and nondeterminism.
 

@@ -1,0 +1,106 @@
+[
+  {
+    "name": "duplicate-positive-exact-ack",
+    "fn": "validate_post",
+    "inputs": {
+      "duplicate": true
+    },
+    "expect": {
+      "id": "1700000000000-000001",
+      "ts": 1700000000,
+      "msg_id": "message-1",
+      "dup": true
+    }
+  },
+  {
+    "name": "exact-4096-bytes",
+    "fn": "validate_post",
+    "inputs": {
+      "body_size": 4096
+    },
+    "expect": {
+      "id": "1700000000000-000001",
+      "ts": 1700000000,
+      "msg_id": "message-1",
+      "dup": false
+    }
+  },
+  {
+    "name": "over-4096-bytes",
+    "fn": "validate_post",
+    "inputs": {
+      "body_size": 4097
+    },
+    "error": {
+      "code": "too_large",
+      "status": 413
+    }
+  },
+  {
+    "name": "normalized-float-ts-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000.0,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      },
+      "normalized_ts": 1700000000
+    },
+    "expect": {
+      "id": "1700000000000-000001",
+      "ts": 1700000000,
+      "msg_id": "message-1",
+      "dup": false
+    }
+  },
+  {
+    "name": "normalized-string-ts-signature",
+    "fn": "validate_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": "01700000000",
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      },
+      "normalized_ts": 1700000000
+    },
+    "expect": {
+      "id": "1700000000000-000001",
+      "ts": 1700000000,
+      "msg_id": "message-1",
+      "dup": false
+    }
+  },
+  {
+    "name": "canonical-float-ts",
+    "fn": "canonical_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000.0,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "expect": "fleet-bus/2|post|1700000000|nonce-1|sender|receiver|message-1||2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  },
+  {
+    "name": "canonical-read-string-ts",
+    "fn": "canonical_read",
+    "inputs": {
+      "ts": "01700000000",
+      "nonce": "read-1",
+      "reader": "reader"
+    },
+    "expect": "fleet-bus/2|read|1700000000|read-1|reader||"
+  }
+]
