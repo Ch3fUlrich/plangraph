@@ -184,12 +184,12 @@ def test_migrations_are_versioned_contiguously():
     assert schema_pg.LATEST == versions[-1]
 
 
-def test_exec_columns_are_only_added_by_migration_6():
+def test_exec_columns_are_only_added_by_migration_7():
     columns = {"exec_workflow_id", "exec_run_id", "exec_attempt"}
-    for migration in schema_pg.MIGRATIONS[:5]:
+    for migration in schema_pg.MIGRATIONS[:6]:
         assert not any(column in migration.sql for column in columns)
-    migration = schema_pg.MIGRATIONS[5]
-    assert migration.version == 6
+    migration = schema_pg.MIGRATIONS[6]
+    assert migration.version == 7
     for column in columns:
         assert f"ALTER TABLE items ADD COLUMN IF NOT EXISTS {column} " in migration.sql
 
@@ -213,6 +213,18 @@ def test_metrics_table_is_in_both_schemas():
     assert "metrics" in schema_pg.parse_tables(mig.sql)
     for earlier in schema_pg.MIGRATIONS[:3]:
         assert "metrics" not in schema_pg.parse_tables(earlier.sql)
+
+
+def test_jev_shadow_table_is_in_both_schemas():
+    tables, _, _ = _sqlite_tables()
+    assert "jev_shadow" in tables
+    mig = schema_pg.MIGRATIONS[5]
+    assert mig.version == 6
+    assert "jev_shadow" in schema_pg.parse_tables(mig.sql)
+    for earlier in schema_pg.MIGRATIONS[:5]:
+        assert "jev_shadow" not in schema_pg.parse_tables(earlier.sql)
+    for value in schema.JEV_KINDS + schema.JEV_STATUSES:
+        assert f"'{value}'" in mig.sql and f"'{value}'" in schema.JEV_DDL
 
 
 def test_pg_exit_and_window_checks_match_sqlite():

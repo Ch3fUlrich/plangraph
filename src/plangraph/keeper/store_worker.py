@@ -233,8 +233,12 @@ class WorkerMixin:
 
     # -------------------------------------------------------------- park
     def worker_park(self, principal, body):
-        return self._run(principal, "worker_park", _card_name(body),
-                         lambda now: self._worker_park(principal, body, now))
+        result = self._run(principal, "worker_park", _card_name(body),
+                           lambda now: self._worker_park(principal, body, now))
+        # RT-P1-JEV-SHADOW: the attempt finished - see ``_fill_jev_outcome``.
+        self._fill_jev_outcome(principal, result.get("card"),
+                               {"exit_class": body.get("exit_class")})
+        return result
 
     def _worker_park(self, principal, body, now):
         _check_body(body, _PARK_KEYS, "worker_park")
@@ -275,8 +279,12 @@ class WorkerMixin:
 
     # ---------------------------------------------------------- complete
     def worker_complete(self, principal, body):
-        return self._run(principal, "worker_complete", _card_name(body),
-                         lambda now: self._worker_complete(principal, body, now))
+        result = self._run(principal, "worker_complete", _card_name(body),
+                           lambda now: self._worker_complete(principal, body, now))
+        # RT-P1-JEV-SHADOW: the attempt finished - see ``_fill_jev_outcome``.
+        self._fill_jev_outcome(principal, result.get("card"),
+                               {"outcome": "complete"})
+        return result
 
     def _worker_complete(self, principal, body, now):
         _check_body(body, _COMPLETE_KEYS, "worker_complete")
@@ -305,6 +313,50 @@ class WorkerMixin:
                     self._exec_gate(key, body, record=True)
                     self._guarded_touch(key, (item["state"],), item["epoch"])
         return {"card": key, "merged_sha": merged_sha}
+
+    # -------------------------------------------------------- jev outcome
+    def _fill_jev_outcome(self, principal, card, outcome):
+        """Fill the outcome of this card's Jev rows; observe-only, never raises.
+
+        RT-P1-JEV-SHADOW: ``worker_park`` and ``worker_complete`` call this AFTER
+        their own write transaction has committed and outside it, because the fill
+        is a separate write.  Neither body carries an attempt number, so every
+        still-unfilled attempt of the card is filled (``store.jev_outcome`` is
+        first-write-wins), with the same ``exit_class``/``outcome`` text
+        :func:`plangraph.planner.shadow.record_outcome` derives for the planner.
+
+        The row is filed by :func:`plangraph.keeper.store_jev._jev_writer`, the
+        same mapping the verdict's ``qc_accept`` row uses: the caller when its
+        role may write ``jev_shadow`` (router/system/l1) and the synthetic
+        ``system`` identity otherwise.  That matters here because the real
+        attempt-finish path is a ``worker`` (or ``spawner``) - a role
+        ``store_jev._WRITE_ROLES`` refuses - so testing the role first, as this
+        once did, meant the outcome was never filled on the path it exists for;
+        the mapping instead lands every fill on a principal that may write, so
+        it can never become a swallowed refusal, for any role.
+
+        A card with no rows is still skipped before any transaction is opened -
+        an outcome only ever fills rows that exist, so a keeper that never ran
+        Jev keeps its audit log and its write lock exactly as they were.
+        Everything (import, refusal, store error) is swallowed: a Jev outcome is
+        best-effort and can never fail or delay a worker verb.
+        """
+        if not card:
+            return
+        try:
+            # Late imports: the planner and the Jev mixin are only needed when a
+            # fill can actually happen (``store_jev`` imports this module).
+            from .store_jev import _jev_writer
+            if self.conn.execute(
+                    "SELECT 1 FROM jev_shadow WHERE key=? LIMIT 1",
+                    (card,)).fetchone() is None:
+                return
+            from plangraph.planner import shadow as shadow_mod
+            shadow_mod.record_outcome(None, outcome, store=self,
+                                      principal=_jev_writer(principal),
+                                      card_key=card)
+        except Exception:  # noqa: BLE001 - a Jev outcome never breaks a worker verb
+            pass
 
     # ------------------------------------------------------------ alarms
     def worker_alarm(self, principal, body):

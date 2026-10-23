@@ -1,7 +1,7 @@
 """Behavioural Postgres coverage for the exec-owner fence (RT-P1 V3-A).
 
-``test_keeper_pg_unit.py`` pins migration 6's DDL structurally and only SQLite
-ran the real behaviour; this file applies migration 6 on a real Postgres
+``test_keeper_pg_unit.py`` pins migration 7's DDL structurally and only SQLite
+ran the real behaviour; this file applies migration 7 on a real Postgres
 schema and then exercises owner-fence calls against it: a park carrying an
 older attempt than the recorded owner must refuse ``exec_stale`` and write
 nothing, and an alarm carrying a newer attempt must advance the recorded
@@ -31,15 +31,15 @@ def owner(w, key):
 
 
 @needs_pg
-def test_migration_6_applies_on_pg_and_park_refuses_an_older_attempt(tmp_path):
+def test_migration_7_applies_on_pg_and_park_refuses_an_older_attempt(tmp_path):
     d = tmp_path / "pgexec"
     d.mkdir()
     w = World(d, backend="postgres", dsn=DSN)
     try:
-        # Migration 6 (the three exec ownership columns) was applied here.
+        # Migration 7 (the three exec ownership columns) was applied here.
         versions = [row[0] for row in w.conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version")]
-        assert 6 in versions, versions
+        assert 7 in versions, versions
         key, = seed(w, [("A", [])])
         # A run-carrying move records the owner at attempt 2 on Postgres ...
         w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
