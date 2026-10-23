@@ -47,8 +47,11 @@ class Context:
 
     Tests build this (or any duck-typed stand-in) with fakes; production builds
     it with :func:`plangraph.keeper.evidence.default_context`. ``claim_time`` is
-    the moment the item was claimed and is compared against a commit's time; a
-    missing claim time fails closed rather than passing the check.
+    the moment the item was claimed. The floor is the ref head sha ("base")
+    recorded at the item's latest release or latest claim by a different
+    principal; ``bind_floor_required=False`` only when no such event exists
+    (first claim). ``merge_principals`` lists allowed merge-commit committer
+    emails (empty permits any committer).
     """
 
     git: Any = None
@@ -58,6 +61,9 @@ class Context:
     decisions: Any = None
     now: float = 0.0
     claim_time: float | None = None
+    merge_principals: tuple[str, ...] = ()
+    bind_floor_sha: str | None = None
+    bind_floor_required: bool = True
     skew: float = DEFAULT_SKEW_S
 
 

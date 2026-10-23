@@ -18,7 +18,8 @@ ATTEMPT_ACTIVITY_TYPES = frozenset({"attempt"})
 KNOWN_ACTIVITY_TYPES = ATTEMPT_ACTIVITY_TYPES | frozenset(
     f"CardActivities::{n}" for n in
     ("tick", "probe", "merge", "report", "park", "complete", "alarm", "janitor", "gate",
-     "ask_question", "record_question_timeout"))
+     "ask_question", "record_question_timeout", "phase_plan", "phase_finish",
+     "claim_card", "ensure_phase_branch"))
 
 
 @dataclass(frozen=True)

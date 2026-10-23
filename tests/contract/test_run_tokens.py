@@ -13,7 +13,7 @@ def _run_dir(kp, key, family=None):
     need(kp, "runs")
     run_id = "run-" + uid().lower()
     (kp.runs_dir / run_id).mkdir(parents=True)
-    request = {"title": f"work on {key}"}
+    request = {"title": f"work on {key}", "item_key": key}
     if family:
         request["family"] = family
     (kp.runs_dir / run_id / "job.json").write_text(json.dumps({"request": request}), encoding="utf-8")

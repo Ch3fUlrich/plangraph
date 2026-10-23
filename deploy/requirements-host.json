@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0",
+  "autoos_components": {
+    "core": [
+      "git",
+      "python",
+      "nodejs",
+      "tailscale",
+      "omniroute",
+      "opencode-cli"
+    ],
+    "agents": [
+      "claude-code",
+      "qwen-code",
+      "gemini-cli",
+      "qoder-cli",
+      "agent-skill-links"
+    ]
+  }
+}

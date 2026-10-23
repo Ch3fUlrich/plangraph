@@ -5,8 +5,9 @@
 graph checks, append one ``item_defined`` event, and commit in the batch's
 single transaction.  A dep that is already present / not present is a no-op
 that only warns (no write, no event); a dep naming a cancelled item is dropped
-with a warning instead of refused, while an unknown dep, a cycle or a claimed
-item still refuses the whole batch and rolls everything back.
+with a warning instead of refused, while an unknown dep or a cycle still
+refuses the whole batch and rolls everything back.  F4: a *claimed* item
+accepts the router's dep edit.
 
 Mutations killed: an edge left behind by a rolled-back batch, no-op dep ops
 that append events, a non-router driving ``apply_ops``, a ``depends_on`` edit
@@ -130,6 +131,22 @@ def test_apply_ops_is_router_only(w):
     assert ei.value.code == "forbidden"
     assert ("demo:A", "demo:B") not in _edges(w)
 
+def test_apply_ops_add_dep_on_a_claimed_item_is_refused_for_non_router(w):
+    to_claimed(w, "demo:A")
+    epoch = w.store._item("demo:A")["epoch"]
+    snapshot = _snapshot(w)
+    for who in ("l1main", "reviewer"):
+        with pytest.raises(Refused) as ei:
+            w.store.apply_ops(w.p(who),
+                              [{"op": "add_dep", "key": "demo:A",
+                                "dep": "demo:B"}])
+        assert ei.value.code == "forbidden"
+    assert _snapshot(w) == snapshot
+    assert ("demo:A", "demo:B") not in _edges(w)
+    item = w.store._item("demo:A")
+    assert item["state"] == "claimed"
+    assert item["epoch"] == epoch
+
 # --------------------------------------------------- cancelled dependencies
 def test_edit_drops_cancelled_dependency_with_warning(w):
     w.store.cancel(w.p("router"), "demo:C", "superseded")
@@ -167,13 +184,23 @@ def test_add_dep_that_would_close_a_cycle_is_refused(wcyc):
     assert _snapshot(wcyc) == before
     assert _integrity(wcyc) == []
 
-def test_add_dep_on_a_claimed_item_is_bad_state(w):
-    to_claimed(w, "demo:A")
-    with pytest.raises(Refused) as ei:
-        w.store.apply_ops(w.p("router"),
-                          [{"op": "add_dep", "key": "demo:A", "dep": "demo:B"}])
-    assert ei.value.code == "bad_state"
-    assert ("demo:A", "demo:B") not in _edges(w)
+def test_add_dep_on_a_claimed_item_is_a_router_edit(w):
+    """F4: the router may rewrite a claimed item's dependencies (and the
+    delegation makes add_dep exactly that edit, item_defined event included)."""
+    epoch = to_claimed(w, "demo:A")
+    results = w.store.apply_ops(w.p("router"),
+                                [{"op": "add_dep", "key": "demo:A",
+                                  "dep": "demo:B"}])
+    assert results["results"][0]["key"] == "demo:A"
+    assert ("demo:A", "demo:B") in _edges(w)
+    event = w.conn.execute(
+        "SELECT type FROM events WHERE key=? ORDER BY seq DESC LIMIT 1",
+        ("demo:A",)).fetchone()
+    assert event[0] == "item_defined"
+    item = w.store._item("demo:A")
+    assert (item["state"], item["epoch"]) == ("claimed", epoch + 1)
+    assert item["round"] == 1          # the active-edit bump (D-434/F4; epoch bumped too)
+    assert _integrity(w) == []
 
 # --------------------------------------------------------------- batch door
 def test_validate_op_accepts_a_dep_op_and_rejects_a_non_str_dep():

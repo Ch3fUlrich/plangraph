@@ -38,10 +38,18 @@ Language: Python (`temporalio` SDK, optional import; the keeper never imports it
   Re-record with `PG_TEMPORAL_ADDR=... PG_RECORD_DIR=<dir> PG_TEMPORAL_CLI=<path to temporal> cargo test --test e2e` in
   `rust/worker`, the e2e records `<name>.json` (SDK layout, replay fixture, copy to `rust/worker/tests/fixtures/<name>.json`)
   and `<name>.proj.json` (proto-JSON, copy to `rust/worker/tests/fixtures/projector/<name>.json`) with names `happy`,
-  `contract_defect`, `check_fails`, `cancel` (1:1 with the fixture files); the checks are
+  `contract_defect`, `check_fails`, `cancel`, `gate_blocks` (1:1 with the fixture files); the checks are
   `tests/test_projector_worker_history.py`. The `check_fails` run may end `parked` or `failed` (quarantined) depending on
   the budget, so after re-recording update the exact expectations in `tests/test_projector_worker_history.py` (`EXPECTED`)
   to the new capture.
+
+  Pre-merge gate (RT-GATE-WIRING): the Card workflow runs `CardActivities::gate` (a list of NAMED checks, each with its own
+  redacted bounded tail; today one check `card-check`) on the attempt worktree before every merge; a failing gate yields
+  a `check_fail` verdict via `report` and the card retries, main untouched; the history carries only redacted tails.
+  The projector derives each attempt's exit_class from the `attempt` activity result; the gate blocks the attempt
+  AFTER that activity succeeded, and the `check_fail` correction reaches the keeper only through the `report` activity,
+  so the projection shows `ok, ok` for `gate_blocks` while the keeper holds `check_fail` then `ok`.
+  Fixing it is a projector change on a HIGH path and is out of scope for this lane (the test pins the current behaviour).
 
 ## History -> records (`history.py`, pure, no temporalio import, input = proto-JSON history dict)
 

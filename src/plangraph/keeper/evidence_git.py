@@ -6,9 +6,10 @@ paths are kept per project, from the router-owned ``repos`` config.
 
 Every commit argument is validated as a full lowercase hex sha first, then
 passed after ``--end-of-options``; an invalid or option-like value never
-reaches git. Commit *dates* are advisory only -- git lets an author forge both
-the author and committer timestamps, so the binding evidence is the trailer,
-the ancestry of ``main`` and the CI result on that exact sha.
+reaches git. Commit *dates* are never used (git lets an author forge both the
+author and committer timestamps); the binding evidence is the trailer, the
+merged-PR ancestry on the target ref (``merge_commit_of``), the ancestry floor
+(``head_sha`` recorded at claim/release) and the CI result on that exact sha.
 """
 
 from __future__ import annotations
@@ -247,6 +248,167 @@ class GitAdapter:
     def is_ancestor_of_main(self, repo: str, sha: str) -> bool:
         return self.is_ancestor(repo, sha, "main")
 
+    def head_sha(self, repo: str, ref: str) -> str | None:
+        """Return the 40-hex lowercase commit SHA of *ref*, or None on failure."""
+        if not valid_ref(ref):
+            return None
+        try:
+            proc = self._run(
+                repo,
+                ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"],
+            )
+            if proc.returncode != 0:
+                return None
+            stdout = proc.stdout
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", "replace")
+            if not isinstance(stdout, str):
+                return None
+            sha = stdout.strip().lower()
+            if not _FULL_HEX40_RE.fullmatch(sha):
+                return None
+            return sha
+        except Exception:
+            return None
+
+    def merge_commit_of(
+        self, repo: str, sha: str, ref: str
+    ) -> tuple[str, str] | None:
+        """Find the merge commit on *ref*'s first-parent history that introduced *sha*.
+
+        Uses first-parent git ancestry rather than commit timestamps because git
+        dates are forgeable and cannot be trusted for binding provenance evidence.
+        """
+        if not valid_commit_ref(sha) or not valid_ref(ref):
+            return None
+        try:
+            # Check if sha is itself a merge commit (2+ parents).
+            proc_parents = self._run(
+                repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]
+            )
+            if proc_parents.returncode != 0:
+                return None
+            out_parents = (
+                proc_parents.stdout
+                if isinstance(proc_parents.stdout, str)
+                else proc_parents.stdout.decode("utf-8", "replace")
+            )
+            lines_parents = [ln.strip() for ln in out_parents.splitlines() if ln.strip()]
+            if not lines_parents:
+                return None
+            tokens = lines_parents[0].split()
+            is_merge = len(tokens) >= 3
+
+            if is_merge:
+                proc_rev = self._run(
+                    repo,
+                    [
+                        "rev-list",
+                        "--first-parent",
+                        "--merges",
+                        "--reverse",
+                        "--end-of-options",
+                        f"{sha}^..{ref}",
+                    ],
+                )
+                if proc_rev.returncode != 0:
+                    return None
+                out_rev = (
+                    proc_rev.stdout
+                    if isinstance(proc_rev.stdout, str)
+                    else proc_rev.stdout.decode("utf-8", "replace")
+                )
+                rev_lines = [ln.strip().lower() for ln in out_rev.splitlines() if ln.strip()]
+                if not rev_lines:
+                    return None
+                first_line = rev_lines[0]
+                if not valid_commit_ref(first_line) or first_line != sha.lower():
+                    return None
+                m_sha = first_line
+            else:
+                proc_fp = self._run(
+                    repo,
+                    [
+                        "rev-list",
+                        "--first-parent",
+                        "--merges",
+                        "--reverse",
+                        "--end-of-options",
+                        f"{sha}..{ref}",
+                    ],
+                )
+                if proc_fp.returncode != 0:
+                    return None
+                out_fp = (
+                    proc_fp.stdout
+                    if isinstance(proc_fp.stdout, str)
+                    else proc_fp.stdout.decode("utf-8", "replace")
+                )
+                fp_lines = [ln.strip().lower() for ln in out_fp.splitlines() if ln.strip()]
+                fp = [ln for ln in fp_lines if valid_commit_ref(ln)]
+
+                proc_anc = self._run(
+                    repo,
+                    [
+                        "rev-list",
+                        "--merges",
+                        "--ancestry-path",
+                        "--end-of-options",
+                        f"{sha}..{ref}",
+                    ],
+                )
+                if proc_anc.returncode != 0:
+                    return None
+                out_anc = (
+                    proc_anc.stdout
+                    if isinstance(proc_anc.stdout, str)
+                    else proc_anc.stdout.decode("utf-8", "replace")
+                )
+                anc_lines = [ln.strip().lower() for ln in out_anc.splitlines() if ln.strip()]
+                anc = {ln for ln in anc_lines if valid_commit_ref(ln)}
+
+                candidate_m: str | None = None
+                for line in fp:
+                    if line in anc:
+                        candidate_m = line
+                        break
+                if candidate_m is None or not valid_commit_ref(candidate_m):
+                    return None
+
+                proc_m2 = self._run(
+                    repo,
+                    ["merge-base", "--is-ancestor", "--end-of-options", sha, f"{candidate_m}^2"],
+                )
+                if proc_m2.returncode != 0:
+                    return None
+
+                proc_m1 = self._run(
+                    repo,
+                    ["merge-base", "--is-ancestor", "--end-of-options", sha, f"{candidate_m}^1"],
+                )
+                if proc_m1.returncode != 1:
+                    return None
+
+                m_sha = candidate_m
+
+            proc_email = self._run(
+                repo, ["show", "-s", "--format=%ce", "--end-of-options", m_sha]
+            )
+            if proc_email.returncode != 0:
+                return None
+            out_email = (
+                proc_email.stdout
+                if isinstance(proc_email.stdout, str)
+                else proc_email.stdout.decode("utf-8", "replace")
+            )
+            committer_email = out_email.strip()
+            if not committer_email:
+                return None
+
+            return (m_sha, committer_email)
+        except Exception:
+            return None
+
     def trailers(self, repo: str, sha: str) -> dict[str, str]:
         if not valid_commit_ref(sha):
             return {}
@@ -256,6 +418,61 @@ class GitAdapter:
         if proc.returncode != 0:
             return {}
         return parse_trailers(proc.stdout)
+
+    def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str]]:
+        """Trailer dicts of the commits that authored the change behind *sha*.
+
+        L1 attaches ``commit+ci`` evidence to the PR merge commit, which carries
+        only ``Plan-Item``.  For a merge (or a PHASE merge whose second-parent
+        range holds inner PR merges) the writers are the NON-merge commits in
+        ``merge-base(parent1, parent2)..parent2``: the merge commit itself,
+        main-side commits and inner merges are never consulted.  A non-merge
+        commit stands for itself.  An octopus merge (3+ parents) has no single
+        second-parent range, so it returns no writers at all.  Failure returns
+        an empty list, which the keeper treats as fail-closed
+        ``writer_unknown``.
+        """
+        if not valid_commit_ref(sha):
+            return []
+        proc = self._run(
+            repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]
+        )
+        if proc.returncode != 0:
+            return []
+        lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+        if not lines:
+            return []
+        tokens = lines[0].split()
+        if not tokens:
+            return []
+        parents = tokens[1:]
+        if len(parents) > 2:
+            # Octopus merge: parents[2:] have no range to derive writers from,
+            # so refusing ([] → writer_unknown) is safer than silently
+            # ignoring the commits they carry.
+            return []
+        if len(parents) < 2:
+            return [self.trailers(repo, sha)]
+        base = self._run(
+            repo, ["merge-base", "--end-of-options", parents[0], parents[1]]
+        )
+        base_sha = base.stdout.strip().lower() if base.returncode == 0 else ""
+        if not valid_commit_ref(base_sha):
+            return []
+        rev = self._run(
+            repo,
+            ["rev-list", "--no-merges", "--end-of-options",
+             f"{base_sha}..{parents[1]}"],
+        )
+        if rev.returncode != 0:
+            return []
+        out: list[dict[str, str]] = []
+        for line in rev.stdout.splitlines():
+            commit = line.strip().lower()
+            if not valid_commit_ref(commit):
+                continue
+            out.append(self.trailers(repo, commit))
+        return out
 
     def commit_times(self, repo: str, sha: str) -> tuple[float | None, float | None]:
         """Return ``(author_epoch, committer_epoch)`` or ``(None, None)``.

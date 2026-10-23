@@ -29,8 +29,8 @@ page every 5 minutes. Three steps, in order:
 workflow *file* (`PLANGRAPH_CI_WORKFLOW_PATH`, default `.github/workflows/tests.yml`) whose own
 `head_sha` is that sha and whose `head_repository` is `PLANGRAPH_REPO` — a same-NAMED workflow in
 another file, or a fork PR's copy of it, cannot decide the result; the run's `name` is not consulted.
-A commit with no PR must carry its own green run. Docs-only PRs produce no run at all, so their heads are
-not followed — the live page advances when the next code PR lands green. Keep `PLANGRAPH_STATE` outside
+A commit with no PR must carry its own green run. Docs-only PRs run only the scrub and the `ci-gate` job (the
+workflow selects suites per change), so their heads are followed too. Keep `PLANGRAPH_STATE` outside
 `PLANGRAPH_OUT`: the output directory is the web-served render directory, and the gate state does not
 belong in it. The read-only token authorising
 those GitHub queries lives only in the file named by `PLANGRAPH_GH_TOKEN_FILE` — a `KEY=VALUE` file
@@ -47,3 +47,26 @@ or copied into a unit or into `render.env`.
 `systemctl --user enable --now plangraph-render.timer`. Optional drop-ins live in
 `plangraph-render.service.d/` as `.example` files (`kg.conf.example` for the knowledge-graph sidecar,
 `live-tree.conf.example` for overriding the live tree location); copy without the suffix to make one live.
+
+## Host Bootstrap & Spawner Setup
+
+Host runtime packages and agent CLI dependencies are defined declaratively and delegated to [AutoOS](https://github.com/mauls/AutoOS) without duplicating installation logic.
+
+- `requirements-host.json`: Inventory of required AutoOS components split into `core` (`git`, `python`, `nodejs`, `tailscale`, `omniroute`, `opencode-cli`) and `agents` (`claude-code`, `qwen-code`, `gemini-cli`, `qoder-cli`, `agent-skill-links`).
+- `bootstrap.ps1` (Windows): Resolves AutoOS root, invokes `setup.ps1 -Only <components> -Yes`, and initializes the local SQLite spawner catalog DB.
+- `bootstrap.sh` (Linux / macOS): Resolves AutoOS root, invokes `setup.sh --only <components> --yes`, and initializes the local SQLite spawner catalog DB.
+
+Usage:
+```powershell
+# Windows PowerShell
+.\deploy\bootstrap.ps1 -DryRun
+.\deploy\bootstrap.ps1
+```
+```bash
+# Linux / macOS
+./deploy/bootstrap.sh --dry-run
+./deploy/bootstrap.sh
+```
+
+For complete spawner catalog, routing ladder, and MCP details, see [`docs/SPAWNER.md`](../docs/SPAWNER.md).
+
