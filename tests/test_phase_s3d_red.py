@@ -111,14 +111,91 @@ def finish_in_review(w, tmp_path, *, ci=True):
 
 def test_worker_complete_moves_claimed_card_to_in_review(w):
     gate(w)
-    w.store.claim(w.p("workerA"), "demo:C1")
+    set_state(w, "claimed", "demo:C1")
+    w.store.conn.execute(
+        "UPDATE items SET claimed_by='system' WHERE key=?", ("demo:C1",)
+    )
+    w.store.conn.commit()
+    w.store.worker_complete(
+        w.p("system"), {"card": "demo:C1", "merged_sha": "abcdef1"}
+    )
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key=?", ("demo:C1",)
+    ).fetchone()
+    assert row[0] == "in_review"
+
+def test_worker_complete_on_non_phase_item_stays_claimed(w):
+    w.store.create_items(
+        w.p("router"),
+        [
+            defn("LONE"),
+            defn("GOAL2", ["LONE"], kind="goal"),
+        ],
+    )
+    set_state(w, "claimed", "demo:LONE")
+    w.store.conn.execute(
+        "UPDATE items SET claimed_by='system' WHERE key=?", ("demo:LONE",)
+    )
+    w.store.conn.commit()
+    w.store.worker_complete(
+        w.p("system"), {"card": "demo:LONE", "merged_sha": "abcdef1"}
+    )
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key=?", ("demo:LONE",)
+    ).fetchone()
+    assert row[0] == "claimed"
+
+def test_worker_complete_by_non_system_worker_stays_claimed(w):
+    gate(w)
+    set_state(w, "claimed", "demo:C1")
+    w.store.conn.execute(
+        "UPDATE items SET claimed_by='workerA' WHERE key=?", ("demo:C1",)
+    )
+    w.store.conn.commit()
     w.store.worker_complete(
         w.p("workerA"), {"card": "demo:C1", "merged_sha": "abcdef1"}
     )
     row = w.store.conn.execute(
         "SELECT state FROM items WHERE key=?", ("demo:C1",)
     ).fetchone()
-    assert row[0] == "in_review"
+    assert row[0] == "claimed"
+
+def test_attach_merge_evidence_refused_before_pr_merged(w):
+    gate(w)
+    set_state(w, "in_review", "demo:C1", "demo:C2")
+    github = FakeGitHub(
+        pr={"number": 7, "url": "u", "state": "open", "head": "h"}
+    )
+    with pytest.raises(Refused) as exc:
+        phase_finish.attach_merge_evidence(
+            w.store, w.p("router"), "demo:PH-X", "a" * 40, github=github
+        )
+    assert exc.value.code == "bad_state"
+    count = w.store.conn.execute(
+        "SELECT COUNT(*) FROM evidence WHERE kind='commit+ci'"
+    ).fetchone()[0]
+    assert count == 0
+
+def test_attach_merge_evidence_after_pr_merged(w):
+    gate(w)
+    set_state(w, "in_review", "demo:C1", "demo:C2")
+    github = FakeGitHub(
+        pr={"number": 7, "url": "u", "state": "merged", "head": "h"}
+    )
+    phase_finish.attach_merge_evidence(
+        w.store, w.p("router"), "demo:PH-X", "a" * 40, github=github
+    )
+    rows = w.store.conn.execute(
+        "SELECT key, ref FROM evidence WHERE kind='commit+ci'"
+    ).fetchall()
+    assert {row[0] for row in rows} == {"demo:C1", "demo:C2"}
+    assert len(rows) == 2
+    assert all("a" * 40 in row[1] for row in rows)
+    with pytest.raises(Refused) as exc:
+        phase_finish.attach_merge_evidence(
+            w.store, w.p("router"), "demo:PH-X", "not-a-sha", github=github
+        )
+    assert exc.value.code == "validation"
 
 def test_finish_refuses_card_not_worker_complete(w, tmp_path):
     gate(w)
