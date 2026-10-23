@@ -8,6 +8,12 @@
 [scrub]
 
 [[scrub.allow_value]]
+path = "tests/fleet_bus/vectors/sign.json"
+rule = "token-shape"
+value_sha256 = "48f27ef8fc9d274fbeee761e0171b64e32551784d0b4543998a94085fa0f07e6"
+why = "synthetic HMAC test vector"
+
+[[scrub.allow_value]]
 path = ".gitleaks.toml"
 rule = "credential-shape"
 value_sha256 = "b4b169401a4aea03b545b9825171c94cd41336757dbdcd400427e68c9ff4a2e5"

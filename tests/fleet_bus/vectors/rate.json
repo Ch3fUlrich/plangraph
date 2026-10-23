@@ -1,0 +1,25 @@
+[
+  {
+    "name": "thirty-first",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true
+    },
+    "error": {
+      "code": "rate_limited",
+      "status": 429
+    }
+  },
+  {
+    "name": "unauth-before-rate",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "signature": "bad"
+    },
+    "error": {
+      "code": "bad_signature",
+      "status": 401
+    }
+  }
+]

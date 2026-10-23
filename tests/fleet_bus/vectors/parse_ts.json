@@ -1,0 +1,177 @@
+[
+  {
+    "name": "1700000000",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": 1700000000
+    },
+    "expect": 1700000000
+  },
+  {
+    "name": "1700000000.0",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": 1700000000.0
+    },
+    "expect": 1700000000
+  },
+  {
+    "name": "1700000000",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": "1700000000"
+    },
+    "expect": 1700000000
+  },
+  {
+    "name": "zero",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": 0
+    },
+    "expect": 0
+  },
+  {
+    "name": "reject-0",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": true
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-1",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": false
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-2",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": -1
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-3",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": -1.0
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-4",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": "-1"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-5",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": "bad"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-6",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": null
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-7",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": []
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-8",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": {}
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "reject-9",
+    "fn": "parse_ts",
+    "inputs": {
+      "value": 1.5
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "nan",
+    "fn": "parse_ts",
+    "inputs": {
+      "special": "nan"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "inf",
+    "fn": "parse_ts",
+    "inputs": {
+      "special": "inf"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "-inf",
+    "fn": "parse_ts",
+    "inputs": {
+      "special": "-inf"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  }
+]
