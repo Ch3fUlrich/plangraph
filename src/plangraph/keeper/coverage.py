@@ -3,7 +3,10 @@
 Mirrors ``tools/seat_verdict.coverage`` on the keeper side.  The reviewer
 families of the current round are the *seats*; the families named by the
 ``Writer:`` trailer of every commit behind the item's current-epoch verified
-``commit+ci`` evidence are the *writers*.  A writer family is covered when
+``commit+ci`` evidence are the *writers*.  A commit may name several
+writers (a squashed branch carries one ``Writer:`` line per writer), so every
+value of the ``Writer:`` key counts — not just the first or the last.  A
+writer family is covered when
 ``need`` distinct seat families other than it exist (``1`` standard, ``2``
 high) and, for a sensitive (high) item, at least one of them is neither
 ``anthropic`` nor the writer itself.  Two Claude seats are therefore one
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 from ..review.family import model_family
 from .errors import Refused
+from .evidence_git import trailer_values
 
 __all__ = ["uncovered", "writer_families"]
 
@@ -52,9 +56,11 @@ def uncovered(writers, seats, need=2, sensitive=False):
 def writer_families(store, item, ctx):
     """Writer families of *item*'s current-epoch verified ``commit+ci`` rows.
 
-    Raises :class:`Refused` with code ``writer_unknown`` when any evidence
-    commit cannot be resolved to a family.  An item with no commit evidence
-    (e.g. decision-only) has no commit writers and returns ``[]``.
+    Every ``Writer:`` value of every leaf commit behind those rows is
+    resolved, so a squashed commit naming two writer families contributes
+    both.  Raises :class:`Refused` with code ``writer_unknown`` when any
+    evidence commit cannot be resolved to a family.  An item with no commit
+    evidence (e.g. decision-only) has no commit writers and returns ``[]``.
     """
     rows = [e for e in store._evidence(item["key"])
             if e["epoch"] == item["epoch"] and e["verified"]
@@ -82,18 +88,20 @@ def writer_families(store, item, ctx):
             raise Refused("writer_unknown",
                           f"commit {commit} names no writer")
         for trailer in trailers:
-            writer = trailer.get("Writer")
-            if writer:
-                model = str(writer).split()[0] if str(writer).split() else ""
-                family = model_family(model)
-                if family is None:
-                    raise Refused("writer_unknown",
-                                  f"unknown writer model {model!r}")
-            elif trailer.get("Hand-Edit"):
-                family = "anthropic"
+            writers = trailer_values(trailer.get("Writer"))
+            if writers:
+                for writer in writers:
+                    tokens = str(writer).split()
+                    model = tokens[0] if tokens else ""
+                    family = model_family(model)
+                    if family is None:
+                        raise Refused("writer_unknown",
+                                      f"unknown writer model {model!r}")
+                    families.append(family)
+            elif trailer_values(trailer.get("Hand-Edit")):
+                families.append("anthropic")
             else:
                 raise Refused(
                     "writer_unknown",
                     f"commit behind {commit} has neither Writer nor Hand-Edit")
-            families.append(family)
     return families

@@ -61,14 +61,24 @@ __all__ = [
 # --------------------------------------------------------------------------- #
 
 def _trailer(trailers: Any, name: str) -> str | None:
-    """Case-insensitive trailer lookup (git trailer keys are case-insensitive)."""
+    """Case-insensitive trailer lookup (git trailer keys are case-insensitive).
+
+    A repeated key keeps every value; this one-value lookup (``Plan-Item``)
+    takes the LAST of them, which is what the old last-value-wins parse
+    returned.
+    """
     if not isinstance(trailers, dict):
         return None
     target = name.lower()
+    found: Any = None
     for key, value in trailers.items():
         if str(key).lower() == target:
-            return str(value)
-    return None
+            found = value
+    if isinstance(found, (list, tuple)):
+        if not found:
+            return None
+        found = found[-1]
+    return str(found) if found is not None else None
 
 
 def _fail(detail: str, ref: dict) -> Result:

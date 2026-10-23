@@ -23,7 +23,8 @@ from typing import Any, Callable, Mapping
 
 from .evidence_types import Result, valid_commit_ref
 
-__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref", "resolve_commit"]
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_values",
+           "valid_ref", "resolve_commit"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
 _SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -39,22 +40,58 @@ def valid_ref(ref: Any) -> bool:
     return bool(_REF_RE.fullmatch(ref))
 
 
-def parse_trailers(text: str) -> dict[str, str]:
-    """Parse ``git show -s --format=%(trailers)`` output into key → value.
+def parse_trailers(text: str) -> dict[str, str | list[str]]:
+    """Parse trailer lines (``Key: value``) into key → value(s), in order.
 
-    ``%(trailers)`` emits one ``Key: value`` line per trailer (possibly with
-    leading blank lines), exactly the shape parsed here. Last value wins.
+    A key that occurs once keeps its plain ``str`` value, so a one-value
+    lookup (``Plan-Item``) sees exactly what it saw before.  A key that
+    occurs MORE than once keeps every value as a ``list[str]`` in message
+    order: a squashed commit may carry several ``Writer:`` lines, and the
+    seat-coverage check must see every writer family, not only the last
+    (or the first) one.
+
+    An indented line continues the trailer before it (git's own continuation
+    rule), which ``%(trailers)`` used to unfold for us; a blank line ends a
+    paragraph, so nothing continues across one.
     """
-    trailers: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
+    values: dict[str, list[str]] = {}
+    last: str | None = None
+    for raw in text.splitlines():
+        if raw[:1] in (" ", "\t") and last is not None and values[last]:
+            values[last][-1] = f"{values[last][-1]} {raw.strip()}".strip()
+            continue
+        line = raw.strip()
         if not line or ":" not in line:
+            last = None
             continue
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
-        if key:
-            trailers[key] = value
-    return trailers
+        if not key:
+            last = None
+            continue
+        values.setdefault(key, []).append(value)
+        last = key
+    return {key: seen[0] if len(seen) == 1 else seen
+            for key, seen in values.items()}
+
+
+def trailer_values(value: Any) -> list[str]:
+    """Every value of one parsed trailer key: a ``str`` is a single value.
+
+    Lets a consumer (the seat-coverage check) treat both shapes — the plain
+    string a single ``Writer:``/``Hand-Edit:`` line yields and the list a
+    repeated key yields — the same way.  Blank values are dropped: a blank
+    trailer line names nothing.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple, set)):
+        items = [str(item) for item in value]
+    else:
+        items = [str(value)]
+    return [item for item in items if item.strip()]
 
 
 def resolve_commit(
@@ -409,17 +446,28 @@ class GitAdapter:
         except Exception:
             return None
 
-    def trailers(self, repo: str, sha: str) -> dict[str, str]:
+    def trailers(self, repo: str, sha: str) -> dict[str, str | list[str]]:
+        """Every trailer of the commit *sha*'s message, key → value(s).
+
+        The message BODY (``%b``) is parsed, not git's ``%(trailers)``
+        placeholder: that placeholder reports only the LAST paragraph of the
+        message, so a ``Writer:`` block (or a ``Plan-Item:`` line) followed
+        by a blank line and another paragraph — e.g. ``Co-Authored-By`` —
+        was silently dropped, hiding a writer from the seat-coverage check.
+        git never takes the subject for a trailer block (``%(trailers)`` is
+        empty for a subject-only message), so reading the body reports
+        everything the placeholder did plus the paragraphs it dropped.
+        """
         if not valid_commit_ref(sha):
             return {}
         proc = self._run(
-            repo, ["show", "-s", "--format=%(trailers)", "--end-of-options", sha]
+            repo, ["show", "-s", "--format=%b", "--end-of-options", sha]
         )
         if proc.returncode != 0:
             return {}
         return parse_trailers(proc.stdout)
 
-    def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str]]:
+    def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str | list[str]]]:
         """Trailer dicts of the commits that authored the change behind *sha*.
 
         L1 attaches ``commit+ci`` evidence to the PR merge commit, which carries
@@ -427,10 +475,11 @@ class GitAdapter:
         range holds inner PR merges) the writers are the NON-merge commits in
         ``merge-base(parent1, parent2)..parent2``: the merge commit itself,
         main-side commits and inner merges are never consulted.  A non-merge
-        commit stands for itself.  An octopus merge (3+ parents) has no single
-        second-parent range, so it returns no writers at all.  Failure returns
-        an empty list, which the keeper treats as fail-closed
-        ``writer_unknown``.
+        commit stands for itself.  Every ``Writer:`` value of such a commit is
+        kept (a squashed leaf may name several writer families).  An octopus
+        merge (3+ parents) has no single second-parent range, so it returns no
+        writers at all.  Failure returns an empty list, which the keeper treats
+        as fail-closed ``writer_unknown``.
         """
         if not valid_commit_ref(sha):
             return []
