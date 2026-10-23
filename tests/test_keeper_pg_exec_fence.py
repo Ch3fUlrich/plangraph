@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-from keeper_util import World, seed
+from keeper_util import World, seed, seed_exec_owner
 from plangraph.keeper.errors import Refused
 
 DSN = os.environ.get("PG_DSN")
@@ -42,7 +42,8 @@ def test_migration_7_applies_on_pg_and_park_refuses_an_older_attempt(tmp_path):
         assert 7 in versions, versions
         key, = seed(w, [("A", [])])
         # A run-carrying move records the owner at attempt 2 on Postgres ...
-        w.store.set_state(w.p("router"), key, "running", run=("wf", "run", 2))
+        seed_exec_owner(w, key, ("wf", "run", 2))
+        w.store.set_state(w.p("router"), key, "running")
         assert owner(w, key) == ("wf", "run", 2)
         before = dict(w.store._item(key))
         # ... so a park from the same run at the older attempt is exec_stale

@@ -119,9 +119,9 @@ def test_a_back_move_is_refused_even_with_a_new_run(w, terminal, target):
     w.store.set_state(w.p("router"), key, terminal, run=RUN1)
     refused("bad_transition", w.store.set_state, w.p("router"), key, target,
             run=RUN1)
-    refused("bad_transition", w.store.set_state, w.p("router"), key, target,
+    refused("validation", w.store.set_state, w.p("router"), key, target,
             run=RUN1, new_run=True)
-    refused("bad_transition", w.store.set_state, w.p("router"), key, target,
+    refused("validation", w.store.set_state, w.p("router"), key, target,
             run=("wf-2", "run-2", 1), new_run=True)
     assert owner(w, key) == ("wf-1", "run-1", 1)
 

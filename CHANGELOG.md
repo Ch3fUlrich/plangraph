@@ -126,3 +126,11 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - **Docs:** review record docs/reviews/2026-10-08-since-1006-seats.md; layered-planning gap table and task-size
   options docs/proposals/2026-10-08-layered-planning-gaps.md (operator chose size B, D-656).
 - **Plan data:** 2026-10-08 router batches under data/updates/ (see data/updates/QUEUE.md).
+# Exec ownership follow-up
+
+- Refuse unassigned workers recording owners on unclaimed cards; require the
+  holder or delegated worker instead.
+- Add router API/MCP `requeue` to revive parked cards while retiring the old run.
+- Preserve owners on projector resumes, audit owner changes in the event chain,
+  bound retired runs to 16, and explicitly reject removed `new_run` takeover.
+- Repair Postgres fence setup and Rust worker formatting.

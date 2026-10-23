@@ -2,6 +2,22 @@
 
 Status: Accepted (2026-10-22)
 
+## Follow-up: worker binding and revival
+
+An unclaimed card defaults to refusing ownership recording. It must have a
+delegate matching the worker principal; a claimed card requires its holder.
+Router-only API/MCP `requeue` revives a parked card to open using the explicit
+hand-back path. Store hand-back is restricted to router and system, not l1.
+Run-less projector resumes from waiting or needs_input to running preserve the
+owner. `new_run=True` is refused as validation, never silently ignored.
+
+Owner recording, attempt advances and clears append `exec_owner_changed` events
+inside their write transaction, so the hash chain attests these changes on both
+backends. The retired-run fence retains only the last 16 run identities, keeping
+the maximum attempt for each retained identity. Older evicted identities are no
+longer fenced; this bounds per-card storage rather than promising eternal replay
+protection.
+
 ## Context
 
 Worker calls can arrive after another Temporal run has begun. One owner per
@@ -15,7 +31,8 @@ principal that presented it. **Only a worker principal may record one** (the
 worker that holds the card's Temporal workflow): the recording principal is
 stored in `exec_principal` beside the triple; a router/l1/system/spawner token
 presenting a triple on an unowned card is refused `forbidden` and records
-nothing; and on a claimed card the claim holder must be that principal. Once
+nothing; on a claimed card the holder must be that principal, and an unclaimed
+card requires a matching delegate. Once
 recorded, a *worker* or *spawner* principal whose name differs from
 `exec_principal` is refused `forbidden` on that card. Audit-only attempts and
 no-op calls do not acquire a first owner. An existing owner still requires stale
@@ -30,7 +47,7 @@ lands on `open`/`ready` clears the owner, in the same transaction as the state
 update, so a parked card revives with a new run. A bare run-less `set_state` —
 the projector/planner write path — is never a hand-back: it keeps the owner of
 a live run (a run-carrying move, a no-op move and a move to any other state
-keep the owner as well). The `new_run` takeover is removed; a different run cannot replace a
+keep the owner as well). The `new_run` takeover is refused; a different run cannot replace a
 live owner.
 Worker
 verbs never take over ownership **while an owner exists**; an unowned card is

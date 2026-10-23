@@ -800,12 +800,7 @@ fn once_options(cfg: &Config) -> ActivityOptions {
 /// of those are live; `claimed` and the terminal states are not.
 fn done_input(card: String, merged_sha: String, attempt: u32) -> DoneInput {
     DoneInput {
-        expected_state: Some(
-            WORKER_LIVE_STATES
-                .iter()
-                .map(|s| (*s).to_owned())
-                .collect(),
-        ),
+        expected_state: Some(WORKER_LIVE_STATES.iter().map(|s| (*s).to_owned()).collect()),
         card,
         merged_sha,
         attempt: Some(attempt.max(1)),
@@ -1550,8 +1545,14 @@ mod tests {
         // needs_input, so both must be part of what complete accepts.
         assert!(states.iter().any(|s| s == "waiting"));
         assert!(states.iter().any(|s| s == "needs_input"));
-        assert_eq!((input.card.as_str(), input.merged_sha.as_str(), input.attempt),
-                   ("c-1", "deadbeef", Some(3)));
+        assert_eq!(
+            (
+                input.card.as_str(),
+                input.merged_sha.as_str(),
+                input.attempt
+            ),
+            ("c-1", "deadbeef", Some(3))
+        );
     }
 
     #[test]

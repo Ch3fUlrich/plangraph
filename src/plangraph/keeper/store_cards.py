@@ -490,8 +490,12 @@ class CardsMixin:
                                                      hand_back=hand_back))
 
     def _set_state(self, principal, key, state, reason, now, run=None, new_run=False,
-                   hand_back=False):
+                    hand_back=False):
         self._require_role(principal, "router", "l1", "system")
+        if new_run:
+            raise Refused("validation", "new_run is removed; use requeue")
+        if hand_back:
+            self._require_role(principal, "router", "system")
         if state not in SETTABLE_STATES:
             raise Refused("validation",
                           f"state must be one of {list(SETTABLE_STATES)}; claim, review,"
@@ -501,6 +505,19 @@ class CardsMixin:
                                  lambda project: self._may_write_for(principal,
                                                                      project),
                                  run=run, new_run=new_run, hand_back=hand_back)
+
+    def requeue(self, principal, key, reason=""):
+        """Router-only revival of a parked card, retiring its previous run."""
+        def apply(now):
+            self._require_role(principal, "router")
+            def guard(item):
+                if item["state"] != "parked":
+                    raise Refused("bad_state", "requeue requires a parked card")
+            return self._apply_state(principal, key, "open",
+                                     _text("reason", reason or "", cap=500, key=key),
+                                     now, lambda project: self._may_write_for(principal, project),
+                                     guard=guard, hand_back=True)
+        return self._run(principal, "requeue", key, apply)
 
     def _exec_clear(self, conn, key):
         """Free the exec owner inside the caller's keeper transaction.
@@ -536,8 +553,10 @@ class CardsMixin:
             retired.append({"workflow_id": run_key[0], "run_id": run_key[1],
                             "attempt": row["exec_attempt"]})
         conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
-                     " exec_attempt=NULL, exec_retired_runs=? WHERE key=?",
-                     (_dump(retired), key))
+                     " exec_attempt=NULL, exec_principal=NULL, exec_retired_runs=? WHERE key=?",
+                     (_dump(retired[-16:]), key))
+        self._append(None, key, "exec_owner_changed",
+                     {"action": "clear", "retired": retired[-16:]}, self.clock())
 
     def _exec_record(self, conn, item_id, wf, run, attempt, principal=None, now=None):
         """Record the exec owner of *item_id*: the first owner of an unowned card.
@@ -562,7 +581,10 @@ class CardsMixin:
             values += (self._iso(now),)
         conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?,"
                      f" exec_attempt=?, exec_principal=?{touch} WHERE key=?",
-                     (*values, item_id))
+                      (*values, item_id))
+        self._append(principal, item_id, "exec_owner_changed",
+                     {"action": "record", "workflow_id": wf, "run_id": run,
+                      "attempt": attempt}, now if now is not None else self.clock())
 
     def _exec_check(self, conn, item_id, wf, run, attempt, principal=None,
                     now=None, record=True):
@@ -582,7 +604,7 @@ class CardsMixin:
         wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
         row = conn.execute(
             "SELECT exec_workflow_id, exec_run_id, exec_attempt, exec_principal,"
-            " exec_retired_runs, claimed_by FROM items WHERE key=?",
+            " exec_retired_runs, claimed_by, delegate FROM items WHERE key=?",
             (item_id,)).fetchone()
         recorded = row["exec_run_id"] if row is not None else None
         retired = [(entry.get("workflow_id"), entry.get("run_id"))
@@ -604,7 +626,7 @@ class CardsMixin:
                               f"{item_id}: only the worker principal may record"
                               f" an exec owner, not {name}")
             holder = row["claimed_by"] if row is not None else None
-            if holder is not None and holder != principal.name:
+            if (holder if holder is not None else row["delegate"]) != principal.name:
                 raise Refused("forbidden",
                               f"{item_id} is held by {holder}: only the holder"
                               " may record its exec owner")
@@ -629,6 +651,9 @@ class CardsMixin:
             values = (attempt,) if now is None else (attempt, self._iso(now))
             conn.execute(f"UPDATE items SET exec_attempt=?{touch} WHERE key=?",
                          (*values, item_id))
+            self._append(principal, item_id, "exec_owner_changed",
+                         {"action": "advance", "workflow_id": wf, "run_id": run,
+                          "attempt": attempt}, now if now is not None else self.clock())
 
     def _apply_state(self, principal, key, state, why, now, scope,
                      guard=None, release_claim=False, run=None, new_run=False,
@@ -655,7 +680,7 @@ class CardsMixin:
         strand it -- the explicit hand-back door (or ``release_claim``) is the
         way back.  Unowned cards keep the historical run-less behaviour.
         No-op moves, run-carrying moves and moves to any other state keep the owner.
-        ``new_run`` is accepted and ignored for compatibility. Callers without
+        ``new_run`` is refused by set_state. Callers without
         ``run`` keep the historical, unchecked behaviour when no owner is recorded.
         """
         with self._write():
@@ -679,6 +704,7 @@ class CardsMixin:
                                   f"{key}: {was} -> {state} is not a forward move")
             elif (item["exec_run_id"] is not None and was != state
                   and not hand_back and not release_claim
+                  and not (was in ("waiting", "needs_input") and state == "running")
                   and not _forward(was, state)):
                 # RT-P1 sq5 fix 3 (deepseek V1): the forward table also guards a
                 # bare run-less move on an OWNED card, so router/l1/system cannot
