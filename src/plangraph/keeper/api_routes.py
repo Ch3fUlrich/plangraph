@@ -130,7 +130,9 @@ def _set_kind(store, principal, body, need):
 
 
 def _apply_ops(store, principal, body, need):
-    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"))
+    return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
+                           base_seq=body.get("base_seq"),
+                           dry_run=body.get("dry_run"))
 
 
 def _migrate_descriptions(store, principal, body, need):
