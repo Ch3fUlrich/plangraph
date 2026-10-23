@@ -427,8 +427,10 @@ class GitAdapter:
         range holds inner PR merges) the writers are the NON-merge commits in
         ``merge-base(parent1, parent2)..parent2``: the merge commit itself,
         main-side commits and inner merges are never consulted.  A non-merge
-        commit stands for itself.  Failure returns an empty list, which the
-        keeper treats as fail-closed ``writer_unknown``.
+        commit stands for itself.  An octopus merge (3+ parents) has no single
+        second-parent range, so it returns no writers at all.  Failure returns
+        an empty list, which the keeper treats as fail-closed
+        ``writer_unknown``.
         """
         if not valid_commit_ref(sha):
             return []
@@ -444,6 +446,11 @@ class GitAdapter:
         if not tokens:
             return []
         parents = tokens[1:]
+        if len(parents) > 2:
+            # Octopus merge: parents[2:] have no range to derive writers from,
+            # so refusing ([] → writer_unknown) is safer than silently
+            # ignoring the commits they carry.
+            return []
         if len(parents) < 2:
             return [self.trailers(repo, sha)]
         base = self._run(
