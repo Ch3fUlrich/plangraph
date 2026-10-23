@@ -17,6 +17,7 @@ EXIT_USAGE = 64
 ENV_PROJECTS = "PLANGRAPH_CLAUDE_PROJECTS_DIR"
 ENV_WEEKLY = "PLANGRAPH_WEEKLY_CAP_WEIGHTED"
 ENV_QUOTA = "PLANGRAPH_PROVIDER_QUOTA"
+ENV_HOST = "PLANGRAPH_HOST"
 
 
 def _cmd_daily(args, session) -> int:
@@ -48,8 +49,18 @@ def _cmd_daily(args, session) -> int:
         print(f"cannot read projects dir: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
+    try:
+        session_classes = (metrics.load_session_classes(args.session_classes)
+                           if args.session_classes else None)
+    except (OSError, ValueError) as exc:
+        print(f"bad session-classes file: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    host = args.host or os.environ.get(ENV_HOST)
+    metrics.tag_records(records, host=host, session_classes=session_classes)
+
     items = list(metrics.daily_metrics(
         day.isoformat(), records, landed, weekly_cap))
+    ctx = metrics.ctx_report(records, day.isoformat())
 
     if args.provider_usage:
         try:
@@ -81,7 +92,7 @@ def _cmd_daily(args, session) -> int:
             return 2
 
     print(json.dumps({"day": day.isoformat(), "items": items,
-                      "posted": posted}))
+                      "posted": posted, "ctx": ctx}))
     return 0
 
 
@@ -141,6 +152,11 @@ def _build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--repo", default=None)
     daily.add_argument("--ref", default="HEAD")
     daily.add_argument("--weekly-cap", type=float, default=None)
+    daily.add_argument("--host", default=None,
+                       help="host name for the ctx report "
+                            f"(default: ${ENV_HOST} or the local hostname)")
+    daily.add_argument("--session-classes", default=None, metavar="PATH",
+                       help="JSON {session_id: class} launch-record mapping")
     daily.add_argument("--provider-usage", default=None)
     daily.add_argument("--rate-limited", default=None)
     daily.add_argument("--dry-run", action="store_true")

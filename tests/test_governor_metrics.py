@@ -414,6 +414,20 @@ def test_nearest_rank_percentiles():
     assert metrics.nearest_rank([70, 10, 40], 0.9) == 70
 
 
+def test_share_over_200k_counts_strictly_more_than_200k():
+    ts = dt.datetime(2024, 4, 1, tzinfo=dt.timezone.utc)
+
+    def rec(cr):
+        return {"host": "box1", "session_class": "main", "session": "s",
+                "model": "claude-x", "ts": ts,
+                "input": 0, "output": 0, "cache_read": cr, "cache_write": 0}
+
+    group = metrics.ctx_report([rec(200000), rec(200001)], "2024-04-01")["groups"][0]
+    assert group["calls"] == 2
+    assert group["share_over_200k"] == 0.5
+    assert group["ctx_p50"] == 200000
+
+
 def test_daily_metrics_counts_only_the_requested_day():
     import datetime as dt
     def rec(day, n):
