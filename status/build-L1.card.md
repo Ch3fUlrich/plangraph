@@ -1,6 +1,6 @@
-# build-L1 card · gen-21 · 2026-10-23 ~11:25Z · NO cron · hb loop br1ugphrz (dies w/ gen-21; restart FIRST) over ops/hb-keys.txt
+# build-L1 card · gen-22 · 2026-10-23 12:55Z · wake bm0b93u2e 13:53Z (D-2432 sol back; agy 22:52Z) · NO cron · hb loop br1ugphrz (dies w/ gen-21; restart FIRST) over ops/hb-keys.txt
 Handoff #22 = docs/build-L1-handoff.md top (order list). Control repo LOCAL ONLY (D-1751): `git push control build-L1`.
-Writers: omniroute/mimo-v2.6-flash via autoos-agent spawn (cx/gpt-6.1-sol not served coding.vm, skip). Never Claude writers.
+Writers: omniroute/mimo-v2.6-flash via autoos-agent spawn (sol back ~13:52Z D-2432; free muse-spark-1.3-contributor ok). Never Claude writers.
 Seats D-2399: deepseek (`sh ops/seat.sh deepseek/deepseek-flash`), Haiku (Agent model haiku), mimo, luna, qwen (429 to 10-24 15:30Z). No opencode free/OR free/agy.
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
 ## Main = 5671ac77 (#145 RT95 DONE). LIVE keeper = live-2d61e281 (never ff)
@@ -10,7 +10,8 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix1 cd8772 ended WIP (patch seats/pr143/cd8772-wip.patch) -> continuation 20261023-123259-ui-browser-fix1-cont-504805 (mimo) -> PR, CI, re-seat deepseek+haiku -> merge -> submit |
 | GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head f2ddac80 (main merged, CHANGELOG-only); Haiku PASS, luna FIX HIGH stray_writer_line indented/quoted (workst answer pr139-luna.answer.md e4b5d49a) -> fix3 deepseek writer requested from workst -> re-seat Haiku+luna -> GO-REQ |
-| PG-PUBLIC-FIX (HIGH p8) | L1 | MERGED c218b921 (D-2425), in_review, deepseek verdict ok; Haiku verdict refused same_family -> BLOCKED routing (*A waive_second_family standing) | -> GO-REQ; then re-seat PG-PUBLIC-READY |
+| PG-PUBLIC-FIX | DONE | closed D-2430 |
+| PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats: deepseek bkko3n3h4 running, luna asked workst; names-list scan BLOCKED (words file, asked routing) -> submit, verdicts, GO-REQ |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
 | KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; PR #148 head 6eb507f8 (sol d1d2b2; workst 4900 pass, 1 pre-existing contract fail on main too); Haiku PASS, deepseek FIX MED test hits kind check + LOW CHANGELOG; CONFLICTING main -> fix1 workst run 20261023-115337-keeper-close-fix1-2b54ea -> re-seat |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | claimed; workst writer 20261023-112202-jev-attempt-thread-write-f55fce running |
