@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import date, datetime, timedelta, timezone
 
 from plangraph.keeper import cli_verbs
@@ -112,11 +113,22 @@ def _cmd_daily(args, session) -> int:
 
 def _write_ctx(path: str, payload: dict) -> None:
     """Write the ctx report as indented JSON, replacing the old one atomically."""
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, sort_keys=True)
-        fh.write("\n")
-    os.replace(tmp, path)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=os.path.dirname(path) or ".",
+            prefix=os.path.basename(path) + ".", suffix=".tmp", delete=False,
+        ) as fh:
+            tmp = fh.name
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
 
 
 def _cmd_check(args, session) -> int:

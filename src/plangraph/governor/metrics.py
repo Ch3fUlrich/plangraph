@@ -124,7 +124,7 @@ def _scan_usage(
     host: str | None = None,
     session_classes: dict[str, str] | None = None,
 ) -> list[dict]:
-    """Parse every usage record in file order, with no deduplication.
+    """Parse usage records in timestamp, relative-file, line order, without dedup.
 
     Malformed lines and files are skipped. Each record carries ``ts``,
     ``session``, ``model``, ``host``, ``session_class``, the four token
@@ -138,7 +138,7 @@ def _scan_usage(
     ]
     records: list[dict] = []
     for pattern in patterns:
-        for path in glob.iglob(pattern):
+        for path in sorted(glob.iglob(pattern)):
             rel = os.path.relpath(path, projects_dir).replace(os.sep, "/")
             parts = rel.split("/")
             subagent = "/subagents/" in rel
@@ -148,7 +148,7 @@ def _scan_usage(
                 session = os.path.splitext(parts[1])[0] if len(parts) > 1 else os.path.splitext(os.path.basename(path))[0]
             try:
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    for line in f:
+                    for line_number, line in enumerate(f, 1):
                         if '"usage"' not in line or '"assistant"' not in line:
                             continue
                         try:
@@ -175,15 +175,22 @@ def _scan_usage(
                         model = d.get("model") or msg.get("model") or ""
                         sidechain = bool(d.get("isSidechain") or msg.get("isSidechain"))
                         base_class = "subagent" if (subagent or sidechain) else "main"
+                        message_id = msg.get("id") or d.get("uuid")
+                        request_id = d.get("requestId")
+                        if any(value is not None and not isinstance(value, (str, int))
+                               for value in (message_id, request_id)):
+                            continue
                         records.append({
+                            "file": rel,
+                            "line": line_number,
                             "ts": ts,
                             "session": session,
                             "model": model,
                             "host": host_name,
                             "session_class": classify_session(
                                 session, base_class, session_classes),
-                            "message_id": msg.get("id") or d.get("uuid"),
-                            "request_id": d.get("requestId"),
+                            "message_id": message_id,
+                            "request_id": request_id,
                             "input": input_tokens,
                             "output": output_tokens,
                             "cache_read": cache_read,
@@ -191,19 +198,23 @@ def _scan_usage(
                         })
             except Exception:
                 continue
-    return records
+    # Directory enumeration order must not choose the ctx report's first call.
+    return sorted(records, key=lambda rec: (rec["ts"], rec["file"], rec["line"]))
 
 
 def _dedup_largest(records: list[dict]) -> list[dict]:
     """Keep the highest-token record per ``(message id, requestId)``.
 
-    First record wins a tie: this is exactly what ``iter_usage`` has always
-    done, so the weighted/daily totals do not move.
+    First record wins a tie; records without a message id are never merged.
     """
     best: dict[tuple, dict] = {}
     totals: dict[tuple, int] = {}
     for rec in records:
         key = (rec.get("message_id"), rec.get("request_id"))
+        if not key[0]:
+            # No identity means no evidence that two calls are duplicates.
+            best[(None, len(best))] = rec
+            continue
         total = rec["input"] + rec["output"] + rec["cache_read"] + rec["cache_write"]
         if key not in best or total > totals[key]:
             best[key] = rec

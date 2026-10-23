@@ -49,6 +49,48 @@ def test_parse_ts_variants():
     assert metrics.parse_ts(None) is None
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_first_is_stable_across_file_order(tmp_path, monkeypatch, reverse):
+    paths = [tmp_path / "p" / name for name in ("a.jsonl", "b.jsonl")]
+    for index in ([1, 0] if reverse else [0, 1]):
+        _write_jsonl(paths[index], [
+            _assistant("same", "r", "2024-01-01T00:00:00Z", inp=index + 1)])
+    monkeypatch.setattr(metrics.glob, "iglob", lambda pattern:
+                        iter([str(p) for p in (paths[::-1] if reverse else paths)])
+                        if "subagents" not in pattern else iter([]))
+    assert metrics.iter_usage_first(tmp_path)[0]["input"] == 1
+
+
+def test_first_orders_timestamp_then_file_then_line(tmp_path):
+    _write_jsonl(tmp_path / "p" / "a.jsonl", [
+        _assistant("same", "r", "2024-01-02T00:00:00Z", inp=9)])
+    _write_jsonl(tmp_path / "p" / "b.jsonl", [
+        _assistant("same", "r", "2024-01-01T00:00:00Z", inp=1),
+        _assistant("same", "r", "2024-01-01T00:00:00Z", inp=2)])
+    assert metrics.iter_usage_first(tmp_path)[0]["input"] == 1
+
+
+@pytest.mark.parametrize("reader", [metrics.iter_usage, metrics.iter_usage_first])
+@pytest.mark.parametrize("field", ["message", "request"])
+def test_malformed_ids_are_skipped(tmp_path, reader, field):
+    bad = _assistant(["bad"] if field == "message" else "bad",
+                     ["bad"] if field == "request" else "r",
+                     "2024-01-01T00:00:00Z", inp=99)
+    good = _assistant("good", "r", "2024-01-01T00:00:00Z", inp=1)
+    _write_jsonl(tmp_path / "p" / "s.jsonl", [bad, good])
+    assert [r["input"] for r in reader(tmp_path)] == [1]
+
+
+@pytest.mark.parametrize("reader", [metrics.iter_usage, metrics.iter_usage_first])
+def test_idless_records_are_never_merged(tmp_path, reader):
+    _write_jsonl(tmp_path / "p" / "s.jsonl", [
+        _assistant(None, None, "2024-01-01T00:00:00Z", inp=i)
+        for i in (1, 2)])
+    records = reader(tmp_path)
+    assert len(records) == 2
+    assert metrics.ctx_report(records)["groups"][0]["calls"] == 2
+
+
 def test_dedup_keeps_higher_total(tmp_path):
     projects = tmp_path / "projects"
     low = _assistant("m1", "r1", "2024-01-01T00:00:00Z", inp=1, out=1)

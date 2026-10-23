@@ -71,6 +71,53 @@ def test_daily_posts_once(stub_daily, capsys):
     assert _out(capsys)["posted"] is True
 
 
+@pytest.mark.parametrize("failure", ["makedirs", "_write_ctx"])
+def test_ctx_write_failure_still_posts(stub_daily, monkeypatch, capsys, failure):
+    def fail(*args, **kwargs):
+        raise OSError("write failed")
+    monkeypatch.setattr(cli.os if failure == "makedirs" else cli, failure, fail)
+    session = FakeSession()
+    assert cli.main(["metrics", "daily", "--projects-dir", str(stub_daily),
+                     "--date", "2024-01-01"], session=session) == 0
+    captured = capsys.readouterr()
+    assert "cannot write ctx report" in captured.err
+    assert json.loads(captured.out)["posted"] is True
+    assert len(session.posts("set_metrics")) == 1
+    assert not (stub_daily / "ctx-2024-01-01.json").exists()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_write_ctx_unique_atomic_temp_and_cleanup(tmp_path, monkeypatch, fails):
+    path = tmp_path / "ctx.json"
+    fixed = tmp_path / "ctx.json.tmp"
+    fixed.write_text("other writer", encoding="utf-8")
+    replace = cli.os.replace
+    seen = []
+
+    def inspect(source, destination):
+        from pathlib import Path
+        source = Path(source)
+        seen.append(source)
+        assert source.parent == path.parent
+        assert source != fixed
+        assert not path.exists()
+        assert json.loads(source.read_text(encoding="utf-8")) == {"ok": True}
+        if fails:
+            raise OSError("rename failed")
+        replace(source, destination)
+
+    monkeypatch.setattr(cli.os, "replace", inspect)
+    if fails:
+        with pytest.raises(OSError):
+            cli._write_ctx(str(path), {"ok": True})
+    else:
+        cli._write_ctx(str(path), {"ok": True})
+        assert json.loads(path.read_text(encoding="utf-8")) == {"ok": True}
+    assert seen and not seen[0].exists()
+    assert fixed.read_text(encoding="utf-8") == "other writer"
+    assert path.exists() is not fails
+
+
 def test_rerun_is_idempotent_body(stub_daily):
     s = FakeSession()
     args = ["metrics", "daily", "--projects-dir", str(stub_daily)]
