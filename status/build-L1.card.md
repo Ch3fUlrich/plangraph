@@ -15,7 +15,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; define refused unreachable_goal -> routing asked (item.json seats/close-skip-unverified); writer after slot frees |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | brief seats/jev-attempt-thread/WRITER-BRIEF.md; spawn+claim when slot frees |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | writer id chased 11:2xZ (D-2407); S3d -> MERGE-READY; merge after #140 |
+| RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
 | RT95 / CARD-CHECKS / WF-VERSIONING | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | expect MERGE-READY/GO-REQ |
 | RT-P1-BUS-CONTRACT | build-L2-bus | expect MERGE-READY (watch qwen 429) |
