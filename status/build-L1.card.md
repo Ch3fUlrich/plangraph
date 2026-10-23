@@ -6,21 +6,20 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 5671ac77 (#145 RT95 DONE). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq6 0f516bc (sol 6ab8f2, verb requeue; unverified full/PG) + main merge -> head cc0edd70 CI running -> seats deepseek+Haiku (recipe sq5/PROMPT.txt) -> re-GO-REQ |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq6 cc0edd70 CI red 12 fail -> sq7 sol RUNNING workst (seats/exec-ownership/sq7) -> CI, deepseek+Haiku -> GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | PR #152 head 32051a6a CI green; r2 seats both FIX (Haiku MED edit scan unscoped; deepseek evidence gaps) -> fix3 sol on workst queued after B -> CI, re-seat (r2b prompt w/ writer-report.txt) |
-| GOV-CTX-METRICS #144 | L1 | r3 seats: deepseek MED None-ts sort TypeError, Haiku LOW id-less doc -> fix3 sol RUNNING on workst (brief B) -> CI, r4 seats -> merge |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix4 470492 taken -> head 3190b3fb CI green; seats FIX: Haiku HIGH subject not scanned, luna HIGH real-repo 2-writer verdict test + f6fadc23 -> fix5 MIMO writer (brief C, workst) -> CI, Haiku+luna -> GO-REQ |
+| GOV-CTX-METRICS #144 | L1 | r4 deepseek PASS, Haiku LOW doc -> Hand-Edit ada4ca2b -> mergepath RUNNING -> submit, verdicts |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix5b mimo RUNNING workst (seats/trailer-multi/fix5) -> CI, Haiku+luna -> GO-REQ; #150 S3d depends on it |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats deepseek + luna (workst sha256 review a434ce1e): no code finding; both FIX only on names-list scan + later gates -> after operator scan line: re-run both, submit, GO-REQ, luna asked workst; IDLE: operator runs words --check on c218b921 (D-2434), trigger = his result line; luna r4 workst builds prompt, runs ~13:52Z -> submit, verdicts, GO-REQ |
-| #96 JEV-SHADOW (HIGH) | L1 | in_review; closes with JEV-ATTEMPT-THREAD (1 seat combined diff) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
-| JEV-ATTEMPT-THREAD p7 | L1 | PR #154 head 31bd5a4e (d305c64 sol f55fce + main) CI running -> 2 non-openai seats (deepseek+Haiku) -> GO-REQ (HIGH via #96) |
-| BUS-NONCE-FLOOD p4 | L1 queue | D-2422 created (PH-RT-CONSOLIDATE); unclaimed, starts after P1 writers free |
+| JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
+| BUS-NONCE-FLOOD p4 | L1 | claimed epoch 1; writer E sol queued on workst (lane/bus-nonce-flood @de54bb22) -> CI, deepseek+mimo -> merge |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
-| CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards (workst) | ruling b-variant: re-run seat2, MERGE-READY #147 (wiring inert); lane 2b wiring same item HIGH; then WF-VERSIONING |
+| RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner | ruling (a) contract C1 multi Plan-Item merge msg / C2 system-card family from writer trailers / C3 atomic idempotent attach; merge after #139 + #140 |
+| CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | ruling (2): fix unjailed base check + diffscan renames, re-seat deepseek, MERGE-READY; lane 2b wiring + findings 2,4,5,6,8 (HIGH GO-REQ); then WF-VERSIONING |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
-| RT-P1-BUS-CONTRACT (HIGH) | L1 | vectors PR #153 head ee86215f CI green; seats deepseek+mimo RUNNING (seats/pr153) -> GO-REQ, merge, submit |
+| RT-P1-BUS-CONTRACT | DONE | #153 merged 432c5377, keeper done (mimo + deepseek r2) |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
 | KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |
 | PG-BOOTSTRAP-FLEET-ENV (HIGH) | L1 queue | blocked autoos:AO-OCL1-PW-FILE |
