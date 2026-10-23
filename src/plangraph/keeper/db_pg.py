@@ -283,9 +283,9 @@ def migrate(raw, schema: str) -> list:
             ran.append(step.version)
         # Presence-based additions must also run on already-current databases.
         raw.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS"
-                    " check_kind TEXT NOT NULL DEFAULT 'change'")
+                    " check_kind TEXT COLLATE \"C\" NOT NULL DEFAULT 'change'")
         raw.execute("ALTER TABLE cards ADD COLUMN IF NOT EXISTS"
-                    " check_reads TEXT NOT NULL DEFAULT '[]'")
+                    " check_reads TEXT COLLATE \"C\" NOT NULL DEFAULT '[]'")
         raw.execute("COMMIT")
     except BaseException:
         raw.execute("ROLLBACK")
