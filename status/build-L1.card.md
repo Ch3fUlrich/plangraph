@@ -11,7 +11,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5 sol RUNNING workst 95d3f4 (18:47Z) -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
-| PG-PUBLIC-READY (HIGH) | L1 | D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
+| PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD p4 | L1 | claimed epoch 1; writer E queued workst (after #139, cx 18:46Z+) (lane/bus-nonce-flood @de54bb22) -> CI, qwen+mimo -> merge, submit |
