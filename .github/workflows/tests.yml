@@ -191,7 +191,11 @@ jobs:
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
+      - name: Build pg-jail helper
+        run: cargo build -p pg-jail
       - name: cargo test
+        env:
+          PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
         run: cargo test
 
   rust-worker:
@@ -245,6 +249,9 @@ jobs:
       - name: cargo test
         env:
           PG_TEMPORAL_ADDR: http://127.0.0.1:17233
+          # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
+          PG_JAIL: "off"
+          PG_TEST_ALLOW_UNJAILED: "1"
         run: cargo test
       - name: Dev server log tail
         if: always()

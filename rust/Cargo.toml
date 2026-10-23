@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["worker-core"]
+members = ["worker-core", "pg-jail"]
 exclude = ["spikes"]
