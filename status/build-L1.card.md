@@ -12,7 +12,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head f2ddac80 (main merged, CHANGELOG-only); Haiku PASS, luna FIX HIGH stray_writer_line indented/quoted (workst answer pr139-luna.answer.md e4b5d49a) -> fix3 deepseek writer requested from workst -> re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX (HIGH p8) | L1 | cont writer 1a3af8 (wt pg-public-fix) -> PR, gitleaks 0, CI, 2 seats, merge; then re-seat PG-PUBLIC-READY |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
-| KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; created D-2412 (edge PH-RT-CONSOLIDATE); claimed; workst writer d1d2b2 done 6eb507f, workst full pytest -> push -> PR -> 2 seats (HIGH) -> GO-REQ |
+| KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; PR #148 head 6eb507f8 (sol d1d2b2; workst 4900 pass, 1 pre-existing contract fail on main too); seats deepseek+Haiku running; CI -> GO-REQ |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | claimed; workst writer 20261023-112202-jev-attempt-thread-write-f55fce running |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
 | RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
