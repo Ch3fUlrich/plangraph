@@ -118,7 +118,14 @@ def _trailing_trailer_lines(text: str) -> list[str]:
     return text.splitlines()[start:]
 
 
-_WRITER_SHAPED_RE = re.compile(r"^writer:\s*\S", re.IGNORECASE)
+#: Any way a Writer key is written on a line: optional indentation, an
+#: optional run of quote/bullet markers, the key (case-insensitive, as git's
+#: trailer keys are), optional spaces before the colon, and a non-empty value.
+#: A bare ``^writer:\\s*\\S`` missed the same dropped family when the line was
+#: indented, quoted (``>``/``>>``), bulleted (``-``/``*``) or used
+#: ``Writer : x``.
+_WRITER_SHAPED_RE = re.compile(
+    r"^[ \t]*(?:[>*-]+[ \t]+)*writer[ \t]*:[ \t]*\S", re.IGNORECASE)
 
 
 def stray_writer_line(text: str) -> bool:
@@ -130,9 +137,11 @@ def stray_writer_line(text: str) -> bool:
     quote must not re-attach a commit), but for the writer families it is
     ambiguous: the dropped line may name a writer that no reviewer seat
     covers.  The keeper must fail closed instead of closing on a PARTIAL
-    family list, so a ``^writer:\\s*\\S`` line (key case-insensitive, as git's
-    trailer keys are) outside the trailing block makes the writer set
-    unknowable.
+    family list, so ANY Writer-shaped line outside the trailing block makes
+    the writer set unknowable: indented (``    Writer: x``), quoted
+    (``> Writer: x``, ``>> Writer: x``), bulleted (``- Writer: x``,
+    ``* Writer: x``) and spaced-before-colon (``Writer : x``) forms all count,
+    not only the bare ``Writer: x`` line (see :data:`_WRITER_SHAPED_RE`).
     """
     start = _trailing_trailer_start(text)
     lines = text.splitlines()

@@ -345,3 +345,86 @@ def test_writer_line_outside_the_trailing_block_refuses_the_closing_verdict(repo
         assert world.store._item(key)["state"] == "in_review"
     finally:
         world.close()
+
+
+# --------------------------------------------------------------------------
+# 22. (FIX3) a Writer-shaped line OUTSIDE the trailing block is not only the
+#     plain "Writer: x" form: indenting it, quoting it, nesting the quote,
+#     bullet-ing it, or spacing the key away from the colon all hide the same
+#     dropped family from ``parse_trailers``, so the keeper must fail closed
+#     on every one of those shapes too.
+# --------------------------------------------------------------------------
+
+#: One (shape id, line) pair per way a stray Writer line is written in a
+#: commit body.  Each line is a paragraph of its own, OUTSIDE the trailing
+#: trailer block that follows the blank line.
+STRAY_WRITER_SHAPES = [
+    ("indented", "    Writer: mimo-v2 run1"),
+    ("quoted", "> Writer: mimo-v2 run1"),
+    ("nested-quote", ">> Writer: mimo-v2 run1"),
+    ("bullet", "- Writer: mimo-v2 run1"),
+    ("star-bullet", "* Writer: mimo-v2 run1"),
+    ("space-before-colon", "Writer : mimo-v2 run1"),
+]
+
+
+def _stray_writer_commit(repo: Path, stray: str) -> str:
+    """A commit whose prose paragraph carries *stray*, then a clean block."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "quote a writer line\n\n"
+         f"{stray}\n"
+         "\n"
+         "Plan-Item: demo:A\n"
+         "Writer: deepseek-r1 run2\n")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("shape,stray", STRAY_WRITER_SHAPES,
+                         ids=[shape for shape, _ in STRAY_WRITER_SHAPES])
+def test_stray_writer_shape_outside_the_trailing_block_refuses(repo, shape, stray):
+    """Every stray shape names a writer ``parse_trailers`` drops.
+
+    Only the trailing block is parsed, so the ``mimo-v2`` family would be
+    silently lost and the keeper could close the item on a seat that never
+    covered it; the writer set must be ``[]`` (``writer_unknown``) instead.
+    """
+    sha = _stray_writer_commit(repo, stray)
+    adapter = GitAdapter({"demo": str(repo)})
+
+    # The trailing block itself is read normally: the stray line is prose.
+    assert adapter.trailers(str(repo), sha) == {
+        "Plan-Item": "demo:A", "Writer": "deepseek-r1 run2"}
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+def test_trailing_block_alone_still_yields_its_writer_values(repo, adapter):
+    """The widened stray-line detection does not fault a clean trailer block."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "clean trailers\n\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n"
+         "Writer: deepseek-r1 run2\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    assert adapter.writer_trailers(str(repo), sha) == [{
+        "Plan-Item": "demo:A",
+        "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
+    }]
+
+
+def test_prose_mentioning_writer_without_a_colon_is_not_flagged(repo, adapter):
+    """Prose that only uses the WORD "writer" must not make writers unknowable."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "mention the writer\n\n"
+         "The writer of this change ran the full suite first.\n"
+         "Every writer line below names one model family.\n"
+         "\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    assert adapter.writer_trailers(str(repo), sha) == [
+        {"Plan-Item": "demo:A", "Writer": "mimo-v2 run1"}]
