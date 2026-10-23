@@ -40,8 +40,82 @@ def valid_ref(ref: Any) -> bool:
     return bool(_REF_RE.fullmatch(ref))
 
 
+def _is_trailer_line(raw: str) -> bool:
+    """True for a non-indented ``Token: value`` line whose ``Token`` has no space.
+
+    A line whose key holds a space (``Note to reviewer: see the plan``) is
+    prose that merely contains a colon, never a git trailer.
+    """
+    if raw[:1] in (" ", "\t") or ":" not in raw:
+        return False
+    key = raw.partition(":")[0]
+    return bool(key) and not any(char.isspace() for char in key)
+
+
+def _paragraph_is_trailer_block(lines: list[str]) -> bool:
+    """True when EVERY line of one paragraph is a trailer or a continuation.
+
+    An indented line continues the trailer before it, so it only counts when
+    a trailer line precedes it in the same paragraph; a line that is neither
+    makes the whole paragraph prose.
+    """
+    if not lines:
+        return False
+    after_trailer = False
+    for raw in lines:
+        if raw[:1] in (" ", "\t"):
+            if not after_trailer:
+                return False
+            continue
+        if not _is_trailer_line(raw):
+            return False
+        after_trailer = True
+    return True
+
+
+def _trailing_trailer_lines(text: str) -> list[str]:
+    """The lines of *text*'s TRAILING trailer block (``[]`` when it has none).
+
+    The block is the maximal run of final paragraphs in which every non-blank
+    line is a trailer (or a continuation of one).  Only that run is read: a
+    prose paragraph ENDS the block, so a ``Hand-Edit:``/``Writer:``/``Plan-Item:``
+    line quoted earlier in the body is prose, not a trailer, and never reaches
+    the seat-coverage check or the item a commit is attached to.  Trailing
+    blank lines are ignored, and paragraphs keep their original spacing so a
+    continuation still joins the trailer before the blank line that follows it.
+    """
+    lines = text.splitlines()
+    paragraphs: list[tuple[int, list[str]]] = []
+    current: list[str] = []
+    begin = 0
+    for index, raw in enumerate(lines):
+        if raw.strip():
+            if not current:
+                begin = index
+            current.append(raw)
+        elif current:
+            paragraphs.append((begin, current))
+            current = []
+    if current:
+        paragraphs.append((begin, current))
+    start = len(paragraphs)
+    while start and _paragraph_is_trailer_block(paragraphs[start - 1][1]):
+        start -= 1
+    if start == len(paragraphs):
+        return []
+    return lines[paragraphs[start][0]:]
+
+
 def parse_trailers(text: str) -> dict[str, str | list[str]]:
-    """Parse trailer lines (``Key: value``) into key → value(s), in order.
+    """Parse the TRAILING trailer block of *text* into key → value(s), in order.
+
+    Only the maximal run of final paragraphs whose every non-blank line is a
+    ``Token: value`` trailer (or an indented continuation of one) is read —
+    the same paragraphs git's ``%(trailers)`` considers a trailer block, minus
+    its "last paragraph only" limit.  A prose paragraph anywhere after them
+    ends the block: a body line such as ``Writer: ...`` or ``Plan-Item: ...``
+    inside prose is quoting text, not carrying a trailer, and is dropped
+    rather than allowed to fake a writer family or re-attach the commit.
 
     A key that occurs once keeps its plain ``str`` value, so a one-value
     lookup (``Plan-Item``) sees exactly what it saw before.  A key that
@@ -56,7 +130,7 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
     """
     values: dict[str, list[str]] = {}
     last: str | None = None
-    for raw in text.splitlines():
+    for raw in _trailing_trailer_lines(text):
         if raw[:1] in (" ", "\t") and last is not None and values[last]:
             values[last][-1] = f"{values[last][-1]} {raw.strip()}".strip()
             continue
@@ -457,6 +531,11 @@ class GitAdapter:
         git never takes the subject for a trailer block (``%(trailers)`` is
         empty for a subject-only message), so reading the body reports
         everything the placeholder did plus the paragraphs it dropped.
+
+        Only the body's TRAILING trailer block counts (see
+        :func:`parse_trailers`): a prose paragraph ends it, so a
+        ``Hand-Edit:``/``Writer:``/``Plan-Item:`` line quoted in prose is
+        never returned as a trailer.
         """
         if not valid_commit_ref(sha):
             return {}
