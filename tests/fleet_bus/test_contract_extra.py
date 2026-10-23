@@ -100,3 +100,58 @@ def test_read_records_rejects_cursor_evicted_by_ring_overflow():
     with pytest.raises(c.BusError) as err:
         c.read_records(state, cursor=first["id"])
     assert (err.value.code, err.value.status) == ("cursor_gone", 410)
+
+
+def reject_key_lookup(kid):
+    pytest.fail("Shape errors must precede key resolution")
+
+
+@pytest.mark.parametrize("cursor", ["\ud800", "\udfff", "prefix\ud800suffix"])
+@pytest.mark.parametrize("signature_present", [True, False])
+def test_surrogate_read_cursor_shape_and_signature_precedence(cursor, signature_present):
+    state = c.new_state()
+    headers = read_headers()
+    if not signature_present:
+        headers.pop("X-Fleet-Sig")
+    with pytest.raises(c.BusError) as err:
+        c.check_read(reject_key_lookup, headers, cursor, NOW, state)
+    expected = ("bad_request", 400) if signature_present else ("bad_signature", 401)
+    assert (err.value.code, err.value.status) == expected
+    assert not state.seen
+    assert not state.limiter.senders
+
+
+@pytest.mark.parametrize("char", ["\ud800", "\udfff", "\u00a0", "\u2028", "\u2029", "\u3000"])
+@pytest.mark.parametrize("field", ["from", "to", "nonce", "msg_id", "trace_id", "key", "run_id", "kid"])
+def test_post_identifier_unicode_shape_rejected_before_auth(field, char):
+    state = c.new_state()
+    envelope = {"from": "sender", "to": "receiver", "ts": NOW,
+                "nonce": "nonce-1", "msg_id": "message-1", "text": "hello"}
+    envelope[field] = "a" + char + "b"
+    with pytest.raises(c.BusError) as err:
+        c.validate_post(reject_key_lookup, json.dumps(envelope).encode("utf-8"),
+                        "invalid", NOW, state)
+    assert (err.value.code, err.value.status) == ("bad_request", 400)
+    assert not state.seen
+
+
+@pytest.mark.parametrize("char", ["\ud800", "\udfff", "\u00a0", "\u2028", "\u2029", "\u3000"])
+@pytest.mark.parametrize("header", ["X-Fleet-From", "X-Fleet-Nonce", "X-Fleet-Kid"])
+def test_read_identifier_unicode_shape_rejected_before_auth(header, char):
+    state = c.new_state()
+    headers = read_headers()
+    headers[header] = "a" + char + "b"
+    with pytest.raises(c.BusError) as err:
+        c.check_read(reject_key_lookup, headers, "", NOW, state)
+    assert (err.value.code, err.value.status) == ("bad_request", 400)
+    assert not state.seen
+
+
+@pytest.mark.parametrize("text", ["\ud800", "hello\udfff"])
+def test_surrogate_post_text_rejected_before_auth(text):
+    envelope = {"from": "sender", "to": "receiver", "ts": NOW,
+                "nonce": "nonce-1", "msg_id": "message-1", "text": text}
+    with pytest.raises(c.BusError) as err:
+        c.validate_post(reject_key_lookup, json.dumps(envelope).encode("utf-8"),
+                        "invalid", NOW, c.new_state())
+    assert (err.value.code, err.value.status) == ("bad_request", 400)

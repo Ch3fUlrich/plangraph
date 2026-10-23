@@ -11,8 +11,9 @@ POST is a UTF-8 JSON object. Required fields are `from`, `to`, `ts`, `nonce`,
 `kid`; unknown fields are rejected.
 
 Identifiers are nonempty strings, capped at 64 Unicode code points except
-`nonce` (128). They contain no whitespace controls, spaces, pipe delimiters or
-surrogates. `attempt_n` is an integer from 1 through 1000, never a boolean.
+`nonce` (128). They contain no controls, spaces (including all Unicode whitespace
+recognized by `char.isspace()`), pipe delimiters or surrogates.
+`attempt_n` is an integer from 1 through 1000, never a boolean.
 `ts` is nonnegative integral Unix epoch seconds: an integer, finite integral
 number, or ASCII decimal digit string; booleans and fractions are invalid.
 `text` is a Unicode string encodable as UTF-8.
@@ -85,10 +86,11 @@ An empty cursor starts at the oldest retained record. A known cursor resumes
 strictly after that record. Cursor validation has two distinct layers:
 
 - `check_read`, the transport authentication seam, rejects a cursor that is not
-  a string or that contains `|` with **400 `bad_request`**, once a signature
+  a string or that contains `|` or a surrogate with **400 `bad_request`** (a shape
+  error), once a signature
   header is present and before authentication. Such a cursor cannot be bound
-  unambiguously into the signed canonical form. Real record IDs never contain
-  `|`. A missing or empty signature header returns `bad_signature` first;
+  unambiguously into the UTF-8 signed canonical form. Real record IDs never contain
+  `|` or surrogates. A missing or empty signature header returns `bad_signature` first;
   timestamp and identifier shape checks also precede the cursor shape check.
 - `check_cursor`, the pure ring lookup called by `read_records` after
   authentication, treats every nonempty malformed, evicted or unknown value

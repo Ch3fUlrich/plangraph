@@ -133,7 +133,7 @@ def _identifier(value, cap):
     # Delimiters and controls would make pipe-separated signing ambiguous.
     if not isinstance(value, str) or not 1 <= len(value) <= cap:
         raise BusError("bad_request")
-    if any(char == "|" or ord(char) < 33 or 127 <= ord(char) <= 159
+    if any(char == "|" or char.isspace() or ord(char) < 33 or 127 <= ord(char) <= 159
            or 0xD800 <= ord(char) <= 0xDFFF for char in value):
         raise BusError("bad_request")
 
@@ -253,7 +253,8 @@ def check_read(resolve_key, headers, cursor, now, state):
     _identifier(nonce, 128)
     if kid is not None:
         _identifier(kid, 64)
-    if not isinstance(cursor, str) or "|" in cursor:
+    if not isinstance(cursor, str) or "|" in cursor or any(
+            0xD800 <= ord(char) <= 0xDFFF for char in cursor):
         raise BusError("bad_request")
     _authenticate(resolve_key, ts, nonce, reader, kid,
                   canonical_read(ts, nonce, reader, kid, cursor), signature, now, state)
