@@ -24,8 +24,8 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 - Never dump environ. Never push site strings/seat prompts to GitHub. Never touch .claude/worktrees/proposal. Keeper LIVE from live-2d61e281 (never ff; LIVE-SYNC-9 = HIGH GO-REQ after item_key fix + mint smoke).
 - D-2315: no age-only deletes; clean only terminal-marker runs.
 - TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
-| KEEPER-TRAILER-MULTI (HIGH) | L1 | PR #139 7676dedf CI green; r1 glm PASS, qwen FIX (%b prose). fix writer 20261023-084226-trailer-multi-fix1-9bb8c2 running (brief FIX1-BRIEF.md) -> take, r2 qwen+glm -> GO-REQ |
-| #100 SANDBOX | L1 | D-2369 ACCEPT: mergepath.sh 100 988665b4 running (merge, CI main, evidence) -> submit + verdicts qwen r3/glm r4. Follow-up RT-P1-SANDBOX-JAIL-E2E (HIGH p6, mine, dep AGENT-JAIL) |
+| KEEPER-TRAILER-MULTI (HIGH) | L1 | fix1 9bb8c2 WIP-exited; taken + reworded c95fb135 (red a56c4013); full suite 4710 passed 22 skipped; pushed, CI 39929726634 -> r2 qwen+glm when local share < 3 -> GO-REQ |
+| #100 SANDBOX | sweep-runtime | NOT MERGED: PR ci-gate red (run 39923865296: tests.yml hand-edit af92fc84 w/o Gate-Edit; 27076751 hand-edit >10 lines). L2 squash same tree -> lane/attempt-sandbox-sq on Gate-Edit D-id from routing (BLOCKED 09:1xZ). Seats r3/r4 valid by tree equality. Then mergepath + submit + verdicts |
 | RT95-EMPTY-RUN-FIXTURE | L1 | claimed; #137 merged -> spawn writer to capture a real opencode empty run when MemAvailable > 5 GB (D-2332; was 4.3 GB) |
 | KEEPER-LEGACY-HUMAN-FAMILY (low) | L1 queue | D-2348: keeper rule legacy/operator claimant -> family 'human' (+test: non-legacy unknown still refused); bundle in keeper batch riding LIVE-SYNC-9 after SPAWNER-ITEM-KEY; then router re-posts OP-DOCKHAND deepseek 438f9e |
 | PG-PUBLIC-READY r3 | L1 | deepseek FAIL verdict POSTED (D-2349, item back to claimed). Re-seat on PG-PUBLIC-FIX merge. Gate PG-REPUBLISH-FRESH deps [READY, FIX] |
@@ -35,3 +35,4 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 
 | KEEPER-MCP-UTF8 (p9, FIRST) | L1 | claimed ep1; wt mcp-utf8 (lane/keeper-mcp-utf8 @ cbf21431); brief seats/mcp-utf8/WRITER-BRIEF.md; spawn at next free slot (share 3/3); 1 seat; workst-L1-autoos Windows confirm |
 | PG-BOOTSTRAP-FLEET-ENV (HIGH p9, secrets) | L1 queue | bootstrap.ps1+.sh fleet-env step, CSPRNG pw owner-only file + AUTOOS_OCL1_PW_FILE, never printed, --DryRun; dep autoos:AO-OCL1-PW-FILE; after MCP-UTF8 |
+- Workstation 09:06Z: ui-browser L2 taskkill /IM python.exe killed MCPs/runs; briefs must say "kill only PIDs you started, never taskkill /IM". mergepath.sh: PR-event ci-gate check is authoritative, dispatch run skips commit-trailer gate.
