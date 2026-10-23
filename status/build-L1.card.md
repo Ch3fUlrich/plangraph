@@ -6,7 +6,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 2aaaf35f (#144 GOV-CTX DONE). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq7 b9a378b7 CI green; Haiku BLOCKER -> sq8 RUNNING mimo workst (cx 429 skip; e11cc8 cancelled, no WIP) -> seats qwen+Haiku (writer xiaomi) -> mergemain, CI, qwen+Haiku -> GO-REQ |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq7 b9a378b7 CI green; Haiku BLOCKER -> sq8 RUNNING mimo 12aa4f workst (omniroute/mimo-v2.6-flash; cx 429 skip; e11cc8 cancelled, no WIP) -> seats qwen+Haiku (writer xiaomi) -> mergemain, CI, qwen+Haiku -> GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | PR #152 head 32051a6a; fix3 6836f4 STUCK cx 429, WIP patch saved; relaunch 18:46Z cx (pr152/FIX3-BRIEF.md) -> CI, qwen+Haiku re-seat -> merge, submit |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5: mimo 503 x3, sol 615435 STUCK cx 429; relaunch 18:46Z cx -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
