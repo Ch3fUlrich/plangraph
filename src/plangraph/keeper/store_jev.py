@@ -11,7 +11,13 @@ the rules and Jev answered plus the one mutable verdict about it.
 Roles: ``router``, ``system`` and ``l1`` (only inside its own projects, via
 ``_may_act_in``) may write; ``worker``, ``spawner``, ``reviewer`` and ``reader``
 are refused for writes.  The reads (``jev_rows`` and ``jev_report``) are open to
-any authenticated principal.  The report numbers come from the pure module
+any authenticated principal.  The keeper's own observe-only rows - a verdict's
+``qc_accept`` and a worker verb's outcome fill - never write as their caller:
+they go through :func:`_jev_writer`, which keeps the caller when its role may
+write and otherwise files under the synthetic ``system`` identity, so a fill is
+never a swallowed refusal and never a raise.
+
+The report numbers come from the pure module
 ``plangraph.keeper.jev_report``; this module never restates them.
 
 All SQL is portable (``?`` placeholders, ids assigned as ``MAX(id)+1`` inside the
@@ -23,7 +29,7 @@ import json
 import math
 import re
 
-from . import jev_report
+from . import auth, jev_report
 from .errors import Refused
 from .schema import JEV_KINDS, JEV_STATUSES
 from .store_cards import _text
@@ -106,6 +112,28 @@ def _confidence(value):
             or not math.isfinite(value)):
         raise Refused("validation", "jev_confidence must be a finite number or null")
     return float(value)
+
+
+def _jev_writer(principal):
+    """Who files an observe-only Jev row: *principal* when it may write, else ``system``.
+
+    The one home for this mapping, shared by both fill paths: the verdict's
+    ``qc_accept`` row (``store_review``) and the worker verbs' outcome fill
+    (``store_worker``).  A ``verdict`` can only come from a ``reviewer`` and a
+    ``worker_park``/``worker_complete`` from a ``worker``, while
+    ``_WRITE_ROLES`` refuses both (worker, spawner, reviewer and reader never
+    write), so passing the caller through would turn every row into a swallowed
+    refusal and neither verdicts nor attempt outcomes would ever be shadowed.
+
+    The row is the keeper's own observation of the event, not the caller's own
+    write, so it is filed under the synthetic ``system`` identity the store
+    already accepts (the same one the API reaper and the projector use).  Every
+    other role - including one no verb could ever hand here - maps to that same
+    identity, so this never raises.
+    """
+    if getattr(principal, "role", None) in _WRITE_ROLES:
+        return principal
+    return auth.Principal("system", "system", [], None)
 
 
 class JevMixin:

@@ -197,11 +197,19 @@ class WorkerMixin:
         first-write-wins), with the same ``exit_class``/``outcome`` text
         :func:`plangraph.planner.shadow.record_outcome` derives for the planner.
 
-        Two cheap guards keep the verb this rides on behaviourally unchanged: a
-        principal that may not write ``jev_shadow`` rows is skipped before it can
-        file a refusal, and a card with no rows is skipped before any transaction
-        is opened - an outcome only ever fills rows that exist, so a keeper that
-        never ran Jev keeps its audit log and its write lock exactly as they were.
+        The row is filed by :func:`plangraph.keeper.store_jev._jev_writer`, the
+        same mapping the verdict's ``qc_accept`` row uses: the caller when its
+        role may write ``jev_shadow`` (router/system/l1) and the synthetic
+        ``system`` identity otherwise.  That matters here because the real
+        attempt-finish path is a ``worker`` (or ``spawner``) - a role
+        ``store_jev._WRITE_ROLES`` refuses - so testing the role first, as this
+        once did, meant the outcome was never filled on the path it exists for;
+        the mapping instead lands every fill on a principal that may write, so
+        it can never become a swallowed refusal, for any role.
+
+        A card with no rows is still skipped before any transaction is opened -
+        an outcome only ever fills rows that exist, so a keeper that never ran
+        Jev keeps its audit log and its write lock exactly as they were.
         Everything (import, refusal, store error) is swallowed: a Jev outcome is
         best-effort and can never fail or delay a worker verb.
         """
@@ -210,16 +218,15 @@ class WorkerMixin:
         try:
             # Late imports: the planner and the Jev mixin are only needed when a
             # fill can actually happen (``store_jev`` imports this module).
-            from .store_jev import _WRITE_ROLES
-            if getattr(principal, "role", None) not in _WRITE_ROLES:
-                return
+            from .store_jev import _jev_writer
             if self.conn.execute(
                     "SELECT 1 FROM jev_shadow WHERE key=? LIMIT 1",
                     (card,)).fetchone() is None:
                 return
             from plangraph.planner import shadow as shadow_mod
             shadow_mod.record_outcome(None, outcome, store=self,
-                                      principal=principal, card_key=card)
+                                      principal=_jev_writer(principal),
+                                      card_key=card)
         except Exception:  # noqa: BLE001 - a Jev outcome never breaks a worker verb
             pass
 
