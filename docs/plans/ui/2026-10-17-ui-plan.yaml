@@ -1,0 +1,264 @@
+# plangraph UI plan 2026-10-17 (plangraph-L1-plan2). Operator order relayed by routing. Principal router.
+batch: 2026-10-17-ui-plan
+principal: router
+source: 2026-10-17-ui-plan.md
+source_sha256: 3b1749aa65c2e0b596ebe6a4ddec8e52ebbe1168c2cdf998fb2595168d9b2fa2
+ops:
+- op: create
+  item:
+    id: UI-VERSION-STAMP
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 2.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'UI build stamp: code sha, snapshot time and head_seq in the header and a meta tag'
+    description: 'The live page shows only the keeper head hash, so nobody can tell which code runs (plan section 1). Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer
+      and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: render writes the renderer git sha (short) into a plangraph-build meta tag and the header, with snapshot time and head_seq (V-SHELL-1); amber when the snapshot is older than 15 min (V-SHELL-4);
+      sha from git or an env var set by the unit, unknown when neither; tests
+    depends_on: []
+- op: create
+  item:
+    id: UI-DEPLOY-AUTO
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: high
+    priority: 1
+    estimate_h: 5.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    - run-record
+    title: 'Live page follows origin/main: render unit in the repo, deploy after green CI, post-deploy stamp check'
+    description: 'Today a merge reaches the live page only through the manual live-sync runbook (new detached worktree plus a hand-edited drop-in), and the render unit is not in the repo (plan section 1).
+      No crons (D-1377): the merge triggers the deploy (CI job or path unit), not a schedule. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer and seats: model order
+      D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: render service, drop-in template and nginx snippet committed under deploy/; a merge to main with green CI updates a fixed live worktree and re-renders, keeping the old page if the render
+      fails; nginx sends Cache-Control no-cache for the page; a post-deploy check compares the page stamp with origin/main and reports a mismatch older than 30 min; one live run recorded (router GO for
+      the live step)
+    depends_on:
+    - plangraph:UI-VERSION-STAMP
+- op: create
+  item:
+    id: UI-BROWSER-TESTS
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 8.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'Real-browser test suite for the UI: one test per VIEWS.md check, repros R1-R10 as failing tests'
+    description: 'The UI has 241 node tests on a fake DOM and no real-browser test, so no click or layout bug can be caught (plan section 3). Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec
+      docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: Playwright (headless Chromium) runs in CI on a page rendered from a fixture snapshot at 1440x900, 1024x768 and 390x844; one test per V- tag in docs/ui/VIEWS.md (tags not met yet are marked
+      expected-fail with the owning item); R1-R10 from the plan as tests; console-error budget 0 with an allow-list; layout-stability helpers (node model positions, viewport transform); suite under 5 min
+    depends_on: []
+- op: create
+  item:
+    id: UI-GRAPH-CLICK
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 8.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'Graph task click: no zoom or pan reset, selected node stays visible, one render per selection'
+    description: 'Repros R2 and R3 (plan section 3): the panel docks over the node, and the first click resets zoom and pan through the ResizeObserver refit. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md;
+      spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: V-GRAPH-1, -2, -4, -7, -8 (selection part), -9 and V-DET-1 to -5 pass in the browser suite; R2 and R3 tests green; fit only on first display; details links use the real focus path; the
+      panel renders once per selection
+    depends_on:
+    - plangraph:UI-BROWSER-TESTS
+- op: create
+  item:
+    id: UI-GRAPH-EXPAND
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 8.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'Graph expand and collapse: anchored to the clicked header, clicks during relayout safe, phone layout'
+    description: 'Repros R4, R5 and R6 (plan section 3): relayout without an anchor, new nodes from (0,0), clicks by screen position during the async ELK layout, phone stub and overlapping boxes. Design:
+      plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: V-GRAPH-3, -5, -6, -8 (collapse and reload part) and -10 pass; R4, R5 and R6 tests green; new nodes start at their parent position
+    depends_on:
+    - plangraph:UI-GRAPH-CLICK
+- op: create
+  item:
+    id: UI-NARROW-LAYOUT
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 4.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'Narrow widths: sidebar closed by default below 1200 px, no click-swallowing scrim, header does not wrap'
+    description: 'Repro R1 (plan section 3): below about 1200 px a full-screen scrim takes the first click, and the :has() rule hides the tree when details open. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md;
+      spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: V-SIDE-1, V-SIDE-2, V-SHELL-2 and V-ALL-6 pass at 1024x768 and 390x844; R1 test green; compact phone legend
+    depends_on:
+    - plangraph:UI-BROWSER-TESTS
+- op: create
+  item:
+    id: UI-URL-HISTORY
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 4.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'URL state and Back: one URL-state module, history steps for page and selection, compact hash'
+    description: 'Repro R7 (plan section 3): Back leaves the app; pg=activity, progress and knowledge are lost on reload; state is split across hash, query string and localStorage; the hash grows to about
+      3 KB. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: V-ALL-4, V-ALL-5, V-SIDE-4, V-TAB-2, V-ACT-1 and V-NEED-3 pass; R7 test green; one module owns URL state; the hash stays under 1 KB on the live snapshot
+    depends_on:
+    - plangraph:UI-GRAPH-CLICK
+- op: create
+  item:
+    id: UI-FLAKE-FIXES
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 6.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'UI error paths and consistency: no swallowed errors, no 404, valid edges, one counting rule, table follows search'
+    description: 'Repros R8, R9 and R10 and the code-reading list in plan section 3. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing
+      step D-323: Playwright checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: V-ALL-1, V-ALL-2, V-ALL-7, V-GRAPH-11, V-GRAPH-12, V-SHELL-3, V-KG-1, V-FLEET-1, V-PROG-1, V-TAB-1 and V-SET-1 pass; R8, R9 and R10 tests green; no object dumps in details
+    depends_on:
+    - plangraph:UI-BROWSER-TESTS
+- op: create
+  item:
+    id: UI-DEAD-CODE
+    project: plangraph
+    kind: lane
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 2
+    estimate_h: 3.0
+    estimate_src: plan
+    evidence_kinds:
+    - commit+ci
+    title: 'Remove dead UI code: dagre path, unwired graph modules, hidden Q&A panel, no-op settings'
+    description: 'Code reading (plan section 3): the legacy dagre graph; page_graph_focus, budget and chips (unless UI-GRAPH-CLICK wired them for V-GRAPH-7); the expanded flag; the hidden Q&A panel rebuilt
+      on every keystroke; Settings toggles with no effect. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Writer and seats: model order D-1714. Standing step D-323: Playwright
+      checklist at 1440x900 and 390x844 with screenshots.'
+    done_criteria: dead modules and toggles removed or wired (each named in the commit); browser suite and node tests green; page not larger
+    depends_on:
+    - plangraph:UI-GRAPH-EXPAND
+    - plangraph:UI-FLAKE-FIXES
+    - plangraph:UI-URL-HISTORY
+    - plangraph:UI-NARROW-LAYOUT
+- op: create
+  item:
+    id: PH-UI-STABLE
+    project: plangraph
+    kind: gate
+    track: UI-STABLE
+    owner: build-L1
+    review_tier: standard
+    priority: 1
+    estimate_h: 0.5
+    estimate_src: plan
+    title: 'Phase UI-STABLE done: live page follows main with a build stamp, view spec met, graph clicks stable, browser suite in CI'
+    description: 'Gate. Design: plangraph docs/plans/ui/2026-10-17-ui-plan.md; spec docs/ui/VIEWS.md. Operator order 2026-10-17, relayed by routing.'
+    done_criteria: all deps done
+    depends_on:
+    - plangraph:UI-VERSION-STAMP
+    - plangraph:UI-DEPLOY-AUTO
+    - plangraph:UI-BROWSER-TESTS
+    - plangraph:UI-GRAPH-CLICK
+    - plangraph:UI-GRAPH-EXPAND
+    - plangraph:UI-NARROW-LAYOUT
+    - plangraph:UI-URL-HISTORY
+    - plangraph:UI-FLAKE-FIXES
+    - plangraph:UI-DEAD-CODE
+- op: edit
+  key: plangraph:PH-M2C-UI
+  fields:
+    depends_on:
+    - plangraph:GRAPH-UI
+    - plangraph:PG-OMNIGRAPH-UI
+    - plangraph:PG-PROJECT-PRIORITY
+    - plangraph:PG-UI-TABICON
+    - plangraph:PROGRESS-PANEL
+    - plangraph:QA-GATE
+    - plangraph:QA-IMPORT
+    - plangraph:QA-UI
+    - plangraph:QA-VERBS
+    - plangraph:RENDER-NEWUI-DETECT
+    - plangraph:UI-ACTIVITY-DATA
+    - plangraph:UI-ACTIVITY-PAGE
+    - plangraph:UI-CREATED-AT
+    - plangraph:UI-DECISION-TEXT
+    - plangraph:UI-HASH-STATE
+    - plangraph:UI-MORE-NODE-EXPAND
+    - plangraph:UI-NODE-BUDGET
+    - plangraph:UI-OVERVIEW-FIX
+    - plangraph:UI-QA-COUNTS
+    - plangraph:UI-REVIEW-W3
+    - plangraph:UI-SHELL
+    - plangraph:UI-TABLE
+    - plangraph:UI-TESTS-TABLE-QA
+    - plangraph:UI-WRITES
+    - plangraph:PH-UI-STABLE
+- op: edit
+  key: plangraph:PG-DEC-ATTRIBUTION
+  fields:
+    done_criteria: keeper decision records with attribute human|agent, actor, timestamp; backfill from routing docs/decisions-by-agents.md (bin/decisions-index heuristic) as the interim source; UI page
+      with filter; tests; seat; merged; the page is the Decisions view of docs/ui/VIEWS.md section 7 (V-DEC-1), with a browser test
+- op: edit
+  key: plangraph:PG-DEC-EDIT-NOTICE
+  fields:
+    done_criteria: UI edit of a decision record (operator principal) with a hash-chained event; ready/show/brief reads report decisions changed since the caller's last check that touch its task/phase/project;
+      tests; seat; merged; edit flow per docs/ui/VIEWS.md V-DEC-2 and V-DEC-3, with a browser test; the write identity is the operator principal from PG-ANSWER-UI
+    depends_on:
+    - plangraph:PG-DEC-ATTRIBUTION
+    - plangraph:PG-ANSWER-UI
+- op: edit
+  key: plangraph:UI-FLEET-TAB
+  fields:
+    done_criteria: per host latest + 24 h trend with stale/down; sessions with context %; provider state; last decisions with reasons; rule edit validated by the schema and audited; effective value, layer
+      and per-host overrides shown; browser test; per docs/ui/VIEWS.md section 11; passes the UI-BROWSER-TESTS view-spec suite
+- op: edit
+  key: plangraph:RT-P3-SVELTE
+  fields:
+    done_criteria: every existing page served by SvelteKit against the keeper HTTP API; static renderer retired; UI tests; passes the UI-BROWSER-TESTS view-spec suite (docs/ui/VIEWS.md) unchanged
+    depends_on:
+    - routing:RT-P2
+    - plangraph:UI-BROWSER-TESTS

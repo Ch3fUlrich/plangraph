@@ -7,12 +7,14 @@ is always the fallback; every helper only summarises what the store returned.
 from __future__ import annotations
 
 from .. import views
+from . import jev_report
 from .brief import brief_text
 
 __all__ = [
     "ready_text", "show_text", "brief_text", "blocked_text", "alerts_text",
     "waves_text", "critical_text", "percent_text", "digest_text",
-    "whoami_text", "snapshot_text", "result_text",
+    "whoami_text", "snapshot_text", "result_text", "jev_report_text",
+    "jev_axis_text",
 ]
 
 
@@ -84,7 +86,68 @@ def show_text(info: dict) -> str:
         if info.get("attempt_cost") is not None:
             line += f" | cost {info['attempt_cost']}"
         lines.append(line)
+    # RT-P1-JEV-SHADOW: the shadow block appears only when the card has rows,
+    # so a card without them renders exactly as before.
+    shadow = info.get("jev_shadow") or []
+    if shadow:
+        lines.append(_jev_summary(info.get("jev_agreement")))
+        lines.extend(_jev_row_line(row) for row in shadow)
     return "\n".join(lines)
+
+
+def _jev_summary(agreement) -> str:
+    """One line: the agree/ok counters and the rate over ok rows (``-`` if none).
+
+    *agreement* may be absent; its counters then read as zero.  ``stubs`` is the
+    number of auto-mode placeholder rows kept out of the rate and kappa.
+    """
+    stats = agreement or {}
+    ok = int(stats.get("ok") or 0)
+    rate = stats.get("agreement_rate")
+    rate_text = f"{float(rate):.2f}" if ok and rate is not None else "-"
+    return (f"jev agree {int(stats.get('agree') or 0)}/{ok} (rate {rate_text}) "
+            f"timeout {int(stats.get('timeout') or 0)} "
+            f"unavailable {int(stats.get('unavailable') or 0)} "
+            f"error {int(stats.get('error') or 0)} "
+            f"stubs {int(stats.get('stub_count') or 0)}")
+
+
+def _jev_row_line(row) -> str:
+    """One row: the rules' answer, Jev's answer, their verdict and the outcome.
+
+    The attempt part is dropped when the row has no attempt; ``agree``/``differ``
+    come from the boolean ``agree`` (``-`` when it is None); a reason is shown
+    only on a non-ok status.
+    """
+    line = f"jev {row.get('kind')}"
+    if row.get("attempt") is not None:
+        line += f" [a{row['attempt']}]"
+    agree = row.get("agree")
+    verdict = "agree" if agree is True else "differ" if agree is False else "-"
+    rule = row.get("rule_answer")
+    jev = row.get("jev_answer")
+    outcome = row.get("outcome")
+    status = row.get("status")
+    line += (f" rule={rule if rule is not None else '-'} "
+             f"jev={jev if jev is not None else '-'} {verdict} "
+             f"{status if status is not None else '-'} "
+             f"outcome={outcome if outcome is not None else '-'}")
+    reason = row.get("reason")
+    if status != "ok" and reason:
+        line += f" ({reason})"
+    return line
+
+
+def jev_report_text(report: dict) -> str:
+    """Text for a whole ``jev_report`` result; ``jev_report`` owns the layout."""
+    return jev_report.render(report)
+
+
+def jev_axis_text(axis: str, stats: dict) -> str:
+    """One-line text per axis: 'jev <axis> kappa <kappa> n=<n>'."""
+    kappa = stats.get("kappa")
+    kappa_text = "-" if kappa is None else f"{kappa}"
+    return f"jev {axis} kappa {kappa_text} n={stats.get('ok', 0)}"
 
 
 def blocked_text(blocked: dict) -> str:
