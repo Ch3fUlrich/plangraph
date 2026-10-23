@@ -251,7 +251,8 @@ class JevMixin:
 
     def _jev_report(self, project):
         rows = [dict(row) for row in self.conn.execute(
-            "SELECT kind,rule_answer,jev_answer,status,outcome,key FROM jev_shadow")]
+            "SELECT kind,rule_answer,jev_answer,status,reason,outcome,key"
+            " FROM jev_shadow")]
         if project is not None:
             # ``key`` is ``project:id``; keep only the requested project.
             rows = [row for row in rows

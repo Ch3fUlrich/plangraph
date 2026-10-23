@@ -15,10 +15,19 @@ from collections.abc import Mapping
 __all__ = ["agrees", "row_view", "agreement_report", "render"]
 
 # These mirror plangraph.keeper.schema.JEV_KINDS / JEV_STATUSES.  The schema
-# names are added by a parallel writer, so we cannot import them yet; a test
-# elsewhere asserts these tuples stay equal to the schema constants.
+# names are added by a parallel writer, so we cannot import them yet; the test
+# ``test_report_kind_and_status_tuples_match_the_schema`` asserts these tuples
+# stay equal to the schema constants.
 _KINDS = ("harness", "window", "budget", "review", "qc_accept")
 _STATUSES = ("ok", "timeout", "unavailable", "error")
+
+#: The reason ``jev_client`` stamps on an auto-mode answer it produced WITHOUT a
+#: key: a placeholder, never Jev's opinion.  Such rows are counted but excluded
+#: from ``agreement_rate``/``kappa`` and reported as ``stub_count`` instead.
+#: Copied (not imported) so this module keeps its no-planner promise; the test
+#: ``test_stub_marker_matches_the_client_auto_fallback`` keeps it in step with
+#: ``plangraph.planner.jev_client``.
+_STUB_REASON = "stub (no key)"
 
 # Fields of the public row view, in display order.  ``key`` is internal routing
 # bookkeeping and is dropped on purpose; ``agree`` is computed, not stored.
@@ -29,9 +38,9 @@ _VIEW_FIELDS = (
     "outcome_at",
 )
 
-# The nine counters that ``agreement_report`` sums per kind and overall.
+# The ten counters that ``agreement_report`` sums per kind and overall.
 _COUNTERS = ("total", "ok", "agree", "disagree", "timeout", "unavailable",
-             "error", "with_outcome", "no_answer")
+             "error", "with_outcome", "no_answer", "stub_count")
 
 
 def agrees(row: Mapping) -> bool | None:
@@ -39,14 +48,27 @@ def agrees(row: Mapping) -> bool | None:
 
     Only a row whose ``status`` is ``"ok"`` has a comparable answer, and only
     when Jev actually produced one (``jev_answer`` is not None).  A timeout,
-    unavailable or errored row is "no verdict", never a disagreement.
+    unavailable or errored row is "no verdict", never a disagreement; the same
+    goes for an auto-mode stub row, which is a placeholder from a client with no
+    key rather than an answer from Jev.
     """
-    if row.get("status") != "ok":
+    if row.get("status") != "ok" or _is_stub(row):
         return None
     jev = row.get("jev_answer")
     if jev is None:
         return None
     return str(row.get("rule_answer")) == str(jev)
+
+
+def _is_stub(row: Mapping) -> bool:
+    """True for an auto-mode placeholder answer (Jev was never actually asked).
+
+    Such a row still records what the rules answered and that no model was
+    available, so it is counted - but it carries no Jev opinion and therefore
+    never enters ``agreement_rate`` or ``kappa`` (see ``stub_count``).
+    """
+    reason = row.get("reason")
+    return isinstance(reason, str) and reason == _STUB_REASON
 
 
 def row_view(row: Mapping) -> dict:
@@ -70,8 +92,10 @@ def agreement_report(rows) -> dict:
     skipped.  An unknown or missing ``status`` is counted as ``"error"``.  Every
     kind is present even with no rows.  ``agreement_rate`` is ``agree / ok``
     rounded to four places (None when there were no ok rows): timeout,
-    unavailable and error rows are counted but excluded from the rate.  Each
-    axis also reports ``kappa`` (Cohen's kappa, None when undefined),
+    unavailable and error rows are counted but excluded from the rate, and so
+    are auto-mode stub rows - a placeholder answer from a client with no key is
+    no Jev opinion - which are counted on their own ``stub_count`` axis instead.
+    Each axis also reports ``kappa`` (Cohen's kappa, None when undefined),
     ``confusion`` (nested dict in sorted label order), ``labels`` (sorted list)
     and ``no_answer`` (count of non-usable rows).  The ``overall`` entry sums
     the kinds and applies the same metrics across all rows.
@@ -93,6 +117,11 @@ def agreement_report(rows) -> dict:
         stats["total"] += 1
         if row.get("outcome") is not None:
             stats["with_outcome"] += 1
+        if _is_stub(row):
+            # A placeholder answer (auto mode, no key): counted, never scored.
+            # It never enters ``ok``, the agreement rate or the kappa pairs.
+            stats["stub_count"] += 1
+            continue
         if status == "ok":
             stats["ok"] += 1
             verdict = agrees(row)
@@ -229,4 +258,5 @@ def _render_line(name: str, stats: dict) -> str:
     rate_text = "-" if rate is None else f"{rate:.4f}"
     return (f"{name}  agree {stats['agree']}/{stats['ok']} (rate {rate_text})  "
             f"timeout {stats['timeout']}  unavailable {stats['unavailable']}  "
-            f"error {stats['error']}  outcomes {stats['with_outcome']}")
+            f"error {stats['error']}  outcomes {stats['with_outcome']}  "
+            f"stubs {stats.get('stub_count', 0)}")

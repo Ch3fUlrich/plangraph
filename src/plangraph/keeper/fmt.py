@@ -98,7 +98,8 @@ def show_text(info: dict) -> str:
 def _jev_summary(agreement) -> str:
     """One line: the agree/ok counters and the rate over ok rows (``-`` if none).
 
-    *agreement* may be absent; its counters then read as zero.
+    *agreement* may be absent; its counters then read as zero.  ``stubs`` is the
+    number of auto-mode placeholder rows kept out of the rate and kappa.
     """
     stats = agreement or {}
     ok = int(stats.get("ok") or 0)
@@ -107,7 +108,8 @@ def _jev_summary(agreement) -> str:
     return (f"jev agree {int(stats.get('agree') or 0)}/{ok} (rate {rate_text}) "
             f"timeout {int(stats.get('timeout') or 0)} "
             f"unavailable {int(stats.get('unavailable') or 0)} "
-            f"error {int(stats.get('error') or 0)}")
+            f"error {int(stats.get('error') or 0)} "
+            f"stubs {int(stats.get('stub_count') or 0)}")
 
 
 def _jev_row_line(row) -> str:

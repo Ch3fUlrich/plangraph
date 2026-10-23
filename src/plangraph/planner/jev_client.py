@@ -53,7 +53,8 @@ from dataclasses import dataclass, replace
 __all__ = ["ENV_MODE", "ENV_URL", "ENV_MODEL", "ENV_TIMEOUT", "ENV_PROFILE",
            "ENV_KEY_SOURCE", "ENV_AUTH_PATH", "ENV_AUTH_DB", "DEFAULT_URL",
            "DEFAULT_MODEL", "DEFAULT_TIMEOUT_S", "MAX_TIMEOUT_S", "MAX_STATE_CHARS",
-           "MAX_RESPONSE_BYTES", "MODES", "PROFILES", "DEFAULT_PROFILE",
+           "MAX_RESPONSE_BYTES", "MODES", "STUB_FALLBACK_REASON", "PROFILES",
+           "DEFAULT_PROFILE",
            "JevConfig", "JevAnswer", "config_from_env", "enabled", "resolve_key",
            "ask", "stub_answer", "parse_answer", "mask"]
 
@@ -88,6 +89,11 @@ MAX_STATE_CHARS = 12000
 MAX_RESPONSE_BYTES = 1048576
 #: Recognised modes; ``on`` is accepted as an alias of ``auto``.
 MODES = ("off", "stub", "api", "auto")
+#: Reason stamped on an ``auto``-mode answer produced WITHOUT a key.  It marks a
+#: placeholder rather than a Jev opinion, so ``plangraph.keeper.jev_report``
+#: counts such rows on its ``stub_count`` axis and keeps them out of
+#: ``agreement_rate``/``kappa`` (a test pins the two names together).
+STUB_FALLBACK_REASON = "stub (no key)"
 
 #: Per-profile DEFAULTS only; individual ``ENV_*`` vars always override them.
 PROFILES = {
@@ -572,7 +578,7 @@ def stub_answer(state: str, questions: dict) -> dict:
 def _stub_fallback(state, questions) -> dict:
     """Mode ``auto`` fallback: stub answers, marked as such in the reason."""
     answers = stub_answer(state, questions)
-    return {key: (replace(answer, reason="stub (no key)")
+    return {key: (replace(answer, reason=STUB_FALLBACK_REASON)
                   if answer.status == "ok" else answer)
             for key, answer in answers.items()}
 

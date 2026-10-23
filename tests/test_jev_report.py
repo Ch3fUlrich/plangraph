@@ -147,13 +147,13 @@ def test_report_mixed_counts_and_rates():
     assert rep["kinds"]["harness"] == {
         "total": 5, "ok": 3, "agree": 2, "disagree": 1, "timeout": 1,
         "unavailable": 1, "error": 0, "agreement_rate": 0.6667,
-        "with_outcome": 1, "no_answer": 2, "kappa": 0.0,
+        "with_outcome": 1, "no_answer": 2, "stub_count": 0, "kappa": 0.0,
         "confusion": {"hold": {"hold": 2, "run": 1}, "run": {"hold": 0, "run": 0}},
         "labels": ["hold", "run"]}
     assert rep["kinds"]["review"] == {
         "total": 2, "ok": 1, "agree": 1, "disagree": 0, "timeout": 0,
         "unavailable": 0, "error": 1, "agreement_rate": 1.0,
-        "with_outcome": 1, "no_answer": 1, "kappa": None,
+        "with_outcome": 1, "no_answer": 1, "stub_count": 0, "kappa": None,
         "confusion": {"accept": {"accept": 1}},
         "labels": ["accept"]}
 
