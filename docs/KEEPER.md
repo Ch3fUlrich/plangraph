@@ -13,7 +13,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 | `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`, `spawner`, `oversight`. `add_oversight_principal(conn, name, projects)` provisions the revocable row (no token); a `pgo1_` token authenticates as `OversightPrincipal` and `add_principal` refuses `role="oversight"`. |
 | `store_oversight.py` | `OversightMixin`: local-only `mint_oversight_token(name, go_decision=…, reason=…)` (TTL 3600 s, generation rotation, sha256 only), the per-use token re-check, the derived hourly budgets, and the `oversight_ops` audit rows + `oversight-guard` alarm. |
-| `oversight_policy.py` | pure policy: `check_action(verb)` and `check_batch(items_by_key, ops) -> [Verdict]` (the single grant used by both fail-closed seams). |
+| `oversight_policy.py` | pure policy: `check_action(verb)` and `check_batch(items_by_key, ops, projects) -> [Verdict]` (the single grant, project-scoped, used by both fail-closed seams). |
 | `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…, ctx=…, batch_roots=…)`, mixed in from `store_create`/`store_verbs`/`store_review`/`store_waiver`/`store_close`/`store_read`/`store_reap`/`store_support`; every verb takes `(principal, …)` |
 | `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
 | `evidence.py` | pluggable verifiers (below) |
@@ -24,7 +24,7 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
-`oversight_tokens(id PK, token_sha256 UNIQUE, principal, generation, scope, minted_by, go_decision, mint_reason, created_at, expires_at, revoked_at)` — revoke-only (trigger) ·
+`oversight_tokens(id PK, token_sha256 UNIQUE, principal, generation, scope, minted_by, go_decision, mint_reason, created_at, expires_at, revoked_at)` — revoke-only: one `UPDATE` may only set `revoked_at` NULL→non-NULL and must leave every other column (including `created_at`/`minted_by`/`go_decision`/`mint_reason`, NULL-safe) unchanged; `DELETE` (and PG `TRUNCATE`) abort ·
 `oversight_ops(id PK, ts, token_id, principal, generation, batch_ref, op_index, op, key, finding_id, reason, outcome, code, event_seq)` — append-only (trigger), never reaped ·
 `items(key PK, project, id, title, kind, track, owner, estimate_h, estimate_src, done_criteria, evidence_kinds json, operator,
 priority, source, note, description, host, corrects, state, epoch, claimed_by, delegate, lease_until, reviewer, model, created_at, updated_at)` ·
@@ -74,12 +74,26 @@ policy allows only:
 * `priority` on such an item;
 * `add_dep` on such an item to an existing non-cancelled dep.
 
-Dependency removal (including add+drop in one list), high/decision/operator_task
-targets, tier edits, `done_criteria` edits, `under`, unknown ops/fields and
-cycles fail closed. Each attempt writes one `oversight_ops` row (applied inside
-the batch transaction, denied after its rollback) and a denial also raises one
-open `projector_alarms` row (`kind='oversight_denied'`,
-`workflow_id='oversight-guard'`). Applied/denied per-hour caps are derived from
+R5 bounds **every** one of those ops to the principal's `projects`: the item a
+create/edit/priority/add_dep names, the item a create would insert, and every
+dependency target (create `depends_on`, an edit's added deps, `add_dep`'s dep)
+must be inside the grant; anything else is `403 oversight:project_denied` and
+nothing is written. The same `projects` value is passed to
+`oversight_policy.check_batch` at both fail-closed seams (pre-lock and in-lock).
+
+Dependency removal (including add+drop in one list), cross-project items or
+dependencies, high/decision/operator_task targets, tier edits, `done_criteria`
+edits, `under`, unknown ops/fields and cycles fail closed. Each attempt writes
+one `oversight_ops` row (applied inside the batch transaction, denied after its
+rollback) and a denial also raises one open `projector_alarms` row
+(`kind='oversight_denied'`, `workflow_id='oversight-guard'`). A refusal at the
+verb seam **after** the token row was resolved — a denied verb/unknown verb, or
+a revoked/expired/rotated/scope-drifted token — is audited the same way, naming
+the attempted verb and key with `finding_id=''` (no op carried a finding), and
+counts toward the denied budget. Only requests that fail *authentication* (no
+principal is resolved at all: unknown/revoked-at-auth hash, inactive principal
+row, role drift) remain unauditable in `oversight_ops`; they still write the
+`audit_log` authentication row. Applied/denied per-hour caps are derived from
 `oversight_ops`; a breach is `403 oversight:rate_limited` and alarm-only — only
 an explicit `pg admin revoke NAME` kills the identity (R4).
 

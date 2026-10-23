@@ -444,8 +444,14 @@ CREATE TRIGGER trg_oversight_tokens_revoke_only_update BEFORE UPDATE ON oversigh
         AND OLD.principal IS NOT DISTINCT FROM NEW.principal
         AND OLD.generation IS NOT DISTINCT FROM NEW.generation
         AND OLD.scope IS NOT DISTINCT FROM NEW.scope
-        AND OLD.expires_at IS NOT DISTINCT FROM NEW.expires_at))
+        AND OLD.expires_at IS NOT DISTINCT FROM NEW.expires_at
+        AND OLD.created_at IS NOT DISTINCT FROM NEW.created_at
+        AND OLD.minted_by IS NOT DISTINCT FROM NEW.minted_by
+        AND OLD.go_decision IS NOT DISTINCT FROM NEW.go_decision
+        AND OLD.mint_reason IS NOT DISTINCT FROM NEW.mint_reason))
     EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
+CREATE TRIGGER trg_oversight_tokens_append_only_delete BEFORE DELETE ON oversight_tokens
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
 
 CREATE TABLE oversight_ops (
     id          BIGINT PRIMARY KEY,

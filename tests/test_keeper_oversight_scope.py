@@ -43,6 +43,7 @@ Every test imports the new modules lazily so collection always succeeds.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 
@@ -1066,3 +1067,252 @@ def test_shared_machinery_denials_count_toward_the_denied_budget(
     err = refusal(apply, w, principal, [op(
         "priority", key="plangraph:OTHER", priority=3)])
     assert err.code == "forbidden" and has("rate_limited", err.msg)
+
+
+# =========================================================================
+# Fix round 2 (HIGH keeper auth, PR #138): three MEDIUM findings.
+# =========================================================================
+
+# -------------------- M1: project scope on EVERY allowed op, not just edit
+def _seed_demo(w):
+    """A complete graph in ``demo``, outside the principal's ['plangraph'].
+
+    A goal that depends on every demo lane keeps the project valid, so the
+    router can create it alongside the seeded plangraph graph.
+    """
+    w.store.create_items(w.p("router"), [
+        defn("DOUT", [], project="demo", review_tier="standard"),
+        defn("DOTHER", [], project="demo", review_tier="standard"),
+        defn("DGOAL", ["DOUT", "DOTHER"], project="demo", kind="goal",
+             review_tier="standard"),
+    ])
+
+
+#: One batch per allowed op class that must be refused by the project scope.
+_M1_SCOPE_OPS = {
+    "edit": lambda: [op("edit", key="demo:DOUT", fields={"note": "outside"})],
+    "priority": lambda: [op("priority", key="demo:DOUT", priority=5)],
+    "add_dep-item": lambda: [op("add_dep", key="demo:DOUT",
+                                dep="demo:DOTHER")],
+    "add_dep-target": lambda: [op("add_dep", key="plangraph:OTHER",
+                                 dep="demo:DOUT")],
+    "edit-add_dep-target": lambda: [op(
+        "edit", key="plangraph:OTHER", fields={"depends_on": ["demo:DOUT"]})],
+    "create-item": lambda: [op("create", item=fresh("NEW", project="demo"))],
+    "create-dep-target": lambda: [op(
+        "create", item=fresh("NEWDEP", deps=["demo:DOUT"]))],
+}
+
+
+@pytest.mark.parametrize("name", sorted(_M1_SCOPE_OPS))
+def test_project_scope_is_enforced_for_every_allowed_op(w, monkeypatch, name):
+    """R5: the one grant is scoped, so no op may name a demo item or dep."""
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch)
+    before = snap(w)
+    err = refusal(apply, w, principal, _M1_SCOPE_OPS[name]())
+    assert err.code == "forbidden", (name, err.msg)
+    assert has("project_denied", err.msg), (name, err.msg)
+    assert snap(w) == before, name
+
+
+def test_priority_outside_the_scope_leaves_the_item_alone(w, monkeypatch):
+    """The regression the seat reported: ``priority`` used to slip through."""
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch)
+    assert w.store._item("demo:DOUT")["priority"] == 0
+    err = refusal(apply, w, principal,
+                  [op("priority", key="demo:DOUT", priority=9)])
+    assert has("project_denied", err.msg)
+    assert w.store._item("demo:DOUT")["priority"] == 0
+
+
+def test_policy_denies_every_op_without_a_project_scope(w):
+    """An empty scope fails closed inside the policy too (both seams use it)."""
+    from plangraph.keeper import oversight_policy
+
+    _seed_demo(w)
+    items = {item["key"]: item for item in w.store._all_items()}
+    for name, build in sorted(_M1_SCOPE_OPS.items()):
+        verdicts = oversight_policy.check_batch(items, build(), [])
+        assert len(verdicts) == 1, name
+        assert verdicts[0].reason == "project_denied", (name, verdicts)
+
+
+# ---------------- M2: verb-seam and token refusals are audited denials
+def _assert_verb_refusal_audited(w, err, *, op_name, token, reason):
+    rows = _denied_rows(w)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    row = rows[0]
+    assert row["principal"] == OPP
+    assert row["op"] == op_name
+    assert reason in (row["code"] or ""), dict(row)
+    assert err.msg in row["reason"], dict(row)
+    assert row["finding_id"] == ""                 # no op carried a finding
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1, [dict(a) for a in alarms]
+    assert f"oversight:{reason}" in alarms[0]["detail"]
+    assert token not in str(dict(row)) + str(dict(alarms[0]))
+
+
+@pytest.mark.parametrize("verb", ["verdict", "waive_second_family",
+                                  "withdraw_review", "set_kind", "cancel"])
+def test_denied_verb_writes_a_denied_row_and_alarm(w, monkeypatch, verb):
+    token, principal = live(w, monkeypatch)
+    before = snap(w)
+    err = refusal(_VERB_CALLS[verb], w.store, principal)
+    assert err.code == "forbidden" and has("verb_denied", err.msg)
+    _assert_verb_refusal_audited(w, err, op_name=verb, token=token,
+                                 reason="verb_denied")
+    assert snap(w) == before                       # the refusal wrote no state
+
+
+def test_unknown_verb_at_the_verb_seam_is_audited(w, monkeypatch):
+    """``check_action`` fails closed on a future verb; the denial is audited."""
+    token, principal = live(w, monkeypatch)
+    err = refusal(w.store._run, principal, "a_future_verb", None,
+                  lambda now: None)
+    assert err.code == "forbidden" and has("verb_denied", err.msg)
+    _assert_verb_refusal_audited(w, err, op_name="a_future_verb", token=token,
+                                 reason="verb_denied")
+
+
+def test_expired_token_refusal_is_audited(w, monkeypatch):
+    from plangraph.keeper import store_oversight
+
+    token, principal = live(w, monkeypatch)
+    w.clock.advance(getattr(store_oversight, "OVERSIGHT_TOKEN_TTL_S", 3600) + 1)
+    err = refusal(apply, w, principal,
+                  [op("edit", key="plangraph:OTHER", fields={"note": "late"})])
+    assert err.code == "forbidden" and has("token_expired", err.msg)
+    _assert_verb_refusal_audited(w, err, op_name="apply_ops", token=token,
+                                 reason="token_expired")
+
+
+def test_revoked_token_refusal_is_audited(w, monkeypatch):
+    """The held principal's token is revoked by a rotation, then used again."""
+    token, first = live(w, monkeypatch)
+    mint(w)                                        # generation 2 revokes gen 1
+    err = refusal(apply, w, first,
+                  [op("priority", key="plangraph:OTHER", priority=1)])
+    assert err.code == "forbidden" and has("token_revoked", err.msg)
+    _assert_verb_refusal_audited(w, err, op_name="apply_ops", token=token,
+                                 reason="token_revoked")
+
+
+def test_generation_and_scope_drift_refusals_are_audited(w, monkeypatch):
+    """A stale/forged principal is refused at use time and still audited."""
+    token, principal = live(w, monkeypatch)
+    stale = dataclasses.replace(principal,
+                                generation=principal.generation + 1)
+    err = refusal(apply, w, stale,
+                  [op("priority", key="plangraph:OTHER", priority=1)])
+    assert has("token_rotated", err.msg)
+    drifted = dataclasses.replace(principal, scope="plan-admin")
+    err2 = refusal(apply, w, drifted,
+                   [op("priority", key="plangraph:OTHER", priority=1)])
+    assert has("token_denied", err2.msg)
+    rows = _denied_rows(w)
+    assert [("token_rotated" in (r["code"] or ""),
+             "token_denied" in (r["code"] or "")) for r in rows] == \
+        [(True, False), (False, True)], [dict(r) for r in rows]
+    assert len(_open_guard_alarms(w)) == 1         # one alarm, kept open
+    assert token not in str([dict(r) for r in rows])
+
+
+def test_verb_denials_count_toward_the_denied_budget(w, monkeypatch):
+    """Verb-seam rows are ledger entries: the denied cap sees them, alarm-only."""
+    from plangraph.keeper import oversight_policy
+
+    token, principal = live(w, monkeypatch)
+    cap = _denied_cap(oversight_policy)
+    assert cap > 0
+    for _ in range(cap):
+        err = refusal(w.store.cancel, principal, "plangraph:OTHER", "stop")
+        assert err.code == "forbidden" and has("verb_denied", err.msg)
+    assert len(_denied_rows(w)) == cap
+    err = refusal(apply, w, principal,
+                  [op("priority", key="plangraph:OTHER", priority=2)])
+    assert err.code == "forbidden" and has("rate_limited", err.msg)
+    # R4: the breach is a single alarm, never an automatic revoke.
+    assert auth.authenticate(w.conn, token).role == "oversight"
+    assert len(_open_guard_alarms(w)) == 1
+
+
+# ------------- M3: oversight_tokens is revoke-only and never deletable
+@pytest.mark.parametrize("column,value", [
+    ("created_at", "1999-01-01T00:00:00+00:00"),
+    ("minted_by", "intruder"),
+    ("go_decision", "D-EVIL"),
+    ("mint_reason", "rewritten after the fact"),
+])
+def test_revoke_update_cannot_smuggle_a_column_change(w, monkeypatch, column,
+                                                      value):
+    live(w, monkeypatch)
+    row = w.conn.execute(
+        "SELECT id," + column + " FROM oversight_tokens WHERE principal=?",
+        (OPP,)).fetchone()
+    revoked = w.store._iso(w.store.now())
+    with pytest.raises(db_errors.INTEGRITY):
+        w.conn.execute(
+            f"UPDATE oversight_tokens SET revoked_at=?, {column}=? WHERE id=?",
+            (revoked, value, row["id"]))
+    fresh = w.conn.execute(
+        "SELECT revoked_at," + column + " FROM oversight_tokens WHERE id=?",
+        (row["id"],)).fetchone()
+    assert fresh["revoked_at"] is None             # the whole update aborted
+    assert fresh[column] == row[column]
+
+
+def test_revoke_only_update_still_works_and_delete_aborts(w, monkeypatch):
+    live(w, monkeypatch)
+    row = w.conn.execute("SELECT id FROM oversight_tokens WHERE principal=?",
+                         (OPP,)).fetchone()
+    stamped = w.store._iso(w.store.now())
+    w.conn.execute("UPDATE oversight_tokens SET revoked_at=? WHERE id=?",
+                   (stamped, row["id"]))
+    assert w.conn.execute("SELECT revoked_at FROM oversight_tokens WHERE id=?",
+                          (row["id"],)).fetchone()["revoked_at"] == stamped
+    with pytest.raises(db_errors.INTEGRITY):
+        w.conn.execute("DELETE FROM oversight_tokens WHERE id=?", (row["id"],))
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 1
+
+
+def test_null_columns_are_null_safe_across_a_revoke(w, monkeypatch):
+    """A row with NULL provenance may be revoked, and not silently rewritten."""
+    live(w, monkeypatch)
+    ts = w.store._iso(w.store.now())
+    w.conn.execute(
+        "INSERT INTO oversight_tokens(token_sha256,principal,generation,scope,"
+        "created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        (auth.hash_token("pgo1_" + "n" * 43), OPP, 99, "plan-write", ts, ts))
+    row = w.conn.execute("SELECT id FROM oversight_tokens WHERE generation=99"
+                         ).fetchone()
+    w.conn.execute("UPDATE oversight_tokens SET revoked_at=? WHERE id=?",
+                   (ts, row["id"]))
+    assert w.conn.execute("SELECT revoked_at,minted_by FROM oversight_tokens"
+                          " WHERE id=?", (row["id"],)).fetchone()["revoked_at"]
+    w.conn.execute(
+        "INSERT INTO oversight_tokens(token_sha256,principal,generation,scope,"
+        "created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        (auth.hash_token("pgo1_" + "m" * 43), OPP, 100, "plan-write", ts, ts))
+    other = w.conn.execute("SELECT id FROM oversight_tokens"
+                           " WHERE generation=100").fetchone()
+    with pytest.raises(db_errors.INTEGRITY):
+        w.conn.execute(
+            "UPDATE oversight_tokens SET revoked_at=?, minted_by='intruder'"
+            " WHERE id=?", (ts, other["id"]))
+
+
+def test_token_guard_columns_and_delete_trigger_are_in_both_ddls():
+    from plangraph.keeper import schema, schema_pg
+
+    six = "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version == 6)
+    for ddl, label in ((schema.OVERSIGHT_DDL, "sqlite"), (six, "pg")):
+        assert "trg_oversight_tokens_append_only_delete" in ddl, label
+        trigger = ddl.split("trg_oversight_tokens_revoke_only_update", 1)[1]
+        for column in ("created_at", "minted_by", "go_decision", "mint_reason"):
+            assert f"OLD.{column}" in trigger, (label, column)
+            assert f"NEW.{column}" in trigger, (label, column)
+    assert "trg_oversight_tokens_append_only_truncate" in six

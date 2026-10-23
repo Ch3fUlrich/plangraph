@@ -285,8 +285,38 @@ class OversightMixin:
             (self._iso(now), principal.token_id, principal.name,
              principal.generation, batch_ref or "", index + 1,
              op.get("op"), key, finding, stored_reason, code))
-        detail = (f"oversight:{policy_reason or code} principal={principal.name}"
-                  f" gen={principal.generation} op={op.get('op')}"
+        self._oversight_guard_alarm(principal, finding,
+                                    policy_reason or code, op.get("op"), now)
+
+    def _record_oversight_refusal(self, principal, action, key, exc, now):
+        """Audit a refusal raised at the VERB seam, after the refusal.
+
+        The verb/token checks (``check_action``, revoked/expired/rotated/scope)
+        run before any batch exists, so there is no op context: the row names
+        the attempted verb and its key, ``finding_id`` stays empty and the
+        reason is the (bounded, masked) refusal text.  A refusal whose message
+        carries ``oversight:<reason>`` stores that reason as its code, matching
+        the policy rows; anything else stores the contract code.
+        """
+        msg = str(getattr(exc, "msg", "") or "")
+        policy_reason = self._reason_from_msg(msg) if "oversight:" in msg else None
+        code = f"oversight:{policy_reason}" if policy_reason else \
+            (getattr(exc, "code", None) or "op_denied")
+        self.conn.execute(
+            "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
+            "batch_ref,op_index,op,key,finding_id,reason,outcome,code,event_seq)"
+            " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_ops),"
+            "?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
+            (self._iso(now), principal.token_id, principal.name,
+             principal.generation, "", 1, action, key or None, "",
+             _audit_text(msg), code))
+        self._oversight_guard_alarm(principal, "", policy_reason or code,
+                                    action, now)
+
+    def _oversight_guard_alarm(self, principal, finding, reason, action, now):
+        """Open (or keep) the single ``oversight-guard`` alarm for a denial."""
+        detail = (f"oversight:{reason} principal={principal.name}"
+                  f" gen={principal.generation} op={action}"
                   f" finding={finding}")
         self.conn.execute(
             "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"

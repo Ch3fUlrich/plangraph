@@ -181,6 +181,16 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
     def _run(self, principal, action, key, fn):
         """Authorise/execute *fn*; audit success and every refusal."""
         now = self.now()
+        # M2: ``_apply_ops_audited`` records a batch refusal (with its op
+        # context); every other oversight refusal is recorded at this seam.
+        self._oversight_denied_written = False
+
+        def deny(exc):
+            """Audit a verb-seam refusal for an authenticated oversight token."""
+            if isinstance(principal, auth.OversightPrincipal) \
+                    and not self._oversight_denied_written:
+                self._record_oversight_refusal(principal, action, key, exc, now)
+
         try:
             if isinstance(principal, auth.RunPrincipal):
                 self._check_run_principal(principal, action, key, now)
@@ -194,12 +204,15 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             result = fn(now)
         except Refused as exc:
             self._audit(principal, action, key, False, exc.code, exc.msg, now)
+            deny(exc)
             raise
         except db_errors.INTEGRITY as exc:
             # A uniqueness/foreign-key violation is a lost race or duplicate.
             self._audit(principal, action, key, False, "conflict", str(exc), now)
-            raise Refused("conflict",
-                          "keeper data conflicts with this request") from exc
+            refused = Refused("conflict",
+                              "keeper data conflicts with this request")
+            deny(refused)
+            raise refused from exc
         except _MALFORMED:
             # A malformed request (bad body shape, wrong parameter type) is a
             # validation refusal, not a crash.  ``_write`` has already rolled
@@ -211,14 +224,18 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                 "malformed input for %s %s", action, key)
             self._audit(principal, action, key, False, "validation",
                         "malformed input", now)
-            raise Refused("validation", "malformed input")
+            refused = Refused("validation", "malformed input")
+            deny(refused)
+            raise refused
         except db_errors.OPERATIONAL as exc:
             # A concurrent writer holding the write lock is a lost race, not an
             # unhandled crash: report it as a conflict and audit the refusal.
             if "lock" not in str(exc).lower() and "busy" not in str(exc).lower():
                 raise
             self._audit(principal, action, key, False, "conflict", str(exc), now)
-            raise Refused("conflict", "keeper database is busy") from exc
+            refused = Refused("conflict", "keeper database is busy")
+            deny(refused)
+            raise refused from exc
         self._audit(principal, action, key, True, "", "", now)
         return result
 

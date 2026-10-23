@@ -114,7 +114,14 @@ WHEN NOT (
         AND OLD.generation IS NEW.generation
         AND OLD.scope IS NEW.scope
         AND OLD.expires_at IS NEW.expires_at
+        AND OLD.created_at IS NEW.created_at
+        AND OLD.minted_by IS NEW.minted_by
+        AND OLD.go_decision IS NEW.go_decision
+        AND OLD.mint_reason IS NEW.mint_reason
      )
+BEGIN SELECT RAISE(ABORT, 'oversight tokens are revoke-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_oversight_tokens_append_only_delete
+BEFORE DELETE ON oversight_tokens
 BEGIN SELECT RAISE(ABORT, 'oversight tokens are revoke-only'); END;
 
 CREATE TABLE IF NOT EXISTS oversight_ops (

@@ -112,7 +112,12 @@ class OpsMixin:
                              principal, ops, batch_ref, now))
 
     def _apply_ops_audited(self, principal, ops, batch_ref, now):
-        """Run one batch and, for oversight, record the denial after rollback."""
+        """Run one batch; an oversight refusal is recorded after the rollback.
+
+        ``_run`` records every oversight refusal at the VERB seam, so this path
+        marks the denial it already wrote with ``_oversight_denied_written``:
+        the batch row carries the op/finding context, the seam row would not.
+        """
         oversight = principal.role == "oversight"
         self._oversight_fail = None
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
@@ -121,6 +126,7 @@ class OpsMixin:
         except Refused as exc:
             if oversight:
                 self._record_oversight_denied(principal, batch_ref, exc, now)
+                self._oversight_denied_written = True
             raise
 
     # ----------------------------------------------------------- planning
@@ -335,7 +341,8 @@ class OpsMixin:
         """The one policy check, run pre-lock and again in-lock."""
         graph = self._all_items() if items is None else items
         items_by_key = {item["key"]: item for item in graph}
-        for verdict in oversight_policy.check_batch(items_by_key, ops):
+        for verdict in oversight_policy.check_batch(
+                items_by_key, ops, principal.projects):
             self._oversight_fail = {
                 "index": verdict.index, "op": ops[verdict.index],
                 "key": None if verdict.key == "-" else verdict.key,

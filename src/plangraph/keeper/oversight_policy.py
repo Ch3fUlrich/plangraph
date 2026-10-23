@@ -10,6 +10,11 @@ write verb (``apply_ops``) and, inside it, exactly four op kinds --
 * ``priority`` on such an item;
 * ``add_dep`` on such an item, to a dependency that already exists and is open.
 
+R5 bounds every one of those ops to the principal's ``projects``: the item a
+``create``/``edit``/``priority``/``add_dep`` names, the dependency an
+``add_dep``/``create``/``edit`` adds, and every dependency target must be inside
+the grant.  An empty project list allows nothing (fail closed).
+
 Everything is decided from database rows (``items_by_key``), never from the
 caller's reason/finding inputs.  Unknown ops, unknown op fields, unknown item
 fields and unknown dependencies are denied: the policy fails closed and never
@@ -84,6 +89,7 @@ _CODES = {
     "dep_cancelled": "validation",
     "batch_ref_required": "validation",
     "rate_limited": "forbidden",
+    "project_denied": "forbidden",
 }
 
 
@@ -158,11 +164,36 @@ def _dependency_reason(dep, items):
     return _item_reason(target)
 
 
-def _check_create(index, op, items):
+def _project_of(items, key):
+    """The project *key* belongs to: the row's column, else the key prefix."""
+    item = items.get(key)
+    if isinstance(item, dict) and isinstance(item.get("project"), str):
+        return item["project"]
+    if isinstance(key, str) and ":" in key:
+        return key.split(":", 1)[0]
+    return ""
+
+
+def _scope_reason(items, key, projects):
+    """R5: ``project_denied`` unless *key* lives in the granted *projects*."""
+    return None if _project_of(items, key) in projects else "project_denied"
+
+
+def _create_scope_reason(raw, projects):
+    """R5: the item a create would insert must be inside the grant."""
+    project = raw.get("project")
+    return None if isinstance(project, str) and project in projects \
+        else "project_denied"
+
+
+def _check_create(index, op, items, projects):
     raw = op.get("item")
     if not isinstance(raw, dict):
         return [_verdict(index, "create", _key_of(op), "op_denied")]
     key = _key_of(op)
+    reason = _create_scope_reason(raw, projects)
+    if reason:
+        return [_verdict(index, "create", key, reason)]
     unknown = set(raw) - OVERSIGHT_CREATE_FIELDS
     if unknown:
         return [_verdict(index, "create", key, "field_unknown")]
@@ -189,10 +220,13 @@ def _check_create(index, op, items):
         reason = _dependency_reason(dep, items)
         if reason:
             return [_verdict(index, "create", key, reason)]
+        reason = _scope_reason(items, dep, projects)
+        if reason:
+            return [_verdict(index, "create", key, reason)]
     return []
 
 
-def _check_edit(index, op, items):
+def _check_edit(index, op, items, projects):
     key = _key_of(op)
     fields = op.get("fields")
     if not isinstance(fields, dict) or not fields:
@@ -201,6 +235,9 @@ def _check_edit(index, op, items):
         return [_verdict(index, "edit", key, "field_denied")]
     item = items.get(key)
     reason = _item_reason(item)
+    if reason:
+        return [_verdict(index, "edit", key, reason)]
+    reason = _scope_reason(items, key, projects)
     if reason:
         return [_verdict(index, "edit", key, reason)]
     if "depends_on" not in fields:
@@ -220,26 +257,38 @@ def _check_edit(index, op, items):
         dep_reason = _dependency_reason(dep, items)
         if dep_reason:
             return [_verdict(index, "edit", key, dep_reason)]
+        dep_reason = _scope_reason(items, dep, projects)
+        if dep_reason:
+            return [_verdict(index, "edit", key, dep_reason)]
     return []
 
 
-def _check_priority(index, op, items):
+def _check_priority(index, op, items, projects):
     key = _key_of(op)
     reason = _item_reason(items.get(key))
+    if reason:
+        return [_verdict(index, "priority", key, reason)]
+    reason = _scope_reason(items, key, projects)
     if reason:
         return [_verdict(index, "priority", key, reason)]
     return []
 
 
-def _check_add_dep(index, op, items):
+def _check_add_dep(index, op, items, projects):
     key = _key_of(op)
     item = items.get(key)
     reason = _item_reason(item)
     if reason:
         return [_verdict(index, "add_dep", key, reason)]
+    reason = _scope_reason(items, key, projects)
+    if reason:
+        return [_verdict(index, "add_dep", key, reason)]
     dep = op.get("dep")
     if not isinstance(dep, str):
         return [_verdict(index, "add_dep", key, "field_denied")]
+    dep_reason = _scope_reason(items, dep, projects)
+    if dep_reason:
+        return [_verdict(index, "add_dep", key, dep_reason)]
     if dep in (item.get("depends_on") or []):
         return []                       # already present: a no-op, as _dep_op
     dep_reason = _dependency_reason(dep, items)
@@ -248,15 +297,18 @@ def _check_add_dep(index, op, items):
     return []
 
 
-def check_batch(items_by_key, ops):
+def check_batch(items_by_key, ops, projects=()):
     """Return the deny verdicts for *ops*; empty means the batch is granted.
 
     *items_by_key* is the graph as it is BEFORE the batch (the store passes
     ``_all_items()``), so a key created earlier in the same batch is simulated
-    here -- exactly as the in-lock ops will see it.
+    here -- exactly as the in-lock ops will see it.  *projects* is the
+    oversight principal's verbatim ``projects`` scope (R5); an empty list
+    allows nothing, so a caller that forgets it fails closed.
     """
     items = {key: dict(item, depends_on=list(item.get("depends_on") or []))
              for key, item in (items_by_key or {}).items()}
+    projects = frozenset(p for p in (projects or ()) if isinstance(p, str))
     verdicts = []
     for index, op in enumerate(ops):
         name = op.get("op")
@@ -270,7 +322,7 @@ def check_batch(items_by_key, ops):
             verdicts.append(_verdict(index, str(name), _key_of(op), "op_denied"))
             continue
         if name == "create":
-            found = _check_create(index, op, items)
+            found = _check_create(index, op, items, projects)
             verdicts.extend(found)
             raw = op.get("item")
             if not found and isinstance(raw, dict):
@@ -283,16 +335,16 @@ def check_batch(items_by_key, ops):
                 }
             continue
         if name == "edit":
-            found = _check_edit(index, op, items)
+            found = _check_edit(index, op, items, projects)
             verdicts.extend(found)
             if not found and isinstance(op.get("fields"), dict) \
                     and "depends_on" in op["fields"]:
                 items[key_of(op)]["depends_on"] = list(op["fields"]["depends_on"])
             continue
         if name == "priority":
-            verdicts.extend(_check_priority(index, op, items))
+            verdicts.extend(_check_priority(index, op, items, projects))
             continue
-        found = _check_add_dep(index, op, items)
+        found = _check_add_dep(index, op, items, projects)
         verdicts.extend(found)
         if not found:
             items[key_of(op)]["depends_on"] = list(

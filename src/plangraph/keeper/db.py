@@ -141,6 +141,13 @@ def _upgrade(conn):
     conn.executescript(DESIGN3_DDL)
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
+    # The oversight-token guard grew four columns and a DELETE guard after the
+    # v13 DDL shipped.  ``OVERSIGHT_DDL`` is CREATE ... IF NOT EXISTS, so an
+    # older database would keep the weaker trigger body forever: drop the two
+    # guards first and let the shared script recreate them (DDL only, no data).
+    conn.executescript(
+        "DROP TRIGGER IF EXISTS trg_oversight_tokens_revoke_only_update;\n"
+        "DROP TRIGGER IF EXISTS trg_oversight_tokens_append_only_delete;")
     conn.executescript(OVERSIGHT_DDL)
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
