@@ -82,7 +82,10 @@ clock rollback does not decrease IDs. Sequence overflow advances the logical
 millisecond. Cursors are opaque retained record IDs, not timestamps.
 
 An empty cursor starts at the oldest retained record. A known cursor resumes
-strictly after that record. Any nonempty malformed, evicted or unknown cursor
+strictly after that record. Exception: a cursor containing `|` is a shape error
+and returns **400 `bad_request`** before authentication, because the canonical
+separator cannot be bound unambiguously into the signature. Real record IDs
+never contain `|`. Every other nonempty malformed, evicted or unknown cursor
 returns **410 `cursor_gone`**, never a full replay. Recovery from lost history
 requires an explicit client decision to restart with an empty cursor.
 
