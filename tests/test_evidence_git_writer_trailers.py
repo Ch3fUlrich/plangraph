@@ -164,3 +164,56 @@ def test_octopus_merge_returns_no_writer_trailers(repo, adapter):
     # A writer behind parents[2:] must never be silently skipped: the adapter
     # cannot tell who wrote an octopus, so the keeper gets [] and fails closed.
     assert adapter.writer_trailers(str(repo), octopus) == []
+
+
+# --------------------------------------------------------------------------
+# 18. a Writer BLOCK followed by a SEPARATE trailer paragraph: the keeper must
+#     still read the writer (git's ``%(trailers)`` reports only the LAST
+#     paragraph of the message)
+# --------------------------------------------------------------------------
+
+def test_writer_block_before_a_separate_trailer_paragraph_is_still_read(repo, adapter):
+    """A blank line after the ``Writer:`` line used to hide it from the keeper.
+
+    ``git show -s --format=%(trailers)`` returns only the message's last
+    paragraph, so for this message it yields the ``Co-Authored-By`` line and
+    nothing else -- the ``Writer:`` line (and with it the ``Plan-Item:`` line)
+    is dropped, and the seat-coverage check can never see that writer.  The
+    adapter reads the whole message body instead, so both paragraphs survive.
+    """
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "squash the branch\n\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n"
+         "\n"
+         "Co-Authored-By: Tester <t@example.invalid>")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    git_trailers = _git(repo, "show", "-s", "--format=%(trailers)", sha)
+    assert "Co-Authored-By:" in git_trailers
+    assert "Writer:" not in git_trailers      # git's own view of the message
+
+    want = {"Plan-Item": "demo:A",
+            "Writer": "mimo-v2 run1",
+            "Co-Authored-By": "Tester <t@example.invalid>"}
+    assert adapter.trailers(str(repo), sha) == want
+    assert adapter.writer_trailers(str(repo), sha) == [want]
+
+
+# --------------------------------------------------------------------------
+# 19. a SQUASHED commit: several ``Writer:`` lines on ONE leaf commit, every
+#     value kept (the seat-coverage check needs every writer family)
+# --------------------------------------------------------------------------
+
+def test_two_writer_lines_on_one_commit_keep_every_value(repo, adapter):
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "squash the branch\n\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n"
+         "Writer: deepseek-r1 run2\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    assert adapter.writer_trailers(str(repo), sha) == [{
+        "Plan-Item": "demo:A",
+        "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
+    }]

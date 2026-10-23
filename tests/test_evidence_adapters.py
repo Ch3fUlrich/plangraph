@@ -215,6 +215,19 @@ def test_parse_trailers_handles_blank_and_missing():
     assert parse_trailers("") == {}
 
 
+def test_parse_trailers_keeps_every_value_per_key():
+    """A repeated key keeps EVERY value (a squashed commit names several)."""
+    text = ("\nPlan-Item: routing:X\n"
+            "Writer: mimo-v2 run1\n"
+            "Writer: deepseek-r1 run2\n\n")
+    parsed = parse_trailers(text)
+    assert parsed["Writer"] == ["mimo-v2 run1", "deepseek-r1 run2"]
+    # One occurrence stays a plain string, so a one-value lookup
+    # (``Plan-Item``) keeps seeing exactly what it saw before.
+    assert parsed["Plan-Item"] == "routing:X"
+    assert parse_trailers("") == {}
+
+
 def test_semaphore_adapter_quotes_ids_and_rejects_non_integers(monkeypatch, tmp_path):
     token_file = tmp_path / "token"
     token_file.write_text("TOK", encoding="utf-8")

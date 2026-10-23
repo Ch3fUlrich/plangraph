@@ -488,3 +488,52 @@ def test_phase_merge_uses_the_flattened_leaf_trailers(w):
     assert w.store._item(refused)["state"] == "in_review"
     assert len(verdict_events(w, refused)) == 1
 
+
+# --------------------------------------------------------------------------
+# 17. (KEEPER-TRAILER-MULTI) a SQUASHED commit: several ``Writer:`` lines on
+#     ONE leaf commit -- every family must be covered, not the last one alone
+# --------------------------------------------------------------------------
+
+SQUASH_SHA = "9" * 40
+
+
+def squash_trailers(writers):
+    """One leaf commit carrying several ``Writer:`` lines (a squashed branch)."""
+    return {SQUASH_SHA: {"Plan-Item": "demo:SQUASH",
+                         "Writer": list(writers)}}
+
+
+def test_squash_commit_with_several_writer_families_needs_all_covered(w):
+    """Every ``Writer:`` line of one leaf commit is a family that needs a seat.
+
+    A last-value-wins trailer parse (or a lookup that sees only the first
+    value) exposes ONE of ``mimo-v2`` (xiaomi) / ``deepseek-r1`` (deepseek);
+    a seat pair covering that one family must not close the item.
+    """
+    covered, refused = seed(
+        w, [("A", []), ("B", [])],
+        evidence_kinds=("commit+ci",), review_tier="high")
+    trailers = squash_trailers(["mimo-v2 run1", "deepseek-r1 run2"])
+    to_review_with_commits(w, covered, trailers, git=git_with(trailers))
+    to_review_with_commits(w, refused, trailers, git=git_with(trailers))
+    assert set(_cov().writer_families(
+        w.store, w.store._item(refused), w.store.ctx)) == {"xiaomi", "deepseek"}
+
+    # Seats covering BOTH families close the item.
+    assert w.store.verdict(w.p("rAlibaba"), covered, True, "one")["state"] == "in_review"
+    assert w.store.verdict(w.p("rAnthropic1"), covered, True, "two")["state"] == "done"
+
+    # alibaba + deepseek cover xiaomi (two other families) but a deepseek seat
+    # never covers the deepseek writer itself: only the SECOND Writer line
+    # makes deepseek a family that needs covering.
+    assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
+    round_no = w.store._item(refused)["round"]
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rDeepseek"), refused, True, "two")
+    assert exc.value.code == "coverage"
+    assert "deepseek" in exc.value.msg
+    item = w.store._item(refused)
+    assert item["state"] == "in_review"
+    assert item["round"] == round_no
+    assert len(verdict_events(w, refused)) == 1
+
