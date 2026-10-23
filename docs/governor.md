@@ -32,6 +32,53 @@ Keeper access: `GET /v1/metrics?day=&since=&metric=` (any authenticated role); `
 (router or system); `POST /v1/governor_override` (router, l1, system, spawner). Both writes are audited;
 an override or fallback is one extra `audit_log` row with action `governor_override`.
 
+## Context / cache report (`ctx`)
+
+The daily job's JSON output gains a `ctx` section beside the unchanged `day`, `items` and
+`posted` keys: `{"day": ..., "groups": [...]}`, one group per `(host, session_class)` for that
+UTC day. The same JSON is also written to a file - `--out-dir DIR` gives `DIR/ctx-<YYYY-MM-DD>.json`,
+and without the flag the report lands next to the transcripts the job read, i.e.
+`<projects-dir>/ctx-<YYYY-MM-DD>.json` (written atomically, and `--dry-run` still skips only the
+keeper upload). Nothing is posted for it - the keeper `metrics` table stays flat rows.
+
+Dedup here is **first usage record per message id** (`message.id`, else the transcript line's
+`uuid`): a later duplicate of that id is ignored, and a record without an id is never merged with
+another. That is the reference scan's rule (`metrics.iter_usage_first`), and it deliberately
+differs from `metrics.iter_usage`, which keeps the *largest* record per `(message id, requestId)`
+for the weighted/daily totals, including pairs with a missing message id (or both ids missing).
+Neither rule changes the other. Both transcript readers skip
+missing or invalid timestamps, consistent with daily aggregation's exclusion of undated usage.
+Both also skip a record whose `message.id` or `requestId` is present but not a string or int
+(only that record; earlier versions dropped the rest of the file), and records are taken in
+`(ts, file, line)` order, so which of two equal duplicates survives is deterministic.
+
+| field | meaning |
+|---|---|
+| `calls` | deduplicated assistant calls in the group (first record per message id) |
+| `weighted` | the existing `weighted()` sum (cache reads at one tenth) |
+| `share_cache_read`, `share_cache_write`, `share_output` | each part of the *raw* token total `input+output+cache_read+cache_write` |
+| `input_from_cache` | `cache_read / (input + cache_read + cache_write)` |
+| `ctx_p50`, `ctx_p90`, `ctx_p99` | nearest-rank percentiles of the per-call context `input+cache_read+cache_write` |
+| `share_over_200k` | fraction of calls whose context is over 200 000 tokens |
+| `cost_usd` | price table below; cache reads cost `read multiplier x input price` |
+
+`host` is `--host`, else `PLANGRAPH_HOST`, else `socket.gethostname()`. `session_class` is
+`subagent` for a transcript under a `subagents/` directory or a record with `isSidechain` true,
+otherwise `main` - refined to `router`/`L1`/`judge`/`worker` (or whatever the launch record
+says) only by `--session-classes PATH`, a JSON `{session_id: class}` file; a session no launch
+record names stays `main`, and a session name is never interpreted.
+
+Prices in USD per million tokens `(input, output, cache_write)`, matched on the model id with
+`DEFAULT_PRICE` `(3.0, 15.0, 3.75)` for an unmatched model: `opus` `(15, 75, 18.75)`,
+`sonnet` `(3, 15, 3.75)`, `haiku` `(1, 5, 1.25)`. Cache reads bill at `0.05 x` the input price
+for a model id containing `opus-5-5` or `sonnet-5-5`, at `0.1 x` otherwise.
+
+```
+python -m plangraph.governor metrics daily --date 2026-10-15 \
+    --projects-dir "$PLANGRAPH_CLAUDE_PROJECTS_DIR" --host "$PLANGRAPH_HOST" \
+    --session-classes /etc/plangraph/session_classes.json --dry-run
+```
+
 ## Daily job
 
 ```
@@ -39,9 +86,13 @@ python -m plangraph.governor metrics daily --date 2026-10-15 \
     --projects-dir "$PLANGRAPH_CLAUDE_PROJECTS_DIR" --repo . --weekly-cap "$PLANGRAPH_WEEKLY_CAP_WEIGHTED"
 ```
 
-Idempotent: a re-run of the same date upserts the same rows. `--dry-run` prints without posting.
+Idempotent: a re-run of the same date upserts the same rows and rewrites the same
+`ctx-<day>.json` report file (`--out-dir`, default the projects dir). `--dry-run` prints and
+writes the file without posting.
 Environment: `PG_URL`, `PG_TOKEN_FILE` (keeper client), `PLANGRAPH_CLAUDE_PROJECTS_DIR`,
-`PLANGRAPH_WEEKLY_CAP_WEIGHTED`, `PLANGRAPH_PROVIDER_QUOTA` (`provider=tokens,...`).
+`PLANGRAPH_WEEKLY_CAP_WEIGHTED`, `PLANGRAPH_PROVIDER_QUOTA` (`provider=tokens,...`),
+`PLANGRAPH_HOST` (host name of the `ctx` report above when `--host` is absent; else the local
+hostname).
 Without a weekly cap no burn index is written and the governor fails open (`burn_unknown`).
 
 Timer unit (install is a separate, operator step; this repo installs nothing):

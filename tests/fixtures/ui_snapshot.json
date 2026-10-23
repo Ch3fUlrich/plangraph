@@ -107,7 +107,8 @@
  "aliases": {},
  "decision_text": {
   "D-11": "Terrace soil depth fixed at 90 cm.",
-  "D-12": "Quay load class B per the fictional harbour code."
+  "D-12": "Quay load class B per the fictional harbour code.",
+  "D-13": "Lamp oil spec narrowed to colza."
  },
  "decisions": [
   {
@@ -130,6 +131,23 @@
    "items": [
     "harbor:HB-05",
     "harbor:HB-10"
+   ]
+  },
+  {
+   "id": "D-13",
+   "project": "lighthouse",
+   "title": "D-13: Lamp oil spec narrowed to colza",
+   "text": "Lamp oil spec narrowed to the colza grade for every lighthouse lantern.",
+   "date": "2026-06-07",
+   "items": [
+    "lighthouse:LH-2"
+   ],
+   "history": [
+    {
+     "previous_text": "Lamp oil spec stays whale oil for every lighthouse lantern.",
+     "editor": "operator (fictional)",
+     "time": "2026-06-07T15:40:00Z"
+    }
    ]
   }
  ],

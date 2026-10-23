@@ -168,6 +168,14 @@ def build_decisions() -> list:
         {"id": "D-12", "project": "harbor", "title": "D-12: Quay load class B",
          "text": "The quay is built to load class B of the fictional harbour code.",
          "date": "2026-06-06", "items": ["harbor:HB-05", "harbor:HB-10"]},
+        # Edited decision: V-DEC-2 asserts the previous text, the editor and the
+        # time of this history entry against the Decisions view, so the history
+        # check is never vacuous (tests/browser/test_views_pages.py).
+        {"id": "D-13", "project": "lighthouse", "title": "D-13: Lamp oil spec narrowed to colza",
+         "text": "Lamp oil spec narrowed to the colza grade for every lighthouse lantern.",
+         "date": "2026-06-07", "items": ["lighthouse:LH-2"],
+         "history": [{"previous_text": "Lamp oil spec stays whale oil for every lighthouse lantern.",
+                      "editor": "operator (fictional)", "time": "2026-06-07T15:40:00Z"}]},
     ]
 
 
@@ -237,7 +245,8 @@ def build_snapshot() -> dict:
         "activity": build_activity(items),
         "aliases": {},
         "decision_text": {"D-11": "Terrace soil depth fixed at 90 cm.",
-                          "D-12": "Quay load class B per the fictional harbour code."},
+                          "D-12": "Quay load class B per the fictional harbour code.",
+                          "D-13": "Lamp oil spec narrowed to colza."},
         "decisions": build_decisions(),
         "generated": GENERATED,
         "head": None,

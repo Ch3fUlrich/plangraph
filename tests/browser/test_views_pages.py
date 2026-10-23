@@ -2,22 +2,30 @@
 (table, needs-you, decisions, activity, progress, knowledge, fleet, settings).
 
 Each test asserts the SPEC against the current page (src/plangraph/web): a tag
-whose behaviour is wrong today is ``xfail(strict=True)`` with the owning item;
-when a fix lane makes it pass, strict xfail reports XPASS as a failure, so
-that lane removes the marker. A feature absent from the page entirely is
-``skip``. Sizes default to all three SIZES unless the tag names one.
+whose behaviour is wrong today is ``xfail(strict=True, raises=AssertionError)``
+with the owning item; when a fix lane makes it pass, strict xfail reports XPASS
+as a failure, so that lane removes the marker, and a harness break (timeout,
+KeyError, ...) stays red instead of passing as an expected failure. A tag whose
+observable already holds today is an UNMARKED green test (``test_v_dec_3``).
+Sizes default to all three SIZES unless the tag names one.
 Assertions carry measured probe values.
 """
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
 from browser import probes
-from browser.conftest import SIZES, for_sizes
+from browser.conftest import SIZES, SNAPSHOT_PATH, for_sizes
 
 pytestmark = pytest.mark.browser
+
+#: Fixture snapshot: every expected value in this module comes from HERE,
+#: never from the page under test (deepseek review: no circular expectations).
+_SNAP = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+_TERMINAL = ("done", "cancelled")
 
 
 def _show(page, name):
@@ -30,9 +38,89 @@ def _load(page, site):
     probes.wait_layout_idle(page)
 
 
+def _fixture_unblocks(key):
+    """V-NEED-1 expected value: the keeper dependency graph, computed from the
+    fixture snapshot only (VIEWS.md 6: "unblocks N" = the number of open,
+    agent-owned items that wait only on this row, plus the downstream count).
+
+    An item counts once every non-terminal item it waits on has been counted,
+    so direct waiters and their downstream come out of one cascade; items that
+    wait on something outside the cascade, terminal items and operator-owned
+    items never count. Returns None when the snapshot has no such key."""
+    items = _SNAP["items"]
+    by_key = {i["key"]: i for i in items}
+    if key not in by_key:
+        return None
+    reached, total, grew = {key}, 0, True
+    while grew:
+        grew = False
+        for it in items:
+            k = it.get("key")
+            if k in reached or it.get("state") in _TERMINAL or it.get("operator"):
+                continue
+            deps = [d for d in (it.get("depends_on") or [])
+                    if d in by_key and by_key[d].get("state") not in _TERMINAL]
+            if deps and set(deps) <= reached:
+                reached.add(k)
+                total += 1
+                grew = True
+    return total
+
+
+def _fixture_row_keys():
+    """Row id -> snapshot key for every row the needs-you table can render
+    (open questions, decisions, operator tasks), straight from the fixture."""
+    keys = {q["id"]: q["item"] for q in _SNAP.get("questions", [])}
+    keys.update({d["id"]: (d.get("items") or [""])[0]
+                 for d in _SNAP.get("decisions", [])})
+    keys.update({i["key"]: i["key"] for i in _SNAP["items"]})
+    return keys
+
+
+def _decisions_view(page):
+    """User path to the Decisions view (VIEWS.md 7): a tab or menu control
+    named for it. Returns the control's accessible name or None, then the
+    state of #decisions-table."""
+    ctl = page.evaluate(
+        """() => { const els = [...document.querySelectorAll(
+             'header .tab-btn, header button, .sb-menu button, .sb-tab')];
+           const b = els.find(e => /decision/i.test(
+             (e.getAttribute('aria-label') || '') + ' ' + (e.textContent || '')));
+           if (b) b.click();
+           return b ? String(b.getAttribute('aria-label') || b.textContent || '').trim() : null; }"""
+    )
+    page.wait_for_timeout(200)
+    st = page.evaluate(
+        """() => { const t = document.getElementById('decisions-table');
+           const p = document.getElementById('panel-qa');
+           return {exists: !!t, visible: !!t && t.getClientRects().length > 0,
+                   panelHidden: p ? p.hidden : null,
+                   cols: t ? [...t.querySelectorAll('thead th')].map(h => h.textContent.trim()) : []}; }"""
+    )
+    return ctl, st
+
+
+def _decision_cells(page):
+    """{decision id: {attribute: ..., actor: ...}} from the decisions table."""
+    return page.evaluate(
+        """() => { const t = document.getElementById('decisions-table');
+           if (!t) return null;
+           const heads = [...t.querySelectorAll('thead th')].map(h => h.textContent.trim());
+           const idx = n => heads.findIndex(h => h.toLowerCase().indexOf(n) >= 0);
+           const out = {};
+           [...t.querySelectorAll('tbody tr')].forEach(tr => {
+             const c = [...tr.children];
+             out[(tr.id.replace(/^qa-row-/, '')) || (c[0] ? c[0].textContent.trim() : '')] = {
+               attribute: idx('attribute') >= 0 && c[idx('attribute')] ? c[idx('attribute')].textContent.trim() : null,
+               actor: idx('actor') >= 0 && c[idx('actor')] ? c[idx('actor')].textContent.trim() : null};
+           });
+           return {rows: out, heads}; }"""
+    )
+
+
 # ---------------------------------------------------------------- Section 5: Table
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_v_tab_1(page, site):
     """V-TAB-1: the global search filters the table while it is shown.
 
@@ -57,7 +145,7 @@ def test_v_tab_1(page, site):
 
 
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-URL-HISTORY")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-URL-HISTORY")
 def test_v_tab_2(page, site):
     """V-TAB-2: filters, sort, grouping and collapsed groups are in the URL.
 
@@ -124,33 +212,53 @@ def test_v_tab_4(page, site):
 
 # ---------------------------------------------------------- Section 6: Needs you
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_v_need_1(page, site):
-    """V-NEED-1: the unblocks count equals the keeper's dependency graph.
+    """V-NEED-1: the unblocks count equals the keeper's dependency graph
+    (tested against the fixture snapshot, never against the page's own VM).
 
-    The needs-you table shows no per-row unblocks count at all (columns are
-    Type/ID/Title/Project/Prio/State/Age/Open).
-    """
+    Every expected number comes from ``_fixture_unblocks`` (fixture JSON); the
+    page is only read for what it renders. The needs-you table has no
+    unblocks column at all (columns: Type/ID/Title/Project/Prio/State/Age/Open)."""
     _load(page, site)
     _show(page, "needs")
-    expect = page.evaluate(
-        "() => { const vm=PlanUI.app.vm; let best=null;"
-        " (vm.needsYou||[]).forEach(function(e){ if (e.text!==undefined) return;"
-        " const n=(e.unblocks||[]).length; if (n>0 && (!best||n>best.n)) best={id:e.key, n:n}; });"
-        " return best; }"
-    )
-    assert expect, "fixture has no needs-you task that unblocks anything"
-    row_text = page.evaluate(
-        "(id) => { const tr=document.getElementById('ny-row-'+id); return tr ? tr.textContent : ''; }",
-        expect["id"],
-    )
-    assert "unblocks" in row_text, (
-        f"needs-you row {expect['id']!r} (expected unblocks {expect['n']}) renders no count: {row_text!r}"
-    )
+    expected = {rid: _fixture_unblocks(key)
+                for rid, key in _fixture_row_keys().items()}
+    row_ids = page.evaluate(
+        "() => [...document.querySelectorAll('#sb-panel-needs tbody tr')]"
+        ".map(t => t.id.replace(/^ny-row-/, ''))")
+    assert row_ids, "needs-you table rendered no rows"
+    unlisted = [r for r in row_ids if r not in expected]
+    assert not unlisted, (
+        "rendered rows with no fixture record behind them: %r" % unlisted)
+    assert any(expected[r] for r in row_ids), (
+        "fixture dependency graph unblocks nothing on any rendered row: %r"
+        % {r: expected[r] for r in row_ids})
+    heads = page.evaluate(
+        "() => [...document.querySelectorAll('#sb-panel-needs thead th')]"
+        ".map(t => t.textContent.trim())")
+    col = next((i for i, h in enumerate(heads) if "unblock" in h.lower()), -1)
+    assert col >= 0, (
+        "needs-you table has no 'unblocks' column (columns %r); VIEWS.md 6 "
+        "requires \"unblocks N\" per row" % heads)
+    got = page.evaluate(
+        "(c) => { const out = {}; document.querySelectorAll("
+        "'#sb-panel-needs tbody tr').forEach(tr => { const td = tr.children[c];"
+        " out[tr.id.replace(/^ny-row-/, '')] = td ? td.textContent.trim() : null; });"
+        " return out; }", col)
+    wrong = {}
+    for rid in row_ids:
+        m = re.match(r"\s*(\d+)", got.get(rid) or "")
+        want = expected[rid]
+        if not m or int(m.group(1)) != want:
+            wrong[rid] = (got.get(rid), want)
+    assert not wrong, (
+        "rows whose unblocks count disagrees with the fixture dependency "
+        "graph {(shown, expected)}: %r" % wrong)
 
 
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_v_need_2(page, site):
     """V-NEED-2: the answered filter shows answer, who, when and the D-id.
 
@@ -181,7 +289,7 @@ def test_v_need_2(page, site):
 
 
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-URL-HISTORY")
 def test_v_need_3(page, site):
     """V-NEED-3: a row's ID link selects the item without reloading the page.
 
@@ -199,7 +307,16 @@ def test_v_need_3(page, site):
     assert sentinel == "alive", f"ID link reloaded the page (sentinel {sentinel!r}); spec: no reload"
 
 
-@for_sizes
+@pytest.mark.parametrize("size", [
+    pytest.param(SIZES["desktop"], id="desktop"),
+    pytest.param(SIZES["tablet"], id="tablet"),
+    # At 390x844 the expanded phase renders no focus target, so Jump cannot
+    # centre anything: that is the UI-GRAPH-EXPAND defect (V-GRAPH-5/V-GRAPH-10),
+    # asserted - never skipped - and strict, so the lane turns it green.
+    pytest.param(SIZES["phone"], id="phone",
+                 marks=pytest.mark.xfail(strict=True, raises=AssertionError,
+                                         reason="plangraph:UI-GRAPH-EXPAND")),
+], indirect=True)
 def test_v_need_4(page, site, size):
     """V-NEED-4: Jump focuses the item in the graph (V-GRAPH-5: one animation,
     expanded, centred, zoom >= 0.75)."""
@@ -223,9 +340,10 @@ def test_v_need_4(page, site, size):
         " w:b.w, h:b.h}; }"
     )
     assert st["page"] == "graph", f"Jump did not switch to graph (page={st['page']!r})"
-    if not st["found"]:
-        # V-GRAPH-10: at narrow widths the expanded phase renders no task node yet, so focus has no target here.
-        pytest.skip("plangraph:UI-GRAPH-EXPAND: task node absent at this width (V-GRAPH-10)")
+    assert st["found"], (
+        "Jump selected %r but no node for it exists in the graph (viewport "
+        "%dx%d), so the focus/centre/zoom check has no target: %r"
+        % (st["sel"], size[0], size[1], st))
     assert st["zoom"] >= 0.75, f"focus zoom {st['zoom']:.2f} below 0.75"
     assert st["w"] > 0 and st["h"] > 0, f"node zero-size after focus: {st['w']}x{st['h']}"
     off = abs(st["cx"] - st["vcx"]) + abs(st["cy2"] - st["vcy"])
@@ -233,33 +351,205 @@ def test_v_need_4(page, site, size):
 
 
 # ------------------------------------------------------ Section 7: Decisions page
-@pytest.mark.xfail(strict=True, reason="plangraph:PG-DEC-ATTRIBUTION")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:PG-DEC-ATTRIBUTION")
 @for_sizes
 def test_v_dec_1(page, site):
-    """V-DEC-1: attribute (human/agent) and actor come from keeper decision
-    records. No Decisions page or attribute/actor fields exist in the page."""
-    raise NotImplementedError("plangraph:PG-DEC-ATTRIBUTION: body lands with the feature")
+    """V-DEC-1: attribute (human/agent) and actor come from the keeper decision
+    records of the snapshot, not from a heuristic in the page.
+
+    Opens the Decisions view the user way (a tab named for it), then compares
+    every rendered row with ``tests/fixtures/ui_snapshot.json``."""
+    _load(page, site)
+    ctl, st = _decisions_view(page)
+    assert ctl, (
+        "no control opens the Decisions view (VIEWS.md 7 'one row per D-row'); "
+        "#decisions-table state %r" % st)
+    assert st["exists"] and st["visible"], (
+        "the Decisions view is not on screen after opening it: %r" % st)
+    cells = _decision_cells(page)
+    assert cells, "no decisions table to read attribute/actor from"
+    heads = [h.lower() for h in cells["heads"]]
+    for field in ("attribute", "actor"):
+        assert any(field in h for h in heads), (
+            "decisions table has no %r column (columns %r); VIEWS.md 7 shows "
+            "attribute human|agent and actor per row" % (field, cells["heads"]))
+    wrong = {}
+    for d in _SNAP["decisions"]:
+        rec = cells["rows"].get(d["id"])
+        if rec is None:
+            wrong[d["id"]] = {"row": None}
+            continue
+        exp_attr, exp_actor = d.get("attribute"), d.get("actor")
+        if rec["attribute"] not in ("human", "agent"):
+            wrong[d["id"]] = {"attribute": rec["attribute"], "keeper": exp_attr}
+        elif rec["attribute"] != exp_attr or (rec["actor"] or None) != exp_actor:
+            wrong[d["id"]] = {"shown": {"attribute": rec["attribute"],
+                                        "actor": rec["actor"]},
+                              "keeper": {"attribute": exp_attr, "actor": exp_actor}}
+    assert not wrong, (
+        "rows whose attribute/actor is not the keeper record's "
+        "(attribute must be human|agent, both taken from the record): %r" % wrong)
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:PG-DEC-EDIT-NOTICE")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:PG-DEC-EDIT-NOTICE")
 @for_sizes
 def test_v_dec_2(page, site):
-    """V-DEC-2: an edit shows previous text, editor and time (hash-chained).
-    No decision-edit feature exists."""
-    raise NotImplementedError("plangraph:PG-DEC-EDIT-NOTICE: body lands with the feature")
+    """V-DEC-2: an edit shows the previous text, the editor and the time
+    (hash-chained event), so the Decisions view needs an edit control and a
+    history surface. Neither exists.
+
+    The history check runs FIRST and is not vacuous: the fixture carries an
+    edited decision (D-13 with a ``history`` entry, see
+    ``test_fixture_decisions_include_an_edited_record``), and its previous
+    text / editor / time must literally appear in the decisions surface.
+    """
+    _load(page, site)
+    ctl, st = _decisions_view(page)
+    edited = [d for d in _SNAP["decisions"]
+              if d.get("history") or d.get("edited")]
+    assert edited, (
+        "the fixture carries no edited decision, so V-DEC-2's previous text/"
+        "editor/time cannot be asserted (guard: "
+        "test_fixture_decisions_include_an_edited_record)")
+    surface = page.evaluate(
+        """() => { const p = document.getElementById('panel-qa');
+           return p ? String(p.textContent || '') : ''; }"""
+    )
+    assert surface.strip(), (
+        "the decisions surface is empty, it can show no edit history: "
+        "control=%r view=%r surface=%r" % (ctl, st, surface[:120]))
+    missing: dict[str, list] = {}
+    for d in edited:
+        for ev in (d.get("history") or []):
+            for field in ("previous_text", "editor", "time"):
+                val = ev.get(field)
+                if not val or str(val) not in surface:
+                    missing.setdefault(d["id"], []).append({field: val})
+    assert not missing, (
+        "decisions whose edit history is NOT shown in the Decisions view "
+        "(expected {decision: [{field: value}]} - V-DEC-2 requires the previous "
+        "text, the editor and the time of the hash-chained event): %r" % missing)
+    edit = page.evaluate(
+        """() => [...document.querySelectorAll('#decisions-table tbody button, #decisions-table tbody a')]
+             .map(b => String(b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
+             .filter(t => /\\bedit\\b/i.test(t))"""
+    )
+    assert edit, (
+        "the Decisions view offers no edit control, so no edit (previous "
+        "text, editor, time) can be shown: control=%r view=%r" % (ctl, st))
 
 
-@pytest.mark.xfail(strict=True, reason="plangraph:PG-DEC-EDIT-NOTICE")
+def test_fixture_decisions_include_an_edited_record():
+    """V-DEC-2 coverage guard (unmarked, must stay green): the fixture really
+    carries an edited decision whose history names the previous text, the editor
+    and the time, so ``test_v_dec_2`` can never pass vacuously on a snapshot
+    without history. Fixture source: ``tools/gen_ui_snapshot.py`` (D-13)."""
+    edited = [d for d in _SNAP["decisions"]
+              if d.get("history") or d.get("edited")]
+    assert edited, (
+        "tests/fixtures/ui_snapshot.json has no edited decision, so the "
+        "V-DEC-2 history assertion has nothing to compare: decisions=%r"
+        % [d.get("id") for d in _SNAP["decisions"]])
+    for d in edited:
+        events = d.get("history") or []
+        assert events, "edited decision %s carries no history event" % d["id"]
+        for ev in events:
+            for field in ("previous_text", "editor", "time"):
+                assert ev.get(field), (
+                    "decision %s history event lacks %r: %r" % (d["id"], field, ev))
+
+
 @for_sizes
 def test_v_dec_3(page, site):
-    """V-DEC-3: without the operator principal the edit control is not shown.
-    There is no edit control or operator principal at all."""
-    raise NotImplementedError("plangraph:PG-DEC-EDIT-NOTICE: body lands with the feature")
+    """V-DEC-3: without the operator principal, the edit control is not shown.
+
+    No marker: V-DEC-3's own observable already holds today - this session has
+    no operator principal and no edit control exists - so the test is green and
+    stays green until an edit control appears that is not gated on a principal.
+
+    The page's missing principal STATE is a different assertion and a different
+    owner: ``test_v_dec_3_principal_state`` below, strict xfail for
+    ``plangraph:PG-ANSWER-UI``, the lane the plan names for the write identity
+    (docs/plans/ui/2026-10-17-ui-plan.yaml line 249 "the write identity is the
+    operator principal from PG-ANSWER-UI", depends_on line 252; plan section 5,
+    docs/plans/ui/2026-10-17-ui-plan.md line 86: PG-ANSWER-UI "brings the
+    operator principal through the proxy hop").
+    """
+    _load(page, site)
+    _assert_no_decision_edit_control(page)
+
+
+def _assert_no_decision_edit_control(page):
+    """Question answer editing must not count as decision editing."""
+    st = page.evaluate(
+        """() => { const p = document.getElementById('panel-qa');
+           const t = document.getElementById('decisions-table');
+           return {panel: !!p, table: !!t,
+                   rows: t ? t.querySelectorAll('tbody tr').length : 0}; }"""
+    )
+    assert st["panel"] and st["table"], (
+        "the Decisions surface is gone, V-DEC-3 has nothing to check against "
+        "(a decision row is where an edit control must be withheld): %r" % st)
+    assert st["rows"] == len(_SNAP["decisions"]), (
+        "the decisions surface does not render the fixture's decisions, so the "
+        "edit-control scan would be vacuous: rows=%d, fixture=%d"
+        % (st["rows"], len(_SNAP["decisions"])))
+    edit = page.evaluate(
+        """() => [...document.querySelectorAll('#decisions-table tbody button, #decisions-table tbody a')]
+             .map(b => String(b.getAttribute('aria-label') || b.title || b.textContent || '').trim())
+             .filter(t => /\\bedit\\b/i.test(t))"""
+    )
+    assert not edit, (
+        "edit control shown without an operator principal: %r" % edit)
+
+
+@for_sizes
+def test_v_dec_3_with_local_question_answer(page, site):
+    """A question's local-answer Edit control is outside V-DEC-3's scope."""
+    _load(page, site)
+    qid = _SNAP["questions"][0]["id"]
+    page.evaluate("(id) => PlanUI.QAPage.setAnswer(id, 'Scope regression answer')", qid)
+    question_edit = page.locator("#qa-table").get_by_role(
+        "button", name="Edit", exact=True, include_hidden=True)
+    assert question_edit.count() == 1, "seeded local answer rendered no question Edit button"
+    _assert_no_decision_edit_control(page)
+
+
+@for_sizes
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:PG-ANSWER-UI")
+def test_v_dec_3_principal_state(page, site):
+    """V-DEC-3's precondition, split out of ``test_v_dec_3`` (deepseek review:
+    that test must go red - or stay green - on V-DEC-3's own observable, not on
+    an internal principal-store key).
+
+    The page must keep operator-principal state to gate an edit control on.
+    Owner ``plangraph:PG-ANSWER-UI``: the plan makes it the source of the write
+    identity (docs/plans/ui/2026-10-17-ui-plan.yaml line 249 "the write identity
+    is the operator principal from PG-ANSWER-UI", depends_on line 252; plan
+    section 5, docs/plans/ui/2026-10-17-ui-plan.md lines 86-87), and VIEWS.md 6
+    (docs/ui/VIEWS.md line 111) names plangraph:PG-ANSWER-UI for the operator
+    write path. PG-DEC-EDIT-NOTICE (the old marker) owns the edit flow, not the
+    principal."""
+    _load(page, site)
+    principal = page.evaluate(
+        """() => { const ui = window.PlanUI && PlanUI.app && PlanUI.app.ui;
+           if (!ui || typeof ui.get !== 'function') return null;
+           for (const k of ['principal', 'identity', 'role', 'actor', 'who']) {
+             let v; try { v = ui.get(k); } catch (e) { continue; }
+             if (v !== undefined && v !== null && v !== '') return {key: k, value: v};
+           }
+           return null; }"""
+    )
+    assert principal is not None, (
+        "the page keeps no principal/identity state to gate editing on "
+        "(checked store keys principal/identity/role/actor/who): principal="
+        "%r - V-DEC-3's operator-only gate cannot exist until PG-ANSWER-UI "
+        "supplies the operator principal" % (principal,))
 
 
 # ---------------------------------------------------------- Section 8: Activity
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-URL-HISTORY")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-URL-HISTORY")
 def test_v_act_1(page, site):
     """V-ACT-1: the range is in the URL.
 
@@ -283,7 +573,7 @@ def test_v_act_1(page, site):
 
 
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_v_act_2(page, site):
     """V-ACT-2: a key link switches to the graph and focuses the item.
 
@@ -318,7 +608,7 @@ def test_v_act_2(page, site):
 
 # ---------------------------------------------------------- Section 9: Progress
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_v_prog_1(page, site):
     """V-PROG-1: one counting rule (total = all minus cancelled, done = done) is
     written next to the bar.
@@ -343,7 +633,7 @@ def test_v_prog_1(page, site):
 
 # --------------------------------------------------------- Section 10: Knowledge
 @for_sizes
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLAKE-FIXES")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLAKE-FIXES")
 def test_v_kg_1(page, site):
     """V-KG-1: with the export missing/disabled, the Knowledge tab stays visible
     and shows its empty state with the reason (V-SHELL-3), and the console has
@@ -363,12 +653,46 @@ def test_v_kg_1(page, site):
 
 
 # ------------------------------------------------------------- Section 11: Fleet
-@pytest.mark.xfail(strict=True, reason="plangraph:UI-FLEET-TAB")
+@pytest.mark.xfail(strict=True, raises=AssertionError, reason="plangraph:UI-FLEET-TAB")
 @for_sizes
 def test_v_fleet_1(page, site):
-    """V-FLEET-1: until the fleet API exists the Fleet tab shows its empty state
-    with the reason. There is no Fleet tab or page in the shell at all."""
-    raise NotImplementedError("plangraph:UI-FLEET-TAB: body lands with the feature")
+    """V-FLEET-1: until the fleet API exists the Fleet tab shows its empty
+    state with the reason. The shell has no Fleet tab at all, so the empty
+    state can never be reached.
+
+    Owner ``plangraph:UI-FLEET-TAB``, the lane that builds the tab:
+    docs/plans/ui/2026-10-17-ui-plan.yaml lines 253-254 (``op: edit`` /
+    ``key: plangraph:UI-FLEET-TAB``) with done criteria lines 256-257 ("browser
+    test; per docs/ui/VIEWS.md section 11"), plan section 5
+    (docs/plans/ui/2026-10-17-ui-plan.md line 88: "UI-FLEET-TAB: done criteria
+    point at VIEWS.md 11") and docs/ui/VIEWS.md line 149 ("Built by
+    plangraph:UI-FLEET-TAB"). UI-FLAKE-FIXES (yaml line 161) also lists
+    V-FLEET-1 in its done criteria; the section-11 builder named by the plan
+    and the spec is UI-FLEET-TAB."""
+    _load(page, site)
+    tab = page.evaluate(
+        """() => { const els = [...document.querySelectorAll(
+             'header .tab-btn, header button, .sb-menu button')];
+           const b = els.find(e => /fleet/i.test(
+             (e.getAttribute('aria-label') || '') + ' ' + (e.textContent || '')));
+           if (b) b.click();
+           return b ? String(b.getAttribute('aria-label') || b.textContent || '').trim() : null; }"""
+    )
+    assert tab, (
+        "no Fleet tab in the shell; VIEWS.md 11 requires the tab (with its "
+        "empty state) until the fleet API exists")
+    page.wait_for_timeout(200)
+    panel = page.evaluate(
+        """() => { const p = document.querySelector(
+             '[id*=fleet][role=tabpanel], [id*=fleet].tabpanel');
+           return p ? {hidden: p.hidden, text: (p.textContent || '').trim()} : null; }"""
+    )
+    assert panel and not panel["hidden"], (
+        "the Fleet tab does not show its panel: %r" % panel)
+    assert panel["text"], "the Fleet panel is blank, it shows no empty state"
+    assert re.search(r"no |not |until |missing|unavailable|empty", panel["text"], re.I), (
+        "the Fleet empty state gives no reason (VIEWS.md 11: the tab shows "
+        "its empty state with the reason): %r" % panel["text"])
 
 
 # ---------------------------------------------------------- Section 12: Settings
