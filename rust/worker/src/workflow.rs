@@ -377,7 +377,14 @@ impl Card {
                     &check_tail,
                 );
                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                park_and_alarm(ctx, &cfg, &packet, "red-first contract defect".into()).await?;
+                park_and_alarm(
+                    ctx,
+                    &cfg,
+                    &packet,
+                    "red-first contract defect".into(),
+                    n.max(1),
+                )
+                .await?;
                 return Ok(parked(n));
             }
 
