@@ -11,9 +11,9 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 43a16a90; Haiku r3 FIX 2 HIGH (in-block indented Writer fold; **/1./`/| shapes) -> fix4 7329ee ended WIP (patch saved) -> cont 470492 mimo -> push, CI, re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
-| PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats deepseek + luna (workst sha256 review a434ce1e): no code finding; both FIX only on names-list scan + later gates -> after operator scan line: re-run both, submit, GO-REQ, luna asked workst; names-list scan: NO agent holds words file -> BLOCKED routing = operator Q (D-2433); luna r4 workst builds prompt, runs ~13:52Z -> submit, verdicts, GO-REQ |
+| PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats deepseek + luna (workst sha256 review a434ce1e): no code finding; both FIX only on names-list scan + later gates -> after operator scan line: re-run both, submit, GO-REQ, luna asked workst; IDLE: operator runs words --check on c218b921 (D-2434), trigger = his result line; luna r4 workst builds prompt, runs ~13:52Z -> submit, verdicts, GO-REQ |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
-| KEEPER-CLOSE-SKIP-UNVERIFIED #148 (HIGH p7) | L1 | head c32f3fe5 CI green; r2 deepseek PASS + Haiku PASS -> GO-REQ sent 14:1xZ -> on GO mergepath, submit, verdicts |
+| KEEPER-CLOSE-SKIP-UNVERIFIED #148 (HIGH p7) | L1 | head c32f3fe5 CI green; r2 deepseek PASS + Haiku PASS -> GO D-2434; mergepath blevniaal running -> submit, deepseek verdict, merge sha to router (Haiku D-2430); router closes PW-ROTATE+MT-226 after live sync |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | claimed; workst writer 20261023-112202-jev-attempt-thread-write-f55fce running |
 | BUS-NONCE-FLOOD p4 | L1 queue | D-2422 created (PH-RT-CONSOLIDATE); unclaimed, starts after P1 writers free |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
