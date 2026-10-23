@@ -41,6 +41,12 @@ message = "Initial public history of plangraph"
 hostname_patterns = []
 allow_email_domains = []
 
+[[scrub.allow_value]]
+path = "tests/fleet_bus/vectors/sign.json"
+rule = "token-shape"
+value_sha256 = "48f27ef8fc9d274fbeee761e0171b64e32551784d0b4543998a94085fa0f07e6"
+why = "synthetic HMAC test vector"
+
 # Vendored third-party code: minified JS trips entropy/IP/e-mail heuristics.
 [[scrub.allow]]
 path = "vendor/**"

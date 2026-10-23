@@ -239,6 +239,13 @@ class SupportMixin:
     # -------------------------------------------------- evidence rules
     def _verify_evidence(self, item, kind, ref, now):
         """Run the verifier for *kind*; the slow I/O a verb does pre-txn."""
+        # Reject malformed decision refs even with an injected/cached verifier:
+        # failed verification may be stored, but an unusable reference must not be.
+        if kind == "decision" and (
+                not isinstance(ref, dict)
+                or not isinstance(ref.get("id"), str)
+                or not ref["id"].strip()):
+            raise Refused("validation", "decision ref requires a non-empty string id")
         if self._batch is not None:
             done = self._batch.verified(item, kind, ref)
             if done is not None:
