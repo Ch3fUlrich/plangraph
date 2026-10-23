@@ -164,8 +164,13 @@ def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
     pg_tables = schema_pg.parse_tables(ddl)
     for name, cols in tables.items():
         assert name in pg_tables, name
-        assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
-        assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
+        if name == "items":
+            # Upgraded Postgres appends columns; fresh SQLite lists them in CREATE order.
+            assert {c for c, _ in cols} == {c for c, _ in pg_tables[name]}, name
+            assert dict(cols) == dict(pg_tables[name]), name
+        else:
+            assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
+            assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
     assert set(pg_tables) == set(tables)
     for name in indexes:
         assert re.search(rf"\b{name}\b", ddl), f"missing index {name}"
@@ -177,6 +182,16 @@ def test_migrations_are_versioned_contiguously():
     versions = [m.version for m in schema_pg.MIGRATIONS]
     assert versions == list(range(1, len(versions) + 1))
     assert schema_pg.LATEST == versions[-1]
+
+
+def test_exec_columns_are_only_added_by_migration_6():
+    columns = {"exec_workflow_id", "exec_run_id", "exec_attempt"}
+    for migration in schema_pg.MIGRATIONS[:5]:
+        assert not any(column in migration.sql for column in columns)
+    migration = schema_pg.MIGRATIONS[5]
+    assert migration.version == 6
+    for column in columns:
+        assert f"ALTER TABLE items ADD COLUMN IF NOT EXISTS {column} " in migration.sql
 
 
 def test_design3_tables_are_in_both_schemas():

@@ -464,6 +464,42 @@ fn workflow_id(id: &str) -> String {
     format!("card:{id}")
 }
 
+/// Every keeper call the card made must carry the full execution identity:
+/// the workflow id, this run's id and the card attempt number (1-based, never
+/// Temporal's activity retry count). Calls name an attempt the card has run,
+/// in non-decreasing order: a question-timeout alarm can precede another attempt.
+fn assert_execs_name_the_attempts(env: &Env, attempts: u32) {
+    let execs = env.keeper.execs();
+    assert!(
+        !execs.is_empty(),
+        "the card must have reached the keeper at least once"
+    );
+    let mut previous = 0;
+    for exec in &execs {
+        assert!(
+            exec.workflow_id.is_some(),
+            "every keeper call carries the workflow id: {exec:?}"
+        );
+        assert!(
+            exec.run_id.is_some(),
+            "every keeper call carries the run id: {exec:?}"
+        );
+        let attempt = exec
+            .attempt
+            .unwrap_or_else(|| panic!("every keeper call carries the card attempt: {exec:?}"));
+        assert!(attempt >= 1, "the card attempt is 1-based: {exec:?}");
+        assert!(
+            attempt <= attempts,
+            "keeper call cannot name a future attempt: {exec:?}"
+        );
+        assert!(
+            attempt >= previous,
+            "keeper call attempts cannot go backwards: {exec:?}"
+        );
+        previous = attempt;
+    }
+}
+
 /// Record this run as a fixture under `<PG_RECORD_DIR>`.
 ///
 /// Two shapes are written: the SDK's JSON history as `<name>.json`, and, when
@@ -648,6 +684,10 @@ async fn happy_attempt_merges_into_main() {
             "keeper completed: {:?}",
             env.keeper.completed()
         );
+        // The card merged on its very first attempt, and the keeper's `complete`
+        // call names that attempt (with the workflow and run ids).
+        assert_eq!(out.attempts, 1, "{out:?}");
+        assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })
     .await;
@@ -940,6 +980,10 @@ async fn needs_input_risk_tagged_never_defaults() {
                 == 1,
             "{parked:?}"
         );
+        // The question path too: ask, park and alarm all name the attempt that
+        // asked, here the card's only attempt.
+        assert_eq!(out.attempts, 1, "{out:?}");
+        assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })
     .await;
@@ -1687,6 +1731,9 @@ async fn a_check_that_never_passes_stops_the_card() {
             !env.keeper.alarms().is_empty() || !env.keeper.parked().is_empty(),
             "a stuck card raises an alarm or a park packet"
         );
+        // A parked card: the park packet and its alarm both carry the card's
+        // final attempt, with workflow id and run id.
+        assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })
     .await;

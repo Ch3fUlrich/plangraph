@@ -105,7 +105,10 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
                   ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"),
-                  ("items", "kg_refs", "TEXT"))
+                  ("items", "kg_refs", "TEXT"),
+                  ("items", "exec_workflow_id", "TEXT"),
+                  ("items", "exec_run_id", "TEXT"),
+                  ("items", "exec_attempt", "INTEGER"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)

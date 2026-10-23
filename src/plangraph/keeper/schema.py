@@ -15,7 +15,7 @@ __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
            "METRICS_DDL", "LOCKS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -286,6 +286,9 @@ CREATE TABLE items (
     writer_model TEXT,
     seat_models  TEXT,
     run_ids      TEXT,
+    exec_workflow_id TEXT,
+    exec_run_id      TEXT,
+    exec_attempt     INTEGER,
     created_at     TEXT,
     updated_at     TEXT
 );

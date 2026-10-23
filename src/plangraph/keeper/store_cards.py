@@ -11,10 +11,20 @@ trigger).
 * ``add_decision``: an operator decision or judge ruling (router only).
 * ``ask_question`` / ``answer_question``: a structured question with an optional default
   and deadline.  A risk-tagged question never has a default.  ``source='question_timeout'``
-  applies the default once the deadline has passed.
+  applies the default once the deadline has passed.  RT-P1-EXEC-OWNERSHIP: an ask
+  carrying ``(workflow_id, run_id, attempt)`` is checked against the card's recorded
+  exec owner exactly like a run-carrying ``set_state`` move; a worker/spawner that
+  omits them on an owned card is refused.
 * ``set_budget``: absolute tokens/cost/meter for one provider and day.
 * ``set_state``: move an item among the non-claim states (open, ready, running,
   needs_input, waiting, failed, parked); claim, review, done and cancel keep their verbs.
+  RT-P1-EXEC-OWNERSHIP: a move that carries ``run=(workflow_id, run_id, attempt)`` is
+   exec-owned -- it must stay forward per ``TRANSITIONS``, and the recorded
+  owner refuses a stale run or an attempt that would go backwards.  A hand-back
+  is EXPLICIT: ``set_state(..., hand_back=True)`` that changes the state and
+  lands on ``open``/``ready`` frees the exec owner for the next run.  A bare
+  run-less move (the projector/planner write path) never clears the owner, so a
+  run-less write cannot free a live run's card (RT-P1 V1-B).
 """
 from __future__ import annotations
 
@@ -27,11 +37,40 @@ from .credential_guard import guard
 from .errors import Refused
 from .schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 
-__all__ = ["CardsMixin", "SETTABLE_STATES", "NO_DEFAULT_TAGS"]
+__all__ = ["CardsMixin", "SETTABLE_STATES", "TRANSITIONS", "NO_DEFAULT_TAGS"]
 
 #: States ``set_state`` moves between (none of them carries a claim, lease or epoch).
 SETTABLE_STATES = ("open", "ready", "running", "needs_input", "waiting", "failed",
                    "parked")
+
+#: RT-P1-EXEC-OWNERSHIP: the hand-back states.  An EXPLICIT ``set_state`` move
+#: (``hand_back=True``) that lands on one of these and changes the state is a
+#: router/operator hand-back: it frees the exec owner so the next run can claim
+#: the card (same transaction as the state UPDATE).  A bare run-less move -- the
+#: projector/planner write path -- is never a hand-back and keeps the owner; so
+#: do run-carrying moves, no-op moves and moves to any other state.
+_HAND_BACK_STATES = frozenset({"open", "ready"})
+
+#: RT-P1-EXEC-OWNERSHIP: direct successors of each settable state (same-state always
+#: allowed; reachability is the transitive closure).  A set-state move that carries a
+#: ``run`` may only follow these edges forward; the back-moves (``failed``/``parked``
+#: back to ``open``/``ready``) are refused. A run-carrying move never clears
+#: ownership; an explicit hand-back (``hand_back=True``) to ``open``/``ready``
+#: does (see ``_HAND_BACK_STATES``).
+#: Moves without a ``run``
+#: keep their historical behaviour. Worker parks do not consult this table at
+#: all: ``_worker_park`` applies its state move with no ``run``, so park never
+#: raises ``bad_transition`` (it refuses ``bad_state`` instead).
+TRANSITIONS: dict[str, frozenset[str]] = {
+    "open":        frozenset({"open", "ready"}),
+    "ready":       frozenset({"ready", "running"}),
+    "running":     frozenset({"running", "needs_input", "waiting"}),
+    "needs_input": frozenset({"needs_input", "waiting", "parked", "failed"}),
+    "waiting":     frozenset({"waiting", "needs_input", "parked", "failed"}),
+    "failed":      frozenset({"failed", "parked"}),
+    "parked":      frozenset({"parked", "failed"}),
+}
+
 #: Question tags: the card tags plus the design's "public release".
 QUESTION_TAGS = RISK_TAGS + ("public-release",)
 #: design 4.8: a question carrying one of these has no default and is never timed out.
@@ -114,6 +153,38 @@ def _number(name, value, nullable=True):
         raise Refused("validation", f"{name} must be a non-negative number"
                       + (" or null" if nullable else ""))
     return float(value)
+
+
+def _exec_parts(key, run):
+    """Validate a ``run=(workflow_id, run_id, attempt)``; return the three parts.
+
+    Every part must be present and well-formed whether or not the item already
+    has a recorded owner: recording a malformed owner would poison the card.
+    """
+    if not isinstance(run, (tuple, list)) or len(run) != 3:
+        raise Refused("validation",
+                      "run must be a (workflow_id, run_id, attempt) tuple")
+    wf, run_id, attempt = run
+    wf = _text("workflow_id", wf, required=True, cap=200, key=key)
+    run_id = _text("run_id", run_id, required=True, cap=200, key=key)
+    if (isinstance(attempt, bool) or not isinstance(attempt, int)
+            or not 1 <= attempt <= 2**31 - 1):
+        raise Refused("validation", "attempt must be an integer in [1, 2147483647]")
+    return wf, run_id, attempt
+
+
+def _forward(was, state):
+    """True when *state* is *was* or forward-reachable from it per TRANSITIONS."""
+    todo, seen = [was], set()
+    while todo:
+        here = todo.pop()
+        if here == state:
+            return True
+        for nxt in TRANSITIONS.get(here, frozenset()):
+            if nxt not in seen:
+                seen.add(nxt)
+                todo.append(nxt)
+    return False
 
 
 class CardsMixin:
@@ -268,14 +339,19 @@ class CardsMixin:
 
     # ------------------------------------------------------------ questions
     def ask_question(self, principal, key, text, default_answer=None, deadline=None,
-                     risk_tags=()):
+                     risk_tags=(), exec_workflow_id=None, exec_run_id=None,
+                     exec_attempt=None, expected_state=None):
         return self._run(principal, "ask_question", key,
                          lambda now: self._ask_question(principal, key, text,
                                                         default_answer, deadline,
-                                                        risk_tags, now))
+                                                        risk_tags, now,
+                                                        exec_workflow_id,
+                                                        exec_run_id, exec_attempt,
+                                                        expected_state))
 
     def _ask_question(self, principal, key, text, default_answer, deadline, risk_tags,
-                      now):
+                      now, exec_workflow_id=None, exec_run_id=None, exec_attempt=None,
+                      expected_state=None):
         self._require_role(principal, "router", "l1", "worker", "spawner", "system")
         body = _text("text", text, required=True, key=key)
         default = _text("default_answer", default_answer, key=key)
@@ -293,6 +369,26 @@ class CardsMixin:
             item = self._get_or_refuse(key)
             self._may_act_in(principal, item["project"])
             self._assert_unlocked(item)
+            # Compare the observed state before _exec_check can record an owner.
+            if expected_state is not None:
+                self._exec_expect_state(item, expected_state)
+            # RT-P1-EXEC-OWNERSHIP: an ask carrying any exec field is checked
+            # against the recorded owner (a first ask records it; a stale run
+            # or a backwards attempt is refused and inserts no question).  A
+            # worker/spawner that omits all three on an owned card names no
+            # run, so it is refused as exec_stale; router/l1/system callers
+            # (planner, router) never are.
+            if any(part is not None
+                   for part in (exec_workflow_id, exec_run_id, exec_attempt)):
+                self._exec_check(self.conn, key, exec_workflow_id, exec_run_id,
+                                 exec_attempt, now=now)
+            elif principal.role in ("worker", "spawner"):
+                row = self.conn.execute(
+                    "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
+                if row is not None and row["exec_run_id"] is not None:
+                    raise Refused("exec_stale",
+                                  f"{key} has an exec owner: workflow_id, run_id"
+                                  " and attempt are required")
             row = self.conn.execute(
                 "INSERT INTO questions(id,key,text,default_answer,deadline,risk_tags,"
                 "state,created_at)"
@@ -379,11 +475,19 @@ class CardsMixin:
                 "meter": reading}
 
     # ---------------------------------------------------------------- state
-    def set_state(self, principal, key, state, reason=""):
+    def set_state(self, principal, key, state, reason="", run=None, new_run=False,
+                  hand_back=False):
+        # Only ``hand_back=True`` hands the card back: on a changing move to
+        # open/ready it clears the exec owner (``_HAND_BACK_STATES``) so the
+        # next run can claim it.  A bare run-less move -- the projector/planner
+        # write path -- keeps the owner (RT-P1 V1-B).
         return self._run(principal, "set_state", key,
-                         lambda now: self._set_state(principal, key, state, reason, now))
+                         lambda now: self._set_state(principal, key, state, reason,
+                                                     now, run=run, new_run=new_run,
+                                                     hand_back=hand_back))
 
-    def _set_state(self, principal, key, state, reason, now):
+    def _set_state(self, principal, key, state, reason, now, run=None, new_run=False,
+                   hand_back=False):
         self._require_role(principal, "router", "l1", "system")
         if state not in SETTABLE_STATES:
             raise Refused("validation",
@@ -392,16 +496,80 @@ class CardsMixin:
         why = _text("reason", reason or "", cap=500, key=key)
         return self._apply_state(principal, key, state, why, now,
                                  lambda project: self._may_write_for(principal,
-                                                                     project))
+                                                                     project),
+                                 run=run, new_run=new_run, hand_back=hand_back)
+
+    def _exec_clear(self, conn, key):
+        """Free the exec owner inside the caller's keeper transaction."""
+        conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
+                     " exec_attempt=NULL WHERE key=?", (key,))
+
+    def _exec_record(self, conn, item_id, wf, run, attempt, now=None):
+        """Record the exec owner of *item_id*: the first owner of an unowned card.
+
+        Only ``_exec_check`` calls this, and only while no owner is recorded, so
+        an existing owner is never replaced here.
+        """
+        wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
+        touch = ", updated_at=?" if now is not None else ""
+        values = (wf, run, attempt)
+        if now is not None:
+            values += (self._iso(now),)
+        conn.execute("UPDATE items SET exec_workflow_id=?, exec_run_id=?,"
+                     f" exec_attempt=?{touch} WHERE key=?", (*values, item_id))
+
+    def _exec_check(self, conn, item_id, wf, run, attempt, now=None, record=True):
+        """RT-P1-EXEC-OWNERSHIP: enforce the recorded exec owner of *item_id*.
+
+        An unowned card records ``(wf, run, attempt)``; the same run may only
+        move its attempt forward (never backwards); a different run is stale.
+        Runs inside the caller's write lock; callers pass ``conn`` (== ``self.conn``)
+        so the helper reads as a pure check against one connection.
+        """
+        wf, run, attempt = _exec_parts(item_id, (wf, run, attempt))
+        row = conn.execute("SELECT exec_workflow_id, exec_run_id, exec_attempt"
+                           " FROM items WHERE key=?",
+                           (item_id,)).fetchone()
+        recorded = row["exec_run_id"] if row is not None else None
+        if recorded is None:
+            if record:
+                self._exec_record(conn, item_id, wf, run, attempt, now=now)
+            return
+        if run != recorded or wf != row["exec_workflow_id"]:
+            raise Refused("exec_stale",
+                          f"{item_id} is owned by run {recorded!r}, not {run!r}")
+        at = row["exec_attempt"] or 0
+        if attempt < at:
+            raise Refused("exec_stale",
+                          f"{item_id} is at attempt {at}; {attempt} would go backwards")
+        if attempt > at and record:
+            touch = ", updated_at=?" if now is not None else ""
+            values = (attempt,) if now is None else (attempt, self._iso(now))
+            conn.execute(f"UPDATE items SET exec_attempt=?{touch} WHERE key=?",
+                         (*values, item_id))
 
     def _apply_state(self, principal, key, state, why, now, scope,
-                     guard=None, release_claim=False):
+                     guard=None, release_claim=False, run=None, new_run=False,
+                     hand_back=False):
         """Move *key* to *state*; *scope(project)* does the authorisation check.
 
         Idempotent: re-applying the state the item already has changes nothing.
         `guard(item)`, if given, runs inside the write lock after the scope and
         lock checks and may raise; `release_claim` lets a `claimed` item move to
-        *state* and clears its claim.
+        *state* and clears its claim.  RT-P1-EXEC-OWNERSHIP: a move carrying
+        ``run=(workflow_id, run_id, attempt)`` is exec-owned -- it must be
+        forward per ``TRANSITIONS`` (back-moves are always refused),
+        and the recorded owner refuses a stale run or a backwards attempt.
+        A hand-back is EXPLICIT: ``hand_back=True`` on a move that changes the
+        state, lands on ``open``/``ready`` and carries no ``run`` (a
+        router/operator move -- neither a worker park nor a projector/planner
+        write) clears the exec owner in the same transaction as the state
+        UPDATE (``_HAND_BACK_STATES``), so the next run can claim the card.  A
+        bare run-less move is never a hand-back: a projector/planner write to
+        ``open``/``ready`` keeps the owner of a live run (RT-P1 V1-B).  No-op
+        moves, run-carrying moves and moves to any other state keep the owner.
+        ``new_run`` is accepted and ignored for compatibility. Callers without
+        ``run`` keep the historical, unchecked behaviour.
         """
         with self._write():
             item = self._get_or_refuse(key)
@@ -413,6 +581,14 @@ class CardsMixin:
             if was not in SETTABLE_STATES and not (release_claim and was == "claimed"):
                 raise Refused("bad_state", f"{key} is {was}; set_state moves only"
                               f" {list(SETTABLE_STATES)}")
+            if run is not None:
+                wf, run_id, attempt_no = _exec_parts(key, run)
+                if _forward(was, state):
+                    self._exec_check(self.conn, key, wf, run_id, attempt_no,
+                                     now=now, record=was != state)
+                else:
+                    raise Refused("bad_transition",
+                                  f"{key}: {was} -> {state} is not a forward move")
             if was == state:
                 return {"key": key, "state": state, "changed": False}
             payload = {"state": state, "was": was, "reason": why}
@@ -430,4 +606,9 @@ class CardsMixin:
                     "UPDATE items SET state=?, updated_at=? WHERE key=? AND state=?"
                     " AND epoch=?", (state, self._iso(now), key, was, item["epoch"]))
             self._race_guard(cursor, key, was, item["epoch"])
+            if hand_back and run is None and state in _HAND_BACK_STATES:
+                # RT-P1-EXEC-OWNERSHIP: the explicit hand-back door frees the
+                # owner for the next run, in the same transaction as the move
+                # above; a bare run-less move never reaches this line (V1-B).
+                self._exec_clear(self.conn, key)
         return {"key": key, "state": state, "changed": True}
