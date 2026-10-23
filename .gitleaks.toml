@@ -50,8 +50,8 @@ regexes = ['''^svcacct/Zq9xk2LmPw$''']
 [[allowlists]]
 # Reason: the estimate/src-edit guard test asserts that "login " plus exactly this synthetic
 # pair is refused (and never echoed), so the value has to sit in the source as one plain
-# literal the leak gate can read -- no splitting/reassembling around the scanner.  Fake, no
-# credential of any kind.  Scope is this file AND this exact value only (condition = AND):
+# literal the leak gate can read: no split fragments to reassemble around the scanner.  Fake,
+# no credential of any kind.  Scope is this file AND this exact value only (condition = AND):
 # any other credential-shaped string written into the same file is still reported.
 description = "synthetic credential the estimate-src-edit guard refuses (reviewed 2026-10-23)"
 condition = "AND"
@@ -62,9 +62,9 @@ regexes = ['''^svcacct/Zq9xk2LmPw$''']
 [[allowlists]]
 # Reason: the key-guard refusal corpus (REAL) is the set of credential pairs the guard must
 # refuse and the mask tests must mask, so the slash pair sits there as one plain literal the
-# leak gate can read -- no splitting/reassembling around the scanner.  Fake, no credential of
-# any kind.  Scope is this file AND this exact value only (condition = AND): any other
-# credential-shaped string written into the same file is still reported.
+# leak gate can read: no split fragments to reassemble around the scanner.  Fake, no
+# credential of any kind.  Scope is this file AND this exact value only (condition = AND):
+# any other credential-shaped string written into the same file is still reported.
 description = "synthetic password the key-guard refusal corpus expects refused (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["generic-api-key"]
@@ -106,12 +106,31 @@ paths = ['''^rust/worker/tests/fixtures/phase_defer\.json$''',
 regexes = ['''^(?:e2e-(?:phase|defer)-[ab]-|phase-)[0-9]+$''']
 
 [[allowlists]]
-# The PEM rule fires on the redaction tests' obviously fake header: the block between the TEST
-# header and footer is letter-only filler ("A" x 64 per line), with no key material anywhere.
-# The "\s*" spelling keeps this config's own text from ever matching the rule it exempts.
-description = "fake PEM test header in the worker-core check/redact tests (reviewed 2026-10-23)"
+# Reason: the worker-core check/redaction tests redact an obviously fake PEM block that sits in
+# the source as ONE literal -- the TEST header, its letter-only filler (lines of exactly 64
+# "A"s, no digits, no base64 body, no key material anywhere) and the matching footer.  The
+# regex pins that whole block: header, that exact filler, footer.  Only such a fake block is
+# waived, so a real key under this header (base64 body lines) matches nothing here and stays
+# reported.  The "\s*" and "{64}" spellings keep this config's own text from ever matching the
+# rule it exempts.
+description = "fake PEM test block (header + 64-A filler + footer) in the worker-core check/redact tests (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["private-key"]
 paths = ['''^rust/worker-core/src/check\.rs$''',
          '''^rust/worker-core/src/redact\.rs$''']
-regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----(?:\r?\nA{64})+\r?\n-----END TEST\s*PRIVATE KEY-----''']
+
+[[allowlists]]
+# Reason: before the fixture became a single literal, the same two tests built the fake block
+# programmatically, so in git history the private-key match starts at the header STRING LITERAL
+# and runs on through the builder code (`.to_string()];`, the `for _ in 0..body_lines` loop,
+# `"A".repeat(64)`) to the footer literal.  This entry waives exactly that historical shape:
+# the TEST header immediately closed by `".to_string()];` -- never a PEM header line, which is
+# always followed by a newline, so a real key (base64 body) under this header is not waived here
+# and stays reported by the entry above's absence.  Same two paths, same rule, AND condition.
+description = "pre-fix programmatic fake-PEM builder in the worker-core check/redact tests, git history only (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^rust/worker-core/src/check\.rs$''',
+         '''^rust/worker-core/src/redact\.rs$''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----"\.to_string\(\)\];\s+for _ in 0\.\.body_lines''']

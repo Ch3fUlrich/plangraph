@@ -142,3 +142,83 @@ def test_guard_fixture_value_is_waived_but_nothing_else(tmp_path, rel):
     secrets = {f["Secret"] for f in findings if f["RuleID"] == "generic-api-key"}
     assert rc == 1 and secrets == {planted}, \
         f"only the planted value may be reported in {rel}: {secrets}"
+
+
+# --- PG-PUBLIC-FIX: the private-key waiver pins the full fake PEM block, not a header ------
+
+#: Assembled at runtime: this file sits in the same scanner gate, so no fragment here may form
+#: a matchable PEM header and footer, or a credential-shaped blob.
+_PEM_HEADER = _join("-----BEGIN ", "TEST PRIVATE KEY-----")
+_PEM_FOOTER = _join("-----END ", "TEST PRIVATE KEY-----")
+_PEM_FILLER = "A" * 64  # letter-only, no digits: never a base64 key body
+#: The fixture exactly as it sits in rust/worker-core/src/{check,redact}.rs: one literal block.
+FAKE_PEM = _PEM_HEADER + "\n" + "\n".join([_PEM_FILLER] * 30) + "\n" + _PEM_FOOTER
+#: A real (fake-content, real-shape) key: base64 body WITH digits under the very same header.
+#: Every literal fragment is digit-free -- this file is scanned by the scrub high-entropy rule,
+#: which only fires on mixed-case-and-digit tokens -- and the digits are spliced in at runtime,
+#: so the source itself never holds a key-body-looking token while the written file does.
+REAL_PEM_BODY = ("MIIEvQIBADANBgkqhkiG" + str(9) + "w" + str(0)
+                 + "BAQEFAASCBKcwggSjAgEAAoIBAQC" + str(7)
+                 + "VJTUt" + str(9) + "Us" + str(8) + "cKmPw" + str(7) + "nQ")
+REAL_PEM = _PEM_HEADER + "\n" + REAL_PEM_BODY + "\n" + _PEM_FOOTER
+#: The pre-fix fixture: the block was BUILT in code, so the private-key match starts at the
+#: header string literal and runs through the builder to the footer literal.  This is what the
+#: git-history gate still sees in the base commits; the config waives exactly this shape.
+HISTORICAL_PEM = (
+    '    let mut v = vec!["' + _PEM_HEADER + '".to_string()];\n'
+    "        for _ in 0..body_lines {\n"
+    '            v.push("A".repeat(64));\n'
+    "        }\n"
+    '        v.push("' + _PEM_FOOTER + '".to_string());\n'
+)
+
+_PEM_REL = "rust/worker-core/src/check.rs"
+
+
+def _make_pem_tree(tmp_path: Path, text: str) -> Path:
+    """A scan tree holding one file at the config's allow-listed PEM path."""
+    tree = tmp_path / "tree"
+    target = tree / _PEM_REL
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return tree
+
+
+def test_full_fake_pem_block_is_waived(tmp_path):
+    """The allowlist waives the fixture's whole fake block (header + 64-A filler + footer)."""
+    exe = _gitleaks()
+    tree = _make_pem_tree(tmp_path, 'const FAKE_PEM: &str = r#"' + FAKE_PEM + '"#;\n')
+    rc, findings = _scan(exe, tree, CONFIG)
+    assert rc == 0, f"the reviewed fake PEM block must stay waived: {findings}"
+
+
+def test_real_key_under_the_test_header_is_still_reported(tmp_path):
+    """A header-only waiver would hide a real key; the full-block pin must not.
+
+    Same header, base64 body (digits included), same path: without the config the rule
+    fires (so the check below is not vacuous), and with the config it must STILL fire.
+    """
+    exe = _gitleaks()
+    tree = _make_pem_tree(tmp_path, REAL_PEM)
+    rc0, bare = _scan(exe, tree, None)
+    assert rc0 == 1 and any(f["RuleID"] == "private-key" for f in bare), \
+        f"the private-key rule must fire on a real key: {bare}"
+    rc, findings = _scan(exe, tree, CONFIG)
+    assert rc == 1 and any(f["RuleID"] == "private-key" for f in findings), \
+        f"a real key under the TEST header must never be waived: {findings}"
+
+
+def test_pre_fix_history_shape_is_waived(tmp_path):
+    """The git-history gate (`gitleaks git --log-opts=--all`) stays green.
+
+    The pre-fix commits build the fake block programmatically, so their match is the header
+    literal followed by builder code; the config's second private-key entry pins that exact
+    shape.  Without the config the match is a finding, so the waiver is live, not vacuous.
+    """
+    exe = _gitleaks()
+    tree = _make_pem_tree(tmp_path, HISTORICAL_PEM)
+    rc0, bare = _scan(exe, tree, None)
+    assert rc0 == 1 and any(f["RuleID"] == "private-key" for f in bare), \
+        f"the historical fixture must be a finding without the config: {bare}"
+    rc, findings = _scan(exe, tree, CONFIG)
+    assert rc == 0, f"the pre-fix fixture must stay waived so history scans clean: {findings}"
