@@ -1,5 +1,5 @@
-# build-L1 card · gen-24 · 2026-10-23 17:2xZ · NO cron · hb loop = job-tmp hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
-Handoff #24 = docs/build-L1-handoff.md top (order list). Control repo LOCAL ONLY (D-1751): `git push control build-L1`.
+# build-L1 card · gen-24 end · 2026-10-23 19:3xZ · NO cron · hb loop = job-tmp hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
+Handoff #25 = docs/build-L1-handoff.md top. Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 (all findings 1 writer) + D-2472 (P1-P6 speed) + D-2459 (mimo/mimo-v2.6-* only).
 Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats D-2449/2450: qwen qodercli (job-tmp qseat.sh; efficient fallback ok), Haiku (Agent haiku), mimo, luna (workst); deepseek API OUT (402).
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
@@ -7,9 +7,9 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | Item | Owner | State / next |
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq7 b9a378b7 CI green; Haiku BLOCKER -> sq8 sol RUNNING workst a3a264 (18:47Z) -> mergemain, CI, qwen+Haiku -> GO-REQ |
-| UI-BROWSER-TESTS #143 | L1 | PR #152 head 32051a6a; fix3 r2 sol RUNNING workst 382049 (6836f4 WIP inlined) -> CI, qwen+Haiku re-seat -> merge, submit |
+| UI-BROWSER-TESTS #143 | L1 | PR #152 fix3 r2 cf0a3b5c + main = 3ae5ad14 pushed; CI running; qwen r3 delta seat RUNNING (seats/pr152/r3, prompt 9af33ab7) -> pass+CI green: merge (standard, mergepath), submit |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5 f587af24 + main = 9fd6cfae pushed (contract 165p local); seats qwen + Haiku fix5 RUNNING; CI -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix5 f587af24 + main = 9fd6cfae; CI running; seats fix5: qwen retry (NO-tools header; try1 no verdict) + Haiku RUNNING (seats/trailer-multi/fix5) -> both pass + CI -> GO-REQ (Haiku: path+sha to routing D-2430) |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |

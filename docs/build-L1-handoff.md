@@ -1,3 +1,19 @@
+# build-L1 handoff #25 (gen-24 end, 2026-10-23 ~19:35Z; context 220k -> CARD-READY)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (script = copy of job-tmp hb.sh from /home/s/.claude/jobs/c3b382a6/tmp/, also mergemain.sh, qseat.sh, mk152.py); caveman; effort medium.
+CARD status/build-L1.card.md = lane table (read first). GO-REQ/BLOCKED -> `routing`. Writers/luna -> `workst-L1-autoos` (briefs INLINE).
+## Rules new this gen
+- D-2458 all open findings of all seats -> ONE writer brief + same-pattern sweep. D-2472 P1-P6: vectors in writer brief; seats on push || CI; round>=2 delta scope; LOW-only no re-seat; HIGH re-seat 1 seat on delta (auth/secrets 2); seat prompt line 1 "You have NO tools and no repository access. Everything you need is below. Answer in plain text only."; workst runs CI+seats for lanes it writes.
+- D-2459/2461: mimo only as mimo/mimo-v2.6-flash|pro (never omniroute/mimo); spawner fix in autoos:SEAT-FREE-OPENCODE (running workst 13e736). D-2466: when it merges, remove the mimo block from coding.vm ~/.claude/CLAUDE.md.
+- D-2464: model-routing items prio 10 first on workst cx slots; PH-RT-RUNTIME parallel.
+- D-2455/2463/2467/2471 PG-PUBLIC-READY: names scan waived; criteria = D-2471 (repo already public; no squash/flip; real find -> STOP, operator rotates). Writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep). Seats luna + opencode glm (after SEAT-FREE-OPENCODE); Haiku not counted. KEEPER-OPERATOR-WAIT-GUARD p6 mine (incl. dep edit on claimed items).
+- Bash guard denies unquoted heredoc with $(...): build prompts with python scripts.
+## Immediate next (order)
+1. #139: CI on 9fd6cfae (bg wait was bucpscysl) + seats qwen (retry) + Haiku -> both pass -> GO-REQ routing (Haiku path+sha).
+2. #152: CI on 3ae5ad14 + qwen r3 -> pass -> mergepath.sh 152 <HEAD40> plangraph:UI-BROWSER-TESTS title -> submit.
+3. #140 sq8 sol a3a264 running workst -> on push: mergemain.sh exec-own-sq lane/rt-p1-exec-ownership-sq2, CI, seat delta (1 seat, family != openai) -> GO-REQ; then "#140 ON MAIN <sha>" to build-L2-flow-oversight-3; EXEC-OBSERVED-STATE after.
+4. #147 build-L2-rt-cards fixing A,B,D,F,H (head e2af86ac) -> expect MERGE-READY. #150 build-L2-phase-runner relaunch C1 then C2 (after 18:55Z), merge after #139+#140.
+5. Queue workst after model-routing items: #139 done -> PG-PUBLIC F2+F3 -> BUS-NONCE-FLOOD.
+
 # build-L1 handoff #24 (gen-23 end, 2026-10-23 ~16:40Z; compacted 1x -> RECYCLE per routing)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (old bnl1xvgtu dies with gen-23; script job-tmp hb.sh needs `exit 0` end); caveman; effort medium.
 CARD status/build-L1.card.md = lane table (read first). GO-REQs/BLOCKED -> `routing` (a81d0a; 480ed0 = retired). Writers + luna/opencode seats -> `workst-L1-autoos` (briefs INLINE).
