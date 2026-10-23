@@ -47,7 +47,7 @@ path = "vendor/**"
 rules = ["ipv4", "ipv6", "email", "high-entropy", "token-shape", "hostname", "credential-shape"]
 # Same, for the browser-test assets (elkjs 0.9.3 bundled, EPL-2.0; UI-BROWSER-TESTS W1).
 [[scrub.allow]]
-path = "tests/browser/assets/**"
+path = "tests/browser/assets/elk.bundled.js"
 rules = ["ipv4", "ipv6", "email", "high-entropy", "token-shape", "hostname", "credential-shape"]
 
 # Tests that deliberately contain obviously fake credential strings (reviewed, synthetic).

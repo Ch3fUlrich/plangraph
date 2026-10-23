@@ -378,7 +378,7 @@
   };
   if (typeof window !== "undefined") window.__pgLayoutIdle = function () {
     return new Promise(function (resolve) { var waits = 0; (function pump() {
-      if (syncTimer || syncPromise) { Promise.resolve(syncPromise).then(pump); return; }
+      if (syncTimer || syncPromise) { if (syncPromise) Promise.resolve(syncPromise).then(pump, pump); else setTimeout(pump, 16); return; }
       if (!cy && waits++ < 250) { setTimeout(pump, 16); return; }
       requestAnimationFrame(function () { requestAnimationFrame(resolve); }); })(); });
   };
