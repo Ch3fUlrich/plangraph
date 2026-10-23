@@ -59,11 +59,12 @@ from plangraph.spawner.runner import (
     extract_served_telemetry,
 )
 
-#: The gateway endpoint is deployment config (``PLANGRAPH_GATEWAY_URL``; the code
-#: ships no default), and the leak gates scan source text -- so this test assembles
-#: its own value at runtime and hands it to the environment explicitly, keeping the
-#: assertion below on the exact string without a site literal sitting in the tree.
-GATEWAY_TEST_URL = "http://127.0.0.1:" + "".join(("2", "0", "1", "2", "8")) + "/v1"
+#: The gateway endpoint is deployment config (``PLANGRAPH_GATEWAY_URL``; the code ships
+#: no default), so this test states its own value as one plain constant: an RFC 5737
+#: TEST-NET-1 (``192.0.2.0/24``) documentation address with an example port -- never a
+#: site host or a deployed port, and nothing assembled from parts.  Tests hand it to the
+#: environment explicitly, so behaviour matches a configured install.
+GATEWAY_TEST_URL = "http://192.0.2.10:8080/v1"
 
 
 # ==============================================================================
@@ -270,8 +271,8 @@ def test_routing_envelope_headers(monkeypatch):
     assert h2["X-OmniRoute-Exclude-Family"] == "claude,gpt"
 
     import json as _json
-    # The endpoint is config, not source: the test states it explicitly (env var)
-    # and builds the value at runtime, so behaviour matches a configured install.
+    # The endpoint is config, not source: the test states it explicitly (env var) as one
+    # documentation-address constant, so behaviour matches a configured install.
     monkeypatch.delenv("OMNIROUTE_BASE_URL", raising=False)
     monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
     monkeypatch.setenv(GATEWAY_URL_ENV_VAR, GATEWAY_TEST_URL)
@@ -282,6 +283,22 @@ def test_routing_envelope_headers(monkeypatch):
     assert omni_prov["settings"]["baseURL"] == GATEWAY_TEST_URL
     assert omni_prov["headers"]["X-OmniRoute-Task-Role"] == "review"
     assert omni_prov["headers"]["X-OmniRoute-Exclude-Family"] == "claude,gpt"
+
+
+def test_gateway_test_url_is_a_documentation_address_only():
+    """The suite's endpoint constant is RFC 5737 TEST-NET-1, never a site endpoint.
+
+    Pins that no test in this file points a gateway at a real host or port: the
+    address is from the documentation range reserved for prose and examples.
+    """
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(GATEWAY_TEST_URL)
+    assert parts.scheme == "http" and parts.port == 8080   # an example port
+    host = parts.hostname
+    assert host is not None
+    assert ipaddress.ip_address(host) in ipaddress.ip_network("192.0.2.0/24")  # TEST-NET-1
 
 
 def test_gateway_url_comes_from_env_or_config_only(monkeypatch):
