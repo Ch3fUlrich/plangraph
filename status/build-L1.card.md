@@ -30,10 +30,10 @@ Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, 
 
 - oc-harden #95: writer 20261022-204611-...ec818f running on workst (no_change migration); then seats mimo + non-OpenAI 2nd family -> GO-REQ routing. Workst queue: card-checks writer next, then bus.
 - sandbox #100 fix: WA run 20261022-204430-...759ac4 (mimo, wt attempt-sandbox-wA) -> push lane/attempt-sandbox-wA; WB next (wt attempt-sandbox-wB, brief in transcript: git hardening attempt.rs + walk); WC = L2 on workst (sol). L2 cherry-picks + CI; I re-seat glm+deepseek.
-- KEEPER-OPCLAIM-CLOSE (HIGH): D-2298 A1. 7cbec2f4 + fixture writer run 20261022-212840-opclaim-fixtures-contrac-0c5caf. Seat prompt: say contract test change intended, no reasons. After merge: legacy B -> server:OP-DOCKHAND-EVENTS in_review.
+- KEEPER-OPCLAIM-CLOSE (HIGH): PR #127 head 65c39584 (7cbec2f4+fb1bc633+main), CI dispatched; seats qwen+deepseek r1 seats/opclaim-127/r1 (bg b2zvj585r); then GO-REQ; after merge legacy B -> server:OP-DOCKHAND-EVENTS in_review.
 - sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
 - D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
 - workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
 - New leaves: RT-P1-CARD-CHECKS-KEEPER (HIGH, dep CARD-CHECKS, D-2289). exec-wfv CI 39848623437 green on 31c525d8.- EXEC #112 r6: exec-wfv workstation blocked (commit 83.7%) -> L1 spawns W19/W20/W21 on coding.vm one at a time; W19 run 20261022-211721-exec-r6-w19-keeper-hand-108b2d; briefs W20/W21: ~/.claude/jobs/c7643711/tmp/exec-r6-W20-W21.md; worktrees plangraph-worktrees/exec-own-w19..21.
-- Sandbox: WA 29ca342c pushed lane/attempt-sandbox-wA (origin+control), told L2; WB run 20261022-212733-sandbox-wb-git-hardening-7481a6.
+- Sandbox: WA 29ca342c + WB 41620c3a pushed; L2 merges WB -> CI -> MERGE-READY -> L1 re-seat (glm+deepseek).
 - PHASE-RUNNER: S3c #124 partial ruling: fix 6/7, (5) scope worker_claim, trailers via new branch -r + new PR, qwen re-seat; glm (1)(2) pending NEXT router gen code check; (3)(4)(8)->HARDEN if they hold. Then S3d (D-2306 A, after #112) -> S4. HARDEN item 12 worker principal.
