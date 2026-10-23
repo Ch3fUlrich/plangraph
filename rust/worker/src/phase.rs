@@ -230,9 +230,118 @@ impl PhasePlan {
     }
 }
 
+/// ready=false with no blockers means nothing is startable (e.g. every card
+/// claimed), not a stop: PhasePlan::startable already yields no wave then, so
+/// the loop ends via the empty wave and the finish step decides.
+pub fn replan_stop(plan: &PhasePlan, key: &str) -> Option<Vec<String>> {
+    if plan.phase != key {
+        Some(vec!["plan is for another phase".to_string()])
+    } else if !plan.blocked.is_empty() {
+        Some(plan.blocked.clone())
+    } else {
+        None
+    }
+}
+
+/// A replan stops the loop on replan_stop, or on ready=false while cards not
+/// yet attempted remain (the planner holds them back): stop with the planner's
+/// reason, else "phase not ready". ready=false with every card attempted (all
+/// claimed) is not a stop.
+pub fn replan_gate(
+    plan: &PhasePlan,
+    key: &str,
+    attempted: &std::collections::HashSet<String>,
+) -> Option<Vec<String>> {
+    if let Some(stop) = replan_stop(plan, key) {
+        return Some(stop);
+    }
+    if !plan.ready && !plan.unstarted(attempted).is_empty() {
+        return Some(vec!["phase not ready".to_string()]);
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replan_stop_other_phase_reports_another_phase() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: true,
+            blocked: Vec::new(),
+            cards: Vec::new(),
+        };
+        assert_eq!(
+            replan_stop(&plan, "PH-B"),
+            Some(vec!["plan is for another phase".to_string()])
+        );
+    }
+
+    #[test]
+    fn replan_stop_reports_blocked_cards() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: true,
+            blocked: vec!["card blocked".to_string()],
+            cards: Vec::new(),
+        };
+        assert_eq!(
+            replan_stop(&plan, "PH-A"),
+            Some(vec!["card blocked".to_string()])
+        );
+    }
+
+    #[test]
+    fn replan_stop_ready_false_without_blockers_is_not_a_stop() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: false,
+            blocked: Vec::new(),
+            cards: Vec::new(),
+        };
+        assert_eq!(replan_stop(&plan, "PH-A"), None);
+    }
+
+    #[test]
+    fn replan_gate_ready_false_with_unattempted_card_stops() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: false,
+            blocked: Vec::new(),
+            cards: vec![card("a", true, false)],
+        };
+        let attempted = std::collections::HashSet::new();
+        assert_eq!(
+            replan_gate(&plan, "PH-A", &attempted),
+            Some(vec!["phase not ready".to_string()])
+        );
+    }
+
+    #[test]
+    fn replan_gate_ready_false_all_attempted_is_not_a_stop() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: false,
+            blocked: Vec::new(),
+            cards: vec![card("a", true, false)],
+        };
+        let mut attempted = std::collections::HashSet::new();
+        attempted.insert("a".to_string());
+        assert_eq!(replan_gate(&plan, "PH-A", &attempted), None);
+    }
+
+    #[test]
+    fn replan_stop_ready_clean_phase_is_not_a_stop() {
+        let plan = PhasePlan {
+            phase: "PH-A".to_string(),
+            ready: true,
+            blocked: Vec::new(),
+            cards: Vec::new(),
+        };
+        assert_eq!(replan_stop(&plan, "PH-A"), None);
+    }
 
     #[test]
     fn unstarted_reports_cards_not_attempted() {

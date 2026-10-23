@@ -16,7 +16,7 @@ use crate::activities::{
 use crate::keeper::Claim;
 use crate::phase::{
     OUTCOME_BLOCKED, OUTCOME_DONE, OUTCOME_PARTIAL, PhaseInput, PhaseOutput, PhasePlan,
-    card_workflow_id, next_wave, phase_branch, select_legs,
+    card_workflow_id, next_wave, phase_branch, replan_gate, select_legs,
 };
 use crate::workflow::Card;
 
@@ -88,20 +88,8 @@ impl Phase {
                     });
                 }
             } else {
-                if plan.phase != input.key {
-                    last_blocked = vec!["plan is for another phase".to_string()];
-                    break;
-                }
-                if !plan.ready {
-                    last_blocked = if plan.blocked.is_empty() {
-                        vec!["phase not ready".to_string()]
-                    } else {
-                        plan.blocked.clone()
-                    };
-                    break;
-                }
-                if !plan.blocked.is_empty() {
-                    last_blocked = plan.blocked.clone();
+                if let Some(blocked) = replan_gate(&plan, &input.key, &attempted) {
+                    last_blocked = blocked;
                     break;
                 }
                 last_blocked.clear();
