@@ -19,6 +19,23 @@ fencing of writes.
 history: it numbers them ``MAX(n)+1`` and carries the cost.  ``worker_attempt``
 therefore records an audit row only — inserting here would double the rows.
 
+RT-P1-EXEC-OWNERSHIP: park, complete, alarm and audit-only attempt calls
+are checked against the card's recorded exec owner (``_exec_gate``).  A body
+that names ``workflow_id``, ``run_id`` or ``attempt`` must present all three
+and match the owner — an unowned card records its first owner, a different run
+or a lower attempt is refused as ``exec_stale`` — and a card that already has
+an owner refuses bodies that omit all three, so one run cannot act on another
+run's card.  Bodies without the fields keep the historical behaviour on
+unowned cards.
+
+Order inside the park/complete guards: the stale-run and lower-attempt checks
+run first (validating only), then a DUPLICATE -- the card already reached the
+verb's final state (``parked``/``done``) and the body either names the
+recorded owner or, with no owner, names no triple -- is a success no-op that
+short-circuits before ``expected_state``.  A retried park whose response was
+lost therefore succeeds instead of failing every retry with
+``exec_stale_state``; a different run is still ``exec_stale``.
+
 All SQL is portable (``?`` placeholders, ids assigned as ``MAX(id)+1`` inside
 the write lock) so it runs unchanged on SQLite and Postgres.
 """
@@ -28,15 +45,21 @@ import re
 
 from .errors import Refused
 from .schema import EXIT_CLASSES
-from .store_cards import _count, _number, _text
+from .store_cards import SETTABLE_STATES, _count, _exec_parts, _number, _text
 
 __all__ = ["WorkerMixin"]
 
 _ATTEMPT_KEYS = frozenset(("card", "n", "leg", "exit_class", "diff_hash",
-                           "check_tail", "cost", "tokens_in", "tokens_out"))
-_PARK_KEYS = frozenset(("card", "tier", "exit_class", "check_tail", "epoch"))
-_COMPLETE_KEYS = frozenset(("card", "merged_sha"))
-_ALARM_KEYS = frozenset(("card", "reason"))
+                           "check_tail", "cost", "tokens_in", "tokens_out",
+                           "workflow_id", "run_id", "attempt"))
+#: The three fields that name an exec run on a worker body.
+_EXEC_IDS = ("workflow_id", "run_id", "attempt")
+# ``n`` is the projector's attempt number, distinct from the exec attempt.
+_PARK_KEYS = frozenset(("card", "tier", "exit_class", "check_tail", "epoch",
+                        "workflow_id", "run_id", "attempt", "expected_state"))
+_COMPLETE_KEYS = frozenset(("card", "merged_sha", "workflow_id", "run_id",
+                            "attempt", "expected_state"))
+_ALARM_KEYS = frozenset(("card", "reason", "workflow_id", "run_id", "attempt"))
 _ACQUIRE_KEYS = frozenset(("owner", "ttl_s"))
 _RELEASE_KEYS = frozenset(("token", "owner"))
 _SHA_RE = re.compile(r"[0-9a-fA-F]{7,64}\Z")
@@ -80,6 +103,20 @@ class WorkerMixin:
     """The worker-facing verbs for :class:`plangraph.keeper.store.Store`."""
 
     # ------------------------------------------------------------- helpers
+    def _exec_expect_state(self, item, expected) -> None:
+        """Check observed state inside the write lock, before recording ownership."""
+        if expected is None:
+            return
+        states = [expected] if isinstance(expected, str) else expected
+        if (not isinstance(states, list) or not states
+                or any(not isinstance(s, str) or s not in SETTABLE_STATES
+                       for s in states)):
+            raise Refused("validation",
+                          f"expected_state must be a state or non-empty list from {list(SETTABLE_STATES)}")
+        if item["state"] not in states:
+            raise Refused("exec_stale_state",
+                          f"{item['key']}: expected {expected!r}, is {item['state']!r}")
+
     def _resolve_scoped(self, principal, card):
         """Resolve *card* to its live key, refuse if unknown, check scope."""
         key = self.resolve_key(card)
@@ -112,6 +149,59 @@ class WorkerMixin:
         if due is not None and due.timestamp() <= now:
             raise Refused("epoch_stale", f"{item['key']}: claim lease expired")
 
+    def _exec_gate(self, key, body, *, record=True):
+        """Check a worker verb body against the card's recorded exec owner.
+
+        Recording runs INSIDE the caller's write lock (park's ``guard`` hook and
+        complete/alarm's write block) because it may record the owner or bump
+        the attempt.  RT-P1-EXEC-OWNERSHIP: a body naming any of
+        ``workflow_id``/``run_id``/``attempt`` must present all three and match
+        the owner (``_exec_check``: a first call records it; a stale run or a
+        lower attempt is refused); a body without them keeps the historical
+        behaviour unless the card is already owned. ``record=False`` validates
+        an unowned call without acquiring ownership (audit-only or no-op), and
+        permits a plain read for audit-only attempts.
+        """
+        # No router/system exemption: router paths clear the owner instead.
+        row = self.conn.execute(
+            "SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
+        owned = row is not None and row["exec_run_id"] is not None
+        if not any(body.get(name) is not None
+                   for name in ("workflow_id", "run_id", "attempt")):
+            if owned:
+                raise Refused("exec_stale",
+                              f"{key} has an exec owner: workflow_id, run_id"
+                              " and attempt are required")
+            return
+        parts = _exec_parts(key, (body.get("workflow_id"), body.get("run_id"),
+                                  body.get("attempt")))
+        # Audit-only and no-op calls validate but cannot acquire a first owner.
+        if owned or record:
+            self._exec_check(self.conn, key, *parts, record=record)
+
+    @staticmethod
+    def _exec_duplicate(item, body, final):
+        """True when *body* retries a worker call that already reached *final*.
+
+        RT-P1-EXEC-OWNERSHIP: a park whose response was lost (card already
+        ``parked``) or a complete whose response was lost (card already
+        ``done``) is a SUCCESS NO-OP, decided BEFORE ``expected_state``: the
+        observed state the retry carries is the state the worker saw before its
+        first call succeeded, so honouring it would turn a duplicate into
+        ``exec_stale_state`` on every retry.  It is a duplicate only when the
+        body's ``(workflow_id, run_id, attempt)`` equals the recorded owner, or
+        the card has no owner and the body carries no triple -- a different run,
+        a backwards attempt and a malformed triple are refused by the caller's
+        stale/lower-attempt check, which runs first.
+        """
+        if item["state"] != final:
+            return False
+        parts = tuple(body.get(name) for name in _EXEC_IDS)
+        if all(part is None for part in parts):   # no triple: as the gate reads it
+            return item["exec_run_id"] is None
+        return parts == (item["exec_workflow_id"], item["exec_run_id"],
+                         item["exec_attempt"])
+
     # ----------------------------------------------------------- attempts
     def worker_attempt(self, principal, body):
         return self._run(principal, "worker_attempt", _card_name(body),
@@ -133,6 +223,7 @@ class WorkerMixin:
         _count("tokens_out", body.get("tokens_out"))
         _number("cost", body.get("cost"))
         key = self._resolve_scoped(principal, card)
+        self._exec_gate(key, body, record=False)
         return {"card": key, "n": number, "exit_class": exit_class}
 
     # -------------------------------------------------------------- park
@@ -155,11 +246,25 @@ class WorkerMixin:
             raise Refused("validation", "epoch must be an integer")
         key = self._resolve_scoped(principal, card)
         why = f"parked: {exit_class} ({tier})"[:500]
+
+        def guard(item):
+            # 1. Stale-run / lower-attempt checks decide first, and only
+            #    validate here: a call that fails later must not acquire
+            #    ownership (record=False).
+            self._exec_gate(item["key"], body, record=False)
+            # 2. A duplicate park is a success no-op, ahead of expected_state.
+            if self._exec_duplicate(item, body, "parked"):
+                return
+            # 3. Observed-state CAS, then the claim binding, then ownership.
+            self._exec_expect_state(item, body.get("expected_state"))
+            self._park_guard(principal, item, epoch, now)
+            if item["state"] != "parked":
+                self._exec_gate(item["key"], body, record=True)
+
         result = self._apply_state(principal, key, "parked", why, now,
                                    lambda project: self._may_act_in(principal,
                                                                     project),
-                                   guard=lambda item: self._park_guard(
-                                       principal, item, epoch, now),
+                                   guard=guard,
                                    release_claim=True)
         return {"card": key, "state": "parked", "changed": result["changed"]}
 
@@ -176,6 +281,16 @@ class WorkerMixin:
             raise Refused("validation",
                           "merged_sha must be 7 to 64 hex characters")
         key = self._resolve_scoped(principal, card)
+        with self._write():
+            item = self._get_or_refuse(key)
+            # Stale-run / lower-attempt checks decide first (validate only, so a
+            # call that fails below acquires nothing).
+            self._exec_gate(key, body, record=False)
+            # A duplicate complete is a success no-op, ahead of expected_state.
+            if not self._exec_duplicate(item, body, "done"):
+                self._exec_expect_state(item, body.get("expected_state"))
+                if item["state"] != "done":
+                    self._exec_gate(key, body, record=True)
         return {"card": key, "merged_sha": merged_sha}
 
     # ------------------------------------------------------------ alarms
@@ -192,6 +307,11 @@ class WorkerMixin:
         reason = _text("reason", reason, required=True, cap=500, key=card)
         key = self._resolve_scoped(principal, card)
         with self._write():
+            existing = self.conn.execute(
+                "SELECT 1 FROM projector_alarms WHERE kind='worker_alarm'"
+                " AND workflow_id='' AND key=? AND cleared_at IS NULL",
+                (key,)).fetchone()
+            self._exec_gate(key, body, record=existing is None)
             self.conn.execute(
                 "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,"
                 "raised_at)"

@@ -232,6 +232,7 @@ class VerbsMixin:
                 " WHERE key=? AND state='claimed' AND epoch=?",
                 (self._iso(now), key, epoch))
             self._race_guard(cursor, key, "claimed", epoch)
+            self._exec_clear(self.conn, key)
         return {"key": key}
 
     # ----------------------------------------------------------- submit

@@ -284,4 +284,6 @@ class ReviewMixin:
                     " WHERE key=? AND state='in_review' AND epoch=?",
                     (principal.name, lease, self._iso(now), key, item["epoch"]))
             self._race_guard(cursor, key, "in_review", item["epoch"])
+            # Both outcomes hand back new work, even when the claimant stays.
+            self._exec_clear(self.conn, key)
         return {"key": key, "state": state, "reviews_passed": 0}
