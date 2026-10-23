@@ -19,7 +19,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
 | CARD-CHECKS / WF-VERSIONING (RT95 done 5671ac77) | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
-| RT-P1-BUS-CONTRACT (HIGH) | build-L2-bus | MERGE-READY #151 90f10de (deepseek+mimo PASS, CI green); CONFLICTING -> L2 merges main; D-2421 cond GO: (a) merged head CI green + 90f10de..merged only conflict hunks, (b) routing link 4cc15740 DONE (evidence), AutoOS link from workst; follow-up BUS-NONCE-FLOOD asked |
+| RT-P1-BUS-CONTRACT (HIGH) | L1 | MERGED (see merge.log seats/pr151), commit+ci attached; wait AutoOS link sha (workst) -> evidence -> submit -> verdicts deepseek+mimo (bus L2 seat files) |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
 | KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |
 | PG-BOOTSTRAP-FLEET-ENV (HIGH) | L1 queue | blocked autoos:AO-OCL1-PW-FILE |
