@@ -493,6 +493,38 @@ def test_r4_per_ref_failure_stays_a_skip_and_the_failure_digest_is_stable(w):
     assert oversight.digest(first)[0] == oversight.digest(later)[0]
 
 
+def test_r4_per_ref_rev_list_failure_skips_only_the_failing_ref(w):
+    """One lane's ``rev-list`` may fail without hiding the other lanes.
+
+    ``r4_lane_idle``'s docstring (the per-ref paragraph) promises that a
+    ``git`` that works for the listing but raises for one ref skips only that
+    ref: the divergence of the other refs is still reported.  A whole-rule
+    failure would be an ``oversight_check_failed`` finding, which this is not.
+    """
+    import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
+    from plangraph.keeper import oversight
+    keys = seed(w, [("A", ()), ("B", ())])
+    w.clock.advance(oversight.LANE_IDLE_S + HOUR)
+    stamp = str(int(w.clock() - (oversight.LANE_IDLE_S + HOUR)))
+    refs = {"refs/remotes/origin/lane/demo-a": keys[0],
+            "refs/remotes/origin/lane/demo-b": keys[1]}
+
+    def git(args):
+        if "for-each-ref" in args:
+            return "".join(f"{ref} {stamp}\n" for ref in refs)
+        if "rev-list" in args:
+            if args[-1].endswith("lane/demo-a"):
+                raise RuntimeError("rev-list failed for demo-a only")
+            return "2\n"
+        return ""
+
+    rows = oversight.r4_lane_idle(w.conn, w.clock(), git=git)
+    # demo:B's lane is still checked and reported; demo:A is only skipped.
+    assert kinds(rows) == [("R4", "lane_idle", keys[1])]
+    assert rows[0]["kind"] != "oversight_check_failed"
+    assert "lane demo-b is 2 commit(s) ahead of main" in rows[0]["detail"]
+
+
 # -------------------- F8: R1/R2 findings carry only data-derived stamps
 def test_r1_r2_digest_is_identical_on_the_same_fixture_600s_later(w):
     import plangraph.keeper.oversight      # absent -> ModuleNotFoundError (not ImportError)
