@@ -30,6 +30,21 @@ def set_state(w, state, *keys):
         w.store.conn.execute("UPDATE items SET state=? WHERE key=?", (state, key))
     w.store.conn.commit()
 
+def claim_as_runner(w, key, via="worker_claim"):
+    w.store.conn.execute(
+        "UPDATE items SET state='claimed', claimed_by='system', epoch=1 WHERE key=?",
+        (key,),
+    )
+    w.store.conn.commit()
+    w.store._append(
+        w.p("system"),
+        key,
+        "claimed",
+        {"epoch": 1, "claimed_by": "system", **({"via": via} if via else {})},
+        1_700_000_000.0,
+    )
+    w.store.conn.commit()
+
 def git_repo(tmp_path):
     root = tmp_path / "repo"
     root.mkdir()
@@ -111,11 +126,7 @@ def finish_in_review(w, tmp_path, *, ci=True):
 
 def test_worker_complete_moves_claimed_card_to_in_review(w):
     gate(w)
-    set_state(w, "claimed", "demo:C1")
-    w.store.conn.execute(
-        "UPDATE items SET claimed_by='system' WHERE key=?", ("demo:C1",)
-    )
-    w.store.conn.commit()
+    claim_as_runner(w, "demo:C1")
     w.store.worker_complete(
         w.p("system"), {"card": "demo:C1", "merged_sha": "abcdef1"}
     )
@@ -196,6 +207,64 @@ def test_attach_merge_evidence_after_pr_merged(w):
             w.store, w.p("router"), "demo:PH-X", "not-a-sha", github=github
         )
     assert exc.value.code == "validation"
+
+def test_bypass_needs_worker_claim_marker(w):
+    gate(w)
+    claim_as_runner(w, "demo:C1", via=None)
+    w.store.worker_complete(
+        w.p("system"), {"card": "demo:C1", "merged_sha": "abcdef1"}
+    )
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key=?", ("demo:C1",)
+    ).fetchone()
+    assert row[0] == "claimed"
+
+def test_bypass_needs_kind_lane(w):
+    w.store.create_items(
+        w.p("router"),
+        [
+            defn("LONG", kind="decision"),
+            defn("PH-D", ["LONG"], kind="gate"),
+            defn("GOAL3", ["PH-D"], kind="goal"),
+        ],
+    )
+    claim_as_runner(w, "demo:LONG")
+    w.store.worker_complete(
+        w.p("system"), {"card": "demo:LONG", "merged_sha": "abcdef1"}
+    )
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key=?", ("demo:LONG",)
+    ).fetchone()
+    assert row[0] == "claimed"
+
+def test_bypass_needs_gate_parent(w):
+    w.store.create_items(
+        w.p("router"),
+        [
+            defn("LONE2"),
+            defn("GOAL4", ["LONE2"], kind="goal"),
+        ],
+    )
+    claim_as_runner(w, "demo:LONE2")
+    w.store.worker_complete(
+        w.p("system"), {"card": "demo:LONE2", "merged_sha": "abcdef1"}
+    )
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key=?", ("demo:LONE2",)
+    ).fetchone()
+    assert row[0] == "claimed"
+
+def test_bypass_needs_running_phase(w):
+    gate(w)
+    claim_as_runner(w, "demo:C1")
+    set_state(w, "cancelled", "demo:PH-X")
+    w.store.worker_complete(
+        w.p("system"), {"card": "demo:C1", "merged_sha": "abcdef1"}
+    )
+    row = w.store.conn.execute(
+        "SELECT state FROM items WHERE key=?", ("demo:C1",)
+    ).fetchone()
+    assert row[0] == "claimed"
 
 def test_finish_refuses_card_not_worker_complete(w, tmp_path):
     gate(w)
