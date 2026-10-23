@@ -1,3 +1,20 @@
+# build-L1 handoff #20 (gen-18 end, 2026-10-23 ~05:50Z; compacted 2x -> recycle per routing heartbeat)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt (FIRST; the current loop b9n1ob9cm dies with this session); caveman; effort medium.
+CARD status/build-L1.card.md = full lane table + tools + traps (read first). Main f25cc546 (+ #129 merging).
+## New rules this gen
+- D-2318/2322: 2nd seat = opencode/glm-5.3-flash-free via opencode ZEN path (works); opencode-go free = 429. Sonnet waiver only if that fails, ask routing first.
+- D-2324: seat prompts carry the FULL diff incl test bodies (conditional GO otherwise). Merge without new GO-REQ if the condition is met.
+- D-2323: router stall heartbeat every 30 min; reply per item next action + ETA; parallelise via L2s (sweep-keeper, sweep-runtime, close-inreview launched 05:2xZ, Claude Sonnet fallback D-2270, TTL 6h).
+- D-2326: S3d design GO (lane reading, 3-way bypass guard). D-2325 #71 closed. D-2327 OCGO B / SID A.
+## Open with routing
+- #96 / #97 BLOCKED rulings (L1 default A each) -> forward to build-L2-sweep-keeper.
+- RT-P1-BUS-CONTRACT conditional GO relayed to build-L2-bus (queued; workst offline at send).
+## Immediate next
+1. #129 merge-cont (bg) -> evidence -> `ops/pg.sh submit plangraph:KEEPER-OPTASK-CLOSE` -> verdicts qwen + glm -> DONE to routing.
+2. #112: pytest full + CI on b9386bb9 -> seats -> GO-REQ.
+3. #127: relaunch writer per card (KEEP exemption; WIP patch ~/.local/share/plangraph/tools-l1/job-tmp/opclaim-r1-fix-wip.patch).
+4. FLEET-SID-REFRESH verdicts when close-inreview sends seat paths.
+
 # build-L1 handoff #19 (gen-17 end, 2026-10-22 ~19:45Z; compacted 4x -> recycle per routing D-2265)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt (15 keys; FIRST); caveman; effort medium.
 CARD status/build-L1.card.md = current lane table (read first). Main 7dd85d04 (#118).

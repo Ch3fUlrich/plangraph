@@ -1,39 +1,25 @@
-# build-L1 card · gen-18 · 2026-10-22 ~20:05Z · hb bg bxastgt52 · D-2270: server-L1-routing retired -> HIGH GO-REQ to routing; OC L2 env unset -> Claude Sonnet L2 fallback · HANDOFF docs/build-L1-handoff.md #19 · NO cron · hb bg loop 25m (15 keys ops/hb-keys.txt; restart FIRST)
-Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers D-2248 opencode free > mimo > deepseek; NEW L2s = OpenCode sol via workst-L1-autoos (D-2265); never Claude writers; D-2240 Hand-Edit own commit.
-Seats D-2205 + D-2217 (family per commit writer; Claude may seat over non-Claude; 2 Claude=1 family; auth/live keep >=1 non-Claude). Seat prompts name head sha (D-2225). HIGH = 2 families + judge GO per exact sha, follow-ups too (D-2218). New leaf = JSON + gate edge to routing (D-2230).
-glm/nvidia verdict reason must name record path + banner + sha256 review/err (D-2226): seat_verdict.py reason lacks them -> post glm via `PGTOK=reviewer-zhipu ops/pg.sh verdict` with full reason (LOWS glm went via tool: minor miss, disclose).
-TOOLS: seat_verdict/tools run from detached checkout /home/s/code/plangraph-worktrees/sv-dry-1dbc4f26, refresh to each main (D-2234). Keeper LIVE runs FROM live-2d61e281 (cwd+PYTHONPATH): never ff it as tools; keeper code move = HIGH D-825 GO-REQ.
-## Main = 78896e92 (#123 S3b GO D-2300, evidence on); #122 e515c264; #121 875205f1. Today merged: #94 #105 #106 #108 #110 #111 #107 #116 REDACT-LC 259dc54b, #113 PHASE S1 e9486140, #118 DEVSTACK (all DONE except PHASE-RUNNER).
-## Lanes
+# build-L1 card · gen-18 end · 2026-10-23 ~05:45Z · HANDOFF docs/build-L1-handoff.md #20 · NO cron · hb bg loop 25m over ops/hb-keys.txt (restart FIRST)
+Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers: cx/gpt-6.1-sol not on coding.vm -> omniroute/mimo-v2.6-flash > deepseek (record skip). Never Claude writers.
+Seats (D-2318/2322): qwen via qodercli (stdin, no-tools header) + opencode/glm-5.3-flash-free (opencode ZEN path, zhipu; opencode-go free = 429). FULL diff incl tests (D-2324). Prompt = done_criteria from `ops/pg.sh show` + diff, no rulings (D-302/2295).
+HIGH = 2 non-writer-family PASS + routing GO per sha. glm verdict: `PGTOK=reviewer-zhipu ops/pg.sh verdict K --pass --reason "<record path, banner, sha256>"`; qwen: sv-dry-1dbc4f26 tools/seat_verdict.py.
+SEAT-COVERAGE-KEEPER now ON MAIN: verdict refuses until every Writer family of leaf commits (merge-base..p2) is covered; Hand-Edit=anthropic; missing Writer = writer_unknown.
+Spawn: MCP spawn BROKEN (deleted uv interpreter) -> CLI `python3 /home/s/code/AutoOS/tools/autoos-agent.py run --client opencode --model omniroute/mimo-v2.6-flash --card '{"complexity":"hard","privacy":"public","role":"implement"}' --isolate --title T "<task>"` (nohup &). Sandbox = history-less snapshot: commit conflicted merge as WIP first, rebuild merge via commit-tree. rc=7 LEAK on moved lane/seat-coverage-keeper refs = false positive.
+Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE (handles main-already-in) / merge-cont.sh PR KEY TITLE after a manual CHANGELOG union. Evidence needs FULL 40-hex sha. Kind `commit` = router-only.
+## Main = f25cc546 (#125 S3c) ; f6b0053a (#128) ; #129 merging (b7t7bx78a)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP (HIGH) | exec-wfv | #112 31c525d8 CI green; r6 deepseek FIX (H1 park excludes waiting, H2 parked no owner clear, M3 retry 409) -> fix round sent; qwen PASS (3rd try). qodercli: big prompts via stdin + "You have NO tools" header line, NOT --attachment |
-| RT-P1-PROJECTOR-RUN-IDS (HIGH) | - | D-2235 created; deps EXEC; claim after EXEC done |
-| RT-P1-WF-VERSIONING | exec-wfv | held until EXEC merges; leg B workflow.rs redo by writer |
-| RT-P1-PHASE-RUNNER (HIGH) | spine | S2 MERGED ef4cab7d (GO D-2291, head 02a5b0eb = 4c88ad17 + clean main merge); ciev bg bx1u58lc0 evidence only. S3: spine/phase-runner-s3a (keeper verb phase_finish, D-2227) + s3 (worker). HARDEN: add D-2288 criteria when open |
-| RT-OVERSIGHT-CHECKS | DONE | 5fe070b3; timer = operator ask #3 at workst |
-| SEAT-COVERAGE-KEEPER (HIGH) | flow-oversight-2 | after oversight dispatch: red tests -> judge GO-REQ (GitAdapter trailer enum + quorum store_review._verdict) |
-| CI-COMMIT-GATE-HARDEN | DONE | 1e1a5ec4, verdicts alibaba+zhipu (glm banner gap disclosed) |
-| CI-COMMIT-GATE-EDGES (HIGH) | spawner | claimed by me 20:4xZ; edges (1)-(9), (8)(9) code+test; MERGE-READY -> GO-REQ routing |
-| fleet-outbox-read | me | b330998 + harden writer run 20261022-160238; then test, seats glm+deepseek on head -> GO-REQ; install /home/s/bin + authorized_keys after GO; stage token COPIES, delete after pull |
-| workst L2s sandbox, card-checks, bus, oc-harden | sandbox c15, oc-harden c16, card-checks c17 LAUNCHED; bus HELD (RAM 84.4%, workst BLOCKED to routing) | admission clear -> oc-harden writer + sandbox seats, then bus |
-| D-2212 BA-TOKENS | workst-L1-basic-analysis | await 'BA-TOKENS OK' -> routing |
-| D-2254 low (after crit path) | me | PH-OPERATOR gate->GOAL holds (checked 19:2xZ); OS-149 A6 keeper cfg after prox A1-A5; RT-P4-ARCHIVE parked until cutover+1wk |
-Parked (D-1932): UI-DEPLOY-AUTO set_kind, UI-BROWSER-TESTS, PG-REPUBLISH-FRESH, PG-PUBLIC-READY.
+| KEEPER-OPTASK-CLOSE #129 (HIGH) | flow-oversight-3 | GO D-2324; merge-cont running (merge-129 wt, CHANGELOG union) -> evidence -> submit -> verdicts qwen (seats/optask-129/qwen) + glm (seats/optask-129/r2/glmfree, sha 3b0a487a) |
+| KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | fix writer 55a32e KILLED at timeout 05:24Z, uncommitted WIP saved ~/.local/share/plangraph/tools-l1/job-tmp/opclaim-r1-fix-wip.patch (REMOVED operator_task exemption = WRONG per D-2318: #127 KEEPS exemption, terminal-state test via OPTASK close path, merges AFTER #129). Next: new writer off #127 head 65c39584 + main (with #129): apply WIP minus exemption removal, keep deepseek r1 items 2-5; re-seat qwen+glm-free; GO-REQ; then legacy B server:OP-DOCKHAND-EVENTS |
+| RT-P1-EXEC-OWNERSHIP #112 (HIGH) | L1 (exec-wfv offline) | head b9386bb9 pushed (W19+W20+W21 + main merge; resolve writer 4d57b6 keeper.rs; CHANGELOG union); rust 141 + worker 267 green; pytest full bg bq4vikono; CI dispatched -> re-seat qwen + glm-free FULL diff -> GO-REQ -> merge -> signal spine S3d |
+| RT-P1-PHASE-RUNNER (HIGH) | spine (relaunched) | S3c MERGED f25cc546 (evidence on). S3d red spine/phase-runner-s3d @ 76904e43 (D-2326 lane reading, 3-way bypass guard, attach_merge_evidence after merge to main) -> impl after #112 signal. Then S4. HARDEN items 1-12 |
+| RT-P1-ATTEMPT-SANDBOX #100 | build-L2-sandbox (workst) | owes WB merge + main + CI + MERGE-READY (stall 7.6h, pinged 05:1xZ); no reply -> give to sweep-runtime |
+| #95 OPENCODE-HARDEN | build-L2-sweep-runtime | in progress; #71 CLOSED (D-2325) |
+| #97 BATCH-PRECONDITION, #96 JEV-SHADOW | build-L2-sweep-keeper | in progress |
+| PG-PUBLIC-READY / FLEET-SID-REFRESH / OCGO-FLEET-BUS | build-L2-close-inreview | PGPR: 67 gitleaks + 6 scrub, writer, each finding fixed/allowlisted + rotation answer before judge. SID: submitted (in_review); seats running -> L1 posts verdicts. OCGO: router re-scopes+closes (D-2327) |
+| RT-P1-BUS-CONTRACT | build-L2-bus (workst, relaunched) | conditional GO impl (push red 28ba998 to origin first); MERGE-READY -> L1 |
+| SEAT-COVERAGE-KEEPER, CI-COMMIT-GATE-EDGES | DONE | |
+Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router-code + spawner moves, prio 8) after RT-P1-E2E green (D-2318 4). Reap timer -> RT-P1-E2E checklist (router edit).
 ## Traps
-- zsh: `"${H}:path"` not `$H:t`; no `h()`; `echo ===` fails; string vars don't split -> bash scripts (tmp/ciwait.sh SHA KEY = CI wait + evidence + submit).
-- Never dump process environ / unit env values (DSN leak 10-22, D-2234 KEEP). Names only.
-- Merge: `gh pr ready N` then `gh api -X PUT .../pulls/N/merge -f sha=HEAD -f commit_message="Plan-Item: plangraph:KEY"`.
-- GH check-runs lag; DONE items are locked (no more evidence). Claim needs deps done.
-- Never push site strings / seat prompts to GitHub (repo public). Private: ~/.local/share/plangraph/{seats,relay}.
-- Never touch .claude/worktrees/proposal (frozen; render/proxy use it).
-
-- oc-harden #95: writer 20261022-204611-...ec818f running on workst (no_change migration); then seats mimo + non-OpenAI 2nd family -> GO-REQ routing. Workst queue: card-checks writer next, then bus.
-- sandbox #100 fix: WA run 20261022-204430-...759ac4 (mimo, wt attempt-sandbox-wA) -> push lane/attempt-sandbox-wA; WB next (wt attempt-sandbox-wB, brief in transcript: git hardening attempt.rs + walk); WC = L2 on workst (sol). L2 cherry-picks + CI; I re-seat glm+deepseek.
-- KEEPER-OPCLAIM-CLOSE (HIGH): PR #127 65c39584; r1 qwen PASS, deepseek FIX (5 HIGH: operator_task door, predicate item_defined, PG, guard, tests) -> fix run 20261023-034204-opclaim-r1-fix-round-55a32e; then re-seat both; GO-REQ; post-merge legacy B -> server:OP-DOCKHAND-EVENTS.
-- sandbox #100 d0905ccb: seats glm+deepseek running on coding.vm (D-2287, seats/attempt-sandbox-100/r1, diff origin/main...head) -> GO-REQ routing. Admission order when free: sandbox, oc-harden, card-checks (one at a time).
-- D-302 (D-2283): seat prompts = item+diff+artifacts only; disputes -> routing.
-- workst admission (commit 84-90% >= 80%): oc-harden, sandbox, card-checks stalled; BLOCKED to routing *A cap 92% until 04Z.
-- New leaves: RT-P1-CARD-CHECKS-KEEPER (HIGH, dep CARD-CHECKS, D-2289). exec-wfv CI 39848623437 green on 31c525d8.- EXEC #112 r6: exec-wfv workstation blocked (commit 83.7%) -> L1 spawns W19/W20/W21 on coding.vm one at a time; W19 run 20261022-211721-exec-r6-w19-keeper-hand-108b2d; briefs W20/W21: ~/.claude/jobs/c7643711/tmp/exec-r6-W20-W21.md; worktrees plangraph-worktrees/exec-own-w19..21.
-- Sandbox: WA 29ca342c + WB 41620c3a pushed; L2 merges WB -> CI -> MERGE-READY -> L1 re-seat (glm+deepseek).
-- PHASE-RUNNER: S3c #124 partial ruling: fix 6/7, (5) scope worker_claim, trailers via new branch -r + new PR, qwen re-seat; glm (1)(2) pending NEXT router gen code check; (3)(4)(8)->HARDEN if they hold. Then S3d (D-2306 A, after #112) -> S4. HARDEN item 12 worker principal.
+- zsh: use bash for `${H}:refs/...`; `echo ===` fails; pkill -f PATTERN kills own shell if pattern in cmd; `while pgrep -f X` matches itself.
+- Never dump environ. Never push site strings/seat prompts to GitHub. Never touch .claude/worktrees/proposal. Keeper LIVE from live-2d61e281 (never ff).
+- D-2315: no age-only deletes; clean only terminal-marker runs.
