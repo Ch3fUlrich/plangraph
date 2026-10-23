@@ -17,7 +17,11 @@ at run time from the environment — `OMNIROUTE_BASE_URL` wins over `PLANGRAPH_G
 (`plangraph.spawner.clients.effective_gateway_base_url()`) — and no source file carries a
 default value — unset simply means "no endpoint configured". The `gateway_url()` helper also
 accepts a config mapping whose `gateway_url` key would supply the value, but no production
-caller passes one today; that argument is for callers that do.
+caller passes one today; that argument is for callers that do. A child config that already
+carries its own `baseURL` keeps it (`build_child_env` merges with `setdefault`, so no
+environment source displaces it), and `plangraph.spawner.clients.effective_child_base_url()` —
+the one helper `build_child_env` and the `plangraph_agent_health` report both read — reports
+that same effective value back.
 
 ## What the public repo contains
 
