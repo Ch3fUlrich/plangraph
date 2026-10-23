@@ -1,3 +1,22 @@
+# build-L1 handoff #24 (gen-23 end, 2026-10-23 ~16:40Z; compacted 1x -> RECYCLE per routing)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (old bnl1xvgtu dies with gen-23; script job-tmp hb.sh needs `exit 0` end); caveman; effort medium.
+CARD status/build-L1.card.md = lane table (read first). GO-REQs/BLOCKED -> `routing` (a81d0a; 480ed0 = retired). Writers + luna/opencode seats -> `workst-L1-autoos` (briefs INLINE).
+## Rules new this gen
+- D-2442: close own sessions when DONE or idle >=30 min w/o pending work (`claude stop`); every brief ends "when done: report, then stop this session".
+- D-2449: NO deepseek API (402); seats = qodercli/qwen3.8-flash (job-tmp qseat.sh R, needs R/head.txt) > opencode free deepseek-v4.1-flash-free / glm-5.3-flash-free. omniroute deepseek-direct OUT. mimo API, Haiku, luna still ok.
+- D-2450: qodercli fallback 'efficient' counts as qwen (alibaba). opencode free ids not in spawner yet -> qoder = the non-Claude seat.
+- Writers: cx/gpt-6.1-sol on workst > mimo > (deepseek-direct out).
+## Immediate next (order)
+1. #140 EXEC-OWNERSHIP (HIGH): sq8 sol writer workst run 20261023-153645-exec-ownership-sq8-e11cc8 (brief seats/exec-ownership/sq8/FIX-BRIEF-sq8.md: Haiku sq7 BLOCKER claimed-card exec_stale_state). Lane lane/rt-p1-exec-ownership-sq2 (head b9a378b7 = sq7 CI green). On push: job-tmp mergemain.sh wt branch -> CI -> seats qwen + Haiku (prompt recipe = seats/exec-ownership/sq7/PROMPT.txt header + diff) -> GO-REQ. Then "#140 ON MAIN <sha>" to build-L2-flow-oversight-3; #150 may merge after #139+#140.
+2. #139 TRAILER-MULTI (HIGH): head 3190b3fb; fix5 (brief seats/trailer-multi/fix5/WRITER-BRIEF.md: subject-line scan, real-repo 2-Writer verdict test, multi-model Writer value, whitespace sep) on workst: mimo retry else sol. Then CI, seats (mimo writer: Haiku+luna; sol writer: Haiku+qwen) -> GO-REQ.
+3. #152 UI-BROWSER-TESTS: fix3 sol on workst (brief seats/pr152/FIX3-BRIEF.md, Haiku MED unscoped edit-control scan test_v_dec_2/3). Then mergemain, CI, re-seat qwen + Haiku (r2b prompt recipe) -> merge (standard) -> submit.
+4. BUS-NONCE-FLOOD p4 claimed epoch1: writer E sol queued workst (lane/bus-nonce-flood from de54bb22; defect contract.py _authenticate records nonce before limiter.check). -> PR, CI, seats qwen + mimo -> merge, submit.
+5. #147 build-L2-rt-cards: expect MERGE-READY after fixes 1+3 (seats qwen/opencode free); then lane 2b GO-REQ, then WF-VERSIONING. #150 build-L2-phase-runner: C1-C3 rework -> 2 non-Claude seats -> GO-REQ via me.
+6. PG-PUBLIC-READY IDLE until operator words --check line (D-2434). Queue: EXEC-OBSERVED-STATE, KEEPER-SEAT-FAMILY-WRITER, KEEPER-LEGACY-HUMAN-FAMILY (LIVE-SYNC-9), PG-OMNIROUTE-CONFIG-HOME.
+## Traps
+- mergepath.sh needs FULL 40-char sha; never eval a range. Haiku verdicts not recordable on build-L1 claims: send routing path+sha (D-2430).
+- Done this gen: #153 432c5377, #154 de54bb22 (JEV + JEV-SHADOW closed), #144 2aaaf35f (GOV-CTX DONE). Main = 2aaaf35f.
+
 # build-L1 handoff #23 (gen-22 end, 2026-10-23 ~14:25Z; compacted 1x -> RECYCLE per routing beat 14:13Z)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (old br1ugphrz dies with gen-22); caveman; effort medium.
 CARD status/build-L1.card.md = lane table (read first). GO-REQs/BLOCKED -> `routing`. Overflow/sol writers + luna seats -> `workst-L1-autoos` (other machine: send briefs/prompts INLINE or as build recipe; it cannot read coding.vm paths).

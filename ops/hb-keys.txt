@@ -5,6 +5,5 @@ plangraph:RT-P1-CARD-CHECKS
 plangraph:RT-P1-PHASE-RUNNER
 plangraph:KEEPER-TRAILER-MULTI
 plangraph:UI-BROWSER-TESTS
-plangraph:GOV-CTX-METRICS
 plangraph:PG-PUBLIC-READY
 plangraph:BUS-NONCE-FLOOD
