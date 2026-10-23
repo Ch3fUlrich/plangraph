@@ -1,14 +1,15 @@
 """B1: the router-only ``apply_ops`` verb for :class:`...store.Store`.
 
-``apply_ops(principal, ops, batch_ref=None)`` applies a list of BATCH.md ops
-(create, edit, legacy_state, add_evidence, close_on_decision, cancel,
-priority, rehome, set_kind, add_dep, remove_dep) in ONE
-``BEGIN IMMEDIATE`` transaction, all or nothing.  Every op runs the very same
-inner function as its single verb (so the same auth/state checks), except that
-the whole-graph validation is deferred: the single verbs' ``_validate_change``
-calls are recorded while a batch is open, and the validation runs ONCE over the
-final graph against the graph as it was when the lock was taken.  Later ops
-therefore see the effects of earlier ones (create a leaf, then link it).
+``apply_ops(principal, ops, batch_ref=None, base_seq=None, dry_run=False)``
+applies a list of BATCH.md ops (create, edit, legacy_state, add_evidence,
+close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep)
+in ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  Every op runs the
+very same inner function as its single verb (so the same auth/state checks),
+except that the whole-graph validation is deferred: the single verbs'
+``_validate_change`` calls are recorded while a batch is open, and the
+validation runs ONCE over the final graph against the graph as it was when
+the lock was taken.  Later ops therefore see the effects of earlier ones
+(create a leaf, then link it).
 
 Any refusal, validation problem or error rolls back the items, edges, events
 and evidence of the whole batch; the refusal names the op:
@@ -31,6 +32,7 @@ from .. import views
 from . import events
 from . import db_errors
 from .errors import Refused
+from .store_create import _MAX_DEPS
 
 MAX_OPS = 500
 _OPS = {
@@ -105,10 +107,12 @@ def _fail(index, op, exc):
 class OpsMixin:
     """The router-only ``apply_ops`` verb."""
 
-    def apply_ops(self, principal, ops, batch_ref=None):
+    def apply_ops(self, principal, ops, batch_ref=None, base_seq=None, dry_run=False):
         return self._run(principal, "apply_ops", None,
                          lambda now: self._apply_ops(principal, ops,
-                                                     batch_ref, now))
+                                                     batch_ref, now,
+                                                     base_seq=base_seq,
+                                                     dry_run=dry_run))
 
     # ----------------------------------------------------------- planning
     def _plan_ops(self, ops, batch_ref):
@@ -190,6 +194,52 @@ class OpsMixin:
         return ref
 
     # ------------------------------------------------------------ applying
+    def _deps_from_form(self, item, spec):
+        """Compute new depends_on list from {'add': [...], 'remove': [...]} form."""
+        if not isinstance(spec, dict) or set(spec) - {"add", "remove"} \
+                or not set(spec) & {"add", "remove"}:
+            raise Refused("validation",
+                          "depends_on form takes only add/remove lists of keys")
+        add_list = spec.get("add", [])
+        remove_list = spec.get("remove", [])
+        if not isinstance(add_list, list) or not isinstance(remove_list, list):
+            raise Refused("validation",
+                          "depends_on form takes only add/remove lists of keys")
+        if len(add_list) > _MAX_DEPS or len(remove_list) > _MAX_DEPS:
+            raise Refused("validation",
+                          "depends_on form takes only add/remove lists of keys")
+        if not all(isinstance(x, str) for x in add_list) or not all(isinstance(x, str) for x in remove_list):
+            raise Refused("validation",
+                          "depends_on form takes only add/remove lists of keys")
+        proj = item["project"]
+        current = list(item.get("depends_on") or [])
+        rem_set = {self._qualify(proj, d) for d in remove_list}
+        new_deps = [d for d in current if d not in rem_set]
+        for d in add_list:
+            qd = self._qualify(proj, d)
+            if qd not in new_deps:
+                new_deps.append(qd)
+        return new_deps
+
+    def _edit_op(self, principal, key, fields, now):
+        """Execute an edit op, expanding depends_on forms and tracking dropped deps."""
+        has_deps = isinstance(fields, dict) and "depends_on" in fields
+        old_deps = []
+        if has_deps:
+            item = self._get_or_refuse(key)
+            old_deps = list(item.get("depends_on") or [])
+            dep_spec = fields["depends_on"]
+            if isinstance(dep_spec, dict):
+                fields = dict(fields, depends_on=self._deps_from_form(item, dep_spec))
+        res = self._edit(principal, key, fields, now)
+        if has_deps:
+            after_item = self._item(key)
+            new_deps_set = set(after_item.get("depends_on") or []) if after_item else set()
+            dropped = sorted(set(old_deps) - new_deps_set)
+            if dropped:
+                res = dict(res, dropped_deps=dropped)
+        return res
+
     def _run_op(self, principal, op, batch_ref, now):
         name = op["op"]
         key = self.resolve_key(op.get("key"))  # an alias made earlier in the batch
@@ -198,7 +248,8 @@ class OpsMixin:
             return self._create(principal, item if isinstance(item, list)
                                 else [item], now, False)
         if name == "edit":
-            return self._edit(principal, key, op["fields"], now)
+            fields = op["fields"]
+            return self._edit_op(principal, key, fields, now)
         if name == "legacy_state":
             return self._set_legacy_state(principal, key, op.get("state"),
                                           op.get("note", ""), now)
@@ -257,8 +308,38 @@ class OpsMixin:
                           f"{item['key']} is {item['state']}, not open")
         return {"key": item["key"], "warnings": warnings}
 
-    def _apply_ops(self, principal, ops, batch_ref, now):
+    def _check_base_seq(self, ops, base_seq):
+        """Refuse with conflict if any key touched by edit/cancel has events newer than base_seq."""
+        check_keys = []
+        seen = set()
+        for op in ops:
+            if op.get("op") in ("edit", "cancel"):
+                k = op.get("key")
+                if k and k not in seen:
+                    seen.add(k)
+                    check_keys.append(k)
+        if not check_keys:
+            return
+        stale = []
+        for k in check_keys:
+            row = self.conn.execute(
+                "SELECT 1 FROM events WHERE key=? AND seq>? LIMIT 1",
+                (k, base_seq)).fetchone()
+            if row is not None:
+                stale.append(k)
+        if stale:
+            stale_str = ", ".join(stale)
+            raise Refused("conflict",
+                          f"base_seq {base_seq}: changed after base_seq: {stale_str}")
+
+    def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None, dry_run=False):
         self._require_role(principal, "router")
+        if base_seq is not None:
+            if isinstance(base_seq, bool) or not isinstance(base_seq, int) or base_seq < 0:
+                raise Refused("validation", "base_seq must be a non-negative integer")
+        if dry_run is not None and not isinstance(dry_run, bool):
+            raise Refused("validation", "dry_run must be a boolean")
+        dry_run = bool(dry_run)
         self._plan_ops(ops, batch_ref)
         ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
                for op in ops]
@@ -268,6 +349,8 @@ class OpsMixin:
         self.conn.execute("BEGIN IMMEDIATE")
         self._batch = batch
         try:
+            if base_seq is not None:
+                self._check_base_seq(ops, base_seq)
             before = self._all_items()
             for index, op in enumerate(ops):
                 batch.current = index
@@ -275,6 +358,9 @@ class OpsMixin:
                                                 batch_ref, now))
             self._batch = None
             self._final_validation(before, ops, batch)
+            if dry_run:
+                self.conn.execute("ROLLBACK")
+                return {"applied": len(results), "results": results, "dry_run": True}
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:
