@@ -14,6 +14,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
 | KEEPER-CLOSE-SKIP-UNVERIFIED (HIGH p7) | L1 queue | D-2411; PR #148 head 6eb507f8 (sol d1d2b2; workst 4900 pass, 1 pre-existing contract fail on main too); Haiku PASS, deepseek FIX MED test hits kind check + LOW CHANGELOG; CONFLICTING main -> fix1 sol writer requested workst -> re-seat |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | claimed; workst writer 20261023-112202-jev-attempt-thread-write-f55fce running |
+| BUS-NONCE-FLOOD p4 | L1 queue | D-2422 created (PH-RT-CONSOLIDATE); unclaimed, starts after P1 writers free |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
 | RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
 | CARD-CHECKS / WF-VERSIONING (RT95 done 5671ac77) | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
