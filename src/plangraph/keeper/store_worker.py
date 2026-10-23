@@ -24,6 +24,7 @@ the write lock) so it runs unchanged on SQLite and Postgres.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .errors import Refused
@@ -176,6 +177,36 @@ class WorkerMixin:
             raise Refused("validation",
                           "merged_sha must be 7 to 64 hex characters")
         key = self._resolve_scoped(principal, card)
+        with self._write():
+            item = self._get_or_refuse(key)
+            if (principal.role == "system" and item["kind"] == "lane"
+                    and item["state"] == "claimed"
+                    and item["claimed_by"] == "system"):
+                claim = None
+                for row in self.conn.execute(
+                        "SELECT payload FROM events WHERE key=? AND type='claimed'"
+                        " ORDER BY seq DESC", (key,)):
+                    payload = json.loads(row["payload"] or "{}")
+                    if payload.get("epoch") == item["epoch"]:
+                        claim = payload
+                        break
+                gate = self.conn.execute(
+                    "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
+                    " WHERE e.dst=? AND i.kind='gate' AND i.state!='cancelled'"
+                    " LIMIT 1", (key,)).fetchone()
+                # Only phase-worker claims may bypass pre-merge evidence.
+                if claim and claim.get("via") == "worker_claim" and gate:
+                    self._assert_unlocked(item)
+                    round_no = int(item.get("round") or 0) + 1
+                    self._append(principal, key, "state_set",
+                                 {"state": "in_review", "was": "claimed",
+                                  "reason": "worker complete", "epoch": item["epoch"],
+                                  "round": round_no, "worker_complete": True}, now)
+                    cursor = self.conn.execute(
+                        "UPDATE items SET state='in_review', round=?, lease_until=NULL,"
+                        " updated_at=? WHERE key=? AND state='claimed' AND epoch=?",
+                        (round_no, self._iso(now), key, item["epoch"]))
+                    self._race_guard(cursor, key, "claimed", item["epoch"])
         return {"card": key, "merged_sha": merged_sha}
 
     # ------------------------------------------------------------ alarms

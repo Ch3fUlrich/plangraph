@@ -29,7 +29,7 @@ class VerbsMixin:
                                                            ref, now))
 
     def _router_evidence(self, principal, key, kind, ref, now):
-        self._require_role(principal, "router")
+        self._require_role(principal, "router", "system")
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         if item["state"] not in ("claimed", "in_review"):
@@ -121,6 +121,8 @@ class VerbsMixin:
                 "claimed_by": principal.name,
                 "lease_until": lease,
             }
+            if allow_system and principal.role == "system":
+                payload["via"] = "worker_claim"
             base = self._ref_head(item["project"])
             if base is not None:
                 payload["base"] = base
