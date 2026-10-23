@@ -1,0 +1,130 @@
+[
+  {
+    "name": "default",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": null
+    },
+    "expect": 100
+  },
+  {
+    "name": "lower",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": 1
+    },
+    "expect": 1
+  },
+  {
+    "name": "upper",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": 200
+    },
+    "expect": 200
+  },
+  {
+    "name": "ascii-upper",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": "200"
+    },
+    "expect": 200
+  },
+  {
+    "name": "leading-zeros",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": "001"
+    },
+    "expect": 1
+  },
+  {
+    "name": "zero",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": 0
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "over",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": 201
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "negative",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": -1
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "bool",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": true
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "arabic-digits",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": "\u0661"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "fullwidth-digits",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": "\uff11"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "long-leading-zeros",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": "0001"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  },
+  {
+    "name": "all-zeros",
+    "fn": "parse_limit",
+    "inputs": {
+      "value": "000"
+    },
+    "error": {
+      "code": "bad_request",
+      "status": 400
+    }
+  }
+]
