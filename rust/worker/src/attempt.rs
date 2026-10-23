@@ -9,6 +9,7 @@
 
 use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
 use crate::keeper::Claim;
+use crate::opencode_events::{self, ProviderErrorKind};
 use crate::question::{self, Question, Scan};
 use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
@@ -244,6 +245,25 @@ fn run_attempt_inner(
 
     let clean = sup.code == Some(0) && !sup.stalled && !sup.timed_out;
 
+    // A JSON-emitting harness says more than its exit code can: a provider
+    // error is the provider's fault whatever the code says, and an empty
+    // stream means the run never got going.
+    let ev = h.json_events().then(|| opencode_events::summarize(&output));
+    let provider_rate_limited = ev.as_ref().is_some_and(|e| {
+        e.provider_error
+            .as_ref()
+            .is_some_and(|p| p.kind == ProviderErrorKind::RateLimit)
+    });
+    let provider_error = ev.as_ref().is_some_and(|e| {
+        e.provider_error
+            .as_ref()
+            .is_some_and(|p| p.kind == ProviderErrorKind::Other)
+    });
+    let empty_output = clean && ev.as_ref().is_some_and(|e| e.is_empty_run());
+    // Anything the provider got wrong skips the check: the check would judge
+    // work the run never did.
+    let provider_failed = provider_rate_limited || provider_error || empty_output;
+
     // A question packet on a run that was not killed is a request for input; an
     // unusable packet is a defect of the harness contract, not something to retry.
     let (question, malformed) = if sup.stalled || sup.timed_out {
@@ -273,11 +293,19 @@ fn run_attempt_inner(
     // to some other repository.
     verify_git_dir(&dest, repo, &claim.base_sha)?;
 
+    // Whether the work changed decides both the commit and `NoChange`, so it
+    // is read once from git rather than inferred later.
+    let mut changed = false;
     if clean {
         worker_git(&dest, &["add", "-A"])?;
         // `--quiet` implies `--exit-code`: a non-zero exit means something is
         // staged. A clean tree must not create an empty commit.
-        if worker_git(&dest, &["diff", "--cached", "--quiet"]).is_err() {
+        let staged = worker_git(&dest, &["diff", "--cached", "--quiet"]).is_err();
+        // The harness may have committed its own work: the index then matches
+        // HEAD with nothing staged, but the tree sits past the claim's base,
+        // so the staged diff alone would miss it and call the run `NoChange`.
+        let committed = worker_git(&dest, &["rev-parse", "HEAD"])? != claim.base_sha;
+        if staged {
             worker_git(
                 &dest,
                 &[
@@ -292,6 +320,7 @@ fn run_attempt_inner(
                 ],
             )?;
         }
+        changed = staged || committed;
     }
     let head = worker_git(&dest, &["rev-parse", "HEAD"])?;
 
@@ -302,10 +331,19 @@ fn run_attempt_inner(
         confine::check_confinement(&dest, &claim.base_sha, &claim.allow, &claim.forbid)?;
     let contract = !violations.is_empty() || malformed.is_some();
 
+    // A clean run that changed nothing — neither staged nor committed past the
+    // base — did not do the work. It is `NoChange` for every harness, not only
+    // the JSON ones, so it comes from git; a question or a defect already
+    // explains the run better.
+    let no_change = clean && !changed && question.is_none() && !contract && !provider_failed;
+
     // Hashed before the check so a check's own scratch files never pollute the
     // diff of what the attempt changed.
     let diff_hash = confine::diff_hash(&dest, &claim.base_sha)?;
-    let (outcome, check_hash, check_tail) = if clean && !contract && question.is_none() {
+    // A provider failure or a no-op run never reaches the check: either way the
+    // check would judge work the run never attempted.
+    let check_allowed = clean && !contract && question.is_none() && !provider_failed && !no_change;
+    let (outcome, check_hash, check_tail) = if check_allowed {
         let (o, last) = check_with_rerun(&claim.check_cmd, &dest, cfg, jail.as_ref())?;
         (Some(o), last.output_hash, last.tail)
     } else if let Some(why) = &malformed {
@@ -318,6 +356,10 @@ fn run_attempt_inner(
         exit_code: sup.code,
         signal: sup.signal,
         check: outcome,
+        provider_rate_limited,
+        provider_error,
+        empty_output,
+        no_change,
         timed_out: sup.timed_out,
         stalled: sup.stalled,
         contract_defect: contract,
@@ -342,8 +384,8 @@ fn run_attempt_inner(
         class: None,
         started_at: None,
         ended_at: None,
-        tokens_in: None,
-        tokens_out: None,
+        tokens_in: ev.as_ref().and_then(|e| e.tokens_in),
+        tokens_out: ev.as_ref().and_then(|e| e.tokens_out),
         cost: None,
         log_ref: None,
         question: question.filter(|_| classification.class == ExitClass::NeedsInput),
@@ -710,6 +752,79 @@ mod tests {
         }
     }
 
+    // Recorded `opencode run --format json` streams; tests must not edit them.
+    const RATE_LIMITED_429: &str =
+        include_str!("../tests/fixtures/opencode/real-429-free-tier-quota.jsonl");
+    const TRANSPORT_ERROR: &str =
+        include_str!("../tests/fixtures/opencode/real-provider-transport-error.jsonl");
+    const OK_TOOL_TOKENS: &str =
+        include_str!("../tests/fixtures/opencode/real-ok-tool-tokens.jsonl");
+    const OK_TEXT: &str = include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
+    /// A run that only announced its first step and then stopped.
+    const STEP_ONLY: &str = r#"{"type":"step_start","part":{"type":"step-start"}}"#;
+
+    /// A JSON-emitting harness that prints a recorded stream, optionally writes
+    /// `out.txt`, and exits with `code` (the code opencode returned for it).
+    struct JsonFixture {
+        fixture: &'static str,
+        code: u8,
+        write_file: bool,
+    }
+
+    impl Harness for JsonFixture {
+        fn name(&self) -> &str {
+            "fake-json"
+        }
+
+        fn json_events(&self) -> bool {
+            true
+        }
+
+        fn command(&self, run: &HarnessRun) -> Command {
+            // The fixture is one argv element, never interpolated into the
+            // script: its content is arbitrary JSON. It must be *printed*,
+            // not opened: `"$1"` is the stream itself, not a path to it, so
+            // `cat "$1"` would only report a failed lookup on stderr and the
+            // classifier would see an empty run. The format string is a
+            // constant, so backslashes in the JSON are never interpreted.
+            let mut script = String::new();
+            if self.write_file {
+                script.push_str("printf 'hi\\n' > out.txt\n");
+            }
+            script.push_str(&format!("printf '%s' \"$1\"\nexit {}", self.code));
+            let mut c = Command::new("sh");
+            c.arg("-c")
+                .arg(script)
+                .arg("sh")
+                .arg(self.fixture)
+                .current_dir(run.workdir);
+            c
+        }
+    }
+
+    /// One attempt of a [`JsonFixture`] against a fresh repo and workroot.
+    fn json_attempt(
+        fixture: &'static str,
+        code: u8,
+        write_file: bool,
+        check_cmd: &str,
+    ) -> AttemptResult {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], check_cmd),
+            1,
+            root.path(),
+        );
+        let h = JsonFixture {
+            fixture,
+            code,
+            write_file,
+        };
+        run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap()
+    }
+
     /// Local git runner: worker-core's helper is `pub(crate)` there and its
     /// hermetic env only applies inside worker-core's own tests, so pin the
     /// identity here with `-c`.
@@ -958,6 +1073,85 @@ mod tests {
         assert_eq!(res.branch, AttemptId::new("c1", 1).branch());
         assert_ne!(res.head, base);
         assert!(!res.diff_hash.is_empty());
+        assert_eq!(h.runs(), 1);
+    }
+
+    #[test]
+    fn a_rate_limit_is_usage_limit_whatever_the_exit_code() {
+        // The provider error is on the event stream, so it outranks a clean
+        // exit, and the check never runs: `false` would otherwise fail it.
+        for code in [1u8, 0] {
+            let res = json_attempt(RATE_LIMITED_429, code, false, "false");
+            assert_eq!(res.exit_class, ExitClass::UsageLimit, "exit {code}");
+            assert_eq!(res.check_hash, "", "exit {code}");
+        }
+    }
+
+    #[test]
+    fn a_transport_error_is_an_outage_whatever_the_exit_code() {
+        for code in [1u8, 0] {
+            let res = json_attempt(TRANSPORT_ERROR, code, false, "true");
+            assert_eq!(res.exit_class, ExitClass::Outage, "exit {code}");
+        }
+    }
+
+    #[test]
+    fn a_run_that_only_started_a_step_is_an_empty_run() {
+        let res = json_attempt(STEP_ONLY, 0, false, "true");
+        assert_eq!(res.exit_class, ExitClass::Outage);
+        assert_eq!(res.check_hash, "");
+    }
+
+    #[test]
+    fn a_tool_run_reports_tokens_and_is_ok_once_the_check_passes() {
+        let res = json_attempt(OK_TOOL_TOKENS, 0, true, "test -f out.txt");
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        assert_eq!(res.tokens_in, Some(13318));
+        assert_eq!(res.tokens_out, Some(50));
+        assert!(!res.check_hash.is_empty());
+    }
+
+    #[test]
+    fn a_text_only_run_with_no_diff_is_no_change() {
+        let res = json_attempt(OK_TEXT, 0, false, "true");
+        assert_eq!(res.exit_class, ExitClass::NoChange);
+        assert_eq!(res.check_hash, "");
+    }
+
+    #[test]
+    fn a_plain_harness_with_no_diff_is_also_no_change() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(claim(&repo_s, &base, &["out.txt"], "true"), 1, root.path());
+        let h = Fake::new("true");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::NoChange);
+        assert_eq!(res.check_hash, "");
+        assert_eq!(h.runs(), 1);
+    }
+
+    #[test]
+    fn work_the_agent_committed_itself_is_not_no_change() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let repo_s = r.path().to_string_lossy().into_owned();
+        let inp = input(
+            claim(&repo_s, &base, &["out.txt"], "test -f out.txt"),
+            1,
+            root.path(),
+        );
+        // The harness commits its own work, so the index matches HEAD with
+        // nothing staged: only HEAD having left `base` shows there is work.
+        let h = Fake::new(
+            "printf 'hi\\n' > out.txt && git add out.txt && \
+             git -c user.name=agent -c user.email=agent@localhost \
+             commit -q -m 'agent work'",
+        );
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_ne!(res.exit_class, ExitClass::NoChange);
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        assert!(!res.check_hash.is_empty());
         assert_eq!(h.runs(), 1);
     }
 
