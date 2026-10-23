@@ -38,6 +38,11 @@ _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id"
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
 _MAX_DEPS = 200
+#: BATCH.md: ``edit`` accepts ``depends_on`` as a list (replace the whole list)
+#: or as ``{add: [...], remove: [...]}`` applied to the current list; every
+#: other shape is refused with this message (``apply_batch.validate_op``
+#: reports the same words before it ever calls the keeper).
+_DEPS_FORM_MSG = "depends_on form takes only add/remove lists of keys"
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
@@ -308,6 +313,41 @@ class CreateMixin:
                          {"legacy": True}, now)
 
     # ------------------------------------------------------ edit/priority
+    def _deps_form(self, item, value):
+        """The new ``depends_on`` list for an edit of *value*, either shape.
+
+        A list replaces the whole list, exactly as it always did;
+        ``{add: [...], remove: [...]}`` is applied to the item's CURRENT deps
+        in the same transaction (bare ids qualified, the result sorted, since
+        ``_item`` reads deps sorted).  A form with neither side, another key
+        or a non-list side is refused with the form's own message -- never
+        silently treated as a list, never silently ignored.
+        """
+        if isinstance(value, dict):
+            if not value or set(value) - {"add", "remove"}:
+                raise Refused("validation", _DEPS_FORM_MSG)
+            sides = []
+            for name in ("add", "remove"):
+                part = value.get(name, [])
+                if not isinstance(part, (list, tuple)) or any(
+                        not isinstance(d, str) for d in part):
+                    raise Refused("validation", _DEPS_FORM_MSG)
+                sides.append([self._qualify(item["project"], d) for d in part])
+            add, remove = sides
+            deps = sorted((set(item.get("depends_on") or []) - set(remove))
+                          | set(add))
+            if len(deps) > _MAX_DEPS:
+                raise Refused("validation",
+                              f"depends_on exceeds {_MAX_DEPS} entries")
+            return deps
+        if not isinstance(value, (list, tuple)):
+            raise Refused("validation", _DEPS_FORM_MSG)
+        if len(value) > _MAX_DEPS:
+            raise Refused("validation", f"depends_on exceeds {_MAX_DEPS} entries")
+        if any(not isinstance(d, str) for d in value):
+            raise Refused("validation", "depends_on entries must be strings")
+        return [self._qualify(item["project"], d) for d in value]
+
     def edit_definition(self, principal, key, fields):
         """Edit an item's definition (router-only on a claimed/in-review item).
 
@@ -397,18 +437,13 @@ class CreateMixin:
         candidate = self._all_items()
         me = next(it for it in candidate if it["key"] == key)
         by_key = {it["key"]: it for it in candidate}
+        old_deps = list(item.get("depends_on") or [])
         dropped = []
         for field, value in edit_fields.items():
             if field == "depends_on":
-                if not isinstance(value, (list, tuple)):
-                    raise Refused("validation", "depends_on must be a list")
-                if len(value) > _MAX_DEPS:
-                    raise Refused("validation",
-                                  f"depends_on exceeds {_MAX_DEPS} entries")
-                if any(not isinstance(d, str) for d in value):
-                    raise Refused("validation",
-                                  "depends_on entries must be strings")
-                deps = [self._qualify(item["project"], d) for d in value]
+                # Either request shape (list replace or {add, remove}) resolves
+                # to the new full list before anything is written.
+                deps = self._deps_form(item, value)
                 # A dependency on an item that is cancelled is dropped from the
                 # resulting list instead of refusing the edit: the rest of the
                 # list stands, the caller is told what went away, and the graph
@@ -459,6 +494,11 @@ class CreateMixin:
         # cancelled-dropped) edge list, not the caller's raw input.
         audit_after = {name: (me["depends_on"] if name == "depends_on"
                               else edit_fields[name]) for name in edit_fields}
+        # Deps the edit drops: a full-list replace, a ``remove`` side, or a
+        # cancelled target filtered out.  Reported only when something went
+        # away, so every caller keeps reading ``{"key": ...}`` otherwise.
+        dropped_deps = [d for d in old_deps if d not in set(me["depends_on"])] \
+            if "depends_on" in edit_fields else []
         with self._write():
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
@@ -544,9 +584,12 @@ class CreateMixin:
         result = {"key": key}
         if bump_epoch:
             result["epoch"] = new_epoch
+        # Both keys appear only when something was actually dropped: every
+        # caller (the HTTP door, the CLI, apply_ops' results) keeps reading
+        # ``{"key": ...}`` when the edit changed no dependency.
+        if dropped_deps:
+            result["dropped_deps"] = dropped_deps
         if dropped:
-            # Only when something was actually dropped: every caller (the HTTP
-            # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
             result["warnings"] = dropped
         return result
 

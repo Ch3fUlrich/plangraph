@@ -512,6 +512,37 @@ def test_depends_on_additions_allowed(w, monkeypatch):
     assert ("plangraph:OTHER", "plangraph:LINK") in edges
 
 
+def test_depends_on_add_form_allowed(w, monkeypatch):
+    """The ``{add: [...]}`` side of BATCH.md's form is an addition: granted."""
+    _, principal = live(w, monkeypatch)
+    out = apply(w, principal, [
+        op("edit", key="plangraph:HOST",
+           fields={"depends_on": {"add": ["plangraph:LINK"]}}),
+    ])
+    assert out["applied"] == 1
+    # both the old and the new dep stand, and nothing was dropped
+    assert set(w.store._item("plangraph:HOST")["depends_on"]) == {
+        "plangraph:OTHER", "plangraph:LINK"}
+    assert "dropped_deps" not in out["results"][0]
+    edges = {(r["src"], r["dst"]) for r in w.conn.execute(
+        "SELECT src,dst FROM edges WHERE rel='depends_on'")}
+    assert {("plangraph:HOST", "plangraph:OTHER"),
+            ("plangraph:HOST", "plangraph:LINK")} <= edges
+
+
+def test_depends_on_replace_keeping_every_dep_allowed(w, monkeypatch):
+    """A full-list replace that drops nothing is an addition, not a removal."""
+    _, principal = live(w, monkeypatch)
+    out = apply(w, principal, [
+        op("edit", key="plangraph:HOST",
+           fields={"depends_on": ["plangraph:OTHER", "plangraph:LINK"]}),
+    ])
+    assert out["applied"] == 1
+    assert set(w.store._item("plangraph:HOST")["depends_on"]) == {
+        "plangraph:OTHER", "plangraph:LINK"}
+    assert "dropped_deps" not in out["results"][0]
+
+
 # ------------------------------------------------------ denied op seam
 def test_edit_done_criteria_denied(w, monkeypatch):
     _, principal = live(w, monkeypatch)
@@ -549,6 +580,14 @@ def test_edit_other_fields_denied(w, monkeypatch, fields):
     # an add and a drop in the same list is a drop: never reached
     [("edit", "plangraph:HOST",
       {"depends_on": ["plangraph:LINK"]})],
+    # the {add, remove} form: ANY remove side is a removal -- naming a dep,
+    # naming nothing, or sitting next to an add.  The grant is additions only.
+    [("edit", "plangraph:HOST",
+      {"depends_on": {"remove": ["plangraph:OTHER"]}})],
+    [("edit", "plangraph:HOST",
+      {"depends_on": {"remove": []}})],
+    [("edit", "plangraph:HOST",
+      {"depends_on": {"add": ["plangraph:LINK"], "remove": []}})],
 ])
 def test_dep_removal_denied(w, monkeypatch, ops):
     _, principal = live(w, monkeypatch)
@@ -561,6 +600,25 @@ def test_dep_removal_denied(w, monkeypatch, ops):
             built.append(op(name, key=key, fields=value))
     err = refusal(apply, w, principal, built)
     assert err.code == "forbidden" and has("dep_removal", err.msg)
+    assert w.store._item("plangraph:HOST")["depends_on"] == ["plangraph:OTHER"]
+    assert snap(w) == before
+
+
+@pytest.mark.parametrize("fields", [
+    {"depends_on": {}},                             # neither side
+    {"depends_on": {"bogus": ["plangraph:LINK"]}},  # a key that is not add/remove
+    {"depends_on": {"add": "plangraph:LINK"}},      # a side that is not a list
+    {"depends_on": {"add": [123]}},                 # a side of non-strings
+    {"depends_on": "plangraph:LINK"},               # not a list, not a form
+    {"depends_on": 42},
+])
+def test_depends_on_bad_shape_denied_fails_closed(w, monkeypatch, fields):
+    """The policy never reads an unrecognised shape as a list: field_denied."""
+    _, principal = live(w, monkeypatch)
+    before = snap(w)
+    err = refusal(apply, w, principal,
+                  [op("edit", key="plangraph:HOST", fields=fields)])
+    assert err.code == "forbidden" and has("field_denied", err.msg), err.msg
     assert w.store._item("plangraph:HOST")["depends_on"] == ["plangraph:OTHER"]
     assert snap(w) == before
 
@@ -1283,9 +1341,15 @@ def test_null_columns_are_null_safe_across_a_revoke(w, monkeypatch):
     """A row with NULL provenance may be revoked, and not silently rewritten."""
     live(w, monkeypatch)
     ts = w.store._iso(w.store.now())
+    # ``id`` is explicit on both backends: SQLite would autoincrement it, but
+    # Postgres' BIGINT PRIMARY KEY has no default (the store assigns
+    # MAX(id)+1 inside the write lock, like run_tokens), so an insert that
+    # omits it fails there with NotNullViolation.
     w.conn.execute(
-        "INSERT INTO oversight_tokens(token_sha256,principal,generation,scope,"
-        "created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO oversight_tokens(id,token_sha256,principal,generation,scope,"
+        "created_at,expires_at)"
+        " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_tokens),"
+        "?,?,?,?,?,?)",
         (auth.hash_token("pgo1_" + "n" * 43), OPP, 99, "plan-write", ts, ts))
     row = w.conn.execute("SELECT id FROM oversight_tokens WHERE generation=99"
                          ).fetchone()
@@ -1294,8 +1358,10 @@ def test_null_columns_are_null_safe_across_a_revoke(w, monkeypatch):
     assert w.conn.execute("SELECT revoked_at,minted_by FROM oversight_tokens"
                           " WHERE id=?", (row["id"],)).fetchone()["revoked_at"]
     w.conn.execute(
-        "INSERT INTO oversight_tokens(token_sha256,principal,generation,scope,"
-        "created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        "INSERT INTO oversight_tokens(id,token_sha256,principal,generation,scope,"
+        "created_at,expires_at)"
+        " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_tokens),"
+        "?,?,?,?,?,?)",
         (auth.hash_token("pgo1_" + "m" * 43), OPP, 100, "plan-write", ts, ts))
     other = w.conn.execute("SELECT id FROM oversight_tokens"
                            " WHERE generation=100").fetchone()

@@ -226,6 +226,50 @@ def _check_create(index, op, items, projects):
     return []
 
 
+def _deps_delta(old, value):
+    """``(added, removing, valid)`` for a ``depends_on`` edit of a list *old*.
+
+    Both request shapes of BATCH.md's ``edit`` are understood:
+
+    * a **list** replaces the whole list -- ``added`` is what it brings,
+      ``removing`` is whatever it leaves out;
+    * ``{add: [...], remove: [...]}`` edits the list in place -- the ``remove``
+      side is a removal even when it names nothing, so the grant never has to
+      decide whether an empty side is "harmless";
+    * anything else (``{}``, another key, a non-list side, a non-string key)
+      is ``valid=False`` and the policy fails closed on ``field_denied``.
+    """
+    old = set(old or ())
+    if isinstance(value, (list, tuple)):
+        if any(not isinstance(d, str) for d in value):
+            return set(), set(), False
+        new = set(value)
+        return new - old, bool(old - new), True
+    if not isinstance(value, dict) or not value \
+            or set(value) - {"add", "remove"}:
+        return set(), set(), False
+    sides = []
+    for name in ("add", "remove"):
+        part = value.get(name, [])
+        if not isinstance(part, (list, tuple)) or any(
+                not isinstance(d, str) for d in part):
+            return set(), set(), False
+        sides.append(set(part))
+    add, remove = sides
+    resulting = (old - remove) | add
+    return (resulting - old), (bool(old - resulting) or "remove" in value), True
+
+
+def _deps_after(item, value):
+    """The item's ``depends_on`` after a GRANTED edit of *value* (either form)."""
+    old = set(item.get("depends_on") or [])
+    if isinstance(value, dict):
+        add = set(value.get("add") or ())
+        remove = set(value.get("remove") or ())
+        return sorted((old - remove) | add)
+    return list(value)
+
+
 def _check_edit(index, op, items, projects):
     key = _key_of(op)
     fields = op.get("fields")
@@ -242,14 +286,14 @@ def _check_edit(index, op, items, projects):
         return [_verdict(index, "edit", key, reason)]
     if "depends_on" not in fields:
         return []
-    new = fields.get("depends_on")
-    if not isinstance(new, (list, tuple)) or any(not isinstance(d, str) for d in new):
+    added, removing, valid = _deps_delta(item.get("depends_on"),
+                                         fields.get("depends_on"))
+    if not valid:
         return [_verdict(index, "edit", key, "field_denied")]
-    old = set(item.get("depends_on") or [])
-    new_set = set(new)
-    if old - new_set:
+    if removing:
+        # A ``remove`` side or a replace that leaves a dep out: the grant is
+        # additions only, so both are refused as a removal.
         return [_verdict(index, "edit", key, "dep_removal")]
-    added = new_set - old
     if not added:
         # No-op / reordering: the grant is additions only, so fail closed.
         return [_verdict(index, "edit", key, "dep_removal")]
@@ -339,7 +383,8 @@ def check_batch(items_by_key, ops, projects=()):
             verdicts.extend(found)
             if not found and isinstance(op.get("fields"), dict) \
                     and "depends_on" in op["fields"]:
-                items[key_of(op)]["depends_on"] = list(op["fields"]["depends_on"])
+                items[key_of(op)]["depends_on"] = _deps_after(
+                    items[key_of(op)], op["fields"]["depends_on"])
             continue
         if name == "priority":
             verdicts.extend(_check_priority(index, op, items, projects))
