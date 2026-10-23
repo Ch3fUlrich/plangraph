@@ -95,6 +95,60 @@ def test_provider_usage_and_rate_limited(stub_daily, capsys, tmp_path):
     assert "rate_limited.muse" in metrics_names
 
 
+def test_daily_output_carries_ctx_section(tmp_path, capsys):
+    """The daily job prints a ctx section; day/items/posted stay as they were."""
+    projects = tmp_path / "projects"
+    line = {
+        "type": "assistant",
+        "requestId": "r1",
+        "timestamp": "2024-01-01T00:00:00Z",
+        "model": "claude-opus-5-5",
+        "message": {
+            "id": "m1",
+            "usage": {
+                "input_tokens": 10000,
+                "output_tokens": 4000,
+                "cache_read_input_tokens": 70000,
+                "cache_creation_input_tokens": 16000,
+            },
+        },
+    }
+    target = projects / "p1" / "main.jsonl"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(line) + "\n", encoding="utf-8")
+    classes = tmp_path / "session_classes.json"
+    classes.write_text(json.dumps({"main": "router"}), encoding="utf-8")
+
+    s = FakeSession()
+    rc = cli.main(["metrics", "daily", "--projects-dir", str(projects),
+                   "--date", "2024-01-01", "--host", "box1",
+                   "--session-classes", str(classes), "--dry-run"], session=s)
+    assert rc == 0
+    out = _out(capsys)
+    assert out["day"] == "2024-01-01"
+    assert out["items"][0]["metric"] == "claude_weighted_tokens"
+    assert {i["metric"] for i in out["items"]} == {"claude_weighted_tokens",
+                                                   "landed_changes"}
+    assert out["posted"] is False
+    assert s.posts("set_metrics") == []
+    assert out["ctx"]["day"] == "2024-01-01"
+    assert out["ctx"]["groups"] == [{
+        "host": "box1",
+        "session_class": "router",
+        "calls": 1,
+        "weighted": 37000.0,
+        "share_cache_read": 0.7,
+        "share_cache_write": 0.16,
+        "share_output": 0.04,
+        "input_from_cache": 0.729167,
+        "ctx_p50": 96000,
+        "ctx_p90": 96000,
+        "ctx_p99": 96000,
+        "share_over_200k": 0.0,
+        "cost_usd": 0.8025,
+    }]
+
+
 def test_bad_date(stub_daily):
     s = FakeSession()
     rc = cli.main(["metrics", "daily", "--projects-dir", str(stub_daily),

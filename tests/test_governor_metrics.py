@@ -214,6 +214,206 @@ def _has_master(repo):
     return out.returncode == 0
 
 
+def _ctx_fixture(tmp_path):
+    """Main + subagent transcripts: duplicate id, one call >200k, two model families."""
+    projects = tmp_path / "projects"
+    day1 = "2024-01-01T00:00:00Z"
+    _write_jsonl(
+        projects / "p1" / "main.jsonl",
+        [
+            # same (message.id, requestId) as the next line, smaller usage: dropped
+            _assistant("m1", "r1", day1, inp=1, out=1, model="claude-opus-5-5"),
+            _assistant("m1", "r1", day1, inp=40000, out=30000, cr=89000, cw=20000,
+                       model="claude-opus-5-5"),
+            _assistant("m2", "r2", day1, out=10000, cr=10000, model="qwen3.8-max"),
+            _assistant("m3", "r3", day1, cr=201000, model="claude-sonnet-5-5"),
+            # other day: outside the 2024-01-01 window
+            _assistant("m4", "r4", "2024-01-02T00:00:00Z", inp=7, out=3,
+                       model="claude-opus-5-5"),
+        ],
+    )
+    _write_jsonl(
+        projects / "p1" / "s1" / "subagents" / "a1.jsonl",
+        [_assistant("m5", "r5", day1, inp=100, out=40, cr=700, cw=160,
+                    model="claude-sonnet-5-5")],
+    )
+    return projects
+
+
+def test_ctx_report_fixture_transcripts(tmp_path):
+    projects = _ctx_fixture(tmp_path)
+    records = metrics.iter_usage(projects, host="box1")
+    assert len(records) == 5
+    assert {r["host"] for r in records} == {"box1"}
+    assert {(r["session"], r["session_class"]) for r in records} == {
+        ("main", "main"),
+        ("s1", "subagent"),
+    }
+    # the duplicate (message.id, requestId) kept the larger usage
+    assert sorted(r["input"] for r in records if r["session"] == "main") == [0, 0, 7, 40000]
+
+    report = metrics.ctx_report(records, "2024-01-01")
+    assert report["day"] == "2024-01-01"
+    assert [(g["host"], g["session_class"]) for g in report["groups"]] == [
+        ("box1", "main"),
+        ("box1", "subagent"),
+    ]
+    main, sub = report["groups"]
+    assert main == {
+        "host": "box1",
+        "session_class": "main",
+        "calls": 3,
+        "weighted": 130000.0,
+        "share_cache_read": 0.75,
+        "share_cache_write": 0.05,
+        "share_output": 0.1,
+        "input_from_cache": 0.833333,
+        "ctx_p50": 149000,
+        "ctx_p90": 201000,
+        "ctx_p99": 201000,
+        "share_over_200k": 0.333333,
+        "cost_usd": 3.4749,
+    }
+    assert sub == {
+        "host": "box1",
+        "session_class": "subagent",
+        "calls": 1,
+        "weighted": 370.0,
+        "share_cache_read": 0.7,
+        "share_cache_write": 0.16,
+        "share_output": 0.04,
+        "input_from_cache": 0.729167,
+        "ctx_p50": 960,
+        "ctx_p90": 960,
+        "ctx_p99": 960,
+        "share_over_200k": 0.0,
+        "cost_usd": 0.001605,
+    }
+    # only the requested UTC day is reported
+    other = metrics.ctx_report(records, "2024-01-02")
+    assert [g["calls"] for g in other["groups"]] == [1]
+    assert other["groups"][0]["weighted"] == 10.0
+    assert other["groups"][0]["cost_usd"] == 0.00033
+    assert metrics.ctx_report([], "2024-01-01") == {"day": "2024-01-01", "groups": []}
+
+
+def test_ctx_report_groups_by_host_and_session_class():
+    tz = dt.timezone.utc
+
+    def rec(host, cls, inp, cr):
+        return {"host": host, "session_class": cls, "session": "s", "model": "claude-x",
+                "ts": dt.datetime(2024, 4, 1, 0, 0, tzinfo=tz),
+                "input": inp, "output": 0, "cache_read": cr, "cache_write": 0}
+
+    records = [
+        rec("box2", "main", 40, 0),
+        rec("box1", "subagent", 10, 20),
+        rec("box1", "main", 5, 5),
+    ]
+    report = metrics.ctx_report(records, "2024-04-01")
+    assert report["day"] == "2024-04-01"
+    assert [(g["host"], g["session_class"]) for g in report["groups"]] == [
+        ("box1", "main"),
+        ("box1", "subagent"),
+        ("box2", "main"),
+    ]
+    by_host = {(g["host"], g["session_class"]): g for g in report["groups"]}
+    assert by_host[("box1", "main")]["calls"] == 1
+    assert by_host[("box2", "main")]["weighted"] == 40.0
+    assert by_host[("box1", "subagent")]["ctx_p90"] == 30
+
+
+def test_is_sidechain_record_is_subagent(tmp_path):
+    projects = tmp_path / "projects"
+    sidechain = _assistant("m1", "r1", "2024-01-01T00:00:00Z", inp=4)
+    sidechain["isSidechain"] = True
+    _write_jsonl(projects / "p1" / "side.jsonl", [sidechain])
+    _write_jsonl(
+        projects / "p1" / "plain.jsonl",
+        [_assistant("m2", "r2", "2024-01-01T00:00:00Z", inp=6)],
+    )
+    records = {r["session"]: r for r in metrics.iter_usage(projects, host="box1")}
+    assert records["side"]["session_class"] == "subagent"
+    assert records["plain"]["session_class"] == "main"
+    assert records["plain"]["host"] == "box1"
+
+
+def test_session_classes_mapping_file(tmp_path):
+    projects = tmp_path / "projects"
+    ts = "2024-01-01T00:00:00Z"
+    _write_jsonl(projects / "p1" / "main.jsonl",
+                 [_assistant("m1", "r1", ts, inp=10, model="claude-x")])
+    _write_jsonl(projects / "p1" / "other.jsonl",
+                 [_assistant("m2", "r2", ts, inp=11, model="claude-x")])
+    _write_jsonl(projects / "p1" / "s2" / "subagents" / "a1.jsonl",
+                 [_assistant("m3", "r3", ts, inp=12, model="claude-x")])
+    path = tmp_path / "session_classes.json"
+    path.write_text(json.dumps({"main": "router", "s2": "judge", "ghost": "worker"}),
+                    encoding="utf-8")
+    classes = metrics.load_session_classes(path)
+    assert classes == {"main": "router", "s2": "judge", "ghost": "worker"}
+
+    records = {r["session"]: r for r in metrics.iter_usage(projects, session_classes=classes)}
+    assert records["main"]["session_class"] == "router"
+    # a launch record never renames a subagent transcript
+    assert records["s2"]["session_class"] == "subagent"
+    # unnamed session stays main; never guessed from the session name
+    assert records["other"]["session_class"] == "main"
+
+    # the same refinement applies to already-parsed records and is idempotent
+    parsed = metrics.iter_usage(projects)
+    assert metrics.tag_records(parsed, host="box3", session_classes=classes) is parsed
+    assert {r["session"]: (r["session_class"], r["host"]) for r in parsed} == {
+        "main": ("router", "box3"),
+        "other": ("main", "box3"),
+        "s2": ("subagent", "box3"),
+    }
+    metrics.tag_records(parsed, host="box4", session_classes=classes)
+    assert {r["session_class"] for r in parsed} == {"router", "main", "subagent"}
+    assert {r["host"] for r in parsed} == {"box4"}
+
+
+def test_session_classes_file_must_be_an_object(tmp_path):
+    path = tmp_path / "session_classes.json"
+    path.write_text(json.dumps(["main"]), encoding="utf-8")
+    with pytest.raises(ValueError):
+        metrics.load_session_classes(path)
+    path.write_text("not json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        metrics.load_session_classes(path)
+
+
+def test_price_table_and_read_multipliers():
+    assert metrics.read_multiplier("claude-opus-5-5") == 0.05
+    assert metrics.read_multiplier("claude-sonnet-5-5-20260101") == 0.05
+    assert metrics.read_multiplier("claude-opus-4-1") == 0.1
+    assert metrics.read_multiplier("qwen3.8-max") == 0.1
+    assert metrics.read_multiplier("") == 0.1
+    assert metrics.price_for("claude-opus-5-5") == (15.0, 75.0, 18.75)
+    assert metrics.price_for("claude-sonnet-5-5") == (3.0, 15.0, 3.75)
+    assert metrics.price_for("claude-3-5-haiku") == (1.0, 5.0, 1.25)
+    assert metrics.price_for("qwen3.8-max") == metrics.DEFAULT_PRICE
+    assert metrics.DEFAULT_PRICE == (3.0, 15.0, 3.75)
+
+    opus = {"input": 1_000_000, "output": 0, "cache_read": 1_000_000,
+            "cache_write": 0, "model": "claude-opus-5-5"}
+    # 15.0 input + 0.05 x 15.0 read
+    assert metrics.record_cost(opus) == pytest.approx(15.75)
+    other = dict(opus, input=0, cache_read=1_000_000, model="qwen3.8-max")
+    # 0.1 x 3.0 default input price
+    assert metrics.record_cost(other) == pytest.approx(0.3)
+
+
+def test_nearest_rank_percentiles():
+    assert metrics.nearest_rank([], 0.5) == 0
+    tens = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    assert metrics.nearest_rank(tens, 0.5) == 50
+    assert metrics.nearest_rank(tens, 0.9) == 90
+    assert metrics.nearest_rank(tens, 0.99) == 100
+    assert metrics.nearest_rank([70, 10, 40], 0.5) == 40
+    assert metrics.nearest_rank([70, 10, 40], 0.9) == 70
+
+
 def test_daily_metrics_counts_only_the_requested_day():
     import datetime as dt
     def rec(day, n):
