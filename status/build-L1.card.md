@@ -10,7 +10,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 |---|---|---|
 | KEEPER-OPTASK-CLOSE | DONE | evidence b79eea55 (#132), verdicts qwen+glm 2/2 |
 | KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | main merged cd8ff51f (pushed). r2 writer 20261023-054153-opclaim-r2-writer-36d71a (mimo) brief seats/opclaim-127/r2/WRITER-BRIEF.md (KEEP exemption + terminal test + deepseek r1 items + PG). Next: verify, push, re-seat qwen+glm-free full diff, GO-REQ, merge; then server:OP-DOCKHAND-EVENTS |
-| RT-P1-EXEC-OWNERSHIP #133 (HIGH) | L1 | D-2329 A squash 8fd739b7 = #112 head + main; 30 Writer lines + Test-Removal: D-2329, NO Hand-Edit (gate forbids >10 lines; #112 gate red cause = "(cherry picked from" line after trailers). CI dispatched; seats qwen+glmfree seats/exec-ownership/sq1 -> GO-REQ -> merge, close #112 -> signal spine S3d |
+| RT-P1-EXEC-OWNERSHIP #133 (HIGH) | L1 | squash 8fd739b7 CI green; sq1 qwen PASS, glm FIX 3 MED (complete gate txn, run-less hand-back, PG behaviour test) -> fix writer 20261023-055023-exec-sq-fix1-43adad brief seats/exec-ownership/sq1/FIX-BRIEF.md -> re-seat qwen + deepseek (zhipu is a writer family: c129069f,f722147e) -> GO-REQ -> merge, close #112 |
 | RT-P1-PHASE-RUNNER (HIGH) | spine (relaunched) | S3c MERGED f25cc546 (evidence on). S3d red spine/phase-runner-s3d @ 76904e43 (D-2326 lane reading, 3-way bypass guard, attach_merge_evidence after merge to main) -> impl after #112 signal. Then S4. HARDEN items 1-12 |
 | RT-P1-ATTEMPT-SANDBOX #100 | build-L2-sandbox (workst) | owes WB merge + main + CI + MERGE-READY (stall 7.6h, pinged 05:1xZ); no reply -> give to sweep-runtime |
 | #95 OPENCODE-HARDEN | build-L2-sweep-runtime | in progress; #71 CLOSED (D-2325) |
