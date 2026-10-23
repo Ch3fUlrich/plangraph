@@ -1273,6 +1273,7 @@ async fn run_janitor(
                 workroot: input.workroot.clone(),
                 check_cmd: input.claim.check_cmd.clone(),
                 base_sha: base_sha.to_string(),
+                card: input.claim.card.clone(),
             },
             janitor_options(cfg),
         )

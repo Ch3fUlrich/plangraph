@@ -50,6 +50,10 @@ impl Ord for AttemptId {
 }
 
 impl AttemptId {
+    /// True when this attempt belongs to `card` (ids parsed from a branch keep only the hash-bearing segment, so compare segments).
+    pub fn is_card(&self, card: &str) -> bool {
+        self.segment() == safe_segment(card)
+    }
     pub fn new(card: impl Into<String>, n: u32) -> Self {
         AttemptId {
             card: card.into(),

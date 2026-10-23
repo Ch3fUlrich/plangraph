@@ -29,6 +29,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "withdraw_review", "reopen", "set_kind", "set_metrics",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
                "governor_override", "phase_plan",
+               # phase_finish mutates only GitHub, never the store; transport is POST
+               "phase_finish",
                "attempts", "park", "complete", "alarms", "locks"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
@@ -180,6 +182,25 @@ def _phase_plan(store, principal, body, need):
     # repo_root is server-side only; plan_phase also re-checks the role first.
     return plan_phase(store, principal, key, repo_root=repo_root, now=None)
 
+#: Seam for tests: the keeper's own GitHub adapter, built from the server environment only.
+def _github_from_env():
+    from ..planner.github_adapter import RestGitHub   # local import: keeps keeper leaf-free
+    return RestGitHub.from_env()
+
+def _phase_finish(store, principal, body, need):
+    # Role first: a non-router/system principal gets 403 before env, key or GitHub access checks.
+    store._require_role(principal, "router", "system")
+    from ..planner.phase_finish import finish_phase
+    key, branch, head = need(body, "key"), need(body, "branch"), need(body, "head")
+    repo_root = os.environ.get("PG_PHASE_REPO_ROOT")
+    if not repo_root or not os.path.isdir(repo_root):
+        raise Refused("unavailable", "PG_PHASE_REPO_ROOT is not configured")
+    github = _github_from_env()
+    if github is None:
+        raise Refused("unavailable", "phase_finish GitHub access is not configured")
+    # repo_root, the repo slug and the token file come from the server environment only, never the body.
+    return finish_phase(store, principal, key, branch, head, repo_root=repo_root, github=github)
+
 
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
@@ -199,4 +220,5 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "governor_override": _governor_override,
-                      "phase_plan": _phase_plan}
+                      "phase_plan": _phase_plan,
+                      "phase_finish": _phase_finish}
