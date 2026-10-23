@@ -27,6 +27,7 @@ class FakeGit:
         ancestor: bool = True,
         trailers: dict | None = None,
         trailers_by_sha: dict | None = None,
+        branch_trailers_by_sha: dict | None = None,
         commit_time: float | None = CLAIM + 100,
         error: Exception | None = None,
         author_time: float | None = None,
@@ -45,6 +46,10 @@ class FakeGit:
         # Per-commit trailers for the seat-coverage tests; any sha not listed
         # falls back to ``trailers`` above.
         self.trailers_by_sha = trailers_by_sha or {}
+        # Merge/phase evidence shas: one dict per BRANCH commit (the adapter's
+        # ``writer_trailers`` result); any sha not listed falls back to a
+        # single-element list holding ``trailers`` above.
+        self.branch_trailers_by_sha = branch_trailers_by_sha or {}
         self.ctime = commit_time
         self.atime = commit_time if author_time is None else author_time
         self.error = error
@@ -83,6 +88,16 @@ class FakeGit:
         if sha in self.trailers_by_sha:
             return dict(self.trailers_by_sha[sha])
         return dict(self.message_trailers)
+
+    def writer_trailers(self, repo, sha):
+        """One dict per commit whose trailers name the writers (ADDENDUM).
+
+        A merge/phase evidence sha carries the branch commits' trailers; any
+        other sha is a single commit whose own trailers stand for it.
+        """
+        if sha in self.branch_trailers_by_sha:
+            return [dict(d) for d in self.branch_trailers_by_sha[sha]]
+        return [self.trailers(repo, sha)]
 
     def commit_times(self, repo, sha):
         if self.commit_time_error:

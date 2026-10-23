@@ -370,3 +370,121 @@ def test_coverage_reuses_the_review_family_table():
     if "model_family" in vars(cov):
         assert cov.model_family is review_family.model_family
 
+
+# --------------------------------------------------------------------------
+# ADDENDUM: the evidence commit is the PR MERGE commit (12-14) ...
+# --------------------------------------------------------------------------
+
+MERGE_SHA = "e" * 40
+PHASE_SHA = "f" * 40
+
+
+def merge_git(branch_trailers, sha=MERGE_SHA, merge_trailers=None):
+    """A ``FakeGit`` whose evidence *sha* is a merge commit.
+
+    The merge commit itself carries only ``Plan-Item`` (that is what L1
+    attaches); ``writer_trailers`` yields one dict per branch commit -- the
+    flattened list the adapter returns for a merge, or for a PHASE merge whose
+    parent2 range holds inner PR merges (D-2308).
+    """
+    return FakeGit(
+        trailers_by_sha={sha: merge_trailers or {"Plan-Item": "demo:MERGE"}},
+        branch_trailers_by_sha={sha: [dict(d) for d in branch_trailers]},
+    )
+
+
+def to_review_merge(w, key, git, sha=MERGE_SHA):
+    """Claim as ``claimant``, attach the merge sha as commit+ci, submit."""
+    return to_review_with_commits(
+        w, key, {sha: git.trailers_by_sha.get(sha, {})}, git=git)
+
+
+def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
+    covered, refused = seed(
+        w, [("A", []), ("B", [])],
+        evidence_kinds=("commit+ci",), review_tier="high")
+    git = merge_git([writer("mimo-v2 run1"),       # xiaomi
+                     writer("deepseek-r1 run2")])  # deepseek
+    to_review_merge(w, covered, git)
+    to_review_merge(w, refused, git)
+    assert set(_cov().writer_families(
+        w.store, w.store._item(covered), w.store.ctx)) == {"xiaomi", "deepseek"}
+
+    assert w.store.verdict(w.p("rAlibaba"), covered, True, "one")["state"] == "in_review"
+    assert w.store.verdict(w.p("rAnthropic1"), covered, True, "two")["state"] == "done"
+
+    assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rXiaomi"), refused, True, "two")
+    assert exc.value.code == "coverage"
+    assert "xiaomi" in exc.value.msg
+    assert w.store._item(refused)["state"] == "in_review"
+    assert len(verdict_events(w, refused)) == 1
+
+
+@pytest.mark.parametrize("branch_trailers", [
+    [],                                # no branch commit at all
+    [{"Plan-Item": "demo:A"}],         # branch commits, none naming a writer
+], ids=["no_branch_commits", "no_writer_trailer"])
+def test_merge_without_a_qualifying_writer_fails_closed(w, branch_trailers):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_merge(w, key, merge_git(branch_trailers))
+
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rGoogle"), key, True, "would close")
+    assert exc.value.code == "writer_unknown"
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+
+# --------------------------------------------------------------------------
+# 14. a Hand-Edit branch commit (no Writer) is a Claude hand: anthropic
+# --------------------------------------------------------------------------
+
+def test_hand_edit_branch_commit_counts_as_anthropic(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_merge(w, key, merge_git([{"Hand-Edit": "D-2240"}]))
+    assert set(_cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx)) == {"anthropic"}
+
+    # Claude's own hand may not cover itself on a standard item...
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rAnthropic1"), key, True, "hand edit")
+    assert exc.value.code == "coverage"
+    assert "anthropic" in exc.value.msg
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+    # ...but any other single family closes it (the refusal left no trace).
+    assert w.store.verdict(w.p("rGoogle"), key, True, "other family")["state"] == "done"
+
+
+# --------------------------------------------------------------------------
+# 16. (D-2308) PHASE merge: only the leaf branch commits name writers
+# --------------------------------------------------------------------------
+
+def test_phase_merge_uses_the_flattened_leaf_trailers(w):
+    covered, refused = seed(
+        w, [("A", []), ("B", [])],
+        evidence_kinds=("commit+ci",), review_tier="high")
+    # Inner PR merges (Plan-Item only) are dropped by the adapter; the leaves
+    # remain, and the PHASE merge commit's own trailers are never consulted.
+    leaves = [writer("mimo-v2 run1"), writer("deepseek-r1 run2")]
+    git = merge_git(leaves, sha=PHASE_SHA,
+                    merge_trailers={"Plan-Item": "demo:PHASE"})
+    to_review_merge(w, covered, git, sha=PHASE_SHA)
+    to_review_merge(w, refused, git, sha=PHASE_SHA)
+    assert set(_cov().writer_families(
+        w.store, w.store._item(covered), w.store.ctx)) == {"xiaomi", "deepseek"}
+
+    assert w.store.verdict(w.p("rAlibaba"), covered, True, "one")["state"] == "in_review"
+    assert w.store.verdict(w.p("rAnthropic1"), covered, True, "two")["state"] == "done"
+
+    assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rXiaomi"), refused, True, "two")
+    assert exc.value.code == "coverage"
+    assert "xiaomi" in exc.value.msg
+    assert w.store._item(refused)["state"] == "in_review"
+    assert len(verdict_events(w, refused)) == 1
+
