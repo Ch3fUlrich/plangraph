@@ -1316,3 +1316,89 @@ def test_token_guard_columns_and_delete_trigger_are_in_both_ddls():
             assert f"OLD.{column}" in trigger, (label, column)
             assert f"NEW.{column}" in trigger, (label, column)
     assert "trg_oversight_tokens_append_only_truncate" in six
+
+
+# =========================================================================
+# Merge with main's KEEPER-BATCH-PRECONDITION: ``base_seq`` + ``dry_run``.
+# =========================================================================
+def _applied_rows(w):
+    return list(w.conn.execute(
+        "SELECT * FROM oversight_ops WHERE outcome='applied' ORDER BY id"))
+
+
+def _head_seq(w):
+    return w.conn.execute("SELECT COALESCE(MAX(seq), 0) FROM events"
+                          ).fetchone()[0]
+
+
+def test_oversight_dry_run_checks_the_gate_and_writes_nothing(w, monkeypatch):
+    """A dry run performs every check and op, then rolls everything back.
+
+    The valid batch passes the policy gate (pre-lock and in-lock), runs both
+    ops and validates the final graph -- yet no item, event or applied audit
+    row survives, so the applied budget is untouched too.
+    """
+    _, principal = live(w, monkeypatch)
+    before = snap(w)
+    out = w.store.apply_ops(
+        principal,
+        [op("edit", key="plangraph:OTHER", fields={"note": "dry"}),
+         op("priority", key="plangraph:HOST", priority=5)],
+        batch_ref=BATCH, base_seq=_head_seq(w), dry_run=True)
+    assert out["applied"] == 2 and out["dry_run"] is True
+    assert len(out["results"]) == 2
+    assert snap(w) == before
+    assert w.store._item("plangraph:OTHER")["note"] is None
+    assert w.store._item("plangraph:HOST")["priority"] == 0
+    assert _applied_rows(w) == []                  # no persisted audit/budget
+    assert _denied_rows(w) == []                   # success is not a denial
+    assert _open_guard_alarms(w) == []
+
+    # The gate still runs on a dry run: a refused op is refused, nothing moves,
+    # and the denial is recorded exactly as a real call would record it.
+    err = refusal(w.store.apply_ops, principal,
+                  [op("edit", key="plangraph:HIGH", fields={"note": "no"})],
+                  batch_ref=BATCH, dry_run=True)
+    assert err.code == "forbidden" and has("target_high", err.msg)
+    assert snap(w) == before
+    assert _applied_rows(w) == []
+    rows = _denied_rows(w)
+    assert len(rows) == 1
+    assert (rows[0]["op"], rows[0]["key"]) == ("edit", "plangraph:HIGH")
+    assert "oversight:" in (rows[0]["code"] or "")
+    assert len(_open_guard_alarms(w)) == 1
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
+        w, monkeypatch, dry_run):
+    """The precondition behaves as on the router door, dry run or not."""
+    token, principal = live(w, monkeypatch)
+    batch_ref = "batch-stale"
+    base_seq = _head_seq(w)
+    w.store.edit_definition(w.p("router"), "plangraph:OTHER",
+                            {"note": "moved on"})
+    assert _head_seq(w) > base_seq
+    before = snap(w)
+
+    err = refusal(w.store.apply_ops, principal,
+                  [op("edit", key="plangraph:OTHER",
+                      fields={"note": "stale write"})],
+                  batch_ref=batch_ref, base_seq=base_seq, dry_run=dry_run)
+    assert err.code == "conflict"
+    assert "changed after base_seq" in err.msg
+    assert "plangraph:OTHER" in err.msg
+    assert snap(w) == before                       # refused: nothing written
+    assert w.store._item("plangraph:OTHER")["note"] == "moved on"
+    assert _applied_rows(w) == []
+
+    rows = _denied_rows(w)
+    assert len(rows) == 1, [dict(r) for r in rows]
+    row = rows[0]
+    assert row["principal"] == OPP
+    assert row["batch_ref"] == batch_ref
+    assert row["code"] == "conflict"
+    assert "changed after base_seq" in row["reason"]
+    assert "plangraph:OTHER" in row["reason"]
+    assert token not in str(dict(row))
+    assert len(_open_guard_alarms(w)) == 1

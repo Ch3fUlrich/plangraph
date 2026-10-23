@@ -1,9 +1,16 @@
-"""B1: the router-only ``apply_ops`` verb for :class:`...store.Store`.
+"""B1: the ``apply_ops`` verb for :class:`...store.Store`.
 
-``apply_ops(principal, ops, batch_ref=None)`` applies a list of BATCH.md ops
-(create, edit, legacy_state, add_evidence, close_on_decision, cancel,
-priority, rehome, set_kind, add_dep, remove_dep) in ONE
-``BEGIN IMMEDIATE`` transaction, all or nothing.  Every op runs the very same
+``apply_ops(principal, ops, batch_ref=None, base_seq=None, dry_run=False)``
+applies a list of BATCH.md ops (create, edit, legacy_state, add_evidence,
+close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep) in
+ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  The router owns the verb;
+an ``oversight`` principal may use it for its narrow grant only (see
+:mod:`.oversight_policy`), with ``batch_ref`` required.  ``base_seq`` is an
+optimistic precondition: a ``conflict`` when any touched key has events newer
+than it, checked under the write lock.  ``dry_run`` performs every check and op
+and then rolls the transaction back, so a dry run changes no state (an
+oversight dry run writes no applied audit rows either; a refusal still records
+its denial).  Every op runs the very same
 inner function as its single verb (so the same auth/state checks), except that
 the whole-graph validation is deferred: the single verbs' ``_validate_change``
 calls are recorded while a batch is open, and the validation runs ONCE over the
@@ -104,14 +111,17 @@ def _fail(index, op, exc):
 
 
 class OpsMixin:
-    """The router-only ``apply_ops`` verb."""
+    """The ``apply_ops`` verb (router; a narrow ``oversight`` grant too)."""
 
-    def apply_ops(self, principal, ops, batch_ref=None):
+    def apply_ops(self, principal, ops, batch_ref=None, base_seq=None,
+                  dry_run=False):
         return self._run(principal, "apply_ops", None,
                          lambda now: self._apply_ops_audited(
-                             principal, ops, batch_ref, now))
+                             principal, ops, batch_ref, now,
+                             base_seq=base_seq, dry_run=dry_run))
 
-    def _apply_ops_audited(self, principal, ops, batch_ref, now):
+    def _apply_ops_audited(self, principal, ops, batch_ref, now, base_seq=None,
+                           dry_run=False):
         """Run one batch; an oversight refusal is recorded after the rollback.
 
         ``_run`` records every oversight refusal at the VERB seam, so this path
@@ -122,7 +132,8 @@ class OpsMixin:
         self._oversight_fail = None
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
         try:
-            return self._apply_ops(principal, ops, batch_ref, now)
+            return self._apply_ops(principal, ops, batch_ref, now,
+                                   base_seq=base_seq, dry_run=dry_run)
         except Refused as exc:
             if oversight:
                 self._record_oversight_denied(principal, batch_ref, exc, now)
@@ -286,12 +297,45 @@ class OpsMixin:
                           f"{item['key']} is {item['state']}, not open")
         return {"key": item["key"], "warnings": warnings}
 
-    def _apply_ops(self, principal, ops, batch_ref, now):
+    def _check_base_seq(self, ops, base_seq):
+        """Refuse with conflict if any key touched by edit/cancel has events newer than base_seq."""
+        check_keys = []
+        seen = set()
+        for op in ops:
+            if op.get("op") in ("edit", "cancel"):
+                k = op.get("key")
+                if k and k not in seen:
+                    seen.add(k)
+                    check_keys.append(k)
+        if not check_keys:
+            return
+        stale = []
+        for k in check_keys:
+            row = self.conn.execute(
+                "SELECT 1 FROM events WHERE key=? AND seq>? LIMIT 1",
+                (k, base_seq)).fetchone()
+            if row is not None:
+                stale.append(k)
+        if stale:
+            stale_str = ", ".join(stale)
+            raise Refused("conflict",
+                          f"base_seq {base_seq}: changed after base_seq: {stale_str}")
+
+    def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None,
+                   dry_run=False):
         oversight = principal.role == "oversight"
         if oversight and (not isinstance(batch_ref, str) or not batch_ref.strip()):
             raise Refused("validation",
                           "oversight:batch_ref_required batch_ref is required")
         self._require_role(principal, "router", "oversight")
+        if base_seq is not None:
+            if isinstance(base_seq, bool) or not isinstance(base_seq, int) \
+                    or base_seq < 0:
+                raise Refused("validation",
+                              "base_seq must be a non-negative integer")
+        if dry_run is not None and not isinstance(dry_run, bool):
+            raise Refused("validation", "dry_run must be a boolean")
+        dry_run = bool(dry_run)
         self._plan_ops(ops, batch_ref, principal)
         metas = [{} for _ in ops]
         if oversight:
@@ -313,6 +357,8 @@ class OpsMixin:
         self.conn.execute("BEGIN IMMEDIATE")
         self._batch = batch
         try:
+            if base_seq is not None:
+                self._check_base_seq(ops, base_seq)
             before = self._all_items()
             if oversight:
                 self._oversight_gate(principal, ops, before)
@@ -322,12 +368,18 @@ class OpsMixin:
                     "SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
                 results.append(self._guarded_op(principal, index, op,
                                                 batch_ref, now))
-                if oversight:
+                # A dry run's rows would roll back with the batch; skipping
+                # them makes "no applied audit row, no applied budget" explicit.
+                if oversight and not dry_run:
                     self._record_oversight_applied(
                         principal, batch_ref, index, op, metas[index],
                         before_seq, now)
             self._batch = None
             self._final_validation(before, ops, batch)
+            if dry_run:
+                self.conn.execute("ROLLBACK")
+                return {"applied": len(results), "results": results,
+                        "dry_run": True}
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:

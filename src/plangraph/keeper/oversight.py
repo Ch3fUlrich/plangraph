@@ -372,12 +372,14 @@ def raise_alarms(conn, findings, now, keep_rules=()):
     Rows live under ``workflow_id='oversight'`` and dedupe on ``(kind, key)``
     while open (a finding's ``reason`` is carried in ``detail``).  New ids are
     ``MAX(id)+1`` inside one write transaction, exactly like the reconciler.
-    An open row whose kind belongs to a rule that reported
-    ``oversight_check_failed`` is *kept*: the rule's findings are missing
-    because the check could not run, not because the condition vanished.
-    ``keep_rules`` names further rules that did not run at all this pass (for
-    instance R4 without a lane git adapter), so their open alarms are kept too.
-    Returns the number of *new* rows.
+    An already-open row whose finding detail changed has only its ``detail``
+    updated: the row keeps its ``id``, its ``raised_at`` (the alarm's age) and
+    stays a single alarm.  An open row whose kind belongs to a rule that
+    reported ``oversight_check_failed`` is *kept*: the rule's findings are
+    missing because the check could not run, not because the condition
+    vanished.  ``keep_rules`` names further rules that did not run at all this
+    pass (for instance R4 without a lane git adapter), so their open alarms are
+    kept too.  Returns the number of *new* rows (refreshes are not new rows).
     """
     stamp = iso(now)
     started = not getattr(conn, "in_transaction", False)
@@ -389,21 +391,28 @@ def raise_alarms(conn, findings, now, keep_rules=()):
         kept = failed | set(keep_rules)
         present = {}
         for row in conn.execute(
-                "SELECT id, kind, key FROM projector_alarms"
+                "SELECT id, kind, key, detail FROM projector_alarms"
                 " WHERE cleared_at IS NULL AND workflow_id='oversight'"
                 " ORDER BY id"):
-            present[(row["kind"], row["key"])] = row["id"]
+            present[(row["kind"], row["key"])] = (row["id"], row["detail"])
         wanted = {}
         for finding in findings:
             wanted.setdefault((finding["kind"], finding["key"]), finding)
         new = 0
         for ident, finding in wanted.items():
+            detail = f"{finding['reason']}: {finding.get('detail', '')}".strip()
             if ident in present:
+                alarm_id, current = present[ident]
+                # Same open alarm, possibly a newer explanation: refresh the
+                # text in place, never the raise stamp and never a second row.
+                if current != detail:
+                    conn.execute(
+                        "UPDATE projector_alarms SET detail=? WHERE id=?",
+                        (detail, alarm_id))
                 continue
             next_id = conn.execute(
                 "SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms"
             ).fetchone()[0]
-            detail = f"{finding['reason']}: {finding.get('detail', '')}".strip()
             conn.execute(
                 "INSERT INTO projector_alarms"
                 "(id, kind, workflow_id, key, detail, raised_at)"
@@ -411,7 +420,7 @@ def raise_alarms(conn, findings, now, keep_rules=()):
                 (next_id, ident[0], "oversight", ident[1], detail,
                  finding.get("ts") or stamp))
             new += 1
-        for ident, alarm_id in present.items():
+        for ident, (alarm_id, _detail) in present.items():
             if ident not in wanted:
                 owner = _RULE_OF_ALARM_KIND.get(ident[0])
                 if owner is not None and owner in kept:

@@ -85,3 +85,25 @@ condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^rust/worker-core/src/sandbox_env\.rs$''']
 regexes = ['''^sentinel-wf8-opkey$''']
+
+[[allowlists]]
+# The recorded replay histories carry synthetic phase/card ids under a "key" field, which the
+# generic-api-key entropy gate reads as a credential: "phase-<digits>" and "e2e-phase|defer-a|b-<digits>"
+# are replay identifiers (unix-time + counter), not secrets of any kind.
+description = "synthetic phase/card ids in the Temporal replay fixtures (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^rust/worker/tests/fixtures/phase_defer\.json$''',
+         '''^rust/worker/tests/fixtures/phase_two_cards\.json$''']
+regexes = ['''^(?:e2e-(?:phase|defer)-[ab]-|phase-)[0-9]+$''']
+
+[[allowlists]]
+# The PEM rule fires on the redaction tests' obviously fake header: the block between the TEST
+# header and footer is letter-only filler ("A" x 64 per line), with no key material anywhere.
+# The "\s*" spelling keeps this config's own text from ever matching the rule it exempts.
+description = "fake PEM test header in the worker-core check/redact tests (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^rust/worker-core/src/check\.rs$''',
+         '''^rust/worker-core/src/redact\.rs$''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----''']
