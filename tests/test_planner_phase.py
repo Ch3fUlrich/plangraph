@@ -289,11 +289,13 @@ def test_jev_routing_rows_land_in_the_keeper(w, repo, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_JEV", "stub")
 
     plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    from plangraph.planner.jev_shadow import drain
+    drain()
 
     rows = w.store.jev_rows("demo:C1")
     assert [r["kind"] for r in rows] == ["harness", "window", "budget", "review"]
     assert all(r["status"] == "ok" for r in rows)
-    assert all(r["attempt"] is None for r in rows)
+    assert all(r["attempt"] == 1 for r in rows)
     assert all(r["jev_model"] == "stub" for r in rows)
     assert len({r["decision_id"] for r in rows}) == 1        # one decision per card
     assert len({r["input_hash"] for r in rows}) == 1

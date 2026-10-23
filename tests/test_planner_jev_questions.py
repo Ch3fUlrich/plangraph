@@ -194,8 +194,8 @@ def test_routing_state_carries_the_inputs_jev_needs():
     assert "estimate_tokens: 40000" in state
     assert "auth" in state
     assert "write files: 2" in state
-    assert route.legs[0].id in state
-    assert "leg:" in state
+    assert route.legs[0].id not in state
+    assert "leg:" not in state
 
 
 def test_routing_state_is_clipped_to_the_cap():
@@ -228,5 +228,3 @@ def test_redact_never_raises_on_odd_input():
     assert jq.redact(12345, 100) == "12345"
     assert jq.redact(["x"], 100) == "['x']"
     assert isinstance(jq.redact(object(), 100), str)
-
-

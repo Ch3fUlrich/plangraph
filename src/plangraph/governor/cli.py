@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from datetime import date, datetime, timedelta, timezone
 
 from plangraph.keeper import cli_verbs
@@ -17,6 +18,7 @@ EXIT_USAGE = 64
 ENV_PROJECTS = "PLANGRAPH_CLAUDE_PROJECTS_DIR"
 ENV_WEEKLY = "PLANGRAPH_WEEKLY_CAP_WEIGHTED"
 ENV_QUOTA = "PLANGRAPH_PROVIDER_QUOTA"
+ENV_HOST = "PLANGRAPH_HOST"
 
 
 def _cmd_daily(args, session) -> int:
@@ -44,12 +46,26 @@ def _cmd_daily(args, session) -> int:
 
     try:
         records = metrics.iter_usage(projects_dir)
+        # a second pass: the ctx report counts the FIRST usage record per
+        # message id, which iter_usage's largest-wins dedup has already dropped
+        ctx_records = metrics.iter_usage_first(projects_dir)
     except OSError as exc:
         print(f"cannot read projects dir: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
+    try:
+        session_classes = (metrics.load_session_classes(args.session_classes)
+                           if args.session_classes else None)
+    except (OSError, ValueError) as exc:
+        print(f"bad session-classes file: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    host = args.host or os.environ.get(ENV_HOST)
+    metrics.tag_records(records, host=host, session_classes=session_classes)
+    metrics.tag_records(ctx_records, host=host, session_classes=session_classes)
+
     items = list(metrics.daily_metrics(
         day.isoformat(), records, landed, weekly_cap))
+    ctx = metrics.ctx_report(ctx_records, day.isoformat())
 
     if args.provider_usage:
         try:
@@ -80,9 +96,39 @@ def _cmd_daily(args, session) -> int:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
 
+    # the ctx report is a file artefact too, not only a stdout section:
+    # DIR/ctx-<day>.json, DIR = --out-dir else the projects dir the job read
+    out_dir = args.out_dir or projects_dir
+    ctx_path = os.path.join(os.fspath(out_dir), f"ctx-{day.isoformat()}.json")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        _write_ctx(ctx_path, ctx)
+    except OSError as exc:
+        print(f"cannot write ctx report {ctx_path}: {exc}", file=sys.stderr)
+
     print(json.dumps({"day": day.isoformat(), "items": items,
-                      "posted": posted}))
+                      "posted": posted, "ctx": ctx}))
     return 0
+
+
+def _write_ctx(path: str, payload: dict) -> None:
+    """Write the ctx report as indented JSON, replacing the old one atomically."""
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=os.path.dirname(path) or ".",
+            prefix=os.path.basename(path) + ".", suffix=".tmp", delete=False,
+        ) as fh:
+            tmp = fh.name
+            json.dump(payload, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
 
 
 def _cmd_check(args, session) -> int:
@@ -141,8 +187,16 @@ def _build_parser() -> argparse.ArgumentParser:
     daily.add_argument("--repo", default=None)
     daily.add_argument("--ref", default="HEAD")
     daily.add_argument("--weekly-cap", type=float, default=None)
+    daily.add_argument("--host", default=None,
+                       help="host name for the ctx report "
+                            f"(default: ${ENV_HOST} or the local hostname)")
+    daily.add_argument("--session-classes", default=None, metavar="PATH",
+                       help="JSON {session_id: class} launch-record mapping")
     daily.add_argument("--provider-usage", default=None)
     daily.add_argument("--rate-limited", default=None)
+    daily.add_argument("--out-dir", default=None, metavar="DIR",
+                       help="write the ctx report to DIR/ctx-<date>.json "
+                            "(default: the projects dir)")
     daily.add_argument("--dry-run", action="store_true")
 
     check = sub.add_parser("check")
