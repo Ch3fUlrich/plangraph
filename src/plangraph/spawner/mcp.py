@@ -15,6 +15,7 @@ import json
 import sys
 from typing import Any, Mapping
 
+from plangraph.spawner.clients import gateway_url
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -171,7 +172,7 @@ class MCPSpawnerServer:
                 "runner_jobs_total": len(self.runner.jobs),
                 "active_jobs_count": len(active_jobs),
                 "catalog_models_count": len(all_models),
-                "gateway_default_url": "http://127.0.0.1:20128/v1",
+                "gateway_default_url": gateway_url() or "",
             }
 
         raise ValueError(f"Unknown MCP tool: {name}")

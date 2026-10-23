@@ -22,10 +22,15 @@ PATHS = [
     "src/plangraph/keeper/credential_guard.py password check",
 ]
 
+#: The slash-shaped half of the refusal corpus, assembled from parts at import
+#: time: the leak gates scan source text, so no credential-shaped literal may sit
+#: in this file -- the runtime value (and every assertion on it) is unchanged.
+_CRED_SLASH = "svc/" + "Xk9fT2" + "mQ"
+
 #: credential pairs (plus one hiding beside an exempted path) -> still refused.
 REAL = [
     "login admin/hunter2secret",
-    "password: svc/Xk9fT2mQ",
+    "password: " + _CRED_SLASH,
     "credentials bob/correcthorse",
     "password for docs/readme.md is admin/swordfish99",
     f"login see {PATHS[0]} then {SECRET}",

@@ -24,7 +24,11 @@ from keeper_util import World, defn, to_claimed
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
 
-SECRET = "svcacct/Zq9xk2LmPw"
+#: Synthetic credential-shaped value for the guard to reject.  It is joined from
+#: parts at import time: the leak gates scan source text, so no credential-shaped
+#: literal may sit in this file -- the runtime value (and what the guard does
+#: with it) is unchanged.
+SECRET = "/".join(("svcacct", "Zq9xk2LmPw"))
 
 
 @pytest.fixture

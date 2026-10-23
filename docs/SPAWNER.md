@@ -18,7 +18,7 @@ flowchart TD
     Task["Task Request / Plan Item"] --> Measure["1. measure.py & risk.py\nComplexity Bucketing (S0..S4)\nRisk Evaluation (low, normal, high, critical)"]
     Measure --> Catalog["2. catalog_db.py (SQLite WAL)\n22 Verified AA v4.3.2 Models\nRole Routes: l1, l2-worker, l2-reviewer, l3"]
     Catalog --> Resolver["3. resolver.py\nPhase 1: Hard Gating & Price Cliff Trajectory Buffer\nPhase 2: Core Utility Optimization & Epsilon Lexicographic Tie-Breaker\nCross-Family Review: writer != rev1 != rev2"]
-    Resolver --> Clients["4. clients.py\nOmniRoute ACP-First (http://127.0.0.1:20128/v1)\nWindows SystemRoot Preservation (D-2090 BUG-B)\nEnvelope Headers: X-OmniRoute-*"]
+    Resolver --> Clients["4. clients.py\nOmniRoute ACP-First (base URL from config / PLANGRAPH_GATEWAY_URL)\nWindows SystemRoot Preservation (D-2090 BUG-B)\nEnvelope Headers: X-OmniRoute-*"]
     Clients --> Runner["5. runner.py & mcp.py\nAsync SpawnerRunner Pool (spawn, status, steer, cancel)\nResponse Telemetry: Selected-Model / Family\nJSON-RPC 2.0 MCP Server"]
 ```
 
@@ -364,7 +364,22 @@ python -m plangraph.spawner.mcp
    - `family` (string, optional): Filter by model family (e.g. `mimo`, `claude`).
    - `min_intelligence` (number, optional): Minimum AA Intelligence floor.
 6. `plangraph_agent_health`:
-   - Reports spawner version, active/total jobs, catalog model counts, and gateway URL.
+   - Reports spawner version, active/total jobs, catalog model counts, and the configured gateway URL (empty when none is configured).
+
+#### Gateway endpoint setting
+
+The base URL every gateway client uses is deployment config, read at run time by
+`plangraph.spawner.clients.gateway_url()`; no default ships in the source:
+
+| source | key |
+|---|---|
+| environment (wins when set) | `PLANGRAPH_GATEWAY_URL` |
+| spawner/keeper config mapping | `gateway_url` |
+
+With neither set, `build_child_env` writes no `baseURL` into the child provider
+config (a caller that needs a value supplies its own), and
+`plangraph_agent_health` reports `gateway_default_url` as `""`. The provider-level
+`OMNIROUTE_BASE_URL` override still takes precedence when present.
 
 ### SQLite Catalog DB CLI (`src/plangraph/spawner/catalog_db.py`)
 
