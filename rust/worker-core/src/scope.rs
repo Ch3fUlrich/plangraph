@@ -38,6 +38,7 @@ pub struct Jail<'a> {
 pub fn system_ro() -> Vec<PathBuf> {
     const CANDIDATES: &[&str] = &[
         "/usr",
+        "/usr/local",
         "/bin",
         "/sbin",
         "/lib",
@@ -266,6 +267,7 @@ mod tests {
         assert!(!ro.contains(&PathBuf::from("/proc")));
         const ALLOWED: &[&str] = &[
             "/usr",
+            "/usr/local",
             "/bin",
             "/sbin",
             "/lib",
