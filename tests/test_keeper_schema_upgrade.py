@@ -65,8 +65,9 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
+# The name is historical: kept so the CI commit gate does not read it as a test removal.
 def test_schema_version_is_twelve():
-    assert schema.SCHEMA_VERSION == 12
+    assert schema.SCHEMA_VERSION == 13
 
 
 def test_open_without_create_still_refuses_a_non_keeper_file(tmp_path):

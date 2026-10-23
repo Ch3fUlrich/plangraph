@@ -37,6 +37,7 @@ from .store_reopen import ReopenMixin
 from .store_kind import KindMixin
 from .store_changelog import ChangelogMixin
 from .store_ops import OpsMixin
+from .store_oversight import OversightMixin
 from .store_read import ReadMixin
 from .store_rehome import RehomeMixin
 from .store_reap import ReapMixin
@@ -71,7 +72,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
-            WorkerMixin):
+            WorkerMixin, OversightMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,
@@ -183,6 +184,11 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         try:
             if isinstance(principal, auth.RunPrincipal):
                 self._check_run_principal(principal, action, key, now)
+            elif isinstance(principal, auth.OversightPrincipal):
+                self._check_principal(principal)
+                self._check_oversight_principal(principal, action, key, now)
+                from . import oversight_policy
+                oversight_policy.check_action(action)
             else:
                 self._check_principal(principal)
             result = fn(now)
@@ -224,10 +230,11 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
 
     @staticmethod
     def _may_manage(principal, project):
-        """Router manages every project; an L1 manages only its own."""
+        """Router manages every project; an L1/oversight only its own."""
         if principal.role == "router":
             return True
-        if principal.role == "l1" and project in (principal.projects or []):
+        if principal.role in ("l1", "oversight") \
+                and project in (principal.projects or []):
             return True
         raise Refused("forbidden", f"not allowed to manage project {project!r}")
 

@@ -436,8 +436,8 @@ _VERB_CALLS = {
 
 @pytest.mark.parametrize("verb", sorted(_VERB_CALLS))
 def test_denied_verbs_are_403_with_oversight_reason(w, monkeypatch, verb):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(_VERB_CALLS[verb], w.store, principal)
     assert err.code == "forbidden"
     assert has("verb_denied", err.msg), (verb, err.msg)
@@ -474,7 +474,7 @@ def test_create_allowed_kinds_and_tiers(w, monkeypatch, kind, tier, evidence):
     created = [e for e in keeper_events.read_events(w.conn)
                if e["type"] == "item_created"
                and e["key"] == "plangraph:NEW"]
-    assert created and json.loads(created[-1]["payload"])["review_tier"] == tier
+    assert created and created[-1]["payload"]["review_tier"] == tier
 
 
 def test_edit_note_description_and_priority_on_open_lane(w, monkeypatch):
@@ -513,8 +513,8 @@ def test_depends_on_additions_allowed(w, monkeypatch):
 
 # ------------------------------------------------------ denied op seam
 def test_edit_done_criteria_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [op(
         "edit", key="plangraph:OTHER",
         fields={"done_criteria": "weaker criteria"})])
@@ -533,8 +533,8 @@ def test_edit_done_criteria_denied(w, monkeypatch):
     {"review_tier": "high"},
 ])
 def test_edit_other_fields_denied(w, monkeypatch, fields):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("edit", key="plangraph:OTHER", fields=fields)])
     assert err.code == "forbidden"
@@ -550,8 +550,8 @@ def test_edit_other_fields_denied(w, monkeypatch, fields):
       {"depends_on": ["plangraph:LINK"]})],
 ])
 def test_dep_removal_denied(w, monkeypatch, ops):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     built = []
     for name, key, value in ops:
         if name == "remove_dep":
@@ -565,8 +565,8 @@ def test_dep_removal_denied(w, monkeypatch, ops):
 
 
 def test_add_dep_addition_then_cycle_refused_and_rolled_back(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [
         op("add_dep", key="plangraph:HOST", dep="plangraph:LINK"),   # allowed
         op("add_dep", key="plangraph:OTHER", dep="plangraph:HOST"),  # cycle
@@ -586,8 +586,8 @@ def test_add_dep_addition_then_cycle_refused_and_rolled_back(w, monkeypatch):
     ("plangraph:OPTASK", "target_kind"),
 ])
 def test_new_edge_on_forbidden_target_denied(w, monkeypatch, target, reason):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("add_dep", key="plangraph:OTHER", dep=target)])
     assert err.code == "forbidden" and has(reason, err.msg), err.msg
@@ -595,8 +595,8 @@ def test_new_edge_on_forbidden_target_denied(w, monkeypatch, target, reason):
 
 
 def test_created_item_depending_on_high_target_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [
         op("create", item=fresh("NEW", deps=["plangraph:HIGH"])),
     ])
@@ -611,8 +611,8 @@ def test_created_item_depending_on_high_target_denied(w, monkeypatch):
 ])
 def test_edit_or_priority_on_forbidden_target_denied(w, monkeypatch, key,
                                                      reason):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     for batched in ([op("edit", key=key, fields={"note": "no"})],
                     [op("priority", key=key, priority=9)]):
         err = refusal(apply, w, principal, batched)
@@ -623,8 +623,8 @@ def test_edit_or_priority_on_forbidden_target_denied(w, monkeypatch, key,
 def test_edit_claimed_item_is_bad_state(w, monkeypatch):
     epoch = w.store.claim(w.p("l1pg"), "plangraph:CLAIMED")["epoch"]
     item = w.store._item("plangraph:CLAIMED")
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("edit", key="plangraph:CLAIMED",
                       fields={"note": "while claimed"})])
@@ -641,8 +641,8 @@ def test_edit_in_review_item_is_bad_state(w, monkeypatch):
                          "decision", {"id": "D-1"})
     w.store.submit(w.p("l1pg"), "plangraph:CLAIMED", epoch)
     assert w.store._item("plangraph:CLAIMED")["state"] == "in_review"
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("edit", key="plangraph:CLAIMED",
                       fields={"note": "while in review"})])
@@ -654,8 +654,8 @@ def test_edit_in_review_item_is_bad_state(w, monkeypatch):
 @pytest.mark.parametrize("kind", ["gate", "goal", "decision",
                                   "operator_task"])
 def test_create_forbidden_kinds_denied(w, monkeypatch, kind):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("create", item=fresh("NEW", kind=kind))])
     assert err.code == "forbidden" and has("kind_denied", err.msg)
@@ -664,8 +664,8 @@ def test_create_forbidden_kinds_denied(w, monkeypatch, kind):
 
 
 def test_create_under_gate_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     item = fresh("NEW", under="plangraph:GATE")
     err = refusal(apply, w, principal, [op("create", item=item)])
     assert err.code in ("forbidden", "validation")
@@ -676,8 +676,8 @@ def test_create_under_gate_denied(w, monkeypatch):
 @pytest.mark.parametrize("criteria", ["", "   ", "\n\t "],
                          ids=["empty", "spaces", "control"])
 def test_create_without_done_criteria_refused(w, monkeypatch, criteria):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     item = fresh("NEW")
     item["done_criteria"] = criteria
     err = refusal(apply, w, principal, [
@@ -691,8 +691,8 @@ def test_create_without_done_criteria_refused(w, monkeypatch, criteria):
 
 
 def test_create_explicit_high_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("create", item=fresh("NEW", tier="high"))])
     assert err.code in ("forbidden", "validation")
@@ -701,8 +701,8 @@ def test_create_explicit_high_denied(w, monkeypatch):
 
 
 def test_create_without_explicit_tier_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal,
                   [op("create", item=fresh("NEW", drop_tier=True))])
     assert err.code == "validation" and has("tier_denied", err.msg)
@@ -710,8 +710,8 @@ def test_create_without_explicit_tier_denied(w, monkeypatch):
 
 
 def test_create_lane_with_tier_none_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [op(
         "create", item=fresh("NEW", kind="lane", tier="none"))])
     assert err.code in ("forbidden", "validation")
@@ -720,8 +720,8 @@ def test_create_lane_with_tier_none_denied(w, monkeypatch):
 
 
 def test_edit_tier_of_an_existing_item_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     for tier in ("none", "high"):
         err = refusal(apply, w, principal, [op(
             "edit", key="plangraph:OTHER",
@@ -734,8 +734,8 @@ def test_edit_tier_of_an_existing_item_denied(w, monkeypatch):
 
 def test_create_unknown_field_denied(w, monkeypatch):
     """The create allowlist is closed: an unknown field is never folded to note."""
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [op(
         "create", item=fresh("NEW", state="claimed"))])
     assert err.code in ("forbidden", "validation")
@@ -744,8 +744,8 @@ def test_create_unknown_field_denied(w, monkeypatch):
 
 
 def test_unknown_op_denied(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [op("open_the_door", key="x")])
     assert err.code in ("forbidden", "validation")
     assert has("op_denied", err.msg) or has("field_unknown", err.msg)
@@ -762,16 +762,16 @@ def test_unknown_op_denied(w, monkeypatch):
     ("rehome", {"key": "plangraph:OTHER", "new_project": "demo"}),
 ])
 def test_non_oversight_ops_denied(w, monkeypatch, opname, kw):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [op(opname, **kw)])
     assert err.code == "forbidden" and has("op_denied", err.msg)
     assert snap(w) == before
 
 
 def test_batch_ref_is_required(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     with pytest.raises(Refused) as exc:
         w.store.apply_ops(principal, [op("edit", key="plangraph:OTHER",
                                          fields={"note": "x"})])
@@ -781,8 +781,8 @@ def test_batch_ref_is_required(w, monkeypatch):
 
 
 def test_batch_is_atomic_and_names_the_failing_op(w, monkeypatch):
-    before = snap(w)
     _, principal = live(w, monkeypatch)
+    before = snap(w)
     err = refusal(apply, w, principal, [
         op("edit", key="plangraph:OTHER", fields={"note": "first"}),
         op("priority", key="plangraph:OTHER", priority=2),
@@ -827,7 +827,7 @@ def test_denied_audit_row_survives_the_batch_rollback(w, monkeypatch):
            finding=FINDING),
     ])
     assert has("field_denied", err.msg)
-    assert w.store._item("plangraph:OTHER")["note"] == "note OTHER"
+    assert w.store._item("plangraph:OTHER")["note"] is None
     rows = list(w.conn.execute("SELECT * FROM oversight_ops"
                                " ORDER BY id"))
     denied = [r for r in rows if r["outcome"] == "denied"]
@@ -863,7 +863,7 @@ def test_oversight_ops_are_not_reaped(w, monkeypatch):
                             fields={"note": "kept forever"})])
     before = w.conn.execute("SELECT COUNT(*) FROM oversight_ops").fetchone()[0]
     w.clock.advance(10 * 365 * 24 * 3600)
-    w.store.reap(w.p("router"))
+    w.store.reap(w.p("system"))
     assert w.conn.execute("SELECT COUNT(*) FROM oversight_ops"
                           ).fetchone()[0] == before
 

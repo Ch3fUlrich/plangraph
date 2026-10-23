@@ -28,7 +28,8 @@ UNKNOWN = "zz_future_event"      # a type only a newer keeper knows
 
 #: in ``EVENT_TYPES`` but with no branch in ``fold``: replayed by
 #: ``token_fold``/the store instead, so a known no-op, never "unknown".
-BRANCHLESS = {"review_verdict", "token_minted", "outage_recorded"}
+BRANCHLESS = {"review_verdict", "token_minted", "outage_recorded",
+             "oversight_token_minted"}
 
 #: every field any branch may read, so a known type replays without a KeyError.
 RICH = {"epoch": 1, "claimed_by": "l1main", "lease_until": "2030-01-01T00:00:00Z",

@@ -13,9 +13,10 @@ from __future__ import annotations
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "STATES", "EXIT_CLASSES", "WINDOW_CLASSES", "RISK_TAGS"]
+           "METRICS_DDL", "LOCKS_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
+           "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -31,7 +32,8 @@ EXIT_CLASSES = ("ok", "check_fail", "flaky_check", "usage_limit", "outage",
 WINDOW_CLASSES = ("128k", "256k", "1m")
 RISK_TAGS = ("auth", "secrets", "money", "migration", "public-contract", "live-step")
 
-ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner")
+ROLES = ("router", "l1", "worker", "reviewer", "system", "reader", "spawner",
+         "oversight")
 
 EVENT_TYPES = (
     "item_created", "item_defined", "claimed", "delegated", "released",
@@ -40,7 +42,7 @@ EVENT_TYPES = (
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
-    "kind_set", "state_set",
+    "kind_set", "state_set", "oversight_token_minted",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -82,6 +84,63 @@ CREATE TABLE IF NOT EXISTS run_tokens (
     revoked_at   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_run_tokens_key ON run_tokens(key);
+"""
+
+#: RT-OVERSIGHT-KEEPER-SCOPE (schema v13): the scoped oversight principal's
+#: one-shot tokens and its append-only op audit.  Octet-for-octet twin of
+#: ``schema_pg`` Migration 6 (same columns in the same order).  ``IF NOT EXISTS``
+#: so ``db._upgrade`` can install it at open on a v12 database.
+OVERSIGHT_DDL = """
+CREATE TABLE IF NOT EXISTS oversight_tokens (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    principal    TEXT NOT NULL,
+    generation   INTEGER NOT NULL,
+    scope        TEXT NOT NULL DEFAULT 'plan-write',
+    minted_by    TEXT,
+    go_decision  TEXT,
+    mint_reason  TEXT,
+    created_at   TEXT NOT NULL,
+    expires_at   TEXT NOT NULL,
+    revoked_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_oversight_tokens_live ON oversight_tokens(principal, expires_at);
+CREATE TRIGGER IF NOT EXISTS trg_oversight_tokens_revoke_only_update
+BEFORE UPDATE ON oversight_tokens
+WHEN NOT (
+        OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL
+        AND OLD.id IS NEW.id AND OLD.token_sha256 IS NEW.token_sha256
+        AND OLD.principal IS NEW.principal
+        AND OLD.generation IS NEW.generation
+        AND OLD.scope IS NEW.scope
+        AND OLD.expires_at IS NEW.expires_at
+     )
+BEGIN SELECT RAISE(ABORT, 'oversight tokens are revoke-only'); END;
+
+CREATE TABLE IF NOT EXISTS oversight_ops (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts          TEXT NOT NULL,
+    token_id    INTEGER NOT NULL,
+    principal   TEXT NOT NULL,
+    generation  INTEGER NOT NULL,
+    batch_ref   TEXT NOT NULL,
+    op_index    INTEGER NOT NULL,
+    op          TEXT NOT NULL,
+    key         TEXT,
+    finding_id  TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    outcome     TEXT NOT NULL CHECK (outcome IN ('applied','denied')),
+    code        TEXT,
+    event_seq   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_oversight_ops_ts ON oversight_ops(principal, ts);
+CREATE INDEX IF NOT EXISTS idx_oversight_ops_key ON oversight_ops(key);
+CREATE TRIGGER IF NOT EXISTS trg_oversight_ops_append_only_update
+BEFORE UPDATE ON oversight_ops
+BEGIN SELECT RAISE(ABORT, 'oversight_ops is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_oversight_ops_append_only_delete
+BEFORE DELETE ON oversight_ops
+BEGIN SELECT RAISE(ABORT, 'oversight_ops is append-only'); END;
 """
 
 #: M2B-OUTBOX: replayed offline entries, deduplicated by the client-generated id.
@@ -465,4 +524,4 @@ CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
-          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL)
+          + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + OVERSIGHT_DDL)

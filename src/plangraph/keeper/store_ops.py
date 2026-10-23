@@ -30,6 +30,7 @@ import logging
 from .. import views
 from . import events
 from . import db_errors
+from . import oversight_policy
 from .errors import Refused
 
 MAX_OPS = 500
@@ -107,29 +108,50 @@ class OpsMixin:
 
     def apply_ops(self, principal, ops, batch_ref=None):
         return self._run(principal, "apply_ops", None,
-                         lambda now: self._apply_ops(principal, ops,
-                                                     batch_ref, now))
+                         lambda now: self._apply_ops_audited(
+                             principal, ops, batch_ref, now))
+
+    def _apply_ops_audited(self, principal, ops, batch_ref, now):
+        """Run one batch and, for oversight, record the denial after rollback."""
+        oversight = principal.role == "oversight"
+        self._oversight_fail = None
+        try:
+            return self._apply_ops(principal, ops, batch_ref, now)
+        except Refused as exc:
+            if oversight:
+                self._record_oversight_denied(principal, batch_ref, exc, now)
+            raise
 
     # ----------------------------------------------------------- planning
-    def _plan_ops(self, ops, batch_ref):
+    def _plan_ops(self, ops, batch_ref, principal=None):
         if not isinstance(ops, list) or not ops:
             raise Refused("validation", "ops must be a non-empty list")
         if len(ops) > MAX_OPS:
             raise Refused("validation", f"batch exceeds {MAX_OPS} ops")
         for index, op in enumerate(ops):
             try:
-                self._check_op_shape(op, batch_ref)
+                self._check_op_shape(op, batch_ref, principal)
             except Refused as exc:
                 raise _fail(index, op, exc) from None
 
     @staticmethod
-    def _check_op_shape(op, batch_ref):
+    def _check_op_shape(op, batch_ref, principal=None):
+        oversight = getattr(principal, "role", None) == "oversight"
         if not isinstance(op, dict):
             raise Refused("validation", "op must be a mapping")
         name = op.get("op")
+        if oversight and name == "remove_dep":
+            # Shape-check it normally; the policy refuses it with dep_removal.
+            pass
+        elif oversight and name not in oversight_policy.OVERSIGHT_OPS:
+            raise Refused("forbidden",
+                          f"oversight:op_denied op {name!r} is not granted")
         if name not in _OPS:
             raise Refused("validation", f"unknown op {name!r}")
-        extra = set(op) - _OPS[name]
+        allowed = _OPS[name]
+        if oversight:
+            allowed = allowed | {"reason", "finding"}
+        extra = set(op) - allowed
         if extra:
             raise Refused("validation", f"unexpected fields {sorted(extra)}")
         if name == "create":
@@ -258,10 +280,26 @@ class OpsMixin:
         return {"key": item["key"], "warnings": warnings}
 
     def _apply_ops(self, principal, ops, batch_ref, now):
-        self._require_role(principal, "router")
-        self._plan_ops(ops, batch_ref)
+        oversight = principal.role == "oversight"
+        if oversight and (not isinstance(batch_ref, str) or not batch_ref.strip()):
+            raise Refused("validation",
+                          "oversight:batch_ref_required batch_ref is required")
+        self._require_role(principal, "router", "oversight")
+        self._plan_ops(ops, batch_ref, principal)
+        metas = [{} for _ in ops]
+        if oversight:
+            kept = []
+            for index, op in enumerate(ops):
+                metas[index] = self._oversight_meta(op, index)
+                kept.append({name: value for name, value in op.items()
+                             if name not in ("reason", "finding")})
+            ops = kept
+        self._oversight_meta_list = metas
         ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
                for op in ops]
+        if oversight:
+            self._oversight_budget(principal, now)
+            self._oversight_gate(principal, ops, batch_ref)
         batch = OpBatch()
         self._prelock(ops, batch_ref, batch, now)
         results = []
@@ -269,10 +307,18 @@ class OpsMixin:
         self._batch = batch
         try:
             before = self._all_items()
+            if oversight:
+                self._oversight_gate(principal, ops, batch_ref, before)
             for index, op in enumerate(ops):
                 batch.current = index
+                before_seq = self.conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
                 results.append(self._guarded_op(principal, index, op,
                                                 batch_ref, now))
+                if oversight:
+                    self._record_oversight_applied(
+                        principal, batch_ref, index, op, metas[index],
+                        before_seq, now)
             self._batch = None
             self._final_validation(before, ops, batch)
             self.conn.execute("COMMIT")
@@ -284,10 +330,35 @@ class OpsMixin:
             self._batch = None
         return {"applied": len(results), "results": results}
 
+    def _oversight_gate(self, principal, ops, batch_ref, items=None):
+        """The one policy check, run pre-lock and again in-lock."""
+        graph = self._all_items() if items is None else items
+        items_by_key = {item["key"]: item for item in graph}
+        for verdict in oversight_policy.check_batch(items_by_key, ops, batch_ref):
+            self._oversight_fail = {
+                "index": verdict.index, "op": ops[verdict.index],
+                "key": None if verdict.key == "-" else verdict.key,
+                "reason": verdict.reason,
+                "finding": self._oversight_meta_list[verdict.index].get(
+                    "finding", ""),
+                "input_reason": self._oversight_meta_list[verdict.index].get(
+                    "reason", "")}
+            raise _fail(verdict.index, ops[verdict.index],
+                        Refused(verdict.code, verdict.message))
+
     def _guarded_op(self, principal, index, op, batch_ref, now):
         try:
             return self._run_op(principal, op, batch_ref, now)
         except Refused as exc:
+            if principal.role == "oversight":
+                self._oversight_fail = {
+                    "index": index, "op": op,
+                    "key": None,
+                    "reason": self._reason_from_msg(exc.msg),
+                    "finding": self._oversight_meta_list[index].get(
+                        "finding", ""),
+                    "input_reason": self._oversight_meta_list[index].get(
+                        "reason", "")}
             raise _fail(index, op, exc) from None
         except db_errors.INTEGRITY as exc:
             raise _fail(index, op, Refused(

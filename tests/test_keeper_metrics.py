@@ -298,8 +298,9 @@ def test_route_governor_override_passes_provider(w):
 # --- schema ------------------------------------------------------------------
 
 def test_schema_version_and_metrics_ddl():
-    assert schema.SCHEMA_VERSION == 12
+    assert schema.SCHEMA_VERSION == 13
     assert schema.METRICS_DDL in schema.SCHEMA
+    assert schema.OVERSIGHT_DDL in schema.SCHEMA
 
 
 def test_fresh_database_has_metrics_table_with_ordered_columns(w):
