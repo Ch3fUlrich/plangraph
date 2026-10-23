@@ -217,3 +217,60 @@ def test_two_writer_lines_on_one_commit_keep_every_value(repo, adapter):
         "Plan-Item": "demo:A",
         "Writer": ["mimo-v2 run1", "deepseek-r1 run2"],
     }]
+
+
+# --------------------------------------------------------------------------
+# 20. (FIX r1) prose paragraphs are NOT trailer blocks: a ``Hand-Edit:`` /
+#     ``Writer:`` line quoted inside prose is prose, and never reaches the
+#     seat-coverage writer families
+# --------------------------------------------------------------------------
+
+def _families(repo, sha):
+    """``coverage.writer_families`` for one verified ``commit+ci`` row at *sha*."""
+    from types import SimpleNamespace
+
+    from plangraph.keeper.coverage import writer_families
+
+    rows = [{"epoch": 1, "verified": True, "kind": "commit+ci",
+             "ref": {"commit": sha}}]
+    store = SimpleNamespace(_evidence=lambda key: rows)
+    ctx = SimpleNamespace(git=GitAdapter({"demo": str(repo)}))
+    return writer_families(store, {"key": "demo:X", "epoch": 1,
+                                   "project": "demo"}, ctx)
+
+
+def test_prose_hand_edit_and_writer_lines_are_not_trailers(repo):
+    """A prose paragraph QUOTING ``Hand-Edit:``/``Writer:`` lines is not a
+    trailer block, so it can neither be returned as a trailer nor change the
+    writer families the keeper needs seats for."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "explain the run\n\n"
+         "This paragraph is prose about the change.\n"
+         "Hand-Edit: touched docs by hand\n"
+         "Writer: claude run-prose\n"
+         "\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2.6-flash run-real\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    adapter = GitAdapter({"demo": str(repo)})
+    got = adapter.trailers(str(repo), sha)
+    # The prose Hand-Edit/Writer lines are dropped, the real ones kept.
+    assert "Hand-Edit" not in got
+    assert got.get("Writer") == "mimo-v2.6-flash run-real"
+    assert adapter.writer_trailers(str(repo), sha) == [got]
+    # Prose must not add the anthropic family the seat check would require.
+    assert _families(repo, sha) == ["xiaomi"]
+
+
+def test_prose_plan_item_loses_to_the_real_trailer(repo, adapter):
+    """A prose ``Plan-Item: plangraph:OTHER`` never attaches the commit to
+    another item: only the real trailer block's key is returned."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "quote the old message\n\n"
+         "Plan-Item: plangraph:OTHER\n"
+         "the line above is quoted prose, not a trailer\n\n"
+         "Plan-Item: plangraph:K\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+
+    assert adapter.trailers(str(repo), sha) == {"Plan-Item": "plangraph:K"}

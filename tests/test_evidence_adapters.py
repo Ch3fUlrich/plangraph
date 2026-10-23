@@ -616,3 +616,24 @@ def test_semaphore_readable_fails_closed_on_unexpected_exception(monkeypatch, ex
 
     monkeypatch.setattr(sem_mod, "_allowed_projects", _raise)
     assert SemaphoreAdapter(fetch=lambda t, p: {}).readable(1) is False
+
+
+def test_parse_trailers_reads_only_the_trailing_trailer_block():
+    """Prose paragraphs are not trailers, even when a line LOOKS like one.
+
+    A ``Hand-Edit:``/``Writer:`` line quoted in prose must not be returned
+    (it would add a fake hand edit / writer family), and a prose
+    ``Plan-Item:`` line must never win over the real trailer one.
+    """
+    prose = ("explain the run\n"
+             "Hand-Edit: x\n"
+             "Writer: y\n\n"
+             "Plan-Item: routing:X\n"
+             "Writer: mimo-v2 run1\n")
+    assert parse_trailers(prose) == {"Plan-Item": "routing:X",
+                                     "Writer": "mimo-v2 run1"}
+    quoted_item = ("the old message said\n"
+                   "Plan-Item: routing:OTHER\n"
+                   "but this paragraph is prose\n\n"
+                   "Plan-Item: routing:X\n")
+    assert parse_trailers(quoted_item) == {"Plan-Item": "routing:X"}
