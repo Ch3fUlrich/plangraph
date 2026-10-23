@@ -231,9 +231,12 @@ def test_cli_subprocess_reports_401_without_leaking(world, srv, tmp_path):
     bad = tmp_path / "bad.token"
     secret = "SECRETTOKEN0123456789abcdef"
     bad.write_text(secret, encoding="utf-8")
-    env = {**os.environ,
-           "PYTHONPATH": os.pathsep.join([str(ROOT / "src"),
-                                          str(ROOT / "tests")])}
+    # src/tests stay ahead of the ambient PYTHONPATH (which some environments
+    # use to expose site-packages such as PyYAML); replacing it outright makes
+    # the tool die on `import yaml` before it can even reach the 401.
+    pythonpath = [str(ROOT / "src"), str(ROOT / "tests")]
+    pythonpath += [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(pythonpath)}
     proc = subprocess.run(
         [sys.executable, str(ROOT / "tools" / "apply_batch.py"),
          str(batch_path), "--url", srv.base_url, "--token-file", str(bad)],

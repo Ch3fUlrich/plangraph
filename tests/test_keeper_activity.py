@@ -15,6 +15,13 @@ from keeper_util import World, seed, to_claimed, to_done, to_in_review
 def w(tmp_path):
     world = World(tmp_path)
     seed(world, [("A", []), ("B", ["A"]), ("C", ["A"])])
+    # demo:C is the legacy lane the router moves straight to ``claimed``; that
+    # move is refused on any tier that still runs review (KEEPER-OPCLAIM-CLOSE),
+    # so the lane is retiered to ``none`` here -- with the evidence kinds that
+    # tier requires.  A and B keep the standard tier their verdicts need.
+    world.store.edit_definition(world.p("router"), "demo:C",
+                                {"review_tier": "none",
+                                 "evidence_kinds": ["decision"]})
     yield world
     world.close()
 

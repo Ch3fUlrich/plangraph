@@ -5,6 +5,18 @@ so that ``close_on_decision`` (X7b) can then close it; every check runs under
 one ``BEGIN IMMEDIATE`` and the ``legacy_state_set`` fold keeps the cache and
 the hash chain agreeing.  The doors below mirror the waiver route: the verb
 refuses a non-router, and the API maps ``forbidden`` to 403.
+
+KEEPER-OPCLAIM-CLOSE: ``claimed`` is refused on any tier other than ``none``
+for a *reviewed* kind (a legacy claim nobody can submit is a dead end), while
+the ``operator_task`` exemption stands: that kind is never agent-reviewed, so
+``close_on_decision`` (KEEPER-OPTASK-CLOSE, #129) closes it from ``claimed`` at
+any tier on a decision whose whole ``Closes: <key>`` token names the item —
+the terminal-state test below walks that path to ``done`` at ``standard`` and
+``high``.  A row the pre-fix verb already stranded in ``claimed`` (no lease,
+owner claimant, holder columns NULL, ``legacy_state_set`` last) may still move
+to ``in_review`` to rejoin the normal review rule, but only on a row where
+``claimed`` itself is refused: a tier-``none`` claim and an ``operator_task``
+claim are closable, not stranded.
 """
 import hashlib
 import json
@@ -16,8 +28,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from keeper_util import World, defn, seed
+from keeper_util import World, defn, seed, seed_stranded_claim
 from plangraph.keeper import api, auth, config
+from plangraph.keeper import events as keeper_events
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 
@@ -26,21 +39,318 @@ DID = "D-400"
 
 
 # --------------------------------------------------------------------- verb
+def _legacy_world(tmp_path, *, review_tier=None, kind=None, owner_family=None):
+    """A lane the verb acts on plus the mandatory goal.
+
+    ``seed`` cannot be used when the lane needs a tier/kind of its own: it
+    passes the same definition kwargs to the goal, and a tier-``none`` goal is
+    refused at create.
+    """
+    world = World(tmp_path)
+    lane = defn("A", [])
+    if review_tier is not None:
+        lane["review_tier"] = review_tier
+        if review_tier == "none":
+            lane["evidence_kinds"] = ["decision"]
+    if kind is not None:
+        lane["kind"] = kind
+    if owner_family is not None:
+        lane["owner_family"] = owner_family
+    world.store.create_items(world.p("router"),
+                             [lane, defn("GOAL", ["A"], kind="goal")])
+    return world
+
+
+def _seed_none(world):
+    """The tier-``none`` decision lane ``_close_world`` seeds (API/CLI doors)."""
+    world.store.create_items(world.p("router"), [
+        defn("A", [], review_tier="none", evidence_kinds=["decision"]),
+        defn("GOAL", ["A"], kind="goal")])
+    return world
+
+
+def _stranded(world, key=KEY):
+    """The row the *pre-fix* verb used to produce (KEEPER-OPCLAIM-CLOSE).
+
+    The single seeder lives in ``keeper_util.seed_stranded_claim`` and is
+    shared with ``tests/test_keeper_rehome.py``; this file passes its note.
+    """
+    seed_stranded_claim(world, key, note="backfill")
+    return world
+
+
+def _decision_close(tmp_path, world):
+    """The proof ``close_on_decision`` needs: a decisions file whose row names
+    ``KEY`` in a whole ``Closes: <key>`` token, plus a hashed batch file inside
+    a configured ``batch_root`` (KEEPER-OPTASK-CLOSE).  Returns the ``batch_ref``.
+    """
+    decisions = tmp_path / "DECISIONS.md"
+    decisions.write_text("| ID | Note | Scope |\n|---|---|---|\n"
+                         f"| {DID} | closes {KEY} | Closes: {KEY} |\n",
+                         encoding="utf-8")
+    world.store.ctx = SimpleNamespace(decisions=DecisionsAdapter(decisions))
+    root = tmp_path / "plan"
+    root.mkdir(parents=True, exist_ok=True)
+    batch = root / "batch.md"
+    batch.write_text("batch body\n", encoding="utf-8")
+    world.store.batch_roots = [str(root)]
+    return f"{batch}@{hashlib.sha256(batch.read_bytes()).hexdigest()}"
+
+
 @pytest.fixture
 def w(tmp_path):
-    world = World(tmp_path)
-    seed(world, [("A", [])])
+    """The default standard-tier lane: the review path a legacy claim would strand."""
+    world = _legacy_world(tmp_path)
     yield world
     world.close()
 
 
-def test_open_to_claimed(w):
-    result = w.store.set_legacy_state(w.p("router"), KEY, "claimed", "backfill")
+@pytest.fixture
+def w_none(tmp_path):
+    """A tier-``none`` decision lane: the row the verb was written for."""
+    world = _legacy_world(tmp_path, review_tier="none")
+    yield world
+    world.close()
+
+
+def test_open_to_claimed(w_none):
+    result = w_none.store.set_legacy_state(w_none.p("router"), KEY, "claimed",
+                                           "backfill")
     assert result["state"] == "claimed"
     assert result["claimed_by"] == "tester"
-    assert w.store._item(KEY)["state"] == "claimed"
-    assert w.store._item(KEY)["claimed_by"] == "tester"
+    assert w_none.store._item(KEY)["state"] == "claimed"
+    assert w_none.store._item(KEY)["claimed_by"] == "tester"
+    assert w_none.store.verify_integrity() == []
+
+
+def test_claimed_on_standard_tier_is_bad_state(w):
+    """The stranding state is unreachable: a standard lane may not go claimed."""
+    before = dict(w.store._item(KEY))
+    with pytest.raises(Refused) as exc:
+        w.store.set_legacy_state(w.p("router"), KEY, "claimed", "backfill")
+    assert exc.value.code == "bad_state"
+    assert "standard" in exc.value.msg      # the message names the tier
+    assert "in_review" in exc.value.msg      # ...and the way that is allowed
+    after = dict(w.store._item(KEY))
+    assert after["state"] == "open"
+    for field in ("epoch", "round", "claimed_by", "delegate", "reviewer",
+                  "lease_until", "review_waiver"):
+        assert after[field] == before[field]
+    assert [e["type"] for e in keeper_events.read_events(w.conn)].count(
+        "legacy_state_set") == 0            # no event, no partial write
     assert w.store.verify_integrity() == []
+
+
+def test_claimed_on_tier_none_still_moves(w_none):
+    out = w_none.store.set_legacy_state(w_none.p("router"), KEY, "claimed")
+    assert out["state"] == "claimed" and out["claimed_by"] == "tester"
+    assert w_none.store._item(KEY)["lease_until"] is None
+    assert w_none.store.verify_integrity() == []
+
+
+def test_claimed_on_operator_task_still_moves(tmp_path):
+    """The exemption stands (KEEPER-OPCLAIM-CLOSE): ``operator_task`` is not
+    a reviewed kind, so the tier that refuses a lane still takes it — and the
+    terminal-state test below shows that tier leads to ``done``."""
+    world = _legacy_world(tmp_path, kind="operator_task")
+    item = world.store._item(KEY)
+    assert item["kind"] == "operator_task" and item["review_tier"] == "standard"
+    out = world.store.set_legacy_state(world.p("router"), KEY, "claimed")
+    assert out["state"] == "claimed" and out["claimed_by"] == "tester"
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+@pytest.mark.parametrize("tier", ["standard", "high"])
+def test_operator_task_claimed_reaches_done_on_decision(tmp_path, tier):
+    """The item-done path: an operator-claimed standard/high item reaches
+    ``done`` with a decision and the seat ref, so the state the verb opens for
+    the exempted kind is never a stranding state (KEEPER-OPCLAIM-CLOSE item 2).
+
+    Router ``set_legacy_state(claimed)`` -> verified ``decision`` evidence
+    naming the key -> router ``close_on_decision`` (KEEPER-OPTASK-CLOSE, #129)
+    writes the cache row ``done`` with ``reviewer`` = the router before the
+    ``closed_on_decision`` event locks it.
+    """
+    world = _legacy_world(tmp_path, kind="operator_task", review_tier=tier)
+    batch_ref = _decision_close(tmp_path, world)
+    out = world.store.set_legacy_state(world.p("router"), KEY, "claimed")
+    assert out["state"] == "claimed" and out["claimed_by"] == "tester"
+    assert world.store._item(KEY)["review_tier"] == tier
+    world.store.add_evidence_router(world.p("router"), KEY, "decision",
+                                    {"id": DID})
+    done = world.store.close_on_decision(world.p("router"), KEY, batch_ref)
+    assert done["state"] == "done" and done["decision_ids"] == [DID]
+    item = world.store._item(KEY)
+    assert item["state"] == "done"
+    assert item["reviewer"] == "router"        # the seat the close fills
+    assert item["claimed_by"] == "tester"
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_stranded_operator_task_is_closable_not_recovered(tmp_path):
+    """An ``operator_task`` row in the stranded *shape* is still not stranded:
+    recovery stays off it (``claimed`` is allowed for that kind, so the refusal
+    scope and the recovery scope are one predicate) and ``close_on_decision``
+    takes it to ``done`` instead of leaving it stuck."""
+    world = _legacy_world(tmp_path, kind="operator_task", review_tier="standard")
+    batch_ref = _decision_close(tmp_path, world)
+    _stranded(world)
+    assert world.store._item(KEY)["state"] == "claimed"
+    with pytest.raises(Refused) as exc:
+        world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    assert exc.value.code == "bad_state"
+    assert "operator_task" in exc.value.msg     # why this row is not stranded
+    assert world.store._item(KEY)["state"] == "claimed"
+    world.store.add_evidence_router(world.p("router"), KEY, "decision",
+                                    {"id": DID})
+    done = world.store.close_on_decision(world.p("router"), KEY, batch_ref)
+    assert done["state"] == "done"
+    assert world.store._item(KEY)["state"] == "done"
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_stranded_legacy_claim_recovers_to_in_review_and_reviews_to_done(tmp_path):
+    """The live case: recover it, then close it through the normal tier rule."""
+    world = _legacy_world(tmp_path, owner_family="teamZ")
+    _stranded(world)
+    stuck = world.store._item(KEY)
+    assert (stuck["state"], stuck["lease_until"], stuck["claimed_by"]) == (
+        "claimed", None, "tester")
+    out = world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    assert out["state"] == "in_review" and out["claimed_by"] == "tester"
+    item = world.store._item(KEY)
+    assert item["state"] == "in_review"
+    assert item["epoch"] == stuck["epoch"] + 1          # epoch + 1
+    assert item["round"] == stuck["round"] + 1          # fresh round
+    assert item["delegate"] is None and item["reviewer"] is None
+    assert item["lease_until"] is None and item["review_waiver"] is None
+    # Verified evidence plus one verdict from a reviewer of another family:
+    # the standard tier's normal rule, no special-casing of legacy rows.
+    world.store.add_evidence_router(world.p("router"), KEY, "decision",
+                                    {"id": DID})
+    done = world.store.verdict(world.p("reviewer"), KEY, True, "passed")
+    assert done["state"] == "done" and done["reviews_passed"] == 1
+    item = world.store._item(KEY)
+    assert item["state"] == "done"
+    assert item["reviewer"] == "reviewer"     # the seat the store records as filled
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_stranded_high_tier_claim_recovers_to_in_review(tmp_path):
+    """``high`` is the other tier where ``claimed`` is refused, so its
+    stranded rows are recoverable too (recovery == the refusal scope)."""
+    world = _legacy_world(tmp_path, review_tier="high", owner_family="teamZ")
+    _stranded(world)
+    out = world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    assert out["state"] == "in_review"
+    item = world.store._item(KEY)
+    assert item["review_tier"] == "high"
+    assert item["delegate"] is None and item["reviewer"] is None
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_tier_none_stranded_claim_is_not_recovered(tmp_path):
+    """A tier-``none`` claim is closable, not stranded: ``close_on_decision``
+    fires from ``claimed``, so the recovery deliberately stays refused."""
+    world = _legacy_world(tmp_path, review_tier="none")
+    _stranded(world)
+    before = dict(world.store._item(KEY))
+    with pytest.raises(Refused) as exc:
+        world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    assert exc.value.code == "bad_state"
+    assert "none" in exc.value.msg
+    after = dict(world.store._item(KEY))
+    assert after["state"] == "claimed"
+    for field in ("epoch", "round", "claimed_by", "delegate", "reviewer",
+                  "lease_until", "review_waiver"):
+        assert after[field] == before[field]
+    assert [e["type"] for e in keeper_events.read_events(world.conn)].count(
+        "legacy_state_set") == 1            # the seed's event, no second write
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_real_claim_keeps_bad_state(w):
+    """A real claim (lease set) is not a legacy claim: in_review stays refused."""
+    w.store.claim(w.p("l1main"), KEY)
+    claimed = w.store._item(KEY)
+    assert claimed["lease_until"] is not None
+    assert claimed["claimed_by"] == "l1main"
+    with pytest.raises(Refused) as exc:
+        w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+    assert exc.value.code == "bad_state"
+    after = w.store._item(KEY)
+    assert (after["state"], after["epoch"], after["lease_until"]) == (
+        claimed["state"], claimed["epoch"], claimed["lease_until"])
+    assert w.store.verify_integrity() == []
+
+
+def test_reclaimed_after_a_legacy_claim_keeps_bad_state(tmp_path):
+    """A later claim event (release -> claim) also ends the recovery window."""
+    world = _legacy_world(tmp_path)
+    _stranded(world)
+    epoch = world.store._item(KEY)["epoch"]
+    world.store.release(world.p("router"), KEY, epoch)
+    world.store.claim(world.p("l1main"), KEY)
+    with pytest.raises(Refused) as exc:
+        world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    assert exc.value.code == "bad_state"
+    assert world.store._item(KEY)["state"] == "claimed"
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_router_dep_edit_does_not_defeat_recovery(tmp_path):
+    """A router definition edit after the legacy claim rewrites the definition;
+    it does not take over the claim (KEEPER-OPCLAIM-CLOSE item 3).
+
+    ``add_dep`` delegates to the router's active-item edit, which appends
+    ``item_defined`` and bumps the round *and* the epoch.  ``item_defined``/
+    ``kind_set`` are not lifecycle events, so ``legacy_state_set`` is still the
+    newest one that counts and the stranded row recovers to ``in_review``.
+    """
+    world = _legacy_world(tmp_path, owner_family="teamZ")
+    world.store.create_items(world.p("router"),
+                             [defn("Z", []), defn("G2", ["Z"], kind="goal")])
+    _stranded(world)
+    stuck = world.store._item(KEY)
+    world.store.apply_ops(world.p("router"),
+                          [{"op": "add_dep", "key": KEY, "dep": "demo:Z"}])
+    edited = world.store._item(KEY)
+    assert "demo:Z" in edited["depends_on"] and edited["state"] == "claimed"
+    assert (edited["epoch"], edited["round"]) != (stuck["epoch"], stuck["round"])
+    types = [e["type"] for e in keeper_events.read_events(world.conn)]
+    assert types[-1] == "item_defined"        # the router edit really happened
+    assert world.store._last_state_changing(KEY) == "legacy_state_set"
+    out = world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    assert out["state"] == "in_review" and out["claimed_by"] == "tester"
+    item = world.store._item(KEY)
+    assert item["delegate"] is None and item["reviewer"] is None
+    assert "demo:Z" in item["depends_on"]
+    assert world.store.verify_integrity() == []
+    world.close()
+
+
+def test_recovery_keeps_fold_and_integrity_clean(tmp_path):
+    world = _legacy_world(tmp_path, owner_family="teamZ")
+    _stranded(world)
+    assert world.store.verify_integrity() == []
+    world.store.set_legacy_state(world.p("router"), KEY, "in_review")
+    item = world.store._item(KEY)
+    folded = keeper_events.fold(keeper_events.read_events(world.conn))[KEY]
+    assert folded["state"] == item["state"] == "in_review"
+    assert folded["epoch"] == item["epoch"] == 2
+    assert folded["round"] == item["round"]
+    assert folded["claimed_by"] == item["claimed_by"] == "tester"
+    assert folded["lease_until"] is None
+    assert world.store.verify_integrity() == []
+    assert world.store.verify_chain() == []
+    world.close()
 
 
 def test_open_to_in_review(w):
@@ -49,12 +359,12 @@ def test_open_to_in_review(w):
     assert w.store.verify_integrity() == []
 
 
-def test_records_legacy_state_set_event(w):
-    w.store.set_legacy_state(w.p("router"), KEY, "claimed", "note")
+def test_records_legacy_state_set_event(w_none):
+    w_none.store.set_legacy_state(w_none.p("router"), KEY, "claimed", "note")
     types = [e["type"] for e in __import__(
-        "plangraph.keeper.events", fromlist=["x"]).read_events(w.conn)]
+        "plangraph.keeper.events", fromlist=["x"]).read_events(w_none.conn)]
     assert "legacy_state_set" in types
-    assert w.store.verify_chain() == []
+    assert w_none.store.verify_chain() == []
 
 
 def test_non_router_forbidden(w):
@@ -72,9 +382,12 @@ def test_bad_target_is_validation(w, target):
 
 
 def test_non_open_item_is_bad_state(w):
-    w.store.set_legacy_state(w.p("router"), KEY, "claimed")
+    # ``in_review`` first (allowed from open), then any further move: bad_state.
+    # A *stranded* ``claimed`` row is the one non-open state ``in_review``
+    # still accepts -- see ``test_stranded_legacy_claim_recovers_...``.
+    w.store.set_legacy_state(w.p("router"), KEY, "in_review")
     with pytest.raises(Refused) as exc:
-        w.store.set_legacy_state(w.p("router"), KEY, "in_review")
+        w.store.set_legacy_state(w.p("router"), KEY, "claimed")
     assert exc.value.code == "bad_state"
 
 
@@ -124,7 +437,7 @@ def _call(srv, path, *, method="POST", body=None, token=None):
 
 def test_api_set_legacy_state_happy(tmp_path):
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    _seed_none(world)
     srv, thread = _api_server(tmp_path, world)
     try:
         status, body = _call(srv, "/v1/set_legacy_state",
@@ -234,7 +547,7 @@ def test_cli_close_and_legacy_parse():
 @pytest.fixture
 def cli_live(tmp_path, monkeypatch):
     world = World(tmp_path)
-    seed(world, [("A", [])])
+    _seed_none(world)
     cfg_path = tmp_path / "keeper.json"
     cfg_path.write_text(json.dumps({"db": str(world.path),
                                     "snapshot": str(tmp_path / "plan.snapshot.json"),
