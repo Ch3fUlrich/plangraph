@@ -101,7 +101,7 @@ def defn(pid, deps=(), project="demo", kind="lane", evidence_kinds=("any",),
     return item
 
 
-def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True,
+def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True, delegate=True,
          **tier):
     """Create ``lanes`` plus a goal that depends on every lane.
 
@@ -117,14 +117,14 @@ def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True,
         items.append(defn("GOAL", [pid for pid, _ in lanes], project=project,
                           kind="goal", **tier))
     world.store.create_items(world.p("router"), items)
-    # Temporal test cards are handed to workerA without an agent lease.
-    with world.store._write():
-        for pid, _ in lanes:
-            key = f"{project}:{pid}"
-            world.store._append(world.p("router"), key, "delegated",
-                                {"worker": "workerA"}, world.clock())
-            world.conn.execute("UPDATE items SET delegate='workerA' WHERE key=?",
-                               (key,))
+    if delegate:
+        with world.store._write():
+            for pid, _ in lanes:
+                key = f"{project}:{pid}"
+                world.store._append(world.p("router"), key, "delegated",
+                                    {"worker": "workerA"}, world.clock())
+                world.conn.execute("UPDATE items SET delegate='workerA' WHERE key=?",
+                                   (key,))
     return [f"{project}:{pid}" for pid, _ in lanes]
 
 

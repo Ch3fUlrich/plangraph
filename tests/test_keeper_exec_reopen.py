@@ -68,6 +68,7 @@ def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first):
 
     assert w.store.reap(w.p("system"), w.clock.advance(7201))["expired"] == [key]
     assert owner(w, key) == (None, None, None)
+    refused("forbidden", w.store.worker_park, w.p("workerA"), body)
     late = {"workflow_id": RUN1[0], "run_id": RUN1[1], "attempt": RUN1[2]}
     if late_run_first:
         # FIRST at the cleared card, and still refused: the retired fence
@@ -78,9 +79,11 @@ def test_lapsed_lease_late_retired_run_is_refused(w, doors, late_run_first):
         assert owner(w, key) == (None, None, None)
         assert w.store._item(key)["state"] == "open"
         # ...and a NEW run still gets the card.
+        to_claimed(w, key, "workerA")
         assert doors.http("workerA", "POST", "/v1/park", body) == (204, "")
         assert owner(w, key) == ("wf-2", "run-2", 1)
         return
+    to_claimed(w, key, "workerA")
     assert doors.http("workerA", "POST", "/v1/park", body) == (204, "")
     assert doors.http("workerA", "POST", "/v1/complete",
                       complete(key, **RUN2)) == (204, "")
@@ -111,6 +114,7 @@ def test_second_review_change_reopens_without_owner_and_new_run_can_park(w):
         assert result["state"] == expected
         assert owner(w, key) == (None, None, None)
     assert owner(w, key) == (None, None, None)
+    to_claimed(w, key, "workerA")
     assert w.store.worker_park(worker, park(key, **RUN2))["state"] == "parked"
     assert owner(w, key) == ("wf-2", "run-2", 1)
 
@@ -167,18 +171,15 @@ def test_new_run_requires_owner_clear_before_acquiring(w, attempt):
                                               attempt=RUN1[2]))
     assert owner(w, key) == RUN1
     before = dict(w.store._item(key))
-    refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
+    refused("validation", w.store.set_state, w.p("router"), key, "open",
             run=("wf-2", "run-2", attempt), new_run=True)
     assert dict(w.store._item(key)) == before
     refused("exec_stale", w.store.worker_park, w.p("workerA"),
             park(key, **dict(RUN2, attempt=attempt)))
-    # RT-P1 revival: the explicit hand-back door frees the owner here -- exactly
-    # the clear the new run below needs before it can acquire (a bare run-less
-    # move would KEEP the owner: only ``hand_back=True`` clears, V1-B).
-    w.store.set_state(w.p("router"), key, "open", hand_back=True)
+    # Requeue retires the old run; the new run must claim before recording.
+    w.store.requeue(w.p("router"), key)
     assert owner(w, key) == (None, None, None)
-    epoch = to_claimed(w, key, "workerA")
-    w.store.release(w.p("workerA"), key, epoch)
+    to_claimed(w, key, "workerA")
     assert owner(w, key) == (None, None, None)
     w.store.worker_park(w.p("workerA"), park(key, **dict(RUN2, attempt=attempt)))
     assert w.store._item(key)["state"] == "parked"
@@ -220,7 +221,7 @@ def test_unowned_back_move_with_run_is_refused(w, new_run):
     key, = seed(w, [("A", [])])
     w.store.set_state(w.p("router"), key, "parked")
     before = dict(w.store._item(key))
-    refused("bad_transition", w.store.set_state, w.p("router"), key, "open",
+    refused("validation" if new_run else "bad_transition", w.store.set_state, w.p("router"), key, "open",
             run=RUN1, new_run=new_run)
     assert dict(w.store._item(key)) == before
     assert owner(w, key) == (None, None, None)

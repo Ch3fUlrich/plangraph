@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from keeper_util import World, seed
+from keeper_util import World, seed, to_claimed
 from test_keeper_exec_ownership import owner, refused, retired_runs
 from test_keeper_exec_reopen import RUN1, RUN2, claimed_owner
 from test_keeper_exec_verbs import park
@@ -49,6 +49,8 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
                 park(key, workflow_id=RUN1[0], run_id=RUN1[1], attempt=RUN1[2]))
         assert owner(w, key) == (None, None, None)
         # ... while a NEW run still takes the card.
+        if w.store._item(key)["state"] == "open":
+            to_claimed(w, key, "workerA")
         assert w.store.worker_park(worker, park(key, **RUN2))["state"] == "parked"
         assert owner(w, key) == ("wf-2", "run-2", 1)
     finally:

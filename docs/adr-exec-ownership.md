@@ -160,3 +160,16 @@ same run and attempt: after the projector moves running to waiting, a delayed
 worker verb expecting running cannot overwrite waiting or record ownership.
 This is not an exactly-once delivery guarantee: calls without an expectation,
 or duplicates whose expected state still matches, retain existing semantics.
+# sq7 compatibility clarification
+
+Requeue is an intentional router-only MCP tool: it revives a parked card and
+retires its previous run. Discovery contains 34 tools; the existing size budget
+still applies. A reaped or twice-rejected card must be claimed again before a
+new worker can record its execution owner. Retired runs remain refused even
+before that claim. No unclaimed first-writer takeover is restored.
+
+`exec_owner_changed` is an explicitly handled lifecycle-fold no-op: ownership
+audit does not change the lifecycle columns compared by that fold. Both storage
+backends use the shared event-type registry. Historical event hashes are not
+rewritten: the legacy replay opts out of the newer shared seeder's delegation
+events, preserving its original operation sequence and unchanged hash pins.
