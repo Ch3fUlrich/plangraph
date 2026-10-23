@@ -339,6 +339,45 @@ def test_health_reports_effective_gateway_base_url(monkeypatch):
     assert child_base_url() == override
 
 
+def test_health_reports_the_base_url_the_child_config_already_holds(monkeypatch):
+    """``gateway_default_url`` is the child's *effective* base URL, not the env's.
+
+    ``build_child_env`` merges into a pre-existing ``OPENCODE_CONFIG_CONTENT``
+    with ``setdefault``, so a config that already carries
+    ``settings.baseURL`` keeps it and no environment source displaces it -- the
+    health report has to say the same value the child will actually use.
+    """
+    import json as _json
+
+    # RFC 5737 TEST-NET-1 documentation address, never a site endpoint.
+    existing = "http://192.0.2.40:8080/v1"
+    preloaded = _json.dumps(
+        {"providers": {"omniroute": {"settings": {"baseURL": existing}}}})
+
+    monkeypatch.delenv(GATEWAY_URL_ENV_VAR, raising=False)
+    monkeypatch.delenv(OMNIROUTE_BASE_URL_ENV_VAR, raising=False)
+    monkeypatch.setenv("OPENCODE_CONFIG_CONTENT", preloaded)
+
+    async def health() -> dict:
+        return await MCPSpawnerServer().call_tool("plangraph_agent_health", {})
+
+    def child_base_url() -> str | None:
+        cfg = _json.loads(build_child_env()["OPENCODE_CONFIG_CONTENT"])
+        return cfg["providers"]["omniroute"].get("settings", {}).get("baseURL")
+
+    # The child keeps what its config already says (setdefault), so health must
+    # report exactly that -- with no environment source named at all.
+    assert child_base_url() == existing
+    assert asyncio.run(health())["gateway_default_url"] == existing
+
+    # ...and it stays the reported value when environment sources name a
+    # different one, because setdefault never displaces it.
+    monkeypatch.setenv(GATEWAY_URL_ENV_VAR, GATEWAY_TEST_URL)
+    monkeypatch.setenv(OMNIROUTE_BASE_URL_ENV_VAR, GATEWAY_TEST_URL + "/override")
+    assert child_base_url() == existing
+    assert asyncio.run(health())["gateway_default_url"] == existing
+
+
 # ==============================================================================
 # 3. RESOLVER & CROSS-FAMILY REVIEW TESTS
 # ==============================================================================
