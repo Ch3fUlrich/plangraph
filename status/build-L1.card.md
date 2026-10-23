@@ -9,7 +9,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | Item | Owner | State / next |
 |---|---|---|
 | KEEPER-OPTASK-CLOSE | DONE | evidence b79eea55 (#132), verdicts qwen+glm 2/2 |
-| KEEPER-OPCLAIM-CLOSE #127 (HIGH) | L1 | GO D-2335; merge-127 wt merged main a0f6c2f4 (CHANGELOG union only); merge-cont queued after #137 -> evidence/submit/verdicts -> OP-DOCKHAND line |
+| KEEPER-OPCLAIM-CLOSE #127 | L1 | DONE merged 827724f5, 2/2; OP-DOCKHAND line sent to routing |
 | RT-P1-EXEC-OWNERSHIP #133 (HIGH) | L1 | squash 8fd739b7 CI green; sq1 qwen PASS, glm FIX 3 MED (complete gate txn, run-less hand-back, PG behaviour test) -> fix writer 20261023-055023-exec-sq-fix1-43adad brief seats/exec-ownership/sq1/FIX-BRIEF.md -> re-seat qwen + deepseek (zhipu is a writer family: c129069f,f722147e) -> GO-REQ -> merge, close #112 |
 | RT-P1-PHASE-RUNNER (HIGH) | spine STOPPED D-2334 (card plangraph-worktrees/spine-card.md); L2-LAUNCH to routing when #133 merged for S3d impl | S3c MERGED f25cc546 (evidence on). S3d red spine/phase-runner-s3d @ 76904e43 (D-2326 lane reading, 3-way bypass guard, attach_merge_evidence after merge to main) -> impl after #112 signal. Then S4. HARDEN items 1-12 |
 | RT-P1-ATTEMPT-SANDBOX #100 | build-L2-sandbox (workst) | owes WB merge + main + CI + MERGE-READY (stall 7.6h, pinged 05:1xZ); no reply -> give to sweep-runtime |
