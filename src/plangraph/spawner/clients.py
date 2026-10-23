@@ -1,8 +1,9 @@
 """OmniRoute ACP-First Client Adapter with Tailnet Coexistence.
 
 All model providers route first through the local model gateway; its base URL is
-deployment config (``PLANGRAPH_GATEWAY_URL`` or the spawner/keeper config, see
-``gateway_url``), never a source literal. Standalone direct CLI spawning (agy,
+deployment config (``OMNIROUTE_BASE_URL``, ``PLANGRAPH_GATEWAY_URL`` or the
+spawner/keeper config, see ``effective_gateway_base_url``), never a source
+literal. Standalone direct CLI spawning (agy,
 qodercli, codex, claude) is reserved strictly as an offline emergency fallback
 when gateway_online=False.
 
@@ -16,6 +17,9 @@ from typing import Any, Mapping, Sequence
 
 #: Environment variable naming the model gateway base URL (see ``gateway_url``).
 GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
+
+#: Environment variable naming the provider-level gateway base URL override.
+OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
 
 def gateway_url(env: Mapping[str, str] | None = None,
@@ -33,6 +37,22 @@ def gateway_url(env: Mapping[str, str] | None = None,
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return None
+
+
+def effective_gateway_base_url(env: Mapping[str, str] | None = None,
+                               config: Mapping[str, Any] | None = None) -> str | None:
+    """Base URL actually handed to gateway clients, or ``None`` when unset.
+
+    Precedence is the one ``build_child_env`` applies when it writes ``baseURL``
+    into the child provider config: ``OMNIROUTE_BASE_URL`` in *env* (the process
+    environment by default) wins, else ``gateway_url`` (``PLANGRAPH_GATEWAY_URL``,
+    then the *config* mapping's ``gateway_url`` key).  ``build_child_env`` and
+    the ``plangraph_agent_health`` report both call this helper, so the reported
+    URL cannot diverge from the effective one.
+    """
+    source = os.environ if env is None else env
+    override = ((source or {}).get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip()
+    return override or gateway_url(source, config)
 
 
 @dataclass(frozen=True)
@@ -66,7 +86,8 @@ def build_child_env(
     """Build subprocess environment preserving critical OS and Tailnet variables.
 
     The gateway base URL written into the child's provider config comes from
-    ``gateway_url`` (env ``PLANGRAPH_GATEWAY_URL``, else the *config* mapping's
+    ``effective_gateway_base_url`` (``OMNIROUTE_BASE_URL`` wins, else
+    ``gateway_url``: env ``PLANGRAPH_GATEWAY_URL``, else the *config* mapping's
     ``gateway_url`` key); when no source names one, no ``baseURL`` key is written
     at all -- this module ships no default endpoint.
 
@@ -107,8 +128,7 @@ def build_child_env(
 
     # Deployment endpoint: provider-specific override, else the configured
     # gateway URL (never a source default -- unset means "no baseURL written").
-    base_url = ((env.get("OMNIROUTE_BASE_URL") or "").strip()
-                or (gateway_url(env, config) or ""))
+    base_url = effective_gateway_base_url(env, config) or ""
     existing_cfg: dict[str, Any] = {}
     raw_cfg = env.get("OPENCODE_CONFIG_CONTENT")
     if raw_cfg:

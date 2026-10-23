@@ -15,6 +15,7 @@ import pytest
 from plangraph.spawner.clients import (
     CLIENTS,
     GATEWAY_URL_ENV_VAR,
+    OMNIROUTE_BASE_URL_ENV_VAR,
     build_child_env,
     build_command,
     build_opencode_command,
@@ -305,6 +306,37 @@ def test_gateway_url_comes_from_env_or_config_only(monkeypatch):
     env = build_child_env(config={"gateway_url": GATEWAY_TEST_URL})
     cfg = _json.loads(env["OPENCODE_CONFIG_CONTENT"])
     assert cfg["providers"]["omniroute"]["settings"]["baseURL"] == GATEWAY_TEST_URL
+
+
+def test_health_reports_effective_gateway_base_url(monkeypatch):
+    """``gateway_default_url`` follows build_child_env precedence, so it cannot diverge."""
+    import json as _json
+
+    monkeypatch.delenv(GATEWAY_URL_ENV_VAR, raising=False)
+    monkeypatch.delenv(OMNIROUTE_BASE_URL_ENV_VAR, raising=False)
+    monkeypatch.delenv("OPENCODE_CONFIG_CONTENT", raising=False)
+
+    async def health() -> dict:
+        return await MCPSpawnerServer().call_tool("plangraph_agent_health", {})
+
+    def child_base_url() -> str | None:
+        cfg = _json.loads(build_child_env()["OPENCODE_CONFIG_CONTENT"])
+        return cfg["providers"]["omniroute"].get("settings", {}).get("baseURL")
+
+    # No source names one: the report is "" and the child gets no baseURL.
+    assert asyncio.run(health())["gateway_default_url"] == ""
+    assert child_base_url() is None
+
+    # PLANGRAPH_GATEWAY_URL alone: report and child agree.
+    monkeypatch.setenv(GATEWAY_URL_ENV_VAR, GATEWAY_TEST_URL)
+    assert asyncio.run(health())["gateway_default_url"] == GATEWAY_TEST_URL
+    assert child_base_url() == GATEWAY_TEST_URL
+
+    # OMNIROUTE_BASE_URL wins over PLANGRAPH_GATEWAY_URL in both places.
+    override = GATEWAY_TEST_URL + "/override"
+    monkeypatch.setenv(OMNIROUTE_BASE_URL_ENV_VAR, override)
+    assert asyncio.run(health())["gateway_default_url"] == override
+    assert child_base_url() == override
 
 
 # ==============================================================================

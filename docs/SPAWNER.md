@@ -364,22 +364,28 @@ python -m plangraph.spawner.mcp
    - `family` (string, optional): Filter by model family (e.g. `mimo`, `claude`).
    - `min_intelligence` (number, optional): Minimum AA Intelligence floor.
 6. `plangraph_agent_health`:
-   - Reports spawner version, active/total jobs, catalog model counts, and the configured gateway URL (empty when none is configured).
+   - Reports spawner version, active/total jobs, catalog model counts, and the effective gateway base URL (empty when none is configured).
 
 #### Gateway endpoint setting
 
 The base URL every gateway client uses is deployment config, read at run time by
-`plangraph.spawner.clients.gateway_url()`; no default ships in the source:
+`plangraph.spawner.clients.effective_gateway_base_url()`; no default ships in the
+source. The only sources wired today are environment variables — `OMNIROUTE_BASE_URL`
+wins over `PLANGRAPH_GATEWAY_URL`:
 
 | source | key |
 |---|---|
-| environment (wins when set) | `PLANGRAPH_GATEWAY_URL` |
-| spawner/keeper config mapping | `gateway_url` |
+| environment (provider-level override, wins when set) | `OMNIROUTE_BASE_URL` |
+| environment (gateway default) | `PLANGRAPH_GATEWAY_URL` |
 
-With neither set, `build_child_env` writes no `baseURL` into the child provider
-config (a caller that needs a value supplies its own), and
-`plangraph_agent_health` reports `gateway_default_url` as `""`. The provider-level
-`OMNIROUTE_BASE_URL` override still takes precedence when present.
+`gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no
+production caller passes one today: that argument exists for callers that do pass it
+(the tests exercise it).
+
+With neither environment variable set, `build_child_env` writes no `baseURL` into the
+child provider config (a caller that needs a value supplies its own), and
+`plangraph_agent_health` reports `gateway_default_url` as `""`. The same helper computes
+both, so the reported URL always matches the effective one.
 
 ### SQLite Catalog DB CLI (`src/plangraph/spawner/catalog_db.py`)
 
