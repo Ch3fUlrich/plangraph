@@ -6,10 +6,10 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 2aaaf35f (#144 GOV-CTX DONE). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq7 b9a378b7 CI green; Haiku BLOCKER -> sq8 mimo 12aa4f failed 503 (flapping); sq8 cx SCHEDULED 18:47Z workst -> mergemain, CI, qwen+Haiku -> GO-REQ |
-| UI-BROWSER-TESTS #143 | L1 | PR #152 head 32051a6a; fix3 6836f4 STUCK cx 429, WIP patch saved; relaunch 18:46Z cx (pr152/FIX3-BRIEF.md) -> CI, qwen+Haiku re-seat -> merge, submit |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq7 b9a378b7 CI green; Haiku BLOCKER -> sq8 sol RUNNING workst a3a264 (18:47Z) -> mergemain, CI, qwen+Haiku -> GO-REQ |
+| UI-BROWSER-TESTS #143 | L1 | PR #152 head 32051a6a; fix3 r2 sol RUNNING workst 382049 (6836f4 WIP inlined) -> CI, qwen+Haiku re-seat -> merge, submit |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5: mimo 503 x3, sol 615435 STUCK cx 429; cx next free slot (after SEAT-FREE-OPENCODE operator top prio) -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 3190b3fb; fix5 sol RUNNING workst 95d3f4 (18:47Z) -> CI, seats (mimo: Haiku+luna; sol: Haiku+qwen) -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
