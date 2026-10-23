@@ -537,3 +537,36 @@ def test_squash_commit_with_several_writer_families_needs_all_covered(w):
     assert item["round"] == round_no
     assert len(verdict_events(w, refused)) == 1
 
+
+# --------------------------------------------------------------------------
+# 18. (FIX2 r2) git trailer keys are case-insensitive: a lower-case
+#     ``writer:`` line next to ``Writer:`` names a second family
+# --------------------------------------------------------------------------
+
+def test_lower_case_writer_key_counts_alongside_the_capitalised_one(w):
+    """``writer:`` and ``Writer:`` are the same trailer key to git.
+
+    A case-sensitive ``trailer.get("Writer")`` sees only one of them, so the
+    second writer family would never need a seat.
+    """
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
+                  review_tier="high")
+    trailers = {SHA_A: {"Plan-Item": "demo:A",
+                        "Writer": "mimo-v2 run1",        # xiaomi
+                        "writer": "deepseek-r1 run2"}}   # deepseek
+    to_review_with_commits(w, key, trailers, git=git_with(trailers))
+
+    assert set(_cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx)) == {"xiaomi", "deepseek"}
+
+    # Seats [deepseek, google] cover the xiaomi writer alone, but a deepseek
+    # seat never covers the deepseek writer itself (and google is its only
+    # other family): the case-sensitive view would have closed the item.
+    assert w.store.verdict(w.p("rDeepseek"), key, True, "one")["state"] == "in_review"
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rGoogle"), key, True, "two")
+    assert exc.value.code == "coverage"
+    assert "deepseek" in exc.value.msg
+    assert w.store._item(key)["state"] == "in_review"
+    assert len(verdict_events(w, key)) == 1
+

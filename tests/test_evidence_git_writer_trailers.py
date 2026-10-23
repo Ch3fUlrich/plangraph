@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.keeper.evidence_git import GitAdapter
+from plangraph.keeper.errors import Refused
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None,
                                 reason="git not available")
@@ -242,7 +243,13 @@ def _families(repo, sha):
 def test_prose_hand_edit_and_writer_lines_are_not_trailers(repo):
     """A prose paragraph QUOTING ``Hand-Edit:``/``Writer:`` lines is not a
     trailer block, so it can neither be returned as a trailer nor change the
-    writer families the keeper needs seats for."""
+    writer families the keeper needs seats for.
+
+    FIX2 r2: the prose ``Writer:`` line still must not be read as a trailer,
+    but it now makes the writer set UNKNOWABLE rather than letting the keeper
+    count only the surviving trailer's family.  A partial family list could
+    close the item with a seat that never covered the dropped writer.
+    """
     _git(repo, "commit", "--allow-empty", "-q", "-m",
          "explain the run\n\n"
          "This paragraph is prose about the change.\n"
@@ -258,9 +265,10 @@ def test_prose_hand_edit_and_writer_lines_are_not_trailers(repo):
     # The prose Hand-Edit/Writer lines are dropped, the real ones kept.
     assert "Hand-Edit" not in got
     assert got.get("Writer") == "mimo-v2.6-flash run-real"
-    assert adapter.writer_trailers(str(repo), sha) == [got]
-    # Prose must not add the anthropic family the seat check would require.
-    assert _families(repo, sha) == ["xiaomi"]
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
 
 
 def test_prose_plan_item_loses_to_the_real_trailer(repo, adapter):
@@ -274,3 +282,66 @@ def test_prose_plan_item_loses_to_the_real_trailer(repo, adapter):
     sha = _git(repo, "rev-parse", "HEAD")
 
     assert adapter.trailers(str(repo), sha) == {"Plan-Item": "plangraph:K"}
+
+
+# --------------------------------------------------------------------------
+# 21. (FIX2 r2) a Writer line OUTSIDE the trailing trailer block makes the
+#     writer set unknowable: fail closed, never a partial family list
+# --------------------------------------------------------------------------
+
+def _ambiguous_commit(repo: Path) -> str:
+    """``Plan-Item``/``Writer`` block, prose, then a final ``Writer`` block."""
+    _git(repo, "commit", "--allow-empty", "-q", "-m",
+         "split the trailers\n\n"
+         "Plan-Item: demo:A\n"
+         "Writer: mimo-v2 run1\n"
+         "\n"
+         "This prose separates the two trailer-shaped paragraphs.\n"
+         "\n"
+         "Writer: deepseek-r1 run2\n")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_writer_line_outside_the_trailing_block_refuses_writer_unknown(repo):
+    """Only the trailing block is read, but a dropped ``Writer:`` cannot be
+    silently ignored: ``writer_trailers`` refuses (``[]``) instead of
+    returning the partial ``deepseek`` family alone."""
+    sha = _ambiguous_commit(repo)
+    adapter = GitAdapter({"demo": str(repo)})
+
+    # Plan-Item/Writer reading itself is unchanged: the prose paragraph ends
+    # the block, so only the final paragraph is parsed.
+    assert adapter.trailers(str(repo), sha) == {"Writer": "deepseek-r1 run2"}
+    assert adapter.writer_trailers(str(repo), sha) == []
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+def test_writer_line_outside_the_trailing_block_refuses_the_closing_verdict(repo):
+    """The production entry (``store.verdict``) refuses the closing verdict.
+
+    A standard item would otherwise close on one seat once the partial family
+    list named only ``deepseek``; the earlier ``mimo-v2`` writer would have
+    no covering seat at all.
+    """
+    from evidence_fakes import make_ctx
+    from keeper_util import World, seed
+
+    sha = _ambiguous_commit(repo)
+    world = World(repo.parent / "keeper")
+    try:
+        (key,) = seed(world, [("A", [])], evidence_kinds=("commit+ci",))
+        world.store.ctx = make_ctx(git=GitAdapter({"demo": str(repo)}))
+        epoch = world.store.claim(world.p("workerA"), key, lease_s=7200)["epoch"]
+        out = world.store.add_evidence(world.p("workerA"), key, epoch,
+                                       "commit+ci", {"commit": sha})
+        assert out["verified"] is True
+        world.store.submit(world.p("workerA"), key, epoch)
+
+        with pytest.raises(Refused) as exc:
+            world.store.verdict(world.p("reviewer"), key, True, "would close")
+        assert exc.value.code == "writer_unknown"
+        assert world.store._item(key)["state"] == "in_review"
+    finally:
+        world.close()
