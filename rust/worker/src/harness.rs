@@ -624,20 +624,29 @@ fn walk(
 ) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
-        // Only the worktree's own top-level `.git` is repo metadata, never part
-        // of the write set. A `.git` deeper down may be a symlink an agent could
-        // use to escape, so it must still be checked.
-        if top && entry.file_name().to_str() == Some(".git") {
-            continue;
-        }
         let path = entry.path();
         // file_type comes from symlink_metadata: it never follows the link.
         let ft = entry.file_type()?;
+        let top_git = top && entry.file_name().to_str() == Some(".git");
+        // The worktree's own top-level `.git` is repo metadata, never part of
+        // the write set: git makes it a directory (a checkout) or a plain
+        // gitfile (a linked worktree), so skipping it leaves every normal
+        // commit untouched. Git never makes `.git` a symlink, though — one at
+        // the top level was planted to redirect git at some other repository,
+        // and that is a violation wherever it points. A `.git` deeper down
+        // never had the exemption.
+        if top_git && !ft.is_symlink() {
+            continue;
+        }
         if ft.is_symlink() {
             let rel = path
                 .strip_prefix(root)
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|_| path.clone());
+            if top_git {
+                out.push(rel);
+                continue;
+            }
             let parent = base.join(rel.parent().unwrap_or(Path::new("")));
             let target = std::fs::read_link(&path)?;
             let resolved = if target.is_absolute() {
@@ -1166,6 +1175,32 @@ mod tests {
             vec![PathBuf::from("sub/.git")]
         );
         assert!(matches!(check_sandbox(w), Err(SandboxError::Escape(_))));
+    }
+
+    #[test]
+    fn top_level_dot_git_symlink_is_a_violation_wherever_it_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        // The target sits *inside* the worktree: a top-level `.git` link is
+        // refused because git must never follow one, not because it escapes.
+        std::fs::write(w.join("elsewhere"), "gitdir: /somewhere").unwrap();
+        link(w, ".git", "elsewhere");
+        assert_eq!(
+            find_escaping_symlinks(w).unwrap(),
+            vec![PathBuf::from(".git")]
+        );
+        assert!(matches!(check_sandbox(w), Err(SandboxError::Escape(_))));
+    }
+
+    #[test]
+    fn top_level_dot_git_gitfile_stays_exempt() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = dir.path();
+        // What `git worktree add` writes is a plain file, never a link, and
+        // every normal commit goes through it.
+        std::fs::write(w.join(".git"), "gitdir: ../main/.git/worktrees/w\n").unwrap();
+        assert!(find_escaping_symlinks(w).unwrap().is_empty());
+        assert!(check_sandbox(w).is_ok());
     }
 
     fn attach_run() -> HarnessRun<'static> {
