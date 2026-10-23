@@ -5,8 +5,9 @@ families of the current round are the *seats*; the families named by the
 ``Writer:`` trailer of every commit behind the item's current-epoch verified
 ``commit+ci`` evidence are the *writers*.  A commit may name several
 writers (a squashed branch carries one ``Writer:`` line per writer), so every
-value of the ``Writer:`` key counts — not just the first or the last.  A
-writer family is covered when
+value of the ``Writer:`` key counts — not just the first or the last — and the
+key is matched case-insensitively, as git trailer keys are (``Writer:`` and
+``writer:`` are the same key).  A writer family is covered when
 ``need`` distinct seat families other than it exist (``1`` standard, ``2``
 high) and, for a sensitive (high) item, at least one of them is neither
 ``anthropic`` nor the writer itself.  Two Claude seats are therefore one
@@ -27,6 +28,21 @@ from .errors import Refused
 from .evidence_git import trailer_values
 
 __all__ = ["uncovered", "writer_families"]
+
+
+def _key_values(trailer, name):
+    """Every value of *name*'s trailer key, matched CASE-INSENSITIVELY.
+
+    Git trailer keys are case-insensitive, so ``Writer:`` and ``writer:`` are
+    the same key and a commit may carry both spellings.  A plain
+    ``trailer.get("Writer")`` would silently ignore the lower-case line and
+    let the seat-coverage check close the item without a seat for that writer.
+    """
+    values = []
+    for key, value in trailer.items():
+        if isinstance(key, str) and key.strip().lower() == name.lower():
+            values.extend(trailer_values(value))
+    return values
 
 
 def uncovered(writers, seats, need=2, sensitive=False):
@@ -88,7 +104,7 @@ def writer_families(store, item, ctx):
             raise Refused("writer_unknown",
                           f"commit {commit} names no writer")
         for trailer in trailers:
-            writers = trailer_values(trailer.get("Writer"))
+            writers = _key_values(trailer, "Writer")
             if writers:
                 for writer in writers:
                     tokens = str(writer).split()

@@ -73,16 +73,12 @@ def _paragraph_is_trailer_block(lines: list[str]) -> bool:
     return True
 
 
-def _trailing_trailer_lines(text: str) -> list[str]:
-    """The lines of *text*'s TRAILING trailer block (``[]`` when it has none).
+def _trailing_trailer_start(text: str) -> int | None:
+    """The line index where *text*'s trailing trailer block begins, or None.
 
     The block is the maximal run of final paragraphs in which every non-blank
-    line is a trailer (or a continuation of one).  Only that run is read: a
-    prose paragraph ENDS the block, so a ``Hand-Edit:``/``Writer:``/``Plan-Item:``
-    line quoted earlier in the body is prose, not a trailer, and never reaches
-    the seat-coverage check or the item a commit is attached to.  Trailing
-    blank lines are ignored, and paragraphs keep their original spacing so a
-    continuation still joins the trailer before the blank line that follows it.
+    line is a trailer (or a continuation of one).  ``None`` means *text* has
+    no trailing trailer block at all.
     """
     lines = text.splitlines()
     paragraphs: list[tuple[int, list[str]]] = []
@@ -102,8 +98,46 @@ def _trailing_trailer_lines(text: str) -> list[str]:
     while start and _paragraph_is_trailer_block(paragraphs[start - 1][1]):
         start -= 1
     if start == len(paragraphs):
+        return None
+    return paragraphs[start][0]
+
+
+def _trailing_trailer_lines(text: str) -> list[str]:
+    """The lines of *text*'s TRAILING trailer block (``[]`` when it has none).
+
+    Only that run is read: a prose paragraph ENDS the block, so a
+    ``Hand-Edit:``/``Writer:``/``Plan-Item:`` line quoted earlier in the body
+    is prose, not a trailer, and never reaches the item a commit is attached
+    to.  Trailing blank lines are ignored, and paragraphs keep their original
+    spacing so a continuation still joins the trailer before the blank line
+    that follows it.
+    """
+    start = _trailing_trailer_start(text)
+    if start is None:
         return []
-    return lines[paragraphs[start][0]:]
+    return text.splitlines()[start:]
+
+
+_WRITER_SHAPED_RE = re.compile(r"^writer:\s*\S", re.IGNORECASE)
+
+
+def stray_writer_line(text: str) -> bool:
+    """True when a Writer-shaped line sits OUTSIDE the trailing trailer block.
+
+    ``parse_trailers`` reads only the trailing block, so a ``Writer:`` line
+    in an earlier trailer-shaped paragraph — or quoted in a prose paragraph —
+    is never returned.  For the *Plan-Item* binding that is right (a prose
+    quote must not re-attach a commit), but for the writer families it is
+    ambiguous: the dropped line may name a writer that no reviewer seat
+    covers.  The keeper must fail closed instead of closing on a PARTIAL
+    family list, so a ``^writer:\\s*\\S`` line (key case-insensitive, as git's
+    trailer keys are) outside the trailing block makes the writer set
+    unknowable.
+    """
+    start = _trailing_trailer_start(text)
+    lines = text.splitlines()
+    outside = lines if start is None else lines[:start]
+    return any(_WRITER_SHAPED_RE.match(raw) for raw in outside)
 
 
 def parse_trailers(text: str) -> dict[str, str | list[str]]:
@@ -520,6 +554,30 @@ class GitAdapter:
         except Exception:
             return None
 
+    def _commit_body(self, repo: str, sha: str) -> str | None:
+        """The commit *sha*'s message body, or None when git cannot read it."""
+        if not valid_commit_ref(sha):
+            return None
+        proc = self._run(
+            repo, ["show", "-s", "--format=%b", "--end-of-options", sha]
+        )
+        if proc.returncode != 0:
+            return None
+        return proc.stdout
+
+    def _leaf_trailers(self, repo: str, sha: str) -> dict[str, str | list[str]] | None:
+        """Trailers of ONE writer-bearing commit; None when it is unknowable.
+
+        None covers both a git failure and a ``Writer:`` line outside the
+        trailing trailer block: in either case the writer families cannot be
+        read without guessing, so the caller fails closed instead of handing
+        the seat-coverage check a partial family list.
+        """
+        body = self._commit_body(repo, sha)
+        if body is None or stray_writer_line(body):
+            return None
+        return parse_trailers(body)
+
     def trailers(self, repo: str, sha: str) -> dict[str, str | list[str]]:
         """Every trailer of the commit *sha*'s message, key → value(s).
 
@@ -537,14 +595,10 @@ class GitAdapter:
         ``Hand-Edit:``/``Writer:``/``Plan-Item:`` line quoted in prose is
         never returned as a trailer.
         """
-        if not valid_commit_ref(sha):
+        body = self._commit_body(repo, sha)
+        if body is None:
             return {}
-        proc = self._run(
-            repo, ["show", "-s", "--format=%b", "--end-of-options", sha]
-        )
-        if proc.returncode != 0:
-            return {}
-        return parse_trailers(proc.stdout)
+        return parse_trailers(body)
 
     def writer_trailers(self, repo: str, sha: str) -> list[dict[str, str | list[str]]]:
         """Trailer dicts of the commits that authored the change behind *sha*.
@@ -558,7 +612,10 @@ class GitAdapter:
         kept (a squashed leaf may name several writer families).  An octopus
         merge (3+ parents) has no single second-parent range, so it returns no
         writers at all.  Failure returns an empty list, which the keeper treats
-        as fail-closed ``writer_unknown``.
+        as fail-closed ``writer_unknown`` — as does a ``Writer:`` line outside
+        the commit's trailing trailer block (see :func:`stray_writer_line`):
+        the dropped line may name a writer no seat covers, so a partial
+        family list is never returned.
         """
         if not valid_commit_ref(sha):
             return []
@@ -580,7 +637,8 @@ class GitAdapter:
             # ignoring the commits they carry.
             return []
         if len(parents) < 2:
-            return [self.trailers(repo, sha)]
+            trailers = self._leaf_trailers(repo, sha)
+            return [] if trailers is None else [trailers]
         base = self._run(
             repo, ["merge-base", "--end-of-options", parents[0], parents[1]]
         )
@@ -594,12 +652,17 @@ class GitAdapter:
         )
         if rev.returncode != 0:
             return []
-        out: list[dict[str, str]] = []
+        out: list[dict[str, str | list[str]]] = []
         for line in rev.stdout.splitlines():
             commit = line.strip().lower()
             if not valid_commit_ref(commit):
                 continue
-            out.append(self.trailers(repo, commit))
+            trailers = self._leaf_trailers(repo, commit)
+            if trailers is None:
+                # One unknowable leaf poisons the whole writer set: never let
+                # the other leaves' families stand for a writer we dropped.
+                return []
+            out.append(trailers)
         return out
 
     def commit_times(self, repo: str, sha: str) -> tuple[float | None, float | None]:
