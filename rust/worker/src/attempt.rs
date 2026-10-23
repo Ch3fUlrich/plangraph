@@ -486,12 +486,25 @@ fn check_with_rerun(
     jail: Option<&crate::harness::JailConfig>,
 ) -> Result<(CheckOutcome, CheckResult), AttemptError> {
     let jail = jail.map(|j| (j.bin.as_path(), &j.limits, j.tmp.as_path()));
-    let first = check::run_check_scoped(cmd, dest, cfg.start_to_close, cfg.check_tail_lines, jail)?;
+    let first = check::run_check_scoped(
+        cmd,
+        dest,
+        cfg.start_to_close,
+        cfg.check_tail_lines,
+        jail,
+        &|| false,
+    )?;
     if first.passed() {
         return Ok((CheckOutcome::Pass, first));
     }
-    let second =
-        check::run_check_scoped(cmd, dest, cfg.start_to_close, cfg.check_tail_lines, jail)?;
+    let second = check::run_check_scoped(
+        cmd,
+        dest,
+        cfg.start_to_close,
+        cfg.check_tail_lines,
+        jail,
+        &|| false,
+    )?;
     let outcome = if second.passed() {
         CheckOutcome::Flaky
     } else {

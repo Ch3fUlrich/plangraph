@@ -83,9 +83,17 @@ from `osrelease`.
   A sibling same-user process's `/proc/<pid>/environ` is refused (covered by the
   escape tests; node starts under this policy). The jail cannot hide the attempt's
   own `/proc/<pid>`, so keep secrets out of the attempt's own environment and argv.
-- The library default (`JailConfig::from_env`) runs unjailed when `PG_JAIL_BIN` is
-  unset; the fail-closed policy is enforced at worker startup, so any other
-  entrypoint must call `required_from_env` itself.
+- The library default (`JailConfig::from_env`) is an alias of
+  `required_from_env`, so both fail closed: with `PG_JAIL_BIN` unset it returns
+  an error and no attempt runs unjailed, unless the test-only override
+  `PG_JAIL=off` **and** `PG_TEST_ALLOW_UNJAILED=1` are both set. An empty or
+  non-absolute `PG_JAIL_BIN` is an error too. Worker startup calls
+  `required_from_env` and attempt setup calls `from_env`, same policy.
+- Landlock is filesystem-only and the attempt runs as the worker's uid, so this
+  layer does not isolate same-user processes: signals to, and `ptrace` of, the
+  worker or a sibling attempt are NOT blocked here (ptrace further subject to
+  the host's `yama` `ptrace_scope`). Keep secrets out of the worker's
+  environment where possible.
 - There is no network egress control in this layer.
 - The kernel must list Landlock in its LSM set and enforce Landlock ABI V3
   (or newer); otherwise `pg-jail` fails closed with exit 78.

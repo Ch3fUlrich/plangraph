@@ -52,16 +52,18 @@ pub fn run_check_cancellable(
     tail_n: usize,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<CheckResult> {
-    run_check_scoped(cmd, dir, timeout, tail_n, None)
+    run_check_scoped(cmd, dir, timeout, tail_n, None, cancelled)
 }
 
-/// Run a check using the attempt's jail and resource ceilings when configured.
+/// Run a check using the attempt's jail and resource ceilings when configured;
+/// let `cancelled` stop the whole process group early.
 pub fn run_check_scoped(
     cmd: &str,
     dir: &Path,
     timeout: Duration,
     tail_n: usize,
     jail: Option<(&Path, &crate::scope::ScopeLimits, &Path)>,
+    cancelled: &dyn Fn() -> bool,
 ) -> io::Result<CheckResult> {
     let home = crate::sandbox_env::HomeGuard::for_check(dir)?;
     let mut c = Command::new("sh");
@@ -145,7 +147,8 @@ mod tests {
             d.path(),
             T,
             50,
-            Some((&d.path().join("missing"), &limits, d.path()))
+            Some((&d.path().join("missing"), &limits, d.path())),
+            &|| false
         )
         .is_err());
         assert!(!d.path().join("marker").exists());
@@ -178,6 +181,7 @@ mod tests {
             T,
             50,
             Some((Path::new(&bin), &limits, &tmp)),
+            &|| false,
         )
         .unwrap();
         // The successful in-jail write proves a launcher failure did not mask the test.
