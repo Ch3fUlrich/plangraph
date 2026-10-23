@@ -82,12 +82,21 @@ clock rollback does not decrease IDs. Sequence overflow advances the logical
 millisecond. Cursors are opaque retained record IDs, not timestamps.
 
 An empty cursor starts at the oldest retained record. A known cursor resumes
-strictly after that record. Exception: a cursor containing `|` is a shape error
-and returns **400 `bad_request`** before authentication, because the canonical
-separator cannot be bound unambiguously into the signature. Real record IDs
-never contain `|`. Every other nonempty malformed, evicted or unknown cursor
-returns **410 `cursor_gone`**, never a full replay. Recovery from lost history
-requires an explicit client decision to restart with an empty cursor.
+strictly after that record. Cursor validation has two distinct layers:
+
+- `check_read`, the transport authentication seam, rejects a cursor that is not
+  a string or that contains `|` with **400 `bad_request`**, once a signature
+  header is present and before authentication. Such a cursor cannot be bound
+  unambiguously into the signed canonical form. Real record IDs never contain
+  `|`. A missing or empty signature header returns `bad_signature` first;
+  timestamp and identifier shape checks also precede the cursor shape check.
+- `check_cursor`, the pure ring lookup called by `read_records` after
+  authentication, treats every nonempty malformed, evicted or unknown value
+  (including one containing `|`) as **410 `cursor_gone`** and never replays the
+  ring for such a value.
+
+Recovery from lost history requires an explicit client decision to restart
+with an empty cursor.
 
 READ requires `X-Fleet-From`, `X-Fleet-Ts`, `X-Fleet-Nonce`, `X-Fleet-Sig`, and
 optionally `X-Fleet-Kid` (header names case-insensitive). Its signature binds the
