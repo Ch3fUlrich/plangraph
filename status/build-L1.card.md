@@ -6,14 +6,14 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 5671ac77 (#145 RT95 DONE). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq5 3c26b3 mimo (5127 pass) + main merge -> sq2 head b2b5293f pushed, gate rc0; seats deepseek bkqiai72c + Haiku running (seats/exec-ownership/sq5) -> CI -> re-GO-REQ |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq2 head b2b5293f CI red (PG fence test forbidden, cargo fmt); sq5 seats deepseek+Haiku FIX (3 HIGH: PG test, unclaimed owner plant, no parked revive) -> sq6 sol writer on workst (brief seats/exec-ownership/sq5/FIX-BRIEF-sq6.md) -> CI, seats -> re-GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix PR #152 head 27da2078, CI green (browser pending); deepseek FIX HIGH v_dec_3 owner/observable + 3 MED -> fix2 mimo fb8747 (seats/pr152/FIX2-BRIEF.md) -> CI, re-seat deepseek+2nd -> merge -> submit |
 | GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 43a16a90; Haiku r3 FIX 2 HIGH (in-block indented Writer fold; **/1./`/| shapes) -> fix4 7329ee ended WIP (patch saved) -> cont 470492 mimo -> push, CI, re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats deepseek + luna (workst sha256 review a434ce1e): no code finding; both FIX only on names-list scan + later gates -> after operator scan line: re-run both, submit, GO-REQ, luna asked workst; names-list scan: NO agent holds words file -> BLOCKED routing = operator Q (D-2433); luna r4 workst builds prompt, runs ~13:52Z -> submit, verdicts, GO-REQ |
 | #96 JEV-SHADOW (HIGH) | L1 | merged 0f588e1d, in_review; D-2396 -> JEV-ATTEMPT-THREAD p7 (spawn next); close w/ 1 seat on combined diff |
-| KEEPER-CLOSE-SKIP-UNVERIFIED #148 (HIGH p7) | L1 | fix1 (sol 2b54ea) + main merge head c32f3fe5 (workst 5140 pass); deepseek r2 running (seats/close-skip-unverified/r2); Haiku r1 PASS -> CI -> GO-REQ |
+| KEEPER-CLOSE-SKIP-UNVERIFIED #148 (HIGH p7) | L1 | head c32f3fe5 CI green; r2 deepseek PASS + Haiku PASS -> GO-REQ sent 14:1xZ -> on GO mergepath, submit, verdicts |
 | JEV-ATTEMPT-THREAD p7 | L1 queue | claimed; workst writer 20261023-112202-jev-attempt-thread-write-f55fce running |
 | BUS-NONCE-FLOOD p4 | L1 queue | D-2422 created (PH-RT-CONSOLIDATE); unclaimed, starts after P1 writers free |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
