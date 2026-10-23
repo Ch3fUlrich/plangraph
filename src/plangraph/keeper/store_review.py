@@ -157,6 +157,10 @@ class ReviewMixin:
                 # D-228: ``_reviewer_family_ok`` above already proved this
                 # reviewer is a distinct principal of a distinct, non-blank
                 # family from the writer's, so one verdict closes the review.
+                # Seat coverage is the closing gate: the sole standard seat
+                # must cover every writer family of the item's commits.
+                self._check_coverage(principal, fresh, prior, need=1,
+                                     sensitive=False, now=now)
                 self._append(principal, key, "review_verdict",
                              self._verdict_payload(principal, fresh), now)
                 return self._pass(principal, key, reason, fresh, now,
@@ -172,6 +176,11 @@ class ReviewMixin:
                 if auth.norm_family(principal.family) == first_family:
                     raise Refused("same_family",
                                   "second reviewer shares a family")
+            if len(prior) + 1 >= 2:
+                # Only the verdict that would close a high item is checked;
+                # a refusal appends nothing and leaves the round intact.
+                self._check_coverage(principal, fresh, prior, need=2,
+                                     sensitive=True, now=now)
             self._append(principal, key, "review_verdict",
                          self._verdict_payload(principal, fresh), now)
             passed = len(prior) + 1
@@ -179,6 +188,25 @@ class ReviewMixin:
                 return self._pass(principal, key, reason, fresh, now,
                                   reviews_passed=passed)
         return {"key": key, "state": "in_review", "reviews_passed": passed}
+
+    def _check_coverage(self, principal, item, prior, *, need, sensitive, now):
+        """Refuse a closing verdict whose writer families are not covered.
+
+        Runs inside the verdict write lock, after every existing gate, on the
+        verdict that would close the item only.  ``writer_families`` may raise
+        ``writer_unknown`` (fail closed); ``Refused('coverage', ...)`` names
+        the uncovered families and, because nothing has been appended yet,
+        leaves the item's state, round and verdict history untouched.
+        """
+        from .coverage import uncovered, writer_families
+
+        writers = writer_families(self, item, self._ctx(item, now))
+        seats = [v.get("family") for v in prior]
+        seats.append(auth.norm_family(principal.family))
+        missing = uncovered(writers, seats, need=need, sensitive=sensitive)
+        if missing:
+            raise Refused("coverage",
+                          f"writer families not covered: {missing}")
 
     @staticmethod
     def _verdict_payload(principal, item):
