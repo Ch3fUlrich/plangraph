@@ -1,0 +1,57 @@
+[
+  {
+    "name": "post-no-kid",
+    "fn": "canonical_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello"
+      }
+    },
+    "expect": "fleet-bus/2|post|1700000000|nonce-1|sender|receiver|message-1||2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  },
+  {
+    "name": "post-kid",
+    "fn": "canonical_post",
+    "inputs": {
+      "envelope": {
+        "from": "sender",
+        "to": "receiver",
+        "ts": 1700000000,
+        "nonce": "nonce-1",
+        "msg_id": "message-1",
+        "text": "hello",
+        "kid": "key-1"
+      }
+    },
+    "expect": "fleet-bus/2|post|1700000000|nonce-1|sender|receiver|message-1|key-1|2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+  },
+  {
+    "name": "read",
+    "fn": "canonical_read",
+    "inputs": {
+      "ts": 1700000000,
+      "nonce": "read-1",
+      "reader": "reader",
+      "kid": null,
+      "cursor": "1700000000000-000001"
+    },
+    "expect": "fleet-bus/2|read|1700000000|read-1|reader||1700000000000-000001"
+  },
+  {
+    "name": "read-empty-cursor",
+    "fn": "canonical_read",
+    "inputs": {
+      "ts": 1700000000,
+      "nonce": "read-1",
+      "reader": "reader",
+      "kid": "key-1",
+      "cursor": ""
+    },
+    "expect": "fleet-bus/2|read|1700000000|read-1|reader|key-1|"
+  }
+]

@@ -22,15 +22,14 @@ PATHS = [
     "src/plangraph/keeper/credential_guard.py password check",
 ]
 
-#: The slash-shaped half of the refusal corpus, assembled from parts at import
-#: time: the leak gates scan source text, so no credential-shaped literal may sit
-#: in this file -- the runtime value (and every assertion on it) is unchanged.
-_CRED_SLASH = "svc/" + "Xk9fT2" + "mQ"
-
 #: credential pairs (plus one hiding beside an exempted path) -> still refused.
+#: Both credential-shaped values are plain literals here: the leak gate waives
+#: exactly these values in exactly this file (narrow per-file, per-regex
+#: allowlist entries in ``.gitleaks.toml`` with their reasons), so any *other*
+#: credential-shaped string written into this file still fails it.
 REAL = [
     "login admin/hunter2secret",
-    "password: " + _CRED_SLASH,
+    "password: svc/Xk9fT2mQ",
     "credentials bob/correcthorse",
     "password for docs/readme.md is admin/swordfish99",
     f"login see {PATHS[0]} then {SECRET}",
