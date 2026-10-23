@@ -32,7 +32,7 @@ class _Runs:
     def job(self, run_id):
         if run_id != "w1":
             raise FileNotFoundError(run_id)
-        return {"request": {"title": f"work on {KEY}"}, "task": ""}
+        return {"request": {"title": f"work on {KEY}", "item_key": KEY}, "task": ""}
 
 
 def _decisions(tmp_path, body):

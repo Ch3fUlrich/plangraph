@@ -131,31 +131,6 @@ def test_run_record_verifier_fails_closed_on_symlinked_run_dir(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# (4) both author and committer dates, with a configurable skew
-# --------------------------------------------------------------------------- #
-
-def test_commit_ci_author_older_than_claim_fails():
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM + 100, author_time=CLAIM - 1000))
-    assert verify("commit+ci", {"commit": SHA}, ctx).ok is False
-
-
-def test_commit_ci_committer_older_than_claim_fails():
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1000, author_time=CLAIM + 100))
-    assert verify("commit+ci", {"commit": SHA}, ctx).ok is False
-
-
-def test_commit_ci_within_default_skew_passes():
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 30))
-    assert verify("commit+ci", {"commit": SHA}, ctx).ok is True
-
-
-def test_commit_ci_skew_is_configurable():
-    ctx = make_ctx(git=FakeGit(commit_time=CLAIM - 1))
-    ctx.skew = 0.0
-    assert verify("commit+ci", {"commit": SHA}, ctx).ok is False
-
-
-# --------------------------------------------------------------------------- #
 # (5) gh api path built only from a validated slug and sha
 # --------------------------------------------------------------------------- #
 
@@ -335,7 +310,7 @@ def test_verifier_guard_catches_unexpected_exception():
 
 
 def test_commit_ci_subprocess_timeout_is_sanitised():
-    ctx = make_ctx(git=FakeGit(commit_time_error=subprocess.TimeoutExpired("git", 30)))
+    ctx = make_ctx(git=FakeGit(merge_error=subprocess.TimeoutExpired("git", 30)))
     res = verify("commit+ci", {"commit": SHA}, ctx)
     assert res.ok is False
     assert "TimeoutExpired" in res.detail

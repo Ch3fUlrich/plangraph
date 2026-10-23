@@ -26,6 +26,7 @@ Q&A page connects each decision/question to task, phase and project and lets you
 | `src/plangraph/web/` | the page's own CSS/JS (graph, table, sidebar, filters) |
 | `src/plangraph/views*.py` | pure views over a snapshot: ready, blocked, critical path, slack, brief |
 | `src/plangraph/keeper/` | the plan-keeper service (SQLite, auth, evidence verifiers; POSIX only — uses `fcntl`) |
+| `src/plangraph/spawner/` | agent spawner & model routing catalog (SQLite WAL, OmniRoute ACP-first, cross-family review, MCP server) |
 | `tools/` | batch apply, markdown sync, plan check, importer |
 | `examples/` | fictional plans, a batch, `snapshot.json` |
 | `docs/` | proposal, spec, runbook, UI/UX reviews |
@@ -53,8 +54,8 @@ PYTHONPATH=src python -m pytest tests -q
 PYTHONPATH=src python -m pytest tests/test_ui*.py tests/test_render*.py tests/test_views.py -q
 ```
 
-Keeper, batches and the public/private repo split are described in `docs/KEEPER.md`,
-`docs/BATCH.md` and `docs/PUBLIC.md`.
+Keeper, batches, agent spawner and the public/private repo split are described in `docs/KEEPER.md`,
+`docs/SPAWNER.md`, `deploy/README.md`, `docs/BATCH.md` and `docs/PUBLIC.md`.
 
 ## Why our own app instead of an existing tracker
 

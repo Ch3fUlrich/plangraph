@@ -396,7 +396,7 @@ class _Runs:
     def job(self, run_id):
         if run_id not in self._JOBS:
             raise FileNotFoundError(run_id)
-        return {"request": {"title": f"work on {self._JOBS[run_id]}"}, "task": ""}
+        return {"request": {"title": f"work on {self._JOBS[run_id]}", "item_key": self._JOBS[run_id]}, "task": ""}
 
 
 def _revoked_at(w, key, token):

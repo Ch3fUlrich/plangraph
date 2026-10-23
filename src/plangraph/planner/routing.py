@@ -19,7 +19,8 @@ from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
 from .legs import DEFAULT_LEGS, TIERS, Leg
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
-           "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION"]
+           "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
+           "SPAWNER_SELECTION_ENABLED"]
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
@@ -29,6 +30,8 @@ USABLE_FRACTION = USABLE_FRACTION_PCT / 100
 #: Attempts on one tier before promotion, and promotions allowed.
 ATTEMPT_BUDGET = 3
 PROMOTIONS = 1
+#: Off until SPAWNER-UTILITY-PROPS closes; the only runtime path for spawner selection is this module.
+SPAWNER_SELECTION_ENABLED = False
 #: Risk tags that keep training-on-data legs away from the card.
 _NO_TRAIN_TAGS = frozenset({"auth", "secrets", "money", "live-step"})
 #: Exit classes where the provider, not the card, failed: rotate inside the tier.
