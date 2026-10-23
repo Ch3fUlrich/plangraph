@@ -20,6 +20,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## 2026-10-22
 
+- **RT-P1-CARD-CHECKS (wiring inert, follow-up lane 2b):** the worker and planner halves above are merged without end-to-end wiring: no production caller yet sends `Claim.check_kind`/`check_reads`/forbid, the keeper card store does not accept `check_kind` (the planner omits the default), and `phase_workflow` passes empty `smoke_checks`/`exports`, `risk_tagged=false` and no `base_sha` to the gate. So red-first, smoke checks, export verification and required held-out do not act in production until lane 2b wires build_claim, the keeper card store and `phase_workflow`. The plan item stays open until then.
 - **RT-P1-CARD-CHECKS / RS-WIRING:** Compose check, required risk-heldout, smoke, diffscan and exports gates with replay-defaulted workflow metadata; park red-first contract defects before probing or retrying and default extended Claim literals. Add composition, legacy JSON and red-first end-to-end coverage.
 - **RT-P1-CARD-CHECKS / RS-GATE-BUILTINS:** Add replay-compatible diffscan and exports gate builtins, validating names and diff bases before execution and confining export reads so promised definitions and test weakening are checked without running placeholder commands.
 - **RT-P1-CARD-CHECKS / RS-PREATTEMPT:** Default-compatible worker claim check metadata, red-first base checks before harness execution (regression opt-out), and confinement protection for check inputs outside the allow set prevent already-green change cards and edits to held-out checks.
