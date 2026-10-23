@@ -4,7 +4,7 @@ A ``review_tier='none'`` item is one the operator has decided never to review:
 its only required evidence is a ``decision`` row.  The router closes it
 directly from ``claimed``/``in_review`` to ``done`` on two pieces of proof:
 
-* at least one attached ``decision`` evidence, every one of which verifies
+* at least one attached verified ``decision`` evidence, each re-verified
   against the configured decisions file; and
 * a ``batch_ref`` of the form ``<path>@<sha256 hex>`` naming a file the keeper
   can open, that resolves inside one of the configured ``batch_roots``
@@ -133,7 +133,7 @@ class CloseMixin:
         return decisions
 
     def _decision_evidence(self, key, item, now, require_named=False):
-        """Verify every attached ``decision`` row pre-lock; return the rows.
+        """Re-verify attached verified ``decision`` rows; return the rows.
 
         Returns ``(rows, named_keys)`` where ``named_keys`` is the union of the
         whole ``Closes:`` tokens across those rows (empty when none carries one).
@@ -142,10 +142,11 @@ class CloseMixin:
         in for the operator naming the key.
         """
         rows = [e for e in self._evidence(key)
-                if e["epoch"] == item["epoch"] and e["kind"] == "decision"]
+                if e["epoch"] == item["epoch"] and e["kind"] == "decision"
+                and e["verified"]]
         if not rows:
             raise Refused("evidence_missing",
-                          f"{key} has no decision evidence attached")
+                          f"{key} has no verified decision evidence attached")
         decisions = self._decisions_adapter(item, now)
         named = set()
         for row in rows:
@@ -335,7 +336,7 @@ class CloseMixin:
                               f"{key} changed kind under the transaction")
             again = frozenset(e["id"] for e in self._evidence(key)
                               if e["epoch"] == fresh["epoch"]
-                              and e["kind"] == "decision")
+                              and e["kind"] == "decision" and e["verified"])
             if again != seen:
                 raise Refused("conflict",
                               "the decision evidence changed under the transaction")
