@@ -25,5 +25,5 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 - D-2315: no age-only deletes; clean only terminal-marker runs.
 - TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
 | KEEPER-TRAILER-MULTI (HIGH) | L1 | writer 20261023-064042-trailer-multi-writer-0e3d4e (wt trailer-multi off main 75a6f7ad) -> verify, PR, CI, seats qwen+glm (non-xiaomi) -> GO-REQ |
-| #100 SANDBOX | sweep-runtime | head 61026cc5 CI green; r2 qwen+glm FIX; disputes -> routing BLOCKED 07:33Z; L2 told fix LOWs + fresh round |
+| #100 SANDBOX | sweep-runtime | head 61026cc5 CI green; r2 qwen+glm FIX; D-2346 disputes VALID; L2 fixes 3 LOWs -> fresh qwen+glm full diff + 3 proofs (c: name verify_git_dir test+log line) -> 2 PASS = merge, no GO-REQ; new MEDIUM -> routing |
 | RT95-EMPTY-RUN-FIXTURE | L1 | claimed; #137 merged -> spawn writer to capture a real opencode empty run when MemAvailable > 5 GB (D-2332; was 4.3 GB) |
