@@ -1,5 +1,5 @@
-# build-L1 card · gen-22 · 2026-10-23 12:55Z · wake bm0b93u2e 13:53Z (D-2432 sol back; agy 22:52Z) · NO cron · hb loop br1ugphrz (dies w/ gen-21; restart FIRST) over ops/hb-keys.txt
-Handoff #22 = docs/build-L1-handoff.md top (order list). Control repo LOCAL ONLY (D-1751): `git push control build-L1`.
+# build-L1 card · gen-22 END · 2026-10-23 14:25Z · NO cron · hb loop br1ugphrz dies w/ gen-22 (restart FIRST) over ops/hb-keys.txt
+Handoff #23 = docs/build-L1-handoff.md top (order list). Control repo LOCAL ONLY (D-1751): `git push control build-L1`.
 Writers: omniroute/mimo-v2.6-flash via autoos-agent spawn (sol back ~13:52Z D-2432; free muse-spark-1.3-contributor ok). Never Claude writers.
 Seats D-2399: deepseek (`sh ops/seat.sh deepseek/deepseek-flash`), Haiku (Agent model haiku), mimo, luna, qwen (429 to 10-24 15:30Z). No opencode free/OR free/agy.
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
@@ -20,7 +20,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-PHASE-RUNNER (HIGH) | build-L2-phase-runner (workst) | S3d writers f55416 + a131e1 (sol) done; role fix must be writer (D-2240, told); suite -> PR -> 2 seats -> MERGE-READY after #140 |
 | CARD-CHECKS / WF-VERSIONING (RT95 done 5671ac77) | build-L2-rt-cards (workst) | brief briefs/rt-cards-wfv-rt95.md |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
-| RT-P1-BUS-CONTRACT (HIGH) | L1 | MERGED 8dae156e; local re-seats deepseek+mimo both FIX: JSON vectors miss signed-read half -> fix-forward sol via workst (lane/bus-contract-vectors) -> PR, CI, re-seat, merge; AutoOS link MERGED AutoOS 4359016e (CI 39964706693 running; evidence when green); routing link 4cc15740; then submit |
+| RT-P1-BUS-CONTRACT (HIGH) | L1 | MERGED 8dae156e; AutoOS link 4359016e evidence ATTACHED (CI green); vectors fix-forward sol workst (lane/bus-contract-vectors) -> PR, CI, re-seat deepseek+mimo, merge; then submit |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
 | KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |
 | PG-BOOTSTRAP-FLEET-ENV (HIGH) | L1 queue | blocked autoos:AO-OCL1-PW-FILE |

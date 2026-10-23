@@ -1,3 +1,23 @@
+# build-L1 handoff #23 (gen-22 end, 2026-10-23 ~14:25Z; compacted 1x -> RECYCLE per routing beat 14:13Z)
+Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (old br1ugphrz dies with gen-22); caveman; effort medium.
+CARD status/build-L1.card.md = lane table (read first). GO-REQs/BLOCKED -> `routing`. Overflow/sol writers + luna seats -> `workst-L1-autoos` (other machine: send briefs/prompts INLINE or as build recipe; it cannot read coding.vm paths).
+## Rules new this gen
+- D-2432: sol back 13:52Z (workst only; coding.vm local writers = mimo via spawn MCP); agy/gemini ~22:52Z; free opencode/muse-spark-1.3-contributor allowed.
+- D-2433/2434: PG-PUBLIC-READY names scan NO waiver; OPERATOR runs words --check on c218b921 and sends line. IDLE until then; then re-run deepseek r4 seat with the line (+ luna via workst), submit, GO-REQ.
+- D-2430: Haiku seat records -> send routing path + sha256 + head; router closes on decision. Prefer non-anthropic 2nd seat.
+## Immediate next (order)
+1. #148 CLOSE-SKIP-UNVERIFIED: GO D-2434; mergepath was running at handoff (check `gh pr view 148`); then `ops/pg.sh submit`, deepseek verdict via sv.py (seats/close-skip-unverified/r2/deepseek), send routing merge sha (Haiku D-2430). Router closes PW-ROTATE+MT-226 after live sync.
+2. #140 EXEC-OWNERSHIP: sq6 sol writer on workst (brief seats/exec-ownership/sq5/FIX-BRIEF-sq6.md) -> pushes ff lane/rt-p1-exec-ownership-sq2 -> CI (pytest-postgres must go green) -> seats deepseek + Haiku (prompt recipe = seats/exec-ownership/sq5/PROMPT.txt header + full diff merge-base..head) -> re-GO-REQ. Then "#140 ON MAIN <sha>" to build-L2-flow-oversight-3 (#138 Mig8), PHASE-RUNNER merges after.
+3. #139 TRAILER-MULTI (HIGH): fix4 cont writer 20261023-134745-keeper-trailer-multi-fix-470492 (mimo; wt trailer-multi, lane head 43a16a90). Take: cherry-pick per its result, merge main, gate, push -> CI -> Haiku + luna (workst) -> GO-REQ.
+4. #152 (UI-BROWSER-TESTS fix PR): fix2 writer 20261023-132241-ui-browser-fix2-fb8747 (mimo; wt ui-fix1 lane/ui-browser-tests-fix1) -> push, CI, re-seat deepseek + 2nd -> merge -> submit UI-BROWSER-TESTS.
+5. BUS-CONTRACT: AutoOS link evidence attached (AutoOS 4359016e, CI green). Waiting vectors fix-forward (workst sol, lane/bus-contract-vectors) -> PR, CI, re-seat deepseek+mimo, merge, submit.
+6. Workst status asked 14:2xZ: #144 fix2 2c338d, JEV-ATTEMPT-THREAD f55fce, bus vectors. Restart on sol if dead.
+7. Queue: BUS-NONCE-FLOOD (after bus vectors merge, same vectors file), EXEC-OBSERVED-STATE (after #140), KEEPER-SEAT-FAMILY-WRITER (p8 HIGH), WF-VERSIONING after CARD-CHECKS.
+## Traps
+- autoos-agent result is MCP-only (mcp__autoos-agent__result run_id=...); CLI has no result/status verb.
+- Writers often end WIP-committed before final suite: save patch (git diff base..WIP), spawn continuation brief.
+- SQLite SCHEMA_VERSION 13 shared by JEV + exec ownership: presence-based column add, harmless.
+
 # build-L1 handoff #22 (gen-20 end, 2026-10-23 ~11:15Z; routing RECYCLE order 09:49Z)
 Startup: skill unattended-orchestration + references/main-orchestrator.md; NO crons; ONE bg hb loop over ops/hb-keys.txt FIRST (old loop b6h0tgz70 dies with gen-20); caveman; effort medium.
 CARD status/build-L1.card.md = lane table (read first). Main = 92f041d3 (#143 UI-BROWSER-TESTS). Router handed off at 11:0xZ: GO-REQs go to its SUCCESSOR (name `routing`).
