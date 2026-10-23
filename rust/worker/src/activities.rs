@@ -1541,7 +1541,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&any).unwrap()["expected_state"],
-            serde_json::json!(["open", "ready", "running", "needs_input"])
+            serde_json::json!(["open", "ready", "running", "waiting", "needs_input"])
         );
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&tagged).unwrap()["expected_state"],

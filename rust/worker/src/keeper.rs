@@ -61,9 +61,21 @@ pub struct Alarm {
     pub attempt: Option<u32>,
 }
 
+/// The single source of truth for the `expected_state` every worker park and
+/// question ask sends: the states a card may be in while this run still owns it.
+///
 /// Worker-run writes may precede state projection. The run/attempt fence rejects
-/// stale retries; this CAS preserves newer actor states and excludes agent leases.
-pub const WORKER_LIVE_STATES: &[&str] = &["open", "ready", "running", "needs_input"];
+/// stale retries; this CAS preserves newer actor states and excludes the agent
+/// lease (`claimed`) and the terminal ones (`parked`, `failed`, `done`,
+/// `cancelled`).
+///
+/// `waiting` is live, not excluded: the projector writes it after an attempt
+/// ends `usage_limit` or `outage`, and on `TIMER_STARTED`, so a wait-cap park or
+/// a question asked after a timer would otherwise get `409 exec_stale_state`
+/// until the workflow's retries ran out. Stale-duplicate protection comes from
+/// the run/attempt fence plus the keeper's idempotent duplicate-park success,
+/// never from leaving `waiting` out of this list.
+pub const WORKER_LIVE_STATES: &[&str] = &["open", "ready", "running", "waiting", "needs_input"];
 
 /// Which execution a keeper call belongs to: the workflow, this run of it, and
 /// the card attempt number (monotone per run — deliberately *not* Temporal's
@@ -579,12 +591,15 @@ impl Keeper for StubKeeper {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn live_states_exclude_newer_actor_and_agent_lease_states() {
+    fn live_states_include_waiting_and_exclude_agent_lease_and_terminal_states() {
         assert_eq!(
             super::WORKER_LIVE_STATES,
-            &["open", "ready", "running", "needs_input"]
+            &["open", "ready", "running", "waiting", "needs_input"]
         );
-        for state in ["waiting", "parked", "failed", "done", "claimed"] {
+        // The projector writes `waiting` (usage_limit/outage attempt ends and
+        // TIMER_STARTED), so a park or ask after a timer must accept it.
+        assert!(super::WORKER_LIVE_STATES.contains(&"waiting"));
+        for state in ["claimed", "parked", "failed", "done", "cancelled"] {
             assert!(!super::WORKER_LIVE_STATES.contains(&state));
         }
     }
@@ -631,7 +646,7 @@ mod tests {
                     }
                     Some(_) => assert_eq!(
                         body["expected_state"],
-                        serde_json::json!(["open", "ready", "running", "needs_input"])
+                        serde_json::json!(["open", "ready", "running", "waiting", "needs_input"])
                     ),
                 }
             }
