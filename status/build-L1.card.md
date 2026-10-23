@@ -7,7 +7,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | Item | Owner | State / next |
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | D-2410 A: fix writer 3c26b3 mimo (seats/exec-ownership/sq5/FIX-BRIEF.md) -> push sq2 -> CI -> seats deepseek+Haiku -> re-GO-REQ |
-| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix1 PR #152 head 27da2078 (504805 mimo, gate rc0) -> CI; seats deepseek bifma25hg + Haiku/luna -> merge -> submit |
+| UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix PR #152 head 27da2078, CI green (browser pending); deepseek FIX HIGH v_dec_3 owner/observable + 3 MED -> fix2 mimo fb8747 (seats/pr152/FIX2-BRIEF.md) -> CI, re-seat deepseek+2nd -> merge -> submit |
 | GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 43a16a90; Haiku r3 FIX 2 HIGH (in-block indented Writer fold; **/1./`/| shapes) -> fix4 mimo 7329ee (seats/trailer-multi/fix4) -> push, CI, re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
