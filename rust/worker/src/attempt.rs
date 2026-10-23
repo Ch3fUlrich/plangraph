@@ -7,7 +7,7 @@
 //! instead of burning retry budget. The worktree is left in place — the janitor
 //! probes and removes dead attempts, so nothing here destroys evidence.
 
-use crate::harness::{self, Harness, HarnessRun, SandboxError, run_harness};
+use crate::harness::{self, run_harness, Harness, HarnessRun, SandboxError};
 use crate::keeper::Claim;
 use crate::opencode_events::{self, ProviderErrorKind};
 use crate::question::{self, Question, Scan};
@@ -15,7 +15,7 @@ use pg_worker_core::check::{self, CheckResult};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::confine::{self, ConfineError, Violation};
 use pg_worker_core::exit_class::{CheckOutcome, ExitClass, Patterns, Signals};
-use pg_worker_core::git::{GitError, check_rev};
+use pg_worker_core::git::{check_rev, GitError};
 use pg_worker_core::stall::Opts;
 use pg_worker_core::worktree::{self, AttemptId};
 use serde::{Deserialize, Serialize};
@@ -773,8 +773,8 @@ mod tests {
     }
     use super::*;
     use std::process::{Command, Stdio};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -979,7 +979,10 @@ mod tests {
             .path()
             .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
         assert!(!dest.join("marker").exists());
-        assert_eq!(git(&dest, &["diff", "--name-only", &base, "HEAD"]), "out.txt");
+        assert_eq!(
+            git(&dest, &["diff", "--name-only", &base, "HEAD"]),
+            "out.txt"
+        );
         assert!(!r.path().join("marker").exists());
         assert_eq!(h.runs(), 1);
         assert_eq!(res.exit_class, ExitClass::Ok);
@@ -1004,7 +1007,10 @@ mod tests {
             .path()
             .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
         assert!(!dest.join("outside").exists());
-        assert_eq!(git(&dest, &["diff", "--name-only", &base, "HEAD"]), "out.txt");
+        assert_eq!(
+            git(&dest, &["diff", "--name-only", &base, "HEAD"]),
+            "out.txt"
+        );
     }
 
     #[test]
@@ -1046,7 +1052,10 @@ mod tests {
             &std::env::var_os("PATH").unwrap_or_default(),
         ));
         let status = Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "attempt::tests::red_first_base_check_uses_fake_jail"])
+            .args([
+                "--exact",
+                "attempt::tests::red_first_base_check_uses_fake_jail",
+            ])
             .env("PG_FAKE_JAIL_TEST", &marker)
             .env("PG_JAIL_BIN", &jail)
             .env("PATH", std::env::join_paths(paths).unwrap())
@@ -1802,11 +1811,10 @@ mod tests {
         assert_eq!(res.harness.as_deref(), Some("no-such"));
         assert_eq!(res.combo.as_deref(), Some("leg-1"));
         // The worktree exists so the probe that follows has something to look at.
-        assert!(
-            root.path()
-                .join(AttemptId::new("c1", 3).dir_name())
-                .is_dir()
-        );
+        assert!(root
+            .path()
+            .join(AttemptId::new("c1", 3).dir_name())
+            .is_dir());
     }
 
     #[test]
