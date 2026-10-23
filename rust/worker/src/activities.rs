@@ -2163,9 +2163,11 @@ mod tests {
         input.base_sha = Some(base);
         let result = run(&tiny(), &input);
         assert!(!result.passed);
-        assert!(result.checks[0]
-            .tail
-            .contains("deleted test file in tests/test_a.py"));
+        assert!(
+            result.checks[0]
+                .tail
+                .contains("deleted test file in tests/test_a.py")
+        );
     }
 
     #[test]
