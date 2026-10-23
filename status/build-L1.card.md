@@ -8,7 +8,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 |---|---|---|
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq2 head b2b5293f CI red (PG fence test forbidden, cargo fmt); sq5 seats deepseek+Haiku FIX (3 HIGH: PG test, unclaimed owner plant, no parked revive) -> sq6 sol writer on workst (brief seats/exec-ownership/sq5/FIX-BRIEF-sq6.md) -> CI, seats -> re-GO-REQ |
 | UI-BROWSER-TESTS #143 | L1 | merged 92f041d3, claimed. fix PR #152 head 32051a6a (fix2 fb8747 done) -> CI, re-seat deepseek+2nd -> merge -> submit |
-| GOV-CTX-METRICS #144 | L1 | 1d6c24 done, head 5e6f3c12 pushed (40 governor tests); r2 both FIX (glob order, unhashable id, write-fail tests, tmp name), CI green -> fix2 workst run 20261023-115810-gov-ctx-metrics-fix2-2c338d -> re-seat r3 -> merge |
+| GOV-CTX-METRICS #144 | L1 | fix2 2c338d done; head 7ed5b6cd (main merged) pushed -> CI, r3 seats -> merge |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | head 43a16a90; Haiku r3 FIX 2 HIGH (in-block indented Writer fold; **/1./`/| shapes) -> fix4 7329ee ended WIP (patch saved) -> cont 470492 mimo -> push, CI, re-seat Haiku+luna -> GO-REQ |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | claim epoch 2; r4 seats deepseek + luna (workst sha256 review a434ce1e): no code finding; both FIX only on names-list scan + later gates -> after operator scan line: re-run both, submit, GO-REQ, luna asked workst; IDLE: operator runs words --check on c218b921 (D-2434), trigger = his result line; luna r4 workst builds prompt, runs ~13:52Z -> submit, verdicts, GO-REQ |
