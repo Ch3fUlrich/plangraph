@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from .. import views
 
@@ -11,8 +12,30 @@ class NeedsMixin:
 
     def needs_you(self, principal, project=None):
         return self._run(principal, "needs_you", None,
-                         lambda now: views.needs_you(self._all_items(),
-                                                     project=project))
+                         lambda now: self._needs_you(project))
+
+    def _needs_you(self, project):
+        items = self._all_items()
+        rows = views.needs_you(items, project=project)
+        by_key = {item["key"]: item for item in items}
+        for item in items:
+            if item["state"] not in ("claimed", "in_review"):
+                continue
+            if project is not None and item["project"] != project:
+                continue
+            # There is a persisted note, but no separate IDLE/waiting_on column.
+            text = " ".join(item.get(field) or "" for field in
+                            ("note", "description", "done_criteria"))
+            if not re.search(r"\boperator\b|\bOS-", text, re.IGNORECASE):
+                continue
+            if any(by_key.get(dep, {}).get("operator")
+                   and by_key[dep]["state"] == "open" for dep in item["depends_on"]):
+                continue
+            rows.append({"key": item["key"], "project": item["project"],
+                         "title": item["title"], "state": item["state"],
+                         "kind": "operator_wait_unlinked", "priority": item["priority"],
+                         "wait": "task", "unblocks": 0, "choices": None})
+        return rows
 
     def answers(self, principal, project=None):
         return self._run(principal, "answers", None,

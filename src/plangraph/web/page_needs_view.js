@@ -1,7 +1,4 @@
-/* plangraph — "Needs you" view (item A2): render() only.
- * Pure rows/filter/sort/encode/decode/FACETS come from page_needs.js.
- * ES5, createElement/textContent only; no-op without a document.
- */
+/* Needs-you DOM view; pure helpers live in page_needs.js. */
 (function (global) {
   "use strict";
   if (typeof document === "undefined") return;
@@ -37,7 +34,6 @@
     return d;
   }
 
-  /* ---- filter bar ------------------------------------------------------- */
   function facetItems(all, key) {
     var map = {}, keys = [], out = [], i, r, v;
     for (i = 0; i < all.length; i++) {
@@ -119,7 +115,6 @@
     return d;
   }
 
-  /* ---- URL -------------------------------------------------------------- */
   function commit() {
     var q = NP.encode ? NP.encode(f, sort, rowId) : "", keep = [], s, i, k;
     try {
@@ -136,7 +131,6 @@
     render(vm);
   }
 
-  /* ---- table ------------------------------------------------------------ */
   function head() {
     var tr = el("tr"), th;
     COLS.forEach(function (c) {
@@ -187,6 +181,9 @@
     td(tr, "tc-key", "ID", a);
 
     var tc = td(tr, "tc-title", "Title", el("span", "ny-tt", r.title || ""));
+    if (r.ref && r.ref.kind === "operator_wait_unlinked") {
+      tc.appendChild(el("span", "tc-badge", "Operator wait unlinked"));
+    }
     var wk = r.type === "question" ? "answer" : (r.type === "task" ? r.ref && r.ref.wait : "");
     if (wk) {   // D-677
       var bd = el("span", "tc-badge", wk === "answer" ? "Needs your answer" : "Needs your task");
@@ -247,7 +244,6 @@
     }, 1600);
   }
 
-  /* ---- render ----------------------------------------------------------- */
   function render(m) {
     vm = m || vm;
     var host = document.getElementById("sb-panel-needs");
@@ -261,6 +257,13 @@
     }
     var now = Date.now();
     var all = NP.rows(vm, now);
+    if (vm.items && vm.items.forEach) vm.items.forEach(function (it) {
+      if (it.state !== "claimed" && it.state !== "in_review") return;
+      if (!/\boperator\b|\bOS-/i.test(it.doneCriteria || "")) return;
+      if ((it.deps || []).some(function (k) { var d = vm.items.get(k); return d && d.operator && d.state === "open"; })) return;
+      all.push({type:"task", id:it.key, key:it.key, title:it.title, project:it.project,
+        priority:it.priority, state:it.state, ref:{kind:"operator_wait_unlinked"}});
+    });
     var list = NP.sort(NP.filter(all, f, now), sort);
     while (host.firstChild) host.removeChild(host.firstChild);
     host.appendChild(el("h2", "ny-h", "Needs you (" + list.length + " of " + all.length + ")"));

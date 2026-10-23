@@ -334,13 +334,20 @@ class CreateMixin:
                 return {"key": key, "priority": int(prio)}
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
-        self._may_manage(principal, item["project"])
+        holder_edit = (principal.role != "router" and item["state"] == "claimed"
+                       and item["claimed_by"] == principal.name
+                       and isinstance(rest, dict) and set(rest) == {"depends_on"})
+        if holder_edit:
+            self._require_project(principal, item["project"])
+            self._operator_dep_addition(item, rest["depends_on"])
+        else:
+            self._may_manage(principal, item["project"])
         # D-434 + F4: the router's narrow exception -- the tier fields plus
         # done_criteria/depends_on alone on a claimed/in-review item; anyone
         # else fails on authorisation, not state.
         tier_edit = (item["state"] in ("claimed", "in_review")
                      and _active_edit_only(rest))
-        if tier_edit and principal.role != "router":
+        if tier_edit and principal.role != "router" and not holder_edit:
             raise Refused("forbidden", "only the router may edit tier fields, "
                           "done_criteria or depends_on while an item is "
                           "claimed or in review")
@@ -470,7 +477,13 @@ class CreateMixin:
             if fresh["state"] not in states or fresh["epoch"] != item["epoch"]:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
-            self._may_manage(principal, fresh["project"])
+            if holder_edit:
+                if fresh["state"] != "claimed" or fresh["claimed_by"] != principal.name:
+                    raise Refused("forbidden", "only the claim holder may add operator dependencies")
+                self._require_project(principal, fresh["project"])
+                self._operator_dep_addition(fresh, rest["depends_on"])
+            else:
+                self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             if tier_edit:
                 # Re-check the resulting (tier, kinds) pair under the lock:
@@ -548,6 +561,20 @@ class CreateMixin:
             # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
             result["warnings"] = dropped
         return result
+
+    def _operator_dep_addition(self, item, value):
+        """Claim holders may only extend their wait graph with open human steps."""
+        if not isinstance(value, (list, tuple)) or any(not isinstance(d, str) for d in value):
+            raise Refused("forbidden", "only adding open operator dependencies is allowed")
+        deps = {self._qualify(item["project"], d) for d in value}
+        old = set(item["depends_on"])
+        added = deps - old
+        if not added or not old <= deps:
+            raise Refused("forbidden", "operator dependencies must be additions only")
+        for dep in added:
+            target = self._item(dep)
+            if target is None or not target["operator"] or target["state"] != "open":
+                raise Refused("forbidden", "added dependencies must be open operator items")
 
     def set_priority(self, principal, key, n):
         return self._run(principal, "set_priority", key,
