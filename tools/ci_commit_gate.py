@@ -1,7 +1,7 @@
 '''CI commit trailer gate: Writer attribution, hand-edit, gate-edit, and test-removal reasons.
 
-Commits come from ``git log --no-merges base..head``, so merge commits are never
-inspected. Commits listed in the exempt file skip every rule. A repo-relative
+Trailer checks use ``git log --no-merges base..head``. Merge parents are checked
+separately when open PR heads are supplied. Exempt commits skip trailer rules. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
 '''
@@ -349,6 +349,7 @@ def check(
     head: str,
     exempt: str | Path | None = None,
     cwd: str | Path | None = None,
+    open_heads: str | Path | None = None,
 ) -> list[str]:
     '''Return one sha40: reason line per violation in base..head.
 
@@ -357,6 +358,8 @@ def check(
     exempt_set = _resolve_exempt(base, exempt, cwd=cwd) if exempt else set()
 
     violations: list[str] = []
+    if open_heads is not None:
+        violations.extend(_open_pr_merges(base, head, open_heads, cwd=cwd))
     for sha, message in _iter_commits(base, head, cwd=cwd):
         if sha.lower() in exempt_set:
             continue
@@ -414,6 +417,40 @@ def check(
     return violations
 
 
+def _open_pr_merges(
+    base: str, head: str, path: str | Path, cwd: str | Path | None = None
+) -> list[str]:
+    '''Refuse merge parents that are open PR heads outside the base history.'''
+    try:
+        lines = Path(path).read_text(encoding='utf-8').splitlines()
+    except OSError as exc:
+        raise GateError(f'cannot read open-heads file {path}: {exc}') from exc
+    heads: set[str] = set()
+    for lineno, raw in enumerate(lines, start=1):
+        sha = raw.strip()
+        if not sha:
+            continue
+        if EXEMPT_SHA_RE.fullmatch(sha) is None:
+            raise GateError(f'open-heads file {path}:{lineno}: not a 40-hex sha')
+        heads.add(sha.lower())
+    merges = _git_text(
+        ['rev-list', '--min-parents=2', '--parents', f'{base}..{head}'], cwd=cwd
+    )
+    violations: list[str] = []
+    for line in merges.splitlines():
+        merge, *parents = line.split()
+        for parent in parents:
+            if parent not in heads:
+                continue
+            # main is safe even when its current head appears in the input list.
+            outside_base = _git_text(
+                ['rev-list', '-1', parent, '--not', base], cwd=cwd
+            ).strip()
+            if outside_base:
+                violations.append(f'{merge}: open_pr_merged {parent}')
+    return violations
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='CI commit trailer gate')
     subparsers = parser.add_subparsers(dest='command')
@@ -421,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser = subparsers.add_parser('check')
     check_parser.add_argument('--base', required=True, help='Base commit SHA')
     check_parser.add_argument('--head', required=True, help='Head commit SHA')
+    check_parser.add_argument('--open-heads', help='Open PR heads file (one 40-hex SHA per line)')
     check_parser.add_argument(
         '--exempt',
         default=None,
@@ -439,12 +477,15 @@ def main(argv: list[str] | None = None) -> int:
 
     exempt = args.exempt if args.exempt is not None else DEFAULT_EXEMPT
     try:
-        violations = check(args.base, args.head, exempt=exempt, cwd=None)
+        violations = check(args.base, args.head, exempt=exempt, cwd=None,
+                           open_heads=args.open_heads)
         hand_edits = hand_edit_commits(args.base, args.head, cwd=None)
     except (ExemptError, GateError) as exc:
         sys.stderr.write(f'ci-commit-gate: {exc}\n')
         return 2
 
+    if args.open_heads is None:
+        sys.stderr.write('ci-commit-gate: open PR merge check skipped (no --open-heads)\n')
     for sha, reason in hand_edits:
         sys.stderr.write(f'hand-edit {sha}: {reason}\n')
     for violation in violations:

@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **LESSONS-TO-ALGORITHM L9:** the commit gate accepts offline `--open-heads` input and refuses `open_pr_merged` when a merge parent is an open PR head outside base history, preventing cross-lane PR merges while allowing main merges. Without the input, it emits a one-line skip notice.
+
 - **GOV-CTX-METRICS-FIX3:** restore weighted/daily largest-record deduplication by `(message id, requestId)` even when the message id is absent; ctx alone keeps every id-less record. Pin both transcript readers skipping missing/invalid timestamps, consistent with daily aggregation, so undated usage cannot disrupt timestamp ordering. A record with a non-string/int `message.id` or `requestId` is skipped alone (previously the rest of its transcript file was dropped); ties keep `(ts, file, line)` order.
 - **JEV-ATTEMPT-THREAD (#96):** dispatch routing and keeper QC observations without waiting for Jev; use independent observer connections, record QC outcomes, bind routing observations and execution fills to numbered attempts and routing kinds, honour `pass_allowed`, omit router answers from model state, document single-axis QC scope, and remove the unused axis formatter. Jev remains default-off and its test network guard is unchanged.
 - **RT-P1-BUS-CONTRACT:** complete read-side JSON conformance vectors, pin bounded leading-zero limit syntax and normalized signing, and reject non-wire POST inputs with validation errors.

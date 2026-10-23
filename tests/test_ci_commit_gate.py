@@ -99,6 +99,34 @@ def test_missing_writer_trailer_fails(repo: Path):
     assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
 
 
+@pytest.mark.parametrize("vector", ["V1", "V2", "V3", "V4"])
+def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, vector):
+    fork = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "lane")
+    _commit(repo, OK_MSG, files={"lane.txt": "lane\n"})
+    _git(repo, "checkout", "-q", "-b", "other", fork)
+    other = _commit(repo, OK_MSG, files={"other.txt": "other\n"})
+    # V1 models main advancing to B after the lane forked.
+    base = other if vector == "V1" else fork
+    _git(repo, "checkout", "-q", "lane")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge other", "other")
+    merge = _head(repo)
+    heads = tmp_path / "open-heads.txt"
+    heads.write_text("" if vector == "V3" else other + "\n", encoding="utf-8")
+    args = ["check", "--base", base, "--head", merge]
+    if vector != "V4":
+        args += ["--open-heads", str(heads)]
+    monkeypatch.chdir(repo)
+    rc = main(args)
+    captured = capsys.readouterr()
+    expected = f"{merge}: open_pr_merged {other}\n" if vector == "V2" else ""
+    assert rc == (1 if vector == "V2" else 0)
+    assert captured.out == expected
+    notice = "ci-commit-gate: open PR merge check skipped (no --open-heads)\n"
+    assert captured.err == (notice if vector == "V4" else "")
+    print(f"{vector}: rc={rc}; {captured.out.strip() or captured.err.strip() or 'allowed'}")
+
+
 def test_valid_writer_passes(repo: Path):
     base = _head(repo)
     sha = _commit(repo, OK_MSG)
