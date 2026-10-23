@@ -28,4 +28,5 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 | #100 SANDBOX | sweep-runtime | head 61026cc5 CI green; r2 qwen+glm FIX; D-2346 disputes VALID; L2 fixes 3 LOWs -> fresh qwen+glm full diff + 3 proofs (c: name verify_git_dir test+log line) -> 2 PASS = merge, no GO-REQ; new MEDIUM -> routing |
 | RT95-EMPTY-RUN-FIXTURE | L1 | claimed; #137 merged -> spawn writer to capture a real opencode empty run when MemAvailable > 5 GB (D-2332; was 4.3 GB) |
 | KEEPER-LEGACY-HUMAN-FAMILY (low) | L1 queue | D-2348: keeper rule legacy/operator claimant -> family 'human' (+test: non-legacy unknown still refused); bundle in keeper batch riding LIVE-SYNC-9 after SPAWNER-ITEM-KEY; then router re-posts OP-DOCKHAND deepseek 438f9e |
-| PG-PUBLIC-READY r3 | L1 | deepseek FIX (1 HIGH 3 MED) seats/pr136/r3; BLOCKED to routing 07:5xZ, default A follow-up leaf PG-PUBLIC-FIX |
+| PG-PUBLIC-READY r3 | L1 | deepseek FAIL verdict POSTED (D-2349, item back to claimed). Re-seat on PG-PUBLIC-FIX merge. Gate PG-REPUBLISH-FRESH deps [READY, FIX] |
+| PG-PUBLIC-FIX (HIGH prio 8) | L1 | claimed epoch 1; wt plangraph-worktrees/pg-public-fix (lane/pg-public-fix @ cbf21431); brief seats/pg-public-fix/WRITER-BRIEF.md; SPAWN HELD: host 5 live runs > cap 3 -> spawn model omniroute/mimo-v2.6-flash when slot frees (cx skip: not on coding.vm). Seats qwen+glm+deepseek |

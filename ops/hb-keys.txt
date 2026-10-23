@@ -10,3 +10,4 @@ plangraph:RT-P1-BUS-CONTRACT
 plangraph:RT-P1-PHASE-RUNNER
 plangraph:KEEPER-TRAILER-MULTI
 plangraph:RT95-EMPTY-RUN-FIXTURE
+plangraph:PG-PUBLIC-FIX
