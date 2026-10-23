@@ -23,6 +23,8 @@ import math
 import re
 from datetime import date
 
+from plangraph.card_paths import normalise_path, path_problem
+
 from .credential_guard import guard
 from .errors import Refused
 from .schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
@@ -168,7 +170,18 @@ class CardsMixin:
             "estimate_tokens": _count("estimate_tokens", card.get("estimate_tokens")),
         }
         for name in _CARD_LISTS:
-            values[name] = _dump(_str_list(name, card.get(name), key=key))
+            entries = _str_list(name, card.get(name), key=key)
+            if name == "check_reads":
+                normalised = []
+                for entry in entries:
+                    path = normalise_path(entry)
+                    problem = path_problem(name, entry, path)
+                    if problem:
+                        raise Refused("validation", problem)
+                    if path not in normalised:
+                        normalised.append(path)
+                entries = normalised
+            values[name] = _dump(entries)
         with self._write():
             item = self._get_or_refuse(key)
             self._may_write_for(principal, item["project"])

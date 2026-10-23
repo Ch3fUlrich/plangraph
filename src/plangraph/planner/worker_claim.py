@@ -13,6 +13,9 @@ def build_claim(
     key: str, card: dict[str, Any], *, repo: str, base_sha: str
 ) -> dict[str, Any]:
     # Share readiness's protection rule so claimed checks cannot be edited away.
+    check_kind = card.get("check_kind", "change")
+    if check_kind not in ("change", "regression"):
+        raise Refused("validation", "check_kind must be change or regression")
     return {
         "card": key,
         "repo": repo,
@@ -21,7 +24,7 @@ def build_claim(
         "allow": list(card["write_set"]),
         "forbid": list(dict.fromkeys([*card.get("forbid_paths", []),
                                      *protected_check_paths(card)])),
-        "check_kind": card.get("check_kind", "change"),
+        "check_kind": check_kind,
         "check_reads": list(card.get("check_reads", [])),
         "smoke_checks": list(card.get("smoke_checks", [])),
         "exports": list(card.get("exports", [])),
@@ -79,6 +82,7 @@ def worker_claim(
     if base_sha is None:
         raise Refused("unavailable", "no base to claim from")
 
+    claim = build_claim(key, card, repo=repo_root, base_sha=base_sha)
     state, claimed_by, lease_until, _project = row
     lease_live = False
     if state == "claimed" and claimed_by == principal.name and lease_until:
@@ -91,4 +95,4 @@ def worker_claim(
     if not lease_live:
         store.worker_claim_lease(principal, key)
 
-    return build_claim(key, card, repo=repo_root, base_sha=base_sha)
+    return claim

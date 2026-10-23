@@ -177,6 +177,19 @@ fn run_attempt_inner(
         return Ok(cancelled_result(&branch, &wt.head, String::new()));
     }
 
+    if !matches!(claim.check_kind.as_str(), "" | "change" | "regression") {
+        return defect_result(
+            &dest,
+            &claim.base_sha,
+            &branch,
+            &wt.head,
+            format!(
+                "unknown check_kind {:?}: expected change or regression",
+                claim.check_kind
+            ),
+        );
+    }
+
     // A link planted by the base that escapes the worktree is a contract
     // defect: a write through it lands beyond the write set.
     if let Some(paths) = sandbox_escape(&dest)? {
@@ -1170,6 +1183,20 @@ mod tests {
                 "red-first: check already passes on base sha (set check_kind=regression if intended)"
             );
         }
+    }
+
+    #[test]
+    fn unknown_check_kind_is_a_contract_defect() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "false");
+        c.check_kind = "typo".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::ContractDefect);
+        assert!(res.check_tail.contains("unknown check_kind"));
+        assert_eq!(h.runs(), 0);
     }
 
     #[test]

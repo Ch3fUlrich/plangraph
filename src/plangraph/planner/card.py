@@ -16,10 +16,11 @@ adds the batch glue:
 from __future__ import annotations
 
 import copy
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+
+from plangraph.card_paths import normalise_path as _normalise_path, path_problem as _path_problem
 
 from plangraph.keeper.credential_guard import guard
 from plangraph.keeper.errors import Refused
@@ -36,7 +37,6 @@ _PATH_LISTS = ("read_set", "write_set", "forbid_paths", "check_reads")
 _TEXTS = ("check_cmd", "heldout_check", "check_kind")
 _FIELDS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
                      *_LISTS, *_TEXTS))
-_DRIVE_RE = re.compile(r"[A-Za-z]:")
 
 
 class CardError(ValueError):
@@ -90,24 +90,6 @@ class Card:
     def from_dict(cls, raw: dict[str, Any]) -> "Card":
         """Validate ``raw`` (see :func:`parse_card`) and build the card."""
         return parse_card(raw)
-
-
-def _normalise_path(value: str) -> str | None:
-    """Strip, use forward slashes, collapse ``//``, drop ``.`` components and a trailing
-    ``/`` (so ``src//``, ``src/`` and ``./src`` all become ``src``); ``None`` if empty."""
-    path = value.strip().replace("\\", "/")
-    parts = [p for p in path.split("/") if p not in ("", ".")]
-    return ("/" if path.startswith("/") else "") + "/".join(parts) or None
-
-
-def _path_problem(name: str, original: str, path: str | None) -> str | None:
-    if path is None:
-        return f"{name} entry {original!r} is empty after normalisation"
-    if path.startswith("/") or _DRIVE_RE.match(path):
-        return f"{name} entry {original!r} must be a relative path"
-    if ".." in path.split("/"):
-        return f"{name} entry {original!r} must not contain '..'"
-    return None
 
 
 def _guard_problem(name: str, value: str, problems: list[str]) -> bool:

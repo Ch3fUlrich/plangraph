@@ -356,7 +356,8 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
     read_set = _as_list(card.get("read_set"))
     bad: set[str] = set()
     for field, entries in (("write_set", write_set), ("read_set", read_set),
-                           ("forbid_paths", _as_list(card.get("forbid_paths")))):
+                           ("forbid_paths", _as_list(card.get("forbid_paths"))),
+                           ("check_reads", _as_list(card.get("check_reads")))):
         for entry in entries:
             if _bad_path(entry):
                 bad.add(str(entry))
