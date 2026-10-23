@@ -149,6 +149,116 @@ def test_daily_output_carries_ctx_section(tmp_path, capsys):
     }]
 
 
+def _assistant(msg_id, request_id, ts, *, inp=0, out=0, cr=0, cw=0, model="claude-x"):
+    """One transcript line shaped like the metrics fixtures'."""
+    return {
+        "type": "assistant",
+        "requestId": request_id,
+        "timestamp": ts,
+        "model": model,
+        "message": {
+            "id": msg_id,
+            "usage": {
+                "input_tokens": inp,
+                "output_tokens": out,
+                "cache_read_input_tokens": cr,
+                "cache_creation_input_tokens": cw,
+            },
+        },
+    }
+
+
+def _write_jsonl(path, lines):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines),
+                    encoding="utf-8")
+
+
+def test_daily_writes_the_ctx_report_file(tmp_path, capsys):
+    """The daily job writes the ctx section (per host/class rows) to a file too."""
+    projects = tmp_path / "projects"
+    day = "2024-01-01"
+    ts = f"{day}T00:00:00Z"
+    _write_jsonl(projects / "p1" / "main.jsonl", [
+        # same (message.id, requestId) as the next line: the ctx file counts the
+        # FIRST record (inp=1), the daily items keep the larger one
+        _assistant("m1", "r1", ts, inp=1, out=1, model="claude-opus-5-5"),
+        _assistant("m1", "r1", ts, inp=40000, out=30000, cr=89000, cw=20000,
+                   model="claude-opus-5-5"),
+        _assistant("m2", "r2", ts, out=10000, cr=10000, model="qwen3.8-max"),
+    ])
+    _write_jsonl(
+        projects / "p1" / "s1" / "subagents" / "a1.jsonl",
+        [_assistant("m5", "r5", ts, inp=100, out=40, cr=700, cw=160,
+                    model="claude-sonnet-5-5")],
+    )
+    out_dir = tmp_path / "governor"
+
+    s = FakeSession()
+    rc = cli.main(["metrics", "daily", "--projects-dir", str(projects),
+                   "--date", day, "--host", "box1", "--out-dir", str(out_dir),
+                   "--dry-run"], session=s)
+    assert rc == 0
+    assert s.posts("set_metrics") == []
+    path = out_dir / f"ctx-{day}.json"
+    assert path.is_file()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["day"] == day
+    assert payload["groups"] == [
+        {
+            "host": "box1",
+            "session_class": "main",
+            "calls": 2,
+            "weighted": 11002.0,
+            "share_cache_read": 0.49995,
+            "share_cache_write": 0.0,
+            "share_output": 0.5,
+            "input_from_cache": 0.9999,
+            "ctx_p50": 1,
+            "ctx_p90": 10000,
+            "ctx_p99": 10000,
+            "share_over_200k": 0.0,
+            "cost_usd": 0.15309,
+        },
+        {
+            "host": "box1",
+            "session_class": "subagent",
+            "calls": 1,
+            "weighted": 370.0,
+            "share_cache_read": 0.7,
+            "share_cache_write": 0.16,
+            "share_output": 0.04,
+            "input_from_cache": 0.729167,
+            "ctx_p50": 960,
+            "ctx_p90": 960,
+            "ctx_p99": 960,
+            "share_over_200k": 0.0,
+            "cost_usd": 0.001605,
+        },
+    ]
+    # stdout still carries the same ctx section
+    assert _out(capsys)["ctx"] == payload
+
+
+def test_daily_ctx_file_defaults_next_to_the_transcripts(tmp_path, capsys):
+    """Without --out-dir the report lands in the projects dir the job reads."""
+    projects = tmp_path / "projects"
+    day = "2024-01-01"
+    _write_jsonl(projects / "p1" / "main.jsonl",
+                 [_assistant("m1", "r1", f"{day}T00:00:00Z", inp=7)])
+
+    s = FakeSession()
+    rc = cli.main(["metrics", "daily", "--projects-dir", str(projects),
+                   "--date", day, "--host", "box1", "--dry-run"], session=s)
+    assert rc == 0
+    path = projects / f"ctx-{day}.json"
+    assert path.is_file()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["day"] == day
+    assert [g["calls"] for g in payload["groups"]] == [1]
+    assert _out(capsys)["ctx"] == payload
+
+
 def test_bad_date(stub_daily):
     s = FakeSession()
     rc = cli.main(["metrics", "daily", "--projects-dir", str(stub_daily),

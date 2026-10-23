@@ -221,7 +221,9 @@ def _ctx_fixture(tmp_path):
     _write_jsonl(
         projects / "p1" / "main.jsonl",
         [
-            # same (message.id, requestId) as the next line, smaller usage: dropped
+            # same (message.id, requestId) as the next line: dropped by the
+            # daily/weighted path (largest wins), counted by the ctx report
+            # (first usage record per message.id wins)
             _assistant("m1", "r1", day1, inp=1, out=1, model="claude-opus-5-5"),
             _assistant("m1", "r1", day1, inp=40000, out=30000, cr=89000, cw=20000,
                        model="claude-opus-5-5"),
@@ -249,10 +251,14 @@ def test_ctx_report_fixture_transcripts(tmp_path):
         ("main", "main"),
         ("s1", "subagent"),
     }
-    # the duplicate (message.id, requestId) kept the larger usage
+    # the duplicate (message.id, requestId) kept the larger usage (daily path)
     assert sorted(r["input"] for r in records if r["session"] == "main") == [0, 0, 7, 40000]
+    # the ctx path counts the FIRST usage record per message.id instead (inp=1)
+    ctx_records = metrics.iter_usage_first(projects, host="box1")
+    assert len(ctx_records) == 5
+    assert sorted(r["input"] for r in ctx_records if r["session"] == "main") == [0, 0, 1, 7]
 
-    report = metrics.ctx_report(records, "2024-01-01")
+    report = metrics.ctx_report(ctx_records, "2024-01-01")
     assert report["day"] == "2024-01-01"
     assert [(g["host"], g["session_class"]) for g in report["groups"]] == [
         ("box1", "main"),
@@ -263,16 +269,16 @@ def test_ctx_report_fixture_transcripts(tmp_path):
         "host": "box1",
         "session_class": "main",
         "calls": 3,
-        "weighted": 130000.0,
-        "share_cache_read": 0.75,
-        "share_cache_write": 0.05,
-        "share_output": 0.1,
-        "input_from_cache": 0.833333,
-        "ctx_p50": 149000,
+        "weighted": 31102.0,
+        "share_cache_read": 0.954742,
+        "share_cache_write": 0.0,
+        "share_output": 0.045253,
+        "input_from_cache": 0.999995,
+        "ctx_p50": 10000,
         "ctx_p90": 201000,
         "ctx_p99": 201000,
         "share_over_200k": 0.333333,
-        "cost_usd": 3.4749,
+        "cost_usd": 0.18324,
     }
     assert sub == {
         "host": "box1",
@@ -290,11 +296,51 @@ def test_ctx_report_fixture_transcripts(tmp_path):
         "cost_usd": 0.001605,
     }
     # only the requested UTC day is reported
-    other = metrics.ctx_report(records, "2024-01-02")
+    other = metrics.ctx_report(ctx_records, "2024-01-02")
     assert [g["calls"] for g in other["groups"]] == [1]
     assert other["groups"][0]["weighted"] == 10.0
     assert other["groups"][0]["cost_usd"] == 0.00033
     assert metrics.ctx_report([], "2024-01-01") == {"day": "2024-01-01", "groups": []}
+
+
+def test_ctx_report_counts_the_first_record_per_message_id():
+    """S6: two records, same message.id, first inp=1 then inp=40000 -> inp=1, calls=1."""
+    tz = dt.timezone.utc
+
+    def rec(inp):
+        return {"host": "box1", "session_class": "main", "session": "s",
+                "model": "claude-sonnet-5-5", "message_id": "m1",
+                "ts": dt.datetime(2024, 5, 1, 0, 0, tzinfo=tz),
+                "input": inp, "output": 0, "cache_read": 0, "cache_write": 0}
+
+    report = metrics.ctx_report([rec(1), rec(40000)], "2024-05-01")
+    group = report["groups"][0]
+    assert group["calls"] == 1
+    assert group["ctx_p50"] == 1                 # the first record, not inp=40000
+    assert group["weighted"] == 1.0
+    assert group["cost_usd"] == pytest.approx(3e-06)   # 1 sonnet input token
+
+
+def test_ctx_report_first_duplicate_wins_from_transcripts(tmp_path):
+    """Red: the ctx path reads transcripts too, and the first duplicate wins."""
+    projects = tmp_path / "projects"
+    ts = "2024-05-01T00:00:00Z"
+    _write_jsonl(
+        projects / "p1" / "main.jsonl",
+        [
+            _assistant("m1", "r1", ts, inp=1, model="claude-sonnet-5-5"),
+            _assistant("m1", "r1", ts, inp=40000, model="claude-sonnet-5-5"),
+        ],
+    )
+    ctx_records = metrics.iter_usage_first(projects, host="box1")
+    assert [r["input"] for r in ctx_records] == [1]
+    group = metrics.ctx_report(ctx_records, "2024-05-01")["groups"][0]
+    assert group["calls"] == 1
+    assert group["ctx_p50"] == 1
+
+    # the weighted/daily totals keep their own rule: the largest record wins
+    daily = metrics.iter_usage(projects, host="box1")
+    assert [r["input"] for r in daily] == [40000]
 
 
 def test_ctx_report_groups_by_host_and_session_class():

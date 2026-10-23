@@ -17,6 +17,7 @@ import subprocess
 __all__ = [
     "parse_ts",
     "iter_usage",
+    "iter_usage_first",
     "weighted",
     "daily_weighted",
     "landed_by_day",
@@ -88,20 +89,54 @@ def iter_usage(
     Globs ``<projects_dir>/*/*.jsonl`` and ``<projects_dir>/*/*/subagents/*.jsonl``.
     Only lines with ``type == "assistant"`` and a ``message.usage`` dict count.
     Duplicates keyed on ``(message.id or uuid, requestId)`` are reduced to the
-    record with the highest total tokens. Malformed lines and files are skipped.
+    record with the highest total tokens - the weighted/daily totals' rule;
+    the ``ctx`` report counts the *first* record per message id instead (see
+    :func:`iter_usage_first`). Malformed lines and files are skipped.
 
     Each record also carries ``host`` (``host``, else the local hostname) and
     ``session_class``: ``subagent`` for a transcript under a ``subagents/``
     directory or a record flagged ``isSidechain``, otherwise ``main`` refined
-    by ``session_classes`` (see :func:`classify_session`).
+    by ``session_classes`` (see :func:`classify_session`), plus ``message_id``
+    and ``request_id`` for dedup.
+    """
+    return _dedup_largest(_scan_usage(projects_dir, host, session_classes))
+
+
+def iter_usage_first(
+    projects_dir,
+    host: str | None = None,
+    session_classes: dict[str, str] | None = None,
+) -> list[dict]:
+    """The same records as :func:`iter_usage`, deduplicated the ctx/S6 way.
+
+    The FIRST usage record per message id (``message.id``, else the line's
+    ``uuid``) wins; records carrying no id at all are never merged. That is
+    the reference scan's rule and the one the ``ctx`` report must follow,
+    while :func:`iter_usage` keeps the *largest* record per ``(message id,
+    requestId)`` for the weighted/daily totals - a separate pass over the
+    transcripts keeps both rules (and both sets of expectations) intact.
+    """
+    return _dedup_first(_scan_usage(projects_dir, host, session_classes))
+
+
+def _scan_usage(
+    projects_dir,
+    host: str | None = None,
+    session_classes: dict[str, str] | None = None,
+) -> list[dict]:
+    """Parse every usage record in file order, with no deduplication.
+
+    Malformed lines and files are skipped. Each record carries ``ts``,
+    ``session``, ``model``, ``host``, ``session_class``, the four token
+    counts, and the dedup keys ``message_id`` (``message.id``, else the
+    line's ``uuid``) and ``request_id``.
     """
     host_name = host or socket.gethostname()
     patterns = [
         os.path.join(projects_dir, "*", "*.jsonl"),
         os.path.join(projects_dir, "*", "*", "subagents", "*.jsonl"),
     ]
-    best: dict[tuple, dict] = {}
-    totals: dict[tuple, int] = {}
+    records: list[dict] = []
     for pattern in patterns:
         for path in glob.iglob(pattern):
             rel = os.path.relpath(path, projects_dir).replace(os.sep, "/")
@@ -137,29 +172,59 @@ def iter_usage(
                         output_tokens = _as_int(usage.get("output_tokens"))
                         cache_read = _as_int(usage.get("cache_read_input_tokens"))
                         cache_write = _as_int(usage.get("cache_creation_input_tokens"))
-                        total = input_tokens + output_tokens + cache_read + cache_write
-                        key = (msg.get("id") or d.get("uuid"), d.get("requestId"))
                         model = d.get("model") or msg.get("model") or ""
                         sidechain = bool(d.get("isSidechain") or msg.get("isSidechain"))
                         base_class = "subagent" if (subagent or sidechain) else "main"
-                        rec = {
+                        records.append({
                             "ts": ts,
                             "session": session,
                             "model": model,
                             "host": host_name,
                             "session_class": classify_session(
                                 session, base_class, session_classes),
+                            "message_id": msg.get("id") or d.get("uuid"),
+                            "request_id": d.get("requestId"),
                             "input": input_tokens,
                             "output": output_tokens,
                             "cache_read": cache_read,
                             "cache_write": cache_write,
-                        }
-                        if key not in best or total > totals[key]:
-                            best[key] = rec
-                            totals[key] = total
+                        })
             except Exception:
                 continue
+    return records
+
+
+def _dedup_largest(records: list[dict]) -> list[dict]:
+    """Keep the highest-token record per ``(message id, requestId)``.
+
+    First record wins a tie: this is exactly what ``iter_usage`` has always
+    done, so the weighted/daily totals do not move.
+    """
+    best: dict[tuple, dict] = {}
+    totals: dict[tuple, int] = {}
+    for rec in records:
+        key = (rec.get("message_id"), rec.get("request_id"))
+        total = rec["input"] + rec["output"] + rec["cache_read"] + rec["cache_write"]
+        if key not in best or total > totals[key]:
+            best[key] = rec
+            totals[key] = total
     return list(best.values())
+
+
+def _dedup_first(records: list[dict]) -> list[dict]:
+    """Keep the first record per message id; records without an id all stay."""
+    seen: set = set()
+    kept: list[dict] = []
+    for rec in records:
+        key = rec.get("message_id")
+        if not key:
+            kept.append(rec)
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(rec)
+    return kept
 
 
 def weighted(rec: dict) -> float:
@@ -353,6 +418,15 @@ def nearest_rank(values, p: float):
 def ctx_report(records: list[dict], day: str | None = None) -> dict:
     """Per ``(host, session_class)`` context/cache report for one UTC day.
 
+    Dedup first: the FIRST usage record per message id (``message_id``, i.e.
+    ``message.id`` or the transcript line's ``uuid``) counts, later duplicates
+    of that id are ignored, and a record carrying no id is never merged with
+    another. That is the S6 reference rule, and it deliberately differs from
+    :func:`iter_usage`, which keeps the *largest* record per ``(message id,
+    requestId)`` for the weighted/daily totals - feed this report the
+    :func:`iter_usage_first` records (or any list still holding duplicates)
+    so the first one survives.
+
     ``day`` is ``YYYY-MM-DD`` (``None`` reports every record). Each group holds:
 
     - ``calls`` and ``weighted`` (:func:`weighted`, cache reads at one tenth);
@@ -367,6 +441,7 @@ def ctx_report(records: list[dict], day: str | None = None) -> dict:
     - ``cost_usd``: :func:`record_cost` summed, i.e. the price table with cache
       reads at :func:`read_multiplier` x the input price.
     """
+    records = _dedup_first(records)
     groups: dict[tuple[str, str], list[dict]] = {}
     for rec in records:
         if day is not None:

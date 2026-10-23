@@ -45,6 +45,9 @@ def _cmd_daily(args, session) -> int:
 
     try:
         records = metrics.iter_usage(projects_dir)
+        # a second pass: the ctx report counts the FIRST usage record per
+        # message id, which iter_usage's largest-wins dedup has already dropped
+        ctx_records = metrics.iter_usage_first(projects_dir)
     except OSError as exc:
         print(f"cannot read projects dir: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -57,10 +60,11 @@ def _cmd_daily(args, session) -> int:
         return EXIT_USAGE
     host = args.host or os.environ.get(ENV_HOST)
     metrics.tag_records(records, host=host, session_classes=session_classes)
+    metrics.tag_records(ctx_records, host=host, session_classes=session_classes)
 
     items = list(metrics.daily_metrics(
         day.isoformat(), records, landed, weekly_cap))
-    ctx = metrics.ctx_report(records, day.isoformat())
+    ctx = metrics.ctx_report(ctx_records, day.isoformat())
 
     if args.provider_usage:
         try:
@@ -91,9 +95,28 @@ def _cmd_daily(args, session) -> int:
             print(f"refused: {exc}", file=sys.stderr)
             return 2
 
+    # the ctx report is a file artefact too, not only a stdout section:
+    # DIR/ctx-<day>.json, DIR = --out-dir else the projects dir the job read
+    out_dir = args.out_dir or projects_dir
+    ctx_path = os.path.join(os.fspath(out_dir), f"ctx-{day.isoformat()}.json")
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+        _write_ctx(ctx_path, ctx)
+    except OSError as exc:
+        print(f"cannot write ctx report {ctx_path}: {exc}", file=sys.stderr)
+
     print(json.dumps({"day": day.isoformat(), "items": items,
                       "posted": posted, "ctx": ctx}))
     return 0
+
+
+def _write_ctx(path: str, payload: dict) -> None:
+    """Write the ctx report as indented JSON, replacing the old one atomically."""
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    os.replace(tmp, path)
 
 
 def _cmd_check(args, session) -> int:
@@ -159,6 +182,9 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="JSON {session_id: class} launch-record mapping")
     daily.add_argument("--provider-usage", default=None)
     daily.add_argument("--rate-limited", default=None)
+    daily.add_argument("--out-dir", default=None, metavar="DIR",
+                       help="write the ctx report to DIR/ctx-<date>.json "
+                            "(default: the projects dir)")
     daily.add_argument("--dry-run", action="store_true")
 
     check = sub.add_parser("check")
