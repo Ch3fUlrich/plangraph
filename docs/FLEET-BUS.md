@@ -108,7 +108,10 @@ authentication seam; `read_records` only shapes data and must not be exposed
 directly by a transport.
 
 Page limit defaults to 100, accepts integers or ASCII decimal query strings,
-and must be 1..200; booleans are invalid. Response is exactly
+and must be 1..200; booleans are invalid. Strings are restricted to one through
+three digits (leading zeros allowed).
+Longer leading-zero forms are rejected to keep the query grammar bounded and identical across implementations.
+Response is exactly
 `{"cursor": "...", "records": [...]}`. The cursor is the last delivered ID,
 or the input cursor when no rows are delivered. Records contain `id`, server
 `ts`, `from`, `to`, `msg_id`, scrubbed `text` and any supplied `trace_id`, `key`,
