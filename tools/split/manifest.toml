@@ -41,9 +41,19 @@ message = "Initial public history of plangraph"
 hostname_patterns = []
 allow_email_domains = []
 
+[[scrub.allow_value]]
+path = "tests/fleet_bus/vectors/sign.json"
+rule = "token-shape"
+value_sha256 = "48f27ef8fc9d274fbeee761e0171b64e32551784d0b4543998a94085fa0f07e6"
+why = "synthetic HMAC test vector"
+
 # Vendored third-party code: minified JS trips entropy/IP/e-mail heuristics.
 [[scrub.allow]]
 path = "vendor/**"
+rules = ["ipv4", "ipv6", "email", "high-entropy", "token-shape", "hostname", "credential-shape"]
+# Same, for the browser-test assets (elkjs 0.9.3 bundled, EPL-2.0; UI-BROWSER-TESTS W1).
+[[scrub.allow]]
+path = "tests/browser/assets/elk.bundled.js"
 rules = ["ipv4", "ipv6", "email", "high-entropy", "token-shape", "hostname", "credential-shape"]
 
 # Tests that deliberately contain obviously fake credential strings (reviewed, synthetic).

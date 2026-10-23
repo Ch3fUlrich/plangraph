@@ -200,6 +200,18 @@ def test_metrics_table_is_in_both_schemas():
         assert "metrics" not in schema_pg.parse_tables(earlier.sql)
 
 
+def test_jev_shadow_table_is_in_both_schemas():
+    tables, _, _ = _sqlite_tables()
+    assert "jev_shadow" in tables
+    mig = schema_pg.MIGRATIONS[5]
+    assert mig.version == 6
+    assert "jev_shadow" in schema_pg.parse_tables(mig.sql)
+    for earlier in schema_pg.MIGRATIONS[:5]:
+        assert "jev_shadow" not in schema_pg.parse_tables(earlier.sql)
+    for value in schema.JEV_KINDS + schema.JEV_STATUSES:
+        assert f"'{value}'" in mig.sql and f"'{value}'" in schema.JEV_DDL
+
+
 def test_pg_exit_and_window_checks_match_sqlite():
     sql = schema_pg.MIGRATIONS[1].sql
     for value in schema.EXIT_CLASSES + schema.WINDOW_CLASSES:

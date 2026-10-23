@@ -52,10 +52,46 @@ pub fn run_check_cancellable(
     tail_n: usize,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<CheckResult> {
+    run_check_scoped(cmd, dir, timeout, tail_n, None, cancelled)
+}
+
+/// Run a check using the attempt's jail and resource ceilings when configured;
+/// let `cancelled` stop the whole process group early.
+pub fn run_check_scoped(
+    cmd: &str,
+    dir: &Path,
+    timeout: Duration,
+    tail_n: usize,
+    jail: Option<(&Path, &crate::scope::ScopeLimits, &Path)>,
+    cancelled: &dyn Fn() -> bool,
+) -> io::Result<CheckResult> {
     let home = crate::sandbox_env::HomeGuard::for_check(dir)?;
     let mut c = Command::new("sh");
     c.arg("-c").arg(cmd).current_dir(dir);
     crate::sandbox_env::confine_check(&mut c, home.path());
+    if let Some((bin, limits, tmp)) = jail {
+        if !bin.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "required jail helper missing",
+            ));
+        }
+        c.env("TMPDIR", tmp);
+        c = crate::scope::wrap(
+            c,
+            limits,
+            &crate::scope::Jail {
+                bin,
+                rw: vec![
+                    dir.to_path_buf(),
+                    home.path().to_path_buf(),
+                    tmp.to_path_buf(),
+                    "/dev/null".into(),
+                ],
+                ro: crate::scope::system_ro(),
+            },
+        );
+    }
     let opts = Opts {
         timeout: Some(timeout),
         grace: Duration::from_secs(2),
@@ -101,6 +137,59 @@ mod tests {
     use std::time::Instant;
 
     const T: Duration = Duration::from_secs(20);
+
+    #[test]
+    fn required_missing_jail_fails_closed() {
+        let d = tempfile::tempdir().unwrap();
+        let limits = crate::scope::ScopeLimits::default();
+        assert!(run_check_scoped(
+            "touch marker",
+            d.path(),
+            T,
+            50,
+            Some((&d.path().join("missing"), &limits, d.path())),
+            &|| false
+        )
+        .is_err());
+        assert!(!d.path().join("marker").exists());
+    }
+
+    #[test]
+    fn jailed_check_cannot_write_outside_worktree() {
+        let Some(bin) = std::env::var_os("PG_JAIL_BIN") else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI requires PG_JAIL_BIN and Landlock"
+            );
+            eprintln!("skipped: PG_JAIL_BIN unset (CI unset)");
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let work = root.path().join("work");
+        let tmp = root.path().join("private-tmp");
+        std::fs::create_dir(&work).unwrap();
+        std::fs::create_dir(&tmp).unwrap();
+        let outside = root.path().join("outside");
+        let command = format!(
+            "echo allowed > marker; echo denied > '{}'",
+            outside.display()
+        );
+        let limits = crate::scope::ScopeLimits::default();
+        let r = run_check_scoped(
+            &command,
+            &work,
+            T,
+            50,
+            Some((Path::new(&bin), &limits, &tmp)),
+            &|| false,
+        )
+        .unwrap();
+        // The successful in-jail write proves a launcher failure did not mask the test.
+        assert!(work.join("marker").exists(), "{}", r.tail);
+        assert!(!r.passed());
+        assert!(!outside.exists());
+        assert!(r.tail.contains("Permission denied"), "{}", r.tail);
+    }
 
     #[test]
     fn pass_and_fail_codes() {
