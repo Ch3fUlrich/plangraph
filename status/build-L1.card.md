@@ -1,4 +1,4 @@
-# build-L1 card · gen-19 -> gen-20 HANDOFF · 2026-10-23 07:25Z · NO cron · restart hb bg loop over ops/hb-keys.txt (one bg wait cmd, 25m)
+# build-L1 card · gen-20 · 2026-10-23 07:35Z · NO cron · hb bg loop b6h0tgz70 (25m x16) over ops/hb-keys.txt
 Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Writers: cx/gpt-6.1-sol not on coding.vm -> omniroute/mimo-v2.6-flash > deepseek (record skip). Never Claude writers.
 Seats (D-2318/2322): qwen via qodercli (stdin, no-tools header) + opencode/glm-5.3-flash-free (opencode ZEN path, zhipu; opencode-go free = 429). FULL diff incl tests (D-2324). Prompt = done_criteria from `ops/pg.sh show` + diff, no rulings (D-302/2295).
 HIGH = 2 non-writer-family PASS + routing GO per sha. glm verdict: `PGTOK=reviewer-zhipu ops/pg.sh verdict K --pass --reason "<record path, banner, sha256>"`; qwen: sv-dry-1dbc4f26 tools/seat_verdict.py.
@@ -16,7 +16,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD KEY TITLE 
 | #137 OPENCODE-HARDEN | DONE | merged 4fb18030, 2/2 (notes cite D-2339 + RT95 leaf); #95 closed |
 | #96 JEV-SHADOW (HIGH) | sweep-keeper | head ba3f0600: qwen PASS, glm FIX+TG yes (no prod caller for QC/outcome keeper path). L1 ruling A: writer wires prod call sites + tests via prod entry, re-seat |
 | KEEPER-RUNTOKEN-CLI-RUNS (HIGH) | L1 | D-2338 created (gate PH-RT-ADAPTERS); after phase-1 items |
-| PG-PUBLIC-READY | L1 | #136 MERGED cbf21431 (CI green). evidence refused (in_review); qwen verdict 1/2 on OLD evidence 115379e8 (writer alibaba) -> glm refused coverage. BLOCKED A sent: router withdraw_review -> L1 evidence cbf21431 -> submit -> repost qwen+glm from seats/pr136/r2. Flip gated on history cut + gitleaks 0 (close-inreview) |
+| PG-PUBLIC-READY | L1 | D-2345 opt B: deepseek seat (gateway deepseek-flash) on r2 full diff -> seats/pr136/r3; then post verdict. #136 MERGED cbf21431 (CI green). evidence refused (in_review); qwen verdict 1/2 on OLD evidence 115379e8 (writer alibaba) -> glm refused coverage. BLOCKED A sent: router withdraw_review -> L1 evidence cbf21431 -> submit -> repost qwen+glm from seats/pr136/r2. Flip gated on history cut + gitleaks 0 (close-inreview) |
 | RT-P1-BUS-CONTRACT | build-L2-bus (workst, relaunched) | conditional GO impl (push red 28ba998 to origin first); MERGE-READY -> L1 |
 Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router-code + spawner moves, prio 8) after RT-P1-E2E green (D-2318 4). Reap timer -> RT-P1-E2E checklist (router edit).
 ## Traps
@@ -25,5 +25,5 @@ Briefs for sweep L2s: plangraph-worktrees/briefs/. Router plans 2nd lane (router
 - D-2315: no age-only deletes; clean only terminal-marker runs.
 - TRAILERS (gen-19): keeper reads %(trailers) = LAST paragraph, last Writer wins. Any merge-candidate commit: ONE final trailer block (Plan-Item, all Writer, Test-Removal, Co-Authored-By, no blank line). #133 squash 8fd739b7 has a split block -> rebuild message (commit-tree) before merge. #134 told to reword. Open: OPTASK verdict passed although leaf f6fadc23 trailers show no Writer/Hand-Edit (split block) -> coverage maybe not firing; raise with routing at next GO-REQ.
 | KEEPER-TRAILER-MULTI (HIGH) | L1 | writer 20261023-064042-trailer-multi-writer-0e3d4e (wt trailer-multi off main 75a6f7ad) -> verify, PR, CI, seats qwen+glm (non-xiaomi) -> GO-REQ |
-| #100 SANDBOX | sweep-runtime | handed over D-2332 |
+| #100 SANDBOX | sweep-runtime | head 61026cc5 CI green; r2 qwen+glm FIX; disputes -> routing BLOCKED 07:33Z; L2 told fix LOWs + fresh round |
 | RT95-EMPTY-RUN-FIXTURE | L1 | claimed; #137 merged -> spawn writer to capture a real opencode empty run when MemAvailable > 5 GB (D-2332; was 4.3 GB) |
