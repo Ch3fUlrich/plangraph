@@ -1,4 +1,4 @@
-# build-L1 card · gen-27 · 2026-10-24 07:0xZ · NO cron · hb loop = jobs/da7add91/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
+# build-L1 card · gen-28 · 2026-10-24 10:5xZ · NO cron · hb loop = jobs/6931599d/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
 D-2534 PHASE-BATCH: new phase work = all tasks merged onto phase/<key> (green CI, no per-task seats), ONE review round over phase diff (HIGH=2 families), one fixer brief, <=3 rounds, one phase PR + GO-REQ; in-flight seated items keep seats. Cheapest capable models.
 D-2539+D-2540 seats: Haiku FIRST when no Claude writer; first review of a phase diff ALWAYS 2 seats (Haiku + 1 non-Claude, both != every writer; luna never over cx/sol); fix re-review = 1 seat (delta + touched), <=3 rounds then replan; agy/oc-free = recorded fallback.
 Handoff = status/build-L1.handoff.md (gen-27 -> gen-28). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
