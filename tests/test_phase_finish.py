@@ -1,4 +1,5 @@
 import fcntl
+import json
 import subprocess
 
 import pytest
@@ -26,7 +27,7 @@ def gate(w):
 
 def finish_cards(w, *keys):
     for key in keys:
-        w.store.conn.execute("UPDATE items SET state='done' WHERE key=?", (key,))
+        w.store.conn.execute("UPDATE items SET state='in_review' WHERE key=?", (key,))
     w.store.conn.commit()
 
 def git_repo(tmp_path):
@@ -88,7 +89,7 @@ class FakeGitHub:
 
     def merge_pr(self, number, head):
         self.calls.append(("merge_pr", number, head))
-        return self._pr(number, "merged", head)
+        return {**self._pr(number, "merged", head), "merge_sha": "a" * 40}
 
 class ExplodingStore:
     def __getattr__(self, name):
@@ -114,6 +115,13 @@ def test_all_cards_done_opens_pr_and_merges_when_ci_green(w, tmp_path):
     assert result["state"] == "merged"
     assert result["pr"]["number"] == 7
     assert result["cards"] == ["demo:C1", "demo:C2"]
+    assert result["merge_sha"] == "a" * 40
+    rows = w.store.conn.execute(
+        "SELECT key, ref FROM evidence WHERE kind='commit+ci'"
+    ).fetchall()
+    assert len(rows) == 2
+    assert {row[0] for row in rows} == {"demo:C1", "demo:C2"}
+    assert all(json.loads(row[1]) == {"commit": "a" * 40} for row in rows)
     assert [c[0] for c in github.calls] == [
         "find_pr",
         "push_branch",
@@ -140,6 +148,7 @@ def test_waiting_ci_does_not_merge(w, tmp_path):
 
     assert result["state"] == "waiting_ci"
     assert "merge_pr" not in [c[0] for c in github.calls]
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
 
 def test_already_merged_pr_is_idempotent(w, tmp_path):
     gate(w)
@@ -168,6 +177,7 @@ def test_already_merged_pr_is_idempotent(w, tmp_path):
     assert result["state"] == "merged"
     assert result["pr"]["number"] == 3
     assert github.calls == [("find_pr", branch)]
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
 
 def test_open_pr_is_reused(w, tmp_path):
     gate(w)
@@ -423,6 +433,7 @@ def test_no_store_write(w, tmp_path):
     finish_cards(w, "demo:C1", "demo:C2")
     root, head = git_repo(tmp_path)
     before_count = w.store.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    before_changes = w.store.conn.total_changes
     before_state = w.store.conn.execute(
         "SELECT state FROM items WHERE key=?", ("demo:PH-X",)
     ).fetchone()[0]
@@ -434,13 +445,15 @@ def test_no_store_write(w, tmp_path):
         phase_finish.phase_branch("demo:PH-X"),
         head,
         repo_root=root,
-        github=FakeGitHub(ci=True),
+        github=FakeGitHub(ci=False),
     )
 
     after_count = w.store.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     after_state = w.store.conn.execute(
         "SELECT state FROM items WHERE key=?", ("demo:PH-X",)
     ).fetchone()[0]
-    assert result["state"] == "merged"
+    assert result["state"] == "waiting_ci"
     assert after_count == before_count
     assert after_state == before_state
+    assert w.store.conn.total_changes == before_changes
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
