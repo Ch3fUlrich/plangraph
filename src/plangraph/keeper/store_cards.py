@@ -394,7 +394,14 @@ class CardsMixin:
             self._assert_unlocked(item)
             # Compare the observed state before _exec_check can record an owner.
             if expected_state is not None:
-                self._exec_expect_state(item, expected_state, principal)
+                self._exec_expect_state(item, expected_state, principal, now=now,
+                                        claim_checked=principal.role == "worker")
+            if principal.role == "worker":
+                self._exec_gate(key, {"workflow_id": exec_workflow_id,
+                                      "run_id": exec_run_id,
+                                      "attempt": exec_attempt}, principal,
+                                record=False)
+                self._park_guard(principal, item, None, now)
             # RT-P1-EXEC-OWNERSHIP: an ask carrying any exec field is checked
             # against the recorded owner (a first ask records it; a stale run
             # or a backwards attempt is refused and inserts no question).  A
