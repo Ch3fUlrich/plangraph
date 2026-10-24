@@ -90,7 +90,6 @@ DEFAULT_LEGS = (
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
         roles=("review",)),
-    *tuple(leg for leg in _legacy.values() if leg.tier == "free" and leg.harness != "qodercli"),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
     _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),

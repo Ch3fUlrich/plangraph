@@ -194,6 +194,8 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run):
     destination.mkdir(parents=True, exist_ok=True)
     templates = root / 'deploy/watchdog'
     if host == 'linux':
+        if any(char.isspace() for char in str(root)):
+            raise ValueError('Linux watchdog root must not contain whitespace')
         for name in ('service', 'timer'):
             text = (templates / ('watchdog.' + name)).read_text()
             text = text.replace('@PYTHON@', python).replace('@ROOT@', str(root))

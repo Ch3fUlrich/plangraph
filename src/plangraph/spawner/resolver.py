@@ -225,6 +225,13 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
 # Registered seats are the authoritative offline routing surface. Legacy rows
 # remain visible for diagnostics but must not become new offline spawn routes.
 from plangraph.planner.legs import DEFAULT_LEGS
+
+
+def admission_models() -> set[str]:
+    """The final role-ordered policy is the sole spawn admission allowlist."""
+    return {leg.model for leg in DEFAULT_LEGS}
+
+
 _fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS}
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
@@ -349,9 +356,10 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
-def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
+def catalog_row_admitted(row: Mapping[str, Any], *, admission: bool = True) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
-    return row.get('available') == 1 and row.get('active') is True
+    return ((not admission or row.get('id') in admission_models())
+            and row.get('available') == 1 and row.get('active') is True)
 
 
 _served_cache = {}
@@ -520,7 +528,8 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     """
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
-    if not catalog_row_admitted(model):
+    # Ranking historical catalog seats is not a new-spawn admission decision.
+    if not catalog_row_admitted(model, admission=False):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -625,7 +634,7 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
-        if not catalog_row_admitted(c):
+        if not catalog_row_admitted(c, admission=False):
             continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)
