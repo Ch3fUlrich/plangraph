@@ -52,7 +52,9 @@ def _status_name(status) -> str:
 def _write_opencode(bin_dir: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     exe = bin_dir / "opencode"
-    exe.write_text('#!/bin/sh\nfor last; do :; done\necho done > "$last"\n', encoding="utf-8")
+    exe.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then\n'
+                   '  echo "opencode 2.0.32"\n  exit 0\nfi\n'
+                   'for last; do :; done\necho done > "$last"\n', encoding="utf-8")
     exe.chmod(0o755)
 
 def _payload(body):
@@ -281,7 +283,7 @@ def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
     result, run_id, children = asyncio.run(_run_phase(r))
 
     assert result["outcome"] == "partial"
-    assert sorted(result["merged"]) == ["demo:C1", "demo:C2"]
+    assert sorted(result["merged"]) == ["demo:C1", "demo:C2"], repr(result)
     assert result["not_merged"] == []
     assert result["waves"] == 1
     assert result["branch"] == PHASE_BRANCH
