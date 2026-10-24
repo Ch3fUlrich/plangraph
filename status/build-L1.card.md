@@ -11,7 +11,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KG-LINK-REPAIR (p9, D-2541 freeze exc.) | L1 + workst cx | LIVE done 07:09Z: kg.conf -> live Omnigraph (backup backups/kg-conf-pre-d2541.conf), export 2041 nodes 0 err, token 0 hits; code brief sent (loud failures, --check alarm, example placeholder) |
 | KEEPER-SEAT-FAMILY-WRITER (HIGH p10, gates PH-RT-RUNTIME) | L1 via workst cx | claimed 07:0xZ; brief sent (A store_support writer families, B Hand-Edit CHANGELOG-only excl, separate commit for #139 rebase); seats Haiku + qwen (D-2539) |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
-| RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (Claude, finishing lane) | S3d de802f3a CI 40071817884 green; RESUME sent 06:5xZ (seats, rebase C1-C3 off #139). Next HARDEN |
+| RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner | force-push REFUSED (harness); D-2545 (b): new branch spine/phase-runner-s3d-r2 8721941 + new PR, L1 closes #150 w/ pointer; seats Haiku+qwen on new head; prove 3 WSL env fails pass in CI |
 | PG-PUBLIC-READY #162 (HIGH) | L1 via workst cx | r3 0af5ab57 CI green but gitleaks HEAD history 42 hits (12 old replay ids, seats/pg-public-ready/r6/l1-history-hits.txt) -> r4 brief sent; then seats r6 -> GO -> D-2501 rewrite |
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
