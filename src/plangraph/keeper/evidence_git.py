@@ -39,20 +39,27 @@ def valid_ref(ref: Any) -> bool:
     return bool(_REF_RE.fullmatch(ref))
 
 
-def parse_trailers(text: str) -> dict[str, str]:
+def parse_trailers(text: str) -> dict[str, str | list[str]]:
     """Parse ``git show -s --format=%(trailers)`` output into key → value.
 
     ``%(trailers)`` emits one ``Key: value`` line per trailer (possibly with
-    leading blank lines), exactly the shape parsed here. Last value wins.
+    leading blank lines), exactly the shape parsed here. Repeated Plan-Item
+    values bind a phase merge to each card; other keys retain last-value wins.
     """
-    trailers: dict[str, str] = {}
+    trailers: dict[str, str | list[str]] = {}
     for line in text.splitlines():
         line = line.strip()
         if not line or ":" not in line:
             continue
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
-        if key:
+        if key and re.fullmatch(r"[A-Za-z0-9-]+", key):
+            if key.lower() == "plan-item":
+                previous = next((k for k in trailers if k.lower() == "plan-item"), None)
+                if previous is not None:
+                    raw = trailers[previous]
+                    trailers[previous] = [*(raw if isinstance(raw, list) else [raw]), value]
+                    continue
             trailers[key] = value
     return trailers
 
@@ -205,6 +212,20 @@ class GitAdapter:
         return proc.returncode == 0
 
     # -- operations ---------------------------------------------------------
+    def two_parent_merge_subject(self, repo: str, sha: str) -> str | None:
+        """Return the subject of an exact two-parent merge; fail closed otherwise."""
+        if not repo or not valid_commit_ref(sha):
+            return None
+        try:
+            proc = self._run(repo, ["show", "-s", "--format=%P%n%s",
+                                    "--end-of-options", sha])
+            lines = proc.stdout.splitlines()
+            if proc.returncode == 0 and len(lines) == 2 and len(lines[0].split()) == 2:
+                return lines[1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return None
+
     def commit_exists(self, repo: str, sha: str) -> bool:
         if not valid_commit_ref(sha):
             return False
