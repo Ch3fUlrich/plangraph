@@ -23,18 +23,28 @@ _COUNT = (
     r"|twenty(?:-(?:one|two|three|four|five|six|seven|eight|nine))?"
     r"|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
     r"|both|a\s+second|another)")
-_SEAT_NOUN = r"(?:seats|families|reviewers|verdicts|sign-offs)"
+_SEAT_NOUN = r"(?:seats|families|reviewers|verdicts|sign[- ]?offs)"
+_SINGULAR_SEAT = r"(?:seat|family|reviewer|verdict|sign-off)"
+_APPROVAL = r"(?:review|approval|approve|verdicts?|signs\s+off)"
+_ARTIFACT = (
+    r"(?:comments|findings|notes|feedback|packages|licenses|table|section|list"
+    r"|chart|column|row|page|docs?)")
+_SEAT_END = rf"(?![\w-])(?!(?:['’]s?)?\s+{_ARTIFACT}\b)"
+# Known limits: '2 OS families' / '2 font families' are refused at standard,
+# as are conditional/negated clauses ('on 1 seat; 2 seats only if auth is touched').
+# This is a surface-form heuristic: reword or use review_tier 'high' safely.
 _SEAT_CLAUSE = re.compile(
     rf"(?<![\w-])(?:{_SEAT_NOUN}\s*[:=]\s*{_COUNT}(?![\w+-])"
-    rf"|{_COUNT}(?:-(?:seat|family|reviewer|verdict|sign-off)(?![\w-])"
+    rf"|(?:a\s+second|another|second)\s+{_SINGULAR_SEAT}{_SEAT_END}"
+    rf"|{_COUNT}(?:-{_SINGULAR_SEAT}{_SEAT_END}"
+    rf"|\s+{_SINGULAR_SEAT}{_SEAT_END}(?=\s+{_APPROVAL}\b)"
     rf"|[\s,]+(?:of\s+(?:the\s+)?)?"
     rf"(?:[a-z0-9]+(?:-[a-z0-9]+)*[\s,]+){{0,3}}?{_SEAT_NOUN}"
-    r"(?![\w'-]|’)(?!\s+(?:table|section|list|chart|column|row|page|docs?"
-    r"|comments|findings|notes|feedback|packages|licenses)\b)))",
+    rf"{_SEAT_END}))",
     re.IGNORECASE)
 _NAVIGATION = re.compile(
-    r"\b(?:step|table|section|figure|phase|row|column|part|item|level|tier|page"
-    r"|chapter)\s+$", re.IGNORECASE)
+    r"\b(?:step|table|section|figure|phase|row|column|part|item|page"
+    r"|chapter)(?:\s+|\s*[:#]\s*)$", re.IGNORECASE)
 
 
 def seat_clause_needs_high(text: str | None) -> str | None:
