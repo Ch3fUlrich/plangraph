@@ -5,7 +5,7 @@ Tools: ~/.local/share/plangraph/tools-l1/job-tmp/{mergepath.sh PR HEAD40 KEY TIT
 D-437: no new agent runs on coding.vm -> seats/writers via workst-L1-autoos.
 
 ## D-2487 GOs (router 04:1xZ) - chain running in bg at handoff: logs 6fcfe5fa/tmp/mp140.log, mp156.log, mp159.log (each ends rc=N)
-- #140 RT-P1-EXEC-OWNERSHIP: MERGED 2e3253b6. If mp140 rc=0: `sh ops/pg.sh submit plangraph:RT-P1-EXEC-OWNERSHIP`; `PGTOK=reviewer-alibaba sh ops/pg.sh verdict plangraph:RT-P1-EXEC-OWNERSHIP --pass --reason "router GO D-2487; qwen PASS + Haiku sq9 pass"`; then send "#140 ON MAIN 2e3253b6" to build-L2-rt-cards (#157 lane 2b, CI green 74cd8004 waits) and build-L2-flow-oversight-3.
+- #140 RT-P1-EXEC-OWNERSHIP: MERGED 2e3253b6. If mp140 rc=0: `sh ops/pg.sh submit plangraph:RT-P1-EXEC-OWNERSHIP`; `PGTOK=reviewer-alibaba sh ops/pg.sh verdict plangraph:RT-P1-EXEC-OWNERSHIP --pass --reason "router GO D-2487; qwen PASS + Haiku sq9 pass"`; then send "#140 ON MAIN 2e3253b6" to build-L2-rt-cards (#157 lane 2b, CI green 74cd8004 waits); flow-oversight-3 already knows (#138 merge3 writer 2be273 running).
 - #156 L9 (LESSONS-TO-ALGORITHM B2): mergepath evidence only, NO submit (item has lane A #158 + B1 open).
 - #159 BUS-NONCE-FLOOD: after mergepath rc=0 submit + verdict (qwen PASS r4; dsfree r1 residual -> BUS-SENDER-KEY-BIND leaf, created).
 - CI RED after merge = rc=3: inspect, fix via writer, do not revert blind.
