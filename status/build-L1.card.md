@@ -1,26 +1,26 @@
-# build-L1 card · gen-25 · 2026-10-23 19:4xZ · NO cron · hb loop = job-tmp hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
-Handoff #25 = docs/build-L1-handoff.md top. Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 (all findings 1 writer) + D-2472 (P1-P6 speed) + D-2459 (mimo/mimo-v2.6-* only).
+# build-L1 card · gen-25 -> RECYCLE · 2026-10-24 04:5xZ · NO cron · hb loop = job-tmp hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
+Handoff = status/build-L1.handoff.md (gen-25 -> gen-26). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
 Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats D-2449/2450: qwen qodercli (job-tmp qseat.sh; efficient fallback ok), Haiku (Agent haiku), mimo, luna (workst); deepseek API OUT (402).
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
-## Main = 34382a1d (#147). LIVE keeper = live-2d61e281 (never ff)
+## Main = e612b836 (#159). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq9 seats qwen PASS + Haiku PASS (seats/exec-ownership/sq9); cb0303ac rust-worker RED (semantic merge: #147 4-arg park_and_alarm) -> Hand-Edit cc563b1e pushed, CI running -> green: GO-REQ |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 2e3253b6, in_review, qwen pass 1/2; dsfree FIX (expired-lease complete/alarm) -> sq10 writer queued workst (D-2498) -> dsfree delta -> deepseek verdict |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | 8274621e CI green, qwen delta PASS -> GO-REQ sent 01:4xZ (residual unknown 2nd model, *A follow-up) -> mergepath |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | router HOLD; dsfree r6 FIX (interior ./-/_ hides family) -> fix9 writer workst 04:46Z -> CI + dsfree+qwen delta -> GO |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
-| BUS-NONCE-FLOOD p4 | L1 | PR #159 7ef86569 CI green; r4 qwen PASS + dsfree doc-only -> Hand-Edit; GO-REQ sent 02:4xZ (HIGH auth); follow-up BUS-SENDER-KEY-BIND proposed |
+| BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| WAIT-GUARD #158 + LESSONS B2 #156 | L1 | #156 GO-REQ sent; #158 l1fix2 writer mimo run 20261024-030128-...57f4c8 (cx 429) -> CI + seats qwen+dsfree |
-| ROUTING-STALL | routing | no reply since 21:20Z; open: GO #140 #139 #156 #159, PG-PUBLIC ruling, BUS-SENDER-KEY-BIND leaf |
+| WAIT-GUARD #158 / LESSONS #156 / B1 | L1 | #156 MERGED 5f4782b0 (evidence); #158 l1fix2 mimo run 57f4c8 -> CI + seats; B1 build-L2-lessons-b1 workst |
+| SEAT-VERDICT-QODER-ALIAS p9 | L1 | D-2495 claimed; writer queued workst after sq10 -> 1 dsfree seat |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (parking) | C1-C3 local 1aa74d0 (contains #139 merge f6b4f6c, no push); STOPPED, handoff C:\fleet\handoff\build-L2-phase-runner.card.md (workst); relaunch with "#139+#140 ON MAIN <sha>" + its handoff |
-| CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | #147 MERGED 34382a1d (dispatch flake rerun -> evidence); lane 2b GO D-2478 (presence-based cols, merge after #140) running; then WF-VERSIONING |
-| RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
+| CARD-CHECKS #157 / WF-VERSIONING | build-L2-rt-cards | 2b b9fc8a7f CI green, qwen delta FIX -> (a) writer F2+F3+sweep -> re-seat -> MERGE-READY |
+| RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | #140 on main; merge3 writer 2be273 running |
 | RT-P1-BUS-CONTRACT | DONE | #153 merged 432c5377, keeper done (mimo + deepseek r2) |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
 | KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |

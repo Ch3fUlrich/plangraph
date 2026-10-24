@@ -7,7 +7,7 @@ D-437: no new agent runs on coding.vm -> seats/writers via workst-L1-autoos.
 ## D-2487 GOs (router 04:1xZ) - chain running in bg at handoff: logs 6fcfe5fa/tmp/mp140.log, mp156.log, mp159.log (each ends rc=N)
 - #140: merged 2e3253b6 main green, submit + qwen pass. dsfree seat ds140 = FIX: REAL HIGH worker_complete w/o expected_state skips lease guard (store_worker.py:126-129 only in phase_holder branch), alarms too, test uses wrong path; V3/V5 false. Router D-2498 *A: sq10 brief seats/exec-ownership/sq10/WRITER-BRIEF.md SENT workst (lane/rt-p1-exec-ownership-sq10 off main). On sha: CI + dsfree delta re-review -> mergepath -> PGTOK=reviewer-deepseek verdict --pass. Cross-link EXEC-PHASE-LEASE (separate). "#140 ON MAIN" sent rt-cards.
 - #156 DONE: merged 5f4782b0, main CI green, evidence attached (no submit).
-- #159: CHANGELOG union merge committed in merge-159; merge-cont running (log 6fcfe5fa/tmp/mp159c.log). rc=0 -> `sh ops/pg.sh submit plangraph:BUS-NONCE-FLOOD`; `PGTOK=reviewer-alibaba sh ops/pg.sh verdict plangraph:BUS-NONCE-FLOOD --pass --reason "router GO D-2487; qwen PASS r4"`; if keeper wants a 2nd family: PGTOK=reviewer-deepseek (dsfree r1..r4 seats, check last verdict line) or ask router.
+- #159 DONE: merged e612b836, main CI green, keeper done 2/2.
 - CI RED after merge = rc=3: inspect, fix via writer, do not revert blind.
 
 ## Open
