@@ -44,6 +44,18 @@ def owner(w, key):
 
 
 @needs_pg
+@pytest.mark.parametrize("who", ["workerA", "workerB"])
+def test_duplicate_complete_pg(tmp_path, who):
+    from test_keeper_exec_sq11 import check_duplicate_complete
+
+    w = World(tmp_path, backend="postgres", dsn=DSN)
+    try:
+        check_duplicate_complete(w, who)
+    finally:
+        w.close()
+
+
+@needs_pg
 def test_migration_7_applies_on_pg_and_park_refuses_an_older_attempt(tmp_path):
     d = tmp_path / "pgexec"
     d.mkdir()

@@ -108,7 +108,8 @@ class WorkerMixin:
     """The worker-facing verbs for :class:`plangraph.keeper.store.Store`."""
 
     # ------------------------------------------------------------- helpers
-    def _exec_expect_state(self, item, expected, principal=None, *, now=None) -> None:
+    def _exec_expect_state(self, item, expected, principal=None, *, now=None,
+                           claim_checked=False) -> None:
         """Check observed state inside the write lock, before recording ownership."""
         if expected is None:
             return
@@ -123,7 +124,7 @@ class WorkerMixin:
                         and item["state"] == "claimed"
                         and principal is not None and principal.role == "worker"
                         and item["claimed_by"] == principal.name)
-        if phase_holder:
+        if phase_holder and not claim_checked:
             # The live-set exception must not revive a dead claim on ask or
             # complete; park already enforces this same lease rule.
             self._park_guard(principal, item, None,
@@ -316,14 +317,15 @@ class WorkerMixin:
             #    so a call that fails below acquires nothing).
             self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
-            if not self._exec_duplicate(item, body, "done"):
-                self._exec_expect_state(item, body.get("expected_state"), principal,
-                                        now=now)
-            # Production complete bodies omit expected_state. Bind every call
-            # to the claim under this lock, before any ownership/write, using
-            # the verb's clock snapshot (including duplicate completions).
+            duplicate = self._exec_duplicate(item, body, "done")
+            if duplicate:
+                return {"card": key, "merged_sha": merged_sha}
+            # Only proven retries bypass the lease; first completions always
+            # bind the claim before any write, using this verb's clock.
+            self._exec_expect_state(item, body.get("expected_state"), principal,
+                                    now=now, claim_checked=True)
             self._park_guard(principal, item, None, now)
-            if not self._exec_duplicate(item, body, "done"):
+            if not duplicate:
                 if item["state"] != "done":
                     # 3. Ownership, then the completion write -- a state/epoch
                     #    CAS (``_guarded_touch``) in the SAME transaction as the
