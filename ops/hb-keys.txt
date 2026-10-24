@@ -8,3 +8,5 @@ plangraph:RATE-LIMIT-TRUTH
 plangraph:MIMO-PROVIDER-PERMANENT
 plangraph:RISK-PATH-CLASSIFIER
 plangraph:RT-P4-SPAWNER
+plangraph:RUN-EXIT-NOTIFY
+plangraph:STALL-WATCHDOG
