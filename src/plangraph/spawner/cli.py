@@ -6,8 +6,25 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+import os
+import subprocess
+import time
 
-from .service import SpawnService
+_start_supervisor = subprocess.Popen
+
+from .runner import spawn_service as SpawnService
+
+
+def _supervise():
+    payload = json.loads(sys.stdin.readline())
+    service = SpawnService(state=payload.pop('state'))
+    async def run():
+        record = await service.spawn(**payload, wait_seconds=0)
+        print(json.dumps(record), flush=True)
+        sys.stdout.close()
+        if record['run_id'] in service.tasks:
+            await service.tasks[record['run_id']]
+    asyncio.run(run())
 
 
 def _card(value):
@@ -15,6 +32,9 @@ def _card(value):
 
 
 def main(argv=None):
+    if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
+        _supervise()
+        return 0
     parser = argparse.ArgumentParser(description='Spawn by card')
     parser.add_argument('--state')
     commands = parser.add_subparsers(dest='verb', required=True)
@@ -42,11 +62,33 @@ def main(argv=None):
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of).to_dict()
         elif args.verb == 'spawn':
-            # Keep the event loop alive through execution; MCP supports asynchronous return.
-            result = asyncio.run(service.spawn(card=args.card, prompt=args.prompt, role=args.role,
+            payload = dict(card=args.card, prompt=args.prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
-                wait_seconds=None, no_fallthrough=args.no_fallthrough))
+                no_fallthrough=args.no_fallthrough)
+            # Validate before detaching so refusals are reported synchronously.
+            if not args.model and not args.leg:
+                if not args.card:
+                    raise ValueError('spawn by card; card required')
+                service.route(args.card, args.role, args.writer_family, args.review_of)
+            if args.dry_run:
+                result = asyncio.run(service.spawn(**payload, wait_seconds=None))
+            else:
+                child = _start_supervisor([sys.executable, '-m', __package__ + '.cli', '--supervise'],
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, **({'start_new_session': True} if os.name != 'nt' else
+                                  {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
+                child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
+                child.stdin.close()
+                line = child.stdout.readline()
+                child.stdout.close()
+                if not line:
+                    raise ValueError('spawn supervisor failed; check card and override reason')
+                result = json.loads(line)
+                deadline = time.monotonic() + max(0, args.wait)
+                while result['status'] == 'running' and time.monotonic() < deadline:
+                    time.sleep(min(.02, max(0, deadline - time.monotonic())))
+                    result = service.result(result['run_id'])
         elif args.verb == 'ps':
             result = service.ps()
         elif args.verb == 'cancel':
@@ -54,7 +96,7 @@ def main(argv=None):
         else:
             result = service.result(args.run_id)
         print(json.dumps(result, indent=2))
-        return 0
+        return result.get('exit_code', 0) if isinstance(result, dict) else 0
     except (ValueError, KeyError, OSError) as exc:
         print(str(exc), file=sys.stderr)
         return 2

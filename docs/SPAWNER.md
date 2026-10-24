@@ -480,3 +480,33 @@ Host binary and client prerequisites are delegated to AutoOS (`deploy/requiremen
 - Agent CLIs: `claude-code`, `qwen-code`, `gemini-cli`, `qoder-cli`, `agent-skill-links`
 
 For host provisioning instructions, refer to [`deploy/README.md`](../deploy/README.md).
+# Bounded dispatch and gateway evidence
+
+`spawn --wait S` waits at most S seconds after supervisor startup. The default,
+`--wait 0`, returns the run id immediately with `status: running`; a detached
+supervisor keeps the child and record monitor alive. Use `result RUN_ID` to read
+the eventual result. If all eligible legs are limited, dispatch returns exit code
+3 with the plan's evidence list and starts no child. Provider stops trigger a
+fresh eligibility plan with the original card, role and writer-family exclusions;
+already attempted legs are never retried during that run.
+
+The OmniRoute fork emits provider failures as one JSON line on **stderr**:
+
+```json
+{"autoos_provider_response":{"leg":"omniroute/cx-gpt-6.1-sol","status":429,"body":"provider quota exhausted","headers":{"Retry-After":"60"}}}
+```
+
+The outer object must contain only `autoos_provider_response`; its object must
+contain exactly `leg`, `status`, `body`, and `headers`. Leg and nonempty body are
+strings, status is the integer 429 or 402, and headers map strings to strings.
+The real child monitor passes this envelope to `runner.provider_response`.
+Stdout JSON, free-text errors, other statuses and additional keys are not evidence.
+This is a trusted harness transport convention, not cryptographic authentication:
+the harness must reserve this envelope and not relay agent-authored stderr as it.
+MCP tools do not expose any leg-state mutation operation.
+
+CLI and MCP persist records through private 0600 temporary files and atomic rename.
+Records and output tails redact `sk-` tokens, Bearer credentials and `*_KEY=`
+assignments; child environment mappings are never persisted. Public entry points
+use the shared hardened dispatch adapter in `spawner.runner` (the legacy service
+remains available for compatibility).

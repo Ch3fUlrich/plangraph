@@ -109,6 +109,7 @@ for _tool in TOOLS_METADATA:
         _tool['inputSchema']['required'] = ['prompt', 'card']
         _tool['inputSchema']['properties'].update({
             'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
+            'writer_families': {'type': 'array', 'items': {'type': 'string'}},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'}})
         _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
@@ -126,8 +127,8 @@ class MCPSpawnerServer:
 
     def __init__(self, runner: SpawnerRunner | None = None, *, state=None):
         self.runner = runner or SpawnerRunner()
-        from .service import SpawnService
-        self.service = SpawnService(self.runner, state=state)
+        from .runner import spawn_service
+        self.service = spawn_service(self.runner, state=state)
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
@@ -141,9 +142,12 @@ class MCPSpawnerServer:
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
             return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":
+            if not arguments.get('card'):
+                raise ValueError('card required')
             return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
+                writer_families=arguments.get('writer_families', ()),
                 dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
                 no_fallthrough=arguments.get('no_fallthrough', False))
 
@@ -229,6 +233,9 @@ class MCPSpawnerServer:
         if method == "tools/call":
             tool_name = params.get("name")
             tool_args = params.get("arguments", {})
+            if tool_name == 'plangraph_agent_spawn' and not tool_args.get('card'):
+                return {'jsonrpc': '2.0', 'id': req_id,
+                        'error': {'code': -32602, 'message': 'card required'}}
             try:
                 result = await self.call_tool(tool_name, tool_args)
                 return {
