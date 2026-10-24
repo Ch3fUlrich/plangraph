@@ -334,13 +334,21 @@ class CreateMixin:
                 return {"key": key, "priority": int(prio)}
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
-        self._may_manage(principal, item["project"])
+        holder_edit = (principal.role != "router" and item["state"] == "claimed"
+                       and item["claimed_by"] == principal.name
+                       and isinstance(rest, dict) and set(rest) == {"depends_on"})
+        if holder_edit:
+            self._require_project(principal, item["project"])
+            self._operator_dep_lease(item, now)
+            self._operator_dep_addition(item, rest["depends_on"])
+        else:
+            self._may_manage(principal, item["project"])
         # D-434 + F4: the router's narrow exception -- the tier fields plus
         # done_criteria/depends_on alone on a claimed/in-review item; anyone
         # else fails on authorisation, not state.
         tier_edit = (item["state"] in ("claimed", "in_review")
                      and _active_edit_only(rest))
-        if tier_edit and principal.role != "router":
+        if tier_edit and principal.role != "router" and not holder_edit:
             raise Refused("forbidden", "only the router may edit tier fields, "
                           "done_criteria or depends_on while an item is "
                           "claimed or in review")
@@ -407,7 +415,7 @@ class CreateMixin:
                 if any(not isinstance(d, str) for d in value):
                     raise Refused("validation",
                                   "depends_on entries must be strings")
-                deps = [self._qualify(item["project"], d) for d in value]
+                deps = sorted({self._qualify(item["project"], d) for d in value})
                 # A dependency on an item that is cancelled is dropped from the
                 # resulting list instead of refusing the edit: the rest of the
                 # list stands, the caller is told what went away, and the graph
@@ -417,6 +425,9 @@ class CreateMixin:
                 for dep in deps:
                     target = by_key.get(dep)
                     if target is not None and target["state"] == "cancelled":
+                        # A holder cannot use router cleanup to remove an old edge.
+                        if holder_edit:
+                            raise Refused("forbidden", "operator dependencies must be additions only")
                         dropped.append(f"dropped cancelled dependency {dep}")
                         continue
                     kept.append(dep)
@@ -462,15 +473,21 @@ class CreateMixin:
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
             fresh = self._get_or_refuse(key)
-            audit_before = {name: fresh.get(name) if name != "depends_on"
-                            else item.get(name) for name in edit_fields}   # F4: in-txn read
+            audit_before = {name: fresh.get(name) for name in edit_fields}
             self._assert_unlocked(fresh)
             # ``tier_edit`` implies router; guard the write on the states the read passed.
             states = ("claimed", "in_review") if tier_edit else ("open",)
             if fresh["state"] not in states or fresh["epoch"] != item["epoch"]:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
-            self._may_manage(principal, fresh["project"])
+            if holder_edit:
+                self._require_project(principal, fresh["project"])
+                self._operator_dep_lease(fresh, now)
+                if fresh["state"] != "claimed" or fresh["claimed_by"] != principal.name:
+                    raise Refused("forbidden", "only the claim holder may add operator dependencies")
+                self._operator_dep_addition(fresh, rest["depends_on"])
+            else:
+                self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             if tier_edit:
                 # Re-check the resulting (tier, kinds) pair under the lock:
@@ -517,6 +534,12 @@ class CreateMixin:
             else:
                 self._guarded_touch(key, ("open",), item["epoch"])
             if "depends_on" in edit_fields:
+                # D-2458/1: _validate_change above ran on the pre-lock graph;
+                # a reverse edge committed in that window would land here
+                # unchecked.  Repeat it on the graph as it is under the lock,
+                # through the same call, so the refusal code is identical and
+                # no cycle can be stored.
+                self._recheck_change_under_lock(key, me["depends_on"])
                 self.conn.execute("DELETE FROM edges WHERE src=?", (key,))
                 for dep in me["depends_on"]:
                     self.conn.execute(
@@ -548,6 +571,50 @@ class CreateMixin:
             # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
             result["warnings"] = dropped
         return result
+
+    def _operator_dep_addition(self, item, value):
+        """Claim holders may only extend their wait graph with open human steps."""
+        if not isinstance(value, (list, tuple)) or any(not isinstance(d, str) for d in value):
+            raise Refused("forbidden", "only adding open operator dependencies is allowed")
+        deps = {self._qualify(item["project"], d) for d in value}
+        old = {self._qualify(item["project"], d) for d in item["depends_on"]}
+        added = deps - old
+        if not added or not old <= deps:
+            raise Refused("forbidden", "operator dependencies must be additions only")
+        for dep in added:
+            # Refuse before lookup, using the same response as an unknown or
+            # ineligible local target: holders must not get an existence oracle.
+            if not dep.startswith(item["project"] + ":"):
+                raise Refused("forbidden", "added dependencies must be open operator items")
+            target = self._item(dep)
+            if target is None or not target["operator"] or target["state"] != "open":
+                raise Refused("forbidden", "added dependencies must be open operator items")
+
+    def _operator_dep_lease(self, item, now):
+        # Legacy imports can have a holder but no lease. They must release and
+        # claim normally before using this live-claim-only editing exception.
+        lease = self._parse_iso(item.get("lease_until"))
+        if lease is None or lease.timestamp() <= now:
+            raise Refused("forbidden", "a live claim lease is required to add operator dependencies")
+
+    def _recheck_change_under_lock(self, key, deps):
+        """Repeat the pre-lock ``_validate_change`` on the graph under the lock.
+
+        D-2458/1: the holder's cycle check runs before ``BEGIN IMMEDIATE``, so
+        a concurrent writer committing the reverse edge in that window would
+        not be seen and the new edge would close a cycle.  ``_all_items`` reads
+        inside the transaction and ``_validate_change`` is the very call the
+        pre-lock check used, so a refused edit reports the same code and
+        message (``cycle`` first) and nothing of it is written.
+        """
+        current = self._all_items()
+        after = []
+        for row in current:
+            candidate = dict(row)
+            if candidate["key"] == key:
+                candidate["depends_on"] = list(deps)
+            after.append(candidate)
+        self._validate_change(after, current, affected={key})
 
     def set_priority(self, principal, key, n):
         return self._run(principal, "set_priority", key,
