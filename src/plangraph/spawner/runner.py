@@ -460,15 +460,19 @@ def spawn_service(*args, **kwargs):
             self.completion_sink = completion_sink or FileInbox(self.state)
             self.keeper_sink = keeper_sink or self.completion_sink
 
-        def _save(self, record):
+        def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
-            super()._save(record)
+            if not retry:
+                super()._save(record)
+            changed = False
             if terminal:
                 if 'completion' not in record:
                     record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
-            super()._save(record)
+                    changed = True
+            if changed:
+                super()._save(record)
             if terminal:
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
                     marker = self._path(record['run_id']).parent / (recipient + '.delivered')
@@ -495,9 +499,16 @@ def spawn_service(*args, **kwargs):
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
-                if record.get('ended') is not None and record.get('job_id'):
+                recipients = ['parent', 'keeper']
+                markers = [r + '.delivered' for r in recipients]
+                if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
+                    markers += [r + '.hook.delivered' for r in recipients]
+                pending = 'completion' not in record or any(
+                    not (self._path(record['run_id']).parent / marker).exists()
+                    for marker in markers)
+                if record.get('ended') is not None and record.get('status') != 'running' and pending:
                     try:
-                        self._save(record)
+                        self._save(record, retry=True)
                     except Exception:
                         logging.getLogger(__name__).exception('completion retry failed')
 

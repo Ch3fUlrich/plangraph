@@ -72,6 +72,7 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/__init__.py": "",
         "plangraph/keeper/__init__.py": "",
         "plangraph/keeper/x.py": "from plangraph.spawner.resolver import resolve\n",
+        "plangraph/stall_watchdog.py": "from plangraph.spawner.stall_watchdog import main\n",
         "plangraph/keeper/a.py": "from plangraph import spawner\n",
         "plangraph/keeper/b.py": "import plangraph.spawner.clients as c\n",
         "plangraph/foo/__init__.py": "",
@@ -94,6 +95,7 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/keeper/a.py",
         "plangraph/keeper/b.py",
         "plangraph/keeper/x.py",
+        "plangraph/stall_watchdog.py",
     ]
 
 def test_selection_has_no_feature_flag(monkeypatch) -> None:

@@ -595,6 +595,11 @@ dry runs do not retain nonces. Steering a job without stdin returns an explicit
 
 Pure-document review exemptions carry `review_exempt`; zero reviewers without
 that flag are invalid, and high/critical risk cannot claim the exemption.
+Regression contracts: `test_existing_safety_contracts` in
+`tests/test_w13_regressions.py` rejects card-asserted exemptions;
+`test_provider_requires_authenticated_source` in the same file pins the trusted
+adapter boundary. `test_candidate_json_and_limit` in `tests/test_w11_selection.py`
+pins route JSON utility, prior/measured source, and skip evidence.
 The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
 output); Flash follows the catalog seed's 1,000,000 context limit. The unused OmniRoute
 model registry is omitted while its transport configuration remains available.

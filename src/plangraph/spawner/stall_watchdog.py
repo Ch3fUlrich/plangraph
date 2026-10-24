@@ -94,7 +94,8 @@ def deliver_event(state, event, *, now=None, interval=None):
     """
     from plangraph.spawner.private_io import atomic_write_private
     payload = json.dumps(event, sort_keys=True)
-    key = hashlib.sha256(payload.encode()).hexdigest()
+    identity = {k: event.get(k) for k in ('rule', 'run_id', 'item_key', 'kind', 'recipient')}
+    key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     now = time.time() if now is None else now
     interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
     stamp = Path(state) / 'watchdog/alerts' / (key + '.json')

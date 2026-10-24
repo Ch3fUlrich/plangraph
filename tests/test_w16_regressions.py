@@ -6,10 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from plangraph.planner.routing import SpawnRefused
-try:
-    from plangraph.spawner import stall_watchdog as w
-except ImportError:
-    from plangraph import stall_watchdog as w
+from plangraph.spawner import stall_watchdog as w
 from plangraph.spawner.runner import spawn_service
 
 

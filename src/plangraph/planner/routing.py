@@ -413,12 +413,16 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
 def validate_model(model):
     """The resolver catalog and registered legs are the exact admission door."""
     from plangraph.spawner.resolver import get_catalog_models
-    from plangraph.mimo_policy import MimoPathError, is_mimo_id
+    from plangraph.mimo_policy import check_mimo_path
     from .legs import DEFAULT_LEGS
-    allowed = {row['id'] for row in get_catalog_models()} | {leg.model for leg in DEFAULT_LEGS}
+    if not isinstance(model, str) or not model:
+        raise SpawnRefused('model must be a nonempty string')
+    check_mimo_path(model)
+    rows = get_catalog_models()
+    inactive = {row['id'] for row in rows if not row.get('active', True)}
+    allowed = ({row['id'] for row in rows if row.get('active', True)} |
+               {leg.model for leg in DEFAULT_LEGS}) - inactive
     if model not in allowed:
-        if is_mimo_id(model):
-            raise MimoPathError('Mimo requires an exact catalog id')
         raise SpawnRefused('unknown model: ' + str(model))
     return model
 

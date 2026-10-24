@@ -493,7 +493,7 @@ def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
     target_db = db if db is not None else _get_default_catalog_db()
     if target_db is not None:
         if hasattr(target_db, "list_models"):
-            models = target_db.list_models(active_only=False)
+            models = target_db.list_models(active_only=True)
             if models is not None:
                 return [_normalize_catalog_row(m) for m in models]
         if hasattr(target_db, "get_models"):
