@@ -5,7 +5,7 @@ Handoff = status/build-L1.handoff.md (gen-25 -> gen-26). Control repo LOCAL ONLY
 Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats ONLY via spawner AutoOS main>=5ce05dd9 (workst C:\fleet\wt\ao-lessons-b1\tools\autoos-agent.py), never C:\fleet\clones\AutoOS or bare opencode run (D-2552). qodercli Efficient = qwen (D-1714). deepseek-direct 402 on workst.
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
-## Main = 0d3a3898 (#160). D-2532 P1 FREEZE (see handoff). LIVE keeper restarted 06:41Z (D-2525, PG CLOSE-WAIT fail-silent; leaf KEEPER-PG-RECONNECT p9 asked)
+## Main = 0d3a3898 (#160). D-2532 P1 FREEZE (see handoff). LIVE keeper restarted 06:41Z (D-2525). KEEPER-PG-RECONNECT run 20261024-072226-keeper-pg-reconnect-d5921f (mimo) running
 | Item | Owner | State / next |
 |---|---|---|
 | KG-LINK-REPAIR (p9, D-2541 freeze exc.) | L1 + workst cx | LIVE done 07:09Z: kg.conf -> live Omnigraph (backup backups/kg-conf-pre-d2541.conf), export 2041 nodes 0 err, token 0 hits; code brief sent (loud failures, --check alarm, example placeholder) |
@@ -16,7 +16,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix11 qwen REJECT (MED-1 slug family); fix12 brief sent workst |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 via workst | fix12 run 20261024-072324-keeper-trailer-multi-fix-5e9e11 (mimo, cx 429; relaunched after 07:20Z kill). Writers now openai+xiaomi -> seats Haiku + qwen |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
 | WAIT-GUARD #158 | L1 | MERGED 27082207, evidence, in_review; LOWs leaf KEEPER-WAIT-GUARD-PRECISION asked. B1-KEEPER lane/lessons-b1-keeper (HIGH) in flight |
