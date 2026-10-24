@@ -4,14 +4,14 @@ Control branch build-L1-bus (local control.git only). Phase branch phase/rt-p1-b
 Review rule D-2534: lanes -> PR into phase branch, green CI, no per-task seats; then ONE HIGH review of phase diff vs main
 D-2539: Haiku 5.5 first + 1 non-Claude family != every writer (cx writers -> qwen | mimo/mimo-v2.6-flash | deepseek-direct-flash; luna only w/o openai writer; never sol). Haiku verdict refused by keeper until KEEPER-SEAT-FAMILY-WRITER: keep .out+sha256, post after. D-2540: 1st review = 2 seats (Haiku + 1 non-Claude); then ONE fixer brief -> re-review ONE seat (delta + touched files), loop <=3 rounds then replan; phase PR; GO-REQ to routing.
 D-2569 writers: cx -> (429) agy gemini-3.8-flash -> mimo -> qodercli; probe first, record skips. Phase writer families so far: xiaomi (EOS r1), openai (KEEPER r2, DISCOVERY) -> seat 2 = qwen.
-**PARKED D-2576 11:3xZ (fleet freeze until PH-MODEL-ROUTE done).** No new lanes/seats/merges; writers finish run + push WIP. Help build-L1 on PH-MODEL-ROUTE if asked. cx 429 was fake.
+UNPARKED D-2657 ~23:2xZ. Phase @38f4824b (main 748fe7f3 merged). Plan status/unpark-plan.md. D-2643 batch review.
 | Item | State / next |
 |---|---|
 | RT-P1-BUS-KEEPER (HIGH p8) | PARKED: lane @433a92c4 = r2 cx run 8c04a7 sandbox tree (schema/store/poll/routes, 10 files) on r1 red tests; stopped 12:08Z after 57 min silent; UNTESTED, --no-verify. Resume: CI dispatch first, then fixer |
 | EXEC-OBSERVED-STATE (HIGH p5) | IN PHASE: #165 merged 12a182f9 (head 73a24850 incl Hand-Edit fmt), CI 40087453166 green; awaits phase review |
 | BUS-WATCHER-TRACKED (p7) | claimed; HELD (D-2564), close superseded when BUS-WAKE lands |
 | RT-P1-BUS-WAKE (p7) | after BUS-KEEPER in phase; bus-keeper lane 4; claim then |
-| RT-QC-ACCEPTS (HIGH p1) | claimed; L2 build-L2-qc-accepts |
+| RT-QC-ACCEPTS (HIGH p1) | L2 build-L2-qc-accepts ses_e8fd201b9ffeOBldPtSE9uA5my (workst oc_l2, cx; reports via workst inbox relay) |
 | BUS-WAKE-STOPGAP-2 | claimed; D-2539 hold, close superseded when BUS-WAKE lands |
 | RT-P1-BUS-RUST (p6) | deps CI-WORKST-RUNNER(in_review), OCGO-BUS-INBOUND(open) |
 | RT-P1-BUS-DISCOVERY (p6) | PARKED: run done 11:14Z, lane @629dafad, PR #168 -> phase, CI 40089375376 (no merge during freeze) |
