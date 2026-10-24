@@ -7,7 +7,7 @@ D-2569 writers: cx -> (429) agy gemini-3.8-flash -> mimo -> qodercli; probe firs
 **PARKED D-2576 11:3xZ (fleet freeze until PH-MODEL-ROUTE done).** No new lanes/seats/merges; writers finish run + push WIP. Help build-L1 on PH-MODEL-ROUTE if asked. cx 429 was fake.
 | Item | State / next |
 |---|---|
-| RT-P1-BUS-KEEPER (HIGH p8) | r2 cx launched 11:03Z from 91f6a1f1 (red tests tests/test_keeper_messages.py); out build-L1/l3-20261024/rt-p1-bus-keeper.r2.out |
+| RT-P1-BUS-KEEPER (HIGH p8) | PARKED: lane @433a92c4 = r2 cx run 8c04a7 sandbox tree (schema/store/poll/routes, 10 files) on r1 red tests; stopped 12:08Z after 57 min silent; UNTESTED, --no-verify. Resume: CI dispatch first, then fixer |
 | EXEC-OBSERVED-STATE (HIGH p5) | IN PHASE: #165 merged 12a182f9 (head 73a24850 incl Hand-Edit fmt), CI 40087453166 green; awaits phase review |
 | BUS-WATCHER-TRACKED (p7) | claimed; HELD (D-2564), close superseded when BUS-WAKE lands |
 | RT-P1-BUS-WAKE (p7) | after BUS-KEEPER in phase; bus-keeper lane 4; claim then |
