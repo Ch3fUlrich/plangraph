@@ -15,6 +15,8 @@ from types import SimpleNamespace
 from typing import Any, Protocol, TextIO
 
 from plangraph.keeper.errors import Refused
+from plangraph.keeper import events
+from plangraph.keeper.evidence_git import GitAdapter
 from plangraph.planner import gitenv
 
 __all__ = ["GitHub", "GitHubError", "finish_phase", "phase_branch", "attach_merge_evidence"]
@@ -88,8 +90,8 @@ def _result(key: str, branch: str, head: str, state: str, pr: dict[str, Any],
     return result
 
 def attach_merge_evidence(store, principal, gate: str, merge_sha: str, *,
-                          github: GitHub) -> None:
-    """Attach commit+ci evidence only after GitHub confirms the phase merged."""
+                          github: GitHub, repo_root: Path | str | None = None) -> None:
+    """Atomically attach verified proof of this phase's exact merge, once per card."""
     if principal.role not in ("router", "system"):
         raise Refused("forbidden", "merge evidence requires router or system")
     if not isinstance(merge_sha, str) or _SHA_RE.fullmatch(merge_sha) is None:
@@ -108,13 +110,64 @@ def attach_merge_evidence(store, principal, gate: str, merge_sha: str, *,
         raise Refused("unavailable", str(exc))
     if pr is None or pr["state"] != "merged":
         raise Refused("bad_state", "phase PR is not merged")
-    _attach_cards(store, principal, gate, merge_sha)
+    head = pr.get("head")
+    if (pr.get("merge_sha") != merge_sha or not isinstance(head, str)
+            or _SHA_RE.fullmatch(head) is None):
+        raise Refused("conflict", "merge proof differs from phase PR or is missing")
+    if repo_root is not None:
+        adapter = GitAdapter()
+        try:
+            parents = adapter._run(str(repo_root), [
+                "rev-list", "--parents", "-n", "1", "--end-of-options", merge_sha])
+            tokens = parents.stdout.strip().split() if parents.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError):
+            tokens = []
+        if len(tokens) < 3 or tokens[0] != merge_sha or tokens[2] != head:
+            raise Refused("conflict", "merge second parent differs from phase PR head")
+    store._run(principal, "attach_merge_evidence", gate,
+               lambda now: _attach_cards(store, principal, gate, merge_sha, now))
 
-def _attach_cards(store, principal, gate, merge_sha):
-    # Reuse verification and recording rather than inserting trusted evidence.
-    for row in store.conn.execute(
-            "SELECT dst FROM edges WHERE src=? ORDER BY dst", (gate,)).fetchall():
-        store.add_evidence_router(principal, row[0], "commit+ci", {"commit": merge_sha})
+def _attach_cards(store, principal, gate, merge_sha, now):
+    ref = {"commit": merge_sha}
+    encoded = events.canonical(ref)
+
+    def exists(key):
+        return store.conn.execute(
+            "SELECT 1 FROM evidence WHERE key=? AND kind='commit+ci' AND ref=?",
+            (key, encoded)).fetchone() is not None
+
+    def cards():
+        return [row[0] for row in store.conn.execute(
+            "SELECT dst FROM edges WHERE src=? ORDER BY dst", (gate,)).fetchall()]
+
+    keys = cards()
+    prepared = {}
+    # All slow verification precedes the lock; no card can leave partial proof.
+    for key in keys:
+        if exists(key):
+            continue
+        item = store._get_or_refuse(key)
+        store._assert_unlocked(item)
+        if item["state"] not in ("claimed", "in_review"):
+            raise Refused("bad_state", f"{key} is {item['state']}")
+        result = store._verify_evidence(item, "commit+ci", ref, now)
+        if not result.ok:
+            raise Refused("bad_state", f"{key}: {result.detail}")
+        prepared[key] = (item, result)
+    with store._write():
+        gate_item = store._get_or_refuse(gate)
+        if gate_item["state"] == "cancelled" or cards() != keys:
+            raise Refused("conflict", "phase changed during evidence verification")
+        for key in keys:
+            if exists(key):
+                continue
+            old, result = prepared[key]
+            fresh = store._get_or_refuse(key)
+            store._assert_unlocked(fresh)
+            if fresh["state"] not in ("claimed", "in_review") or fresh["epoch"] != old["epoch"]:
+                raise Refused("conflict", f"{key} changed during evidence verification")
+            store._guarded_touch(key, ("claimed", "in_review"), fresh["epoch"])
+            store._record_evidence(principal, fresh, "commit+ci", ref, now, result)
 
 def _finish_locked(key: str, branch: str, head: str, root: Path,
                    github: GitHub, base: str, cards: list[str]) -> dict[str, Any]:
@@ -194,9 +247,11 @@ def finish_phase(store, principal, key: str, branch: str, head: str, *,
         result = _finish_locked(key, branch, head, root, github, base, cards)
         if result["state"] == "merged" and result.get("merge_sha") is not None:
             # The merge reply already confirms this PR; avoid a stale follow-up read.
-            confirmed = SimpleNamespace(find_pr=lambda branch: {"state": "merged"})
+            confirmed = SimpleNamespace(find_pr=lambda branch: {
+                "state": "merged", "head": result["head"],
+                "merge_sha": result["merge_sha"]})
             attach_merge_evidence(store, principal, key, result["merge_sha"],
-                                  github=confirmed)
+                                  github=confirmed, repo_root=root)
         return result
     finally:
         try:

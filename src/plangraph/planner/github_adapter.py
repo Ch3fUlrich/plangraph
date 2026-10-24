@@ -39,12 +39,15 @@ def _pr_view(item: Any, state: str | None = None) -> dict[str, Any]:
             raise TypeError
         if state is None:
             state = "merged" if item.get("merged_at") else item["state"]
-        return {
+        result = {
             "number": item["number"],
             "url": item["html_url"],
             "state": state,
             "head": item["head"]["sha"],
         }
+        if state == "merged" and item.get("merge_commit_sha") is not None:
+            result["merge_sha"] = item["merge_commit_sha"]
+        return result
     except (KeyError, TypeError, AttributeError):
         raise GitHubError("github malformed reply") from None
 
