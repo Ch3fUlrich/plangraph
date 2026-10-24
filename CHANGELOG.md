@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **BUS-NONCE-FLOOD:** check rate limits before recording authenticated nonces so 429 floods cannot evict accepted replay protection; rejected requests leave nonce and message-ID dedupe state unchanged and may retry with the same nonce after the rate window opens.
 - **JEV-ATTEMPT-THREAD (#96):** dispatch routing and keeper QC observations without waiting for Jev; use independent observer connections, record QC outcomes, bind routing observations and execution fills to numbered attempts and routing kinds, honour `pass_allowed`, omit router answers from model state, document single-axis QC scope, and remove the unused axis formatter. Jev remains default-off and its test network guard is unchanged.
 - **RT-P1-BUS-CONTRACT:** complete read-side JSON conformance vectors, pin bounded leading-zero limit syntax and normalized signing, and reject non-wire POST inputs with validation errors.
 

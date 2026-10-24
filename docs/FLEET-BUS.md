@@ -53,14 +53,18 @@ The first failing gate wins:
 5. Signature verification.
 6. Nonce replay check.
 7. Rate: 30 authenticated requests per rolling 60 seconds per sender.
-8. Dedupe by `(from, msg_id)`.
+8. Record the nonce, then dedupe by `(from, msg_id)`.
 
 Malformed JSON has no shape: if oversized it returns `too_large`, otherwise
 `bad_request`. Valid JSON is shape-checked even when oversized.
 Failed authentication never consumes a nonce or rate allowance. Authenticated
-nonces are globally unique across POST and READ and stored in insertion order,
-evicting the oldest above 10000 entries. An authenticated rate rejection consumes
-its nonce; clients retry with a fresh nonce. The limiter removes events at or
+nonces are globally unique across POST and READ and, only after passing the rate
+gate, stored in insertion order, evicting the oldest above 10000 entries.
+Rate-rejected (429) requests consume no replay state: they neither insert nor
+evict nonces and do not change message-ID dedupe state. Their nonces remain unseen;
+an exact retry after the rate window opens is a fresh acceptance, provided its
+timestamp still passes the skew gate. This prevents rejected floods from evicting
+accepted nonces. The limiter removes events at or
 before `now - 60`; rejected requests do not add a rate event. Its retry delay is
 at least one second, rounded up to the first available slot.
 

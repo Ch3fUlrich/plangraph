@@ -174,11 +174,11 @@ def _authenticate(resolve_key, ts, nonce, sender, kid, canonical, signature, now
         raise BusError("bad_signature")
     if nonce in state.seen:
         raise BusError("replayed_nonce")
-    # Only authenticated requests may consume replay or rate state.
+    # Rate-rejected floods must not evict previously accepted nonces.
+    state.limiter.check(sender, now)
     state.seen[nonce] = now
     while len(state.seen) > NONCE_CAP:
         state.seen.popitem(last=False)
-    state.limiter.check(sender, now)
 
 
 def validate_post(resolve_key, body, signature, now, state):

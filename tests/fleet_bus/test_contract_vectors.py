@@ -56,6 +56,15 @@ def test_vector(case):
                     c.validate_post(lambda kid: SECRET, json.dumps(prior).encode(), c.sign(SECRET, c.canonical_post(prior)), NOW, state)
             if inputs.get("duplicate"):
                 state.msg_ids[(envelope["from"], envelope["msg_id"])] = {"id": "1700000000000-000001", "ts": NOW, "msg_id": envelope["msg_id"], "dup": False}
+            if "retry_after_s" in inputs:
+                seen, msg_ids = state.seen.copy(), state.msg_ids.copy()
+                with pytest.raises(c.BusError) as rejected:
+                    c.validate_post(lambda kid: SECRET, body, sig, NOW, state)
+                assert (rejected.value.code, rejected.value.status) == ("rate_limited", 429)
+                assert state.seen == seen
+                assert state.msg_ids == msg_ids
+                return c.validate_post(lambda kid: SECRET, body, sig,
+                                       NOW + inputs["retry_after_s"], state)
             return c.validate_post(lambda kid: None if inputs.get("unknown_kid") else SECRET, body, sig, inputs.get("now", NOW), state)
         if fn == "check_read":
             state = fleet_state(c)
