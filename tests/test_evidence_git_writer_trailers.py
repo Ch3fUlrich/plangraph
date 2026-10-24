@@ -731,8 +731,10 @@ def test_fix8_punctuated_run_id_preserves_model(repo):
 
 
 def test_fix8_corpus_line_169_refuses_mixed_writers(repo):
-    value, _ = (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt"
-                ).read_text(encoding="utf-8").splitlines()[168].split("\t")
+    value, _ = [line for line in
+                (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt"
+                 ).read_text(encoding="utf-8").splitlines()
+                if not line.startswith("#")][168].split("\t")
     assert "fixes by L2:" in value
     sha = _commit(repo, "mixed corpus writer", {"Writer": value})
     with pytest.raises(Refused) as exc:
@@ -743,7 +745,7 @@ def test_fix8_corpus_line_169_refuses_mixed_writers(repo):
 @pytest.mark.parametrize("value,expected", [
     line.split("\t") for line in
     (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt").read_text(
-        encoding="utf-8").splitlines()
+        encoding="utf-8").splitlines() if not line.startswith("#")
 ])
 def test_fix7_main_writer_corpus(repo, value, expected):
     sha = _commit(repo, "corpus", {"Writer": value})

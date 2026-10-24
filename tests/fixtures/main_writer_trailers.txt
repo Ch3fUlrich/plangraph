@@ -1,94 +1,95 @@
+# Mask VALUE UUIDs as <uuid> and hex/high-entropy run-id segments as <hex>; all other value bytes and labels are unchanged.
 L2 (3-line fix in page_boot.js, not auth/secrets)	anthropic
 L2 (seat-found, <=10 lines)	anthropic
 L2 (sonnet) direct, tool-less n/a	anthropic
 L2 (text verbatim from the item's done criteria)	anthropic
 L2 generated (tools/split/build_examples.py)	anthropic
-L2 self-edit (deletion of the exemption, ~40 lines, D-1272); original code opencode run 20261016-213842-pg-le-guard-key-writer-0d9943 tool-using	anthropic
-L2 self-fix (~13 src lines + 2 tests, D-1272); original code mimo-v2.6-flash run 20261016-213742-pg-estimate-src-edit-wri-f8cb49	writer_unknown
-Qwen3.8-Flash qodercli 042dc0ec-bd92-4f71-8207-3cfd8055e9c8	alibaba
+L2 self-edit (deletion of the exemption, ~40 lines, D-1272); original code opencode run <hex>-pg-le-guard-key-writer-<hex> tool-using	anthropic
+L2 self-fix (~13 src lines + 2 tests, D-1272); original code mimo-v2.6-flash run <hex>-pg-estimate-src-edit-wri-<hex>	writer_unknown
+Qwen3.8-Flash qodercli <uuid>	alibaba
 Sonnet 5.5 in-session (small fix from mimo seat residuals)	anthropic
 Sonnet 5.5 in-session (test-only fix of CI flake)	anthropic
 Sonnet 5.5 in-session (test-only fix of seat D5 MED findings)	anthropic
 agy gemini-3.8-flash-high (tool-less; L2 applied output and fixed mechanical issues)	writer_unknown
-agy/gemini-3.8-flash 20261017-105642-opencode-cfg-wsl-legs-wr-48400f	google
+agy/gemini-3.8-flash <hex>-opencode-cfg-wsl-legs-wr-<hex>	google
 agy/gemini-3.8-flash-high gw5-B2d,B2e [plan-mode diff]	google
 claude-sonnet-5-5 (in-session edit, no spawner run; the spawner was at its worker cap)	anthropic
-cx-gpt-6.1-sol 20261022-145401-card-checks-py-readiness-45a082	openai
-cx-gpt-6.1-sol 20261022-145406-card-checks-rs-diffscan-70bbe1	openai
-cx-gpt-6.1-sol 20261022-154303-card-checks-rs-preattemp-9a2471	openai
-cx-gpt-6.1-sol 20261022-160412-card-checks-rs-gate-buil-07b377	openai
-cx-gpt-6.1-sol 20261022-204621-sandbox-wc-check-cmd-jai-664332	openai
-cx-gpt-6.1-sol 20261022-205324-card-checks-rs-wiring-81d1ca	openai
-cx-gpt-6.1-sol bus-contract-vectors-20261023-125120-bus-contract-vectors-48a73a	openai
-cx-gpt-6.1-sol gov-ctx-metrics-20261023-115810-gov-ctx-metrics-fix2-2c338d	openai
-cx-gpt-6.1-sol jev-attempt-thread-20261023-112202-jev-attempt-thread-write-f55fce	openai
-cx-gpt-6.1-sol keeper-close-fix1-2b54ea	openai
-cx-gpt-6.1-sol keeper-close-skip-unverified-20261023-112204-keeper-close-skip-writer-d1d2b2	openai
-cx-gpt-6.1-sol plangraph-wt-bus-contract-20261023-091025-bus-impl-ddaa7b	openai
-cx-gpt-6.1-sol plangraph-wt-bus-contract-20261023-094606-bus-scrub-c22e06	openai
-cx-gpt-6.1-sol plangraph-wt-bus-contract-20261023-095739-bus-seatfix-ba53b8	openai
-cx-gpt-6.1-sol plangraph-wt-bus-contract-20261023-110553-bus-docfix-a4ad3a	openai
-cx-gpt-6.1-sol plangraph-wt-bus-contract-20261023-112838-bus-fix4-eb4fd3	openai
-cx-gpt-6.1-sol plangraph-wt-sandbox-fix-20261022-145357-sandbox-w2-worker-cx-86c428	openai
-cx-gpt-6.1-sol sandbox-w1-pg-jail-cx-2e1eb7	openai
-cx-gpt-6.1-sol sandbox-w3-scope-procsel-13fc2a	openai
-cx/gpt-6.1-sol 20261022-145400-5da8a1	openai
-deepseek-direct-flash 20261023-002728-seat-coverage-keeper-imp-82408c	deepseek
-deepseek-direct-flash 20261023-045518-optask-close-red-tests-3d2f65	deepseek
-deepseek-direct-flash 20261023-051153-oversight-fu-83a43f	deepseek
-deepseek-direct-flash seat-cov-20261022-222650-seat-coverage-keeper-red-329318	deepseek
-deepseek-direct-flash seat-cov-20261023-024254	deepseek
-deepseek-direct-flash seat-cov-20261023-050327-optask-impl-00d2b2	deepseek
-deepseek-flash (tool-less) run 35de81ca-746d-448a-9cc3-44830c3251cf 0b2e2b2f-5086-4a37-a371-e67388aaf68c ba7142ef-4563-439e-90db-155ae040183f	deepseek
-deepseek-flash (tool-less) run 3d48eb9c-9fec-44e1-8574-1481a40ba6b5 69c0e0ca-a727-429f-affd-ac7cbb5a35eb	deepseek
-deepseek-flash (tool-less) run b51cdaa2-810f-4714-95f1-68c5637df695 2ee21175-d51a-4d28-bc9a-cfd01acedba3	deepseek
-deepseek-flash (tool-less) run f0fe920c-b6f9-42f1-a9d9-44c7db8f2ac8 e1cef4fe-0f59-40e5-b23c-80e3f247dc35 19aae4fc-becb-4d80-a57e-879c1d43a11a 6af8e546-a4ea-4118-8ff9-2897227a698b 8d6e89ac-4cec-4b16-ad2b-870df9179b00	deepseek
-deepseek-flash 04f1dc71-4c71-46b6-93c5-bac1db9caa70 [tool-less]	deepseek
-deepseek-flash 20261022-142814-w3-props-red-part1-ds1-1dc4da [tool-less]	deepseek
-deepseek-flash 20261022-143333-w3-props-red-part0-ds-a956f8 [tool-less]	deepseek
-deepseek-flash 20261022-143532-w4-resolver-fix-try1-5dec66 [tool-less]	deepseek
-deepseek-flash 20261022-144001-w5-eps-fix-try1-86ff05 [tool-less]	deepseek
-deepseek-flash 20261022-144103-w6-envelope-try1-c3881f [tool-less]	deepseek
-deepseek-flash 20261022-144226-w7-sweep-docs-try1-3f4f72 [tool-less]	deepseek
-deepseek-flash 20261022-144358-w7b-sweep-keys-try1-d07ce6 [tool-less]	deepseek
-deepseek-flash 20261022-144511-w8-resolve-id-try1-fd8a16 [tool-less]	deepseek
-deepseek-flash 20261022-150147-w9-need-tokens-try1-02e1fa [tool-less]	deepseek
-deepseek-flash 20261022-150244-w10-need-tokens-test-try-e4ce6f [tool-less]	deepseek
-deepseek-flash 20261022-150321-w10b-try1-876277 [tool-less]	deepseek
-deepseek-flash 20261022-151501-w11-test-findings-try1-385e01 [tool-less]	deepseek
-deepseek-flash 20261022-153053-w12-failclosed-sweep-try-386924 [tool-less]	deepseek
-deepseek-flash 20261022-153300-w13-order-outside-band-t-fcacbb [tool-less]	deepseek
-deepseek-flash 20261022-160316-w14-seat-wording-vacuity-1ad5ee [tool-less]	deepseek
-deepseek-flash 20261022-161946-w15-ctx-validation-try1-0e0c98 [tool-less]	deepseek
-deepseek-flash 20261022-165327-w17-props-lows-redo-try1-f65d0e [tool-less]	deepseek
-deepseek-flash 20261022-170904-w18-beta-tune-try1-6de470 [tool-less]	deepseek
-deepseek-flash 20261022-175438-oversight-impl-core-ds-245a62	deepseek
-deepseek-flash 20261022-183932-oversight-fix-seat-findi-2c8018	deepseek
-deepseek-flash 20261022-190250-w19-devstack-flake-try1-bcc597 [tool-less]	deepseek
-deepseek-flash 20261022-190413-oversight-r4-failopen-c8b6c9	deepseek
-deepseek-flash 20261022-192215-w20-gate-script-try1-1d6604 [tool-less]	deepseek
-deepseek-flash 20261022-192632-w21-gate-script-rev-try1-767895 [tool-less]	deepseek
-deepseek-flash 20261022-192842-w22-gate-tests-update-tr-a71b89 [tool-less]	deepseek
-deepseek-flash 20261022-193010-w23-gate-new-tests-try1-3b1275 [tool-less]	deepseek
-deepseek-flash 20261022-194253-oversight-r1r2-stable-9ceb4d	deepseek
-deepseek-flash 20261022-194734-oversight-r4-skipped-kee-64ba60	deepseek
-deepseek-flash 20261022-194934-oversight-lows-717d6e	deepseek
-deepseek-flash 20261022-195544-w24-gate-pin-tests-try2-9b16c8 [tool-less]	deepseek
-deepseek-flash 20261022-200149-w25-gate-wiring-check-24effb [tool-less]	deepseek
-deepseek-flash 20261022-204356-w26-gate-edges-1580f2 [tool-less]	deepseek
-deepseek-flash 20261022-204600-w27-mkdir-fix-5da57b [tool-less]	deepseek
-deepseek-flash 20261022-205851-w28-wiring-harden-69c7d9 [tool-less]	deepseek
-deepseek-flash 20261022-210044-w29-wiring-tests-0a0eca [tool-less]	deepseek
-deepseek-flash 20261022-211257-w30-more-pins-89725f [tool-less]	deepseek
-deepseek-flash 21361dff-ad58-402b-84a2-a5ac52b480e1 [tool-less]	deepseek
-deepseek-flash 548f3b49-4994-4812-9aae-2d7f87f6f83a [tool-less]	deepseek
-deepseek-flash 598bdb80-9817-40ca-bfbb-6dc67efa7bae [tool-less]	deepseek
-deepseek-flash 63ffbaaa-004e-48d4-81af-1b1c3be9d9f7 [tool-less]	deepseek
-deepseek-flash 83989dd4-7755-4324-8ec0-f89b12c6cd93 [tool-less]	deepseek
-deepseek-flash 85969ac4-74fc-4f0e-a8f4-4d24d13e2710 [tool-less]	deepseek
-deepseek-flash 984d79ec-1953-4bc9-a92e-1760fc5ef045 [tool-less]	deepseek
-deepseek-flash c07503b9-3df7-47bd-9cd6-7c31cd5bddd9 [tool-less]	deepseek
-deepseek-flash f465a381-67ad-444c-818e-1070c6e771ff, mimo-v2.6-flash 097c7e27-451b-4070-b6ab-32b16332780d	writer_unknown
+cx-gpt-6.1-sol <hex>-card-checks-py-readiness-<hex>	openai
+cx-gpt-6.1-sol <hex>-card-checks-rs-diffscan-<hex>	openai
+cx-gpt-6.1-sol <hex>-card-checks-rs-preattemp-<hex>	openai
+cx-gpt-6.1-sol <hex>-card-checks-rs-gate-buil-<hex>	openai
+cx-gpt-6.1-sol <hex>-sandbox-wc-check-cmd-jai-<hex>	openai
+cx-gpt-6.1-sol <hex>-card-checks-rs-wiring-<hex>	openai
+cx-gpt-6.1-sol bus-contract-vectors-<hex>-bus-contract-vectors-<hex>	openai
+cx-gpt-6.1-sol gov-ctx-metrics-<hex>-gov-ctx-metrics-fix2-<hex>	openai
+cx-gpt-6.1-sol jev-attempt-thread-<hex>-jev-attempt-thread-write-<hex>	openai
+cx-gpt-6.1-sol keeper-close-fix1-<hex>	openai
+cx-gpt-6.1-sol keeper-close-skip-unverified-<hex>-keeper-close-skip-writer-<hex>	openai
+cx-gpt-6.1-sol plangraph-wt-bus-contract-<hex>-bus-impl-<hex>	openai
+cx-gpt-6.1-sol plangraph-wt-bus-contract-<hex>-bus-scrub-<hex>	openai
+cx-gpt-6.1-sol plangraph-wt-bus-contract-<hex>-bus-seatfix-<hex>	openai
+cx-gpt-6.1-sol plangraph-wt-bus-contract-<hex>-bus-docfix-<hex>	openai
+cx-gpt-6.1-sol plangraph-wt-bus-contract-<hex>-bus-fix4-<hex>	openai
+cx-gpt-6.1-sol plangraph-wt-sandbox-fix-<hex>-sandbox-w2-worker-cx-<hex>	openai
+cx-gpt-6.1-sol sandbox-w1-pg-jail-cx-<hex>	openai
+cx-gpt-6.1-sol sandbox-w3-scope-procsel-<hex>	openai
+cx/gpt-6.1-sol <hex>-<hex>	openai
+deepseek-direct-flash <hex>-seat-coverage-keeper-imp-<hex>	deepseek
+deepseek-direct-flash <hex>-optask-close-red-tests-<hex>	deepseek
+deepseek-direct-flash <hex>-oversight-fu-<hex>	deepseek
+deepseek-direct-flash seat-cov-<hex>-seat-coverage-keeper-red-<hex>	deepseek
+deepseek-direct-flash seat-cov-<hex>	deepseek
+deepseek-direct-flash seat-cov-<hex>-optask-impl-<hex>	deepseek
+deepseek-flash (tool-less) run <uuid> <uuid> <uuid>	deepseek
+deepseek-flash (tool-less) run <uuid> <uuid>	deepseek
+deepseek-flash (tool-less) run <uuid> <uuid>	deepseek
+deepseek-flash (tool-less) run <uuid> <uuid> <uuid> <uuid> <uuid>	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <hex>-w3-props-red-part1-ds1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w3-props-red-part0-ds-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w4-resolver-fix-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w5-eps-fix-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w6-envelope-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w7-sweep-docs-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w7b-sweep-keys-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w8-resolve-id-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w9-need-tokens-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w10-need-tokens-test-try-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w10b-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w11-test-findings-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w12-failclosed-sweep-try-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w13-order-outside-band-t-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w14-seat-wording-vacuity-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w15-ctx-validation-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w17-props-lows-redo-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w18-beta-tune-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-oversight-impl-core-ds-<hex>	deepseek
+deepseek-flash <hex>-oversight-fix-seat-findi-<hex>	deepseek
+deepseek-flash <hex>-w19-devstack-flake-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-oversight-r4-failopen-<hex>	deepseek
+deepseek-flash <hex>-w20-gate-script-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w21-gate-script-rev-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w22-gate-tests-update-tr-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w23-gate-new-tests-try1-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-oversight-r1r2-stable-<hex>	deepseek
+deepseek-flash <hex>-oversight-r4-skipped-kee-<hex>	deepseek
+deepseek-flash <hex>-oversight-lows-<hex>	deepseek
+deepseek-flash <hex>-w24-gate-pin-tests-try2-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w25-gate-wiring-check-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w26-gate-edges-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w27-mkdir-fix-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w28-wiring-harden-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w29-wiring-tests-<hex> [tool-less]	deepseek
+deepseek-flash <hex>-w30-more-pins-<hex> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid> [tool-less]	deepseek
+deepseek-flash <uuid>, mimo-v2.6-flash <uuid>	writer_unknown
 deepseek-flash g3c [tool-less]	deepseek
 deepseek-flash g3d [tool-less]	deepseek
 deepseek-flash g3e [tool-less]	deepseek
@@ -126,155 +127,155 @@ gemini-3.8-flash agy P5-P6	google
 gemini-3.8-flash agy-tool-less [agy]	google
 gemini-3.8-flash-high agy-tool-less batch-w1 [tool-less]	google
 gemini-3.8-flash-high agy-tool-less batch-w2 [tool-less]	google
-glm-5.3-flash ses_eb078ff8affeevJ4MLNilk2vfo [opencode-go]	zhipu
-mimo-v2.6-flash (20261022-202358-keeper-opclaim-close-wri-6d5fb8)	xiaomi
-mimo-v2.6-flash (xiaomi, omniroute) 20261018-163334-batch-fix-effd64 [spawner]	xiaomi
-mimo-v2.6-flash (xiaomi, omniroute) 20261018-164546-batch-fix2-152020 [spawner]	xiaomi
-mimo-v2.6-flash (xiaomi, omniroute) 20261023-052855-jev96-qc-66695a [spawner]	xiaomi
-mimo-v2.6-flash (xiaomi, omniroute) 20261023-052923-kbp2-fix-3ad35f [spawner]	xiaomi
-mimo-v2.6-flash (xiaomi, omniroute) 20261023-064634-jev96-prod-40c693 [spawner]	xiaomi
-mimo-v2.6-flash (xiaomi, omniroute) 20261023-075448-jev96-tests-3c536d [spawner]	xiaomi
-mimo-v2.6-flash 0344bad6-41bd-4ea7-847e-c36aa12e4376 [tool-less]	xiaomi
-mimo-v2.6-flash 03b8b3e5-3add-43c4-81f5-ec1b3dd7db71	xiaomi
-mimo-v2.6-flash 20261016-213742-pg-estimate-src-edit-wri-f8cb49 (opencode, before the tool-less rule)	xiaomi
-mimo-v2.6-flash 20261016-213830-pg-le-deps-ops-writer-c794cd (opencode tool-using, launched before the tool-less rule; tests follow from a tool-less writer)	xiaomi
-mimo-v2.6-flash 20261022-132509-ci-gate-writer-mimo-2b37a7	xiaomi
-mimo-v2.6-flash 20261022-134705-ci-gate-scrub-fix-mimo-d94870	xiaomi
-mimo-v2.6-flash 20261022-135416-ci-gate-seat-fixes-mimo-83d15c	xiaomi
-mimo-v2.6-flash 20261022-141204-ci-gate-default-exempt-m-714b7a	xiaomi
-mimo-v2.6-flash 20261022-170408-oversight-red-checks-f2f82a, 20261022-170414-oversight-red-units-185a7c	xiaomi
-mimo-v2.6-flash 20261022-174453-oversight-impl-cli-e6318c	xiaomi
-mimo-v2.6-flash 20261022-212733-sandbox-wb-git-hardening-7481a6	xiaomi
-mimo-v2.6-flash 20261022-212840-opclaim-fixtures-contrac-0c5caf	xiaomi
-mimo-v2.6-flash 20261022-232805-seat-coverage-keeper-red-b4af60	xiaomi
-mimo-v2.6-flash 20261023-051322-jev96-merge-a11305	xiaomi
-mimo-v2.6-flash 20261023-064422-pgpr-fix1-b54419	xiaomi
-mimo-v2.6-flash 20261023-084625-pg-public-fix-writer-7bf42d	xiaomi
-mimo-v2.6-flash 20261023-115511-pg-public-fix2-a28382	xiaomi
-mimo-v2.6-flash 20261023-123259-ui-browser-fix1-cont-504805	xiaomi
-mimo-v2.6-flash 20261023-132241-ui-browser-fix2-fb8747	xiaomi
-mimo-v2.6-flash 37967cf4-71e1-4e36-8c4c-20fb04135c43	xiaomi
-mimo-v2.6-flash 7024b746-ab72-41d9-86e7-1d9e16cc9367	xiaomi
-mimo-v2.6-flash 891c8038-fdae-4da6-ad74-4d16cb77f1ae	xiaomi
-mimo-v2.6-flash 8f4c7d	xiaomi
-mimo-v2.6-flash 904da93e-5efe-4d1e-aa52-e922c80b6f11 [tool-less]	xiaomi
-mimo-v2.6-flash 96558890-57d2-4be3-ba87-8084ca5408b3	xiaomi
+glm-5.3-flash ses_<hex> [opencode-go]	zhipu
+mimo-v2.6-flash (<hex>-keeper-opclaim-close-wri-<hex>)	xiaomi
+mimo-v2.6-flash (xiaomi, omniroute) <hex>-batch-fix-<hex> [spawner]	xiaomi
+mimo-v2.6-flash (xiaomi, omniroute) <hex>-batch-fix2-<hex> [spawner]	xiaomi
+mimo-v2.6-flash (xiaomi, omniroute) <hex>-jev96-qc-<hex> [spawner]	xiaomi
+mimo-v2.6-flash (xiaomi, omniroute) <hex>-kbp2-fix-<hex> [spawner]	xiaomi
+mimo-v2.6-flash (xiaomi, omniroute) <hex>-jev96-prod-<hex> [spawner]	xiaomi
+mimo-v2.6-flash (xiaomi, omniroute) <hex>-jev96-tests-<hex> [spawner]	xiaomi
+mimo-v2.6-flash <uuid> [tool-less]	xiaomi
+mimo-v2.6-flash <uuid>	xiaomi
+mimo-v2.6-flash <hex>-pg-estimate-src-edit-wri-<hex> (opencode, before the tool-less rule)	xiaomi
+mimo-v2.6-flash <hex>-pg-le-deps-ops-writer-<hex> (opencode tool-using, launched before the tool-less rule; tests follow from a tool-less writer)	xiaomi
+mimo-v2.6-flash <hex>-ci-gate-writer-mimo-<hex>	xiaomi
+mimo-v2.6-flash <hex>-ci-gate-scrub-fix-mimo-<hex>	xiaomi
+mimo-v2.6-flash <hex>-ci-gate-seat-fixes-mimo-<hex>	xiaomi
+mimo-v2.6-flash <hex>-ci-gate-default-exempt-m-<hex>	xiaomi
+mimo-v2.6-flash <hex>-oversight-red-checks-<hex>, <hex>-oversight-red-units-<hex>	xiaomi
+mimo-v2.6-flash <hex>-oversight-impl-cli-<hex>	xiaomi
+mimo-v2.6-flash <hex>-sandbox-wb-git-hardening-<hex>	xiaomi
+mimo-v2.6-flash <hex>-opclaim-fixtures-contrac-<hex>	xiaomi
+mimo-v2.6-flash <hex>-seat-coverage-keeper-red-<hex>	xiaomi
+mimo-v2.6-flash <hex>-jev96-merge-<hex>	xiaomi
+mimo-v2.6-flash <hex>-pgpr-fix1-<hex>	xiaomi
+mimo-v2.6-flash <hex>-pg-public-fix-writer-<hex>	xiaomi
+mimo-v2.6-flash <hex>-pg-public-fix2-<hex>	xiaomi
+mimo-v2.6-flash <hex>-ui-browser-fix1-cont-<hex>	xiaomi
+mimo-v2.6-flash <hex>-ui-browser-fix2-<hex>	xiaomi
+mimo-v2.6-flash <uuid>	xiaomi
+mimo-v2.6-flash <uuid>	xiaomi
+mimo-v2.6-flash <uuid>	xiaomi
+mimo-v2.6-flash <hex>	xiaomi
+mimo-v2.6-flash <uuid> [tool-less]	xiaomi
+mimo-v2.6-flash <uuid>	xiaomi
 mimo-v2.6-flash [mimo]	xiaomi
-mimo-v2.6-flash a2dc969b-3a24-4e72-9709-a2f4715e8437, 37967cf4-71e1-4e36-8c4c-20fb04135c43	xiaomi
-mimo-v2.6-flash attempt-sandbox-wA-20261022-204430-sandbox-wa-pg-jail-abi-v-759ac4	xiaomi
-mimo-v2.6-flash ecd119b2-f8bb-49ed-af25-262200097555	xiaomi
+mimo-v2.6-flash <uuid>, <uuid>	xiaomi
+mimo-v2.6-flash attempt-sandbox-wA-<hex>-sandbox-wa-pg-jail-abi-v-<hex>	xiaomi
+mimo-v2.6-flash <uuid>	xiaomi
 mimo-v2.6-flash mimo	xiaomi
 mimo-v2.6-flash mimo (launched pre-D-1704)	xiaomi
-mimo-v2.6-flash opclaim-r2-20261023-054153-36d71a	xiaomi
-mimo-v2.6-flash review-call tool-less (tests, ~12 lines of result-shape fixes by L2: results['results'], edges baseline); src by opencode run 20261016-213830-pg-le-deps-ops-writer-c794cd (pre-rule)	writer_unknown
-mimo-v2.6-flash rt-p1-jev-shadow-20261023-084157-jev96-fix3b-ccc411	xiaomi
-mimo/mimo-v2.6-flash tool-less (corr 4dd32a28-62aa-400d-96b5-6edba1a9c89e ctl, outBC view/css, outD test) + L2 (test fixes, keepOpen, 1 css line)	writer_unknown
+mimo-v2.6-flash opclaim-r2-<hex>-<hex>	xiaomi
+mimo-v2.6-flash review-call tool-less (tests, ~12 lines of result-shape fixes by L2: results['results'], edges baseline); src by opencode run <hex>-pg-le-deps-ops-writer-<hex> (pre-rule)	writer_unknown
+mimo-v2.6-flash rt-p1-jev-shadow-<hex>-jev96-fix3b-<hex>	xiaomi
+mimo/mimo-v2.6-flash tool-less (corr <uuid> ctl, outBC view/css, outD test) + L2 (test fixes, keepOpen, 1 css line)	writer_unknown
 mimo/mimo-v2.6-flash tool-less (ui-batch-seats/NEEDS-w1/out*/evidence.json); L2 glue fixes	writer_unknown
 mimo/mimo-v2.6-flash tool-less (ui-batch-seats/TFIX-w1/o{A,B,C}); L2 applied diffs, specificity fix and tests	writer_unknown
 n/a merge commit	writer_unknown
-omniroute/cx-gpt-6.1-sol 20261023-111055-rt95-fixture-371c36	openai
-omniroute/cx-gpt-6.1-sol 20261023-111730-cc-resolve-df667e	openai
-omniroute/cx-gpt-6.1-sol 20261023-113306-cc-fix-74be63	openai
-omniroute/cx-gpt-6.1-sol 20261023-114731-cc-fix2-ea635c	openai
-omniroute/cx-gpt-6.1-sol 20261023-152036-cc-fix3-4b9f48	openai
-omniroute/cx-gpt-6.1-sol 20261023-153601-cc-fix4-e58c5e	openai
-omniroute/cx-gpt-6.1-sol 20261023-182916-cc-fix5b-d76188	openai
-omniroute/cx-gpt-6.1-sol 20261023-185322-cc-fix6-dc7622	openai
-omniroute/cx-gpt-6.1-sol 20261023-190757-cc-fix7-66e374	openai
-omniroute/cx-gpt-6.1-sol 20261023-192422-cc-fix8-a6f3e7	openai
-omniroute/cx-gpt-6.1-sol gov-ctx-metrics-fix3-cf2913	openai
-omniroute/cx-gpt-6.1-sol sandbox-w4-limit-probe-ec2c14	openai
-omniroute/cx-gpt-6.1-sol ui-browser-20261023-092552-ui-browser-tests-apply-f-9687be	openai
-omniroute/cx-gpt-6.1-sol ui-browser-20261023-094101-ui-browser-tests-land-pl-267c48	openai
-omniroute/cx-gpt-6.1-sol ui-browser-20261023-095617-ui-browser-tests-regen-e-0b53c4	openai
-omniroute/cx-gpt-6.1-sol ui-browser-20261023-101114-ui-browser-tests-seat-mi-32cf1b	openai
-omniroute/cx-gpt-6.1-sol ui-browser-20261023-102056-ui-browser-tests-hook-fi-afde2f	openai
-omniroute/cx-gpt-6.1-sol ui-browser-20261023-102458-ui-browser-tests-regen-e-98cb34	openai
-omniroute/cx-gpt-6.1-sol ui-browser-fix3-r2-382049	openai
+omniroute/cx-gpt-6.1-sol <hex>-rt95-fixture-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-resolve-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix2-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix3-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix4-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix5b-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix6-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix7-<hex>	openai
+omniroute/cx-gpt-6.1-sol <hex>-cc-fix8-<hex>	openai
+omniroute/cx-gpt-6.1-sol gov-ctx-metrics-fix3-<hex>	openai
+omniroute/cx-gpt-6.1-sol sandbox-w4-limit-probe-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-<hex>-ui-browser-tests-apply-f-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-<hex>-ui-browser-tests-land-pl-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-<hex>-ui-browser-tests-regen-e-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-<hex>-ui-browser-tests-seat-mi-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-<hex>-ui-browser-tests-hook-fi-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-<hex>-ui-browser-tests-regen-e-<hex>	openai
+omniroute/cx-gpt-6.1-sol ui-browser-fix3-r2-<hex>	openai
 omniroute/deepseek-direct-flash (leg 7) d3	deepseek
 omniroute/deepseek-direct-flash (leg 7) d4	deepseek
 omniroute/deepseek-direct-flash (leg 7) d9	deepseek
 omniroute/deepseek-direct-flash (leg 7) w1 d1,d1b; rustfmt applied mechanically	deepseek
 omniroute/deepseek-direct-flash (leg 7) w2 d2; rustfmt applied mechanically	deepseek
-omniroute/mimo-v2.6-flash 20261023-060441-rt95-fix1-07f0a5	xiaomi
-omniroute/mimo-v2.6-flash 20261023-065935-as100-fix1-0f4e86	xiaomi
-omniroute/mimo-v2.6-flash 20261023-073104-as100-merge2-803499	xiaomi
-omniroute/mimo-v2.6-flash 20261023-075556-as100-lows-9af315	xiaomi
-omniroute/mimo-v2.6-flash 20261023-090146-mcp-utf8-writer-bbf2d5	xiaomi
-omniroute/mimo-v2.6-flash 20261023-105917-pg-public-fix-cont-1a3af8	xiaomi
-omniroute/mimo-v2.6-flash 20261023-110256-gov-ctx-fix1-1d6c24	xiaomi
-omniroute/mimo-v2.6-flash <20261023-061645-rt95-fix2-d6b58f>	xiaomi
-omniroute/mimo-v2.6-flash mcp-utf8-20261023-092955-gov-ctx-metrics-writer-8928df	xiaomi
-opencode (pre-D-437 tool-using, reviewed by L2) run 20261016-213842-pg-le-guard-key-writer-0d9943	anthropic
+omniroute/mimo-v2.6-flash <hex>-rt95-fix1-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <hex>-as100-fix1-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <hex>-as100-merge2-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <hex>-as100-lows-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <hex>-mcp-utf8-writer-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <hex>-pg-public-fix-cont-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <hex>-gov-ctx-fix1-<hex>	xiaomi
+omniroute/mimo-v2.6-flash <<hex>-rt95-fix2-<hex>>	xiaomi
+omniroute/mimo-v2.6-flash mcp-utf8-<hex>-gov-ctx-metrics-writer-<hex>	xiaomi
+opencode (pre-D-437 tool-using, reviewed by L2) run <hex>-pg-le-guard-key-writer-<hex>	anthropic
 opencode-go/glm-5.3-flash gw5-legA	zhipu
 opencode-go/glm-5.3-flash gw5-legB1,B1b	zhipu
-qoder bdb18903-1f14-47ae-85e3-cc7989a10417	alibaba
-qoder plangraph-wt-ui-browser-20261017-123235	alibaba
-qoder-agent e5ae62c9-b413-4dff-ad25-57fdb87603fc	alibaba
-qoder-cli 20261017-123235-w3-tests-611f4c	alibaba
-qoder-cli ab21a0	alibaba
-qoder/Qwen3.8-Flash 20261017-133538-w3b-r6-fe91ac	alibaba
-qoder/Qwen3.8-Flash 20261017-145007-w4-harden-da6460	alibaba
-qoder/Qwen3.8-Flash deploy-m-36f09c	alibaba
-qoder/Qwen3.8-Flash deploy-n-6cc2f6	alibaba
-qoder/Qwen3.8-Flash deploy-p1-c5a60a deploy-p2-d9bac0	alibaba
-qoder/Qwen3.8-Flash deploy-q-c54aaa	alibaba
-qoder/Qwen3.8-Flash deploy-t-5361aa	alibaba
-qoder/Qwen3.8-Flash deploy-u-11f700	alibaba
-qoder/Qwen3.8-Flash hard-a-d47f14	alibaba
-qoder/Qwen3.8-Flash hard-c-37c66d	alibaba
+qoder <uuid>	alibaba
+qoder plangraph-wt-ui-browser-<hex>	alibaba
+qoder-agent <uuid>	alibaba
+qoder-cli <hex>-w3-tests-<hex>	alibaba
+qoder-cli <hex>	alibaba
+qoder/Qwen3.8-Flash <hex>-w3b-r6-<hex>	alibaba
+qoder/Qwen3.8-Flash <hex>-w4-harden-<hex>	alibaba
+qoder/Qwen3.8-Flash deploy-m-<hex>	alibaba
+qoder/Qwen3.8-Flash deploy-n-<hex>	alibaba
+qoder/Qwen3.8-Flash deploy-p1-<hex> deploy-p2-<hex>	alibaba
+qoder/Qwen3.8-Flash deploy-q-<hex>	alibaba
+qoder/Qwen3.8-Flash deploy-t-<hex>	alibaba
+qoder/Qwen3.8-Flash deploy-u-<hex>	alibaba
+qoder/Qwen3.8-Flash hard-a-<hex>	alibaba
+qoder/Qwen3.8-Flash hard-c-<hex>	alibaba
 qoder/Qwen3.8-Flash rtF-F1	alibaba
 qoder/Qwen3.8-Flash rtF-F2	alibaba
 qoder/Qwen3.8-Flash rtF-F3	alibaba
 qoder/Qwen3.8-Flash rtF-F4	alibaba
 qoder/Qwen3.8-Flash rtF-F6	alibaba
-qoder/Qwen3.8-Flash ui-stamp-a-bf871f ui-stamp-b-680bd5	alibaba
-qoder/Qwen3.8-Flash ui-stamp-c-3dcbed	alibaba
+qoder/Qwen3.8-Flash ui-stamp-a-<hex> ui-stamp-b-<hex>	alibaba
+qoder/Qwen3.8-Flash ui-stamp-c-<hex>	alibaba
 qoder/Qwen3.8-Flash ui-stamp-d	alibaba
 qoder/Qwen3.8-Flash ui-stamp-e	alibaba
 qoder/Qwen3.8-Flash ui-stamp-f	alibaba
-qodercli Qwen3.8-Flash qt-w1-67abcd	alibaba
-qodercli Qwen3.8-Flash qt-w2-274c7c	alibaba
-qodercli Qwen3.8-Flash qt-w3b-e4be14 [partial, stalled before the tests]	alibaba
-qodercli Qwen3.8-Flash qt-w5-d2f754	alibaba
-qodercli Qwen3.8-Flash rtf-f5-38f845 (autoos-agent --isolate); test fixes by L2	writer_unknown
-qodercli SKIPPED for the last fix (tool-using runs hang, D-1704); opencode deepseek-v4.1-flash-free via stdin; earlier writers qwen3.8-flash qodercli d113572e-115b-4190-bd18-1b42fd99fde5 f8dafcaa-4046-487a-933f-1c523b197e3f ac3b87d1-ee97-4203-86f6-838fffeb23d4	writer_unknown
-qodercli/Qwen3.8-Flash 20261017-112050-ci-github-hosted-writer-ccd99e	alibaba
-qodercli/Qwen3.8-Flash 20261017-115029-pg-public-ready-t2	alibaba
-qodercli/Qwen3.8-Flash 20261017-115029-pg-public-ready-t3	alibaba
-qodercli/Qwen3.8-Flash 20261017-115029-pg-public-ready-t4	alibaba
-qodercli/Qwen3.8-Flash 20261017-122129-pg-public-ready-t5	alibaba
+qodercli Qwen3.8-Flash qt-w1-<hex>	alibaba
+qodercli Qwen3.8-Flash qt-w2-<hex>	alibaba
+qodercli Qwen3.8-Flash qt-w3b-<hex> [partial, stalled before the tests]	alibaba
+qodercli Qwen3.8-Flash qt-w5-<hex>	alibaba
+qodercli Qwen3.8-Flash rtf-f5-<hex> (autoos-agent --isolate); test fixes by L2	writer_unknown
+qodercli SKIPPED for the last fix (tool-using runs hang, D-1704); opencode deepseek-v4.1-flash-free via stdin; earlier writers qwen3.8-flash qodercli <uuid> <uuid> <uuid>	writer_unknown
+qodercli/Qwen3.8-Flash <hex>-ci-github-hosted-writer-<hex>	alibaba
+qodercli/Qwen3.8-Flash <hex>-pg-public-ready-t2	alibaba
+qodercli/Qwen3.8-Flash <hex>-pg-public-ready-t3	alibaba
+qodercli/Qwen3.8-Flash <hex>-pg-public-ready-t4	alibaba
+qodercli/Qwen3.8-Flash <hex>-pg-public-ready-t5	alibaba
 qodercli/Qwen3.8-Flash pg-public-ready-t6	alibaba
-qwen3.8-flash 20261017-131756-republish-t7-a1e9d5	alibaba
-qwen3.8-flash 20261017-193943-republish-t1c-f5531c	alibaba
+qwen3.8-flash <hex>-republish-t7-<hex>	alibaba
+qwen3.8-flash <hex>-republish-t1c-<hex>	alibaba
 qwen3.8-flash 20261018 dp-psqlfix [qodercli]	alibaba
-qwen3.8-flash 20261018-095206/102431/103109 [qodercli]	alibaba
-qwen3.8-flash 20261018-102128-s-dscrub-9e0103 [qodercli]	alibaba
-qwen3.8-flash 20261018-102431-p1-publicmd-e2f9fa [qodercli]	alibaba
-qwen3.8-flash 20261018-104128-f2-planlogs-c59218 [qodercli]	alibaba
-qwen3.8-flash 20261018-130831-d2-guard-7fb550 [qodercli]	alibaba
-qwen3.8-flash <plangraph-wt-republish-t6-20261017-130211-d67b52>	alibaba
-qwen3.8-flash qodercli 11533f75-0ba7-44b4-a2b2-b8f7acbf36b2	alibaba
-qwen3.8-flash qodercli 40ea0152-74e1-4227-b644-fddf7cd3a97b (activity), b3e925d4-1ae9-4b1e-b388-7b2265e018ce (tests), 0a05a92b-6d08-4003-95c8-12c5f97db366 (doc)	alibaba
-qwen3.8-flash qodercli 54a41e6f-0047-422d-a7ea-b7344322255d 4a085c4c-c0c4-4175-9181-05c2762889b5 a2fec995-78a3-463a-a0c8-634fdbe0c133	alibaba
-qwen3.8-flash qodercli 5a0c9ee2-c77a-4d0a-959f-ea3ee81951ce dab0195a-c43a-416f-8b60-7b924c1cb825	alibaba
-qwen3.8-flash qodercli 7e4a7a08-c7de-48d1-82e2-47d3c1ed60ac 876400a3-3f6f-482a-8d3d-9855eb00f6bc a403f06b-d66a-4093-96f7-e441bba304ff	alibaba
+qwen3.8-flash <hex>/102431/103109 [qodercli]	alibaba
+qwen3.8-flash <hex>-s-dscrub-<hex> [qodercli]	alibaba
+qwen3.8-flash <hex>-p1-publicmd-<hex> [qodercli]	alibaba
+qwen3.8-flash <hex>-f2-planlogs-<hex> [qodercli]	alibaba
+qwen3.8-flash <hex>-d2-guard-<hex> [qodercli]	alibaba
+qwen3.8-flash <plangraph-wt-republish-t6-<hex>-<hex>>	alibaba
+qwen3.8-flash qodercli <uuid>	alibaba
+qwen3.8-flash qodercli <uuid> (activity), <uuid> (tests), <uuid> (doc)	alibaba
+qwen3.8-flash qodercli <uuid> <uuid> <uuid>	alibaba
+qwen3.8-flash qodercli <uuid> <uuid>	alibaba
+qwen3.8-flash qodercli <uuid> <uuid> <uuid>	alibaba
 qwen3.8-flash qodercli BRIEF-G1-cards BRIEF-G12-worker BRIEF-G12-docs BRIEF-G12-tests	alibaba
-qwen3.8-flash qodercli b0afa375-6f4d-41ef-9ccb-f7394200447f,ede1d27d-f1ea-4958-a63f-159e023c30a6	alibaba
-qwen3.8-flash qodercli c8a6c3e8-87bc-47c0-b841-5228332eb748	alibaba
-qwen3.8-flash qodercli d113572e-115b-4190-bd18-1b42fd99fde5 f8dafcaa-4046-487a-933f-1c523b197e3f ac3b87d1-ee97-4203-86f6-838fffeb23d4	alibaba
-qwen3.8-flash qodercli de1bfa26-1cb5-4a24-ba5a-20b43f99ef98	alibaba
+qwen3.8-flash qodercli <uuid>,<uuid>	alibaba
+qwen3.8-flash qodercli <uuid>	alibaba
+qwen3.8-flash qodercli <uuid> <uuid> <uuid>	alibaba
+qwen3.8-flash qodercli <uuid>	alibaba
 qwen3.8-flash qodercli ds1+ds2 [tool-less]	alibaba
 qwen3.8-flash qodercli ds3+ds4 [tool-less]	alibaba
 qwen3.8-flash qodercli ds5+ds6 [tool-less]	alibaba
-qwen3.8-flash qodercli eb28b4ea-5d9c-4a9a-8d2c-b90dbd6b0c75	alibaba
-qwen3.8-flash qodercli ec63350b-ac83-45dd-9918-b52604d9c4e7 (devstack.sh), 771ddc43-d081-48da-84e6-6a0c43e51ba9 (tests)	alibaba
+qwen3.8-flash qodercli <uuid>	alibaba
+qwen3.8-flash qodercli <uuid> (devstack.sh), <uuid> (tests)	alibaba
 qwen3.8-flash qodercli fu2 [tool-less]	alibaba
 qwen3.8-flash qodercli fu3 [tool-less]	alibaba
 qwen3.8-flash qodercli pd-a pd-b	alibaba
 qwen3.8-flash rtside-G-w1 [qodercli]	alibaba
-qwen3.8-flash t1b-20261017-182412	alibaba
-revert of c4adff59 (code originally opencode run 20261016-213842-pg-le-guard-key-writer-0d9943, pre-rule tool-using) + L2 docstring/test lines	anthropic
-xiaomi-mimo/mimo-v2.6-flash e705fa13-c3e1-494f-86bd-56cad6d8a63c [tool-less]	xiaomi
+qwen3.8-flash t1b-<hex>	alibaba
+revert of <hex> (code originally opencode run <hex>-pg-le-guard-key-writer-<hex>, pre-rule tool-using) + L2 docstring/test lines	anthropic
+xiaomi-mimo/mimo-v2.6-flash <uuid> [tool-less]	xiaomi
 xiaomi-mimo/mimo-v2.6-flash w1-import-guard [tool-less]	xiaomi
 xiaomi-mimo/mimo-v2.6-flash w2-guard-tests [tool-less]	xiaomi
