@@ -15,19 +15,32 @@ family, and Claude can never cover a Claude hand on a high item.
 
 Family names (and the one model-id table) come from
 :mod:`plangraph.review.family`; this module copies neither.  A ``Writer:``
-value is ``<model-id> <run id>`` and family/alias tokens resolve ONLY in the
-model/provider position -- the token(s) before the run id, split on ``/`` and
-into ``-``/``.``/``_`` segments -- never inside a run-id slug, where ``meta``,
-``google`` and ``nvidia`` are words in a date-stamped name rather than a
-second writer.  The check fails closed on any writer it cannot resolve, with
-three distinct reasons: a commit with no ``Writer`` or ``Hand-Edit`` trailer,
-a blank value or a git error raises ``Refused('writer_unknown', ...)``, a
-value whose model position names no known family raises
-``Refused('writer_unknown_family', ...)``, and a value naming two writer
-families raises ``Refused('writer_mixed_family', ...)``, so a closing verdict
-never rests on a guess.  ``Hand-Edit`` also counts as ``anthropic`` alongside
-any ``Writer``: a hand edit
-is Claude/operator work, not a model writer.
+value is ``<model-id> <run id>``, read by one strict four-rule grammar
+(G1-G4) that decides where model words live and when a value fails closed:
+
+G1 -- the model/provider position is the whitespace-delimited token(s)
+before the run id; G2 -- the first date-stamped token (4-8 digits followed
+by ``-`` or ``_``) ENDS that position, so trailing text after the run id is
+slug text (``meta``, ``google`` and ``nvidia`` are words in a
+date-stamped name), never a second writer; G3 -- a masked id segment
+(``<hex>``, ``<uuid>``) is run-id shaped and contributes no model token;
+G4 -- each remaining token splits into words, every word resolving through
+the alias table first and the family table second, and the FIRST word of
+the first word-bearing token -- and of any token that names a family --
+must be a word those tables know, else the value fails closed as
+``writer_unknown_family`` even when a later token resolves: ``kimi-k2
+codex`` is not openai and ``run-claude`` never hides behind its
+``claude``.
+
+The check fails closed on any writer it cannot resolve, with three
+distinct reasons: a commit with no ``Writer`` or ``Hand-Edit`` trailer, a
+blank value, a value with no model token at all, or a git error raises
+``Refused('writer_unknown', ...)``, a value whose model position names no
+known family raises ``Refused('writer_unknown_family', ...)``, and a
+value naming two writer families raises ``Refused('writer_mixed_family',
+...)``, so a closing verdict never rests on a guess.  ``Hand-Edit`` also
+counts as ``anthropic`` alongside any ``Writer``: a hand edit is
+Claude/operator work, not a model writer.
 """
 from __future__ import annotations
 
@@ -84,13 +97,15 @@ def writer_families(store, item, ctx):
     """Writer families of *item*'s current-epoch verified ``commit+ci`` rows.
 
     Every ``Writer:`` value of every leaf commit behind those rows is
-    resolved, so a squashed commit naming two writer families contributes
-    both.  The refusals are fail closed and distinct: ``writer_unknown`` for
-    a missing or blank attribution and for any git error,
+    resolved under the G1-G4 grammar of the module docstring, so a squashed
+    commit naming two writer families contributes both.  The refusals are
+    fail closed and distinct: ``writer_unknown`` for a missing or blank
+    attribution, a value with no model token, and any git error,
     ``writer_unknown_family`` for a value whose model position names no
-    known family, ``writer_mixed_family`` for a value that names two.  An
-    item with no commit
-    evidence (e.g. decision-only) has no commit writers and returns ``[]``.
+    known family or whose first word the tables do not know (G4),
+    ``writer_mixed_family`` for a value that names two.  An item with no
+    commit evidence (e.g. decision-only) has no commit writers and
+    returns ``[]``.
     """
     rows = [e for e in store._evidence(item["key"])
             if e["epoch"] == item["epoch"] and e["verified"]
@@ -123,26 +138,12 @@ def writer_families(store, item, ctx):
                 for writer in writers:
                     if writer is None or not str(writer).strip():
                         raise Refused("writer_unknown", "blank Writer value")
-                    # Only the model/provider position may name a family; a
-                    # run-id slug is a date-stamped name, not a writer.
-                    tokens = _model_tokens(writer)
-                    if not tokens:
-                        # Punctuation or a bare run id: no model/provider
-                        # token at all, so the attribution is blank.
-                        raise Refused(
-                            "writer_unknown",
-                            f"Writer value names no model token: {writer!r}")
-                    resolved = {family for token in tokens
-                                for family in _writer_token_families(token)}
-                    if len(resolved) > 1:
-                        raise Refused(
-                            "writer_mixed_family",
-                            f"Writer value names several writer families: {writer!r}")
-                    if not resolved:
-                        raise Refused(
-                            "writer_unknown_family",
-                            f"Writer value names no known writer family: {writer!r}")
-                    families.append(resolved.pop())
+                    # Only the model/provider position may name a family,
+                    # and only under the G1-G4 grammar: a run-id slug is a
+                    # date-stamped name, a masked segment is no token at
+                    # all, and an unknown model head fails the value closed
+                    # -- never guessed from a later token.
+                    families.append(_writer_value_family(writer))
             if any(value is not None and str(value).strip()
                    for value in _key_values(trailer, "Hand-Edit")):
                 families.append("anthropic")
@@ -165,58 +166,96 @@ _WRITER_ALIASES.update(dict.fromkeys(
     "agy opencode omniroute openrouter spawner tool-less tool-using".split()))
 
 
-def _writer_token_families(token):
-    """Keep every match; punctuation cannot conceal a second model or alias."""
-    low = token.lower()
-    if low in _WRITER_ALIASES:
-        family = _WRITER_ALIASES[low]
+def _writer_word_families(word):
+    """The writer families of ONE word: the alias table wins, else FAMILIES.
+
+    The alias table is consulted first and alone: a word it knows resolves
+    by that entry only -- even an alias carrying no family of its own
+    (``opencode``, ``spawner``), which then names none and can never borrow
+    one from a pattern search.
+    """
+    if word in _WRITER_ALIASES:
+        family = _WRITER_ALIASES[word]
         return {family} if family else set()
-    found = set()
-    for part in [low, *re.split(r"[._-]+", low)]:
-        if part in _WRITER_ALIASES:
-            family = _WRITER_ALIASES[part]
-            if family:
-                found.add(family)
-        else:
-            found.update(family for pattern, family in review_family.FAMILIES
-                         if re.search(pattern, part))
-    return found
+    return {family for pattern, family in review_family.FAMILIES
+            if re.search(pattern, word)}
+
+
+def _known_word(word):
+    """True when the tables know *word*: an alias key or a family mention."""
+    return word in _WRITER_ALIASES or bool(_writer_word_families(word))
 
 
 #: The first segment of a run id: date/time stamped, as in
 #: ``20261024-061038-meta-review-18b0fc`` or ``20261024-1-nvidia-driver-x``.
+#: G2: the first date-stamped token ENDS the model/provider position.
 _RUN_ID_RE = re.compile(r"^\d{4,8}[-_]")
 
+#: G3: a masked id segment stands in for run-id text -- run-id shaped, so
+#: it contributes no model token (``<hex>`` is not a model word).
+_MASK_RE = re.compile(r"<(?:hex|uuid)>")
 
-def _model_position(value):
-    """*value* with its run id removed: where model/provider tokens live.
 
-    A ``Writer:`` value is ``<model-id> <run id>`` (the run id is optional).
-    From the first date-stamped segment on, the value is a slug of names --
-    ``...-meta-review-...``, ``...-google-sync-...``, ``...-nvidia-driver-x``
-    -- and no family or alias may resolve there: those words are a run, not a
-    second writer.  A value that is only a run id therefore has no model
-    position at all (and so no family: it fails closed).  Tokens before the
-    stamp are untouched, so a second MODEL token such as ``codex`` in
-    ``deepseek-v4 codex`` still names its own family.
+def _model_word_groups(value):
+    """Word-bearing tokens of *value*'s model/provider position (G1-G3).
+
+    G1: the position is the whitespace-delimited token(s) before the run
+    id; G2: a date-stamped token ENDS it, so text after the run id is slug
+    text and never a second writer; G3: a masked id segment is skipped like
+    the run-id text it stands in for.  Each surviving token splits into
+    words on every non-alphanumeric character (``omniroute/cx-gpt-6.1-sol``
+    yields ``omniroute``, ``cx``, ``gpt``, ...), and a token with no word
+    at all (``:;,/()[]...---``, ``---``) contributes nothing, keeping a
+    purely punctuated value the blank attribution ``writer_unknown``.
     """
-    parts = str(value).split()
-    for index, part in enumerate(parts):
-        if _RUN_ID_RE.match(part):
-            return " ".join(parts[:index])
-    return str(value)
+    groups = []
+    for token in str(value).split():
+        if _RUN_ID_RE.match(token):
+            break
+        if _MASK_RE.search(token):
+            continue
+        words = [word for word in re.split(r"[^A-Za-z0-9]+",
+                                           token.lower()) if word]
+        if words:
+            groups.append(words)
+    return groups
 
 
-def _model_tokens(value):
-    """The model/provider tokens of *value*: the run id contributes none.
+def _writer_value_family(value):
+    """The one writer family of a ``Writer:`` value, else ``Refused`` (G4).
 
-    The position is split on ``/`` (``omniroute/cx-gpt-6.1-sol``) and each
-    segment on ``-``/``.``/``_`` (``cx``), exactly as it always was -- only
-    the run id is excluded.  Empty when the value holds no model token at
-    all, which tells a blank attribution (``:;,/()[]...---``, a bare run id)
-    apart from a model id the table cannot resolve.
+    Every word of every model-position token resolves through
+    ``_writer_word_families``; the FIRST word of the first word-bearing
+    token -- and of any token that names a family -- must be a word the
+    tables know, else the value fails closed as ``writer_unknown_family``
+    even when a later token resolves: ``kimi-k2 codex`` is not openai, and
+    ``run-claude`` never hides behind its ``claude``.  No word-bearing
+    token at all keeps the blank-attribution ``writer_unknown``; no family
+    after the walk is ``writer_unknown_family``; two families are
+    ``writer_mixed_family``.
     """
-    return [token for token in
-            (part.strip(".-") for part in
-             re.split(r"[^A-Za-z0-9._-]+", _model_position(value)))
-            if token and any(ch.isalnum() for ch in token)]
+    groups = _model_word_groups(value)
+    if not groups:
+        # Punctuation or a bare run id: no model/provider token at all,
+        # so the attribution is blank.
+        raise Refused("writer_unknown",
+                      f"Writer value names no model token: {value!r}")
+    families = set()
+    for index, words in enumerate(groups):
+        named = {family for word in words
+                 for family in _writer_word_families(word)}
+        if (index == 0 or named) and not _known_word(words[0]):
+            raise Refused(
+                "writer_unknown_family",
+                f"Writer value names a word no alias or family knows: "
+                f"{value!r}")
+        families |= named
+    if not families:
+        raise Refused(
+            "writer_unknown_family",
+            f"Writer value names no known writer family: {value!r}")
+    if len(families) > 1:
+        raise Refused(
+            "writer_mixed_family",
+            f"Writer value names several writer families: {value!r}")
+    return families.pop()

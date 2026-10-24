@@ -717,8 +717,29 @@ def test_fix6_slash_model_list_refused(repo, value):
 @pytest.mark.parametrize("run_id", ["run-claude"])
 def test_second_token_naming_another_family_is_refused(repo, run_id):
     sha = _commit(repo, "run", {"Writer": f"mimo-v2 {run_id}"})
-    with pytest.raises(Refused, match="writer_mixed_family"):
+    with pytest.raises(Refused) as exc:
         _families(repo, sha)
+    # FIX13 (G4): ``run-claude`` names anthropic, but ``run`` is no model the
+    # table knows, so the value fails closed with the EXACT reason code.
+    assert exc.value.code == "writer_unknown_family"
+
+
+def test_fix13_unknown_model_head_with_codex_fails_closed(repo):
+    """FIX13 (G4): ``codex`` resolves openai, but ``kimi-k2`` names no model
+    the table knows -- an unresolvable model head fails closed as
+    ``writer_unknown_family``, never accepted as openai.
+    """
+    sha = _commit(repo, "fix13 head", {"Writer": "kimi-k2 codex"})
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown_family"
+
+
+def test_fix13_text_after_the_run_id_is_not_a_second_writer(repo):
+    """FIX13 (G2): trailing text after the date-stamped run id is slug text."""
+    sha = _commit(repo, "fix13 slug", {
+        "Writer": "mimo-v2.6-flash 20261024-072324-x codex"})
+    assert _families(repo, sha) == ["xiaomi"]
 
 
 @pytest.mark.parametrize("run_id", [
@@ -806,18 +827,14 @@ def test_corpus_value_naming_mimo_and_l2_refuses_mixed_writers(repo):
         encoding="utf-8").splitlines() if not line.startswith("#")
 ])
 def test_fix7_main_writer_corpus(repo, value, expected):
+    """FIX13: every row pins its EXACT outcome -- one family, or the exact
+    refusal code the grammar produces (the fix12 catch-all
+    ``code in (...)`` is gone: a ``writer_unknown*`` label IS the code)."""
     sha = _commit(repo, "corpus", {"Writer": value})
-    if expected == "writer_unknown":
-        # The label is "refused".  FIX12 (V3) split the single catch-all
-        # reason into three distinct codes: blank/git error keeps
-        # writer_unknown, an unresolvable model position raises
-        # writer_unknown_family, two families raise writer_mixed_family.
-        # The fixture rows (and their labels) are unchanged; only the code
-        # the refusal carries differs for a mixed value.
+    if expected.startswith("writer_"):
         with pytest.raises(Refused) as exc:
             _families(repo, sha)
-        assert exc.value.code in (
-            "writer_unknown", "writer_unknown_family", "writer_mixed_family")
+        assert exc.value.code == expected
     else:
         assert _families(repo, sha) == [expected]
 

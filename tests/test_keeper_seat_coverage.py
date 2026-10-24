@@ -159,6 +159,43 @@ def test_fix12_refusal_reason_is_exact_on_the_closing_verdict(w, value, reason):
     assert verdict_events(w, key) == []
 
 
+# --------------------------------------------------------------------------
+# FIX13 (strict Writer-value grammar): G1 the model/provider position is the
+# token(s) before the run id; G2 a date-stamped run-id token ENDS that
+# position, so trailing text after the run id is slug text, never a second
+# writer; G3 a masked id segment (`<hex>`, `<uuid>`) is run-id shaped and
+# contributes no model token; G4 the first word of the first word-bearing
+# token -- and of any token that names a family -- must be a word the
+# alias/family table knows, else the value fails closed as
+# writer_unknown_family even when a later token resolves.  Every code is
+# asserted exactly through the public ``writer_families`` path.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value,reason", [
+    ("kimi-k2 codex", "writer_unknown_family"),
+    ("mimo-v2 run-claude", "writer_unknown_family"),
+])
+def test_fix13_unresolved_model_head_fails_closed(w, value, reason):
+    """G4: a later family token (``codex``, ``claude``) never rescues an
+    unresolvable model head -- the reason code is exact, not the catch-all."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    assert exc.value.code == reason
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+
+def test_fix13_text_after_the_run_id_is_not_a_second_writer(w):
+    """G2: ``codex`` after the date-stamped run id is slug text, ignored."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(
+        w, key, {SHA_A: writer("mimo-v2.6-flash 20261024-072324-x codex")})
+    assert _cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx) == ["xiaomi"]
+
+
 @pytest.mark.parametrize("value,family", [
     ("cx/gpt-6.1-sol mimo", None),
     ("deepseek-v4 xiaomi-mimo", None),
@@ -438,12 +475,16 @@ def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
     ("deepseek-r1 run-claude", None),
 ])
 def test_writer_family_counts_model_mentions_in_every_token(w, trailer, family):
-    """All tokens count: run-claude resolves to anthropic, so two families refuse."""
+    """Every model-position token counts.  ``run-claude`` names anthropic,
+    but its head word ``run`` is no model the table knows, so FIX13 (G4)
+    fails the value closed as ``writer_unknown_family`` -- the mention is
+    never dropped and the family is never guessed."""
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(trailer)})
     if family is None:
-        with pytest.raises(Refused, match="writer_mixed_family"):
+        with pytest.raises(Refused) as exc:
             _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+        assert exc.value.code == "writer_unknown_family"
         return
     assert set(_cov().writer_families(
         w.store, w.store._item(key), w.store.ctx)) == {family}
