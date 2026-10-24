@@ -137,6 +137,8 @@ class CreateMixin:
                         raise Refused("forbidden",
                                       "cross-project dependency needs the router")
         if legacy:
+            # Import/replay/copy intentionally bypass the seat-clause gate:
+            # existing data must remain loadable, including standard-tier rows.
             self._require_role(principal, "router")
             for definition in defs:
                 if definition["state"] not in ("open", "claimed", "in_review"):
@@ -386,7 +388,8 @@ class CreateMixin:
                 raise Refused("forbidden", "only the router may lower review_tier")
         # X7b: the *resulting* (tier, evidence_kinds) pair must hold, so an edit
         # of either field alone cannot leave a `none` item with looser evidence.
-        resulting_tier = edit_fields.get("review_tier", item["review_tier"])
+        # Legacy row shapes missing review_tier use the standard default.
+        resulting_tier = edit_fields.get("review_tier", item.get("review_tier") or "standard")
         if tier_needs_router(resulting_tier):
             if (resulting_tier != item["review_tier"]
                     and principal.role != "router"):
@@ -455,7 +458,8 @@ class CreateMixin:
         # Check after rename escalation, and leave unrelated legacy edits alone.
         if any(field in edit_fields and edit_fields[field] != item.get(field)
                for field in ("done_criteria", "review_tier")):
-            resulting_tier = edit_fields.get("review_tier", item["review_tier"])
+            resulting_tier = edit_fields.get(
+                "review_tier", item.get("review_tier") or "standard")
             check_seat_clause_tier(
                 edit_fields.get("done_criteria", item.get("done_criteria")),
                 resulting_tier)
