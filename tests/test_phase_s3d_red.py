@@ -1,5 +1,4 @@
 import json
-import subprocess
 
 import pytest
 
@@ -7,6 +6,7 @@ from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase_finish
 from plangraph.planner.github_adapter import RestGitHub
+from test_phase_finish import FakeGitHub, git_repo
 
 @pytest.fixture
 def w(tmp_path):
@@ -44,69 +44,6 @@ def claim_as_runner(w, key, via="worker_claim"):
         1_700_000_000.0,
     )
     w.store.conn.commit()
-
-def git_repo(tmp_path):
-    root = tmp_path / "repo"
-    root.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.invalid",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "x",
-        ],
-        cwd=root,
-        check=True,
-    )
-    subprocess.run(["git", "branch", "-M", "phase/demo-PH-X"], cwd=root, check=True)
-    head = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=root, text=True
-    ).strip()
-    return root, head
-
-class FakeGitHub:
-    def __init__(self, pr=None, ci=True, fail=None):
-        self.pr = pr
-        self.ci = ci
-        self.fail = fail
-        self.calls = []
-
-    def _pr(self, number, state, head):
-        return {
-            "number": number,
-            "url": f"https://example.invalid/pr/{number}",
-            "state": state,
-            "head": head,
-        }
-
-    def push_branch(self, repo_root, branch, head):
-        self.calls.append(("push_branch", repo_root, branch, head))
-        if self.fail is not None:
-            raise self.fail
-
-    def find_pr(self, branch):
-        self.calls.append(("find_pr", branch))
-        return self.pr
-
-    def open_pr(self, branch, base, title, body):
-        self.calls.append(("open_pr", branch, base, title, body))
-        return self._pr(7, "open", "")
-
-    def ci_green(self, head):
-        self.calls.append(("ci_green", head))
-        return self.ci
-
-    def merge_pr(self, number, head):
-        self.calls.append(("merge_pr", number, head))
-        pr = self._pr(number, "merged", head)
-        pr["merge_sha"] = "a" * 40
-        return pr
 
 def finish_in_review(w, tmp_path, *, ci=True):
     gate(w)
@@ -191,7 +128,8 @@ def test_attach_merge_evidence_after_pr_merged(w):
     gate(w)
     set_state(w, "in_review", "demo:C1", "demo:C2")
     github = FakeGitHub(
-        pr={"number": 7, "url": "u", "state": "merged", "head": "h"}
+        pr={"number": 7, "url": "u", "state": "merged", "head": "b" * 40,
+            "merge_sha": "a" * 40}
     )
     phase_finish.attach_merge_evidence(
         w.store, w.p("router"), "demo:PH-X", "a" * 40, github=github
@@ -288,7 +226,7 @@ def test_finish_refuses_card_not_worker_complete(w, tmp_path):
 def test_finish_accepts_in_review_cards(w, tmp_path):
     result, _github = finish_in_review(w, tmp_path, ci=True)
     assert result["state"] == "merged"
-    assert result["merge_sha"] == "a" * 40
+    assert result["merge_sha"] == _github.merge_sha
 
 def test_evidence_attached_to_each_card_after_green_merge(w, tmp_path):
     result, _github = finish_in_review(w, tmp_path, ci=True)
@@ -298,7 +236,7 @@ def test_evidence_attached_to_each_card_after_green_merge(w, tmp_path):
     ).fetchall()
     assert {row[0] for row in rows} == {"demo:C1", "demo:C2"}
     assert len(rows) == 2
-    assert all("a" * 40 in row[2] for row in rows)
+    assert all(_github.merge_sha in row[2] for row in rows)
 
 def test_red_gate_attaches_no_evidence(w, tmp_path):
     result, github = finish_in_review(w, tmp_path, ci=False)

@@ -7,6 +7,7 @@ import pytest
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase_finish
+from test_phase_merge_trailers import git, merge_commit
 
 @pytest.fixture
 def w(tmp_path):
@@ -50,6 +51,7 @@ def git_repo(tmp_path):
         check=True,
     )
     subprocess.run(["git", "branch", "-M", "phase/demo-PH-X"], cwd=root, check=True)
+    git(root, "commit", "--allow-empty", "-m", "phase")
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
@@ -71,6 +73,7 @@ class FakeGitHub:
         }
 
     def push_branch(self, repo_root, branch, head):
+        self.root = repo_root
         self.calls.append(("push_branch", repo_root, branch, head))
         if self.fail is not None:
             raise self.fail
@@ -87,9 +90,11 @@ class FakeGitHub:
         self.calls.append(("ci_green", head))
         return self.ci
 
-    def merge_pr(self, number, head):
+    def merge_pr(self, number, head, *, commit_message=None):
         self.calls.append(("merge_pr", number, head))
-        return {**self._pr(number, "merged", head), "merge_sha": "a" * 40}
+        self.merge_sha = merge_commit(self.root, head)
+        self.pr = {**self._pr(number, "merged", head), "merge_sha": self.merge_sha}
+        return self.pr
 
 class ExplodingStore:
     def __getattr__(self, name):
@@ -115,13 +120,13 @@ def test_all_cards_done_opens_pr_and_merges_when_ci_green(w, tmp_path):
     assert result["state"] == "merged"
     assert result["pr"]["number"] == 7
     assert result["cards"] == ["demo:C1", "demo:C2"]
-    assert result["merge_sha"] == "a" * 40
+    assert result["merge_sha"] == github.merge_sha
     rows = w.store.conn.execute(
         "SELECT key, ref FROM evidence WHERE kind='commit+ci'"
     ).fetchall()
     assert len(rows) == 2
     assert {row[0] for row in rows} == {"demo:C1", "demo:C2"}
-    assert all(json.loads(row[1]) == {"commit": "a" * 40} for row in rows)
+    assert all(json.loads(row[1]) == {"commit": github.merge_sha} for row in rows)
     assert [c[0] for c in github.calls] == [
         "find_pr",
         "push_branch",

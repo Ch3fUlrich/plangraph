@@ -11,6 +11,16 @@ from plangraph.planner.phase_finish import GitHubError
 
 TOKEN = "tok-" + "sentinel"
 
+def test_merge_pr_sends_exact_commit_message(tmp_path):
+    gh, opener = make_github(tmp_path, [(200, {"merged": True, "sha": "b" * 40})])
+    message = "Merge phase demo:PH-X\n\nPlan-Item: demo:C1\nPlan-Item: demo:C2\n"
+    gh.merge_pr(7, "a" * 40, commit_message=message)
+    assert opener.calls[0][0] == "PUT"
+    assert json.loads(opener.calls[0][3]) == {
+        "sha": "a" * 40, "merge_method": "merge",
+        "commit_title": "Merge phase demo:PH-X", "commit_message": message,
+    }
+
 class FakeOpener:
     def __init__(self, replies: list[tuple[int, object]]) -> None:
         self.replies = list(replies)

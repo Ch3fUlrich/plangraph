@@ -203,9 +203,12 @@ class RestGitHub:
             and newest.get("conclusion") == "success"
         )
 
-    def merge_pr(self, number: int, head: str) -> dict[str, Any]:
+    def merge_pr(self, number: int, head: str, *, commit_message: str | None = None) -> dict[str, Any]:
         path = f"/repos/{self.repo}/pulls/{number}/merge"
-        reply = self._request("PUT", path, {"sha": head, "merge_method": "merge"})
+        body = {"sha": head, "merge_method": "merge"}
+        if commit_message is not None:
+            body.update(commit_title=commit_message.splitlines()[0], commit_message=commit_message)
+        reply = self._request("PUT", path, body)
         if not isinstance(reply, dict) or reply.get("merged") is not True:
             raise GitHubError("github merge not confirmed")
         merge_sha = reply.get("sha")

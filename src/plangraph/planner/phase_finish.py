@@ -35,7 +35,12 @@ class GitHub(Protocol):
     def find_pr(self, branch: str) -> dict[str, Any] | None: ...
     def open_pr(self, branch: str, base: str, title: str, body: str) -> dict[str, Any]: ...
     def ci_green(self, head: str) -> bool: ...
-    def merge_pr(self, number: int, head: str) -> dict[str, Any]: ...
+    def merge_pr(self, number: int, head: str, *, commit_message: str | None = None) -> dict[str, Any]: ...
+
+def merge_message(gate: str, cards: list[str]) -> str:
+    """Bind one merge to every phase card in a single trailer block."""
+    return f"Merge phase {gate}\n\n" + "".join(
+        f"Plan-Item: {card}\n" for card in sorted(set(cards)))
 
 def phase_branch(key: str) -> str:
     """Return the worker-compatible branch name for phase ``key``."""
@@ -191,7 +196,7 @@ def _finish_locked(key: str, branch: str, head: str, root: Path,
         if not github.ci_green(head):
             return _result(key, branch, head, "waiting_ci", pr, cards)
 
-        merged = github.merge_pr(pr["number"], head)
+        merged = github.merge_pr(pr["number"], head, commit_message=merge_message(key, cards))
         return _result(key, branch, head, "merged", merged, cards)
     except GitHubError as exc:
         raise Refused("unavailable", str(exc))
