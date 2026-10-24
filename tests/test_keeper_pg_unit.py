@@ -1,6 +1,7 @@
 """Postgres backend units that need no server: translation, rows, selection, schema parity."""
 import re
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -164,8 +165,13 @@ def test_pg_ddl_has_the_same_tables_columns_indexes_and_triggers():
     pg_tables = schema_pg.parse_tables(ddl)
     for name, cols in tables.items():
         assert name in pg_tables, name
-        assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
-        assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
+        if name == "items":
+            # Upgraded Postgres appends columns; fresh SQLite lists them in CREATE order.
+            assert {c for c, _ in cols} == {c for c, _ in pg_tables[name]}, name
+            assert dict(cols) == dict(pg_tables[name]), name
+        else:
+            assert [c for c, _ in cols] == [c for c, _ in pg_tables[name]], name
+            assert [bool(nn) for _, nn in cols] == [bool(nn) for _, nn in pg_tables[name]], name
     assert set(pg_tables) == set(tables)
     for name in indexes:
         assert re.search(rf"\b{name}\b", ddl), f"missing index {name}"
@@ -177,6 +183,36 @@ def test_migrations_are_versioned_contiguously():
     versions = [m.version for m in schema_pg.MIGRATIONS]
     assert versions == list(range(1, len(versions) + 1))
     assert schema_pg.LATEST == versions[-1]
+
+
+def test_exec_columns_are_only_added_by_migration_7():
+    # sq5: the owner principal (fix 1) and the retired-run fence (fix 2) land in
+    # the SAME Postgres migration 7 as the exec triple -- never in a shipped one.
+    columns = {"exec_workflow_id", "exec_run_id", "exec_attempt",
+               "exec_principal", "exec_retired_runs"}
+    for migration in schema_pg.MIGRATIONS[:6]:
+        assert not any(column in migration.sql for column in columns)
+    migration = schema_pg.MIGRATIONS[6]
+    assert migration.version == 7
+    for column in columns:
+        assert f"ALTER TABLE items ADD COLUMN IF NOT EXISTS {column} " in migration.sql
+
+
+def test_changelog_migration_numbering_is_postgres_7():
+    """V3-1 (haiku): the notes operators migrate from must name Postgres migration 7.
+
+    The exec columns live in migration 7 (migration 6 shipped the JEV shadow), so
+    no line may send an operator at migration 6 for them, and the new owner
+    principal + retired-run fence columns need their own "Migration 7" section.
+    """
+    text = (Path(__file__).resolve().parents[1] / "CHANGELOG.md").read_text(
+        encoding="utf-8")
+    for line in text.splitlines():
+        lowered = line.lower()
+        if "migration 6" in lowered:
+            assert not ("exec" in lowered and "migration 7" not in lowered), line
+    assert "Migration 7" in text, "CHANGELOG needs a Migration 7 section"
+    assert "exec_principal" in text and "exec_retired_runs" in text
 
 
 def test_design3_tables_are_in_both_schemas():
