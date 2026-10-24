@@ -29,6 +29,20 @@ _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
 
 
+def redact(value):
+    """Scrub credential-shaped strings recursively before persistence or display."""
+    if isinstance(value, dict):
+        return {k: ('[REDACTED]' if re.search(r'(?i)(key|authorization|token|secret)', k)
+                    else redact(v)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact(v) for v in value]
+    if isinstance(value, str):
+        value = re.sub(r'sk-[\w-]+', '[REDACTED]', value)
+        value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
+        return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
+    return value
+
+
 @dataclass
 class JobInfo:
     """Execution state of a spawned agent task."""
@@ -104,20 +118,22 @@ class SpawnerRunner:
         self.provider_responses = {}
 
     def provider_response(self, job_id, leg, status, body, headers, *, account=None, combo=None, store=None):
-        """Gateway transport callback, NOT child stdout or agent-generated JSON.
+        """Consume trusted gateway transport evidence, never free-text output.
 
-        A gateway adapter must call this for the actual HTTP response, including
-        a provider stop before the child exits. Exit codes alone are not evidence.
+        Called by adapters or the strict stderr envelope parser at child exit.
+        Exit codes alone are not evidence.
         """
         from plangraph.spawner import leg_state
 
         if job_id not in self.jobs:
             raise KeyError(job_id)
         target = store or leg_state
+        if '/' not in leg:
+            leg = 'agy/' + leg
         if status in (429, 402):
             target.record_provider_response(leg, status, body, headers, "runner:gateway-response", account=account, combo=combo)
             from plangraph.spawner.leg_state import _redact
-            self.provider_responses[job_id] = {"status": status, "body": _redact(body), "headers": dict(headers or {})}
+            self.provider_responses[job_id] = redact({"status": status, "body": _redact(body), "headers": dict(headers or {})})
         elif 200 <= status < 300:
             target.record_probe_pass(leg, caller="runner:gateway-response", account=account, combo=combo)
 
@@ -246,8 +262,24 @@ class SpawnerRunner:
             exit_code = proc.returncode
 
             job = self.jobs[job_id]
-            job.stdout = stdout_text
-            job.stderr = stderr_text
+            # Only the fork's exact stderr transport envelope is evidence.
+            for line in stderr_text.splitlines():
+                try:
+                    envelope = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
+                    continue
+                response = envelope['autoos_provider_response']
+                if (isinstance(response, dict) and set(response) == {'leg', 'status', 'body', 'headers'}
+                        and isinstance(response['leg'], str) and response['leg']
+                        and type(response['status']) is int and response['status'] in (429, 402)
+                        and isinstance(response['body'], str) and response['body'].strip()
+                        and isinstance(response['headers'], dict)
+                        and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
+                    self.provider_response(job_id, **response)
+            job.stdout = redact(stdout_text)
+            job.stderr = redact(stderr_text)
             job.exit_code = exit_code
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
@@ -322,3 +354,105 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None):
     else:
         import signal
         os.killpg(pid, signal.SIGKILL)
+
+
+def spawn_service(*args, **kwargs):
+    """Shared hardened dispatch for the public CLI and MCP entry points."""
+    from .service import SpawnService
+    from dataclasses import asdict
+    from pathlib import Path
+
+    class DispatchService(SpawnService):
+        def route(self, card, role='implement', writer_families=(), review_of=None):
+            from . import leg_state
+            reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
+            original = self.leg_reader
+            self.leg_reader = lambda model, **kw: reader(model if '/' in model else 'agy/' + model, **kw)
+            try:
+                return super().route(card, role, writer_families, review_of)
+            finally:
+                self.leg_reader = original
+
+        def _save(self, record):
+            import tempfile
+            path = self._path(record['run_id'])
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd, name = tempfile.mkstemp(prefix='.record-', dir=path.parent)
+            try:
+                with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+                    json.dump(redact(record), stream, indent=2)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                Path(name).replace(path)
+            finally:
+                Path(name).unlink(missing_ok=True)
+
+        async def spawn(self, card=None, prompt='', role='implement', writer_families=(),
+                        review_of=None, model=None, leg=None, override_reason=None,
+                        dry_run=False, wait_seconds=0, no_fallthrough=False):
+            # Let the base service handle audited overrides, which never fall through.
+            if model or leg or not card:
+                return await super().spawn(card, prompt, role, writer_families, review_of,
+                    model, leg, override_reason, dry_run, wait_seconds, True)
+            plan = self.route(card, role, writer_families, review_of)
+            run_id = 'run-' + uuid.uuid4().hex
+            import hashlib
+            record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
+                role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
+                served_family=None, writer_family=None, status='running', started=time.time(),
+                ended=None, attempts=[], stdout_tail='')
+            self._save(record)
+
+            if not plan.legs or plan.error:
+                record.update(status='limited', exit_code=3, ended=time.time(),
+                              evidence=plan.to_dict()['skipped'])
+                self._save(record)
+                return self.result(run_id)
+
+            async def execute():
+                tried = set()
+                current = plan
+                try:
+                    for _ in range(len(plan.legs)):
+                        chosen = next((l for l in current.legs if l.id not in tried), None)
+                        if chosen is None or current.error:
+                            break
+                        tried.add(chosen.id)
+                        job = await self.runner.spawn(prompt=prompt, model_or_combo=chosen.model,
+                            role=role, dry_run=dry_run, client=chosen.harness)
+                        process = self.runner._processes.get(job.job_id)
+                        record.update(job_id=job.job_id, pid=process.pid if process else None,
+                                      chosen_leg=asdict(chosen), writer_family=chosen.family)
+                        self._save(record)
+                        task = self.runner._tasks.get(job.job_id)
+                        if task:
+                            await asyncio.shield(task)
+                        stop = self.runner.provider_responses.get(job.job_id)
+                        record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                            skip_reason='provider_stop' if stop else None, provider_response=stop))
+                        record.update(status=job.status, served_model=job.served_model,
+                            served_family=job.served_family, writer_family=job.served_family or chosen.family,
+                            stdout_tail=redact(job.stdout)[-16000:])
+                        if not stop or no_fallthrough or dry_run:
+                            return
+                        current = self.route(card, role, writer_families, review_of)
+                        record['plan'] = current.to_dict()
+                    record.update(status='limited', exit_code=3, evidence=current.to_dict()['skipped'])
+                except Exception as exc:
+                    record.update(status='failed', error=redact(str(exc)))
+                finally:
+                    record['ended'] = time.time()
+                    self._save(record)
+
+            task = asyncio.create_task(execute())
+            self.tasks[run_id] = task
+            if dry_run or wait_seconds is None:
+                await task
+            elif wait_seconds > 0:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), wait_seconds)
+                except asyncio.TimeoutError:
+                    pass
+            return self.result(run_id)
+
+    return DispatchService(*args, **kwargs)
