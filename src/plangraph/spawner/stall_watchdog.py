@@ -105,6 +105,39 @@ def read_claims(session=None):
     return [c for c in session.call('GET', 'snapshot')['items'] if c.get('state') == 'claimed']
 
 
+def _read_state(state, path, *, stamp=False):
+    """Treat corrupt mailbox state as absent; retain evidence outside active queues."""
+    from .private_io import atomic_write_private
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(record, dict):
+            raise ValueError('expected object')
+        if stamp and (not isinstance(record.get('sent'), (int, float)) or
+                      not isinstance(record.get('count', 1), int) or
+                      record.get('count', 1) < 1):
+            raise ValueError('invalid alert stamp')
+        return record
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, UnicodeError) as exc:
+        report = Path(state) / 'watchdog/bad-state.json'
+        try:
+            bad = json.loads(report.read_text(encoding='utf-8'))
+            if not isinstance(bad, list):
+                bad = []
+        except (OSError, ValueError, UnicodeError):
+            bad = []
+        if not any(isinstance(r, dict) and r.get('path') == str(path) for r in bad):
+            bad.append(dict(path=str(path), error=type(exc).__name__))
+            atomic_write_private(report, json.dumps(bad))
+        # Rename is atomic and does not require read permission on the bad file.
+        try:
+            path.replace(path.with_suffix('.json.corrupt'))
+        except FileNotFoundError:
+            pass
+        return None
+
+
 def deliver_event(state, event, *, now=None, interval=None):
     """Idempotent, private mailbox. Consumers acknowledge by removing the file.
 
@@ -116,7 +149,9 @@ def deliver_event(state, event, *, now=None, interval=None):
     if event.get('kind') == 'clear':
         for folder in ('alerts', 'outbox'):
             for path in (Path(state) / 'watchdog' / folder).glob('*.json'):
-                record = json.loads(path.read_text())
+                record = _read_state(state, path, stamp=folder == 'alerts')
+                if record is None:
+                    continue
                 if record.get('run_id') == event.get('run_id') and record.get('rule') == event.get('rule'):
                     path.unlink(missing_ok=True)
         return
@@ -126,10 +161,10 @@ def deliver_event(state, event, *, now=None, interval=None):
     interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
     stamp = Path(state) / 'watchdog/alerts' / (key + '.json')
     count = 0
-    if stamp.exists():
+    previous = _read_state(state, stamp, stamp=True)
+    if previous is not None:
         if event.get('kind') == 'completion':
             return
-        previous = json.loads(stamp.read_text())
         count = previous.get('count', 1)
         if event.get('rule') == 'finished-child':
             interval = min(300 * 2 ** min(count - 1, 4), 3600)
@@ -142,7 +177,10 @@ def deliver_event(state, event, *, now=None, interval=None):
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
     for path in sorted((Path(state) / 'watchdog/outbox').glob('*.json')):
-        run(command, input=path.read_text(encoding='utf-8'), text=True,
+        record = _read_state(state, path)
+        if record is None:
+            continue
+        run(command, input=json.dumps(record, sort_keys=True), text=True,
             check=True, timeout=20)
         path.unlink(missing_ok=True)
 

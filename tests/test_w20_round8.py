@@ -63,7 +63,9 @@ def test_historical_delivered_completion_not_requeued(tmp_path):
     runs = stall_watchdog.read_runs(tmp_path)
     events = []
     stall_watchdog.tick(runs, [], lambda s: 0, now=4000, deliver=events.append)
-    assert events == []
+    # D-2621 forbids requeue/re-alert, not an idempotent W24 backoff reset.
+    assert not any(e['kind'] in ('completion', 'alert') for e in events)
+    assert all(e == dict(rule='finished-child', run_id='run-old', kind='clear') for e in events)
 
 
 def test_route_refusal_persisted(tmp_path):
