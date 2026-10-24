@@ -21,6 +21,7 @@ from pathlib import Path
 import time
 
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
+from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .legs import DEFAULT_LEGS, TIERS, Leg
 
@@ -43,14 +44,6 @@ _NO_TRAIN_TAGS = frozenset({"auth", "secrets", "money", "live-step"})
 _PROVIDER_EXITS = frozenset({"usage_limit", "outage"})
 #: Exit classes that leave the routing loop (planner queue or inbox).
 _PARK_EXITS = frozenset({"contract_defect", "needs_input", "flaky_check", "cancelled"})
-
-
-class RouteError(ValueError):
-    """No usable route (estimate too big, or no eligible leg)."""
-
-    def __init__(self, message, *, exclusion_reasons=None):
-        super().__init__(message)
-        self.exclusion_reasons = dict(exclusion_reasons or {})
 
 
 @dataclass(frozen=True)
@@ -123,8 +116,6 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     legs = tuple(legs)
-    for candidate in legs:
-        validate_model(candidate.model)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
     bad = [t for t in tags if t not in RISK_TAGS]
@@ -209,10 +200,6 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
         if TIERS.index(leg.tier) > rank:
             return ("promote", leg)
     return ("park", None)
-
-
-class SpawnRefused(RouteError):
-    """A spawn lacks its mandatory card or explicit audited override."""
 
 
 class BenchmarkError(SpawnRefused):
@@ -426,12 +413,13 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
 def validate_model(model):
     """The resolver catalog and registered legs are the exact admission door."""
     from plangraph.spawner.resolver import get_catalog_models
-    from plangraph.mimo_policy import is_mimo_id
+    from plangraph.mimo_policy import MimoPathError, is_mimo_id
     from .legs import DEFAULT_LEGS
     allowed = {row['id'] for row in get_catalog_models()} | {leg.model for leg in DEFAULT_LEGS}
     if model not in allowed:
-        raise SpawnRefused('Mimo requires an exact catalog id' if is_mimo_id(model)
-                           else 'unknown model: ' + str(model))
+        if is_mimo_id(model):
+            raise MimoPathError('Mimo requires an exact catalog id')
+        raise SpawnRefused('unknown model: ' + str(model))
     return model
 
 

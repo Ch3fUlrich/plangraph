@@ -30,13 +30,15 @@ def test_refused(model):
 @pytest.mark.parametrize("dry_run", [False, True])
 @pytest.mark.parametrize("model", BAD)
 def test_spawn_starts_nothing(monkeypatch, dry_run, model):
+    from plangraph.planner.routing import SpawnRefused
     from plangraph.spawner.runner import SpawnerRunner
     def forbidden(*args, **kwargs):
         pytest.fail("process started")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
     runner = SpawnerRunner()
-    with pytest.raises(MimoPathError):
+    with pytest.raises(MimoPathError, match="Mimo requires an exact catalog id") as exc:
         asyncio.run(runner.spawn("test", model_or_combo=model, dry_run=dry_run))
+    assert isinstance(exc.value, SpawnRefused)
     assert not runner.jobs and not runner._processes and not runner._tasks
 
 

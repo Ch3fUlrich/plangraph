@@ -2,10 +2,12 @@
 
 import re
 
+from plangraph.routing_errors import SpawnRefused
+
 ACCEPTED_MIMO_IDS = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
 
 
-class MimoPathError(ValueError):
+class MimoPathError(SpawnRefused):
     """A Mimo model was requested through an unapproved path."""
 
 
