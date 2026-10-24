@@ -338,8 +338,8 @@ class CreateMixin:
                        and item["claimed_by"] == principal.name
                        and isinstance(rest, dict) and set(rest) == {"depends_on"})
         if holder_edit:
-            self._operator_dep_lease(item, now)
             self._require_project(principal, item["project"])
+            self._operator_dep_lease(item, now)
             self._operator_dep_addition(item, rest["depends_on"])
         else:
             self._may_manage(principal, item["project"])
@@ -425,6 +425,9 @@ class CreateMixin:
                 for dep in deps:
                     target = by_key.get(dep)
                     if target is not None and target["state"] == "cancelled":
+                        # A holder cannot use router cleanup to remove an old edge.
+                        if holder_edit:
+                            raise Refused("forbidden", "operator dependencies must be additions only")
                         dropped.append(f"dropped cancelled dependency {dep}")
                         continue
                     kept.append(dep)
@@ -478,10 +481,10 @@ class CreateMixin:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
             if holder_edit:
+                self._require_project(principal, fresh["project"])
                 self._operator_dep_lease(fresh, now)
                 if fresh["state"] != "claimed" or fresh["claimed_by"] != principal.name:
                     raise Refused("forbidden", "only the claim holder may add operator dependencies")
-                self._require_project(principal, fresh["project"])
                 self._operator_dep_addition(fresh, rest["depends_on"])
             else:
                 self._may_manage(principal, fresh["project"])
@@ -582,6 +585,8 @@ class CreateMixin:
                 raise Refused("forbidden", "added dependencies must be open operator items")
 
     def _operator_dep_lease(self, item, now):
+        # Legacy imports can have a holder but no lease. They must release and
+        # claim normally before using this live-claim-only editing exception.
         lease = self._parse_iso(item.get("lease_until"))
         if lease is None or lease.timestamp() <= now:
             raise Refused("forbidden", "a live claim lease is required to add operator dependencies")

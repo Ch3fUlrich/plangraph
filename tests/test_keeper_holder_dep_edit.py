@@ -45,6 +45,15 @@ def test_expired_holder_refused(w, elapsed):
     assert w.store._item("demo:WORK")["depends_on"] == []
 
 
+@pytest.mark.parametrize("lease", [None, "invalid-date"])
+def test_missing_or_unparsable_holder_lease_refused(w, lease):
+    to_claimed(w, "demo:WORK", "workerA")
+    w.conn.execute("UPDATE items SET lease_until=? WHERE key=?", (lease, "demo:WORK"))
+    with pytest.raises(Refused, match="live claim lease"):
+        edit(w, ["OP"])
+    assert w.store._item("demo:WORK")["depends_on"] == []
+
+
 def test_duplicates_normalized_and_resubmit_clear(w):
     epoch = to_claimed(w, "demo:WORK", "workerA")
     assert edit(w, ["OP", "demo:OP", "OP"])["epoch"] == epoch + 1
@@ -146,4 +155,69 @@ def test_router_duplicate_edges_share_normalization(w):
     to_claimed(w, "demo:WORK", "workerA")
     edit(w, ["OTHER", "demo:OTHER"], who="router")
     assert w.store._item("demo:WORK")["depends_on"] == ["demo:OTHER"]
+    assert w.store.verify_integrity() == []
+
+
+def test_holder_cannot_drop_preexisting_cancelled_dependency(w):
+    to_claimed(w, "demo:WORK", "workerA")
+    edit(w, ["OTHER"], who="router")
+    w.store.cancel(w.p("router"), "demo:OTHER", "not needed")
+    with pytest.raises(Refused, match="additions only"):
+        edit(w, ["OTHER", "OP"])
+    assert w.store._item("demo:WORK")["depends_on"] == ["demo:OTHER"]
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_nonmember_holder_gets_scope_refusal_before_lease(w, expired):
+    to_claimed(w, "demo:WORK", "workerA")
+    w.conn.execute("UPDATE items SET claimed_by='reader' WHERE key=?", ("demo:WORK",))
+    principal = w.p("reader")
+    if expired:
+        w.clock.advance(7200)
+    with pytest.raises(Refused, match="not scoped to project"):
+        w.store.edit_definition(principal, "demo:WORK", {"depends_on": ["OP"]})
+
+
+def test_concurrent_dependency_add_is_not_overwritten(w, monkeypatch):
+    to_claimed(w, "demo:WORK", "workerA")
+    original = w.store._write
+
+    @contextmanager
+    def changed_write():
+        monkeypatch.setattr(w.store, "_write", original)
+        edit(w, ["OTHER"], who="router")
+        with original():
+            yield
+
+    monkeypatch.setattr(w.store, "_write", changed_write)
+    with pytest.raises(Refused, match="changed under the transaction"):
+        edit(w, ["OP"])
+    assert w.store._item("demo:WORK")["depends_on"] == ["demo:OTHER"]
+    assert w.store.verify_integrity() == []
+
+
+def test_order_only_holder_resubmit_is_clear_refusal(w):
+    to_done(w, "demo:OTHER")
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"depends_on": ["OTHER"]})
+    to_claimed(w, "demo:WORK", "workerA")
+    edit(w, ["OTHER", "OP"])
+    before = w.store._item("demo:WORK")
+    with pytest.raises(Refused, match="additions only"):
+        edit(w, ["OP", "OTHER"])
+    assert w.store._item("demo:WORK") == before
+    assert w.store.verify_integrity() == []
+
+
+def test_legacy_null_lease_holder_must_establish_live_lease(w):
+    w.store.import_items(w.p("router"), [
+        defn("LEGACY", owner="workerA", state="claimed", review_tier="none",
+             evidence_kinds=("decision",)),
+        defn("LEGACY_GOAL", ["LEGACY"], kind="goal")])
+    item = w.store._item("demo:LEGACY")
+    assert item["lease_until"] is None
+    with pytest.raises(Refused, match="live claim lease"):
+        w.store.edit_definition(w.p("workerA"), "demo:LEGACY", {"depends_on": ["OP"]})
+    w.store.release(w.p("workerA"), "demo:LEGACY", item["epoch"])
+    to_claimed(w, "demo:LEGACY", "workerA")
+    w.store.edit_definition(w.p("workerA"), "demo:LEGACY", {"depends_on": ["OP"]})
     assert w.store.verify_integrity() == []
