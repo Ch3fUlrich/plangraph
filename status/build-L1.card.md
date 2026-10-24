@@ -8,6 +8,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = 0d3a3898 (#160). D-2532 P1 FREEZE (see handoff). LIVE keeper restarted 06:41Z (D-2525, PG CLOSE-WAIT fail-silent; leaf KEEPER-PG-RECONNECT p9 asked)
 | Item | Owner | State / next |
 |---|---|---|
+| KG-LINK-REPAIR (p9, D-2541 freeze exc.) | L1 + workst cx | LIVE done 07:09Z: kg.conf -> live Omnigraph (backup backups/kg-conf-pre-d2541.conf), export 2041 nodes 0 err, token 0 hits; code brief sent (loud failures, --check alarm, example placeholder) |
 | KEEPER-SEAT-FAMILY-WRITER (HIGH p10, gates PH-RT-RUNTIME) | L1 via workst cx | claimed 07:0xZ; brief sent (A store_support writer families, B Hand-Edit CHANGELOG-only excl, separate commit for #139 rebase); seats Haiku + qwen (D-2539) |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (Claude, finishing lane) | S3d de802f3a CI 40071817884 green; RESUME sent 06:5xZ (seats, rebase C1-C3 off #139). Next HARDEN |
@@ -16,7 +17,6 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix11 qwen REJECT (MED-1 slug family); fix12 brief sent workst |
-| PG-PUBLIC-FIX | DONE | closed D-2430 |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
