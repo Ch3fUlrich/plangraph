@@ -12,9 +12,10 @@ from plangraph.planner.routing import (RouteError, effective_estimate,
                                        route_card)
 
 D25_IDS = [
-    "qodercli-qwen3.8-flash", "opencode-zen-free", "or-north-mini-code-free",
+    "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
+    "opencode-glm-5.3-flash-free", "opencode-zen-free", "or-north-mini-code-free",
     "or-laguna-s-2.1-free", "or-nemotron-3-super-free", "ovh-gpt-oss-120b",
-    "mimo-v2.6-flash", "agy-gemini-3.8-flash", "agy-sonnet-5.5", "deepseek",
+    "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash", "agy-sonnet-5.5", "deepseek",
 ]
 
 
@@ -45,7 +46,7 @@ def test_default_legs_exact_d25_order():
     tiers = [TIERS.index(leg.tier) for leg in DEFAULT_LEGS]
     assert tiers == sorted(tiers)
     ids_ = [leg.id for leg in DEFAULT_LEGS]
-    assert ids_.index("mimo-v2.6-flash") < ids_.index("agy-gemini-3.8-flash")
+    assert ids_.index("cx-gpt-6.1-sol") < ids_.index("agy-gemini-3.8-flash") < ids_.index("mimo-v2.6-flash")
     assert ids_[-1] == "deepseek"
 
 
@@ -138,7 +139,7 @@ def test_90000_goes_256k_and_only_legs_with_that_window():
     r = route_card(card(estimate_tokens=90000))
     assert r.window_class == "256k"
     assert ids(r) == ["qodercli-qwen3.8-flash", "or-nemotron-3-super-free",
-                      "mimo-v2.6-flash", "agy-gemini-3.8-flash",
+                      "cx-gpt-6.1-sol", "agy-gemini-3.8-flash", "mimo-v2.6-flash",
                       "agy-sonnet-5.5", "deepseek"]
     assert all("256k" in leg.windows for leg in r.legs)
 
@@ -153,7 +154,7 @@ def test_risky_tag_removes_trains_on_data_legs_with_reason():
     for tag in ("auth", "secrets", "money", "live-step"):
         r = route_card(card(risk_tags=[tag]))
         assert not any(leg.trains_on_data for leg in r.legs)
-        assert "excluded 4 legs: trains_on_data" in r.reasons
+        assert "excluded 6 legs: trains_on_data" in r.reasons
     # migration / public-contract keep the free trainers
     r = route_card(card(risk_tags=["migration"]))
     assert any(leg.trains_on_data for leg in r.legs)
@@ -180,7 +181,7 @@ def test_over_window_share_for_fixed_class_has_no_route():
 
 def test_unavailable_first_leg_falls_to_next_free():
     r = route_card(card(), unavailable={"qodercli-qwen3.8-flash"})
-    assert r.first_leg.id == "opencode-zen-free"
+    assert r.first_leg.id == "opencode-deepseek-v4.1-flash-free"
     assert r.harness == "opencode"
     assert "excluded 1 legs: unavailable" in r.reasons
 
@@ -228,12 +229,12 @@ def test_review_levels():
 def test_tier_order_beats_list_order_in_custom_legs():
     paid_first = (dataclasses.replace(DEFAULT_LEGS[-1]),) + DEFAULT_LEGS[:2]
     r = route_card(card(), legs=paid_first)
-    assert ids(r) == ["qodercli-qwen3.8-flash", "opencode-zen-free", "deepseek"]
+    assert ids(r) == ["qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free", "deepseek"]
 
 
 def test_measured_window_changes_eligibility():
     legs = with_measured(DEFAULT_LEGS, {"qodercli-qwen3.8-flash": 30000})
-    assert route_card(card(), legs=legs).first_leg.id == "opencode-zen-free"
+    assert route_card(card(), legs=legs).first_leg.id == "opencode-deepseek-v4.1-flash-free"
 
 
 # --- next_after_failure -----------------------------------------------------------
@@ -277,7 +278,7 @@ def test_retry_until_budget_then_promote_free_sub_paid_park(route):
         a, leg = next_after_failure(route, [q], ec, 2)
         assert (a, leg.id) == ("retry", q)
     a, leg = next_after_failure(route, [q], "check_fail", 3)
-    assert (a, leg.id) == ("promote", "mimo-v2.6-flash")
+    assert (a, leg.id) == ("promote", "cx-gpt-6.1-sol")
     a, leg = next_after_failure(route, [q, leg.id], "check_fail", 3)
     assert (a, leg.id) == ("promote", "deepseek")
     assert next_after_failure(route, [q, "mimo-v2.6-flash", "deepseek"],

@@ -143,7 +143,7 @@ class Measurement:
     sources: dict[str, str] = field(default_factory=dict)
 
 
-def grep_fanout(repo: str | Path | None, symbol: str) -> int:
+def grep_fanout(repo: str | Path | None, symbol: str) -> int | None:
     """Count whole-word references to symbol across tracked files in repository.
 
     Ignores ubiquitous method names (e.g., 'run', 'get', 'resolve', 'validate', '__init__')
@@ -155,7 +155,7 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int:
         return 0
     repo_path = Path(repo)
     if not (repo_path / ".git").exists():
-        return 0
+        return None
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_path), "grep", "-w", "-c", "-F", "-e", symbol],
@@ -165,7 +165,7 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int:
         if proc.returncode == 1:
             return 0
         if proc.returncode != 0:
-            return 0
+            return None
         total = 0
         for line in proc.stdout.splitlines():
             _, sep, count = line.rpartition(":")
@@ -173,13 +173,15 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int:
                 try:
                     total += int(count)
                 except ValueError:
-                    pass
+                    return None
         return total
-    except Exception:
-        return 0
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning('fanout_failed: %s', type(exc).__name__)
+        return None
 
 
-def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) -> int:
+def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) -> int | None:
     """Count the number of files in the repo that import any of the modified modules using AST analysis.
 
     Scopes the fanout check so only files that actually import the modified module(s) are counted,
@@ -207,8 +209,8 @@ def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) ->
             continue
         try:
             tree = ast.parse(py_file.read_text(encoding="utf-8", errors="replace"))
-        except (SyntaxError, OSError):
-            continue
+        except (SyntaxError, OSError, ValueError):
+            return None
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -321,6 +323,10 @@ def measure(
         valid_symbols = [s for s in symbols if not is_ubiquitous_symbol(s)]
         for sym in valid_symbols:
             f = grep_fanout(repo, sym)
+            if f is None:
+                best_fanout = max(best_fanout, 13)
+                sources['fanout'] = 'not_measured'
+                continue
             if f > best_fanout:
                 best_fanout = f
         if not valid_symbols and norm_paths:
@@ -329,13 +335,16 @@ def measure(
             sources["fanout"] = "ast_imports"
         else:
             computed_fanout = best_fanout
-            sources["fanout"] = "git_grep"
+            sources.setdefault("fanout", "git_grep")
     elif repo and norm_paths:
         computed_fanout = ast_caller_fanout(repo, norm_paths)
         sources["fanout"] = "ast_imports"
     else:
         computed_fanout = 0
         sources["fanout"] = "default_zero"
+    if computed_fanout is None:
+        computed_fanout = 13
+        sources['fanout'] = 'not_measured'
 
     docs_only = is_docs_only(norm_paths) if norm_paths else False
 

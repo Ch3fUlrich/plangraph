@@ -86,7 +86,7 @@ Window class: the card's own, else the smallest class holding the estimate at 55
 | 4 | laguna-s-2.1 free | free | 128k | 90000 |
 | 5 | nemotron-3-super free | free | 128k 256k | 100000 |
 | 6 | ovh gpt-oss-120b | free | 128k | 90000 |
-| 7 | mimo-v2.6-flash | subscription | 128k 256k 1m | 200000 |
+| 7 | mimo/mimo-v2.6-flash | subscription | 128k 256k 1m | 200000 |
 | 8 | agy gemini-3.8-flash | subscription | 128k 256k 1m | 900000 |
 | 9 | agy sonnet-5.5 | subscription | 128k 256k 1m | 180000 |
 | 10 | deepseek | paid | 128k 256k | 100000 |

@@ -1,7 +1,7 @@
 {
   "$schema": "https://opencode.ai/config.json",
   // plangraph opencode configuration: mirrors AutoOS opencode.jsonc for WSL legs.
-  // Provides t2-worker and l2-worker agents and omniroute/mimo-v2.6-flash model so
+  // Provides t2-worker and l2-worker agents and mimo/mimo-v2.6-flash model so
   // autoos-agent spawn legs run seamlessly from a plangraph checkout.
   "permissions": [
     // mirrors the secret-file fences in AutoOS opencode.jsonc
@@ -48,7 +48,7 @@
     "t2-worker": {
       "description": "Smart worker: owns one track, reconciles reviews. May launch t3-reviewer only.",
       "mode": "subagent",
-      "model": "omniroute/mimo-v2.6-flash",
+      "model": "mimo/mimo-v2.6-flash",
       "permissions": [
         { "action": "subagent", "resource": "*", "effect": "deny" },
         { "action": "subagent", "resource": "t3-reviewer", "effect": "allow" },
@@ -63,7 +63,7 @@
     "l2-worker": {
       "description": "Smart worker: owns one track, reconciles reviews. May launch t3-reviewer only.",
       "mode": "subagent",
-      "model": "omniroute/mimo-v2.6-flash",
+      "model": "mimo/mimo-v2.6-flash",
       "permissions": [
         { "action": "subagent", "resource": "*", "effect": "deny" },
         { "action": "subagent", "resource": "t3-reviewer", "effect": "allow" },
@@ -84,12 +84,27 @@
       "settings": {
         // no built-in default port: opencode substitutes PLANGRAPH_REVIEW_URL (empty if unset)
         "baseURL": "{env:PLANGRAPH_REVIEW_URL}"
+      }
+    },
+    "mimo": {
+      "package": "@opencode/ai/providers/openai-compatible",
+      "name": "MiMo direct gateway legs (D-2459)",
+      "env": ["AUTOOS_OMNIROUTE_KEY"],
+      "settings": {
+        "baseURL": "{env:PLANGRAPH_REVIEW_URL}"
       },
       "models": {
+        // Limits mirror SEED_MODELS in src/plangraph/spawner/catalog_seed.py:
+        // Both seed rows use 1,000,000 context tokens (not 1,048,576).
         "mimo-v2.6-flash": {
-          "modelID": "mimo-v2.6-flash",
-          "name": "Xiaomi MiMo v2.6 Flash · 1M",
-          "limit": { "context": 1048576, "output": 65536 }
+          "modelID": "mimo/mimo-v2.6-flash",
+          "name": "Xiaomi MiMo v2.6 Flash",
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "mimo-v2.6-pro": {
+          "modelID": "mimo/mimo-v2.6-pro",
+          "name": "Xiaomi MiMo v2.6 Pro",
+          "limit": { "context": 1000000, "output": 65536 }
         }
       }
     }

@@ -1,0 +1,9 @@
+[Unit]
+Description=Plangraph deterministic stall watchdog
+
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+Environment="PYTHONPATH=@ROOT@/src"
+EnvironmentFile=-%h/.config/plangraph/watchdog.env
+ExecStart="@PYTHON@" -m plangraph.spawner.stall_watchdog tick

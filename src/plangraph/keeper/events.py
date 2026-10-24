@@ -291,6 +291,9 @@ def fold(events, unknown=None):
             item["operator"] = payload.get("operator", item["operator"])
         elif kind == "state_set":   # set_state / park: design-3 states; claim fields are untouched unless the payload says released
             item["state"] = payload.get("state", item["state"])
+            if payload.get("worker_complete"):
+                item["round"] = payload["round"]
+                item["lease_until"] = None
             if payload.get("released"):   # a claimed card parked by its holder: the claim ends here (like release)
                 item["claimed_by"] = None
                 item["delegate"] = None
