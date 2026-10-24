@@ -5,14 +5,14 @@ Handoff = status/build-L1.handoff.md (gen-27 -> gen-28). Control repo LOCAL ONLY
 Writers (D-2569): cx/gpt-6.1-sol on workst (inline briefs); cx 429/cooldown -> agy/gemini-3.8-flash > mimo/mimo-v2.6-flash; probe first, record skips; gemini writer = no google seat (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats ONLY via spawner AutoOS main>=5ce05dd9 (workst C:\fleet\wt\ao-lessons-b1\tools\autoos-agent.py), never C:\fleet\clones\AutoOS or bare opencode run (D-2552). qodercli Efficient = qwen (D-1714). deepseek-direct 402 on workst.
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
-## Main = 0d3a3898 (#160). D-2532 P1 FREEZE (see handoff). LIVE keeper restarted 06:41Z (D-2525). KEEPER-PG-RECONNECT run 20261024-072226-keeper-pg-reconnect-d5921f (mimo) running
+## D-2576 FLEET FREEZE: only PH-MODEL-ROUTE (L2 build-L2-model-route, brief briefs/model-route.md, branch phase/PH-MODEL-ROUTE). L1 claims RATE-LIMIT-TRUTH + MIMO-PROVIDER-PERMANENT. Everything below PARKED (list sent routing). cx NOT limited (operator).
 | Item | Owner | State / next |
 |---|---|---|
 | KG-LINK-REPAIR (p9, D-2541 freeze exc.) | L1 + workst cx | LIVE done 07:09Z: kg.conf -> live Omnigraph (backup backups/kg-conf-pre-d2541.conf), export 2041 nodes 0 err, token 0 hits; code brief sent (loud failures, --check alarm, example placeholder) |
 | KEEPER-SEAT-FAMILY-WRITER (HIGH p10, gates PH-RT-RUNTIME) | L1 via workst cx | claimed 07:0xZ; brief sent (A store_support writer families, B Hand-Edit CHANGELOG-only excl, separate commit for #139 rebase); seats Haiku + qwen (D-2539) |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
 | RT-P1-PHASE-RUNNER (HIGH) | DONE | #163 a6587b14 + #167 S4 09f67846 (GO D-2571), keeper done 2/2 (alibaba+google seats/phase-runner-s4). L2 stopped. Follow-up PHASE-HOLDER-EXEC-GATE-ONCE p3 (gates HARDEN) |
-| PG-PUBLIC-READY #162 (HIGH) | L1 via workst | r6 ed4fb47f (mimo, gitleaks 8.30.1 pin) + L1 merge main e7f16ba6 (CHANGELOG union, Hand-Edit). r8 qwen seat on workflow delta running (seats/pg-public-ready/r8); CI pending -> GO-REQ -> D-2501 rewrite |
+| PG-PUBLIC-READY #162 (HIGH) | PARKED | e5eac94d; r9 gemini LOW fixed 8411865f, r10 PASS, scans 0 (seats/pg-public-ready/r9,r10); CI rerun 40089909850 (temporal flake); D-2573 GO pre-granted, merge asked vs freeze |
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
