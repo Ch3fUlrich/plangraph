@@ -239,7 +239,7 @@ def test_unknown_variants_cli_mcp(tmp_path, model):
     response = asyncio.run(server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
         'params': {'name': 'plangraph_agent_spawn', 'arguments': {'card': {'estimate_tokens': 100},
         'prompt': 'p', 'model_or_combo': model, 'override_reason': 'explicit regression override', 'dry_run': True}}}))
-    assert response['error']['data']['type'] == 'SpawnRefused'
+    assert response['error']['data']['type'] in ('SpawnRefused', 'MimoPathError')  # MimoPathError is a SpawnRefused subtype (W17)
 
 
 def test_stdio_internal_and_unknown_tool_errors(tmp_path, monkeypatch):
