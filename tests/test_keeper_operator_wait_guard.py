@@ -66,7 +66,7 @@ def test_v5_router_unchanged(w):
     assert w.store.verify_integrity() == []
 
 
-@pytest.mark.parametrize("field,text", [("note", "IDLE until operator"), ("description", "waiting on OS-12"), ("done_criteria", "operator approval")])
+@pytest.mark.parametrize("field,text", [("note", "IDLE until operator"), ("description", "waiting on OS-12"), ("done_criteria", "waiting_on: operator approval")])
 @pytest.mark.parametrize("state", ["claimed", "in_review"])
 def test_v6_unlinked_open_and_done_operator(w, field, text, state):
     w.store.edit_definition(w.p("router"), "demo:WORK", {field: text})
@@ -89,15 +89,56 @@ def test_flag_row_rendered():
     web = Path(__file__).resolve().parents[1] / "src/plangraph/web"
     script = r"""
 const nodes=[];
-function el(){const n={children:[],style:{},appendChild(x){this.children.push(x)},setAttribute(){},addEventListener(){}};nodes.push(n);return n;}
-const host=el();global.document={createElement:el,getElementById(){return host}};
+function el(){const n={children:[],style:{setProperty(){}},appendChild(x){this.children.push(x)},removeChild(x){this.children.splice(this.children.indexOf(x),1)},get firstChild(){return this.children[0]},set textContent(x){this.children=[];this.text=String(x)},get textContent(){return (this.text||'')+this.children.map(c=>c.textContent).join('')},setAttribute(){},addEventListener(){}};nodes.push(n);return n;}
+const host=el();global.document={createElement:el,getElementById(id){return id==='sb-panel-needs'?host:null}};
 global.location={search:'',pathname:''};
 require(process.argv[1]+'/page_needs.js');
 require(process.argv[1]+'/page_needs_view.js');
 const it={key:'demo:WORK',title:'Waiting',project:'demo',state:'claimed',doneCriteria:'IDLE until operator',deps:[]};
-PlanUI.NeedsPage.render({items:new Map([[it.key,it]]),needsYou:[]});
-if(!nodes.some(n=>n.textContent==='Operator wait unlinked'))throw Error('flag missing');
-if(!nodes.some(n=>n.textContent==='demo:WORK'))throw Error('key missing');
+const flag={...it,kind:'operator_wait_unlinked',wait:'task'};
+for(const items of [new Map([[it.key,it]]),[it]]) {
+ PlanUI.NeedsPage.render({items,needsYou:[flag,flag]});
+ if(!host.textContent.includes('Operator wait unlinked'))throw Error('flag missing');
+ if(!host.textContent.includes('demo:WORK'))throw Error('key missing');
+ if(!host.textContent.includes('(1 of 1)'))throw Error('duplicate flag');
+ if(!host.textContent.includes('claimed'))throw Error('state missing');
+ PlanUI.NeedsPage.render({items,needsYou:[]});
+ if(host.textContent.includes('Operator wait unlinked'))throw Error('client derived flag');
+}
 """
     result = subprocess.run([shutil.which("node"), "-e", script, str(web)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("text", ["no operator intervention needed", "operator approval", "OS-12 is documented"])
+def test_wait_requires_marker(w, text):
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
+    to_claimed(w, "demo:WORK", "workerA")
+    assert not any(r.get("kind") == "operator_wait_unlinked" for r in w.store.needs_you(w.p("reader")))
+
+
+@pytest.mark.parametrize("value", [["IDLE until operator"], {"waiting_on": "operator"}, 12])
+def test_nonstring_wait_fields_do_not_crash(w, value, monkeypatch):
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item["note"] = value
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    w.store.needs_you(w.p("reader"))
+
+
+def test_needs_scope(w):
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": "IDLE until operator"})
+    to_claimed(w, "demo:WORK", "workerA")
+    assert w.store.needs_you(w.p("l1other")) == []
+    assert w.store.needs_you(w.p("l1other"), project="demo") == []
+    assert any(r["key"] == "demo:WORK" for r in w.store.needs_you(w.p("workerA")))
+
+
+@pytest.mark.parametrize("signal,expected", [("operator", True), ("OS-12", True), ("task", False), ("", False)])
+def test_structured_wait_signal_wins(w, monkeypatch, signal, expected):
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item.update(waiting_on=signal, note="IDLE until operator")
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    rows = w.store.needs_you(w.p("reader"))
+    assert any(r.get("kind") == "operator_wait_unlinked" for r in rows) == expected
