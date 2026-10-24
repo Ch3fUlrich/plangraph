@@ -246,6 +246,11 @@ class MCPSpawnerServer:
                         'error': {'code': -32602, 'message': 'card required'}}
             try:
                 result = await self.call_tool(tool_name, tool_args)
+                if isinstance(result, dict) and result.get('refusal') == 'BenchRequired':
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {
+                        'code': -32602, 'message': result.get('error', 'benchmark rows missing'),
+                        'data': {'type': 'BenchRequired', 'legs': result.get('evidence', []),
+                                 'run_id': result.get('run_id')}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,

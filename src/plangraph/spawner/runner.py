@@ -166,7 +166,17 @@ class SpawnerRunner:
         import secrets
         nonce = secrets.token_hex(32)
         if len(self._nonces) >= 4096:
-            raise RuntimeError('active run nonce capacity reached')
+            finished = sorted(
+                (key for key in self._nonces if key in self.jobs
+                 and self.jobs[key].status != 'running'),
+                key=lambda key: self.jobs[key].end_time or self.jobs[key].start_time,
+            )
+            for key in finished:
+                self._nonces.pop(key, None)
+                if len(self._nonces) < 4096:
+                    break
+            if len(self._nonces) >= 4096:
+                raise RuntimeError('active run nonce capacity reached')
         # Build routing envelope headers if not provided
         envelope_headers = dict(headers or {})
         if not envelope_headers:
