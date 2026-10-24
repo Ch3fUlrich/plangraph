@@ -11,12 +11,21 @@ from plangraph.spawner.runner import JobInfo, spawn_service
 
 
 def test_supervisor_imports_without_install(tmp_path, monkeypatch, capsys):
+    from pathlib import Path
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=1))
+    original = cli._start_supervisor
+    received = []
+    def start(command, **kw):
+        received.append(kw['env']['PYTHONPATH'])
+        return original(command, **kw)
+    monkeypatch.setattr(cli, '_start_supervisor', start)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv('PYTHONPATH', raising=False)
     # An invalid explicit leg reaches the real supervisor and returns its JSON refusal.
     assert cli.main(['--state', str(tmp_path / 'state'), 'spawn', 'x', '--card', '{"estimate_tokens":100}',
                      '--leg', 'missing', '--override-reason', 'test']) == 2
     assert json.loads(capsys.readouterr().out)['error'] == 'unknown leg'
+    assert received == [str(Path(cli.__file__).resolve().parents[2])]
 
 
 def test_supervisor_import_error_is_visible(tmp_path, monkeypatch, capsys):

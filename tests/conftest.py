@@ -73,7 +73,8 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
     for name in list(os.environ):
-        if any(word in name.upper() for word in ('KEY', 'TOKEN', 'SECRET', 'PASSWORD')):
+        if name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
+                                    'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
     from plangraph.spawner import resolver
     probe = resolver.served_models

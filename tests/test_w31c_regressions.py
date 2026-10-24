@@ -37,10 +37,10 @@ def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, insta
     command, kw = saved[0]
     assert probes == [[sys.executable, '-I', '-c', 'import plangraph']]
     root = str(Path(cli.__file__).resolve().parents[2])
-    assert kw['env']['PYTHONPATH'] == ('/existing/first' if installed else '/existing/first' + os.pathsep + root)
-    log = state / 'supervisor.stderr.log'
+    assert kw['env']['PYTHONPATH'] == root + os.pathsep + '/existing/first'
+    log = Path(command[3])
     assert log.exists()
-    assert Path(kw['stderr'].name) == log
+    assert log.name.startswith('supervisor-')
     # Exercise the actual child bootstrap with a fake supervisor, including raw fd writes.
     bootstrap = command[2]
     fake = """import os
@@ -53,21 +53,29 @@ for _ in range(400): os.write(2, b'x' * 8192)
     child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log), str(state)], stderr=log.open('ab'), env=child_env)
     assert child.wait(timeout=10) == 0, log.read_text()[-2000:]
     assert log.stat().st_size > 0
-    assert sum(p.stat().st_size for p in state.glob('supervisor.stderr.log*')) <= 2 * 1024 * 1024
+    assert sum(p.stat().st_size for p in state.glob('supervisor-*.stderr.log*')) <= 2 * 1024 * 1024
     assert 'supervisor_stderr_path' in bootstrap
     record = json.loads((state / 'runs/run-fake/record.json').read_text())
     assert record['supervisor_stderr_path'] == str(log)
 
 
-def test_host_environment_is_pinned():
+def test_host_environment_is_pinned(monkeypatch):
     assert Path(os.environ['AUTOOS_ROOT']).is_dir()
     assert not (Path(os.environ['AUTOOS_ROOT']) / 'opencode.jsonc').exists()
-    assert not any(any(word in key.upper() for word in ('KEY', 'TOKEN', 'SECRET', 'PASSWORD')) for key in os.environ)
+    monkeypatch.setenv('MY_TEST_SECRET', 'test-value')
+    from plangraph.spawner.env_redact import redact_env_values
+    assert redact_env_values('test-value', os.environ) == '[autoos:redacted]'
 
 
 @pytest.mark.real_probe
-def test_real_probe_marker_bypasses_stub(real_served_models):
-    assert resolver.served_models is real_served_models
+def test_real_probe_marker_bypasses_stub(real_served_models, monkeypatch):
+    calls = []
+    def run(command, **kw):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout='provider/model\nnot a model\n')
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert resolver.served_models('{}') == frozenset({'provider/model'})
+    assert calls == [['opencode', 'models']]
 
 
 def test_default_probe_is_stubbed(real_served_models):

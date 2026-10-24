@@ -9,6 +9,7 @@ import sys
 import os
 import subprocess
 import time
+import uuid
 
 _start_supervisor = subprocess.Popen
 
@@ -112,16 +113,37 @@ def main(argv=None):
                 import plangraph
                 env = os.environ.copy()
                 root = str(Path(plangraph.__file__).resolve().parent.parent)
-                installed = subprocess.run([sys.executable, '-I', '-c', 'import plangraph'],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
-                if not installed:
+                try:
+                    installed = subprocess.run([sys.executable, '-I', '-c', 'import plangraph'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    installed = False
+                checkout = (any((Path(root).parent / name).is_file() for name in ('pyproject.toml', 'setup.cfg'))
+                            or (Path(root).name == 'src' and (Path(root).parent / '.git').exists()))
+                if checkout:
+                    env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+                elif not installed:
                     env['PYTHONPATH'] = (env['PYTHONPATH'] + os.pathsep if env.get('PYTHONPATH') else '') + root
                 # Drain fd 2 in the child so Python AND native writes rotate, even
                 # after the launching CLI exits. Keep the startup tail readable.
                 service.state.mkdir(parents=True, exist_ok=True)
-                log_path = service.state / 'supervisor.stderr.log'
+                log_path = service.state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
+                logs = []
+                for path in service.state.glob('supervisor-*.stderr.log'):
+                    try:
+                        logs.append((path.stat().st_mtime, path))
+                    except FileNotFoundError:
+                        pass  # Another launcher may already have pruned this file.
+                logs = [path for _, path in sorted(logs, reverse=True)]
+                for old in logs[19:]:
+                    for path in (old, Path(str(old) + '.1')):
+                        try:
+                            path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
                 bootstrap = '''import os, sys, threading
 from plangraph.spawner import cli as supervisor
+from plangraph.spawner.env_redact import redact_env_values
 path = sys.argv[1]
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
@@ -129,19 +151,45 @@ os.close(write_fd)
 def drain():
     def open_log():
         return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab", buffering=0)
-    output = open_log()
+    output = None
     try:
+        try:
+            output = open_log()
+        except OSError:
+            pass
+        pending = b""
+        def emit(line):
+            nonlocal output
+            data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), os.environ)).encode()
+            # Bound even a native writer's multi-megabyte unterminated line,
+            # but only after redaction so truncation cannot expose a secret suffix.
+            data = data[-1024 * 1024:]
+            if output is None:
+                return
+            try:
+                if output.tell() + len(data) > 1024 * 1024:
+                    output.close()
+                    output = None
+                    os.replace(path, path + ".1")
+                    output = open_log()
+                output.write(data)
+            except OSError:
+                if output is not None:
+                    output.close()
+                output = None
         while True:
             chunk = os.read(read_fd, 8192)
             if not chunk:
                 break
-            if output.tell() + len(chunk) > 1024 * 1024:
-                output.close()
-                os.replace(path, path + ".1")
-                output = open_log()
-            output.write(chunk)
+            pending += chunk
+            while b"\\n" in pending:
+                line, pending = pending.split(b"\\n", 1)
+                emit(line + b"\\n")
+        if pending:
+            emit(pending)
     finally:
-        output.close()
+        if output is not None:
+            output.close()
         os.close(read_fd)
 thread = threading.Thread(target=drain, daemon=True)
 thread.start()
@@ -157,7 +205,7 @@ def service_with_log(*args, **kwargs):
 supervisor.SpawnService = service_with_log
 try:
     code = supervisor.main(["--supervise"])
-except BaseException:
+except Exception:
     import traceback
     traceback.print_exc()
     code = 1
@@ -167,8 +215,7 @@ finally:
     thread.join(timeout=5)
 raise SystemExit(code)
 '''
-                with open(log_path, 'a+b') as errors:
-                    os.chmod(log_path, 0o600)
+                with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
                     child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
                         env=env, text=True, **({'start_new_session': True} if os.name != 'nt' else
@@ -182,12 +229,19 @@ raise SystemExit(code)
                     child.stdout.close()
                     if not line:
                         child.wait()
-                        errors.seek(0, os.SEEK_END)
-                        size = errors.tell()
-                        errors.seek(max(0, size - 262144))
                         from .env_redact import redact_env_values
                         from .opencode_overlay import overlay_env
-                        text = errors.read(262144).decode('utf-8', errors='replace')
+                        text = ''
+                        size = 0
+                        for path in (Path(str(log_path) + '.1'), log_path):
+                            try:
+                                with path.open('rb') as current:
+                                    current.seek(0, os.SEEK_END)
+                                    size = current.tell()
+                                    current.seek(max(0, size - 262144))
+                                    text += current.read(262144).decode('utf-8', errors='replace')
+                            except FileNotFoundError:
+                                pass
                         # Discard the possibly partial first line before displaying a suffix.
                         if size > 262144:
                             text = text.partition('\n')[2]
