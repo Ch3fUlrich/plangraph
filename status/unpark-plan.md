@@ -17,3 +17,6 @@ File overlap with build-L1 (to confirm with build-L1): keeper core files in lane
 and KEEPER-PG-RECONNECT may touch db.py/store.py -> rebase order: build-L1's keeper lanes merge to main first, phase merges main.
 Held (close superseded with BUS-WAKE): BUS-WAKE-STOPGAP-2, BUS-WATCHER-TRACKED. Blocked: RT-P1-BUS-RUST (OCGO-BUS-INBOUND open).
 Then: phase review (Haiku + qwen, D-2539/2540) -> fixer -> 1-seat re-review -> phase PR -> GO-REQ.
+build-L1 file sets (18:5xZ): W27 spawner/{resolver,stall_watchdog}.py; #139 keeper trailer/evidence; #166 KEEPER-PG-RECONNECT keeper/db.py,store.py,schema_pg.py
+(OVERLAPS lane 2); #164 keeper/api_routes.py (OVERLAPS lane 2); #171 keeper define/edit validation. Rule: earlier merge first, later lane merges main;
+build-L1 tells me if #166/#164 land before BUS-KEEPER. Lanes 1, 3-6 file-disjoint. Freeze end only on build-L1's word.
