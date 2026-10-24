@@ -16,19 +16,37 @@ _ALLOWED_DECISION_KINDS = (frozenset({"decision"}), frozenset({"decision", "comm
 
 _TIER_FIELDS = frozenset(("review_tier", "evidence_kinds"))
 
+_MULTI_INTEGER = r"(?:0*[2-9]|0*[1-9][0-9]+)"
+_COUNT = (
+    rf"(?:[0-9]+\s*(?:-|\bto\b)\s*{_MULTI_INTEGER}"
+    rf"|(?:(?:at\s+least|min)\s+)?{_MULTI_INTEGER}\+?"
+    r"|twenty(?:-(?:one|two|three|four|five|six|seven|eight|nine))?"
+    r"|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    r"|both|a\s+second|another)")
+_SEAT_NOUN = r"(?:seats|families|reviewers|verdicts|sign-offs)"
 _SEAT_CLAUSE = re.compile(
-    r"(?<![\w-])(?:[2-9]|two|three|four|five|six|seven|eight|nine)\s+"
-    r"(?:(?!(?:of|the)\b)[a-z]+(?:-[a-z]+)*\s+){0,3}"
-    r"(?:seats?|families|family|reviewers?|verdicts?)(?![\w-])",
+    rf"(?<![\w-])(?:{_SEAT_NOUN}\s*[:=]\s*{_COUNT}(?![\w+-])"
+    rf"|{_COUNT}(?:-(?:seat|family|reviewer|verdict|sign-off)(?![\w-])"
+    rf"|[\s,]+(?:of\s+(?:the\s+)?)?"
+    rf"(?:[a-z0-9]+(?:-[a-z0-9]+)*[\s,]+){{0,3}}?{_SEAT_NOUN}"
+    r"(?![\w'-]|’)(?!\s+(?:table|section|list|chart|column|row|page|docs?"
+    r"|comments|findings|notes|feedback|packages|licenses)\b)))",
     re.IGNORECASE)
+_NAVIGATION = re.compile(
+    r"\b(?:step|table|section|figure|phase|row|column|part|item|level|tier|page"
+    r"|chapter)\s+$", re.IGNORECASE)
 
 
 def seat_clause_needs_high(text: str | None) -> str | None:
     """Return a multi-seat clause, excluding table-navigation prose."""
-    match = _SEAT_CLAUSE.search(text or "")
-    return match.group(0) if match else None
+    text = text or ""
+    for match in _SEAT_CLAUSE.finditer(text):
+        if not _NAVIGATION.search(text[:match.start()]):
+            return match.group(0)
+    return None
 
 
+# 'high' alone needs two families; 'none'/'standard' are refused by design.
 def check_seat_clause_tier(done_criteria: str | None, tier: str) -> None:
     """Refuse criteria promising multiple review seats outside the high tier."""
     clause = seat_clause_needs_high(done_criteria)

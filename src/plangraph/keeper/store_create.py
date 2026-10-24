@@ -128,8 +128,6 @@ class CreateMixin:
                 validate_family(raw.get("owner_family"))
         for raw, definition in zip(items, defs):
             definition["review_tier"] = self._tier_for(raw, definition, principal)
-            check_seat_clause_tier(definition.get("done_criteria"),
-                                   definition["review_tier"])
         for definition in defs:
             self._may_manage(principal, definition["project"])
         if principal.role != "router":
@@ -146,6 +144,8 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
+                check_seat_clause_tier(definition.get("done_criteria"),
+                                       definition["review_tier"])
                 definition["state"] = "open"
         keys = [d["key"] for d in defs]
         if len(set(keys)) != len(keys):
@@ -464,7 +464,8 @@ class CreateMixin:
                 edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
         # Check after rename escalation, and leave unrelated legacy edits alone.
-        if "done_criteria" in edit_fields or "review_tier" in edit_fields:
+        if any(field in edit_fields and edit_fields[field] != item.get(field)
+               for field in ("done_criteria", "review_tier")):
             resulting_tier = edit_fields.get("review_tier", item["review_tier"])
             check_seat_clause_tier(
                 edit_fields.get("done_criteria", item.get("done_criteria")),
