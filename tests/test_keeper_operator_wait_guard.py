@@ -237,3 +237,70 @@ def test_missing_project_and_empty_scope(w, monkeypatch):
     assert w.store.needs_you(w.p("workerA")) == []
     item.update(project="demo", operator=True)
     assert w.store._needs_you(None, replace(w.p("workerA"), projects=[])) == []
+
+
+@pytest.mark.parametrize("text", [
+    "- IDLE until operator", "* IDLE until operator", "> waiting on operator",
+    "**IDLE until operator**", "[IDLE until operator]", "1. IDLE until operator",
+    "Task 12: IDLE until operator", "state=IDLE until operator",
+    "Current status for this card: IDLE until operator",
+    "IDLE until operator-123", "waiting on operator-123", "IDLE until OS-123-B",
+    "waiting on OS-123-B",
+])
+def test_formatted_and_contextual_waits(w, text):
+    test_labeled_wait_marker(w, text)
+
+
+@pytest.mark.parametrize("text", [
+    "IDLE is not a blocker, the operator can proceed",
+    "waiting on the client; no operator needed",
+    "IDLE today, operator handoff was last week",
+    "IDLE until no operator needed", "IDLE not waiting for operator",
+    "IDLE without operator", "IDLE until " + "x" * 31 + " operator",
+])
+def test_nonwait_clauses(w, text):
+    test_wait_rejects_prose_and_identifiers(w, text)
+
+
+@pytest.mark.parametrize("signal,expected", [
+    ("operator sign-off not required", False), ("no operator needed", False),
+    ("not waiting for operator", False), ("without operator", False),
+    ("see ticket operator-123", False), ("OS-123-B", False),
+    ("IDLE until operator-123", True), ("waiting on OS-123-B", True),
+])
+def test_waiting_on_marker_consistency(w, monkeypatch, signal, expected):
+    test_waiting_on_standalone_operator(w, monkeypatch, signal, expected)
+
+
+@pytest.mark.parametrize("with_human", [False, True])
+def test_preference_preserves_keyless_and_other_rows(w, monkeypatch, with_human):
+    from plangraph.keeper import store_needs
+
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item.update(note="IDLE until operator")
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    keyless = [{"kind": "question"}, {"kind": "operator_wait_unlinked"}]
+    flag = {"key": item["key"], "kind": "operator_wait_unlinked"}
+    human = {"key": item["key"], "kind": "question"}
+    rows = keyless + [flag] + ([human] if with_human else [])
+    monkeypatch.setattr(store_needs.views, "needs_you", lambda *args, **kwargs: rows)
+    result = w.store.needs_you(w.p("reader"))
+    assert all(row in result for row in keyless)
+    assert (human in result) == with_human
+    assert (flag in result) != with_human
+
+
+def test_loop_adds_only_absent_flag_keys(w, monkeypatch):
+    from plangraph.keeper import store_needs
+
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item.update(note="IDLE until operator")
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    human = {"key": item["key"], "kind": "question"}
+    for rows in ([], [human]):
+        monkeypatch.setattr(store_needs.views, "needs_you", lambda *args, **kwargs: rows)
+        result = w.store.needs_you(w.p("reader"))
+        assert len(result) == 1
+        assert result[0]["kind"] == ("question" if rows else "operator_wait_unlinked")

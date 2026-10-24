@@ -8,9 +8,16 @@ from .. import views
 
 # Hyphens belong to identifiers, not standalone human-wait signals.
 _OPERATOR = re.compile(r"(?<![\w-])(?:operator|OS-\d+)(?![\w-])", re.I)
+# Clause anchoring depends on the "\n" join of fields below.
 _WAIT = re.compile(
-    r"(?:^|[\n.;])[ \t]*(?:[A-Za-z][A-Za-z ]{0,19}:[ \t]*)?"
-    r"(?:IDLE|waiting(?:_on| on))\b[^\n.;]*(?:" + _OPERATOR.pattern + ")", re.I)
+    r"(?:^|[\n.;])[-*>\[\]_~#\d. \t]{0,8}"
+    r"(?:[^\n.;:=]{1,40}[:=][ \t]*)?"
+    r"(?![^\n.;]{0,80}\b(?:no|not|without)\b)"
+    r"(?:waiting_on[ \t]*:[ \t]*(?:" + _OPERATOR.pattern + r")|"
+    r"(?:IDLE\b|waiting on\b)"
+    r"(?=[^\n.;]{0,30}(?<![\w-])(?:operator|OS-\d+))"
+    r"[ \t]*(?:(?:until|for|on|from|by)\b[ \t]*|:[ \t]*)?"
+    r"(?<![\w-])(?:operator(?:-\d+)?|OS-\d+(?:-[A-Za-z0-9]+)?)(?![\w-]))", re.I)
 
 
 class NeedsMixin:
@@ -27,10 +34,11 @@ class NeedsMixin:
                  or it.get("project") in (principal.projects or [])]
         rows = views.needs_you(items, project=project)
         # Prefer genuine waits regardless of the order supplied by the view.
-        human_keys = {row["key"] for row in rows
-                      if row.get("kind") != "operator_wait_unlinked"}
+        human_keys = {row.get("key") for row in rows
+                      if row.get("key") is not None
+                      and row.get("kind") != "operator_wait_unlinked"}
         rows = [row for row in rows if row.get("kind") != "operator_wait_unlinked"
-                or row["key"] not in human_keys]
+                or row.get("key") not in human_keys]
         by_key = {item["key"]: item for item in items}
         for item in items:
             if item["state"] not in ("claimed", "in_review"):
@@ -39,14 +47,14 @@ class NeedsMixin:
                 continue
             text = "\n".join(str(item.get(field) or "") for field in
                             ("note", "description", "done_criteria"))
-            waiting = _OPERATOR.search(str(item.get("waiting_on") or "")) or _WAIT.search(text)
+            waiting = _WAIT.search(f"waiting_on: {item.get('waiting_on') or ''}") or _WAIT.search(text)
             if not waiting:
                 continue
             if any(by_key.get(dep, {}).get("operator")
                    and by_key[dep]["state"] == "open" for dep in item["depends_on"]):
                 continue
             # Genuine human waits take precedence over the diagnostic flag.
-            if any(row["key"] == item["key"] for row in rows):
+            if any(row.get("key") == item["key"] for row in rows):
                 continue
             rows.append({"key": item["key"], "project": item.get("project"),
                          "title": item["title"], "state": item["state"],
