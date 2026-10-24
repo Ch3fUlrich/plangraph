@@ -1,0 +1,110 @@
+import json
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+
+import pytest
+
+from plangraph.planner.legs import DEFAULT_LEGS, TIERS
+from plangraph.planner import routing
+
+POLICY = tuple(l for l in DEFAULT_LEGS if set(l.roles) & {"implement", "review"})
+WRITERS = tuple(l for l in POLICY if "implement" in l.roles)
+
+
+def plan(**kwargs):
+    return routing.plan_spawn({"estimate_tokens": 1000}, role="implement",
+                              leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
+                              **kwargs)
+
+
+def rows(legs):
+    return {l.model: {"model_id": l.model, "aa_intelligence": 45,
+                      "cost_per_task_usd": 0, "verified_tok_per_s": 10} for l in legs}
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+def test_missing_ranked_last_in_tier(as_list):
+    data = rows(WRITERS[1:])
+    p = plan(benchmark=list(data.values()) if as_list else data)
+    assert p.gaps == ({"leg": WRITERS[0].id, "model": WRITERS[0].model,
+                       "reason": "no benchmark row"},)
+    assert any(WRITERS[0].id in r and "no benchmark row" in r for r in p.reasons)
+    assert [l.id for l in p.legs] == [WRITERS[1].id, WRITERS[2].id, WRITERS[0].id, WRITERS[3].id]
+    assert [TIERS.index(l.tier) for l in p.legs] == sorted(TIERS.index(l.tier) for l in p.legs)
+    assert p.to_dict()["gaps"] == p.gaps
+    assert not plan(benchmark=rows(WRITERS)).gaps
+
+
+def test_absent_explicit_operator_order():
+    p = plan()
+    assert p.legs == WRITERS
+    assert p.p_source == "operator-order"
+    assert {g["leg"] for g in p.gaps} == {l.id for l in WRITERS}
+    assert "benchmark data absent" in p.reasons
+
+
+@pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
+def test_strict_names_missing(data):
+    with pytest.raises(routing.SpawnRefused, match="benchmark rows missing: .*cx-gpt-6.1-sol"):
+        plan(benchmark=data, strict=True)
+
+
+def database(path, models, table="catalog_benchmarks"):
+    with sqlite3.connect(path) as conn:
+        conn.execute(f"CREATE TABLE {table} (model_id TEXT, aa_intelligence REAL)")
+        conn.executemany(f"INSERT INTO {table} VALUES (?, 45)", [(m,) for m in models])
+    return path
+
+
+@pytest.mark.parametrize("table", ["catalog_benchmarks", "model_benchmarks"])
+def test_read_only_loader(tmp_path, table):
+    path = database(tmp_path / "bench.db", [WRITERS[0].model], table)
+    before = path.read_bytes()
+    data, errors = routing.benchmark_rows_from_db(path)
+    assert not errors and data[WRITERS[0].model]["aa_intelligence"] == 45
+    assert path.read_bytes() == before
+
+
+def test_missing_table_and_file(tmp_path):
+    path = tmp_path / "empty.db"
+    sqlite3.connect(path).close()
+    for p in (path, tmp_path / "missing.db"):
+        data, errors = routing.benchmark_rows_from_db(p)
+        assert data == {} and errors
+        assert str(p) in errors[0]
+    assert not (tmp_path / "missing.db").exists()
+
+
+def gate(*paths, json_output=False):
+    command = [sys.executable, str(Path(__file__).resolve().parents[1] / "tools/bench_gate.py")]
+    for path in paths:
+        command.extend(["--db", str(path)])
+    return subprocess.run(command + (["--json"] if json_output else []), capture_output=True, text=True)
+
+
+def test_gate_complete_short_and_two_databases(tmp_path):
+    models = list(dict.fromkeys(l.model for l in POLICY))
+    complete = database(tmp_path / "complete.db", models)
+    short = database(tmp_path / "short.db", models[1:])
+    assert gate(complete).returncode == 0
+    result = gate(short)
+    assert result.returncode == 1 and models[0] in result.stdout
+    result = gate(complete, short, json_output=True)
+    assert result.returncode == 1
+    evidence = json.loads(result.stdout)
+    assert str(short) in result.stdout and models[0] in result.stdout
+    assert len(evidence["databases"]) == 2
+
+
+def test_gate_unreadable(tmp_path):
+    path = tmp_path / "bad.db"
+    path.write_text("not sqlite")
+    assert gate(path).returncode == 2
+    assert gate(tmp_path / "missing.db").returncode == 2
+
+
+def test_gate_import_guard():
+    import runpy
+    runpy.run_path(str(Path(__file__).resolve().parents[1] / "tools/bench_gate.py"), run_name="import_guard")
