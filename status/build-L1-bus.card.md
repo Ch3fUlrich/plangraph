@@ -5,7 +5,7 @@ Review rule D-2534: lanes -> PR into phase branch, green CI, no per-task seats; 
 D-2539: Haiku 5.5 first + 1 non-Claude family != every writer (cx writers -> qwen | mimo/mimo-v2.6-flash | deepseek-direct-flash; luna only w/o openai writer; never sol). Haiku verdict refused by keeper until KEEPER-SEAT-FAMILY-WRITER: keep .out+sha256, post after. D-2540: 1st review = 2 seats (Haiku + 1 non-Claude); then ONE fixer brief -> re-review ONE seat (delta + touched files), loop <=3 rounds then replan; phase PR; GO-REQ to routing.
 | Item | State / next |
 |---|---|
-| RT-P1-BUS-KEEPER (HIGH p8) | a514ed cut (mimo truncation), red tests only WIP lane @91f6a1f1; relaunch cx when workst slot frees (cap 4) |
+| RT-P1-BUS-KEEPER (HIGH p8) | r2 cx launched 11:03Z from 91f6a1f1 (red tests tests/test_keeper_messages.py); out build-L1/l3-20261024/rt-p1-bus-keeper.r2.out |
 | EXEC-OBSERVED-STATE (HIGH p5) | IN PHASE: #165 merged 12a182f9 (head 73a24850 incl Hand-Edit fmt), CI 40087453166 green; awaits phase review |
 | BUS-WATCHER-TRACKED (p7) | claimed; HELD (D-2564), close superseded when BUS-WAKE lands |
 | RT-P1-BUS-WAKE (p7) | after BUS-KEEPER in phase; bus-keeper lane 4; claim then |
