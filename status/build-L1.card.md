@@ -3,13 +3,13 @@ Handoff = status/build-L1.handoff.md (gen-25 -> gen-26). Control repo LOCAL ONLY
 Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats D-2449/2450: qwen qodercli (job-tmp qseat.sh; efficient fallback ok), Haiku (Agent haiku), mimo, luna (workst); deepseek API OUT (402).
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
-## Main = 27082207 (#158). LIVE keeper restarted 06:41Z (D-2525, PG CLOSE-WAIT fail-silent; leaf KEEPER-PG-RECONNECT p9 asked)
+## Main = 0d3a3898 (#160). D-2532 P1 FREEZE (see handoff). LIVE keeper restarted 06:41Z (D-2525, PG CLOSE-WAIT fail-silent; leaf KEEPER-PG-RECONNECT p9 asked)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | GO D-2526/D-2528; merged head 07bb99db (CHANGELOG union Hand-Edit); mergepath running (mp160.log) -> submit |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix11 49be9171 (cx snapshot commit OK); delta qwen+agy running (prompt 0b05d0e0) -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix11 qwen REJECT (MED-1 slug family); fix12 brief sent workst |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY #162 (HIGH) | L1 | r3 writer (all qwen findings + FAKE_PEM allowlist) -> seats -> GO -> D-2501 rewrite (rewrite-prep.sh, announce window first) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |

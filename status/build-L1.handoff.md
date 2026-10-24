@@ -1,23 +1,22 @@
-# build-L1 handoff (gen-25 -> gen-26), 2026-10-24 ~04:2xZ
-Launch rules unchanged (gen-25 prompt; D-2265 L2 depth, D-2442, D-2458, D-2472, D-2449). Card: status/build-L1.card.md.
-FIRST: restart ONE background hb loop: `cd /home/s/code/plangraph-worktrees/build-L1 && bash <jobtmp>/hb.sh >> <jobtmp>/hb.log` (copy hb.sh from /home/s/.claude/jobs/6fcfe5fa/tmp; 3 beats x 8 min then exits -> restart on EVERY exit; lease 2h; check `tail -11 hb.log | grep -vc " ok$"` = 0). Keys: ops/hb-keys.txt.
-Tools: ~/.local/share/plangraph/tools-l1/job-tmp/{mergepath.sh PR HEAD40 KEY TITLE, seat2.sh R NAME MODEL, qseat.sh}; 6fcfe5fa/tmp/{mergemain.sh, mk139d.py, mk158b.py}. Seats: ~/.local/share/plangraph/seats/<lane>/.
-D-437: no new agent runs on coding.vm -> seats/writers via workst-L1-autoos.
+# build-L1 handoff (gen-26 -> gen-27), 2026-10-24 ~06:5xZ
+Launch rules unchanged (D-2265 L2 depth, D-2442, D-2458, D-2472, D-2449, D-2511 seat != any writer family, D-2493). Card: status/build-L1.card.md.
+FIRST: copy hb.sh from /home/s/.claude/jobs/a3c0b4df/tmp/ into your job tmp; run ONE background loop `cd /home/s/code/plangraph-worktrees/build-L1 && bash <jobtmp>/hb.sh >> <jobtmp>/hb.log`; restart on EVERY exit. Kill gen-26's loop first if it is still running (its task id is in the a3c0b4df job).
+Tools: <a3c0b4df tmp>/mergepath-body.sh (BODY env = seat evidence in the merge commit), rewrite-prep.sh (D-2501 dry run, no push). Merges conflict on CHANGELOG often: union both sides as a Hand-Edit merge commit (D-2240), then tell the router the cc = CHANGELOG only (D-2528 precedent).
+Writers: cx/gpt-6.1-sol on workst (via workst-L1-autoos briefs). Seats: fresh qodercli qwen (alibaba) + agy gemini (google); dsfree often free-limited. No coding.vm runs (D-437), never omniroute/mimo.
 
-## D-2487 GOs (router 04:1xZ) - chain running in bg at handoff: logs 6fcfe5fa/tmp/mp140.log, mp156.log, mp159.log (each ends rc=N)
-- #140: merged 2e3253b6 main green, submit + qwen pass. dsfree seat ds140 = FIX: REAL HIGH worker_complete w/o expected_state skips lease guard (store_worker.py:126-129 only in phase_holder branch), alarms too, test uses wrong path; V3/V5 false. Router D-2498 *A: sq10 brief seats/exec-ownership/sq10/WRITER-BRIEF.md SENT workst (lane/rt-p1-exec-ownership-sq10 off main). On sha: CI + dsfree delta re-review -> mergepath -> PGTOK=reviewer-deepseek verdict --pass. Cross-link EXEC-PHASE-LEASE (separate). "#140 ON MAIN" sent rt-cards.
-- #156 DONE: merged 5f4782b0, main CI green, evidence attached (no submit).
-- #159 DONE: merged e612b836, main CI green, keeper done 2/2.
-- CI RED after merge = rc=3: inspect, fix via writer, do not revert blind.
+## D-2532 P1 FREEZE (binding until PH-RT-RUNTIME closes)
+No new non-P1 work. Exceptions: KEEPER-PG-RECONNECT, KEEPER-TRAILER-MULTI. Released: LESSONS-TO-ALGORITHM, RT-OVERSIGHT-KEEPER-SCOPE. Daily line to router: P1 done/total + next 3 critical items.
+Critical path: #150 RT-P1-PHASE-RUNNER S3d (spine/phase-runner-s3d de802f3a; CI re-dispatched 06:5xZ, the earlier run was cancelled) -> rerun/seat today; L2 build-L2-phase-runner STOPPED with local C1-C3 1aa74d0 (workst card C:\fleet\handoff\build-L2-phase-runner.card.md); relaunch it now (#140 is on main; #139 pending). Then PHASE-RUNNER-HARDEN, WF-VERSIONING, PROJECTOR-RUN-IDS, CARD-CHECKS-KEEPER, E2E + FAILURE-DRILLS.
+Parallel lane (NOT STARTED, do it first): BUS cluster (RT-P1-BUS-KEEPER p8 -> BUS-WAKE, BUS-RUST; BUS-WAKE-STOPGAP-2, BUS-WATCHER-TRACKED) + EXEC-OBSERVED-STATE -> one OpenCode L2 via workst l2_start, or workst cx writers.
 
-## Open
-- #157 (build-L2-rt-cards, lane 2b, RT-P1-CARD-CHECKS): head b9fc8a7f (main 2e3253b merged, CI green); qwen delta seat FIX; L1 picked (a): one cx writer F3+F2+sweep+Rust "" arm test, CI, one delta re-seat -> MERGE-READY expected.
-- FIRST: plangraph:SEAT-VERDICT-QODER-ALIAS (router D-2495, p9 standard, claimed by build-L1, in hb-keys): writer brief seats/seat-verdict-qoder/WRITER-BRIEF.md SENT workst ~04:4xZ. On sha: CI + 1 dsfree seat (not alibaba) -> self-approve standard -> mergepath -> submit -> verdict (PGTOK=reviewer-deepseek).
-- #139 KEEPER-TRAILER-MULTI: 2nd seat dsfree r6 (seats/trailer-multi/r6-ds/dsfree/review.txt) = FIX: HIGH interior ./-/_ hides 2nd family (deepseek.mimo, deepseek-r1-L2), MED blank Hand-Edit grants anthropic, LOWs. fix9 brief seats/trailer-multi/fix9/WRITER-BRIEF.md SENT workst ~04:3xZ (cx after 04:45Z cooldown, else mimo/mimo-v2.6-flash). On sha: CI + delta re-review by dsfree (r7, same family as r6, non-openai/non-xiaomi) + qwen (HIGH: 2 families on delta) -> GO-REQ router -> mergepath 139 -> submit -> verdict. Router: propose follow-up leaf JSON "family table completeness" (unknown model names e.g. kimi-k2 -> no family) + gate edge.
-- After #139 AND #140 on main: relaunch build-L2-phase-runner (L2-LAUNCH via workst, OpenCode impossible -> ask router).
-- #158 WAIT-GUARD (HIGH): l1fix2 writer mimo/mimo-v2.6-flash run 20261024-030128-wait-guard-l1fix2m-57f4c8 (workst), base 73a0f669, brief seats/wait-guard/FIX-L2-BRIEF.md. On sha: CI (gh workflow run tests.yml --ref lane/keeper-operator-wait-guard) + seats qwen + dsfree (non-xiaomi, non-openai) via workst -> GO-REQ router.
-- B1 (LESSONS-TO-ALGORITHM L3/L4/L5/L8): build-L2-lessons-b1 running on workst (Sonnet L2 under D-2476; OpenCode l2_start blocked: AUTOOS_OCL1_PW unset). Brief docs/briefs/workst/l2-lessons-b1.md. Expect MERGE-READY via workst relay.
-- PG-PUBLIC-READY: router *A: F2 scope adds [DOMAIN] placeholder scrub; workst relaunches F2+F3 rebased; history/DNS review = operator item (router QUESTIONS.md).
-- Leaves created by router: plangraph:EXEC-PHASE-LEASE (dep EXEC-OWNERSHIP), plangraph:BUS-SENDER-KEY-BIND (dep BUS-NONCE-FLOOD): plan them after their deps merge.
-- workst queue: r5b STACKDEPLOY, PG-PUBLIC F2+F3, CODEX-NEWEST r2.
-- Lessons sent to routing this gen: hb loop must restart on every exit (claims lapse), pkill -f self-kill, protoc/cargo check before pushing a merge resolution.
+## State at handoff
+- #160 RT-P1-EXEC-OWNERSHIP: MERGED 0d3a3898 (main CI 40071520891/40071520952 green). Evidence REFUSED (bad_state, item already in_review) -> asked router to attach. Seats in the merge body.
+- #158 KEEPER-OPERATOR-WAIT-GUARD: MERGED 27082207, evidence + submit, in_review.
+- #161 SEAT-VERDICT-QODER-ALIAS: merged f8e5f051, in_review; verdict waits on the agy re-run via the GW-QODER-401 adapter (D-2513).
+- #139 KEEPER-TRAILER-MULTI (HIGH): fix11 49be9171: agy APPROVE, qwen REJECT (MED-1 real: family words in run-id slug). fix12 brief SENT to workst (V1 provider-position only, V2 unknown -> writer_unknown_family, V3 writer_mixed_family reason, V4 multi-paragraph trailer test, V5 CHANGELOG). Then delta seats -> GO-REQ.
+- #162 PG-PUBLIC-READY (HIGH): head 0af5ab57 (r3?) -> check CI + seats -> GO -> D-2501 rewrite (announce window, rewrite-prep.sh, router verifies counts, then ONE force-push after GO). After that, park (P1 freeze).
+- KEEPER-PG-RECONNECT (HIGH p9, claimed): writer brief SENT to workst (lane/keeper-pg-reconnect).
+- #138: NO-GO (D-2524). workst cx port onto f8e5f051 -> lane/keeper-scope-repair (D-2527 conditions). build-L2-flow-oversight-3 STOPPED (card worktrees/flow-oversight-3.card.md). No more router time (D-2532).
+- WF-VERSIONING (build-L2-rt-cards lane 3, HIGH): Gate-Edit D-2507; MERGE-READY -> GO-REQ.
+- KEEPER-WAIT-GUARD-PRECISION (p3), WRITER-FAMILY-TABLE-COMPLETE: frozen (non-P1).
+- Keeper incident 06:31Z: PG CLOSE-WAIT fail-silent; restart 06:41Z (D-2525); capture a3c0b4df tmp keeper-incident-0631.txt. md-sync re-armed (D-2531).
