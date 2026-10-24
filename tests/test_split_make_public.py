@@ -364,14 +364,68 @@ def test_leaks_allowlist_only_names_test_paths():
     assert cfg["extend"]["useDefault"] is True
     lists = cfg["allowlists"]
     root = tomllib.loads((ROOT / ".gitleaks.toml").read_text())
-    assert lists == [al for al in root["allowlists"]
-                     if al["targetRules"] != ["private-key"]]
-    assert len(lists) == 12  # reviewed exact paths, including history and Rust fixtures
+    assert lists == root["allowlists"]
+    # Historical prose and Rust test fixtures are the only non-tests/ exceptions.
+    exceptions = {
+        r"^PROMPT\.md$", r"^docs/plans/2026-10-16-orchestration-setup\.md$",
+        r"^rust/worker-core/src/sandbox_env\.rs$",
+        r"^rust/worker/tests/fixtures/phase_defer\.json$",
+        r"^rust/worker/tests/fixtures/phase_two_cards\.json$",
+        r"^rust/worker-core/src/check\.rs$", r"^rust/worker-core/src/redact\.rs$",
+    }
+    values = {
+        r"^bool/str/negative$", r"^RT\-P2\-DECISIONS$",
+        r"^svcacct/Zq9xk2LmPw$", r"^svc/Xk9fT2mQ$",
+        r"^Zx81kQ92LmPq77Vb$", r"^AbCd1234Efgh$", r"^sentinel-wf8-opkey$",
+        r"^e2e-defer-a-33069540525861094644722115702876536833$",
+        r"^e2e-defer-b-33069540525861163949139600629661958146$",
+        r"^phase-33069540525861169132674685342045962243$",
+        r"^e2e-phase-a-33069540670160061784166484599698882561$",
+        r"^e2e-phase-b-33069540670160144222665750007685054466$",
+        r"^phase-33069540670160152892635464651174313987$",
+    }
+    assert {r for al in lists if al.get("targetRules") == ["generic-api-key"]
+            for r in al["regexes"]} == values
+    assert any(r"^tests/fixtures/md_sync/QUESTIONS\.md$" in al["paths"]
+               and al["regexes"] == [r"^Zx81kQ92LmPq77Vb$"] for al in lists)
     for al in lists:
-        assert al["condition"] == "AND" and al["targetRules"] == ["generic-api-key"]
-        assert len(al["regexes"]) == 1 and al["paths"]
+        assert al["condition"] == "AND" and al.get("targetRules")
+        assert al["regexes"] and al["paths"]
+        assert all(p.startswith("^tests/") or p in exceptions for p in al["paths"])
         assert all(p.startswith("^") and p.endswith("$") for p in al["paths"])
         assert all(r.startswith("^") and r.endswith("$") for r in al["regexes"])
+
+
+def test_historical_md_sync_path_is_covered_in_both_configs():
+    import tomllib
+    for config in (LEAKS_CFG, ROOT / ".gitleaks.toml"):
+        lists = tomllib.loads(config.read_text())["allowlists"]
+        assert any(r"^tests/fixtures/md_sync/QUESTIONS\.md$" in al["paths"]
+                   and al["regexes"] == [r"^Zx81kQ92LmPq77Vb$"] for al in lists)
+
+
+def test_public_phase_values_are_exact():
+    import tomllib
+    lists = tomllib.loads(LEAKS_CFG.read_text())["allowlists"]
+    entry = next(al for al in lists if r"^rust/worker/tests/fixtures/phase_defer\.json$" in al["paths"])
+    assert len(entry["regexes"]) == 6
+    assert all("[0-9]" not in value for value in entry["regexes"])
+
+
+def test_public_config_provenance_and_guardrail():
+    text = LEAKS_CFG.read_text()
+    assert "public build" in text and "make_public" in text
+    assert "Never add a non-test path here" in text
+
+
+@pytest.mark.skipif(shutil.which("gitleaks") is None, reason="gitleaks not installed")
+def test_public_real_pem_in_other_file_is_reported(tmp_path):
+    header = "-----BEGIN " + "PRIVATE KEY-----"
+    footer = "-----END " + "PRIVATE KEY-----"
+    body = "MIIEvQIBADANBgkqhkiG" + str(9) + "w" + str(0) + "BAQEFAASCBKcwggSjAgEAAoIBAQC"
+    write(tmp_path, "src/other.pem", header + "\n" + body + "\n" + footer)
+    hits, error = mp.run_gitleaks(tmp_path, shutil.which("gitleaks"), LEAKS_CFG)
+    assert not error and hits
 
 
 

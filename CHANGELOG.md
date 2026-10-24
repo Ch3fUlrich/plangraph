@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- Pin public leak-scanner exceptions to reviewed fixture values, preserve the exact historical Markdown fixture path, share the narrow fake-PEM waivers, and independently test path/value scope and config provenance.
+
 - Replace the operational domain with a placeholder and align public leak scanner exceptions by exact fixture path and value.
 
 - Seat verdicts recognize the exact Efficient model alias from qodercli as an Alibaba seat and accept end_turn as a completed response alongside stop. Other finish reasons, unknown models, writer-family restrictions and test-gaming refusals remain unchanged.

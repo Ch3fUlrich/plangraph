@@ -66,7 +66,8 @@ regexes = ['''^svc/Xk9fT2mQ$''']
 description = "synthetic demo value in tests/fixtures/md_sync/sample_questions.md"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^tests/fixtures/md_sync/sample_questions\.md$''']
+paths = ['''^tests/fixtures/md_sync/sample_questions\.md$''',
+         '''^tests/fixtures/md_sync/QUESTIONS\.md$''']
 regexes = ['''^Zx81kQ92LmPq77Vb$''']
 
 [[allowlists]]
@@ -113,7 +114,12 @@ condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^rust/worker/tests/fixtures/phase_defer\.json$''',
          '''^rust/worker/tests/fixtures/phase_two_cards\.json$''']
-regexes = ['''^(?:e2e-(?:phase|defer)-[ab]-|phase-)[0-9]+$''']
+regexes = ['''^e2e-defer-a-33069540525861094644722115702876536833$''',
+           '''^e2e-defer-b-33069540525861163949139600629661958146$''',
+           '''^phase-33069540525861169132674685342045962243$''',
+           '''^e2e-phase-a-33069540670160061784166484599698882561$''',
+           '''^e2e-phase-b-33069540670160144222665750007685054466$''',
+           '''^phase-33069540670160152892635464651174313987$''']
 
 [[allowlists]]
 # Reason: the worker-core check/redaction tests redact an obviously fake PEM block that sits in
@@ -128,7 +134,7 @@ condition = "AND"
 targetRules = ["private-key"]
 paths = ['''^rust/worker-core/src/check\.rs$''',
          '''^rust/worker-core/src/redact\.rs$''']
-regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----(?:\r?\nA{64})+\r?\n-----END TEST\s*PRIVATE KEY-----''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----(?:\r?\nA{64})+\r?\n-----END TEST\s*PRIVATE KEY-----$''']
 
 [[allowlists]]
 # Reason: before the fixture became a single literal, the same two tests built the fake block

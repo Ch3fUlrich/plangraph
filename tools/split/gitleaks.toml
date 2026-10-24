@@ -1,13 +1,15 @@
-# Root leak-scanner config (gitleaks 8.30.1), auto-discovered by `gitleaks git`/`gitleaks dir`
-# and by CI.  Default rules stay on; the allowlists below are a REVIEWED set of paths whose only
+# Public leak-scanner config for the public build, passed with -c by make_public.
+# Never add a non-test path here without an exact reviewed exception in
+# test_leaks_allowlist_only_names_test_paths (historical prose and Rust fixtures).
+# Default rules remain enabled.  Default rules stay on; the allowlists below are a REVIEWED set of paths whose only
 # findings are (a) ordinary prose that the entropy rule mis-fires on, or (b) synthetic,
 # credential-shaped fixtures that exercise the credential guard / redactor.  No entry below
 # exempts a whole file blindly: prose files are limited to the one mis-firing rule, and every
 # fixture entry names the exact fake value, so a NEW credential-shaped string in these files
 # still fails the gate.  Never add a path here without reviewing its findings.
 #
-# Gate: gitleaks git --log-opts=--all --redact -c .gitleaks.toml   (must exit 0)
-title = "plangraph public repo"
+# Gate: gitleaks git --log-opts=--all --redact -c tools/split/gitleaks.toml   (must exit 0)
+title = "plangraph public build"
 
 [extend]
 useDefault = true
@@ -66,7 +68,8 @@ regexes = ['''^svc/Xk9fT2mQ$''']
 description = "synthetic demo value in tests/fixtures/md_sync/sample_questions.md"
 condition = "AND"
 targetRules = ["generic-api-key"]
-paths = ['''^tests/fixtures/md_sync/sample_questions\.md$''']
+paths = ['''^tests/fixtures/md_sync/sample_questions\.md$''',
+         '''^tests/fixtures/md_sync/QUESTIONS\.md$''']
 regexes = ['''^Zx81kQ92LmPq77Vb$''']
 
 [[allowlists]]
@@ -113,4 +116,43 @@ condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^rust/worker/tests/fixtures/phase_defer\.json$''',
          '''^rust/worker/tests/fixtures/phase_two_cards\.json$''']
-regexes = ['''^(?:e2e-(?:phase|defer)-[ab]-|phase-)[0-9]+$''']
+regexes = ['''^e2e-defer-a-33069540525861094644722115702876536833$''',
+           '''^e2e-defer-b-33069540525861163949139600629661958146$''',
+           '''^phase-33069540525861169132674685342045962243$''',
+           '''^e2e-phase-a-33069540670160061784166484599698882561$''',
+           '''^e2e-phase-b-33069540670160144222665750007685054466$''',
+           '''^phase-33069540670160152892635464651174313987$''']
+
+[[allowlists]]
+# Reason: the worker-core check/redaction tests redact an obviously fake PEM block that sits in
+# the source as ONE literal -- the TEST header, its letter-only filler (lines of exactly 64
+# "A"s, no digits, no base64 body, no key material anywhere) and the matching footer.  The
+# regex pins that whole block: header, that exact filler, footer.  Only such a fake block is
+# waived, so a real key under this header (base64 body lines) matches nothing here and stays
+# reported.  The "\s*" and "{64}" spellings keep this config's own text from ever matching the
+# rule it exempts.
+description = "fake PEM test block (header + 64-A filler + footer) in the worker-core check/redact tests (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^rust/worker-core/src/check\.rs$''',
+         '''^rust/worker-core/src/redact\.rs$''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----(?:\r?\nA{64})+\r?\n-----END TEST\s*PRIVATE KEY-----$''']
+
+[[allowlists]]
+# Reason: before the fixture became a single literal, the same two tests built the fake block
+# programmatically, so in git history the private-key match starts at the header STRING LITERAL
+# and runs on through the builder code (`.to_string()];`, the `for _ in 0..body_lines` loop,
+# `"A".repeat(64)`) to the footer literal.  This entry waives exactly that historical shape --
+# and NOTHING after its opening: the regex is pinned token by token from the header literal all
+# the way to the footer literal and ends there (`$`, no open-ended `.*`), because gitleaks'
+# private-key match spans header..first footer, so a prefix-only regex would waive a real
+# base64 body dropped in anywhere before that footer.  A real key under this header is not
+# waived here (test_real_key_inside_the_historical_shape_is_still_reported), nor by the entry
+# above's absence.  Same two paths, same rule, AND condition.  The "\s*" spellings keep this
+# config's own text from ever matching the rule it exempts.
+description = "pre-fix programmatic fake-PEM builder in the worker-core check/redact tests, git history only (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["private-key"]
+paths = ['''^rust/worker-core/src/check\.rs$''',
+         '''^rust/worker-core/src/redact\.rs$''']
+regexes = ['''^-----BEGIN TEST\s*PRIVATE KEY-----"\.to_string\(\)\];\s+for _ in 0\.\.body_lines\s*\{\s+v\.push\("A"\.repeat\(64\)\);\s+\}\s+v\.push\("-----END TEST\s*PRIVATE KEY-----$''']

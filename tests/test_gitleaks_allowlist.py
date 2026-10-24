@@ -18,23 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".gitleaks.toml"
 
 
-def test_root_and_public_allowlists_match_except_rust_pem():
-    root = tomllib.loads(CONFIG.read_text(encoding="utf-8"))["allowlists"]
-    public = tomllib.loads((ROOT / "tools/split/gitleaks.toml").read_text(
-        encoding="utf-8"))["allowlists"]
-    pem = [entry for entry in root if entry["targetRules"] == ["private-key"]]
-    assert len(pem) == 2
-    assert all(path.startswith("^rust/") for entry in pem for path in entry["paths"])
-    assert not any(entry["targetRules"] == ["private-key"] for entry in public)
-    manifest = tomllib.loads((ROOT / "tools/split/manifest.toml").read_text(
-        encoding="utf-8"))
-    assert not any(path.startswith("rust") for path in manifest["public"]["include"])
-    assert [entry for entry in root if entry not in pem] == public
-    for entry in public:
-        assert entry["condition"] == "AND"
-        assert entry["targetRules"]
-        assert all(path.startswith("^") and path.endswith("$") for path in entry["paths"])
-
 PROMPT_REL = Path("PROMPT.md")
 PLAN_REL = Path("docs/plans/2026-10-16-orchestration-setup.md")
 # assembled at runtime so this test file is not itself a generic-api-key finding
@@ -48,6 +31,38 @@ WAIVED_PLAN_SECRET = _join("RT-P2-", "DECISIONS")
 # historically allow-listed files
 PROMPT_PROSE = _join("It accepts tokens, ", WAIVED_PROMPT_SECRET, " values.\n")
 PLAN_PROSE = _join("Phases: Q-API-PUSH, ", WAIVED_PLAN_SECRET, " are done.\n")
+
+
+def _assert_narrow_entry(entry):
+    assert entry.get("targetRules"), "allowlist must name targetRules"
+    assert entry.get("condition") == "AND"
+    for value in entry["paths"] + entry["regexes"]:
+        assert value.startswith("^") and value.endswith("$")
+        assert ".*" not in value and ".+" not in value
+
+
+def test_root_and_public_allowlists_match_except_rust_pem():
+    # Retain the historical test name: PEM entries are now shared too, not omitted.
+    root = tomllib.loads(CONFIG.read_text(encoding="utf-8"))["allowlists"]
+    public = tomllib.loads((ROOT / "tools/split/gitleaks.toml").read_text(
+        encoding="utf-8"))["allowlists"]
+    assert root == public
+    for entry in root:
+        _assert_narrow_entry(entry)
+
+
+@pytest.mark.parametrize("entry", [
+    {"condition": "AND", "paths": ["^tests/x$"], "regexes": ["^x$"]},
+    {"condition": "AND", "targetRules": ["private-key"],
+     "paths": ["^rust/.*$"], "regexes": ["^x$"]},
+    {"condition": "AND", "targetRules": ["private-key"],
+     "paths": ["rust/x"], "regexes": ["^x$"]},
+    {"condition": "AND", "targetRules": ["generic-api-key"],
+     "paths": ["^tests/x$"], "regexes": ["^.*$"]},
+])
+def test_allowlist_validation_rejects_broad_or_unscoped_entries(entry):
+    with pytest.raises(AssertionError):
+        _assert_narrow_entry(entry)
 
 
 def _gitleaks() -> str:
