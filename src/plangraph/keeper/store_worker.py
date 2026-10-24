@@ -108,7 +108,7 @@ class WorkerMixin:
     """The worker-facing verbs for :class:`plangraph.keeper.store.Store`."""
 
     # ------------------------------------------------------------- helpers
-    def _exec_expect_state(self, item, expected, principal=None) -> None:
+    def _exec_expect_state(self, item, expected, principal=None, *, now=None) -> None:
         """Check observed state inside the write lock, before recording ownership."""
         if expected is None:
             return
@@ -126,7 +126,8 @@ class WorkerMixin:
         if phase_holder:
             # The live-set exception must not revive a dead claim on ask or
             # complete; park already enforces this same lease rule.
-            self._park_guard(principal, item, None, self.clock())
+            self._park_guard(principal, item, None,
+                             self.clock() if now is None else now)
         if item["state"] not in states and not phase_holder:
             raise Refused("exec_stale_state",
                           f"{item['key']}: expected {expected!r}, is {item['state']!r}")
@@ -316,7 +317,13 @@ class WorkerMixin:
             self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
             if not self._exec_duplicate(item, body, "done"):
-                self._exec_expect_state(item, body.get("expected_state"), principal)
+                self._exec_expect_state(item, body.get("expected_state"), principal,
+                                        now=now)
+            # Production complete bodies omit expected_state. Bind every call
+            # to the claim under this lock, before any ownership/write, using
+            # the verb's clock snapshot (including duplicate completions).
+            self._park_guard(principal, item, None, now)
+            if not self._exec_duplicate(item, body, "done"):
                 if item["state"] != "done":
                     # 3. Ownership, then the completion write -- a state/epoch
                     #    CAS (``_guarded_touch``) in the SAME transaction as the
@@ -388,6 +395,8 @@ class WorkerMixin:
         reason = _text("reason", reason, required=True, cap=500, key=card)
         key = self._resolve_scoped(principal, card)
         with self._write():
+            item = self._get_or_refuse(key)
+            self._park_guard(principal, item, None, now)
             existing = self.conn.execute(
                 "SELECT 1 FROM projector_alarms WHERE kind='worker_alarm'"
                 " AND workflow_id='' AND key=? AND cleared_at IS NULL",
