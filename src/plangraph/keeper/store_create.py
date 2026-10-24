@@ -338,6 +338,7 @@ class CreateMixin:
                        and item["claimed_by"] == principal.name
                        and isinstance(rest, dict) and set(rest) == {"depends_on"})
         if holder_edit:
+            self._operator_dep_lease(item, now)
             self._require_project(principal, item["project"])
             self._operator_dep_addition(item, rest["depends_on"])
         else:
@@ -414,7 +415,7 @@ class CreateMixin:
                 if any(not isinstance(d, str) for d in value):
                     raise Refused("validation",
                                   "depends_on entries must be strings")
-                deps = [self._qualify(item["project"], d) for d in value]
+                deps = sorted({self._qualify(item["project"], d) for d in value})
                 # A dependency on an item that is cancelled is dropped from the
                 # resulting list instead of refusing the edit: the rest of the
                 # list stands, the caller is told what went away, and the graph
@@ -469,8 +470,7 @@ class CreateMixin:
             # Re-read inside the transaction: a competitor may have claimed or
             # otherwise moved the item between the read above and here.
             fresh = self._get_or_refuse(key)
-            audit_before = {name: fresh.get(name) if name != "depends_on"
-                            else item.get(name) for name in edit_fields}   # F4: in-txn read
+            audit_before = {name: fresh.get(name) for name in edit_fields}
             self._assert_unlocked(fresh)
             # ``tier_edit`` implies router; guard the write on the states the read passed.
             states = ("claimed", "in_review") if tier_edit else ("open",)
@@ -478,6 +478,7 @@ class CreateMixin:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
             if holder_edit:
+                self._operator_dep_lease(fresh, now)
                 if fresh["state"] != "claimed" or fresh["claimed_by"] != principal.name:
                     raise Refused("forbidden", "only the claim holder may add operator dependencies")
                 self._require_project(principal, fresh["project"])
@@ -567,14 +568,23 @@ class CreateMixin:
         if not isinstance(value, (list, tuple)) or any(not isinstance(d, str) for d in value):
             raise Refused("forbidden", "only adding open operator dependencies is allowed")
         deps = {self._qualify(item["project"], d) for d in value}
-        old = set(item["depends_on"])
+        old = {self._qualify(item["project"], d) for d in item["depends_on"]}
         added = deps - old
         if not added or not old <= deps:
             raise Refused("forbidden", "operator dependencies must be additions only")
         for dep in added:
+            # Refuse before lookup, using the same response as an unknown or
+            # ineligible local target: holders must not get an existence oracle.
+            if not dep.startswith(item["project"] + ":"):
+                raise Refused("forbidden", "added dependencies must be open operator items")
             target = self._item(dep)
             if target is None or not target["operator"] or target["state"] != "open":
                 raise Refused("forbidden", "added dependencies must be open operator items")
+
+    def _operator_dep_lease(self, item, now):
+        lease = self._parse_iso(item.get("lease_until"))
+        if lease is None or lease.timestamp() <= now:
+            raise Refused("forbidden", "a live claim lease is required to add operator dependencies")
 
     def set_priority(self, principal, key, n):
         return self._run(principal, "set_priority", key,

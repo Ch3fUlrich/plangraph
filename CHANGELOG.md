@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **KEEPER-OPERATOR-WAIT-GUARD server hardening:** holder dependency additions require a live claim lease, including under the write lock, and refuse foreign, missing and non-operator targets identically. Qualify old edges before comparing additions and normalize dependency edits to sorted unique edges for holders and routers, keeping the stored graph and before/after audit aligned. Preserve the narrow claimed-only, dependencies-only holder exception and explicit additions-only refusal on resubmission.
+
 - **KEEPER-OPERATOR-WAIT-GUARD:** claim holders may add only open operator dependencies to their own claimed item, retaining the active-edit epoch/round and before/after audit. Needs-you JSON and rows flag active operator waits in note/description/done criteria without an open operator edge.
 
 - **GOV-CTX-METRICS-FIX3:** restore weighted/daily largest-record deduplication by `(message id, requestId)` even when the message id is absent; ctx alone keeps every id-less record. Pin both transcript readers skipping missing/invalid timestamps, consistent with daily aggregation, so undated usage cannot disrupt timestamp ordering. A record with a non-string/int `message.id` or `requestId` is skipped alone (previously the rest of its transcript file was dropped); ties keep `(ts, file, line)` order.
