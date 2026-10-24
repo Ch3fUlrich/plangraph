@@ -173,6 +173,11 @@ def fold(events, unknown=None):
         elif kind == "exec_owner_changed":
             # Ownership has its own audit events; lifecycle replay is unchanged.
             pass
+        elif kind == "oversight_token_minted":
+            # RT-OVERSIGHT: the mint audits a row in oversight_tokens (the event
+            # is keyless) -- no item state, so replay is a no-op; it is branched
+            # so a known type is never reported as unknown.
+            pass
         elif kind == "item_defined":
             if "priority" in payload:
                 item["priority"] = payload["priority"]

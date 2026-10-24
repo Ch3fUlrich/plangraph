@@ -110,6 +110,25 @@ def _cmd_revoke(args, cfg) -> int:
     return 0
 
 
+def _cmd_mint_oversight_token(args, cfg) -> int:
+    """R2: the only door.  Plaintext goes to a 0600 file, never to stdout."""
+    conn = _open(cfg)
+    try:
+        out = Store(conn).mint_oversight_token(
+            args.name, go_decision=args.go, reason=args.reason)
+    finally:
+        conn.close()
+    path = args.token_out
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, (out["token"] + "\n").encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.chmod(path, 0o600)
+    print(f"oversight token written to {path}")
+    return 0
+
+
 def _problem_line(problem) -> str:
     """One line per integrity problem; unknown types name the type and seq.
 
@@ -238,6 +257,7 @@ _COMMANDS = {
     "migrate": _cmd_migrate,
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,
+    "mint-oversight-token": _cmd_mint_oversight_token,
     "verify": _cmd_verify,
     "copy-to-pg": _cmd_copy_to_pg,
     "import": _cmd_import,
