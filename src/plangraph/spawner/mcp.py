@@ -151,7 +151,8 @@ class MCPSpawnerServer:
             return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":
             if not arguments.get('card'):
-                raise ValueError('card required')
+                from plangraph.planner.routing import SpawnRefused
+                raise SpawnRefused('spawn by card; card required')
             return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
@@ -216,6 +217,8 @@ class MCPSpawnerServer:
 
     async def handle_rpc_request(self, req: Mapping[str, Any]) -> dict[str, Any]:
         """Dispatch a single JSON-RPC 2.0 request."""
+        if not isinstance(req, Mapping) or req.get('jsonrpc', '2.0') != '2.0' or not isinstance(req.get('method'), str) or not isinstance(req.get('params', {}), Mapping):
+            return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid request'}}
         req_id = req.get("id")
         method = req.get("method")
         params = req.get("params", {})
@@ -241,9 +244,6 @@ class MCPSpawnerServer:
         if method == "tools/call":
             tool_name = params.get("name")
             tool_args = params.get("arguments", {})
-            if tool_name == 'plangraph_agent_spawn' and not tool_args.get('card'):
-                return {'jsonrpc': '2.0', 'id': req_id,
-                        'error': {'code': -32602, 'message': 'card required'}}
             try:
                 result = await self.call_tool(tool_name, tool_args)
                 if isinstance(result, dict) and result.get('status') == 'refused':
@@ -262,9 +262,9 @@ class MCPSpawnerServer:
                     },
                 }
             except Exception as exc:
-                from plangraph.planner.routing import BenchRequired, SpawnRefused
+                from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
-                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'type': type(exc).__name__, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 3 if isinstance(exc, BenchmarkError) else 2, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -298,6 +298,10 @@ async def run_stdio_server() -> None:
             req = json.loads(line.decode("utf-8").strip())
             resp = await server.handle_rpc_request(req)
             sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.flush()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': None,
+                'error': {'code': -32700, 'message': 'Parse error'}}) + '\n')
             sys.stdout.flush()
         except Exception as exc:
             import logging

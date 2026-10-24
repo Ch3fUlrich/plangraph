@@ -53,20 +53,53 @@ class SpawnService:
             families.append(family)
         return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
-    async def spawn(self, card=None, prompt='', role='implement', writer_families=(),
+    async def spawn(self, *args, **kwargs):
+        from plangraph.planner.routing import SpawnRefused, BenchmarkError
+        try:
+            return await self._spawn(*args, **kwargs)
+        except Exception as exc:
+            record = dict(run_id='run-' + uuid.uuid4().hex, role=kwargs.get('role', 'implement'),
+                          started=time.time(), ended=time.time(),
+                          status='refused' if isinstance(exc, SpawnRefused) else 'failed',
+                          exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
+                          refusal=type(exc).__name__, error=str(exc))
+            self._save(record)
+            raise
+
+    async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import DEFAULT_LEGS
+        if not card:
+            raise SpawnRefused('spawn by card; card required')
         if model or leg or not card:
+            # Overrides change the selected model, not the card safety contract.
+            from plangraph.planner.routing import plan_spawn
+            plan_spawn(card, role=role, legs=())
             chosen = next((l for l in DEFAULT_LEGS if l.id == leg), None) if leg else None
+            if leg and chosen is None:
+                raise SpawnRefused('unknown leg')
+            if model and chosen and model != chosen.model:
+                raise SpawnRefused('model and leg disagree')
             target = model or (chosen.model if chosen else None)
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
-            chosen = chosen or replace(DEFAULT_LEGS[0], id='override', model=target,
-                                       family=__import__('plangraph.spawner.resolver', fromlist=['detect_model_family']).detect_model_family(target))
+            chosen = next((l for l in DEFAULT_LEGS if l.model == target), None)
+            if chosen is None:
+                from .resolver import get_catalog_models, detect_model_family
+                from plangraph.planner.legs import Leg
+                row = next((r for r in get_catalog_models() if r['id'] == target), None)
+                if row is None:
+                    raise SpawnRefused('override model missing registry data')
+                context = row.get('context_tokens', 0)
+                from plangraph.planner.routing import WINDOW_TOKENS
+                windows = tuple(w for w, n in WINDOW_TOKENS.items() if n <= context)
+                chosen = Leg('override', row['tier'], row.get('harness', 'opencode'), target,
+                             detect_model_family(target), windows, context,
+                             bool(row.get('trains_on_prompts', True)), roles=(role,))
             if review_of and chosen.family == self.result(review_of).get('writer_family'):
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
@@ -104,10 +137,10 @@ class SpawnService:
                     if not stop or no_fallthrough or dry_run:
                         break
             except Exception as exc:
-                from plangraph.planner.routing import BenchRequired, SpawnRefused
+                from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
                     record.update(status='refused', refusal=type(exc).__name__,
-                                  exit_code=3 if isinstance(exc, BenchRequired) else 2,
+                                  exit_code=3 if isinstance(exc, BenchmarkError) else 2,
                                   evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [],
                                   legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                                   error=str(exc))
@@ -138,6 +171,6 @@ class SpawnService:
         if task and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-        record.update(status='cancelled', ended=time.time())
+        record.update(status='cancelled', exit_code=1, ended=time.time())
         self._save(record)
         return record

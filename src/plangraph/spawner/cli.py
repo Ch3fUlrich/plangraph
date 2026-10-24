@@ -13,7 +13,7 @@ import time
 _start_supervisor = subprocess.Popen
 
 from .runner import spawn_service as SpawnService
-from plangraph.planner.routing import BenchRequired, SpawnRefused
+from plangraph.planner.routing import BenchmarkError, SpawnRefused
 
 
 def _supervise():
@@ -67,6 +67,8 @@ def main(argv=None):
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':
+            if not args.card:
+                raise SpawnRefused('spawn by card; card required')
             payload = dict(card=args.card, prompt=args.prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
@@ -103,13 +105,13 @@ def main(argv=None):
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
             if 'status' not in result:
-                return 0
+                return 2 if result.get('error') else 0
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)
         return 0
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(str(exc), file=sys.stderr)
-        return 3 if isinstance(exc, BenchRequired) else 2
+        return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
 
 
 if __name__ == '__main__':

@@ -573,7 +573,7 @@ dry runs do not retain nonces. Steering a job without stdin returns an explicit
 Pure-document review exemptions carry `review_exempt`; zero reviewers without
 that flag are invalid, and high/critical risk cannot claim the exemption.
 The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
-output); Flash retains its existing 1,048,576 context limit. The unused OmniRoute
+output); Flash follows the catalog seed's 1,000,000 context limit. The unused OmniRoute
 model registry is omitted while its transport configuration remains available.
 # Routing hardening
 

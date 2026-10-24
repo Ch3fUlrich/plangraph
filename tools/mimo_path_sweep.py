@@ -21,9 +21,12 @@ DEFAULT_ROOTS = (Path(__file__).resolve().parents[1], Path("~/code/AutoOS"),
 
 def model_key_exemptions(text):
     """Tokenize JSONC once, retaining real object ancestry and source lines."""
-    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*[\s\S]*?\*/|[{}:\[\],]', text))
+    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*[\s\S]*?(?:\*/|$)|[{}:\[\],]', text))
+    if any(t.group().startswith('/*') and not t.group().endswith('*/') for t in tokens):
+        raise ValueError('unterminated block comment')
     tokens = [t for t in tokens if not t.group().startswith(('//', '/*'))]
     stack, key, exempt = [], None, {}
+    brackets = []
     for i, token in enumerate(tokens):
         value = token.group()
         if value.startswith('"'):
@@ -35,14 +38,19 @@ def model_key_exemptions(text):
                     start = token.start() - (text.rfind('\n', 0, token.start()) + 1)
                     exempt.setdefault(line, []).append((start, start + len(value)))
         elif value in ('{', '['):
+            brackets.append(value)
             stack.append(key)
             key = None
         elif value in ('}', ']'):
+            if not brackets or brackets.pop() != {'}': '{', ']': '['}[value]:
+                raise ValueError('bracket mismatch')
             if stack:
                 stack.pop()
             key = None
         elif value == ',':
             key = None
+    if brackets:
+        raise ValueError('unclosed bracket')
     return exempt
 
 
@@ -69,8 +77,13 @@ def scan(root: Path, allow: list[str]):
             try:
                 lines = path.read_text(encoding="utf-8").splitlines()
             except (OSError, UnicodeError):
+                yield {'file': str(path.relative_to(root)), 'error': 'unreadable file'}
                 continue
-            exemptions = model_key_exemptions('\n'.join(lines)) if path.suffix.lower() in {'.json', '.jsonc'} else {}
+            try:
+                exemptions = model_key_exemptions('\n'.join(lines)) if path.suffix.lower() in {'.json', '.jsonc'} else {}
+            except ValueError as exc:
+                yield {'file': str(path.relative_to(root)), 'error': str(exc)}
+                continue
             for number, line in enumerate(lines, 1):
                 bad = [m.group() for m in MODEL.finditer(line) if m.group() not in ACCEPTED
                        and not any(start <= m.start() and m.end() <= end

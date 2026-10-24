@@ -12,7 +12,7 @@ class MimoPathError(ValueError):
 def is_mimo_id(model_id: str) -> bool:
     """Recognize bare and provider-qualified Mimo model names."""
     value = model_id.lower()
-    return ('mimo' in re.split(r'[/\\\-_.:]', value)
+    return ('mimo' in re.split(r'[/\\\-_.:\s+@]', value)
             or bool(re.match(r'^mimo(?:[0-9v_.-]|$)', re.split(r'[/\\]', value)[-1])))
 
 

@@ -244,7 +244,7 @@ def test_override_and_unknown_review(tmp_path):
         service = SpawnService(state=tmp_path)
         with pytest.raises(ValueError, match='unknown run'):
             await service.spawn(card={'estimate_tokens': 1000}, review_of='run-unknown', dry_run=True)
-        await service.spawn(model='mimo/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
+        await service.spawn(card={'estimate_tokens': 1000}, model='mimo/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)
         assert json.loads((tmp_path / 'spawn-overrides.jsonl').read_text())['reason'] == 'explicit test override'
         with pytest.raises(ValueError):
             await service.spawn(model='omniroute/mimo-v2.6-pro', override_reason='explicit test override', dry_run=True)

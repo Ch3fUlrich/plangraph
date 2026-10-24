@@ -445,12 +445,12 @@ def spawn_service(*args, **kwargs):
             finally:
                 self.leg_reader = original
 
-        async def spawn(self, card=None, prompt='', role='implement', writer_families=(),
+        async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
             # Let the base service handle audited overrides, which never fall through.
             if model or leg or not card:
-                return await super().spawn(card, prompt, role, writer_families, review_of,
+                return await super()._spawn(card, prompt, role, writer_families, review_of,
                     model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
             plan = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             run_id = 'run-' + uuid.uuid4().hex
@@ -497,9 +497,9 @@ def spawn_service(*args, **kwargs):
                         record['plan'] = current.to_dict()
                     record.update(status='limited', exit_code=3, evidence=current.to_dict()['skipped'])
                 except Exception as exc:
-                    from plangraph.planner.routing import BenchRequired, SpawnRefused
+                    from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                     if isinstance(exc, SpawnRefused):
-                        record.update(status='refused', exit_code=3 if isinstance(exc, BenchRequired) else 2,
+                        record.update(status='refused', exit_code=3 if isinstance(exc, BenchmarkError) else 2,
                                       refusal=type(exc).__name__, error=redact(str(exc)),
                                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [],
                                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [])
