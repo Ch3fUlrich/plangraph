@@ -304,10 +304,20 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
-            stdout_bytes, stderr_bytes = await proc.communicate()
+            timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
+            if timeout:
+                try:
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), float(timeout))
+                except asyncio.TimeoutError:
+                    await self.tree_killer(proc.pid)
+                    stdout_bytes, stderr_bytes = await proc.communicate()
+                    self.jobs[job_id].events.append({'event': 'run_timeout'})
+                    self.jobs[job_id].exit_code = 124
+            else:
+                stdout_bytes, stderr_bytes = await proc.communicate()
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = proc.returncode
+            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
 
             job = self.jobs[job_id]
             # Only the fork's exact stderr transport envelope is evidence.
@@ -435,6 +445,55 @@ def spawn_service(*args, **kwargs):
     from pathlib import Path
 
     class DispatchService(SpawnService):
+        def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            from .notify import FileInbox
+            self.completion_sink = completion_sink or FileInbox(self.state)
+            self.keeper_sink = keeper_sink or self.completion_sink
+
+        def _save(self, record):
+            from .notify import completion_event, CommandSink
+            terminal = record.get('ended') is not None and record.get('status') != 'running'
+            record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
+            if terminal:
+                if 'completion' not in record:
+                    record['completion'] = completion_event(record, getattr(self.runner, 'default_cwd', os.getcwd()))
+            super()._save(record)
+            if terminal:
+                for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
+                    marker = self._path(record['run_id']).parent / (recipient + '.delivered')
+                    if marker.exists():
+                        continue
+                    try:
+                        sink.deliver(recipient, record['completion'])
+                        from .private_io import atomic_write_private
+                        atomic_write_private(marker, 'delivered\n')
+                    except Exception:
+                        logging.getLogger(__name__).exception('completion delivery failed: %s', recipient)
+                command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
+                if command:
+                    for recipient in ('parent', 'keeper'):
+                        marker = self._path(record['run_id']).parent / (recipient + '.hook.delivered')
+                        if not marker.exists():
+                            try:
+                                CommandSink(command).deliver(recipient, record['completion'])
+                                from .private_io import atomic_write_private
+                                atomic_write_private(marker, 'delivered\n')
+                            except Exception:
+                                logging.getLogger(__name__).exception('completion hook failed')
+
+        async def wait(self, run_id, timeout=None):
+            if timeout is not None and timeout < 0:
+                raise ValueError('timeout must be nonnegative')
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                record = self.result(run_id)
+                if record.get('ended') is not None and record['status'] != 'running':
+                    return record
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError('run wait timed out: ' + run_id)
+                await asyncio.sleep(.02)
+
         def route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
@@ -506,6 +565,8 @@ def spawn_service(*args, **kwargs):
                         return
                     record.update(status='failed', exit_code=1, error=redact(str(exc)))
                 finally:
+                    if record['status'] == 'running':
+                        record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
                     self._save(record)
 

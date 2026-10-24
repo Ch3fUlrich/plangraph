@@ -57,6 +57,9 @@ def main(argv=None):
             p.add_argument('--wait', type=float, default=0)
             p.add_argument('--no-fallthrough', action='store_true')
     commands.add_parser('ps')
+    p = commands.add_parser('wait')
+    p.add_argument('run_id')
+    p.add_argument('--timeout', type=float)
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
     args = parser.parse_args(argv)
@@ -111,6 +114,8 @@ def main(argv=None):
             result = service.ps()
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
+        elif args.verb == 'wait':
+            result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:
             result = service.result(args.run_id)
         print(json.dumps(result, indent=2))

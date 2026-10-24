@@ -16,8 +16,11 @@ python -m plangraph.spawner.cli result run-ID
 
 Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
 `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
-`--dry-run` plans without a child. CLI currently waits through completion;
-`--wait` is reserved (MCP `wait_seconds` supports bounded asynchronous return).
+`--dry-run` plans without a child. Spawn returns a `wait_cmd`:
+`plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
+Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
+the waiting shell itself. Wait reads atomic run records, not process names;
+its timeout stops waiting, not the writer.
 `--no-fallthrough` disables automatic advancement after a captured provider stop.
 Plain stdout, including text saying 429, is never provider evidence.
 
@@ -25,6 +28,26 @@ Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family, writer family, status, started/ended timestamps,
 attempts with provider stop details, job id, pid, and stdout tail.
 These records are the only source for `--review-of`; unknown ids refuse.
+
+On terminal save the supervisor publishes exactly one completion per run to
+`inbox/parent.jsonl` and `inbox/keeper.jsonl` under the state directory. Events
+include stable `event_id`, DONE/FAILED, run_id, rc, head_sha, take_cmd and
+discard_cmd. `PLANGRAPH_SPAWN_PARENT_SESSION` and `PLANGRAPH_SPAWN_ITEM` identify
+the destination session and keeper item. These are private durable outboxes;
+they do not by themselves inject a message into an agent session.
+The pluggable `deliver(recipient, event)` sink can bridge a fleet bus. Keeper's
+authenticated evidence API requires a principal/claim epoch, which the spawner
+does not own: the default keeper sink is an item-event outbox stub for an
+authorized consumer, not a bypass of that API and not automatic item closure.
+`PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell);
+it receives recipient as its final argument and event JSON on stdin. Consumers
+must deduplicate by event_id: external delivery is at-least-once across crashes.
+Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds;
+expiry kills its process tree and records rc 124 with FAILED completion.
+The detached supervisor must survive the child; killing the supervisor itself
+requires a future recovery service. This interim event contract carries over to
+the later Temporal implementation (also covers FLEET-STATUS-HOOK).
 `--model`/`--leg` require `--override-reason` of at least ten characters,
 audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides.

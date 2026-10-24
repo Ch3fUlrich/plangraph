@@ -1,9 +1,13 @@
 ---
+
 name: plangraph-planning
 description: Use when planning and executing multi-step work with layered agents (project, phase, task). Defines the three layers, which model/effort each runs at, how planning and work phases spawn research, implementer and reviewer agents, the one-agent-per-task rule, the task-size contract, failure handling and report schemas, all mirrored as items in the plangraph plan graph; emits execution cards (readiness-gated, routed) for every task in that batch.
 ---
 
 # plangraph-planning
+
+For spawned writers/seats, use `plangraph-spawn wait RUN_ID --timeout SECONDS`.
+Never use `pgrep -f` wait loops; completion is determined by the durable run record.
 
 A planning-and-delivery method for work too big for one agent. Every unit of work is an **item in
 the plan graph** (project, phase, task) and every task item carries an execution **card** the
