@@ -93,6 +93,18 @@ def test_fixed_card_goes_ready_again(w, repo):
     assert state_of(w, key) == "ready"
 
 
+def test_owned_needs_input_is_left_to_worker(w, repo):
+    from keeper_util import seed_exec_owner
+    key, = seed(w, [("A", [])])
+    put(w, key)
+    w.store.set_state(w.p("router"), key, "needs_input")
+    seed_exec_owner(w, key, ("wf", "run", 1))
+    before = dict(w.store._item(key))
+    result = gate(w, repo, key)
+    assert not result.acted and result.state == "needs_input"
+    assert dict(w.store._item(key)) == before
+
+
 def test_read_file_missing(w, repo):
     (key,) = seed(w, [("A", [])])
     put(w, key, read_set=["src/nope.py"])

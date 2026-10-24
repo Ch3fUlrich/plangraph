@@ -151,7 +151,12 @@ class Projector:
                 out = self.store.set_state(self.principal, rec.plan_key, rec.state,
                                            (rec.reason or "")[:_REASON_CAP])
             except Refused as exc:
-                if exc.code not in ("bad_state", "locked"):       # the item moved under us
+                # ``bad_state``/``locked``: the item moved under us.
+                # ``bad_transition`` (RT-P1 sq5 fix 3): a late projection whose
+                # back move the state machine refuses on an OWNED card -- the
+                # card keeps the state its own run left it in, so the stale
+                # event is skipped rather than fatal (and still marked).
+                if exc.code not in ("bad_state", "locked", "bad_transition"):
                     raise
                 result.states_skipped_state += 1
             else:
