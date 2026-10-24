@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Plangraph stalls every two minutes
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=120
+AccuracySec=1s
+Unit=plangraph-stall-watchdog.service
+
+[Install]
+WantedBy=timers.target

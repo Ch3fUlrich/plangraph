@@ -9,7 +9,7 @@
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
-use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper};
+use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper, expected_state_for};
 use crate::mergelock::{self, MergeOutcome};
 use crate::question::Question;
 use pg_worker_core::budget;
@@ -115,6 +115,9 @@ pub struct PhaseBranchResult {
 /// Ask the keeper to store an agent question for a card.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AskInput {
+    /// The live-set fallback the workflow hands over; under
+    /// EXEC-OBSERVED-STATE the activity replaces it with the state it just
+    /// observed whenever `Keeper::card_state` could tell it one.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -466,9 +469,11 @@ fn park_attempt_of(input: &str) -> Option<u32> {
 }
 
 /// The park packet JSON the workflow hands to the `park` activity, with the
-/// card attempt and observed state added as extra top-level keys when known.
-/// [`ParkPacket::from_json`] ignores the extra keys (the activity re-reads them
-/// there to build the [`ExecId`]), so the packet itself round-trips.
+/// card attempt and the live-set `expected_state` fallback added as extra
+/// top-level keys when known. [`ParkPacket::from_json`] ignores the extra keys
+/// (the activity re-reads them there to build the [`ExecId`], and swaps the
+/// fallback for the state it observed when the keeper could tell it one), so
+/// the packet itself round-trips.
 pub fn park_json_with_attempt(
     p: &ParkPacket,
     attempt: Option<u32>,
@@ -1283,10 +1288,11 @@ impl CardActivities {
         input: String,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        // The card attempt rides along as an extra key of the packet JSON
-        // (`ParkPacket::from_json` ignores it); read it before the blocking
-        // task so the exec identity is built from this activity's context.
-        let expected_state = serde_json::from_str::<serde_json::Value>(&input)
+        // The card attempt and the workflow's live-set fallback ride along as
+        // extra keys of the packet JSON (`ParkPacket::from_json` ignores them);
+        // read them before the blocking task so the exec identity is built
+        // from this activity's context.
+        let fallback = serde_json::from_str::<serde_json::Value>(&input)
             .ok()
             .and_then(|v| {
                 let state = v.get("expected_state")?;
@@ -1298,14 +1304,15 @@ impl CardActivities {
                         .filter(|states| !states.is_empty())
                 }
             });
+        let packet = ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
+        // EXEC-OBSERVED-STATE: park sends the state this run just read on the
+        // keeper; the workflow's live set is what it sends only when it
+        // observed nothing (`card_state` is `None` on any failed read).
+        let expected_state = expected_state_for(keeper.card_state(&packet.card), fallback);
         let exec = exec_of(&ctx, park_attempt_of(&input), expected_state);
-        tokio::task::spawn_blocking(move || {
-            let packet =
-                ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
-            keeper.park(&packet, &exec).map_err(activity_error)
-        })
-        .await
-        .map_err(activity_error)?
+        tokio::task::spawn_blocking(move || keeper.park(&packet, &exec).map_err(activity_error))
+            .await
+            .map_err(activity_error)?
     }
 
     /// Tell the keeper the card merged.
@@ -1350,7 +1357,11 @@ impl CardActivities {
         input: AskInput,
     ) -> Result<Option<i64>, ActivityError> {
         let keeper = self.deps.keeper.clone();
-        let exec = exec_of(&ctx, input.attempt, input.expected_state.clone());
+        // EXEC-OBSERVED-STATE: an ask presents the state this run just read;
+        // the workflow's live set is the fallback when it observed nothing.
+        let expected_state =
+            expected_state_for(keeper.card_state(&input.card), input.expected_state.clone());
+        let exec = exec_of(&ctx, input.attempt, expected_state);
         let res = tokio::task::spawn_blocking(move || {
             retry_transient(&TRANSIENT_BACKOFF, || {
                 keeper.ask_question(&input.card, &input.question, &exec)

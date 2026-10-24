@@ -406,9 +406,11 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
-                        // Question parks take the live set: waiting is live (a
-                        // timer or an exhausted attempt may have written it),
-                        // claimed is not.
+                        // Question parks hand over the live set as the
+                        // fallback (EXEC-OBSERVED-STATE): the activity sends
+                        // the state it observed instead, and waiting is live
+                        // there because a timer or an exhausted attempt may
+                        // have written it; claimed is not in the set.
                         WORKER_LIVE_STATES,
                     )
                     .await?
@@ -474,7 +476,7 @@ impl Card {
                                     MERGE_LOCK_PARK_REASON,
                                 );
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Park only live worker states; waiting is live
+                                // Park only live worker states as the fallback; waiting is live
                                 // and claimed is not.
                                 park_and_alarm(
                                     ctx,
@@ -603,7 +605,7 @@ impl Card {
                         &check_tail,
                     );
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                    // Park only live worker states; waiting is live and claimed
+                    // Park only live worker states as the fallback; waiting is live and claimed
                     // is not.
                     park_and_alarm(
                         ctx,
@@ -645,7 +647,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Park only live worker states; waiting is live
+                                // Park only live worker states as the fallback; waiting is live
                                 // and claimed is not.
                                 park_and_alarm(
                                     ctx,
@@ -667,7 +669,7 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                                // Park only live worker states; waiting is live
+                                // Park only live worker states as the fallback; waiting is live
                                 // and claimed is not.
                                 park_and_alarm(
                                     ctx,
@@ -726,7 +728,7 @@ impl Card {
                     Action::Quarantine => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Park only live worker states; waiting is live and
+                        // Park only live worker states as the fallback; waiting is live and
                         // claimed is not.
                         park_and_alarm(
                             ctx,
@@ -741,7 +743,7 @@ impl Card {
                     Action::ToPlanner => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Park only live worker states; waiting is live and
+                        // Park only live worker states as the fallback; waiting is live and
                         // claimed is not.
                         park_and_alarm(
                             ctx,
@@ -755,7 +757,7 @@ impl Card {
                     }
                     Action::Park { packet } => {
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                        // Park only live worker states; waiting is live and
+                        // Park only live worker states as the fallback; waiting is live and
                         // claimed is not.
                         park_and_alarm(
                             ctx,
@@ -901,8 +903,11 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
-                // Questions carry the live set: a question asked after a timer
-                // may find the card in waiting, and claimed must not pass.
+                // Questions carry the live set as the fallback
+                // (EXEC-OBSERVED-STATE: the activity swaps in the state it
+                // observed when it could read one): a question asked after a
+                // timer may find the card in waiting, and claimed must not
+                // pass.
                 expected_state: Some(WORKER_LIVE_STATES.iter().map(|s| (*s).to_owned()).collect()),
                 card: card.clone(),
                 question: q.clone(),
@@ -924,7 +929,7 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
-                // Failed asks park only on the live set; waiting is live,
+                // Failed asks park on the live-set fallback; waiting is live,
                 // claimed is not.
                 WORKER_LIVE_STATES,
             )
@@ -941,8 +946,8 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
-            // Refused asks park only on the live set; waiting is live, claimed
-            // is not.
+            // Refused asks park on the live-set fallback; waiting is live,
+            // claimed is not.
             WORKER_LIVE_STATES,
         )
         .await;
@@ -1014,8 +1019,10 @@ async fn question_step(
                     question::timeout_park_tail(&q.text),
                     n,
                     // Question timeouts park right after the deadline timer,
-                    // which may have left the card waiting: the live set
-                    // accepts waiting and still excludes claimed.
+                    // which may have left the card waiting: the fallback
+                    // accepts waiting and still excludes claimed, and the
+                    // activity sends the observed waiting state instead when
+                    // it read one.
                     WORKER_LIVE_STATES,
                 )
                 .await
@@ -1041,9 +1048,11 @@ async fn park_question(
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    // Question parks preserve newer actor states by accepting only the live
-    // set, waiting included; the run/attempt fence and the keeper's idempotent
-    // duplicate-park success keep a stale retry from double-parking.
+    // Question parks preserve newer actor states by handing over only the
+    // live-set fallback (waiting included, claimed not); the activity sends
+    // the state it observed when it could read one, and the run/attempt fence
+    // plus the keeper's idempotent duplicate-park success keep a stale retry
+    // from double-parking.
     park_and_alarm_in_state(
         ctx,
         cfg,
@@ -1395,10 +1404,13 @@ async fn park_and_alarm(
     reason: String,
     attempt: u32,
 ) -> WorkflowResult<()> {
-    // Generic parks CAS on the one live set (waiting included: the projector
-    // writes it on usage_limit/outage attempts and TIMER_STARTED). Excluding a
-    // stale retry is the run/attempt fence's and the keeper's idempotent
-    // duplicate-park success's job, never this list's; claimed stays out.
+    // Generic parks hand the activity the live set as the FALLBACK
+    // (EXEC-OBSERVED-STATE): the activity sends the state it just observed on
+    // the keeper whenever it could read one. `waiting` is in the fallback
+    // because the projector writes it on usage_limit/outage attempts and on
+    // TIMER_STARTED. Excluding a stale retry is the run/attempt fence's and
+    // the keeper's idempotent duplicate-park success's job, never this list's;
+    // claimed stays out.
     park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, Some(WORKER_LIVE_STATES)).await
 }
 

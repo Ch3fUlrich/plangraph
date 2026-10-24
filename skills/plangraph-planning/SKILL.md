@@ -5,6 +5,9 @@ description: Use when planning and executing multi-step work with layered agents
 
 # plangraph-planning
 
+For spawned writers/seats, use `plangraph-spawn wait RUN_ID --timeout SECONDS`.
+Never use `pgrep -f` wait loops; completion is determined by the durable run record.
+
 A planning-and-delivery method for work too big for one agent. Every unit of work is an **item in
 the plan graph** (project, phase, task) and every task item carries an execution **card** the
 keeper gates and routes, so the human sees the same hierarchy the agents run. Companion skills:

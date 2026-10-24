@@ -284,19 +284,28 @@ class SupportMixin:
         principal; its ``owner_family`` (set by the router at import time) then
         stands in for the claimant's family.  Either peer with an unknown family
         fails closed, as does a reviewer with none.
+
+        System claims have no model family: their verified evidence writers
+        supply the peer families instead, using the seat-coverage resolver.
         """
         from . import auth
         reviewer_family = auth.norm_family(principal.family)
         if reviewer_family is None:
             raise Refused("family_unknown", "reviewer has no family")
         peers = []
-        claimer = auth.get_principal(self.conn, item["claimed_by"])
-        claimant_family = (claimer.family if claimer is not None
-                           else item.get("owner_family"))
-        claimant_family = auth.norm_family(claimant_family)
-        if claimant_family is None:
-            raise Refused("family_unknown", "claimant family unknown")
-        peers.append(claimant_family)
+        if item["claimed_by"] == "system":
+            from .coverage import writer_families
+            peers.extend(writer_families(self, item, self._ctx(item, self.clock())))
+            if not peers:
+                raise Refused("writer_unknown", "system claim has no verified commit writers")
+        else:
+            claimer = auth.get_principal(self.conn, item["claimed_by"])
+            claimant_family = (claimer.family if claimer is not None
+                               else item.get("owner_family"))
+            claimant_family = auth.norm_family(claimant_family)
+            if claimant_family is None:
+                raise Refused("family_unknown", "claimant family unknown")
+            peers.append(claimant_family)
         if item["delegate"]:
             delegate = auth.get_principal(self.conn, item["delegate"])
             delegate_family = (auth.norm_family(delegate.family)

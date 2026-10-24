@@ -11,6 +11,7 @@ import os
 import sqlite3
 import sys
 import time
+import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -52,7 +53,9 @@ def _status_name(status) -> str:
 def _write_opencode(bin_dir: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
     exe = bin_dir / "opencode"
-    exe.write_text('#!/bin/sh\nfor last; do :; done\necho done > "$last"\n', encoding="utf-8")
+    exe.write_text('#!/bin/sh\nif [ "$1" = "--version" ]; then\n'
+                   '  echo "opencode 2.0.32"\n  exit 0\nfi\n'
+                   'for last; do :; done\necho done > "$last"\n', encoding="utf-8")
     exe.chmod(0o755)
 
 def _payload(body):
@@ -132,7 +135,7 @@ def _review_leg(out: Path, diff: str) -> dict:
     return {"pass": bool(pass_plan["pass"]), "fix_cards": len(fix_plan["fix_cards"])}
 
 @pytest.fixture
-def rig(tmp_path, monkeypatch):
+def rig(tmp_path, monkeypatch, request):
     """Dev server, real keeper, worker; torn down in reverse; logs stay under tmp_path."""
     started = []                                     # cleanup stack: (name, stop)
 
@@ -143,6 +146,19 @@ def rig(tmp_path, monkeypatch):
         pass
 
     r = Rig()
+    r.conclusion = getattr(request, "param", "success")
+    r.finishes = []
+    from plangraph.planner import phase_finish
+    real_finish = phase_finish.finish_phase
+
+    def record_finish(*args, **kwargs):
+        result = real_finish(*args, **kwargs)
+        with sqlite3.connect(r.world.path) as db:
+            evidence = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
+        r.finishes.append((dict(result), len(r.merge_bodies), evidence))
+        return result
+
+    monkeypatch.setattr(phase_finish, "finish_phase", record_finish)
     r.tmp, r.t0 = tmp_path, time.monotonic()
     try:
         r.dev = DevServer(_CLI, tmp_path, http_api=True)
@@ -212,21 +228,38 @@ def rig(tmp_path, monkeypatch):
                 check_polls[0] += 1
                 sha = (path.split("/commits/", 1)[1].split("/check-runs", 1)[0]
                        if "/commits/" in path else pr_holder["pr"]["head"]["sha"])
-                if check_polls[0] == 1:
+                assert sha == pr_holder["pr"]["head"]["sha"]
+                if check_polls[0] <= 2:
                     return 200, {"check_runs": [], "total_count": 0}
                 return 200, {
                     "check_runs": [{
                         "id": 1,
                         "name": "ci-gate",
                         "status": "completed",
-                        "conclusion": "success",
+                        "conclusion": r.conclusion,
                         "head_sha": sha,
                     }],
                     "total_count": 1,
                 }
             if method == "PUT" and path.endswith("/pulls/5/merge"):
-                merge_bodies.append(_payload(body))
-                return 200, {"merged": True, "sha": "m"}
+                data = _payload(body)
+                merge_bodies.append(data)
+                assert r.conclusion == "success"
+                assert data["sha"] == pr_holder["pr"]["head"]["sha"]
+                assert data["merge_method"] == "merge"
+                assert data["commit_title"] == "Merge phase demo:PH-X"
+                assert [line for line in data["commit_message"].splitlines()
+                        if line.startswith("Plan-Item:")] == [
+                            "Plan-Item: demo:C1", "Plan-Item: demo:C2"]
+                u.git(r.repo, "checkout", "main")
+                u.git(r.repo, "merge", "--no-ff", "-m", data["commit_title"],
+                      "-m", data["commit_message"], data["sha"])
+                sha = u.git(r.repo, "rev-parse", "HEAD")
+                pr_holder["pr"].update(state="closed", merged_at="2026-10-24T00:00:00Z",
+                                       merge_commit_sha=sha)
+                return 200, {"merged": True, "sha": sha}
+            if method == "GET" and path.endswith("/pulls/5"):
+                return 200, pr_holder["pr"]
             raise AssertionError(f"unexpected GitHub call {method} {url}")
 
         monkeypatch.setenv("PG_PHASE_REPO_ROOT", str(r.repo))
@@ -277,19 +310,40 @@ def rig(tmp_path, monkeypatch):
                 sys.stderr.write(f"cleanup {name} failed: {exc!r}\n")
 
 def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
+    _assert_phase_chain(rig)
+
+
+@pytest.mark.parametrize("rig", ["failure"], indirect=True)
+def test_phase_red_ci_gate_never_merges(rig):
+    _assert_phase_chain(rig)
+
+
+def _assert_phase_chain(rig):
     r = rig
     result, run_id, children = asyncio.run(_run_phase(r))
 
-    assert result["outcome"] == "partial"
-    assert sorted(result["merged"]) == ["demo:C1", "demo:C2"]
+    assert result["outcome"] == ("done" if r.conclusion == "success" else "partial"), result
+    assert sorted(result["merged"]) == ["demo:C1", "demo:C2"], repr(result)
     assert result["not_merged"] == []
     assert result["waves"] == 1
     assert result["branch"] == PHASE_BRANCH
     assert result["finish"] is not None
-    assert result["finish"]["state"] == "refused"
-    assert "refused phase_finish" in result["finish"]["detail"]
-    assert r.merge_bodies == []
-    assert not [c for c in r.calls if c[0] == "PUT"]
+    waiting = [entry for entry in r.finishes if entry[0]["state"] == "waiting_ci"]
+    assert len(waiting) >= 2
+    assert all(puts == 0 and evidence == 0 for _, puts, evidence in waiting)
+    head = u.git(r.repo, "rev-parse", PHASE_REF)
+    assert u.git(r.bare, "show-ref").splitlines() == [f"{head} {PHASE_REF}"]
+    if r.conclusion == "success":
+        assert result["finish"]["state"] == "merged", result
+        assert len(r.merge_bodies) == 1
+        merge_sha = u.git(r.repo, "rev-parse", "main")
+        assert u.git(r.repo, "rev-list", "--parents", "-n", "1", merge_sha).split() == [
+            merge_sha, r.base_sha, head]
+    else:
+        assert result["finish"]["state"] == "waiting_ci", result
+        assert r.merge_bodies == []
+        assert not [c for c in r.calls if c[0] == "PUT"]
+        assert u.git(r.repo, "rev-parse", "main") == r.base_sha
 
     import json
     import urllib.error
@@ -308,17 +362,14 @@ def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
         },
         method="POST",
     )
-    try:
-        urllib.request.urlopen(req)
-    except urllib.error.HTTPError as exc:
-        assert exc.code == 400
-        body = json.loads(exc.read().decode())
-        assert body["error"] == "bad_state"
-        assert "cards not done" in body["msg"]
-        assert "demo:C1" in body["msg"]
-        assert "demo:C2" in body["msg"]
-    else:
-        pytest.fail("phase_finish should be refused")
+    with sqlite3.connect(r.world.path) as db:
+        before = [db.execute(f"SELECT * FROM {table}").fetchall()
+                  for table in ("evidence", "events")]
+    with urllib.request.urlopen(req) as response:
+        assert response.status == 200
+    with sqlite3.connect(r.world.path) as db:
+        assert before == [db.execute(f"SELECT * FROM {table}").fetchall()
+                          for table in ("evidence", "events")]
 
     for child_id, desc in children:
         assert _status_name(desc.status).endswith("COMPLETED"), child_id
@@ -326,7 +377,6 @@ def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
 
     tree = set(u.git(r.repo, "ls-tree", "-r", "--name-only", PHASE_REF).splitlines())
     assert {"a.txt", "b.txt", "seed.txt"} <= tree
-    assert u.git(r.repo, "rev-parse", "main") == r.base_sha
 
     with sqlite3.connect(r.world.path) as db:
         claim_count = db.execute(
@@ -334,12 +384,27 @@ def test_phase_runs_two_cards_to_merge_through_the_real_keeper(rig):
         cols = {row[1] for row in db.execute("PRAGMA table_info(items)")}
         key_col = "key" if "key" in cols else "item"
         rows = db.execute(
-            f"SELECT {key_col}, claimed_by FROM items WHERE {key_col} IN (?, ?)",
+            f"SELECT {key_col}, claimed_by, state FROM items WHERE {key_col} IN (?, ?)",
             ("demo:C1", "demo:C2"),
         ).fetchall()
+        for key in ("demo:C1", "demo:C2"):
+            audit = db.execute(
+                "SELECT action, actor, role FROM audit_log WHERE key=? AND ok=1 ORDER BY id",
+                (key,)).fetchall()
+            claim = audit.index(("claim", "system", "system"))
+            complete = audit.index(("worker_complete", "system", "system"))
+            assert claim < complete
+            events = db.execute("SELECT payload FROM events WHERE key=? AND type='claimed'",
+                                (key,)).fetchall()
+            assert len(events) == 1
+            assert json.loads(events[0][0])["via"] == "worker_claim"
+            proof = db.execute("SELECT kind, ref FROM evidence WHERE key=?", (key,)).fetchall()
+            assert proof == ([("commit+ci", json.dumps({"commit": merge_sha},
+                                                      sort_keys=True, separators=(",", ":")))]
+                             if r.conclusion == "success" else [])
     assert claim_count == 2
     assert len(rows) == 2
-    assert all(by == "system" for _, by in rows)
+    assert all(by == "system" and state == "in_review" for _, by, state in rows)
 
     diff = u.git(r.repo, "diff", r.base_sha, PHASE_BRANCH)
     review = _review_leg(r.tmp / "review", diff)
