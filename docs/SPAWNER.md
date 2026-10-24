@@ -5,6 +5,32 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 `tests/test_spawner_import_guard.py`, and the switch
 `SPAWNER_SELECTION_ENABLED` defaults to `False`.
 
+### Card-driven routing core
+
+`planner.routing.plan_spawn(card, role="implement"|"review")` applies the
+canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
+Writers start with `omniroute/cx-gpt-6.1-sol`, then agy Gemini, Mimo Flash,
+and direct DeepSeek. Review seats start with Qoder Qwen, free DeepSeek, free
+GLM, agy Gemini, then Mimo; Claude is not a default writer or review seat.
+Two review seats must have different families from every writer and each other;
+an impossible fence returns fewer seats and an explicit plan error, not a fallback.
+
+An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
+row) ranks measured legs only inside their existing tier. Unmeasured positions
+retain operator order and the plan reports `no benchmark p`. Automatic catalog
+selection stays disabled under the existing import-guard contract.
+
+`leg_reader=` accepts a store or leg-status callable; card `account` and `combo`
+scope live provider evidence exactly. `next_leg_after_provider_stop` records
+actual 429/402 responses with nonempty provider text and advances to the next
+currently eligible leg. Other responses do not suppress a leg. Transport adapters
+must supply actual provider responses, never agent output or exit-code guesses.
+
+`hand_picked` always requires an override reason of at least ten nonblank characters,
+enforces the Mimo provider fence, and appends an audit JSON line to
+`$XDG_STATE_HOME/plangraph/spawn-overrides.jsonl` (or injected `log_path`).
+Readiness remains separate in `planner/readiness.py`.
+
 Plangraph Spawner provisions, routes, and supervises autonomous agents across multi-model coding workflows. It combines a local WAL-mode SQLite benchmark catalog, a 5-rung tier priority ladder, fine-grained task complexity and risk measurement, OmniRoute ACP-first execution with full Windows Tailnet environment preservation, cross-family code review isolation, and a JSON-RPC 2.0 MCP server.
 
 ---

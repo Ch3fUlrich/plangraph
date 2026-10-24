@@ -43,6 +43,7 @@ class Leg:
     trains_on_data: bool
     claude_family: bool = False
     note: str = ""
+    roles: tuple[str, ...] = ("orchestrate",)
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -76,6 +77,26 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="Antigravity quota, not Claude Max"),
     _leg("deepseek", "paid", "opencode", "omniroute/deepseek", "deepseek",
          ("128k", "256k"), 100000, False, note="pay-as-you-go, only if really needed"),
+)
+
+# D-2148/D-1704/D-2569: role orders are policy, not resolver fallbacks.
+from dataclasses import replace as _replace
+_legacy = {leg.id: leg for leg in DEFAULT_LEGS}
+DEFAULT_LEGS = (
+    _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",)),
+    Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
+        "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
+        roles=("review",)),
+    Leg("opencode-glm-5.3-flash-free", "free", "opencode",
+        "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
+        roles=("review",)),
+    *tuple(leg for leg in _legacy.values() if leg.tier == "free" and leg.harness != "qodercli"),
+    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
+    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
+    _legacy["agy-sonnet-5.5"],
+    _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
@@ -116,6 +137,11 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if isinstance(raw.get("harness"), str) and raw["harness"] not in HARNESSES:
         problems.append(f"{where}.harness: {raw['harness']!r} not in {HARNESSES}")
     windows = raw.get("windows")
+    roles = raw.get("roles", ("orchestrate",))
+    if (not isinstance(roles, (list, tuple)) or not roles
+            or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
+            or len(set(roles)) != len(roles)):
+        problems.append(f"{where}.roles: must be a non-empty subset of implement|review|orchestrate")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES
@@ -133,6 +159,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         return None
     data = dict(raw)
     data["windows"] = tuple(windows)
+    data["roles"] = tuple(roles)
     return Leg(**data)
 
 

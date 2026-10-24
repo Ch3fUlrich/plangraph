@@ -26,3 +26,9 @@ limited candidates) and the selected leg. MCP catalog queries retain limited
 legs for inspection. `views.leg_state(candidates)` exposes a pure web projection
 without introducing a forbidden runtime spawner import. The planner's existing
 `SPAWNER_SELECTION_ENABLED` flag remains false.
+
+The card-driven planner now reads this evidence through `plan_spawn` in
+`planner/routing.py`. Only `limited` excludes a leg; expired and `reprobe` legs
+remain selectable. The card's optional `account` and `combo` are passed unchanged
+to the reader. The planner's provider-stop callback records only actual 429/402
+responses with nonempty provider text, and can use an injected store for tests.
