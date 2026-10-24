@@ -1,9 +1,17 @@
-'''CI commit trailer gate: Writer attribution, hand-edit, gate-edit, and test-removal reasons.
+'''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
-Commits come from ``git log --no-merges base..head``, so merge commits are never
-inspected. Commits listed in the exempt file skip every rule. A repo-relative
+Trailer checks use ``git log --no-merges base..head``. Merge parents are checked
+separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
+
+--head must be the PR head SHA, not GitHub's speculative pull_request merge ref:
+that ref's second parent is the PR's own head. The --open-heads file must be
+regenerated per run from OPEN PRs only (drop closed-unmerged PRs). The merge
+check is inert until a caller writes the file and supplies --open-heads.
+The PR under test's own head may be listed. The caller must fetch open PR heads first
+so every listed SHA resolves to a commit in the local object database.
 '''
 
 from __future__ import annotations
@@ -92,6 +100,8 @@ GATE_PATHS: tuple[str, ...] = (
 )
 
 EXEMPT_SHA_RE = re.compile(r'^[0-9a-fA-F]{40}$')
+OPEN_HEAD_SHA_RE = re.compile(r'^[0-9a-f]{40}$')
+OPEN_PR_SKIP_NOTICE = 'ci-commit-gate: open PR merge check skipped (no --open-heads)\n'
 
 MISSING_WRITER = 'missing Writer trailer'
 CLAUDE_WRITER = 'claude writer'
@@ -117,7 +127,7 @@ class GateError(Exception):
 def _parse_exempt_text(text: str, source: str) -> set[str]:
     '''Parse exempt-file text read from source (path label for errors).'''
     exempt: set[str] = set()
-    for lineno, raw in enumerate(text.splitlines(), start=1):
+    for lineno, raw in enumerate(text.removeprefix('\ufeff').splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith('#'):
             continue
@@ -130,8 +140,8 @@ def _parse_exempt_text(text: str, source: str) -> set[str]:
 def load_exempt(path: str | Path) -> set[str]:
     '''Parse the exempt file on disk: 40-hex shas, comments and blanks.'''
     try:
-        text = Path(path).read_text(encoding='utf-8')
-    except OSError as exc:
+        text = Path(path).read_text(encoding='utf-8-sig')
+    except (OSError, UnicodeError) as exc:
         raise ExemptError(f'cannot read exempt file {path}: {exc}') from exc
 
     return _parse_exempt_text(text, str(path))
@@ -349,6 +359,7 @@ def check(
     head: str,
     exempt: str | Path | None = None,
     cwd: str | Path | None = None,
+    open_heads: str | Path | None = None,
 ) -> list[str]:
     '''Return one sha40: reason line per violation in base..head.
 
@@ -357,6 +368,8 @@ def check(
     exempt_set = _resolve_exempt(base, exempt, cwd=cwd) if exempt else set()
 
     violations: list[str] = []
+    if open_heads is not None:
+        violations.extend(_open_pr_merges(base, head, open_heads, cwd=cwd))
     for sha, message in _iter_commits(base, head, cwd=cwd):
         if sha.lower() in exempt_set:
             continue
@@ -414,13 +427,80 @@ def check(
     return violations
 
 
+def _open_pr_merges(
+    base: str, head: str, path: str | Path, cwd: str | Path | None = None
+) -> list[str]:
+    '''Refuse merged-in parents reachable from foreign open heads but not base.'''
+    def run_git(
+        args: list[str], allowed: tuple[int, ...] = (0,), context: str = ''
+    ) -> subprocess.CompletedProcess:
+        probe = subprocess.run(['git', *args], cwd=cwd, capture_output=True)
+        if probe.returncode not in allowed:
+            detail = probe.stderr.decode('utf-8', errors='replace').strip()
+            raise GateError(
+                f'git {args[0]} failed (exit {probe.returncode}): {detail}{context}'
+            )
+        return probe
+
+    def is_ancestor(ancestor: str, descendant: str) -> bool:
+        # Exit 1 is a valid negative ancestry answer, not a failed probe.
+        probe = run_git(['merge-base', '--is-ancestor', ancestor, descendant], allowed=(0, 1))
+        return probe.returncode == 0
+
+    reachability: dict[tuple[str, str], bool] = {}
+
+    def reachable(parent: str, tip: str) -> bool:
+        key = (parent, tip)
+        if key not in reachability:
+            probe = run_git(['rev-list', '-1', parent, '--not', tip])
+            reachability[key] = not probe.stdout.strip()
+        return reachability[key]
+
+    try:
+        lines = Path(path).read_text(encoding='utf-8-sig').splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise GateError(f'cannot read open-heads file {path}: {exc}') from exc
+    heads: set[str] = set()
+    for lineno, raw in enumerate(lines, start=1):
+        sha = raw.strip().lower()
+        if not sha:
+            continue
+        if OPEN_HEAD_SHA_RE.fullmatch(sha) is None:
+            raise GateError(f'open-heads file {path}:{lineno}: not a 40-hex sha')
+        run_git(
+            ['cat-file', '-e', f'{sha}^{{commit}}'],
+            context=f'; open-heads file {path}:{lineno}: not a local commit; fetch open PR heads first',
+        )
+        heads.add(sha)
+    # A merged foreign head is an ancestor of head: keep it as evidence.
+    # Only the checked head itself and stacked descendants are not foreign PRs.
+    heads = {sha for sha in heads
+             if sha != head and not is_ancestor(head, sha)}
+    probe = run_git(['rev-list', '--min-parents=2', '--parents', f'{base}..{head}'])
+    merges = probe.stdout.decode('utf-8', errors='replace')
+    violations: list[str] = []
+    for line in merges.splitlines():
+        merge, *parents = line.split()
+        # Parent zero is the lane lineage, not a merged-in branch. It may be
+        # reachable from the lane's own listed head or a stacked descendant.
+        for parent in parents[1:]:
+            # Main remains safe even after base advances past the merged commit.
+            if not reachable(parent, base) and any(
+                reachable(parent, open_head)
+                for open_head in sorted(heads)
+            ):
+                violations.append(f'{merge}: open_pr_merged {parent}')
+    return violations
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description='CI commit trailer gate')
+    parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest='command')
 
     check_parser = subparsers.add_parser('check')
     check_parser.add_argument('--base', required=True, help='Base commit SHA')
-    check_parser.add_argument('--head', required=True, help='Head commit SHA')
+    check_parser.add_argument('--head', required=True, help='PR head SHA, not GitHub speculative pull_request merge ref (whose second parent is the PR head)')
+    check_parser.add_argument('--open-heads', help='File regenerated per run from OPEN PRs only; drop closed-unmerged PRs. The PR under test\'s own head may be listed; fetch open PR heads first so each SHA is a local commit. One 40-hex SHA per line, case-insensitive, blanks allowed, UTF-8 BOM accepted. Check is inert until a caller writes and supplies this file.')
     check_parser.add_argument(
         '--exempt',
         default=None,
@@ -438,8 +518,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     exempt = args.exempt if args.exempt is not None else DEFAULT_EXEMPT
+    if args.open_heads is None:
+        sys.stderr.write(OPEN_PR_SKIP_NOTICE)
     try:
-        violations = check(args.base, args.head, exempt=exempt, cwd=None)
+        violations = check(args.base, args.head, exempt=exempt, cwd=None,
+                           open_heads=args.open_heads)
         hand_edits = hand_edit_commits(args.base, args.head, cwd=None)
     except (ExemptError, GateError) as exc:
         sys.stderr.write(f'ci-commit-gate: {exc}\n')

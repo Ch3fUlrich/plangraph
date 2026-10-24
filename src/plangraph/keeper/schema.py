@@ -48,7 +48,7 @@ EVENT_TYPES = (
     "priority_set", "heartbeat",
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
-    "kind_set", "state_set",
+    "kind_set", "state_set", "exec_owner_changed",
 )
 
 #: MODEL-HOST: ``old_key -> new_key`` after a ``rehome``; append-only.  Kept as
@@ -324,6 +324,11 @@ CREATE TABLE items (
     writer_model TEXT,
     seat_models  TEXT,
     run_ids      TEXT,
+    exec_workflow_id TEXT,
+    exec_run_id      TEXT,
+    exec_attempt     INTEGER,
+    exec_principal   TEXT,
+    exec_retired_runs TEXT,
     created_at     TEXT,
     updated_at     TEXT
 );
