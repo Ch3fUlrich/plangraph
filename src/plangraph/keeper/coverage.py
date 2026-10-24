@@ -111,8 +111,10 @@ def writer_families(store, item, ctx):
                 for writer in writers:
                     # Annotations and run ids are harmless unless they name
                     # another family; repeated mentions of one family count once.
-                    resolved = {_writer_token_family(token) for token in
-                                re.split(r"[\s/,()\[\];]+", str(writer))} - {None}
+                    tokens = (token.strip(".-") for token in
+                              re.split(r"[^A-Za-z0-9._-]+", str(writer)))
+                    resolved = {_writer_token_family(token) for token in tokens
+                                if token} - {None}
                     if len(resolved) != 1:
                         raise Refused("writer_unknown",
                                       f"Writer value must resolve to one family: {writer!r}")

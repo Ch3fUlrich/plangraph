@@ -166,7 +166,7 @@ mimo-v2.6-flash ecd119b2-f8bb-49ed-af25-262200097555	xiaomi
 mimo-v2.6-flash mimo	xiaomi
 mimo-v2.6-flash mimo (launched pre-D-1704)	xiaomi
 mimo-v2.6-flash opclaim-r2-20261023-054153-36d71a	xiaomi
-mimo-v2.6-flash review-call tool-less (tests, ~12 lines of result-shape fixes by L2: results['results'], edges baseline); src by opencode run 20261016-213830-pg-le-deps-ops-writer-c794cd (pre-rule)	xiaomi
+mimo-v2.6-flash review-call tool-less (tests, ~12 lines of result-shape fixes by L2: results['results'], edges baseline); src by opencode run 20261016-213830-pg-le-deps-ops-writer-c794cd (pre-rule)	writer_unknown
 mimo-v2.6-flash rt-p1-jev-shadow-20261023-084157-jev96-fix3b-ccc411	xiaomi
 mimo/mimo-v2.6-flash tool-less (corr 4dd32a28-62aa-400d-96b5-6edba1a9c89e ctl, outBC view/css, outD test) + L2 (test fixes, keepOpen, 1 css line)	writer_unknown
 mimo/mimo-v2.6-flash tool-less (ui-batch-seats/NEEDS-w1/out*/evidence.json); L2 glue fixes	writer_unknown

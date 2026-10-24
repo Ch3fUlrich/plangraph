@@ -64,6 +64,17 @@ def writer(value):
     return {"Writer": value}
 
 
+@pytest.mark.parametrize("value", ["", " \t ", ":;,/()[]...---"])
+def test_fix8_empty_writer_values_refuse_closing_verdict(w, value):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rGoogle"), key, True, "would close")
+    assert exc.value.code == "writer_unknown"
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+
 def git_with(trailers_by_sha):
     return FakeGit(trailers_by_sha=trailers_by_sha)
 

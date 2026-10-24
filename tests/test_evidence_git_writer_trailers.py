@@ -712,6 +712,34 @@ def test_fix7_zero_families_refused(repo, value):
         _families(repo, sha)
 
 
+@pytest.mark.parametrize("value", [
+    "deepseek-r1 (fix by L2:)",
+    "qwen3.8-flash, L2.",
+    "gpt-6.1-sol;claude-sonnet",
+])
+def test_fix8_glued_punctuation_exposes_second_family(repo, value):
+    sha = _commit(repo, "punctuation", {"Writer": value})
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
+def test_fix8_punctuated_run_id_preserves_model(repo):
+    sha = _commit(repo, "run", {
+        "Writer": "cx/gpt-6.1-sol 20261023-235309-x-800284."})
+    assert _families(repo, sha) == ["openai"]
+
+
+def test_fix8_corpus_line_169_refuses_mixed_writers(repo):
+    value, _ = (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt"
+                ).read_text(encoding="utf-8").splitlines()[168].split("\t")
+    assert "fixes by L2:" in value
+    sha = _commit(repo, "mixed corpus writer", {"Writer": value})
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
 @pytest.mark.parametrize("value,expected", [
     line.split("\t") for line in
     (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt").read_text(
