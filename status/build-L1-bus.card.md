@@ -14,4 +14,4 @@ D-2539: Haiku 5.5 first + 1 non-Claude family != every writer (cx writers -> qwe
 | RT-P1-BUS-RUST (p6) | deps CI-WORKST-RUNNER(in_review), OCGO-BUS-INBOUND(open) |
 | RT-P1-BUS-DISCOVERY (p6) | dep HOST-SAMPLES-API(open) |
 | EXEC-PHASE-LEASE (p8) | dep #140 RT-P1-EXEC-OWNERSHIP in_review (verdict pending) |
-07:55Z workst-L1-autoos writing DIRECT (no L2): lane/rt-p1-bus-keeper + lane/exec-observed-state (cx; mimo fallback on 429, skip rec). Queued: BUS-WATCHER-TRACKED, QC A-E, BUS-WAKE after KEEPER merge. Workst opencode mass-kill 07:20Z (routing informed).
+07:55Z workst-L1-autoos writing DIRECT (no L2): lane/rt-p1-bus-keeper + lane/exec-observed-state (cx 429 -> mimo/mimo-v2.6-flash, runs 20261024-075304-rt-p1-bus-keeper-a514ed, 20261024-075350-exec-observed-state-86cb4f). Writer families so far: xiaomi (+openai if cx later) -> phase seats Haiku + qwen. Queued: BUS-WATCHER-TRACKED, QC A-E, BUS-WAKE after KEEPER merge. Workst opencode mass-kill 07:20Z (routing informed).
