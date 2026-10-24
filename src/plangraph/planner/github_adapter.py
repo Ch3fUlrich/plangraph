@@ -39,12 +39,15 @@ def _pr_view(item: Any, state: str | None = None) -> dict[str, Any]:
             raise TypeError
         if state is None:
             state = "merged" if item.get("merged_at") else item["state"]
-        return {
+        result = {
             "number": item["number"],
             "url": item["html_url"],
             "state": state,
             "head": item["head"]["sha"],
         }
+        if state == "merged" and item.get("merge_commit_sha") is not None:
+            result["merge_sha"] = item["merge_commit_sha"]
+        return result
     except (KeyError, TypeError, AttributeError):
         raise GitHubError("github malformed reply") from None
 
@@ -200,16 +203,23 @@ class RestGitHub:
             and newest.get("conclusion") == "success"
         )
 
-    def merge_pr(self, number: int, head: str) -> dict[str, Any]:
+    def merge_pr(self, number: int, head: str, *, commit_message: str | None = None) -> dict[str, Any]:
         path = f"/repos/{self.repo}/pulls/{number}/merge"
-        reply = self._request("PUT", path, {"sha": head, "merge_method": "merge"})
+        body = {"sha": head, "merge_method": "merge"}
+        if commit_message is not None:
+            body.update(commit_title=commit_message.splitlines()[0], commit_message=commit_message)
+        reply = self._request("PUT", path, body)
         if not isinstance(reply, dict) or reply.get("merged") is not True:
             raise GitHubError("github merge not confirmed")
+        merge_sha = reply.get("sha")
+        if not isinstance(merge_sha, str) or re.fullmatch(r"[0-9a-f]{40}", merge_sha) is None:
+            raise GitHubError("github merge sha is invalid")
         return {
             "number": number,
             "url": f"https://github.com/{self.repo}/pull/{number}",
             "state": "merged",
             "head": head,
+            "merge_sha": merge_sha,
         }
 
     def push_branch(self, repo_root: Path, branch: str, head: str) -> None:
