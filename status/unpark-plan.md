@@ -20,3 +20,4 @@ Then: phase review (Haiku + qwen, D-2539/2540) -> fixer -> 1-seat re-review -> p
 build-L1 file sets (18:5xZ): W27 spawner/{resolver,stall_watchdog}.py; #139 keeper trailer/evidence; #166 KEEPER-PG-RECONNECT keeper/db.py,store.py,schema_pg.py
 (OVERLAPS lane 2); #164 keeper/api_routes.py (OVERLAPS lane 2); #171 keeper define/edit validation. Rule: earlier merge first, later lane merges main;
 build-L1 tells me if #166/#164 land before BUS-KEEPER. Lanes 1, 3-6 file-disjoint. Freeze end only on build-L1's word.
+D-2643: fix rounds = parallel fix writers by file group (affected tests + CI gate), then ONE review over the collected delta; no seat per writer/fixer.
