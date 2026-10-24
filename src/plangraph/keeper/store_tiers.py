@@ -16,6 +16,29 @@ _ALLOWED_DECISION_KINDS = (frozenset({"decision"}), frozenset({"decision", "comm
 
 _TIER_FIELDS = frozenset(("review_tier", "evidence_kinds"))
 
+_SEAT_CLAUSE = re.compile(
+    r"(?<![\w-])(?:[2-9]|two|three|four|five|six|seven|eight|nine)\s+"
+    r"(?:(?!(?:of|the)\b)[a-z]+(?:-[a-z]+)*\s+){0,3}"
+    r"(?:seats?|families|family|reviewers?|verdicts?)(?![\w-])",
+    re.IGNORECASE)
+
+
+def seat_clause_needs_high(text: str | None) -> str | None:
+    """Return a multi-seat clause, excluding table-navigation prose."""
+    match = _SEAT_CLAUSE.search(text or "")
+    return match.group(0) if match else None
+
+
+def check_seat_clause_tier(done_criteria: str | None, tier: str) -> None:
+    """Refuse criteria promising multiple review seats outside the high tier."""
+    clause = seat_clause_needs_high(done_criteria)
+    if clause and tier != "high":
+        raise Refused(
+            "validation",
+            f"done_criteria ask for {clause} but review_tier is {tier!r}; "
+            "two seats/families need review_tier 'high' "
+            "(raise the tier or reduce the clause)")
+
 
 def default_review_tier(project: str, identifier: str, title: str, track: str) -> str:
     """The tier an item gets when nobody named one: ``high`` for risky work."""
