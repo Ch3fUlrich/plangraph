@@ -16,7 +16,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 via workst | fix12 run 20261024-072324-keeper-trailer-multi-fix-5e9e11 (mimo, cx 429; relaunched after 07:20Z kill). Writers now openai+xiaomi -> seats Haiku + qwen |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 via workst | fix12 f8238bfb Haiku REJECT (HIGH unknown token dropped, L1-verified). fix13 = strict fail-closed grammar brief sent, 1 qwen seat; HIGH again -> replan w/ router, no fix14 |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
 | WAIT-GUARD #158 | L1 | MERGED 27082207, evidence, in_review; LOWs leaf KEEPER-WAIT-GUARD-PRECISION asked. B1-KEEPER lane/lessons-b1-keeper (HIGH) in flight |
