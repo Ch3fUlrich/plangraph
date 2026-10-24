@@ -540,3 +540,19 @@ Records and output tails redact `sk-` tokens, Bearer credentials and `*_KEY=`
 assignments; child environment mappings are never persisted. Public entry points
 use the shared hardened dispatch adapter in `spawner.runner` (the legacy service
 remains available for compatibility).
+
+### Transport envelope nonce (defense in depth)
+
+Each runner invocation generates a random nonce sent as the
+`X-OmniRoute-Run-Nonce` request header. A stderr provider envelope must echo
+that value as `nonce` inside `autoos_provider_response`. Missing or mismatched
+values are ignored and recorded as a `forged_envelope` run event, never a leg
+mark. This does **not** close child-controlled stderr forgery: the child process
+can still read its own environment, including request-header configuration.
+Production must verify the nonce against the OmniRoute call log before trusting
+provider evidence; call-log verification remains a follow-up.
+
+CLI route/spawn accept `--require-bench` and repeatable `--bench-db PATH`.
+MCP route/spawn accept `require_bench` and `bench_db`. The entry-point default
+`PLANGRAPH_REQUIRE_BENCH=1` enables strict coverage; missing rows refuse before
+starting a child and name the missing legs.

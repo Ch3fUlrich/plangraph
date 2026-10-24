@@ -214,6 +214,8 @@ def build_child_env(
     if headers:
         env["OMNIROUTE_ENVELOPE_HEADERS"] = json.dumps(dict(headers), sort_keys=True)
         for k, v in headers.items():
+            if k.lower() == "x-omniroute-run-nonce":
+                continue  # Only carry the nonce as a request-header value.
             env_key = k.upper().replace("-", "_")
             env[env_key] = str(v)
         omni_headers = omni_prov.setdefault("headers", {})
@@ -236,6 +238,7 @@ def build_routing_envelope_headers(
     exclude_families: Sequence[str] | str = (),
     effort: str = "medium",
     author_model: str | None = None,
+    nonce: str | None = None,
 ) -> dict[str, str]:
     """Build structured routing envelope headers for OmniRoute ACP/Gateway.
 
@@ -263,6 +266,9 @@ def build_routing_envelope_headers(
 
     if families:
         headers["X-OmniRoute-Exclude-Family"] = ",".join(families)
+
+    if nonce:
+        headers["X-OmniRoute-Run-Nonce"] = nonce
 
     if author_model:
         headers["X-OmniRoute-Author-Model"] = str(author_model)

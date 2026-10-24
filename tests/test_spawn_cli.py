@@ -19,6 +19,7 @@ def test_gateway_envelope_and_redaction(tmp_path):
         envelope = {'autoos_provider_response': {'leg': 'cx', 'status': 429,
                     'body': 'quota exhausted', 'headers': {}}}
         async def factory(*args, **kwargs):
+            envelope['autoos_provider_response']['nonce'] = json.loads(kwargs['env']['OMNIROUTE_ENVELOPE_HEADERS'])['X-OmniRoute-Run-Nonce']
             code = 'import sys; print("sk-plantedsecret Bearer plantedtoken API_KEY=hidden"); print(' + repr(json.dumps(envelope)) + ', file=sys.stderr)'
             return await asyncio.create_subprocess_exec(sys.executable, '-c', code, **kwargs)
         runner.process_factory = factory

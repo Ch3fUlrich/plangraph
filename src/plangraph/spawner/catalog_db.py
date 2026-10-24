@@ -44,6 +44,8 @@ class CatalogDB:
         else:
             self.db_path = str(Path(db_path).resolve())
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            from .private_io import create_private
+            create_private(self.db_path)
 
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
@@ -345,8 +347,8 @@ class CatalogDB:
         if output_path:
             p = Path(output_path).resolve()
             p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, sort_keys=True)
+            from .private_io import atomic_write_private
+            atomic_write_private(p, json.dumps(payload, indent=2, sort_keys=True))
 
         return payload
 
@@ -383,8 +385,8 @@ class CatalogDB:
         if output_path:
             p = Path(output_path).resolve()
             p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, sort_keys=True)
+            from .private_io import atomic_write_private
+            atomic_write_private(p, json.dumps(result, indent=2, sort_keys=True))
 
         return result
 

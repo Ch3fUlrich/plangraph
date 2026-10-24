@@ -365,9 +365,9 @@ def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller
     path = Path(log_path) if log_path is not None else Path(
         os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph/spawn-overrides.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps({"ts": time.time(), "model": model,
-                                 "reason": override_reason, "caller": caller or "planner"}) + "\n")
+    from plangraph.spawner.private_io import append_private
+    append_private(path, json.dumps({"ts": time.time(), "model": model,
+                    "reason": override_reason, "caller": caller or "planner"}) + "\n")
     return model
 
 

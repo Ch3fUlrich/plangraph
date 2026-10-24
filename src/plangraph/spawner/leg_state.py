@@ -58,6 +58,8 @@ class LegStateStore:
 
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        from .private_io import create_private
+        create_private(self.path)
         db = sqlite3.connect(self.path)
         db.row_factory = sqlite3.Row
         db.execute("""CREATE TABLE IF NOT EXISTS leg_events (

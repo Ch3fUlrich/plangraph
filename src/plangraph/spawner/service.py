@@ -33,19 +33,16 @@ class SpawnService:
             raise ValueError('unknown run id') from None
 
     def _save(self, record):
-        path = self._path(record['run_id'])
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temp = path.with_suffix('.tmp')
-        temp.write_text(json.dumps(record, indent=2), encoding='utf-8')
-        temp.chmod(0o600)
-        temp.replace(path)
+        from .private_io import atomic_write_private
+        from .runner import redact
+        atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
 
     def ps(self):
         paths = (self.state / 'runs').glob('run-*/record.json')
         return {'runs': sorted((json.loads(p.read_text(encoding='utf-8')) for p in paths),
                                key=lambda r: r['started'], reverse=True)}
 
-    def route(self, card, role='implement', writer_families=(), review_of=None):
+    def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.planner.routing import plan_spawn, SpawnRefused
         families = list(writer_families)
         if review_of:
@@ -54,11 +51,11 @@ class SpawnService:
             if not family:
                 raise SpawnRefused('writer family unavailable')
             families.append(family)
-        return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader)
+        return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
     async def spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
-                    dry_run=False, wait_seconds=0, no_fallthrough=False):
+                    dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import DEFAULT_LEGS
         if model or leg or not card:
@@ -74,7 +71,7 @@ class SpawnService:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:
-            plan = self.route(card, role, writer_families, review_of)
+            plan = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
@@ -102,7 +99,7 @@ class SpawnService:
                         skip_reason='provider_stop' if stop else None, provider_response=stop))
                     record.update(status=job.status, served_model=job.served_model,
                         served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                        stdout_tail=job.stdout[-16000:])
+                        stdout_tail=job.stdout[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
                     if not stop or no_fallthrough or dry_run:
                         break

@@ -61,6 +61,7 @@ class JobInfo:
     served_model: str | None = None
     served_family: str | None = None
     dry_run: bool = False
+    events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -94,8 +95,8 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
                                 served_model = str(data["served_model"])
                             if not served_family and "served_family" in data:
                                 served_family = str(data["served_family"])
-                    except Exception:
-                        pass
+                    except (ValueError, TypeError):
+                        continue
 
     if not served_model and fallback_model:
         served_model = fallback_model
@@ -116,6 +117,7 @@ class SpawnerRunner:
         self.process_factory = process_factory or asyncio.create_subprocess_exec
         self.tree_killer = tree_killer or kill_process_tree
         self.provider_responses = {}
+        self._nonces = {}
 
     def provider_response(self, job_id, leg, status, body, headers, *, account=None, combo=None, store=None):
         """Consume trusted gateway transport evidence, never free-text output.
@@ -157,6 +159,9 @@ class SpawnerRunner:
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
 
+        import secrets
+        nonce = secrets.token_hex(32)
+        self._nonces[job_id] = nonce
         # Build routing envelope headers if not provided
         envelope_headers = dict(headers or {})
         if not envelope_headers:
@@ -166,6 +171,8 @@ class SpawnerRunner:
                 min_intelligence=44.0,
                 required_context=32000,
             )
+
+        envelope_headers["X-OmniRoute-Run-Nonce"] = build_routing_envelope_headers(nonce=nonce)["X-OmniRoute-Run-Nonce"]
 
         cmd = build_command(
             prompt=prompt,
@@ -271,6 +278,10 @@ class SpawnerRunner:
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
                     continue
                 response = envelope['autoos_provider_response']
+                if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
+                    job.events.append({'event': 'forged_envelope'})
+                    continue
+                response = {k: v for k, v in response.items() if k != 'nonce'}
                 if (isinstance(response, dict) and set(response) == {'leg', 'status', 'body', 'headers'}
                         and isinstance(response['leg'], str) and response['leg']
                         and type(response['status']) is int and response['status'] in (429, 402)
@@ -317,8 +328,8 @@ class SpawnerRunner:
             try:
                 proc.stdin.write((message + "\n").encode("utf-8"))
                 await proc.stdin.drain()
-            except Exception:
-                pass
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                job.events.append({"event": "steer_failed", "error": str(exc)})
 
         return {"job_id": job_id, "steered": True, "message": message, "status": job.status}
 
@@ -363,38 +374,24 @@ def spawn_service(*args, **kwargs):
     from pathlib import Path
 
     class DispatchService(SpawnService):
-        def route(self, card, role='implement', writer_families=(), review_of=None):
+        def route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
             self.leg_reader = lambda model, **kw: reader(model if '/' in model else 'agy/' + model, **kw)
             try:
-                return super().route(card, role, writer_families, review_of)
+                return super().route(card, role, writer_families, review_of, **options)
             finally:
                 self.leg_reader = original
 
-        def _save(self, record):
-            import tempfile
-            path = self._path(record['run_id'])
-            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            fd, name = tempfile.mkstemp(prefix='.record-', dir=path.parent)
-            try:
-                with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-                    json.dump(redact(record), stream, indent=2)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                Path(name).replace(path)
-            finally:
-                Path(name).unlink(missing_ok=True)
-
         async def spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
-                        dry_run=False, wait_seconds=0, no_fallthrough=False):
+                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
             # Let the base service handle audited overrides, which never fall through.
             if model or leg or not card:
                 return await super().spawn(card, prompt, role, writer_families, review_of,
-                    model, leg, override_reason, dry_run, wait_seconds, True)
-            plan = self.route(card, role, writer_families, review_of)
+                    model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
+            plan = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
@@ -432,10 +429,10 @@ def spawn_service(*args, **kwargs):
                             skip_reason='provider_stop' if stop else None, provider_response=stop))
                         record.update(status=job.status, served_model=job.served_model,
                             served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                            stdout_tail=redact(job.stdout)[-16000:])
+                            stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                         if not stop or no_fallthrough or dry_run:
                             return
-                        current = self.route(card, role, writer_families, review_of)
+                        current = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         record['plan'] = current.to_dict()
                     record.update(status='limited', exit_code=3, evidence=current.to_dict()['skipped'])
                 except Exception as exc:
