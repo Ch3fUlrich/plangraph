@@ -37,8 +37,8 @@
       map.set(v, (map.get(v) || 0) + 1);
     });
     return Array.from(map.keys()).sort(function (a, b) {
-      return key === "priority" ? Number(b) - Number(a) :
-        PlanUI.naturalCmp ? PlanUI.naturalCmp(a, b) : a.localeCompare(b);
+      return key === "priority" ? (Number(b) - Number(a) || 0) :
+        PlanUI.naturalCmp ? PlanUI.naturalCmp(a, b) : a < b ? -1 : a > b ? 1 : 0;
     }).map(function (v) { return {v:v, n:map.get(v)}; });
   }
   function cb(text, checked, aria, apply) {
@@ -100,7 +100,7 @@
   function head() {
     var tr = el("tr"), th;
     COLS.forEach(function (c) {
-      th = el("th");
+      th = el("th", "tc-" + (c[0] === "id" ? "key" : c[0]));
       th.setAttribute("data-label", c[1]);
       th.setAttribute("aria-sort", sort.col === c[0] ?
         (sort.dir === "asc" ? "ascending" : "descending") : "none");
@@ -142,8 +142,8 @@
     td(tr, "tc-key", "ID", a);
 
     var tc = td(tr, "tc-title", "Title", el("span", "ny-tt", r.title || ""));
-    if (r.ref.kind === "operator_wait_unlinked") tc.appendChild(el("span", "tc-badge", "Operator wait unlinked"));
-    var wk = r.type === "question" ? "answer" : r.type === "task" ? r.ref.wait : "";
+    if (r.ref && r.ref.kind === "operator_wait_unlinked") tc.appendChild(el("span", "tc-badge", "Operator wait unlinked"));
+    var wk = r.type === "question" ? "answer" : r.type === "task" && r.ref ? r.ref.wait : "";
     if (wk) {
       var bd = el("span", "tc-badge", "Needs your " + (wk === "answer" ? "answer" : "task"));
       bd.style.background = "var(--wait-" + wk + ")";
@@ -155,7 +155,7 @@
       ab.type = "button";
       ab.addEventListener("click", function () { openA = openA === r.id ? "" : r.id; render(vm); });
       tc.appendChild(ab);
-      if (openA === r.id && PlanUI.QAPage && PlanUI.QAPage.editor) {
+      if (openA === r.id && r.ref && PlanUI.QAPage && PlanUI.QAPage.editor) {
         var ed = PlanUI.QAPage.editor(r.ref, function () { openA = ""; render(vm); });
         if (ed) {
           var box = el("div", "ny-ed");
@@ -205,12 +205,18 @@
       if (d && d.sort) sort = d.sort;
       rowId = (d && d.row) || "";
     }
-    var now = Date.now(), seen = new Set(), all = NP.rows(vm, now).filter(function (r) {
-      if (r.type !== "task") return true;
-      r.state = r.state || r.ref.state;
-      if (seen.has(r.key)) return false;
-      seen.add(r.key);
-      return true;
+    var now = Date.now(), seen = new Map(), all = [];
+    NP.rows(vm, now).forEach(function (r) {
+      var key = r.key || r.id, ref = r.ref || {}, i = seen.get(key);
+      if (r.type === "task") {
+        r = Object.assign({}, r, {state: r.state || ref.state});
+        if (key && i != null) {
+          if (all[i].ref && all[i].ref.kind === "operator_wait_unlinked" && ref.kind !== "operator_wait_unlinked") all[i] = r;
+          return;
+        }
+        if (key) seen.set(key, all.length);
+      }
+      all.push(r);
     });
     var list = NP.sort(NP.filter(all, f, now), sort);
     while (host.firstChild) host.removeChild(host.firstChild);

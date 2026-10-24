@@ -85,7 +85,8 @@ def test_v6_unlinked_open_and_done_operator(w, field, text, state):
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="node unavailable")
-def test_flag_row_rendered():
+@pytest.mark.parametrize("case", ["base", "missing_ref", "missing_key", "prefer_wait", "prefer_wait_reverse", "headers", "facets"])
+def test_flag_row_rendered(case):
     web = Path(__file__).resolve().parents[1] / "src/plangraph/web"
     script = r"""
 const nodes=[];
@@ -105,8 +106,34 @@ for(const items of [new Map([[it.key,it]]),[it]]) {
  PlanUI.NeedsPage.render({items,needsYou:[]});
  if(host.textContent.includes('Operator wait unlinked'))throw Error('client derived flag');
 }
+const row={type:'task',id:'a',title:'A',project:'demo',priority:1,state:''};
+const mode=process.argv[2];
+let rs=[];
+if(mode==='missing_ref')rs=[row,{...row,type:'question',id:'q'}];
+if(mode==='missing_key')rs=[{...row,ref:{}},{...row,id:'b',ref:{}},{...row,id:'',ref:{}},{...row,id:'',ref:{}}];
+if(mode.startsWith('prefer_wait'))rs=[{...row,key:'a',ref:{kind:'operator_wait_unlinked'}},{...row,key:'a',title:'Human question',ref:{kind:'question',wait:'answer'}}];
+if(mode==='prefer_wait_reverse')rs.reverse();
+if(mode==='headers')rs=[{...row,ref:{}}];
+if(mode==='facets')rs=[{...row,key:'a',project:'a',priority:'odd',ref:{}},{...row,key:'b',id:'b',project:'Z',priority:2,ref:{}}];
+if(rs.length){
+ if(mode==='missing_ref')rs.forEach(Object.freeze);
+ PlanUI.NeedsPage.rows=()=>rs;
+ if(mode==='facets'){
+  String.prototype.localeCompare=function(){throw Error('locale dependent')};
+  const original=Array.prototype.sort;
+  Array.prototype.sort=function(cmp){return original.call(this,cmp?function(a,b){const n=cmp(a,b);if(Number.isNaN(n))throw Error('NaN comparator');return n}:cmp)};
+ }
+ PlanUI.NeedsPage.render({});
+ if(mode==='missing_key'&&!host.textContent.includes('(4 of 4)'))throw Error('keyless row lost');
+ if(mode.startsWith('prefer_wait')&&(!host.textContent.includes('Human question')||host.textContent.includes('Operator wait unlinked')))throw Error('human wait lost');
+ if(mode==='headers'){
+  const table=host.children.find(n=>n.className==='tt ny-t');
+  const hs=table.children[0].children[0].children;
+  ['type','key','title','project','priority','state','age'].forEach((k,i)=>{if(hs[i].className!=='tc-'+k)throw Error('header class '+k)});
+ }
+}
 """
-    result = subprocess.run([shutil.which("node"), "-e", script, str(web)], capture_output=True, text=True)
+    result = subprocess.run([shutil.which("node"), "-e", script, str(web), case], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -134,11 +161,38 @@ def test_needs_scope(w):
     assert any(r["key"] == "demo:WORK" for r in w.store.needs_you(w.p("workerA")))
 
 
-@pytest.mark.parametrize("signal,expected", [("operator", True), ("OS-12", True), ("task", False), ("", False)])
-def test_structured_wait_signal_wins(w, monkeypatch, signal, expected):
+@pytest.mark.parametrize("signal", ["operator", "OS-12", "task", ""])
+def test_wait_signals_are_additive(w, monkeypatch, signal):
     to_claimed(w, "demo:WORK", "workerA")
     item = w.store._item("demo:WORK")
     item.update(waiting_on=signal, note="IDLE until operator")
     monkeypatch.setattr(w.store, "_all_items", lambda: [item])
     rows = w.store.needs_you(w.p("reader"))
-    assert any(r.get("kind") == "operator_wait_unlinked" for r in rows) == expected
+    assert any(r.get("kind") == "operator_wait_unlinked" for r in rows)
+
+
+@pytest.mark.parametrize("text", ["Status: IDLE until operator", "Work is waiting on OS-12"])
+def test_labeled_wait_marker(w, text):
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
+    to_claimed(w, "demo:WORK", "workerA")
+    assert any(r.get("kind") == "operator_wait_unlinked" for r in w.store.needs_you(w.p("reader")))
+
+
+def test_genuine_wait_preferred(w, monkeypatch):
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item.update(kind="question", note="IDLE until operator")
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    rows = [r for r in w.store.needs_you(w.p("reader")) if r["key"] == "demo:WORK"]
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "question"
+
+
+def test_missing_project_and_empty_scope(w, monkeypatch):
+    from dataclasses import replace
+    item = w.store._item("demo:WORK")
+    item.pop("project")
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    assert w.store.needs_you(w.p("workerA")) == []
+    item.update(project="demo", operator=True)
+    assert w.store._needs_you(None, replace(w.p("workerA"), projects=[])) == []

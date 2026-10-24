@@ -6,6 +6,9 @@ import re
 
 from .. import views
 
+_OPERATOR = re.compile(r"\boperator\b|\bOS-\d+", re.I)
+_WAIT = re.compile(r"\b(?:IDLE|waiting(?:_on| on))\b[^\n.;]*(?:" + _OPERATOR.pattern + ")", re.I)
+
 
 class NeedsMixin:
     """Read-only; any authenticated principal may call them."""
@@ -18,30 +21,26 @@ class NeedsMixin:
         # Readers retain the public read contract; scoped actors see only their projects.
         items = [it for it in self._all_items()
                  if principal.role in ("router", "reader", "system")
-                 or it["project"] in (principal.projects or [])]
+                 or it.get("project") in (principal.projects or [])]
         rows = views.needs_you(items, project=project)
         by_key = {item["key"]: item for item in items}
         for item in items:
             if item["state"] not in ("claimed", "in_review"):
                 continue
-            if project is not None and item["project"] != project:
+            if project is not None and item.get("project") != project:
                 continue
             text = " ".join(str(item.get(field) or "") for field in
                             ("note", "description", "done_criteria"))
-            signal = item.get("waiting_on")
-            if signal is not None:
-                waiting = bool(re.search(r"\boperator\b|\bOS-\d+", str(signal), re.I))
-            else:
-                waiting = bool(re.search(
-                    r"(?:^|[\n.;])\s*(?:IDLE\b|waiting(?:_on| on)\b)[^\n.;]*"
-                    r"(?:\boperator\b|\bOS-\d+)", text, re.I))
+            waiting = _OPERATOR.search(str(item.get("waiting_on") or "")) or _WAIT.search(text)
             if not waiting:
                 continue
             if any(by_key.get(dep, {}).get("operator")
                    and by_key[dep]["state"] == "open" for dep in item["depends_on"]):
                 continue
-            rows = [row for row in rows if row["key"] != item["key"]]
-            rows.append({"key": item["key"], "project": item["project"],
+            # Genuine human waits take precedence over the diagnostic flag.
+            if any(row["key"] == item["key"] for row in rows):
+                continue
+            rows.append({"key": item["key"], "project": item.get("project"),
                          "title": item["title"], "state": item["state"],
                          "kind": "operator_wait_unlinked", "priority": item["priority"],
                          "wait": "task", "unblocks": 0, "choices": None})
