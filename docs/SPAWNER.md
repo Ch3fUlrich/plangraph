@@ -382,7 +382,7 @@ sequenceDiagram
     Note over Orchestrator,Gateway: Cross-Family Review 1 (Task Role: review, Exclude: claude)
     Orchestrator->>Gateway: POST /v1/chat/completions (combo: l2-worker, X-OmniRoute-Exclude-Family: claude)
     Note over Gateway: Gateway excludes all 'claude' legs & bypasses session stickiness
-    Gateway->>Rev1: Dispatches to top non-claude leg (mimo-v2.6-pro)
+    Gateway->>Rev1: Dispatches to top non-claude leg (mimo/mimo-v2.6-pro)
     Rev1-->>Gateway: Review Verdict & Lints
     Gateway-->>Orchestrator: 200 OK (X-OmniRoute-Selected-Family: mimo)
 
