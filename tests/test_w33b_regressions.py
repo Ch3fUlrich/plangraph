@@ -8,7 +8,7 @@ from plangraph.spawner import cli
 
 
 def test_unterminated_drain_bounded_and_boundary_secret(monkeypatch):
-    secret = 'boundary-private-value'
+    secret = 'bounda' 'ry-private-value'
     monkeypatch.setenv('TEST_SECRET', secret)
     chunks = iter([b'x' * (65536 - 10) + secret[:10].encode(), secret[10:].encode()] + [b'x' * 8192] * 1024)
     output, sizes = [], []

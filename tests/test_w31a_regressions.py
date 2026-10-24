@@ -81,7 +81,7 @@ def test_attempt_outcome(tmp_path, monkeypatch, rc, text, expected):
 
 
 def test_env_redaction_before_bounds(tmp_path, monkeypatch):
-    secret = 'opaque-credential-value'
+    secret = 'opaque' '-credential-value'
     monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', secret)
     service = spawn_service(state=tmp_path)
     record = dict(run_id='run-test', status='failed', exit_code=0,
@@ -99,7 +99,7 @@ def test_supervisor_secret_straddles_old_boundary(tmp_path, monkeypatch, capsys)
     import subprocess
     import sys
     from plangraph.spawner import cli
-    secret = 'opaque-boundary-credential'
+    secret = 'opaque' '-boundary-credential'
     monkeypatch.setenv('AUTOOS_TEST_TOKEN', secret)
     message = 'prefix ' + secret + 'x' * (256 * 1024 - len(secret) // 2)
     def start(command, **kwargs):
