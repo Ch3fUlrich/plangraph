@@ -88,7 +88,7 @@ def test_provider_mimo():
             flash: {
                 "modelID": "mimo/mimo-v2.6-flash",
                 "name": "Xiaomi MiMo v2.6 Flash",
-                "limit": {"context": 1048576, "output": 65536},
+                "limit": {"context": 1000000, "output": 65536},
             },
             pro: {"modelID": "mimo/mimo-v2.6-pro", "name": "Xiaomi MiMo v2.6 Pro",
                   "limit": {"context": 1000000, "output": 65536}},

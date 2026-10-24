@@ -19,6 +19,33 @@ DEFAULT_ROOTS = (Path(__file__).resolve().parents[1], Path("~/code/AutoOS"),
                  Path("~/.claude"), Path("~/.agents"))
 
 
+def model_key_exemptions(text):
+    """Tokenize JSONC once, retaining real object ancestry and source lines."""
+    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*[\s\S]*?\*/|[{}:\[\],]', text))
+    tokens = [t for t in tokens if not t.group().startswith(('//', '/*'))]
+    stack, key, exempt = [], None, {}
+    for i, token in enumerate(tokens):
+        value = token.group()
+        if value.startswith('"'):
+            if i + 1 < len(tokens) and tokens[i + 1].group() == ':':
+                key = json.loads(value)
+                if stack[-3:] == ['providers', 'mimo', 'models'] and key in {
+                        'mimo-v2.6-flash', 'mimo-v2.6-pro'}:
+                    line = text.count('\n', 0, token.start()) + 1
+                    start = token.start() - (text.rfind('\n', 0, token.start()) + 1)
+                    exempt.setdefault(line, []).append((start, start + len(value)))
+        elif value in ('{', '['):
+            stack.append(key)
+            key = None
+        elif value in ('}', ']'):
+            if stack:
+                stack.pop()
+            key = None
+        elif value == ',':
+            key = None
+    return exempt
+
+
 def scan(root: Path, allow: list[str]):
     """Yield bad lines; output only matched model tokens, never raw config values."""
     root = root.expanduser().absolute()
@@ -43,28 +70,11 @@ def scan(root: Path, allow: list[str]):
                 lines = path.read_text(encoding="utf-8").splitlines()
             except (OSError, UnicodeError):
                 continue
-            stack = []
+            exemptions = model_key_exemptions('\n'.join(lines)) if path.suffix.lower() in {'.json', '.jsonc'} else {}
             for number, line in enumerate(lines, 1):
-                exempt = (path.suffix.lower() in {'.json', '.jsonc'}
-                          and stack[-3:] == ['providers', 'mimo', 'models']
-                          and re.fullmatch(r'\s*"mimo-v2\.6-(?:flash|pro)":\s*\{\s*', line))
-                if path.suffix.lower() in {'.json', '.jsonc'}:
-                    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*.*?\*/|[{}:\[\]]', line))
-                    key = None
-                    for i, token in enumerate(tokens):
-                        value = token.group()
-                        if value.startswith(('//', '/*')):
-                            continue
-                        if value.startswith('"') and i + 1 < len(tokens) and tokens[i + 1].group() == ':':
-                            key = json.loads(value)
-                        elif value in ('{', '['):
-                            stack.append(key)
-                            key = None
-                        elif value in ('}', ']') and stack:
-                            stack.pop()
-                if exempt:
-                    continue
-                bad = [m.group() for m in MODEL.finditer(line) if m.group() not in ACCEPTED]
+                bad = [m.group() for m in MODEL.finditer(line) if m.group() not in ACCEPTED
+                       and not any(start <= m.start() and m.end() <= end
+                                   for start, end in exemptions.get(number, ()))]
                 if bad:
                     # Deliberately omit ALL surrounding content, even unknown key formats.
                     yield {"root": str(root), "file": path.relative_to(root).as_posix(),
