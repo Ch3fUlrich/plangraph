@@ -11,12 +11,24 @@ moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
 
-__all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
+__all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL",
+           "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
            "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 14
+#: Code-level schema version.  Main pins this at 13 (its schema tests assert it),
+#: so the oversight feature does NOT bump it: ``db._upgrade`` installs
+#: ``OVERSIGHT_DDL`` presence-based at open, like every other post-ship table
+#: (``ALIASES_DDL``, ``RUN_TOKENS_DDL``, ``JEV_DDL``), and main's v12 -> v13
+#: exec-column upgrade path stays exactly as it shipped.
+SCHEMA_VERSION = 13
+
+#: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
+#: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
+#: PostgreSQL Migration 8 alone.  Nothing keys off it at runtime; it names the
+#: delta so docs, CHANGELOG and the parity tests have one figure to quote.
+OVERSIGHT_SCHEMA_VERSION = 14
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).

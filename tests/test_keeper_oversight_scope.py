@@ -1003,7 +1003,11 @@ def test_denied_budget_is_alarm_only_not_auto_revoke(w, monkeypatch):
 def test_schema_is_v14_and_carries_the_oversight_ddl():
     from plangraph.keeper import schema
 
-    assert schema.SCHEMA_VERSION == 14
+    # Main pins ``SCHEMA_VERSION`` at 13 (its own schema tests assert it), so the
+    # v13 -> v14 step the oversight tables add is named separately and installed
+    # presence-based by ``db._upgrade`` -- main's upgrade tests stay green.
+    assert schema.SCHEMA_VERSION == 13
+    assert schema.OVERSIGHT_SCHEMA_VERSION == schema.SCHEMA_VERSION + 1 == 14
     assert "oversight_tokens" in schema.OVERSIGHT_DDL
     assert "oversight_ops" in schema.OVERSIGHT_DDL
     assert schema.OVERSIGHT_DDL in schema.SCHEMA
@@ -1107,8 +1111,9 @@ def test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8():
         [bool(nn) for _, nn in applied["items"]], "items NOT NULL drift"
 
     # the exec columns live in the SQLite items DDL at main's v13 shape, and
-    # the SQLite version step stays the oversight tables alone
-    assert schema.SCHEMA_VERSION == 14
+    # the SQLite version step (v14) stays the oversight tables alone
+    assert schema.OVERSIGHT_SCHEMA_VERSION == 14
+    assert schema.SCHEMA_VERSION == 13
     for column in exec_cols:
         assert f"    {column}" in schema.TABLES, column
     assert "exec_workflow_id" not in schema.OVERSIGHT_DDL
