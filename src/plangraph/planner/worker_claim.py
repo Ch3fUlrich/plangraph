@@ -3,24 +3,41 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from plangraph.card_paths import normalise_path, path_problem
 from plangraph.keeper.errors import Refused
 from plangraph.planner import gitenv, phase_finish
+from plangraph.planner.readiness import protected_check_paths
 
 __all__ = ["build_claim", "worker_claim"]
 
 def build_claim(
     key: str, card: dict[str, Any], *, repo: str, base_sha: str
 ) -> dict[str, Any]:
-    # RT-P1-CARD-CHECKS-KEEPER extends this builder next (check_kind,
-    # check_reads, forbid from forbid_paths, RS-WIRING CardInput fields);
-    # forbid stays [] until then.
+    # Share readiness's protection rule so claimed checks cannot be edited away.
+    check_kind = card.get("check_kind", "change")
+    if check_kind not in ("change", "regression"):
+        raise Refused("validation", "check_kind must be change or regression")
+    check_reads = card.get("check_reads", [])
+    if not isinstance(check_reads, list) or any(not isinstance(p, str) for p in check_reads):
+        raise Refused("validation", "check_reads must be a list of strings")
+    for entry in check_reads:
+        problem = path_problem("check_reads", entry, normalise_path(entry))
+        if problem is not None:
+            raise Refused("validation", problem)
     return {
         "card": key,
         "repo": repo,
         "base_sha": base_sha,
         "check_cmd": card["check_cmd"],
         "allow": list(card["write_set"]),
-        "forbid": [],
+        "forbid": list(dict.fromkeys([*card.get("forbid_paths", []),
+                                     *protected_check_paths(card)])),
+        "check_kind": check_kind,
+        "check_reads": list(check_reads),
+        "smoke_checks": list(card.get("smoke_checks", [])),
+        "exports": list(card.get("exports", [])),
+        "heldout_cmd": card.get("heldout_check") or "",
+        "risk_tagged": bool(card.get("risk_tags")),
         "prompt": card["outcome"],
     }
 
@@ -73,6 +90,7 @@ def worker_claim(
     if base_sha is None:
         raise Refused("unavailable", "no base to claim from")
 
+    claim = build_claim(key, card, repo=repo_root, base_sha=base_sha)
     state, claimed_by, lease_until, _project = row
     lease_live = False
     if state == "claimed" and claimed_by == principal.name and lease_until:
@@ -85,4 +103,4 @@ def worker_claim(
     if not lease_live:
         store.worker_claim_lease(principal, key)
 
-    return build_claim(key, card, repo=repo_root, base_sha=base_sha)
+    return claim

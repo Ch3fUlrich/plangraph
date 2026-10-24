@@ -11,6 +11,23 @@ from plangraph.keeper.errors import Refused
 from plangraph.planner import gitenv
 from plangraph.planner.worker_claim import build_claim, worker_claim
 
+
+def test_build_claim_preserves_gate_inputs():
+    got = build_claim("demo:A", {
+        "outcome": "fix", "check_cmd": "pytest tests/check.py",
+        "write_set": ["src/a.py"], "check_kind": "regression",
+        "check_reads": ["fixtures/input.json"], "forbid_paths": ["secrets"],
+        "smoke_checks": ["pytest -q"], "exports": ["api"],
+        "heldout_check": "heldout", "risk_tags": ["migration"],
+    }, repo="repo", base_sha="abc")
+    assert got["check_kind"] == "regression"
+    assert got["check_reads"] == ["fixtures/input.json"]
+    assert got["forbid"] == ["secrets", "tests/check.py", "fixtures/input.json"]
+    assert got["smoke_checks"] == ["pytest -q"]
+    assert got["exports"] == ["api"]
+    assert got["heldout_cmd"] == "heldout"
+    assert got["risk_tagged"] is True
+
 def _code(exc: Refused):
     return getattr(exc, "code", exc.args[0] if exc.args else None)
 
@@ -90,6 +107,8 @@ def test_claim_exact(w, repo, gate):
         "allow": ["x.txt"],
         "forbid": [],
         "prompt": "do the thing",
+        "check_kind": "change", "check_reads": [], "smoke_checks": [],
+        "exports": [], "heldout_cmd": "", "risk_tagged": False,
     }
 
 def test_system_claims_like_a_worker(w, repo, gate):
@@ -203,6 +222,8 @@ def test_build_claim_keys_and_values():
         "allow",
         "forbid",
         "prompt",
+        "check_kind", "check_reads", "smoke_checks", "exports", "heldout_cmd",
+        "risk_tagged",
     }
     assert got == {
         "card": "demo:C1",
@@ -212,6 +233,8 @@ def test_build_claim_keys_and_values():
         "allow": ["x.txt"],
         "forbid": [],
         "prompt": "do the thing",
+        "check_kind": "change", "check_reads": [], "smoke_checks": [],
+        "exports": [], "heldout_cmd": "", "risk_tagged": False,
     }
 
 def test_gitenv_scrubs_git_dir(monkeypatch, repo):
