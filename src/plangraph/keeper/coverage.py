@@ -133,12 +133,14 @@ def writer_families(store, item, ctx):
     return families
 
 
-# Launcher aliases are local to writer attribution, not model identities.
+# Single-family launchers still name a writer family; ignoring them can hide
+# a second writer. Multi-family launchers are not model identities.
 _WRITER_ALIASES = dict.fromkeys(
     ("qodercli", "qoder", "qoder-cli", "qoder-agent"), "alibaba")
 _WRITER_ALIASES["l2"] = "anthropic"
+_WRITER_ALIASES.update({"cx": "openai", "mimo": "xiaomi", "xiaomi-mimo": "xiaomi"})
 _WRITER_ALIASES.update(dict.fromkeys(
-    "agy opencode omniroute cx mimo xiaomi-mimo openrouter spawner tool-less tool-using".split()))
+    "agy opencode omniroute openrouter spawner tool-less tool-using".split()))
 
 
 def _writer_token_families(token):

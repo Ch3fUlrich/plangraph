@@ -299,6 +299,29 @@ def _families(repo, sha):
                                    "project": "demo"}, ctx)
 
 
+@pytest.mark.parametrize("body,expected", [
+    ("Writer: ", None),
+    ("Writer: deepseek-v4\nWriter: ", None),
+    ("Hand-Edit: manual\nWriter: ", None),
+    ("Writer: deepseek-v4\nHand-Edit: ", ["deepseek"]),
+    ("Hand-Edit: ", None),
+], ids=["blank-writer", "blank-writer-after-writer", "blank-writer-after-hand",
+        "blank-hand-with-writer", "blank-hand-only"])
+def test_fix10_real_parser_blank_attribution(repo, adapter, body, expected):
+    _git(repo, "commit", "--allow-empty", "--cleanup=verbatim", "-q", "-m",
+         f"blank attribution\n\nPlan-Item: demo:A\n{body}\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+    blank_key = body.splitlines()[-1].split(":")[0]
+    parsed = adapter.writer_trailers(str(repo), sha)[0][blank_key]
+    assert (parsed[-1] if isinstance(parsed, list) else parsed) == ""
+    if expected is None:
+        with pytest.raises(Refused) as exc:
+            _families(repo, sha)
+        assert exc.value.code == "writer_unknown"
+    else:
+        assert _families(repo, sha) == expected
+
+
 def test_prose_hand_edit_and_writer_lines_are_not_trailers(repo):
     """A prose paragraph QUOTING ``Hand-Edit:``/``Writer:`` lines is not a
     trailer block, so it can neither be returned as a trailer nor change the

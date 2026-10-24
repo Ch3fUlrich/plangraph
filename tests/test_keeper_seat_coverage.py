@@ -65,6 +65,27 @@ def writer(value):
 
 
 @pytest.mark.parametrize("value,family", [
+    ("cx/gpt-6.1-sol mimo", None),
+    ("deepseek-v4 xiaomi-mimo", None),
+    ("mimo/mimo-v2.6-flash", "xiaomi"),
+    ("xiaomi-mimo/mimo-v2.6-flash", "xiaomi"),
+    ("cx/gpt-6.1-sol 20261024-050222-x-a64465", "openai"),
+    ("omniroute/cx-gpt-6.1-sol", "openai"),
+    ("agy/gemini-3.8-flash", "google"),
+    ("deepseek-v4 cx", None),
+])
+def test_fix10_single_family_alias_cannot_hide_second_writer(w, value, family):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    if family is None:
+        with pytest.raises(Refused) as exc:
+            _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+        assert exc.value.code == "writer_unknown"
+    else:
+        assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == [family]
+
+
+@pytest.mark.parametrize("value,family", [
     ("deepseek.mimo", None), ("mimo_deepseek", None),
     ("deepseek-r1-L2", None), ("gpt-4o.qwen3", None),
     ("deepseek_l2", None), ("deepseek.o3", None),
