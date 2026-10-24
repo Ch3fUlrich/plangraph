@@ -53,6 +53,8 @@ def test_catalog_total_rows_control_fallback(tmp_path, monkeypatch, real, mode):
             assert [r['id'] for r in rows] == [model]
         if not real:
             assert True in db.calls
+            if mode == 'mixed':
+                assert False not in db.calls
     finally:
         if real:
             db.close()

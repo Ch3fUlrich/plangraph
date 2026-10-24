@@ -515,25 +515,35 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
 
 def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dict[str, Any]]:
     """Retrieve catalog models, including inactive rows unless explicitly filtered."""
-    target_db = db if db is not None else _get_default_catalog_db()
-    if target_db is not None:
-        if hasattr(target_db, "list_models"):
-            models = target_db.list_models(active_only=active_only)
-            # D-2631: no admitted rows is not an empty catalog. Preserve the
-            # active-only query contract, but probe total rows before fallback.
-            if active_only and not models and target_db.list_models(active_only=False):
-                return []
-            if models:
-                return [_normalize_catalog_row(m) for m in models
-                        if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
-        if hasattr(target_db, "get_models"):
-            models = target_db.get_models()
-            if models:
-                return [_normalize_catalog_row(m) for m in models
-                        if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+    catalog_source = None
+    try:
+        target_db = db if db is not None else _get_default_catalog_db()
+        if target_db is not None:
+            if hasattr(target_db, "list_models"):
+                models = target_db.list_models(active_only=active_only)
+                # D-2631: no admitted rows is not an empty catalog. Preserve the
+                # active-only query contract, but probe total rows before fallback.
+                if active_only and not models and target_db.list_models(active_only=False):
+                    return []
+                if models:
+                    return [_normalize_catalog_row(m) for m in models
+                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+            if hasattr(target_db, "get_models"):
+                models = target_db.get_models()
+                if models:
+                    return [_normalize_catalog_row(m) for m in models
+                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "catalog_db_error fallback=offline err=%s: %s", type(exc).__name__, exc)
+        catalog_source = "offline_fallback_db_error"
 
-    return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
-            if not active_only or catalog_row_admitted(m)]
+    rows = [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
+            if not (catalog_source or active_only) or catalog_row_admitted(m)]
+    if catalog_source:
+        rows = [dict(m, catalog_source=catalog_source) for m in rows]
+    return rows
 
 def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
     """Check if model satisfies context window and price cliff limits.
@@ -602,6 +612,8 @@ def resolve_review_plan(
           Rev 2: X-OmniRoute-Task-Role: review, X-OmniRoute-Exclude-Family: <writer_family>,<family_1>
       - Raises ValueError if no eligible reviewer exists.
     """
+    if review_exempt:
+        raise ValueError("caller cannot assert review_exempt; zero reviewers requires evaluated exemption")
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
@@ -625,7 +637,7 @@ def resolve_review_plan(
     all_models = [annotate(m) for m in get_catalog_models(db)]
 
     # Filter candidate models
-    target_db = db if db is not None else _get_default_catalog_db()
+    target_db = None if any(m.get("catalog_source") == "offline_fallback_db_error" for m in all_models) else (db if db is not None else _get_default_catalog_db())
     combo_priority_legs = False
     candidates: list[dict[str, Any]] = []
 
