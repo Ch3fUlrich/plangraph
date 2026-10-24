@@ -9,10 +9,11 @@ import sys
 import os
 import subprocess
 import time
+import tempfile
 
 _start_supervisor = subprocess.Popen
 
-from .runner import spawn_service as SpawnService
+from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 
 
@@ -109,16 +110,32 @@ def main(argv=None):
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
-                child = _start_supervisor([sys.executable, '-m', __package__ + '.cli', '--supervise'],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, **({'start_new_session': True} if os.name != 'nt' else
-                                  {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
-                child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
-                child.stdin.close()
-                line = child.stdout.readline()
-                child.stdout.close()
-                if not line:
-                    raise ValueError('spawn supervisor failed; check card and override reason')
+                import plangraph
+                env = os.environ.copy()
+                root = str(Path(plangraph.__file__).resolve().parent.parent)
+                env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+                # A file avoids PIPE backpressure during the detached child's lifetime.
+                # TemporaryFile is private and disappears when the child releases it.
+                service.state.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryFile(dir=service.state) as errors:
+                    child = _start_supervisor([sys.executable, '-m', __package__ + '.cli', '--supervise'],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+                        env=env, text=True, **({'start_new_session': True} if os.name != 'nt' else
+                                      {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
+                    try:
+                        child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
+                        child.stdin.close()
+                    except BrokenPipeError:
+                        pass  # Read the startup diagnostic below, including early import failures.
+                    line = child.stdout.readline()
+                    child.stdout.close()
+                    if not line:
+                        child.wait()
+                        errors.seek(0, os.SEEK_END)
+                        errors.seek(max(0, errors.tell() - 16384))
+                        tail = '\n'.join(redact(errors.read().decode('utf-8', errors='replace')).splitlines()[-20:])
+                        raise ValueError('spawn supervisor failed; check card and override reason' +
+                                         ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
                 while result['status'] == 'running' and time.monotonic() < deadline:

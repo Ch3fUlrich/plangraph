@@ -465,6 +465,14 @@ def spawn_service(*args, **kwargs):
 
         def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink
+            job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+            if job is not None:
+                for stream in ('stdout', 'stderr'):
+                    record[stream + '_tail'] = redact(getattr(job, stream, '')).encode('utf-8')[-4096:].decode('utf-8', errors='ignore')
+                for attempt in record.get('attempts', []):
+                    if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
+                        attempt['skip_reason'] = (redact(job.stderr.strip().splitlines()[0])
+                            if job.stderr.strip() else f'harness exit code {job.exit_code}')
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -550,7 +558,7 @@ def spawn_service(*args, **kwargs):
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, writer_family=None, status='running', started=time.time(),
-                ended=None, attempts=[], stdout_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             self._save(record)
 
             if not plan.legs or plan.error:
@@ -583,11 +591,16 @@ def spawn_service(*args, **kwargs):
                         if task:
                             await asyncio.shield(task)
                         stop = self.runner.provider_responses.get(job.job_id)
+                        reason = None
+                        if job.status in ('failed', 'skipped'):
+                            reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                            skip_reason='provider_stop' if stop else None, provider_response=stop))
+                            skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop))
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                            stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
+                            stdout_tail=redact(job.stdout).encode('utf-8')[-4096:].decode('utf-8', errors='ignore'),
+                            stderr_tail=redact(job.stderr).encode('utf-8')[-4096:].decode('utf-8', errors='ignore'),
+                            events=record.get('events', []) + getattr(job, 'events', []))
                         if not stop or no_fallthrough or dry_run:
                             if not dry_run:
                                 await self._continue_writer(record, job.stdout)
