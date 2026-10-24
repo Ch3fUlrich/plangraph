@@ -52,18 +52,23 @@ The first failing gate wins:
 4. Key lookup (`kid`).
 5. Signature verification.
 6. Nonce replay check.
-7. Rate: 30 authenticated requests per rolling 60 seconds per sender.
-8. Record the nonce, then dedupe by `(from, msg_id)`.
+7. Replay capacity: refuse with `replay_window_full` (503) if 10000 live nonces remain.
+8. Rate: 30 authenticated requests per rolling 60 seconds per sender.
+9. Purge expired nonces, record the nonce, then dedupe by `(from, msg_id)`.
 
 Malformed JSON has no shape: if oversized it returns `too_large`, otherwise
 `bad_request`. Valid JSON is shape-checked even when oversized.
 Failed authentication never consumes a nonce or rate allowance. Authenticated
-nonces are globally unique across POST and READ and, only after passing the rate
-gate, stored in insertion order, evicting the oldest above 10000 entries.
+nonces are globally unique across POST and READ. Store each accepted message's
+timestamp, not acceptance time. Only entries with `ts < now - 60` may be purged;
+the inclusive boundary remains protected. Never evict an in-window nonce to make
+room: a full window returns 503 without changing state. READ and POST share this
+window, including capacity and expiry rules.
 Rate-rejected (429) requests consume no replay state: they neither insert nor
 evict nonces and do not change message-ID dedupe state. Their nonces remain unseen;
-an exact retry after the rate window opens is a fresh acceptance, provided its
-timestamp still passes the skew gate. This prevents rejected floods from evicting
+clients should retry with a fresh nonce and fresh timestamp. An exact retry can
+be accepted only while its original timestamp remains within the skew window
+(`abs(now - ts) <= 60`) and all other gates pass. This prevents rejected floods from evicting
 accepted nonces. The limiter removes events at or
 before `now - 60`; rejected requests do not add a rate event. Its retry delay is
 at least one second, rounded up to the first available slot.
@@ -73,7 +78,7 @@ Duplicate messages still pass replay and rate gates, then return the original
 New acknowledgements contain exactly `id`, `ts`, `msg_id`, `dup: false`.
 Acknowledgement `ts` is server acceptance time in seconds. Retain 1000 records;
 dedupe acknowledgements are retired with their records. Replay protection is
-bounded by the nonce cap, not a durable exactly-once guarantee.
+time-bounded and in-memory, not a durable exactly-once guarantee.
 
 State belongs to one bus instance. Adapters must serialize authentication,
 insertion and reads, supply a consistent clock, and enforce their own
@@ -96,7 +101,8 @@ strictly after that record. Cursor validation has two distinct layers:
   unambiguously into the UTF-8 signed canonical form. Real record IDs never contain
   `|` or surrogates. A missing or empty signature header returns `bad_signature` first;
   timestamp and identifier shape checks also precede the cursor shape check.
-- `check_cursor`, the pure ring lookup called by `read_records` after
+- `check_cursor`, the pure ring lookup called by `check_read` after verification
+  and again by `read_records` after
   authentication, treats every nonempty malformed, evicted or unknown value
   (including one containing `|`) as **410 `cursor_gone`** and never replays the
   ring for such a value.
@@ -108,7 +114,12 @@ READ requires `X-Fleet-From`, `X-Fleet-Ts`, `X-Fleet-Nonce`, `X-Fleet-Sig`, and
 optionally `X-Fleet-Kid` (header names case-insensitive). Its signature binds the
 exact cursor. Apply skew, key, signature, replay and per-reader rate gates
 before disclosing records. There is **no open GET**. `check_read` is the
-authentication seam; `read_records` only shapes data and must not be exposed
+authentication seam; pass the same query `limit` to `check_read` and
+`read_records`. After signature and replay verification, `check_read` validates
+the limit and retained cursor before capacity/rate checks and nonce recording.
+Thus a bad signature wins over a stale cursor (401 before 410). Every refused
+POST or READ leaves nonce, message-ID dedupe and rate state unchanged, including
+expired entries; cleanup occurs only on acceptance. `read_records` only shapes data and must not be exposed
 directly by a transport.
 
 Page limit defaults to 100, accepts integers or ASCII decimal query strings,
@@ -139,3 +150,4 @@ publish as a Retry-After header; it is not an extra JSON response field.
 | `cursor_gone` | 410 |
 | `too_large` | 413 |
 | `rate_limited` | 429 |
+| `replay_window_full` | 503 |

@@ -88,7 +88,7 @@ def test_rate_rejected_flood_preserves_replay_state(c):
     assert not any(nonce.startswith("rejected-") for nonce in state.seen)
 
 
-def test_rate_rejected_request_can_retry_exactly_at_window_boundary(c):
+def test_exact_retry_at_inclusive_skew_and_rate_boundary(c):
     state = fleet_state(c)
     for n in range(c.RATE_PER_MIN):
         send(c, state, post(nonce=f"prior-{n}", msg_id=f"prior-{n}"))
@@ -100,6 +100,11 @@ def test_rate_rejected_request_can_retry_exactly_at_window_boundary(c):
     assert ("sender", "retry") not in state.msg_ids
     ack = send(c, state, envelope, now=NOW + 60)
     assert ack["dup"] is False
+
+
+def test_rate_rejected_request_can_retry_exactly_at_window_boundary(c):
+    # Preserve the original regression entry point; the precise boundary is above.
+    test_exact_retry_at_inclusive_skew_and_rate_boundary(c)
 
 
 def test_duplicate_returns_original_ack_without_append(c):
@@ -125,11 +130,68 @@ def test_evicted_cursor_never_replays_ring(c):
 
 def test_nonce_and_ring_storage_are_bounded(c):
     state = fleet_state(c)
-    for n in range(c.NONCE_CAP + 1):
+    for n in range(c.NONCE_CAP):
         # Distinct senders avoid the unrelated per-sender rate gate.
         send(c, state, post(**{"from": f"sender-{n}", "nonce": f"n-{n}", "msg_id": f"m-{n}"}))
     assert len(state.seen) <= c.NONCE_CAP
     assert len(state.ring) == c.RING_CAP
+    with pytest.raises(c.BusError) as err:
+        send(c, state, post(**{"from": "overflow", "nonce": "overflow"}))
+    assert (err.value.code, err.value.status) == ("replay_window_full", 503)
+    assert len(state.seen) == c.NONCE_CAP
+    assert len(state.ring) == c.RING_CAP
+
+
+@pytest.mark.parametrize("cursor,limit,code", [("", 0, "bad_request"), ("1-000001", 100, "cursor_gone")])
+def test_read_refusal_preserves_nonce_and_rate(c, cursor, limit, code):
+    state = fleet_state(c)
+    send(c, state)
+    seen = state.seen.copy()
+    rates = {key: list(value) for key, value in state.limiter.senders.items()}
+    headers = {"X-Fleet-From": "reader", "X-Fleet-Ts": str(NOW), "X-Fleet-Nonce": "read"}
+    headers["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(NOW, "read", "reader", cursor=cursor))
+    with pytest.raises(c.BusError) as err:
+        c.check_read(lambda kid: SECRET, headers, cursor, NOW, state, limit=limit)
+    assert err.value.code == code
+    assert state.seen == seen
+    assert {key: list(value) for key, value in state.limiter.senders.items()} == rates
+
+
+def test_read_auth_before_stale_cursor(c):
+    state = fleet_state(c)
+    headers = {"X-Fleet-From": "reader", "X-Fleet-Ts": str(NOW),
+               "X-Fleet-Nonce": "read", "X-Fleet-Sig": "0" * 64}
+    with pytest.raises(c.BusError) as err:
+        c.check_read(lambda kid: SECRET, headers, "1-000001", NOW, state)
+    assert (err.value.code, err.value.status) == ("bad_signature", 401)
+    assert not state.seen
+    assert not state.limiter.senders
+
+
+def test_accepted_flood_fails_closed_and_purges_by_message_ts(c):
+    state = fleet_state(c)
+    for n in range(c.NONCE_CAP):
+        send(c, state, post(**{"from": f"sender-{n // 30}", "nonce": f"n-{n}",
+                              "msg_id": f"m-{n}", "ts": NOW + 10}))
+    seen = state.seen.copy()
+    rates = {key: list(value) for key, value in state.limiter.senders.items()}
+    with pytest.raises(c.BusError) as err:
+        send(c, state, post(**{"from": "new", "nonce": "overflow"}))
+    assert (err.value.code, err.value.status) == ("replay_window_full", 503)
+    assert state.seen == seen
+    assert {key: list(value) for key, value in state.limiter.senders.items()} == rates
+    oldest = post(**{"from": "sender-0", "nonce": "n-0", "msg_id": "m-0", "ts": NOW + 10})
+    with pytest.raises(c.BusError) as err:
+        send(c, state, oldest)
+    assert err.value.code == "replayed_nonce"
+    with pytest.raises(c.BusError) as err:
+        send(c, state, post(nonce="boundary", ts=NOW + 70), now=NOW + 70)
+    assert err.value.code == "replay_window_full"
+    send(c, state, post(nonce="fresh", ts=NOW + 71), now=NOW + 71)
+    assert state.seen == OrderedDict([("fresh", NOW + 71)])
+    with pytest.raises(c.BusError) as err:
+        send(c, state, oldest, now=NOW + 71)
+    assert err.value.code == "skew"
 
 
 @pytest.mark.parametrize("text", ["", "\ud800", "\udfff", "\x00\r\n", "\u2028\u2029", "x" * 10000], ids=["empty", "high-surrogate", "low-surrogate", "controls", "separators", "long"])

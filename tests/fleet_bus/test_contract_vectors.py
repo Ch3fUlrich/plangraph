@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from .test_contract_unit import fleet_state, post, SECRET, NOW
+from .test_contract_unit import fleet_state, post, send, SECRET, NOW
 
 
 CASES = [
@@ -27,6 +27,21 @@ def test_vector(case):
     fn, inputs = case["fn"], case.get("inputs", {})
 
     def invoke():
+        if fn == "replay_window":
+            state = fleet_state(c)
+            for n in range(c.NONCE_CAP):
+                send(c, state, post(**{"from": f"s-{n // 30}", "nonce": f"n-{n}", "msg_id": str(n), "ts": NOW + 10}))
+            seen = state.seen.copy()
+            rates = {k: list(v) for k, v in state.limiter.senders.items()}
+            now = inputs.get("now", NOW)
+            try:
+                send(c, state, post(nonce="fresh", ts=now), now=now)
+            except c.BusError:
+                assert state.seen == seen
+                assert {k: list(v) for k, v in state.limiter.senders.items()} == rates
+                assert "n-0" in state.seen
+                raise
+            return dict(state.seen)
         if fn == "constants":
             return {name: getattr(c, name) for name in case["expect"]}
         if fn == "validate_post":
@@ -53,30 +68,40 @@ def test_vector(case):
             if inputs.get("rate_full"):
                 for n in range(30):
                     prior = post(nonce=f"prior-{n}", msg_id=f"prior-{n}")
-                    c.validate_post(lambda kid: SECRET, json.dumps(prior).encode(), c.sign(SECRET, c.canonical_post(prior)), NOW, state)
+                    c.validate_post(lambda kid: SECRET, json.dumps(prior).encode(), c.sign(SECRET, c.canonical_post(prior)), inputs.get("now", NOW), state)
             if inputs.get("duplicate"):
                 state.msg_ids[(envelope["from"], envelope["msg_id"])] = {"id": "1700000000000-000001", "ts": NOW, "msg_id": envelope["msg_id"], "dup": False}
             if "retry_after_s" in inputs:
                 seen, msg_ids = state.seen.copy(), state.msg_ids.copy()
                 with pytest.raises(c.BusError) as rejected:
-                    c.validate_post(lambda kid: SECRET, body, sig, NOW, state)
+                    c.validate_post(lambda kid: SECRET, body, sig, inputs.get("now", NOW), state)
                 assert (rejected.value.code, rejected.value.status) == ("rate_limited", 429)
                 assert state.seen == seen
                 assert state.msg_ids == msg_ids
                 return c.validate_post(lambda kid: SECRET, body, sig,
-                                       NOW + inputs["retry_after_s"], state)
+                                       inputs.get("now", NOW) + inputs["retry_after_s"], state)
             return c.validate_post(lambda kid: None if inputs.get("unknown_kid") else SECRET, body, sig, inputs.get("now", NOW), state)
         if fn == "check_read":
             state = fleet_state(c)
             headers = dict(inputs["headers"])
             cursor = inputs.get("cursor", "")
+            if inputs.get("sign"):
+                headers["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(
+                    headers["X-Fleet-Ts"], headers["X-Fleet-Nonce"], headers["X-Fleet-From"], cursor=cursor))
             if inputs.get("rate_full"):
                 for n in range(30):
                     prior = dict(headers, **{"X-Fleet-Nonce": f"prior-{n}"})
                     prior["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(
                         prior["X-Fleet-Ts"], prior["X-Fleet-Nonce"], prior["X-Fleet-From"]))
                     c.check_read(lambda kid: SECRET, prior, "", NOW, state)
-            return c.check_read(lambda kid: SECRET, headers, cursor, inputs.get("now", NOW), state)
+            try:
+                return c.check_read(lambda kid: SECRET, headers, cursor, inputs.get("now", NOW), state, limit=inputs.get("limit", 100))
+            except c.BusError:
+                if inputs.get("unchanged"):
+                    assert not state.seen
+                    assert not state.limiter.senders
+                    assert not state.msg_ids
+                raise
         if fn == "read_records":
             state = fleet_state(c)
             state.ring.extend(inputs.get("records", []))
