@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Callable, Mapping, Sequence
 
+from plangraph.card_paths import normalise_path, path_problem
 from plangraph.keeper.schema import WINDOW_CLASSES
 
 __all__ = ["WINDOW_TOKENS", "USABLE_FRACTION", "CODES", "Finding", "Verdict",
@@ -263,7 +264,9 @@ def check_read_paths(cmd: str) -> list[str]:
 def protected_check_paths(card: Mapping) -> list[str]:
     """Return check paths not overlapping writes, without modifying the card."""
     writes = _as_list(card.get("write_set"))
-    return [path for path in check_read_paths(card.get("check_cmd"))
+    reads = list(dict.fromkeys([*check_read_paths(card.get("check_cmd")),
+                               *_as_list(card.get("check_reads"))]))
+    return [path for path in reads
             if not any(isinstance(write, str) and paths_overlap(path, write)
                        for write in writes)]
 
@@ -354,9 +357,17 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
     read_set = _as_list(card.get("read_set"))
     bad: set[str] = set()
     for field, entries in (("write_set", write_set), ("read_set", read_set),
-                           ("forbid_paths", _as_list(card.get("forbid_paths")))):
+                           ("forbid_paths", _as_list(card.get("forbid_paths"))),
+                           ("check_reads", _as_list(card.get("check_reads")))):
         for entry in entries:
-            if _bad_path(entry):
+            # Older fields accept dot-only paths; keep their historical rule.
+            if field == "check_reads":
+                invalid = (not isinstance(entry, str)
+                           or entry.strip().startswith("~")
+                           or path_problem(field, entry, normalise_path(entry)) is not None)
+            else:
+                invalid = _bad_path(entry)
+            if invalid:
                 bad.add(str(entry))
                 add("bad_path", f"{field}: {entry}")
 

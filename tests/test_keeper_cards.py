@@ -7,6 +7,7 @@ store or ``conn.execute`` only.
 import json
 
 import pytest
+from card_path_cases import CHECK_PATH_CASES
 
 from keeper_util import World, pass_review, seed, to_claimed
 from plangraph.keeper import db_errors, events as keeper_events
@@ -41,6 +42,45 @@ def count(w, table):
 
 
 # ------------------------------------------------------------------- cards
+@pytest.mark.parametrize("path", ["/abs/path", "../a", "a/../b", "", " ",
+                                  "\\root", "C:\\root", "C:relative", "."])
+def test_check_reads_refuses_unsafe_paths(w, path):
+    (key,) = seed(w, [("A", [])])
+    refused("validation", w.store.put_card, w.p("router"), key,
+            card(check_reads=[path]))
+
+
+def test_check_reads_normalises_relative_paths(w):
+    (key,) = seed(w, [("A", [])])
+    w.store.put_card(w.p("router"), key, card(check_reads=["./tests\\test_a.py"]))
+    assert w.store.get_card(w.p("reader"), key)["check_reads"] == ["tests/test_a.py"]
+
+
+def test_other_keeper_path_lists_keep_existing_behavior(w):
+    (key,) = seed(w, [("A", [])])
+    fields = {name: ["../legacy"] for name in ("read_set", "write_set", "forbid_paths")}
+    w.store.put_card(w.p("router"), key, card(**fields))
+    got = w.store.get_card(w.p("reader"), key)
+    for name, value in fields.items():
+        assert got[name] == value
+
+
+@pytest.mark.parametrize("path,valid", CHECK_PATH_CASES)
+def test_planner_and_keeper_agree_on_check_paths(w, path, valid):
+    from plangraph.planner.card import CardError, parse_card
+
+    (key,) = seed(w, [("A", [])])
+    value = card(check_reads=[path])
+    if valid:
+        parsed = parse_card(value)
+        w.store.put_card(w.p("router"), key, value)
+        assert w.store.get_card(w.p("reader"), key)["check_reads"] == list(parsed.check_reads)
+    else:
+        with pytest.raises(CardError):
+            parse_card(value)
+        refused("validation", w.store.put_card, w.p("router"), key, value)
+
+
 def test_put_and_get_card_roundtrip(w):
     (key,) = seed(w, [("A", [])])
     router = w.p("router")
@@ -53,6 +93,17 @@ def test_put_and_get_card_roundtrip(w):
     assert got["risk_tags"] == ["migration"]
     assert got["window_class"] == "128k" and got["estimate_tokens"] == 40000
     assert got["heldout_check"] is None
+    assert got["check_kind"] == "change"
+    assert got["check_reads"] == []
+
+
+def test_regression_check_roundtrip(w):
+    (key,) = seed(w, [("A", [])])
+    w.store.put_card(w.p("router"), key, card(
+        check_kind="regression", check_reads=["tests/test_existing.py"]))
+    got = w.store.get_card(w.p("reader"), key)
+    assert got["check_kind"] == "regression"
+    assert got["check_reads"] == ["tests/test_existing.py"]
 
 
 def test_put_card_replaces(w):
@@ -71,6 +122,7 @@ def test_put_card_replaces(w):
     {"window_class": "512k"}, {"risk_tags": ["vibes"]}, {"estimate_tokens": -1},
     {"estimate_tokens": True}, {"write_set": "src/a.py"}, {"write_set": [""]},
     {"outcome": "  "}, {"unknown_field": 1}, {"check_cmd": 7},
+    {"check_kind": "other"}, {"check_reads": "tests/a.py"},
 ])
 def test_put_card_validates(w, bad):
     (key,) = seed(w, [("A", [])])
