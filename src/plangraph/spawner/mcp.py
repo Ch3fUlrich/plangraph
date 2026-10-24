@@ -122,6 +122,12 @@ for _verb in ('route', 'ps', 'result'):
             'required': ['card'] if _verb == 'route' else (['run_id'] if _verb == 'result' else [])}})
 
 
+for _tool in TOOLS_METADATA:
+    if _tool['name'] in ('plangraph_agent_route', 'plangraph_agent_spawn'):
+        _tool['inputSchema']['properties'].update({
+            'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'}})
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
@@ -132,9 +138,11 @@ class MCPSpawnerServer:
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
+        from .bench_entry import benchmark_options
+        options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
         if name == 'plangraph_agent_route':
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
-                arguments.get('writer_families', ()), arguments.get('review_of')).to_dict()
+                arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
         if name == 'plangraph_agent_ps':
             return self.service.ps()
         if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
@@ -149,7 +157,7 @@ class MCPSpawnerServer:
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
                 writer_families=arguments.get('writer_families', ()),
                 dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
-                no_fallthrough=arguments.get('no_fallthrough', False))
+                no_fallthrough=arguments.get('no_fallthrough', False), **options)
 
         if name == "plangraph_agent_status":
             job_id = arguments.get("job_id")
@@ -249,6 +257,8 @@ class MCPSpawnerServer:
                     },
                 }
             except Exception as exc:
+                if 'benchmark' in str(exc):
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc)}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,

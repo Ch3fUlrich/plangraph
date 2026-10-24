@@ -41,6 +41,8 @@ def main(argv=None):
     for verb in ('route', 'spawn'):
         p = commands.add_parser(verb)
         p.add_argument('--card', type=_card)
+        p.add_argument('--require-bench', action='store_true')
+        p.add_argument('--bench-db', action='append')
         p.add_argument('--role', choices=('implement', 'review'), default='implement')
         p.add_argument('--writer-family', action='append', default=[])
         p.add_argument('--review-of')
@@ -59,18 +61,20 @@ def main(argv=None):
     args = parser.parse_args(argv)
     service = SpawnService(state=args.state)
     try:
+        from .bench_entry import benchmark_options
+        options = benchmark_options(args.require_bench, args.bench_db) if args.verb in ('route', 'spawn') else {}
         if args.verb == 'route':
-            result = service.route(args.card, args.role, args.writer_family, args.review_of).to_dict()
+            result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':
             payload = dict(card=args.card, prompt=args.prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
-                no_fallthrough=args.no_fallthrough)
+                no_fallthrough=args.no_fallthrough, **options)
             # Validate before detaching so refusals are reported synchronously.
             if not args.model and not args.leg:
                 if not args.card:
                     raise ValueError('spawn by card; card required')
-                service.route(args.card, args.role, args.writer_family, args.review_of)
+                service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
@@ -99,7 +103,7 @@ def main(argv=None):
         return result.get('exit_code', 0) if isinstance(result, dict) else 0
     except (ValueError, KeyError, OSError) as exc:
         print(str(exc), file=sys.stderr)
-        return 2
+        return 3 if 'benchmark' in str(exc) else 2
 
 
 if __name__ == '__main__':
