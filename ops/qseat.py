@@ -8,8 +8,8 @@ from pathlib import Path
 
 args = sys.argv[1:]
 out = Path(args.pop(0)); adj = None
-if args and args[0] == "--adjudication":
-    args.pop(0); adj = Path(args.pop(0))
+if "--adjudication" in args:
+    sys.exit("RETIRED (router D-2515): --adjudication is an L1 self-ruling (D-302); re-seat via the GW-QODER-401 adapter instead")
 parts, verdicts, tg = [], [], []
 text = []
 for p in map(Path, args):
