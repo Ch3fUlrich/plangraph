@@ -132,8 +132,16 @@ def main(argv=None):
                     if not line:
                         child.wait()
                         errors.seek(0, os.SEEK_END)
-                        errors.seek(max(0, errors.tell() - 16384))
-                        tail = '\n'.join(redact(errors.read().decode('utf-8', errors='replace')).splitlines()[-20:])
+                        size = errors.tell()
+                        errors.seek(max(0, size - 262144))
+                        from .env_redact import redact_env_values
+                        from .opencode_overlay import overlay_env
+                        text = errors.read(262144).decode('utf-8', errors='replace')
+                        # Discard the possibly partial first line before displaying a suffix.
+                        if size > 262144:
+                            text = text.partition('\n')[2]
+                        tail = '\n'.join(redact(redact_env_values(text, overlay_env(os.environ))).splitlines()[-20:])
+                        tail = tail.encode()[-4096:].decode('utf-8', errors='ignore')
                         raise ValueError('spawn supervisor failed; check card and override reason' +
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)

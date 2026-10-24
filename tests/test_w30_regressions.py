@@ -21,7 +21,7 @@ def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, expli
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
-    monkeypatch.setenv('AUTOOS_TEST_KEY', 'sk-test-SECRET123')
+    monkeypatch.setenv('AUTOOS_TEST_KEY', 'opaque-test-SECRET123')
     (tmp_path / 'opencode.jsonc').write_text(json.dumps({'providers': {'omniroute': {'env': ['AUTOOS_TEST_KEY']}}}))
     service = spawn_service(state=tmp_path / 'state', runner=SpawnerRunner(default_cwd=str(tmp_path)))
     monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((first, second), (), 'test', (), ()))
@@ -32,7 +32,7 @@ def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, expli
                                        wait_seconds=None, no_fallthrough=explicit))
     assert result['status'] == ('failed' if explicit else 'completed')
     assert len(result['attempts']) == (1 if explicit else 2)
-    assert 'sk-test-SECRET123' not in service._path(result['run_id']).read_text() + caplog.text
+    assert 'opaque-test-SECRET123' not in service._path(result['run_id']).read_text() + caplog.text
 
 
 def test_dry_run_never_probes(tmp_path, monkeypatch):

@@ -35,6 +35,31 @@ class SpawnService:
     def _save(self, record):
         from .private_io import atomic_write_private
         from .runner import redact
+        from .env_redact import redact_env_values
+        env = dict(os.environ)
+        env.update(getattr(self.runner, '_child_envs', {}).get(record.get('job_id'), {}))
+        def clean(value):
+            if isinstance(value, str):
+                return redact(redact_env_values(value, env))
+            if isinstance(value, list):
+                return [clean(v) for v in value]
+            if isinstance(value, dict):
+                return {k: clean(v) for k, v in value.items()}
+            return value
+        record.update(clean(record))
+        for attempt in record.get('attempts', []):
+            if attempt.get('skip_reason'):
+                attempt['skip_reason'] = clean(attempt['skip_reason'][:300])
+        if record.get('status') == 'failed':
+            if not record.get('exit_code'):
+                record['exit_code'] = 1
+            record['error'] = record.get('error') or '; '.join(
+                a.get('skip_reason') or 'harness failed' for a in record.get('attempts', [])) or 'harness failed'
+        if record.get('error'):
+            record['error'] = clean('; '.join(p[:300] for p in record['error'].split('; '))[:2000])
+        for stream in ('stdout_tail', 'stderr_tail'):
+            if stream in record:
+                record[stream] = clean(record[stream]).encode()[-4096:].decode('utf-8', errors='ignore')
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
 
     def ps(self):
@@ -89,7 +114,7 @@ class SpawnService:
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
-        reason = ('nonzero_exit' if record.get('exit_code') != 0 else
+        reason = ('nonzero_exit' if record.get('exit_code') != 0 or record.get('status', 'completed') != 'completed' else
                   'continuation_limit' if record.get('continuation') else
                   'not_writer' if record.get('role') != 'implement' else
                   'clean_report' if not gaps else 'remaining_gaps')
@@ -112,7 +137,7 @@ class SpawnService:
             task = self.runner._tasks.get(job.job_id)
             if task:
                 await asyncio.shield(task)
-            child.update(status=job.status, exit_code=job.exit_code, stdout_tail=job.stdout[-16000:])
+            child.update(status=job.status, exit_code=job.exit_code, stdout_tail=job.stdout)
             await self._continue_writer(child, job.stdout)
         except Exception as exc:
             child.update(status='failed', exit_code=1, error=str(exc), continuation_reason='spawn_failed')
@@ -210,11 +235,19 @@ class SpawnService:
                     if task:
                         await asyncio.shield(task)
                     stop = self.runner.provider_responses.get(job.job_id)
+                    from .runner import unavailable_reason
+                    unavailable = unavailable_reason(job)
+                    if unavailable:
+                        job.status = 'failed'
+                        job.exit_code = job.exit_code or 1
+                    reason = unavailable or ('provider_stop' if stop else
+                        (job.stderr.strip().splitlines()[0] if job.stderr.strip() else f'harness exit code {job.exit_code}')
+                        if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                        skip_reason='provider_stop' if stop else None, provider_response=stop))
+                        skip_reason=reason, provider_response=stop))
                     record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                         served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                        stdout_tail=job.stdout[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
+                        stdout_tail=job.stdout, stderr_tail=job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
                     if not stop or no_fallthrough or dry_run:
                         if not dry_run:
