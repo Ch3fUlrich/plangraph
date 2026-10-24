@@ -1,0 +1,15 @@
+Here is my structured assessment, as requested. I found two problems and
+have listed them as JSON so they are easy to copy:
+
+```json
+{"findings": [
+  {"title": "unbounded retry", "finding": "worker.rs:poll never backs off", "files": ["rust/worker/src/worker.rs"]},
+  {"title": "missing test", "finding": "no test for park path", "files": ["rust/worker/tests/e2e.rs"]}
+]}
+```
+
+Both are medium severity, neither blocks the merge on its own.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only branches and env checks: 0 hits
+
+VERDICT: fix - medium: worker.rs:poll never backs off; medium: no test for the park path

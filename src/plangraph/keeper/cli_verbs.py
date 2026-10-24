@@ -1,0 +1,448 @@
+"""CLI verbs: talk to the API with urllib and fall back to the local snapshot.
+
+The token is read from ``PG_TOKEN_FILE`` (mode 600), never from argv and never
+printed.  The keeper URL comes from ``--url`` or ``PG_URL``, resolved at call
+time; there is no built-in default (D-A=2).  Exit codes: 0 ok, 2 refused,
+3 unreachable.  On an unreachable keeper a
+*read* verb is answered from the local ``plan.snapshot.json`` (signature-checked when
+configured, M2B) with :mod:`plangraph.views` + a stderr notice; a write only exits 3.
+"""
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+from .. import views
+from . import brief as brief_mod, fmt, outbox
+from .credential_guard import mask_all
+from .snapshot_io import SignError, read_snapshot
+from .cli_local import evidence_ref, local_alerts, local_digest, local_show
+
+__all__ = ["Session", "RefusedCli", "MissingKeeperURL", "Unreachable",
+           "parse_duration",
+           "EXIT_OK", "EXIT_REFUSED", "EXIT_UNREACHABLE"]
+
+EXIT_OK = 0
+EXIT_REFUSED = 2
+EXIT_UNREACHABLE = 3
+TIMEOUT = 15.0
+NOTICE = "READ-ONLY fallback (keeper unreachable)"
+
+
+class RefusedCli(Exception):
+    """The API refused a verb (HTTP 4xx)."""
+
+    def __init__(self, code: str, msg: str = ""):
+        super().__init__(f"{code}: {msg}" if msg else code)
+        self.code = code
+        self.msg = msg
+
+
+class Unreachable(Exception):
+    """The keeper could not be reached (connection error or 5xx)."""
+
+
+class MissingKeeperURL(RefusedCli):
+    """No keeper URL configured (D-A=2: the client has no default port)."""
+
+    def __init__(self):
+        super().__init__("no keeper URL: pass --url or set PG_URL")
+
+
+def parse_duration(value) -> int:
+    """``2h``/``30m``/``90s``/``7200`` -> seconds."""
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value).strip().lower()
+    if text.isdigit():
+        return int(text)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([smhd])", text)
+    if not match:
+        raise ValueError(f"cannot parse duration {value!r}")
+    scale = {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+    return int(float(match.group(1)) * scale)
+
+
+def _parse_error(raw, status):
+    try:
+        data = json.loads(raw.decode("utf-8"))
+        return data.get("error", str(status)), data.get("msg", "")
+    except (ValueError, AttributeError):
+        return str(status), ""
+
+
+class Session:
+    """One CLI invocation: URL, token file and (for fallback) config path."""
+
+    def __init__(self, json_mode=False, config_path=None, url=None):
+        self.json_mode = bool(json_mode)
+        self._url = url
+        self.config_path = config_path or os.environ.get("PG_CONFIG")
+        self._token = None
+        self._config = None
+
+    @property
+    def url(self):
+        url = self._url or os.environ.get("PG_URL")
+        if not url:
+            raise MissingKeeperURL()
+        return url.rstrip("/")
+
+    # --------------------------------------------------------------- token
+    def token(self):
+        if self._token is None:
+            path = os.environ.get("PG_TOKEN_FILE")
+            if not path:
+                raise Unreachable("PG_TOKEN_FILE is not set")
+            try:
+                self._token = Path(path).read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise Unreachable(f"cannot read token file: {exc}") from exc
+        return self._token
+
+    # ---------------------------------------------------------------- HTTP
+    def call(self, method, verb, params=None, body=None):
+        query = dict(params or {})
+        query.setdefault("fmt", "json")
+        query = {k: v for k, v in query.items() if v is not None}
+        url = f"{self.url}/v1/{verb}?{urllib.parse.urlencode(query)}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request = urllib.request.Request(url, data=data, method=method)
+        request.add_header("Authorization", f"Bearer {self.token()}")
+        if data is not None:
+            request.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(request, timeout=TIMEOUT) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as exc:
+            code, msg = _parse_error(exc.read(), exc.code)
+            if exc.code >= 500:
+                raise Unreachable(msg or f"server error {exc.code}") from None
+            raise RefusedCli(code, msg) from None
+        except (urllib.error.URLError, http.client.HTTPException,
+                TimeoutError, OSError) as exc:
+            reason = getattr(exc, "reason", exc)
+            raise Unreachable(str(reason)) from None
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except ValueError:
+            return {"raw": raw.decode("utf-8", "replace")}
+
+    # ------------------------------------------------------------ fallback
+    @property
+    def config(self):
+        if self._config is None:
+            from . import config as config_mod
+            if self.config_path:
+                self._config = config_mod.load_config(self.config_path)
+            else:
+                self._config = False
+        return self._config or None
+
+    def snapshot_path(self) -> Path:
+        cfg = self.config
+        return Path(cfg.snapshot) if cfg else Path("plan.snapshot.json")
+
+    def local_snapshot(self) -> dict:
+        try:   # M2B: the signature must verify when a snapshot_pubkey is configured
+            snap = read_snapshot(self.snapshot_path(), getattr(self.config, "snapshot_pubkey", None))
+        except (OSError, SignError) as exc:
+            raise Unreachable(f"no usable local snapshot at {self.snapshot_path()}: {exc}") from exc
+        from .snapshot_pull import behind_mark   # PG-LOCAL-COPY: a half-installed pull is not served
+        if behind_mark(self.snapshot_path(), snap):
+            raise Unreachable(f"local copy at {self.snapshot_path()} is older than the last pull; run pg sync pull")
+        return snap
+
+    def local_items(self):
+        return self.local_snapshot().get("items") or []
+
+
+# --------------------------------------------------------------------------- #
+# output helpers
+# --------------------------------------------------------------------------- #
+
+def _emit(session, value, renderer) -> int:
+    if session.json_mode:
+        print(json.dumps(value))
+    else:
+        print(renderer(value) if callable(renderer) else value)
+    return EXIT_OK
+
+
+def _refuse(exc) -> int:
+    print(str(exc), file=sys.stderr)
+    return EXIT_REFUSED
+
+
+def read(session, verb, params, renderer, local=None) -> int:
+    """A read verb; falls back to the local snapshot when unreachable."""
+    try:
+        return _emit(session, session.call("GET", verb, params), renderer)
+    except RefusedCli as exc:
+        return _refuse(exc)
+    except Unreachable as exc:
+        if local is None:
+            print(f"keeper unreachable: {exc}", file=sys.stderr)
+            return EXIT_UNREACHABLE
+        print(NOTICE, file=sys.stderr)
+        return local()
+
+
+def write(session, verb, body, renderer=None) -> int:
+    try:
+        return _emit(session, session.call("POST", verb, body=body),
+                     renderer or (lambda r: fmt.result_text(verb, r)))
+    except RefusedCli as exc:
+        return _refuse(exc)
+    except Unreachable as exc:   # M2B-OUTBOX: a run token with PG_OUTBOX queues instead
+        return outbox.on_unreachable(verb, body, exc, exit_unreachable=EXIT_UNREACHABLE)
+
+
+def _epoch(session, key) -> int:
+    return int(os.environ.get("PG_EPOCH") or session.call("GET", "show", {"key": key})["epoch"])
+
+
+# --------------------------------------------------------------------------- #
+# read verbs
+# --------------------------------------------------------------------------- #
+
+def cmd_ready(args, session):
+    if getattr(args, "brief", False):
+        session.json_mode = False
+    n = None if args.all else args.n
+
+    owner = getattr(args, "owner", None)
+    mine = bool(getattr(args, "mine", False))
+    agent = bool(getattr(args, "agent", False))
+
+    def local():
+        # Offline (snapshot) fallback: --mine needs the server's whoami, so it
+        # falls back to no owner filter there; --owner and --agent still apply.
+        return _emit(session, session.local_items(),
+                     lambda items: fmt.ready_text(items, args.project, n,
+                                                  owner=owner, agent=agent))
+    return read(session, "ready", {"project": args.project, "n": n,
+                                   "all": 1 if args.all else None,
+                                   "owner": owner, "mine": 1 if mine else None,
+                                   "agent": 1 if agent else None},
+                lambda r: fmt.ready_text(r["items"], unblocks=r.get("unblocks"),
+                                         server_items=True), local)
+
+
+def cmd_show(args, session):
+    render = brief_mod.brief_text if args.brief else fmt.show_text
+    def local():
+        try:
+            data = local_show(session.local_items(), args.key,
+                              session.local_snapshot().get("aliases"))
+        except KeyError:
+            print(f"not found in the local snapshot: {args.key}", file=sys.stderr)
+            return EXIT_REFUSED
+        if args.brief:
+            data = brief_mod.build(data, data.get("depends_on"))
+        return _emit(session, data, render)
+    params = {"key": args.key, "brief": 1 if args.brief else None}
+    return read(session, "show", params, lambda r: render(r), local)
+
+
+def cmd_blocked(args, session):
+    def local():
+        return _emit(session,
+                     views.blocked(session.local_items(), project=args.project),
+                     fmt.blocked_text)
+    return read(session, "blocked", {"project": args.project},
+                lambda r: fmt.blocked_text(r), local)
+
+
+def cmd_waves(args, session):
+    def local():
+        return _emit(session, views.waves(session.local_items()), fmt.waves_text)
+    return read(session, "waves", {}, lambda r: fmt.waves_text(r), local)
+
+
+def cmd_critical(args, session):
+    def local():
+        return _emit(session, views.critical_path(session.local_items(),
+                                                  project=args.project),
+                     fmt.critical_text)
+    return read(session, "critical_path", {"project": args.project},
+                lambda r: fmt.critical_text(r), local)
+
+
+def cmd_percent(args, session):
+    def local():
+        return _emit(session, views.percent_done(session.local_items(),
+                                                 by=args.by,
+                                                 project=args.project),
+                     fmt.percent_text)
+    return read(session, "percent", {"project": args.project, "by": args.by},
+                lambda r: fmt.percent_text(r), local)
+
+
+def cmd_alerts(args, session):
+    def local():
+        return _emit(session, local_alerts(session.local_items(), args.project),
+                     fmt.alerts_text)
+    return read(session, "alerts", {"project": args.project},
+                lambda r: fmt.alerts_text(r), local)
+
+
+def cmd_digest(args, session):
+    def local():
+        return _emit(session, local_digest(session.local_items()), fmt.digest_text)
+    return read(session, "digest", {}, lambda r: fmt.digest_text(r), local)
+
+
+def cmd_snapshot(args, session):
+    def local():
+        return _emit(session, session.local_snapshot(), fmt.snapshot_text)
+    return read(session, "snapshot", {}, lambda r: fmt.snapshot_text(r), local)
+
+
+def cmd_whoami(args, session):
+    return read(session, "whoami", {}, lambda r: fmt.whoami_text(r))
+
+
+# --------------------------------------------------------------------------- #
+# write verbs
+# --------------------------------------------------------------------------- #
+
+def cmd_claim(args, session):
+    body = {"key": args.key}
+    if args.lease:
+        body["lease_s"] = parse_duration(args.lease)
+    return write(session, "claim", body, lambda r: fmt.result_text("claim", r))
+
+
+def cmd_delegate(args, session):
+    return write(session, "delegate", {"key": args.key, "worker": args.worker})
+
+
+def cmd_heartbeat(args, session):
+    return write(session, "heartbeat",
+                 {"key": args.key, "epoch": _epoch(session, args.key)})
+
+
+def cmd_release(args, session):
+    return write(session, "release",
+                 {"key": args.key, "epoch": _epoch(session, args.key)})
+
+
+def cmd_evidence(args, session):
+    ref = evidence_ref(args)
+    return write(session, "add_evidence",
+                 {"key": args.key, "epoch": _epoch(session, args.key),
+                  "kind": args.kind, "ref": ref})
+
+
+def cmd_submit(args, session):
+    return write(session, "submit",
+                 {"key": args.key, "epoch": _epoch(session, args.key)})
+
+
+def cmd_verdict(args, session):
+    ok = bool(args.ok)
+    if not args.ok and not args.changes:
+        print("verdict needs --pass or --changes", file=sys.stderr)
+        return EXIT_REFUSED
+    return write(session, "verdict",
+                 {"key": args.key, "ok": ok,
+                  "reason": args.changes or args.reason or ""},
+                 lambda r: fmt.result_text("verdict", r))
+
+
+def cmd_cancel(args, session):
+    return write(session, "cancel", {"key": args.key, "reason": args.reason or ""})
+
+
+def cmd_waive(args, session):
+    return write(session, "waive_second_family",
+                 {"key": args.key, "decision_id": args.decision_id},
+                 lambda r: f"{r.get('key')} waiver {r.get('review_waiver')}")
+
+
+def cmd_withdraw(args, session):
+    return write(session, "withdraw_review",
+                 {"key": args.key, "decision_id": args.decision_id},
+                 lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
+
+
+def cmd_reopen(args, session):
+    return write(session, "reopen",
+                 {"key": args.key, "decision_id": args.decision_id,
+                  "reason": args.reason},
+                 lambda r: f"{args.key} reopened -> {r.get('state')} epoch {r.get('epoch')}")
+
+
+def cmd_set_kind(args, session):
+    return write(session, "set_kind", {"key": args.key, "kind": args.kind},
+                 lambda r: f"{r.get('key')} kind {r.get('was')} -> {r.get('kind')}")
+
+
+def cmd_close(args, session):
+    return write(session, "close_on_decision",
+                 {"key": args.key, "batch_ref": args.batch},
+                 lambda r: f"{r.get('key')} closed {r.get('state')}")
+
+
+def cmd_legacy(args, session):
+    return write(session, "set_legacy_state",
+                 {"key": args.key, "state": args.state, "note": args.note},
+                 lambda r: f"{r.get('key')} -> {r.get('state')}")
+
+
+def cmd_priority(args, session):
+    return write(session, "set_priority", {"key": args.key, "n": args.n},
+                 lambda r: f"{r.get('key')} priority {r.get('priority')}")
+
+
+def cmd_define(args, session):
+    payload = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    if args.edit:
+        fields = payload.get("fields", payload) if isinstance(payload, dict) else payload
+        return write(session, "edit_definition", {"key": args.key, "fields": fields})
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    tier = getattr(args, "tier", None)
+    if tier:
+        for definition in (items if isinstance(items, list) else [items]):
+            if isinstance(definition, dict):
+                definition["review_tier"] = tier
+    return write(session, "create_items", {"items": items},
+                 lambda r: fmt.result_text("create_items", r))
+
+
+def cmd_render(args, session):
+    from .. import render as render_mod
+    try:
+        snapshot = session.call("GET", "snapshot")
+    except RefusedCli as exc:
+        return _refuse(exc)
+    except Unreachable:
+        print(NOTICE, file=sys.stderr)
+        try:
+            snapshot = session.local_snapshot()
+        except Unreachable as exc:
+            print(f"keeper unreachable: {exc}", file=sys.stderr)
+            return EXIT_UNREACHABLE
+    snapshot, masked = mask_all(snapshot)  # D-374: last line of defence
+    if masked:
+        print(f"render: masked {masked} credential-shaped string(s)",
+              file=sys.stderr)
+    document = render_mod.render(snapshot, render_mod.default_vendor_dir(),
+                                 cdn=args.cdn)
+    out = Path(args.out)
+    if out.parent and not out.parent.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(document, encoding="utf-8")
+    from .. import kg_export  # PG-KG-EXPORT: read-only, off without a token, never fails the render
+    kg_export.run(snapshot.get("items") or [], out.parent)
+    return EXIT_OK

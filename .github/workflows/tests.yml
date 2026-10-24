@@ -1,0 +1,351 @@
+# One required status check: ci-gate.
+# Branch protection requires only ci-gate; unselected suites skip, while selected
+# suites that skip or fail will fail the gate. Push to main and workflow_dispatch run everything.
+
+name: tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
+# but never a workflow_dispatch run (timing measurements must finish).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-24.04
+    outputs:
+      scrub: ${{ steps.sel.outputs.scrub }}
+      pytest: ${{ steps.sel.outputs.pytest }}
+      pytest-postgres: ${{ steps.sel.outputs.pytest-postgres }}
+      rust: ${{ steps.sel.outputs.rust }}
+      rust-worker: ${{ steps.sel.outputs.rust-worker }}
+      rust-spike: ${{ steps.sel.outputs.rust-spike }}
+      full: ${{ steps.sel.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: sel
+        name: Select test suites
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python3 tools/ci_select.py select --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            python3 tools/ci_select.py select --full
+          fi
+
+  # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
+  # the private word list never enters CI; output is path:line:rule only.
+  scrub:
+    needs: select
+    if: needs.select.outputs.scrub == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: scrub_check (public patterns)
+        run: python tools/split/scrub_check.py . --rules tools/split/manifest.toml --rules tools/split/scrub_ci.toml
+
+  pytest:
+    needs: select
+    if: needs.select.outputs.pytest == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # D-1393: pip wheel cache keyed on the requirements hash.
+      - name: Restore pip cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('requirements-ci.txt') }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test deps
+        run: python -m pip install --quiet -r requirements-ci.txt
+      - name: Install Temporal CLI 1.9.1
+        run: |
+          dir=$(mktemp -d)
+          curl -fsSL -o "$dir/temporal.tar.gz" \
+            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
+          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
+          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - name: Git identity for tests that commit
+        run: |
+          git config --global user.name "plangraph-ci"
+          git config --global user.email "ci@example.invalid"
+          git config --global init.defaultBranch main
+      - name: pytest
+        run: python -m pytest -q -n auto --dist loadgroup --durations=30 tests
+
+  # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
+  # committed local assets, so the job never needs network access to a CDN.
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test deps
+        run: python -m pip install --quiet -r requirements-ci.txt
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+      - name: browser tests
+        run: python -m pytest -q tests/browser -m browser
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: out/ui-shots/*.png
+          if-no-files-found: warn
+
+  pytest-postgres:
+    needs: select
+    if: needs.select.outputs.pytest-postgres == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: keeper
+        ports:
+          - 5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PG_KEEPER_BACKEND: postgres
+      # per-route keeper latency table at the end of the run (tests/contract/conftest.py)
+      PG_CONTRACT_LATENCY_DIR: /tmp/pg-contract-latency
+      # root-cause hunt (CI-PG-CONTRACT-TIMEOUT): on a hung request dump the keeper's thread stacks
+      PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # D-1393: pip wheel cache keyed on the requirements hash.
+      - name: Restore pip cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.12-${{ hashFiles('requirements-ci.txt') }}
+      - name: Resolve Postgres service host
+        env:
+          PG_PORT: ${{ job.services.postgres.ports['5432'] }}
+        # On GitHub-hosted runners the service container is published on localhost.
+        run: echo "PG_DSN=postgresql://postgres@localhost:$PG_PORT/keeper" >> "$GITHUB_ENV"
+      - name: Install test deps
+        run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
+      - name: Install Temporal CLI 1.9.1
+        run: |
+          dir=$(mktemp -d)
+          curl -fsSL -o "$dir/temporal.tar.gz" \
+            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
+          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
+          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - name: Git identity for tests that commit
+        run: |
+          git config --global user.name "plangraph-ci"
+          git config --global user.email "ci@example.invalid"
+          git config --global init.defaultBranch main
+      - name: pytest (contract suite + keeper storage tests on Postgres)
+        run: |
+          # keeper modules that never open the SQLite file directly
+          FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                  | xargs grep -L sqlite3 | tr '\n' ' ')
+          # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
+          python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+            tests/test_projector_ddl.py $FILES
+
+  rust:
+    needs: select
+    if: needs.select.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: rust
+    env:
+      CARGO_BUILD_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build pg-jail helper
+        run: cargo build -p pg-jail
+      - name: cargo test
+        env:
+          PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
+        run: cargo test
+
+  rust-worker:
+    needs: select
+    if: needs.select.outputs.rust-worker == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: rust/worker
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/worker/target
+          key: rust-worker-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker-core/Cargo.toml') }}
+      - name: Install Temporal CLI 1.9.1
+        run: |
+          dir=$(mktemp -d)
+          curl -fsSL -o "$dir/temporal.tar.gz" \
+            https://github.com/temporalio/cli/releases/download/v1.9.1/temporal_cli_1.9.1_linux_amd64.tar.gz
+          echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
+          echo "TEMPORAL_CLI=$dir/temporal" >> "$GITHUB_ENV"
+      - name: Start Temporal dev server
+        run: |
+          "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port 17233 > /tmp/temporal.log 2>&1 &
+          for i in $(seq 1 30); do
+            if "$TEMPORAL_CLI" operator cluster health --address 127.0.0.1:17233 2>/dev/null; then
+              echo "Temporal server is healthy"
+              break
+            fi
+            if [ "$i" -eq 30 ]; then
+              echo "Temporal server failed to start"
+              exit 1
+            fi
+            sleep 1
+          done
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        env:
+          PG_TEMPORAL_ADDR: http://127.0.0.1:17233
+          # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
+          PG_JAIL: "off"
+          PG_TEST_ALLOW_UNJAILED: "1"
+        run: cargo test
+      - name: Dev server log tail
+        if: always()
+        run: |
+          if [ -f /tmp/temporal.log ]; then
+            tail -n 100 /tmp/temporal.log
+          fi
+
+  rust-spike:
+    needs: select
+    if: needs.select.outputs.rust-spike == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/spikes/temporal-spike/target
+          key: temporal-spike-${{ hashFiles('rust/spikes/temporal-spike/Cargo.lock') }}
+      - name: cargo test replay
+        run: cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay
+
+  ci-gate:
+    name: ci-gate
+    runs-on: ubuntu-24.04
+    needs: [select, scrub, pytest, pytest-postgres, rust, rust-worker, rust-spike]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gate
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 tools/ci_select.py gate --needs "$NEEDS_JSON"
+      # The gate runs from the BASE copy so a PR cannot weaken the gate that judges it;
+      # removing the ci-gate job itself is caught only at merge (L1 merges only when
+      # the ci-gate check-run exists and is green).
+      - name: Commit trailers
+        if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "pull_request" ]; then
+            BASE="$PR_BASE"
+            HEAD="$PR_HEAD"
+          else
+            BASE="$PUSH_BEFORE"
+            HEAD="$PUSH_AFTER"
+          fi
+          if [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            echo "new ref: nothing to check"
+            exit 0
+          fi
+          git show "$BASE:tools/ci_commit_gate.py" > "$RUNNER_TEMP/ci_commit_gate_base.py"
+          python3 "$RUNNER_TEMP/ci_commit_gate_base.py" check --base "$BASE" --head "$HEAD" --exempt tools/ci_commit_exempt.txt

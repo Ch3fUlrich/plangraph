@@ -1,0 +1,31 @@
+# M2B-ANCHOR: one short-lived instance per connection; appends one record or refuses.
+# Operator-installed as root: /etc/systemd/system/pganchor@.service
+[Unit]
+Description=plangraph anchor log writer (one record)
+
+[Service]
+Type=oneshot
+User=pganchor
+Group=pganchor
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+ExecStart=/usr/bin/python3 -I /usr/local/lib/pganchor/anchord.py --log /var/lib/pganchor/anchor.log
+RuntimeMaxSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pganchor
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0022

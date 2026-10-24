@@ -1,0 +1,15 @@
+## V1 - migration risk
+
+The change rewrites stored rows on open without a backup step. A crash
+mid-migration would leave the store unreadable, and no test covers the
+rollback. Review stops here until the migration is scoped out of this item.
+
+## V2 - gaming check
+
+No test-only branches were found in the searched scope.
+
+TEST-GAMING: no - searched src/ and tests/ for test-only guards: 0 hits
+
+VERDICT: halt
+
+- destructive migration without a backup path (blocking)

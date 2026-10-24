@@ -1,0 +1,73 @@
+[
+  {
+    "name": "exact-page-shape",
+    "fn": "read_records",
+    "inputs": {
+      "records": [
+        {
+          "id": "1700000000000-000002",
+          "ts": 1700000000,
+          "from": "sender",
+          "to": "receiver",
+          "msg_id": "message-2",
+          "text": "hello"
+        }
+      ]
+    },
+    "expect": {
+      "cursor": "1700000000000-000002",
+      "records": [
+        {
+          "id": "1700000000000-000002",
+          "ts": 1700000000,
+          "from": "sender",
+          "to": "receiver",
+          "msg_id": "message-2",
+          "text": "hello"
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty-page-retains-cursor",
+    "fn": "read_records",
+    "inputs": {
+      "records": [
+        {
+          "id": "1700000000000-000002",
+          "ts": 1700000000,
+          "from": "sender",
+          "to": "receiver",
+          "msg_id": "message-2",
+          "text": "hello"
+        }
+      ],
+      "cursor": "1700000000000-000002"
+    },
+    "expect": {
+      "cursor": "1700000000000-000002",
+      "records": []
+    }
+  },
+  {
+    "name": "evicted-never-full-replay",
+    "fn": "read_records",
+    "inputs": {
+      "records": [
+        {
+          "id": "1700000000000-000002",
+          "ts": 1700000000,
+          "from": "sender",
+          "to": "receiver",
+          "msg_id": "message-2",
+          "text": "hello"
+        }
+      ],
+      "cursor": "1700000000000-000001"
+    },
+    "error": {
+      "code": "cursor_gone",
+      "status": 410
+    }
+  }
+]

@@ -1,0 +1,8 @@
+## V1 - behaviour
+
+The new branch in `store.py:open_store` returns early when an environment
+flag is set, so the migration test never exercises the real path.
+
+TEST-GAMING: yes - "if os.environ.get('PG_FAKE_MIGRATE'): return"
+
+VERDICT: fix - high: store.py:open_store has a test-only early return

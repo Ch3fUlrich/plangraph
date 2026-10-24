@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+out/
+
+# agent tooling artifacts (local navigation, not shipped)
+.serena/
+graphify-out/
+logs/
+.playwright-mcp/
+.venv-pg/
+.devstack/

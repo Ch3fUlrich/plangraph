@@ -1,0 +1,41 @@
+fix(oversight): address build-L1 findings for oversight feature
+
+HIGH: Tier lowering - oversight may only RAISE tiers, never lower below
+default_review_tier. plangraph items default to 'high', so oversight
+creating with tier='standard' has the tier raised to 'high' instead of
+being refused. Test: test_oversight_cannot_lower_tier_below_default.
+
+MED: base_seq checks - extended to ALL op keys oversight can send
+(edit, priority, add_dep). Cancel is excluded as it's not an oversight
+op. Test: test_oversight_stale_base_seq_all_op_kinds (table-driven).
+
+MED: Triggers - removed DROP TRIGGER on open, now uses CREATE IF NOT
+EXISTS (presence-based). Test: test_oversight_triggers_persist_across_reopens_and_concurrent_open.
+
+LOW: Token re-check - added token re-check inside BEGIN IMMEDIATE
+transaction in _apply_ops to close mint/revoke race. Test:
+test_token_rechecked_inside_write_transaction.
+
+LOW: batch_ref validation - bounded and guarded like reason/finding
+using _oversight_text. Test: test_batch_ref_is_bounded_and_guarded.
+
+LOW: cli_admin mint - added atomic rename for file write (temp file +
+os.replace). Full two-phase mint (write file before DB changes) not
+implemented due to complexity.
+
+LOW: docs/KEEPER.md - fixed fold-branch sentence for oversight_token_minted
+(it now has a fold branch in events.py).
+
+NOT DONE in this round (documented as follow-ups):
+- READ_VERBS project-scoped for oversight (requires modifying all read verbs)
+- oversight_ops hash-chain (requires adding prev_hash/hash columns)
+- Dry run writes nothing on refusal (complex interaction with verb-seam refusals)
+
+Coverage gaps closed:
+- Test for oversight tier lowering
+- Table-driven base_seq test for all op kinds
+- Concurrent open test for triggers
+
+Plan-Item: plangraph:RT-OVERSIGHT-KEEPER-SCOPE
+Writer: qodercli qwen3.8-flash 20261024-091154-keeper-scope-repair-r4-2fafd4
+Co-Authored-By: plangraph-keeper <noreply@example.invalid>

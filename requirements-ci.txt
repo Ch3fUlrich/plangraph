@@ -1,0 +1,7 @@
+pytest
+pytest-xdist
+pyyaml
+cryptography>=41.0.7
+temporalio
+pytest-playwright==0.10.0
+playwright==1.64.0

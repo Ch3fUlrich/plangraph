@@ -1,0 +1,9 @@
+{
+  "generated": "2026-10-01T00:00:00Z",
+  "head": null,
+  "items": [
+    {"project": "demo", "id": "A", "key": "demo:A", "title": "First A", "kind": "lane", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 1, "depends_on": [], "corrects": null, "priority": 0},
+    {"project": "demo", "id": "A", "key": "demo:A", "title": "Second A wins", "kind": "lane", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 3, "depends_on": [], "corrects": null, "priority": 0},
+    {"project": "demo", "id": "GOAL", "key": "demo:GOAL", "title": "Demo goal", "kind": "goal", "track": "T0", "owner": "demo L1", "state": "open", "estimate_h": 0, "depends_on": ["demo:A"], "corrects": null, "priority": 0}
+  ]
+}
