@@ -22,7 +22,7 @@ needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service 
 def replay_legacy(w):
     """A mixed workload: create, claim, evidence, review, edit, cancel, refusals, a rollback."""
     router, lead = w.p("router"), w.p("l1main")
-    keys = seed(w, [("A", []), ("B", ["A"]), ("C", []), ("D", [])])
+    keys = seed(w, [("A", []), ("B", ["A"]), ("C", []), ("D", [])], delegate=False)
     a, b, c, d = keys
     epoch = to_claimed(w, a)
     w.store.add_evidence(lead, a, epoch, "decision", {"id": "D-1"})

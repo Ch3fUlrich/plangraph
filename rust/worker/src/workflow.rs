@@ -9,11 +9,11 @@
 
 use crate::activities::AskInput;
 use crate::activities::{
-    CardActivities, CardInput, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput,
-    GateResult, JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick,
+    CardActivities, CardOutput, ConfineSpec, DoneInput, GateCheck, GateInput, GateResult,
+    JanitorInput, MergeInput, MergeResult, ProbeInput, ProbeResult, Tick, park_json_with_attempt,
 };
 use crate::attempt::{AttemptInput, AttemptResult, LegSpec, to_budget_attempt};
-use crate::keeper::{Alarm, AttemptReport, Claim};
+use crate::keeper::{Alarm, AttemptReport, Claim, WORKER_LIVE_STATES};
 use crate::question::{self, OnTimer, Question};
 use pg_worker_core::budget::{self, Action, Attempt, ContextClass, Leg};
 use pg_worker_core::config::{Config, Tier};
@@ -56,6 +56,38 @@ const MERGE_LOCK_PARK_REASON: &str = "merge lock unavailable";
 /// a card started after the change runs it. The id is pinned by a test: renaming
 /// it would strand every card whose history already carries the old marker.
 const GATE_PATCH: &str = "gate-before-merge-v1";
+
+/// Workflow wire input. Kept here so gate metadata does not change the legacy
+/// activity input contract; missing fields preserve recorded start payloads.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CardInput {
+    #[serde(flatten)]
+    pub legacy: crate::activities::CardInput,
+    #[serde(default)]
+    pub risk_tagged: bool,
+    #[serde(default)]
+    pub heldout_cmd: String,
+    #[serde(default)]
+    pub smoke_checks: Vec<String>,
+    #[serde(default)]
+    pub exports: Vec<String>,
+    #[serde(default)]
+    pub base_sha: Option<String>,
+}
+
+impl std::ops::Deref for CardInput {
+    type Target = crate::activities::CardInput;
+
+    fn deref(&self) -> &Self::Target {
+        &self.legacy
+    }
+}
+
+impl std::ops::DerefMut for CardInput {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.legacy
+    }
+}
 
 /// Alarm reason when a question stayed unanswered until the wait cap.
 const QUESTION_PARK_REASON: &str = question::TIMEOUT_PARK_REASON;
@@ -333,6 +365,29 @@ impl Card {
             ctx.execute_activity(CardActivities::report, report, activity_options(&cfg))
                 .await?;
 
+            // An already-green change check is a broken contract, not work a
+            // retry or an already-done probe can repair.
+            if result.exit_class == ExitClass::ContractDefect
+                && check_tail.starts_with("red-first:")
+            {
+                let packet = packet_for(
+                    &input.claim.card,
+                    leg.tier,
+                    ExitClass::ContractDefect,
+                    &check_tail,
+                );
+                run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                park_and_alarm(
+                    ctx,
+                    &cfg,
+                    &packet,
+                    "red-first contract defect".into(),
+                    n.max(1),
+                )
+                .await?;
+                return Ok(parked(n));
+            }
+
             // A question is not a failure: it takes no retry budget, so the
             // attempt stays out of the history. The next attempt reruns the
             // same leg with the answer in its prompt.
@@ -351,6 +406,10 @@ impl Card {
                         QUESTION_ROUNDS_REASON,
                         q.normalized().text.clone(),
                         n,
+                        // Question parks take the live set: waiting is live (a
+                        // timer or an exhausted attempt may have written it),
+                        // claimed is not.
+                        WORKER_LIVE_STATES,
                     )
                     .await?
                     {
@@ -393,10 +452,12 @@ impl Card {
                         MergeStep::Merged(sha) => {
                             ctx.execute_activity(
                                 CardActivities::complete,
-                                DoneInput {
-                                    card: input.claim.card.clone(),
-                                    merged_sha: sha.clone(),
-                                },
+                                // Merge retry timers can leave waiting; probe paths
+                                // can retain the attempt's needs_input/waiting
+                                // state -- the live set covers every one of them,
+                                // so the real complete carries a CAS like the
+                                // other worker verbs instead of `None` (sq5 fix 4).
+                                done_input(input.claim.card.clone(), sha.clone(), n),
                                 activity_options(&cfg),
                             )
                             .await?;
@@ -413,11 +474,14 @@ impl Card {
                                     MERGE_LOCK_PARK_REASON,
                                 );
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                // Park only live worker states; waiting is live
+                                // and claimed is not.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
                                     &packet,
                                     MERGE_LOCK_PARK_REASON.to_string(),
+                                    n.max(1),
                                 )
                                 .await?;
                                 return Ok(parked(n));
@@ -539,7 +603,16 @@ impl Card {
                         &check_tail,
                     );
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                    park_and_alarm(ctx, &cfg, &packet, PROBE_FAIL_PARK_REASON.to_string()).await?;
+                    // Park only live worker states; waiting is live and claimed
+                    // is not.
+                    park_and_alarm(
+                        ctx,
+                        &cfg,
+                        &packet,
+                        PROBE_FAIL_PARK_REASON.to_string(),
+                        n.max(1),
+                    )
+                    .await?;
                     return Ok(parked(n));
                 }
 
@@ -572,11 +645,14 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                // Park only live worker states; waiting is live
+                                // and claimed is not.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
                                     &packet,
                                     exit_name(packet.exit_class).to_string(),
+                                    n.max(1),
                                 )
                                 .await?;
                                 return Ok(parked(n));
@@ -591,11 +667,14 @@ impl Card {
                                 let packet =
                                     packet_from_last(&input.claim.card, &history, &check_tail);
                                 run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                                // Park only live worker states; waiting is live
+                                // and claimed is not.
                                 park_and_alarm(
                                     ctx,
                                     &cfg,
                                     &packet,
                                     exit_name(packet.exit_class).to_string(),
+                                    n.max(1),
                                 )
                                 .await?;
                                 return Ok(parked(n));
@@ -615,8 +694,18 @@ impl Card {
                         if waited >= cfg.wait_cap {
                             let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                             run_janitor(ctx, &cfg, &input, &base_sha).await?;
-                            park_and_alarm(ctx, &cfg, &packet, WAIT_CAP_PARK_REASON.to_string())
-                                .await?;
+                            // Wait-cap park: the projector may have left the
+                            // card in waiting (a usage_limit/outage attempt or
+                            // TIMER_STARTED) and the live set accepts it;
+                            // claimed is still excluded.
+                            park_and_alarm(
+                                ctx,
+                                &cfg,
+                                &packet,
+                                WAIT_CAP_PARK_REASON.to_string(),
+                                n.max(1),
+                            )
+                            .await?;
                             return Ok(parked(n));
                         }
                         waits += 1;
@@ -637,11 +726,14 @@ impl Card {
                     Action::Quarantine => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                        // Park only live worker states; waiting is live and
+                        // claimed is not.
                         park_and_alarm(
                             ctx,
                             &cfg,
                             &packet,
                             exit_name(packet.exit_class).to_string(),
+                            n.max(1),
                         )
                         .await?;
                         return Ok(finish("quarantined", None, n));
@@ -649,22 +741,28 @@ impl Card {
                     Action::ToPlanner => {
                         let packet = packet_from_last(&input.claim.card, &history, &check_tail);
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                        // Park only live worker states; waiting is live and
+                        // claimed is not.
                         park_and_alarm(
                             ctx,
                             &cfg,
                             &packet,
                             exit_name(packet.exit_class).to_string(),
+                            n.max(1),
                         )
                         .await?;
                         return Ok(finish("planner", None, n));
                     }
                     Action::Park { packet } => {
                         run_janitor(ctx, &cfg, &input, &base_sha).await?;
+                        // Park only live worker states; waiting is live and
+                        // claimed is not.
                         park_and_alarm(
                             ctx,
                             &cfg,
                             &packet,
                             exit_name(packet.exit_class).to_string(),
+                            n.max(1),
                         )
                         .await?;
                         return Ok(finish("parked", None, n));
@@ -746,6 +844,23 @@ fn once_options(cfg: &Config) -> ActivityOptions {
         .build()
 }
 
+/// The input the real `complete` activity gets for a merged attempt.
+///
+/// RT-P1 sq5 fix 4 (deepseek MED, D-2410 HIGH): complete sends the live set the
+/// worker observed instead of `None`, so the keeper's `_worker_complete` writes
+/// with a real state CAS instead of "whatever the card happens to be now".  The
+/// set is [`WORKER_LIVE_STATES`]: merge-retry timers can leave `waiting` and
+/// probe paths can retain the attempt's `needs_input`/`waiting` state, and all
+/// of those are live; `claimed` and the terminal states are not.
+fn done_input(card: String, merged_sha: String, attempt: u32) -> DoneInput {
+    DoneInput {
+        expected_state: Some(WORKER_LIVE_STATES.iter().map(|s| (*s).to_owned()).collect()),
+        card,
+        merged_sha,
+        attempt: Some(attempt.max(1)),
+    }
+}
+
 /// Wait `d` durably, unless the `cancel` signal wins first (`true`).
 ///
 /// The signal cancels the attempt's child token, so a wait has to race it too,
@@ -786,8 +901,12 @@ async fn question_step(
         .execute_activity(
             CardActivities::ask_question,
             AskInput {
+                // Questions carry the live set: a question asked after a timer
+                // may find the card in waiting, and claimed must not pass.
+                expected_state: Some(WORKER_LIVE_STATES.iter().map(|s| (*s).to_owned()).collect()),
                 card: card.clone(),
                 question: q.clone(),
+                attempt: Some(n.max(1)),
             },
             activity_options(cfg),
         )
@@ -805,6 +924,9 @@ async fn question_step(
                 QUESTION_ASK_FAILED_REASON,
                 q.text.clone(),
                 n,
+                // Failed asks park only on the live set; waiting is live,
+                // claimed is not.
+                WORKER_LIVE_STATES,
             )
             .await;
         }
@@ -819,6 +941,9 @@ async fn question_step(
             QUESTION_REFUSED_REASON,
             q.text.clone(),
             n,
+            // Refused asks park only on the live set; waiting is live, claimed
+            // is not.
+            WORKER_LIVE_STATES,
         )
         .await;
     };
@@ -871,6 +996,7 @@ async fn question_step(
                         Alarm {
                             card: card.clone(),
                             reason: QUESTION_TIMEOUT_REFUSED_REASON.to_string(),
+                            attempt: Some(n.max(1)),
                         },
                     )
                     .await;
@@ -887,6 +1013,10 @@ async fn question_step(
                     QUESTION_PARK_REASON,
                     question::timeout_park_tail(&q.text),
                     n,
+                    // Question timeouts park right after the deadline timer,
+                    // which may have left the card waiting: the live set
+                    // accepts waiting and still excludes claimed.
+                    WORKER_LIVE_STATES,
                 )
                 .await
             }
@@ -907,10 +1037,22 @@ async fn park_question(
     reason: &str,
     check_tail: String,
     n: u32,
+    expected_state: &[&str],
 ) -> WorkflowResult<QuestionStep> {
     let packet = packet_for(&input.claim.card, tier, ExitClass::NeedsInput, &check_tail);
     run_janitor(ctx, cfg, input, base_sha).await?;
-    park_and_alarm(ctx, cfg, &packet, reason.to_string()).await?;
+    // Question parks preserve newer actor states by accepting only the live
+    // set, waiting included; the run/attempt fence and the keeper's idempotent
+    // duplicate-park success keep a stale retry from double-parking.
+    park_and_alarm_in_state(
+        ctx,
+        cfg,
+        &packet,
+        reason.to_string(),
+        n.max(1),
+        Some(expected_state),
+    )
+    .await?;
     Ok(QuestionStep::Finished(parked(n)))
 }
 
@@ -970,29 +1112,43 @@ fn map_merge_result(r: MergeResult) -> MergeStep {
 
 /// The card's named gate checks.
 ///
-/// Today the list holds ONE check, `card-check`, whose command is the card's
-/// own `check_cmd` — and is EMPTY when the card configures none. CARD-CHECKS
-/// appends more named checks (e.g. a test-gaming diff scan) here: the wire
-/// shape (`GateInput.checks`) is already a list, so a new check joins it
-/// without another gate wiring change.
-///
-/// A blank command means the card has nothing to verify, so the list is empty
-/// and the gate is skipped. The original string is kept, untrimmed: the shell
-/// is what decides whitespace, and `merge_fenced` still runs an empty
-/// `check_cmd` through `sh -c ''` (which passes). The `gate` activity instead
-/// rejects an empty command as invalid input, so the workflow must never hand
-/// it one — hence the empty list here and the trim test rather than an
-/// emptiness test.
+/// Builtins always run, even when no shell check was configured. A required
+/// but missing heldout command fails closed instead of silently disappearing.
 fn gate_checks(input: &CardInput) -> Vec<GateCheck> {
-    let cmd = input.claim.check_cmd.as_str();
-    if cmd.trim().is_empty() {
-        return Vec::new();
+    let mut checks = Vec::new();
+    let mut command = |name: String, cmd: String| {
+        checks.push(GateCheck {
+            name,
+            cmd,
+            builtin: None,
+            timeout_s: None,
+        })
+    };
+    if !input.claim.check_cmd.trim().is_empty() {
+        command("check".into(), input.claim.check_cmd.clone());
     }
-    vec![GateCheck {
-        name: "card-check".to_string(),
-        cmd: cmd.to_string(),
-        timeout_s: None,
-    }]
+    if input.risk_tagged || !input.heldout_cmd.trim().is_empty() {
+        command(
+            "heldout".into(),
+            if input.heldout_cmd.trim().is_empty() {
+                "false".into()
+            } else {
+                input.heldout_cmd.clone()
+            },
+        );
+    }
+    for (i, cmd) in input.smoke_checks.iter().enumerate() {
+        command(format!("smoke-{}", i + 1), cmd.clone());
+    }
+    for builtin in ["diffscan", "exports"] {
+        checks.push(GateCheck {
+            name: builtin.into(),
+            cmd: builtin.into(),
+            builtin: Some(builtin.into()),
+            timeout_s: None,
+        });
+    }
+    checks
 }
 
 /// Run the card's gate in the attempt worktree before the branch is merged.
@@ -1028,17 +1184,7 @@ async fn gate_step(
     let r: GateResult = match ctx
         .execute_activity(
             CardActivities::gate,
-            GateInput {
-                workroot: input.workroot.clone(),
-                // The same worktree `merge_step` hands the merge: the gate must
-                // judge the tree that will land, not a fresh checkout of it.
-                workdir: format!(
-                    "{}/{}",
-                    input.workroot,
-                    AttemptId::new(input.claim.card.clone(), n).dir_name()
-                ),
-                checks,
-            },
+            gate_input(input, base_sha, n, checks),
             gate_options(cfg),
         )
         .await
@@ -1058,6 +1204,21 @@ async fn gate_step(
         }
     };
     Ok(map_gate_result(r, base_sha))
+}
+
+fn gate_input(input: &CardInput, base_sha: &str, n: u32, checks: Vec<GateCheck>) -> GateInput {
+    GateInput {
+        workroot: input.workroot.clone(),
+        // Judge the tree that will land, against its current attempt base.
+        workdir: format!(
+            "{}/{}",
+            input.workroot,
+            AttemptId::new(input.claim.card.clone(), n).dir_name()
+        ),
+        checks,
+        base_sha: Some(base_sha.to_string()),
+        exports: input.exports.clone(),
+    }
 }
 
 /// Map a gate result to the step the run loop acts on: `None` when the gate
@@ -1223,15 +1384,39 @@ fn janitor_options(cfg: &Config) -> ActivityOptions {
 }
 
 /// Record a park packet and raise the alarm that goes with it.
+///
+/// `attempt` is the card attempt number (`n`, 1-based) the park happened on:
+/// it rides in the packet JSON and on the alarm so the keeper can fence both
+/// calls to this run of this attempt, never Temporal's activity retry count.
 async fn park_and_alarm(
     ctx: &WorkflowContext<Card>,
     cfg: &Config,
     packet: &ParkPacket,
     reason: String,
+    attempt: u32,
+) -> WorkflowResult<()> {
+    // Generic parks CAS on the one live set (waiting included: the projector
+    // writes it on usage_limit/outage attempts and TIMER_STARTED). Excluding a
+    // stale retry is the run/attempt fence's and the keeper's idempotent
+    // duplicate-park success's job, never this list's; claimed stays out.
+    park_and_alarm_in_state(ctx, cfg, packet, reason, attempt, Some(WORKER_LIVE_STATES)).await
+}
+
+async fn park_and_alarm_in_state(
+    ctx: &WorkflowContext<Card>,
+    cfg: &Config,
+    packet: &ParkPacket,
+    reason: String,
+    attempt: u32,
+    expected_state: Option<&[&str]>,
 ) -> WorkflowResult<()> {
     ctx.execute_activity(
         CardActivities::park,
-        packet.to_json(),
+        park_json_with_attempt(
+            packet,
+            Some(attempt),
+            expected_state.map(|states| states.iter().map(|state| (*state).to_owned()).collect()),
+        ),
         activity_options(cfg),
     )
     .await?;
@@ -1241,6 +1426,7 @@ async fn park_and_alarm(
         Alarm {
             card: packet.card.clone(),
             reason,
+            attempt: Some(attempt),
         },
     )
     .await;
@@ -1378,16 +1564,81 @@ mod tests {
             allow: vec!["src/**".to_string()],
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),
+            ..Default::default()
         };
         let input = CardInput {
-            claim,
-            legs,
-            workroot: root.path().to_string_lossy().into_owned(),
-            main_branch: "main".to_string(),
-            question_wait_cap_s: None,
-            max_question_rounds: None,
+            legacy: crate::activities::CardInput {
+                claim,
+                legs,
+                workroot: root.path().to_string_lossy().into_owned(),
+                main_branch: "main".to_string(),
+                question_wait_cap_s: None,
+                max_question_rounds: None,
+            },
+            risk_tagged: false,
+            heldout_cmd: String::new(),
+            smoke_checks: Vec::new(),
+            exports: Vec::new(),
+            base_sha: None,
         };
         (root, input)
+    }
+
+    #[test]
+    fn old_card_json_defaults_gate_metadata() {
+        let old = serde_json::json!({
+            "claim": {"card":"c", "repo":"r", "base_sha":"abc", "check_cmd":"true",
+                "allow":[], "forbid":[], "prompt":"p"},
+            "legs":[], "workroot":"work", "main_branch":"main"
+        });
+        let input: CardInput = serde_json::from_value(old).unwrap();
+        assert!(!input.risk_tagged);
+        assert!(input.heldout_cmd.is_empty());
+        assert!(input.smoke_checks.is_empty());
+        assert!(input.exports.is_empty());
+        assert!(input.base_sha.is_none());
+    }
+
+    #[test]
+    fn gate_diff_uses_current_attempt_base_not_stale_wire_base() {
+        let (_root, mut input) = card_input(vec![]);
+        input.base_sha = Some("stale-wire-base".into());
+        let gate = gate_input(&input, "current-attempt-base", 2, gate_checks(&input));
+        assert_eq!(gate.base_sha.as_deref(), Some("current-attempt-base"));
+    }
+
+    #[test]
+    fn gate_checks_compose_commands_and_builtins() {
+        let (_root, mut input) = card_input(vec![]);
+        input.risk_tagged = true;
+        input.heldout_cmd = "  heldout  ".into();
+        input.smoke_checks = vec!["smoke one".into(), "smoke two".into()];
+        input.exports = vec!["src/a:run".into()];
+        input.base_sha = Some("explicit-base".into());
+        let checks = gate_checks(&input);
+        assert_eq!(
+            checks.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            vec![
+                "check", "heldout", "smoke-1", "smoke-2", "diffscan", "exports"
+            ]
+        );
+        assert_eq!(checks[1].cmd, "  heldout  ");
+        assert_eq!(checks[2].cmd, "smoke one");
+        assert_eq!(checks[3].cmd, "smoke two");
+        assert!(checks[..4].iter().all(|c| c.builtin.is_none()));
+        assert_eq!(checks[4].builtin.as_deref(), Some("diffscan"));
+        assert_eq!(checks[5].builtin.as_deref(), Some("exports"));
+        assert!(checks.iter().all(|c| c.timeout_s.is_none()));
+    }
+
+    #[test]
+    fn risk_tagged_card_cannot_skip_missing_heldout() {
+        let (_root, mut input) = card_input(vec![]);
+        input.risk_tagged = true;
+        let checks = gate_checks(&input);
+        let heldout = checks.iter().find(|c| c.name == "heldout").unwrap();
+        assert_eq!(heldout.cmd, "false");
+        assert!(heldout.builtin.is_none());
     }
 
     #[test]
@@ -1410,6 +1661,36 @@ mod tests {
         }))
         .unwrap();
         assert_eq!((full.question_id, full.key.as_str()), (12, "k"));
+    }
+
+    /// sq5 fix 4 (deepseek, D-2410 HIGH): the real complete activity carries the
+    /// live set the worker observed instead of `None`, so keeper `_worker_complete`
+    /// gets a real CAS instead of "whatever the card happens to be now".
+    #[test]
+    fn complete_sends_the_live_set_as_expected_state() {
+        let input = done_input("c-1".to_string(), "deadbeef".to_string(), 3);
+        let states = input
+            .expected_state
+            .expect("complete must carry the observed live set, not None");
+        assert_eq!(
+            states,
+            WORKER_LIVE_STATES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect::<Vec<_>>()
+        );
+        // The merge-retry/probe paths this CAS has to cover live in waiting and
+        // needs_input, so both must be part of what complete accepts.
+        assert!(states.iter().any(|s| s == "waiting"));
+        assert!(states.iter().any(|s| s == "needs_input"));
+        assert_eq!(
+            (
+                input.card.as_str(),
+                input.merged_sha.as_str(),
+                input.attempt
+            ),
+            ("c-1", "deadbeef", Some(3))
+        );
     }
 
     #[test]
@@ -1598,15 +1879,14 @@ mod tests {
     }
 
     #[test]
-    fn gate_checks_is_empty_for_a_blank_check_cmd() {
+    fn gate_checks_keeps_builtins_for_a_blank_check_cmd() {
         for blank in ["", " ", "\t\n  "] {
             let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
             input.claim.check_cmd = blank.to_string();
-            // A card with no check command has nothing to verify: the check
-            // list is empty and `gate_step` skips the gate entirely — the
-            // activity is never handed an empty list, which it rejects as
-            // invalid input.
-            assert!(gate_checks(&input).is_empty(), "{blank:?}");
+            let checks = gate_checks(&input);
+            assert_eq!(checks.len(), 2, "{blank:?}");
+            assert_eq!(checks[0].builtin.as_deref(), Some("diffscan"));
+            assert_eq!(checks[1].builtin.as_deref(), Some("exports"));
         }
     }
 
@@ -1615,8 +1895,8 @@ mod tests {
         let (_root, mut input) = card_input(vec![leg("leg-1", Tier::Free)]);
         input.claim.check_cmd = "  cargo test  ".to_string();
         let checks = gate_checks(&input);
-        assert_eq!(checks.len(), 1);
-        assert_eq!(checks[0].name, "card-check");
+        assert_eq!(checks.len(), 3);
+        assert_eq!(checks[0].name, "check");
         // The original string is kept, not a trimmed copy: the shell owns
         // whitespace.
         assert_eq!(checks[0].cmd, "  cargo test  ");

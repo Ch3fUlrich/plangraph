@@ -46,6 +46,10 @@ ROOT = Path(__file__).resolve().parents[2]
 ITEM, WID = "demo:E2E-1", "card:demo:E2E-1"
 BUILD_ID = "e2e-local"
 FIXTURES = TESTS / "fixtures" / "review"
+#: The states the worker's live-set ask/park CAS pins.  ``waiting`` is in it:
+#: the projector writes waiting after usage_limit/outage and on a timer, so the
+#: cap-park must still land there.
+WORKER_LIVE_SET = ("open", "ready", "running", "needs_input", "waiting")
 
 
 def reply(name: str) -> str:
@@ -62,7 +66,7 @@ def run_projector(cfg: Path, address: str) -> dict:
 
 
 @pytest.fixture
-def rig(tmp_path, monkeypatch):
+def rig(tmp_path, monkeypatch, request):
     """Dev server, keeper, worker; torn down in reverse; logs stay under tmp_path."""
     started = []                                     # cleanup stack: (name, stop)
 
@@ -86,6 +90,10 @@ def rig(tmp_path, monkeypatch):
         r.world = World(tmp_path / "keeper-a")
         push("world", r.world.close)
         seed(r.world, [("E2E-1", [])])
+        r.initial_state = request.param
+        if r.initial_state == "ready":
+            r.world.conn.execute("UPDATE items SET state='ready' WHERE key=?", (ITEM,))
+            r.world.conn.commit()
         r.keeper = u.KeeperServer(r.world, tmp_path)
         push("keeper", r.keeper.stop)
 
@@ -129,6 +137,7 @@ def card_input(r) -> dict:
             "workroot": str(r.workroot), "main_branch": u.BRANCH, "question_wait_cap_s": 300}
 
 
+@pytest.mark.parametrize("rig", ["open", "ready"], indirect=True)
 def test_rtp1_local_end_to_end(rig, tmp_path):
     try:
         _flow(rig, tmp_path)
@@ -146,6 +155,11 @@ def _flow(rig, tmp_path):
         timings[name] = round(time.monotonic() - r.t0, 2)
 
     mark("stack_up")
+    # No synthetic running state: worker_attempt is a read-only check and the
+    # worker's live-set ask/park CAS (WORKER_LIVE_SET, waiting included) must
+    # accept the seeded pre-projection card.
+    assert item_state(world, ITEM) == r.initial_state
+    assert r.initial_state in WORKER_LIVE_SET
     loop = asyncio.new_event_loop()
     client = loop.run_until_complete(Client.connect(r.addr))
     handle = loop.run_until_complete(client.start_workflow(
@@ -159,6 +173,11 @@ def _flow(rig, tmp_path):
     question = wait_for(open_question, "the worker's question row", timeout=90)
     mark("question_row")
     assert question["state"] == "open" and question["default_answer"] is None
+
+    # Wait for the question park before projecting, so both worker calls exercise
+    # the real report -> ask -> park -> projector order (not a projected running).
+    wait_for(lambda: item_state(world, ITEM) == "parked",
+             "the worker's pre-projection question park", timeout=90)
 
     first = run_projector(cfg, r.addr)
     # one unmapped run is the dev server's own readiness probe (no plan key), never a card

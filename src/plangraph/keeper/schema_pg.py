@@ -15,8 +15,11 @@ budget) and the append-only triggers on attempts, decisions and answers.
 
 A later change appends a new ``Migration`` to ``MIGRATIONS``; never edit one that
 shipped.  ``db_pg.migrate`` applies the pending ones under an advisory lock.
-Migration 6 is the twin of SQLite schema v13 (``schema.JEV_DDL``, ``jev_shadow``)
-and Migration 7 of schema v14 (``schema.OVERSIGHT_DDL``, the oversight tables).
+Migration 6 is the twin of SQLite schema v13 (``schema.JEV_DDL``, ``jev_shadow``);
+Migration 7 (main's #140, RT-P1-EXEC-OWNERSHIP) adds the three ``exec_*``
+ownership columns to ``items`` - the twin of the same columns in the SQLite
+``items`` DDL, which stay at main's schema v13 shape - and Migration 8 is the
+twin of schema v14 (``schema.OVERSIGHT_DDL``, the oversight tables).
 """
 from __future__ import annotations
 
@@ -424,7 +427,8 @@ CREATE TABLE merge_locks (
 #: Logical twin of ``schema.JEV_DDL`` (SQLite schema v13, RT-P1-JEV-SHADOW): the
 #: Jev shadow rows - one per card/attempt plus the design-D18 audit columns.
 #: Main's half of the merge: this migration stays ``_V6`` / version 6 unchanged;
-#: the oversight tables moved up to 7.  Column names, order and NOT NULL flags
+#: the oversight tables moved up to 8 (7 is main's exec ownership of ``items``).
+#: Column names, order and NOT NULL flags
 #: mirror the SQLite table exactly (the parity tests compare them).
 _V6 = """
 CREATE TABLE jev_shadow (
@@ -455,9 +459,23 @@ CREATE INDEX idx_jev_shadow_card ON jev_shadow(card_key, ts);
 CREATE INDEX idx_jev_shadow_kind ON jev_shadow(kind, ts);
 """
 
-#: Logical twin of ``schema.OVERSIGHT_DDL`` (SQLite schema v14).  ``id`` carries no
-#: sequence (the store assigns MAX(id)+1 inside the write lock, like run_tokens).
+#: RT-P1-EXEC-OWNERSHIP (main's #140): the three exec ownership columns of the
+#: SQLite ``items`` DDL - which the merge keeps at main's schema v13 shape -
+#: added in the order SQLite appends them, so ``items`` ends with exactly the
+#: SQLite column list.  Nullable like their SQLite twins; ``parse_tables`` folds
+#: the ``ADD COLUMN`` statements back into the ``items`` table so the SQLite /
+#: Postgres parity tests see one merged column list (the parity parser is how a
+#: migration is "applied" in tests; no live server is needed).
 _V7 = """
+ALTER TABLE items ADD COLUMN exec_workflow_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN exec_run_id      TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN exec_attempt     BIGINT;
+"""
+
+#: Logical twin of ``schema.OVERSIGHT_DDL`` (SQLite schema v14, Migration 8 -
+#: the merge moved it up one slot for main's exec ownership in 7).  ``id`` carries no
+#: sequence (the store assigns MAX(id)+1 inside the write lock, like run_tokens).
+_V8 = """
 CREATE TABLE oversight_tokens (
     id           BIGINT PRIMARY KEY,
     token_sha256 TEXT COLLATE "C" NOT NULL UNIQUE,
@@ -523,17 +541,34 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(4, "governor: metrics", _V4),
               Migration(5, "locks: merge_locks", _V5),
               Migration(6, "jev: shadow audit", _V6),
-              Migration(7, "oversight: tokens, ops audit", _V7))
+              Migration(7, "items: exec ownership", _V7),
+              Migration(8, "oversight: tokens, ops audit", _V8))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\);", re.S)
+#: ``ALTER TABLE <t> ADD COLUMN <c> <decl>;`` - how a migration grows an existing
+#: table (main's exec ownership columns); folded into that table's body below.
+_ALTER = re.compile(r"^ALTER TABLE (?:IF NOT EXISTS )?(\w+) ADD COLUMN"
+                    r" (?:IF NOT EXISTS )?(\w+)\s+([^;]*);", re.M)
 _COLUMN = re.compile(r"^    (\w+)\s+\S")
 _NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
 
 
 def table_bodies(ddl: str) -> dict:
-    """``{table: body text}`` of every ``CREATE TABLE`` in *ddl*."""
-    return {m.group(1): m.group(2) for m in _TABLE.finditer(ddl)}
+    """``{table: body text}`` of every ``CREATE TABLE`` in *ddl*.
+
+    An ``ALTER TABLE ... ADD COLUMN`` grows the table it alters (one synthetic
+    column-declaration line per statement, in statement order), so applying
+    migrations 1..n in order yields the same column list as the twin SQLite DDL.
+    """
+    out = {m.group(1): m.group(2) for m in _TABLE.finditer(ddl)}
+    for m in _ALTER.finditer(ddl):
+        name, column, decl = m.group(1), m.group(2), m.group(3).strip()
+        lines = out.get(name, "")
+        if lines:
+            lines += "\n"
+        out[name] = lines + f"    {column} {decl}"
+    return out
 
 
 def parse_tables(ddl: str) -> dict:

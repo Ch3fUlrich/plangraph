@@ -28,13 +28,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use pg_worker::activities::{CardActivities, CardInput, CardOutput, Deps, TASK_QUEUE};
+use pg_worker::activities::{CardActivities, CardOutput, Deps, TASK_QUEUE};
 use pg_worker::attempt::LegSpec;
 use pg_worker::harness::{Harness, HarnessRegistry, HarnessRun};
 use pg_worker::keeper::{Claim, Keeper, StubKeeper};
 use pg_worker::phase::{PhaseInput, PhaseOutput};
 use pg_worker::phase_workflow::Phase;
-use pg_worker::workflow::Card;
+use pg_worker::workflow::{Card, CardInput};
 use pg_worker_core::config::{Config, Tier};
 use pg_worker_core::exit_class::Patterns;
 use tempfile::TempDir;
@@ -215,6 +215,7 @@ impl Env {
             allow: allow.iter().map(|s| s.to_string()).collect(),
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),
+            ..Default::default()
         }
     }
 
@@ -236,12 +237,19 @@ impl Env {
     /// Like [`start`](Self::start), with the card's legs given by the caller.
     async fn start_with_legs(&self, id: &str, claim: Claim, legs: Vec<LegSpec>) -> Handle {
         let input = CardInput {
-            claim,
-            legs,
-            workroot: self.workroot.to_string_lossy().into_owned(),
-            main_branch: "main".to_string(),
-            question_wait_cap_s: self.question_cap_s.get(),
-            max_question_rounds: self.max_rounds.get(),
+            legacy: pg_worker::activities::CardInput {
+                claim,
+                legs,
+                workroot: self.workroot.to_string_lossy().into_owned(),
+                main_branch: "main".to_string(),
+                question_wait_cap_s: self.question_cap_s.get(),
+                max_question_rounds: self.max_rounds.get(),
+            },
+            risk_tagged: false,
+            heldout_cmd: String::new(),
+            smoke_checks: Vec::new(),
+            exports: Vec::new(),
+            base_sha: None,
         };
         let wf_id = workflow_id(id);
         self.client
@@ -464,6 +472,42 @@ fn workflow_id(id: &str) -> String {
     format!("card:{id}")
 }
 
+/// Every keeper call the card made must carry the full execution identity:
+/// the workflow id, this run's id and the card attempt number (1-based, never
+/// Temporal's activity retry count). Calls name an attempt the card has run,
+/// in non-decreasing order: a question-timeout alarm can precede another attempt.
+fn assert_execs_name_the_attempts(env: &Env, attempts: u32) {
+    let execs = env.keeper.execs();
+    assert!(
+        !execs.is_empty(),
+        "the card must have reached the keeper at least once"
+    );
+    let mut previous = 0;
+    for exec in &execs {
+        assert!(
+            exec.workflow_id.is_some(),
+            "every keeper call carries the workflow id: {exec:?}"
+        );
+        assert!(
+            exec.run_id.is_some(),
+            "every keeper call carries the run id: {exec:?}"
+        );
+        let attempt = exec
+            .attempt
+            .unwrap_or_else(|| panic!("every keeper call carries the card attempt: {exec:?}"));
+        assert!(attempt >= 1, "the card attempt is 1-based: {exec:?}");
+        assert!(
+            attempt <= attempts,
+            "keeper call cannot name a future attempt: {exec:?}"
+        );
+        assert!(
+            attempt >= previous,
+            "keeper call attempts cannot go backwards: {exec:?}"
+        );
+        previous = attempt;
+    }
+}
+
 /// Record this run as a fixture under `<PG_RECORD_DIR>`.
 ///
 /// Two shapes are written: the SDK's JSON history as `<name>.json`, and, when
@@ -648,6 +692,10 @@ async fn happy_attempt_merges_into_main() {
             "keeper completed: {:?}",
             env.keeper.completed()
         );
+        // The card merged on its very first attempt, and the keeper's `complete`
+        // call names that attempt (with the workflow and run ids).
+        assert_eq!(out.attempts, 1, "{out:?}");
+        assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })
     .await;
@@ -940,6 +988,10 @@ async fn needs_input_risk_tagged_never_defaults() {
                 == 1,
             "{parked:?}"
         );
+        // The question path too: ask, park and alarm all name the attempt that
+        // asked, here the card's only attempt.
+        assert_eq!(out.attempts, 1, "{out:?}");
+        assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })
     .await;
@@ -1297,7 +1349,8 @@ echo attempt > seed.txt"#;
             return;
         };
         let card = "e2e-rebase-conflict";
-        let claim = env.claim(card, &["seed.txt"], "test -f seed.txt");
+        let mut claim = env.claim(card, &["seed.txt"], "test -f seed.txt");
+        claim.check_kind = "regression".into(); // seed.txt already exists on base.
         let id = format!("e2e-rebase-conflict-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1405,7 +1458,8 @@ fi"#;
             return;
         };
         let card = "e2e-gate-blocks";
-        let claim = env.claim(card, &["out.txt"], &check_cmd);
+        let mut claim = env.claim(card, &["out.txt"], &check_cmd);
+        claim.check_kind = "regression".into(); // Keep the counter's first run in the attempt.
         let id = format!("e2e-gate-blocks-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1546,7 +1600,8 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
             return;
         };
         let card = "e2e-gate-secret";
-        let claim = env.claim(card, &["out.txt"], &check_cmd);
+        let mut claim = env.claim(card, &["out.txt"], &check_cmd);
+        claim.check_kind = "regression".into(); // Keep the counter's first run in the attempt.
         let id = format!("e2e-gate-secret-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1610,6 +1665,36 @@ async fn a_secret_in_a_failing_gate_never_reaches_the_keeper_or_history() {
             .any(|(_, d)| d.contains(REDACTED)),
             "the gate's redacted tail must reach a keeper record or the history"
         );
+        env.stop();
+    })
+    .await;
+}
+
+/// A passing base check parks without retrying or invoking the writer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn red_first_parks_without_retry_or_harness() {
+    in_local(async {
+        let Some(env) = env_or_skip("red-first", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let claim = env.claim("e2e-red-first", &["out.txt"], "true");
+        let id = format!("e2e-red-first-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let out = finish("red_first", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(out.detail, "parked", "{out:?}");
+        assert_eq!(out.attempts, 1);
+        let reports = env.keeper.attempts();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].exit_class, ExitClass::ContractDefect);
+        assert!(reports[0].check_tail.starts_with("red-first:"));
+        let packets = env.keeper.parked();
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].exit_class, ExitClass::ContractDefect);
+        assert!(packets[0].check_tail.starts_with("red-first:"));
+        assert!(env.keeper.completed().is_empty());
+        assert!(!env.repo.join("out.txt").exists());
         env.stop();
     })
     .await;
@@ -1687,6 +1772,9 @@ async fn a_check_that_never_passes_stops_the_card() {
             !env.keeper.alarms().is_empty() || !env.keeper.parked().is_empty(),
             "a stuck card raises an alarm or a park packet"
         );
+        // A parked card: the park packet and its alarm both carry the card's
+        // final attempt, with workflow id and run id.
+        assert_execs_name_the_attempts(&env, out.attempts);
         env.stop();
     })
     .await;

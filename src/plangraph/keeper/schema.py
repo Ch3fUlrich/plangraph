@@ -19,7 +19,11 @@ __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
 
 #: v9 baseline -> v13 (``JEV_DDL``, RT-P1-JEV-SHADOW) -> v14 (``OVERSIGHT_DDL``,
 #: RT-OVERSIGHT-KEEPER-SCOPE): the merge with main keeps both tables, so the
-#: oversight half of ``SCHEMA`` moved one version up.
+#: oversight half of ``SCHEMA`` moved one version up.  Main's #140
+#: (RT-P1-EXEC-OWNERSHIP) added the three ``exec_*`` columns to ``items``
+#: without bumping this number - they live in the ``items`` DDL (and in
+#: ``db._upgrade``) exactly as main has them, and their Postgres twin is
+#: Migration 7, before the oversight Migration 8.
 SCHEMA_VERSION = 14
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
@@ -197,8 +201,9 @@ CREATE INDEX IF NOT EXISTS idx_jev_shadow_kind ON jev_shadow(kind, ts);
 
 #: RT-OVERSIGHT-KEEPER-SCOPE (schema v14): the scoped oversight principal's
 #: one-shot tokens and its append-only op audit.  Octet-for-octet twin of
-#: ``schema_pg`` Migration 7 (same columns in the same order).  ``IF NOT EXISTS``
-#: so ``db._upgrade`` can install it at open on a v13 database.
+#: ``schema_pg`` Migration 8 (same columns in the same order) - the merge with
+#: main's #140 left Migration 7 to the exec ownership columns of ``items``.
+#: ``IF NOT EXISTS`` so ``db._upgrade`` can install it at open on a v13 database.
 OVERSIGHT_DDL = """
 CREATE TABLE IF NOT EXISTS oversight_tokens (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -462,7 +467,10 @@ CREATE TABLE items (
     seat_models  TEXT,
     run_ids      TEXT,
     created_at     TEXT,
-    updated_at     TEXT
+    updated_at     TEXT,
+    exec_workflow_id TEXT,
+    exec_run_id      TEXT,
+    exec_attempt     INTEGER
 );
 
 CREATE TABLE edges (

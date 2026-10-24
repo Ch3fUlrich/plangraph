@@ -72,7 +72,7 @@ def test_both_worker_verbs_fill_the_outcome_and_the_first_write_wins(w,
     # ...and the mirror image: complete first, park cannot overwrite it
     assert [r["outcome"] for r in second] == ["complete"] * len(second)
     assert all(r["outcome_at"] for r in second)
-    assert len(fill_audits(w)) == 4               # one fill audit per verb call
+    assert len(fill_audits(w)) == 16              # four routing kinds per verb
 
 
 # ------------------------------------------------------- a worker-role caller
@@ -96,7 +96,7 @@ def test_a_worker_role_fills_the_outcome_on_both_verbs(w, monkeypatch):
     assert [r["outcome"] for r in done] == ["complete"] * len(done)
     assert all(r["outcome_at"] for r in done)
     audits = fill_audits(w)
-    assert len(audits) == 2                       # one fill audit per verb call
+    assert len(audits) == 8                       # four routing kinds per verb
     # a worker may not write jev_shadow itself: the fill rides on the shared
     # writer mapping's synthetic system identity, it is never skipped
     assert {(a["actor"], a["role"]) for a in audits} == {("system", "system")}
@@ -133,7 +133,7 @@ def test_a_role_that_cannot_be_mapped_still_never_raises(w, monkeypatch):
     w.store._fill_jev_outcome(ghost, key, {"outcome": "complete"})
 
     audits = fill_audits(w)
-    assert len(audits) == 1
+    assert len(audits) == 4
     assert (audits[0]["actor"], audits[0]["role"]) == ("system", "system")
     rows = w.store.jev_rows(key)
     assert [r["outcome"] for r in rows] == ["complete"] * len(rows)

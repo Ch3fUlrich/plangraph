@@ -211,6 +211,42 @@ fn run_attempt_inner(
     if let Err(why) = h.validate(&run) {
         return defect_result(&dest, &claim.base_sha, &branch, &wt.head, why);
     }
+    // The base check is untrusted card code too: use the same jail and private
+    // tmp isolation as the harness and post-attempt check, even if it parks early.
+    let tmp = attempt_tmp()?;
+    let jail = crate::harness::JailConfig::from_env()
+        .map_err(std::io::Error::other)?
+        .map(|mut jail| {
+            jail.tmp = tmp.path().to_path_buf();
+            jail
+        });
+    if claim.check_kind != "regression" && !claim.check_cmd.trim().is_empty() {
+        // Base-check state must never be visible to the writer.
+        let base_tmp = attempt_tmp()?;
+        // Capture the pristine diff before the check can create scratch files.
+        let base_diff_hash = confine::diff_hash(&dest, &claim.base_sha)?;
+        let pre = check::run_check_scoped(
+            &claim.check_cmd,
+            &dest,
+            cfg.start_to_close,
+            cfg.check_tail_lines,
+            jail.as_ref()
+                .map(|j| (j.bin.as_path(), &j.limits, base_tmp.path())),
+            &|| false,
+        );
+        // Base-check scratch is not writer work, even when the check parks.
+        worker_git(&dest, &["checkout", "--", "."])?;
+        worker_git(&dest, &["clean", "-fdxq"])?;
+        drop(base_tmp);
+        let pre = pre?;
+        if pre.passed() {
+            let mut result = cancelled_result(&branch, &wt.head, String::new());
+            result.exit_class = ExitClass::ContractDefect;
+            result.diff_hash = base_diff_hash;
+            result.check_tail = "red-first: check already passes on base sha (set check_kind=regression if intended)".into();
+            return Ok(result);
+        }
+    }
     let opts = Opts {
         stall: Some(cfg.stall),
         timeout: Some(cfg.start_to_close),
@@ -221,17 +257,10 @@ fn run_attempt_inner(
     // goes away with the attempt. The check below gets its own HOME, so a login
     // the harness persisted here never reaches the check child.
     let mut home = pg_worker_core::sandbox_env::HomeGuard::for_dir(&dest)?;
-    let tmp = attempt_tmp()?;
     // Harness auth travels as staged files in this HOME, never by env (the
     // confined env carries no credential names; see sandbox_env). The guard
     // removes what it staged when the attempt ends.
     home.stage_harness_auth()?;
-    let jail = crate::harness::JailConfig::from_env()
-        .map_err(std::io::Error::other)?
-        .map(|mut jail| {
-            jail.tmp = tmp.path().to_path_buf();
-            jail
-        });
     let sup = run_harness(h, &run, home.path(), &opts, cancelled, jail.as_ref())?;
     let output = String::from_utf8_lossy(&sup.output).into_owned();
     let output_tail = check::tail_lines(&output, cfg.check_tail_lines);
@@ -327,8 +356,19 @@ fn run_attempt_inner(
     // Confinement is judged before the check: a write outside the set is a
     // contract defect however the check would have gone, so the check is
     // skipped entirely.
-    let violations =
-        confine::check_confinement(&dest, &claim.base_sha, &claim.allow, &claim.forbid)?;
+    let mut forbid = claim.forbid.clone();
+    // Reuse confinement's matcher, including directory prefixes and literal
+    // separators, rather than maintaining another interpretation of allow.
+    for violation in confine::evaluate(
+        claim.check_reads.iter().map(String::as_str),
+        &claim.allow,
+        &[],
+    )? {
+        if let Violation::OutsideWriteSet { path } = violation {
+            forbid.push(path);
+        }
+    }
+    let violations = confine::check_confinement(&dest, &claim.base_sha, &claim.allow, &forbid)?;
     let contract = !violations.is_empty() || malformed.is_some();
 
     // A clean run that changed nothing — neither staged nor committed past the
@@ -783,8 +823,8 @@ mod tests {
     const OK_TOOL_TOKENS: &str =
         include_str!("../tests/fixtures/opencode/real-ok-tool-tokens.jsonl");
     const OK_TEXT: &str = include_str!("../tests/fixtures/opencode/real-ok-text.jsonl");
-    /// A run that only announced its first step and then stopped.
-    const STEP_ONLY: &str = r#"{"type":"step_start","part":{"type":"step-start"}}"#;
+    /// Recorded empty run: exit zero after announcing only its first step.
+    const EMPTY_RUN: &str = include_str!("../tests/fixtures/opencode/real-empty-run.jsonl");
 
     /// A JSON-emitting harness that prints a recorded stream, optionally writes
     /// `out.txt`, and exits with `code` (the code opencode returned for it).
@@ -916,9 +956,265 @@ mod tests {
             repo: repo.to_string(),
             base_sha: base.to_string(),
             check_cmd: check_cmd.to_string(),
+            // Most tests exercise attempt behavior, not the red-first gate.
+            check_kind: "regression".to_string(),
             allow: allow.iter().map(|s| s.to_string()).collect(),
             forbid: Vec::new(),
             prompt: "do the thing".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn base_check_scratch_is_absent_when_writer_runs() {
+        let (r, _) = repo();
+        write(r.path(), ".gitignore", "ignored\n");
+        let base = commit_all(r.path(), "ignore check scratch");
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "if test ! -f out.txt; then echo scratch > ignored; echo scratch > \"${TMPDIR:-.}/base-only\"; exit 1; fi",
+        );
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new(
+            "test ! -e ignored && test ! -e \"${TMPDIR:-.}/base-only\" && echo hi > out.txt",
+        );
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(h.runs(), 1);
+        assert_eq!(res.exit_class, ExitClass::Ok);
+    }
+
+    #[test]
+    fn blank_change_check_does_not_park_writer() {
+        for cmd in ["", " \t\n"] {
+            let (r, base) = repo();
+            let root = tempfile::tempdir().unwrap();
+            let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], cmd);
+            c.check_kind = "change".into();
+            let inp = input(c, 1, root.path());
+            let h = Fake::new("echo hi > out.txt");
+            let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+            assert_eq!(h.runs(), 1);
+            assert_eq!(res.exit_class, ExitClass::Ok);
+            assert!(!res.check_tail.starts_with("red-first:"));
+        }
+    }
+
+    #[test]
+    fn red_first_check_runs_in_card_worktree() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "test -f README.md || exit 0; if test ! -f out.txt; then echo scoped > marker; exit 1; fi",
+        );
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("test ! -e marker && echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+        assert!(!dest.join("marker").exists());
+        assert_eq!(
+            git(&dest, &["diff", "--name-only", &base, "HEAD"]),
+            "out.txt"
+        );
+        assert!(!r.path().join("marker").exists());
+        assert_eq!(h.runs(), 1);
+        assert_eq!(res.exit_class, ExitClass::Ok);
+    }
+
+    #[test]
+    fn red_first_untracked_file_outside_allow_is_not_writer_work() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "if test ! -f out.txt; then echo scratch > outside; exit 1; fi",
+        );
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("test ! -e outside && echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+        assert!(!dest.join("outside").exists());
+        assert_eq!(
+            git(&dest, &["diff", "--name-only", &base, "HEAD"]),
+            "out.txt"
+        );
+    }
+
+    #[test]
+    fn red_first_base_check_uses_fake_jail() {
+        // Isolate env overrides in a child test process: other parallel tests
+        // must never observe the fake jail or systemd launcher.
+        if std::env::var_os("PG_FAKE_JAIL_TEST").is_some() {
+            let (r, base) = repo();
+            let root = tempfile::tempdir().unwrap();
+            let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], "true");
+            c.check_kind = "change".into();
+            let inp = input(c, 1, root.path());
+            let h = Fake::new("exit 99");
+            let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+            assert_eq!(res.exit_class, ExitClass::ContractDefect);
+            assert!(res.check_tail.starts_with("red-first:"));
+            assert_eq!(h.runs(), 0);
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let tools = tempfile::tempdir().unwrap();
+        let marker = tools.path().join("invoked");
+        let jail = tools.path().join("fake-jail");
+        for (path, script) in [
+            (
+                tools.path().join("systemd-run"),
+                "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
+            ),
+            (
+                jail.clone(),
+                "#!/bin/sh\nprintf invoked > \"$PG_FAKE_JAIL_TEST\"\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
+            ),
+        ] {
+            std::fs::write(&path, script).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut paths = vec![tools.path().to_path_buf()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "attempt::tests::red_first_base_check_uses_fake_jail",
+            ])
+            .env("PG_FAKE_JAIL_TEST", &marker)
+            .env("PG_JAIL_BIN", &jail)
+            .env("PATH", std::env::join_paths(paths).unwrap())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read_to_string(marker).unwrap(), "invoked");
+    }
+
+    #[test]
+    fn red_first_check_is_jailed_in_card_worktree() {
+        if std::env::var_os("PG_JAIL_BIN").is_none() {
+            // rust-worker CI runs unjailed by design; the rust job exercises
+            // the real Landlock jail in worker-core's check tests.
+            eprintln!("skipping jailed base check: PG_JAIL_BIN is unset");
+            return;
+        }
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("outside");
+        let command = format!(
+            "test -f README.md && echo scoped > marker && ! sh -c 'echo escaped > \"{}\"'",
+            outside.display()
+        );
+        let mut c = claim(&r.path().to_string_lossy(), &base, &["out.txt"], &command);
+        c.check_kind = "change".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert!(!outside.exists(), "base check escaped the attempt jail");
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+        assert!(!dest.join("marker").exists());
+        assert_eq!(res.exit_class, ExitClass::ContractDefect);
+        assert!(res.check_tail.starts_with("red-first:"));
+        assert_eq!(h.runs(), 0);
+    }
+
+    #[test]
+    fn red_first_parks_passing_base_without_running_harness() {
+        for kind in ["", "change"] {
+            let (r, base) = repo();
+            let root = tempfile::tempdir().unwrap();
+            let mut c = claim(
+                &r.path().to_string_lossy(),
+                &base,
+                &["out.txt"],
+                "echo changed > README.md; echo scratch > marker; true",
+            );
+            c.check_kind = kind.into();
+            let inp = input(c, 1, root.path());
+            let h = Fake::new("echo hi > out.txt");
+            let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+            assert_eq!(res.exit_class, ExitClass::ContractDefect);
+            assert_eq!(h.runs(), 0);
+            assert_eq!(res.head, base);
+            let dest = root
+                .path()
+                .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+            assert!(!dest.join("marker").exists());
+            assert_eq!(
+                std::fs::read_to_string(dest.join("README.md")).unwrap(),
+                "hello\n"
+            );
+            assert_eq!(res.diff_hash, confine::diff_hash(r.path(), &base).unwrap());
+            assert_eq!(
+                res.check_tail,
+                "red-first: check already passes on base sha (set check_kind=regression if intended)"
+            );
+        }
+    }
+
+    #[test]
+    fn regression_skips_base_check() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "test ! -f out.txt",
+        );
+        c.check_kind = "regression".into();
+        let inp = input(c, 1, root.path());
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::CheckFail);
+        assert_eq!(h.runs(), 1);
+    }
+
+    #[test]
+    fn check_reads_are_protected_unless_allowed() {
+        for allow in [
+            vec!["out.txt"],
+            vec!["out.txt", "*.md"],
+            vec!["out.txt", "README.md"],
+        ] {
+            let (r, base) = repo();
+            let root = tempfile::tempdir().unwrap();
+            let mut c = claim(
+                &r.path().to_string_lossy(),
+                &base,
+                &allow,
+                "test -f out.txt",
+            );
+            c.check_reads = vec!["README.md".into()];
+            let inp = input(c, 1, root.path());
+            let h = Fake::new("echo changed > README.md; echo hi > out.txt");
+            let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+            if allow.len() == 1 {
+                assert_eq!(res.exit_class, ExitClass::ContractDefect);
+                assert_eq!(res.check_tail, "forbidden: README.md");
+            } else {
+                assert_eq!(res.exit_class, ExitClass::Ok);
+            }
+            assert_eq!(h.runs(), 1);
         }
     }
 
@@ -1173,8 +1469,8 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_only_started_a_step_is_an_empty_run() {
-        let res = json_attempt(STEP_ONLY, 0, false, "true");
+    fn a_real_empty_run_is_classified_outage_never_ok() {
+        let res = json_attempt(EMPTY_RUN, 0, false, "true");
         assert_eq!(res.exit_class, ExitClass::Outage);
         assert_eq!(res.check_hash, "");
     }
@@ -1283,7 +1579,7 @@ mod tests {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let repo_s = r.path().to_string_lossy().into_owned();
-        let inp = input(
+        let mut inp = input(
             claim(
                 &repo_s,
                 &base,
@@ -1293,6 +1589,7 @@ mod tests {
             1,
             root.path(),
         );
+        inp.claim.check_kind = "regression".into();
         let h = Fake::new("echo hi > out.txt");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::FlakyCheck);
@@ -1498,7 +1795,7 @@ mod tests {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let repo_s = r.path().to_string_lossy().into_owned();
-        let inp = input(claim(&repo_s, &base, &["out.txt"], "true"), 1, root.path());
+        let inp = input(claim(&repo_s, &base, &["out.txt"], "false"), 1, root.path());
         let h = Fake::new("echo 'PG_QUESTION: not json'");
         let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
         assert_eq!(res.exit_class, ExitClass::ContractDefect);

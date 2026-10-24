@@ -170,6 +170,9 @@ def fold(events, unknown=None):
             for field in ("priority", "model", "review_tier") + SMALL_FIELDS:
                 if field in payload:
                     item[field] = payload[field]
+        elif kind == "exec_owner_changed":
+            # Ownership has its own audit events; lifecycle replay is unchanged.
+            pass
         elif kind == "item_defined":
             if "priority" in payload:
                 item["priority"] = payload["priority"]

@@ -48,8 +48,10 @@ busy timeout (5 s); expiry maps to the same `conflict` refusal as a SQLite busy 
 
 `schema_pg.py` holds a versioned migration list; each migration is one DDL script. Version 1 is the logical equivalent of
 SQLite schema v9 (tables, indexes, locking triggers, aliases, run_tokens, outbox_seen). Version 6 is the logical equivalent of
-SQLite schema v13 (`schema.JEV_DDL`, the merged `jev_shadow` store/audit rows) and version 7 of schema v14 (`schema.OVERSIGHT_DDL`, the
-oversight tokens and op audit) — the keeper-scope merge with main keeps both halves at their own version. `schema_migrations(version, name,
+SQLite schema v13 (`schema.JEV_DDL`, the merged `jev_shadow` store/audit rows); version 7 (main's #140, RT-P1-EXEC-OWNERSHIP) adds
+the three exec ownership columns of the SQLite `items` DDL (`ALTER TABLE items ADD COLUMN exec_workflow_id/exec_run_id/exec_attempt`,
+folded back into the `items` column list by `parse_tables` so the parity tests see one merged table); version 8 of schema v14
+(`schema.OVERSIGHT_DDL`, the oversight tokens and op audit) — the keeper-scope merge with main keeps both halves at their own version. `schema_migrations(version, name,
 applied_at)` records what ran. `open_db(create=True)` and `pg admin migrate` apply pending migrations under an advisory
 lock; `open_db(create=False)` refuses a database that is behind (a runtime role has no DDL rights). A unit test compares the
 SQLite and Postgres table/column lists so the two schemas cannot drift.

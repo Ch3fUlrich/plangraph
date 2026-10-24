@@ -146,6 +146,9 @@ def gate_card(store: Any, principal: Any, key: str, *, repo_root: Path | str,
                 readiness.Finding("leg_request_too_big", f"pack too big: {pack_error}"),))
 
     state = _item_state(store, key)
+    owned = store.conn.execute("SELECT exec_run_id FROM items WHERE key=?", (key,)).fetchone()
+    if state == "needs_input" and owned is not None and owned[0] is not None:
+        return GateResult(key, verdict, route, route_error, False, state, None)
     if state not in GATEABLE_STATES:
         return GateResult(key, verdict, route, route_error, False, state, None)
     if verdict.ready:

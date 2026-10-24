@@ -122,7 +122,5 @@ def test_jev_report_text_renders_empty_and_populated_reports(w):
 
 
 def test_jev_axis_text():
-    line = fmt.jev_axis_text("harness", {"kappa": 0.5, "ok": 12})
-    assert line == "jev harness kappa 0.5 n=12"
-    line_none = fmt.jev_axis_text("window", {"kappa": None, "ok": 0})
-    assert line_none == "jev window kappa - n=0"
+    # Axis reporting has one renderer; the unused parallel formatter is gone.
+    assert not hasattr(fmt, "jev_axis_text")

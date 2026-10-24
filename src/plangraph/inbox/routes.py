@@ -220,9 +220,16 @@ def _signal(store, question_id) -> dict:
 
 
 def _ask(store, principal, body: dict) -> dict:
+    # RT-P1-EXEC-OWNERSHIP: the Rust worker posts workflow_id/run_id/attempt
+    # with every ask (rust/worker/src/keeper.rs ``with_exec``); pass them on so
+    # the store can check them against the card's recorded exec owner.
     return store.ask_question(principal, _need(body, "key"), body.get("text"),
                               body.get("default_answer"), body.get("deadline"),
-                              body.get("risk_tags") or ())
+                              body.get("risk_tags") or (),
+                              exec_workflow_id=body.get("workflow_id"),
+                              exec_run_id=body.get("run_id"),
+                              exec_attempt=body.get("attempt"),
+                              expected_state=body.get("expected_state"))
 
 
 def _answer(store, principal, body: dict) -> dict:

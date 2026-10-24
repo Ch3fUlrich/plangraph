@@ -1016,6 +1016,9 @@ def test_schema_is_v14_and_carries_the_oversight_ddl():
 
 
 def test_pg_migration_7_matches_the_sqlite_ddl():
+    # Merge note: the name keeps its old number (the CI trailer gate treats a
+    # renamed test as a removal).  Main's #140 took Migration 7 for the exec
+    # ownership columns of ``items``, so the oversight twin is Migration 8.
     from plangraph.keeper import schema, schema_pg
 
     sqlite_tables = schema_pg.parse_tables(schema.SCHEMA)
@@ -1027,14 +1030,80 @@ def test_pg_migration_7_matches_the_sqlite_ddl():
             [c for c, _ in pg_tables[table]], table
         assert [bool(nn) for _, nn in sqlite_tables[table]] == \
             [bool(nn) for _, nn in pg_tables[table]], table
-    assert schema_pg.LATEST >= 7
-    seven = [m for m in schema_pg.MIGRATIONS if m.version == 7]
-    assert seven, "Postgres Migration 7 must carry the oversight tables"
-    seven_tables = schema_pg.parse_tables(seven[0].sql)
-    assert {"oversight_tokens", "oversight_ops"} <= set(seven_tables)
+    assert schema_pg.LATEST >= 8
+    eight = [m for m in schema_pg.MIGRATIONS if m.version == 8]
+    assert eight, "Postgres Migration 8 must carry the oversight tables"
+    eight_tables = schema_pg.parse_tables(eight[0].sql)
+    assert {"oversight_tokens", "oversight_ops"} <= set(eight_tables)
     earlier = schema_pg.parse_tables(
-        "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version < 7))
+        "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version < 8))
     assert not {"oversight_tokens", "oversight_ops"} & set(earlier)
+
+
+def test_all_pg_migrations_apply_in_order_exec_7_then_oversight_8():
+    """Merge of origin/main #140: migrations 1..8 apply in order, no gaps.
+
+    Applied through the parity parser (``parse_tables`` over the ``MIGRATIONS``
+    list, no live Postgres): 7 is main's exec ownership of ``items``, 8 is our
+    oversight pair, and each new set is column-for-column the SQLite twin.
+    """
+    from plangraph.keeper import schema, schema_pg
+
+    steps = list(schema_pg.MIGRATIONS)
+    versions = [m.version for m in steps]
+    assert versions == list(range(1, 9))              # 1..8: no gaps
+    assert versions == sorted(set(versions))          # strictly increasing
+    assert schema_pg.LATEST == 8
+
+    exec_cols = ["exec_workflow_id", "exec_run_id", "exec_attempt"]
+    seven = [m for m in steps if m.version == 7]
+    eight = [m for m in steps if m.version == 8]
+    assert len(seven) == len(eight) == 1
+    assert steps.index(seven[0]) < steps.index(eight[0])   # 7 before 8
+
+    # apply the migrations in order, re-parsing after each step
+    applied = {}
+    for index, step in enumerate(steps, start=1):
+        applied = schema_pg.parse_tables(
+            "\n".join(m.sql for m in steps[:index]))
+        columns = [c for c, _ in applied["items"]]
+        if step.version < 7:
+            assert "exec_workflow_id" not in columns, step
+        if step.version < 8:
+            assert not {"oversight_tokens", "oversight_ops"} & set(applied), step
+    assert applied, "every migration parsed"
+
+    # migration 7 alone adds exactly the exec ownership columns ...
+    seven_tables = schema_pg.parse_tables(seven[0].sql)
+    assert list(seven_tables) == ["items"]
+    assert [c for c, _ in seven_tables["items"]] == exec_cols
+    assert applied["items"][-len(exec_cols):] == \
+        [(c, False) for c in exec_cols], applied["items"]
+
+    # ... and migration 8 alone carries the oversight tables
+    eight_tables = schema_pg.parse_tables(eight[0].sql)
+    assert {"oversight_tokens", "oversight_ops"} <= set(eight_tables)
+
+    # both new sets match SQLite column-for-column (name order and NOT NULL)
+    sqlite_tables = schema_pg.parse_tables(schema.SCHEMA)
+    for table in ("oversight_tokens", "oversight_ops"):
+        assert [c for c, _ in sqlite_tables[table]] == \
+            [c for c, _ in applied[table]], table
+        assert [bool(nn) for _, nn in sqlite_tables[table]] == \
+            [bool(nn) for _, nn in applied[table]], table
+    for column, notnull in sqlite_tables["items"][-len(exec_cols):]:
+        assert column in exec_cols, column
+    assert [c for c, _ in sqlite_tables["items"]] == \
+        [c for c, _ in applied["items"]], "items columns drift"
+    assert [bool(nn) for _, nn in sqlite_tables["items"]] == \
+        [bool(nn) for _, nn in applied["items"]], "items NOT NULL drift"
+
+    # the exec columns live in the SQLite items DDL at main's v13 shape, and
+    # the SQLite version step stays the oversight tables alone
+    assert schema.SCHEMA_VERSION == 14
+    for column in exec_cols:
+        assert f"    {column}" in schema.TABLES, column
+    assert "exec_workflow_id" not in schema.OVERSIGHT_DDL
 
 
 def test_copy_to_pg_includes_both_oversight_tables():
@@ -1376,14 +1445,16 @@ def test_null_columns_are_null_safe_across_a_revoke(w, monkeypatch):
 def test_token_guard_columns_and_delete_trigger_are_in_both_ddls():
     from plangraph.keeper import schema, schema_pg
 
-    seven = "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version == 7)
-    for ddl, label in ((schema.OVERSIGHT_DDL, "sqlite"), (seven, "pg")):
+    # number updated for the merge: main's #140 holds Migration 7 (exec
+    # ownership), so the oversight twin moved to Migration 8
+    eight = "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version == 8)
+    for ddl, label in ((schema.OVERSIGHT_DDL, "sqlite"), (eight, "pg")):
         assert "trg_oversight_tokens_append_only_delete" in ddl, label
         trigger = ddl.split("trg_oversight_tokens_revoke_only_update", 1)[1]
         for column in ("created_at", "minted_by", "go_decision", "mint_reason"):
             assert f"OLD.{column}" in trigger, (label, column)
             assert f"NEW.{column}" in trigger, (label, column)
-    assert "trg_oversight_tokens_append_only_truncate" in seven
+    assert "trg_oversight_tokens_append_only_truncate" in eight
 
 
 # =========================================================================

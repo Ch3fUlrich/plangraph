@@ -2,7 +2,8 @@
 
 Main took SQLite schema v13 (``JEV_DDL``) and Postgres Migration 6 (``_V6``) for
 the audit-only ``jev_shadow`` table; the oversight merge moved *our* tables to
-v14 / Migration 7 and appended them after main's half.  These tests pin that
+v14 / Migration 8 (main's #140 keeps Migration 7 for the ``items`` exec
+ownership columns) and appended them after main's half.  These tests pin that
 nothing of main's side moved: the JEV tables stay where main put them, and the
 oversight tables sit strictly after them in SQLite, Postgres and the copy order.
 """
@@ -58,12 +59,15 @@ def test_jev_lands_in_a_fresh_database_and_survives_reopen(tmp_path):
 
 
 def test_pg_migration_6_is_the_jev_twin_and_7_the_oversight_twin():
-    assert schema_pg.LATEST == 7
+    # name kept (the CI trailer gate treats a renamed test as a removal); the
+    # number it quotes is updated: main's #140 took Migration 7 for the items
+    # exec ownership columns, so the oversight twin is Migration 8.
+    assert schema_pg.LATEST == 8
     six = [m for m in schema_pg.MIGRATIONS if m.version == 6]
-    seven = [m for m in schema_pg.MIGRATIONS if m.version == 7]
-    assert len(six) == len(seven) == 1
+    eight = [m for m in schema_pg.MIGRATIONS if m.version == 8]
+    assert len(six) == len(eight) == 1
     assert JEV_TABLE in schema_pg.parse_tables(six[0].sql)
-    assert {"oversight_tokens", "oversight_ops"} <= set(schema_pg.parse_tables(seven[0].sql))
+    assert {"oversight_tokens", "oversight_ops"} <= set(schema_pg.parse_tables(eight[0].sql))
     earlier = schema_pg.parse_tables(
         "\n".join(m.sql for m in schema_pg.MIGRATIONS if m.version < 6))
     assert JEV_TABLE not in earlier

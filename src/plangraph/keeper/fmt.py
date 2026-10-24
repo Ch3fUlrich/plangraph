@@ -14,7 +14,6 @@ __all__ = [
     "ready_text", "show_text", "brief_text", "blocked_text", "alerts_text",
     "waves_text", "critical_text", "percent_text", "digest_text",
     "whoami_text", "snapshot_text", "result_text", "jev_report_text",
-    "jev_axis_text",
 ]
 
 
@@ -141,13 +140,6 @@ def _jev_row_line(row) -> str:
 def jev_report_text(report: dict) -> str:
     """Text for a whole ``jev_report`` result; ``jev_report`` owns the layout."""
     return jev_report.render(report)
-
-
-def jev_axis_text(axis: str, stats: dict) -> str:
-    """One-line text per axis: 'jev <axis> kappa <kappa> n=<n>'."""
-    kappa = stats.get("kappa")
-    kappa_text = "-" if kappa is None else f"{kappa}"
-    return f"jev {axis} kappa {kappa_text} n={stats.get('ok', 0)}"
 
 
 def blocked_text(blocked: dict) -> str:

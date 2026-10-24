@@ -50,8 +50,8 @@ class ReviewMixin:
         """Record ONE observe-only ``qc_accept`` row for the verdict just landed.
 
         The keeper's own accept/reject decision, shadowed exactly like
-        ``review.actions.plan_actions`` shadows the planner's: through
-        :func:`plangraph.planner.shadow.qc_with_shadow`, so the same switch
+        ``review.actions.plan_actions`` shadows the planner's: through its
+        injected observation hook, so the same switch
         (``PLANGRAPH_JEV``, off is a cheap no-op with no ask and no network),
         the same redaction, the same single guarded ask
         (``jev_client.MAX_TIMEOUT_S``) and the same ``[]``-on-failure rules
@@ -59,11 +59,9 @@ class ReviewMixin:
         for a change request - and only the verdict's evidence (reason) is
         handed to the state builder, never the word itself.
 
-        It runs AFTER the verdict's write transaction has committed and outside
-        it, because the guarded ask may take up to ~10s and the write lock must
-        never be held for it.  The verdict's own result is returned unchanged
-        and every escape is swallowed, so a slow, broken or disabled Jev can
-        never fail, reorder or delay a verdict beyond that guard.
+        It dispatches AFTER the verdict commits, without waiting for the ask.
+        Its observer owns a separate connection and fills only its own row's
+        accepted verdict outcome. The rules result is returned unchanged.
 
         The row is filed by :func:`plangraph.keeper.store_jev._jev_writer`, the
         shared writer mapping the worker verbs' outcome fill also uses: a
@@ -74,12 +72,35 @@ class ReviewMixin:
         try:
             # Local imports: the planner is only loaded when a hook can run, and
             # ``store_jev`` (which owns the writer mapping) is loaded with it.
-            from plangraph.planner import shadow as shadow_mod
             from .store_jev import _jev_writer
+            from plangraph.planner import jev_shadow, jev_client
+            cfg = jev_client.config_from_env()
+            if not jev_client.enabled(cfg):
+                return
             verdict = {"verdict": "pass" if ok else "fix", "reason": reason}
-            shadow_mod.qc_with_shadow(verdict, "review", key,
-                                      store=self,
-                                      principal=_jev_writer(principal))
+            writer = _jev_writer(principal)
+            connect = jev_shadow.observer_connection(self)
+
+            def sink(row):
+                from .store import Store
+                conn = connect()
+                try:
+                    observer = Store(conn, clock=self.clock)
+                    result = observer.jev_record(writer, row)
+                    # Fill exactly this decision, not another reviewer's rows.
+                    with observer._write():
+                        conn.execute(
+                            "UPDATE jev_shadow SET outcome=?, outcome_at=? WHERE id=? AND outcome IS NULL",
+                            ("accept" if ok else "reject", self._iso(self.clock()), result["id"]))
+                finally:
+                    conn.close()
+                return True
+
+            from plangraph.review.actions import plan_actions
+            plan_actions(verdict, "review", key, store=self, principal=writer,
+                         shadow=lambda observed, phase, card: jev_shadow.background(
+                             lambda: jev_shadow.shadow_qc_accept(
+                                 observed, phase, card, sink=sink, cfg=cfg)))
         except Exception:  # noqa: BLE001 - a shadow failure never breaks a verdict
             pass
 
@@ -324,4 +345,6 @@ class ReviewMixin:
                     " WHERE key=? AND state='in_review' AND epoch=?",
                     (principal.name, lease, self._iso(now), key, item["epoch"]))
             self._race_guard(cursor, key, "in_review", item["epoch"])
+            # Both outcomes hand back new work, even when the claimant stays.
+            self._exec_clear(self.conn, key, principal, now)
         return {"key": key, "state": state, "reviews_passed": 0}

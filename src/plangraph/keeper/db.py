@@ -96,7 +96,10 @@ def _enable_defensive(conn):
 
 
 #: Columns added after a schema shipped: ``(table, column, DDL type)``.  An older
-#: database gains them when opened (before the authorizer denies ALTER).
+#: database gains them when opened (before the authorizer denies ALTER).  The
+#: three ``exec_*`` ownership columns are main's #140 (RT-P1-EXEC-OWNERSHIP):
+#: main shipped them inside the ``items`` DDL at schema v13, so they carry no
+#: version step here either - the merged v14 step stays the oversight tables.
 _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "wait", "TEXT"),
                   ("items", "writer_model", "TEXT"),
@@ -105,7 +108,10 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
                   ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"),
-                  ("items", "kg_refs", "TEXT"))
+                  ("items", "kg_refs", "TEXT"),
+                  ("items", "exec_workflow_id", "TEXT"),
+                  ("items", "exec_run_id", "TEXT"),
+                  ("items", "exec_attempt", "INTEGER"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
@@ -142,8 +148,10 @@ def _upgrade(conn):
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     # Main's ``JEV_DDL`` (schema v13) installs before the oversight half (v14),
-    # exactly as ``SCHEMA`` composes them.  The oversight-token guard grew four
-    # columns and a DELETE guard after the oversight DDL first shipped.
+    # exactly as ``SCHEMA`` composes them.  Main's exec ownership columns (the
+    # ``_ADDED_COLUMNS`` entries above) land the same way, before either.  The
+    # oversight-token guard grew four columns and a DELETE guard after the
+    # oversight DDL first shipped.
     # ``OVERSIGHT_DDL`` is CREATE ... IF NOT EXISTS, so an older database would
     # keep the weaker trigger body forever: drop the two guards first and let the
     # shared script recreate them (DDL only, no data).

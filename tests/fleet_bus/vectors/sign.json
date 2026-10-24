@@ -1,0 +1,38 @@
+[
+  {
+    "name": "post-no-kid",
+    "fn": "sign",
+    "inputs": {
+      "secret": "test-secret-not-real",
+      "canonical": "fleet-bus/2|post|1700000000|nonce-1|sender|receiver|message-1||2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    },
+    "expect": "1be0b9c3ee813d02dac2e83d0691506022b1b59d6d733c9b55b518819b2a9b20"
+  },
+  {
+    "name": "post-kid",
+    "fn": "sign",
+    "inputs": {
+      "secret": "test-secret-not-real",
+      "canonical": "fleet-bus/2|post|1700000000|nonce-1|sender|receiver|message-1|key-1|2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+    },
+    "expect": "90d655d3e49ab9c3274819c9824c6ccd59d3eeec130f74a808a14daa06053873"
+  },
+  {
+    "name": "read",
+    "fn": "sign",
+    "inputs": {
+      "secret": "test-secret-not-real",
+      "canonical": "fleet-bus/2|read|1700000000|read-1|reader||1700000000000-000001"
+    },
+    "expect": "b1f72e97e486822fd115ec43d43681ad6fc85a921517def1c6b66bd6fcc173dd"
+  },
+  {
+    "name": "read-empty-cursor",
+    "fn": "sign",
+    "inputs": {
+      "secret": "test-secret-not-real",
+      "canonical": "fleet-bus/2|read|1700000000|read-1|reader|key-1|"
+    },
+    "expect": "7c39cf2a97ee649c5f2d3a479c297e7ea6b46261c4c13d6c53c494d500652a16"
+  }
+]

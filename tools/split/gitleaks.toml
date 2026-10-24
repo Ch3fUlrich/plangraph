@@ -25,3 +25,23 @@ condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_keeper_credential_guard\.py$''']
 regexes = ['''^svcacct/Zq9xk2LmPw$''']
+
+[[allowlists]]
+# PG-PUBLIC-FIX: the estimate/src-edit guard test asserts this exact pair is refused and never
+# echoed, so it sits in the source as one plain literal (no splitting around the scanner).
+# Same reviewed fake value as the credential-guard entry, scoped to this file AND this value.
+description = "synthetic credential the estimate-src-edit guard refuses (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_keeper_estimate_src_edit\.py$''']
+regexes = ['''^svcacct/Zq9xk2LmPw$''']
+
+[[allowlists]]
+# PG-PUBLIC-FIX: the key-guard refusal corpus (REAL) expects this pair refused and masked, so it
+# is one plain literal too.  Scoped to this file AND this value: another credential-shaped
+# string written here is still reported.
+description = "synthetic password the key-guard refusal corpus expects refused (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_keeper_guard_key\.py$''']
+regexes = ['''^svc/Xk9fT2mQ$''']
