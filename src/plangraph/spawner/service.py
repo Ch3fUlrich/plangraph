@@ -41,7 +41,7 @@ class SpawnService:
         def clean(value):
             if isinstance(value, str):
                 return redact(redact_env_values(value, env))
-            if isinstance(value, list):
+            if isinstance(value, (list, tuple, set)):
                 return [clean(v) for v in value]
             if isinstance(value, dict):
                 return {k: clean(v) for k, v in value.items()}
@@ -49,18 +49,20 @@ class SpawnService:
         record.update(clean(record))
         for attempt in record.get('attempts', []):
             if attempt.get('skip_reason'):
-                attempt['skip_reason'] = clean(attempt['skip_reason'][:300])
+                attempt['skip_reason'] = clean(attempt['skip_reason'])[:300]
         if record.get('status') == 'failed':
             if not record.get('exit_code'):
                 record['exit_code'] = 1
             record['error'] = record.get('error') or '; '.join(
                 a.get('skip_reason') or 'harness failed' for a in record.get('attempts', [])) or 'harness failed'
         if record.get('error'):
-            record['error'] = clean('; '.join(p[:300] for p in record['error'].split('; '))[:2000])
+            record['error'] = '; '.join(p[:300] for p in clean(record['error']).split('; '))[:2000]
         for stream in ('stdout_tail', 'stderr_tail'):
             if stream in record:
                 record[stream] = clean(record[stream]).encode()[-4096:].decode('utf-8', errors='ignore')
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
+        if record.get('ended'):
+            getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
     def ps(self):
         from .stall_watchdog import read_runs
@@ -235,8 +237,8 @@ class SpawnService:
                     if task:
                         await asyncio.shield(task)
                     stop = self.runner.provider_responses.get(job.job_id)
-                    from .runner import unavailable_reason
-                    unavailable = unavailable_reason(job)
+                    from .env_redact import unavailable_reason
+                    unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                     if unavailable:
                         job.status = 'failed'
                         job.exit_code = job.exit_code or 1
@@ -249,7 +251,7 @@ class SpawnService:
                         served_family=job.served_family, writer_family=job.served_family or chosen.family,
                         stdout_tail=job.stdout, stderr_tail=job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
-                    if not stop or no_fallthrough or dry_run:
+                    if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:
                             await self._continue_writer(record, job.stdout)
                         break

@@ -101,7 +101,7 @@ def test_supervisor_secret_straddles_old_boundary(tmp_path, monkeypatch, capsys)
     from plangraph.spawner import cli
     secret = 'opaque-boundary-credential'
     monkeypatch.setenv('AUTOOS_TEST_TOKEN', secret)
-    message = 'prefix ' + secret + 'x' * (16384 - len(secret) // 2)
+    message = 'prefix ' + secret + 'x' * (256 * 1024 - len(secret) // 2)
     def start(command, **kwargs):
         return subprocess.Popen([sys.executable, '-c',
             'import sys; sys.stdin.readline(); sys.stderr.write(' + repr(message) + ')'], **kwargs)

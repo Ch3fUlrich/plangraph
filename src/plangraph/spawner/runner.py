@@ -31,15 +31,7 @@ _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
 
 
-def unavailable_reason(job):
-    """Only failed harness error lines (not successful task prose) are evidence."""
-    if job.exit_code == 0:
-        return None
-    lines = job.stdout.splitlines()
-    candidates = job.stderr.splitlines() + lines[:1] + lines[-1:]
-    return next((line for line in candidates if
-        re.match(r'(?i)^error:\s*.*(?:model unavailable|not served|unknown model)', line)
-        or line.startswith('not_served_on_host:')), None)
+from .env_redact import unavailable_reason
 
 
 def redact(value):
@@ -406,6 +398,7 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
@@ -584,7 +577,7 @@ def spawn_service(*args, **kwargs):
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch
             if hasattr(plan, '__dataclass_fields__'):
-                plan = plan_for_launch(plan, dry_run=dry_run)
+                plan = await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
@@ -592,14 +585,14 @@ def spawn_service(*args, **kwargs):
                 served_family=None, writer_family=None, status='running', started=time.time(),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             for skipped in plan.to_dict()['skipped']:
-                if 'not_served_on_host' in str(skipped):
+                if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
                     record.setdefault('skipped', []).append(skipped)
                     record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                         skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
 
             if not plan.legs or plan.error:
-                host_skips = [s for s in plan.skipped if 'not_served_on_host' in str(s)]
+                host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
                 exhausted = not plan.legs and (not plan.error or
                     bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
@@ -613,7 +606,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    while True:
+                    for _ in range(len(plan.legs) + 2):
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
@@ -630,7 +623,7 @@ def spawn_service(*args, **kwargs):
                             await asyncio.shield(task)
                         stop = self.runner.provider_responses.get(job.job_id)
                         reason = None
-                        unavailable = unavailable_reason(job)
+                        unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
                         if unavailable:
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
@@ -651,14 +644,17 @@ def spawn_service(*args, **kwargs):
                             return
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
-                            current = plan_for_launch(current, dry_run=dry_run)
+                            current = await asyncio.to_thread(plan_for_launch, current, dry_run=dry_run)
                         for skipped in current.to_dict()['skipped']:
-                            if 'not_served_on_host' in str(skipped) and skipped not in record.setdefault('skipped', []):
+                            if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
                                 record['skipped'].append(skipped)
                                 record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                                     skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
                         record['plan'] = current.to_dict()
-                    if any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host')) for a in record['attempts']):
+                    else:
+                        record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
+                        return
+                    if any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):
                         record.update(status='failed', exit_code=1,
                             error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
                     else:
