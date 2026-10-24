@@ -226,22 +226,33 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
 # remain visible for diagnostics but must not become new offline spawn routes.
 from plangraph.planner.legs import DEFAULT_LEGS
 
+# OVH removed by operator, muse-spark-1.3-free gone D-1714, D-2655 G3.
+OPERATOR_REMOVED_MODELS = frozenset({
+    'omniroute/ovh-gpt-oss-120b',
+    'omniroute/or-north-mini-code-free',
+    'omniroute/or-laguna-s-2.1-free',
+    'omniroute/or-nemotron-3-super-free',
+    'opencode/muse-spark-1.3-contributor-free',
+})
+
 
 def admission_models() -> set[str]:
-    """The final role-ordered policy is the sole spawn admission allowlist."""
-    return {leg.model for leg in DEFAULT_LEGS}
+    """Registered offline routes, excluding models removed by the operator."""
+    return {leg.model for leg in DEFAULT_LEGS} - OPERATOR_REMOVED_MODELS
 
 
-_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS}
+_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
     if not _row['active']:
         _row['available'] = 0
-for _model, _leg in _fallback_legs.items():
+for _leg in DEFAULT_LEGS:
+    _model = _leg.model
     if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
         DEFAULT_FALLBACK_MODELS.append(dict(
             id=_model, family=_leg.family, harness=_leg.harness,
-            tier=_leg.tier, available=1, active=True,
+            tier=_leg.tier, available=int(_model in _fallback_legs),
+            active=_model in _fallback_legs,
             context_window=_leg.max_request_tokens,
             aa_intelligence=0.0, combos=[]))
 
@@ -356,9 +367,9 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
-def catalog_row_admitted(row: Mapping[str, Any], *, admission: bool = True) -> bool:
+def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
-    return ((not admission or row.get('id') in admission_models())
+    return (row.get('id') not in OPERATOR_REMOVED_MODELS
             and row.get('available') == 1 and row.get('active') is True)
 
 
@@ -529,7 +540,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
     # Ranking historical catalog seats is not a new-spawn admission decision.
-    if not catalog_row_admitted(model, admission=False):
+    if not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -634,7 +645,7 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
-        if not catalog_row_admitted(c, admission=False):
+        if not catalog_row_admitted(c):
             continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)

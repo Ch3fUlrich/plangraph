@@ -53,7 +53,12 @@ def test_exact_catalog_allowlist():
     from plangraph.planner.legs import DEFAULT_LEGS
     rows = get_catalog_models()
     rejected = {r['id'] for r in rows if not catalog_row_admitted(r)}
-    ids = ({r['id'] for r in rows if catalog_row_admitted(r)} | {l.model for l in DEFAULT_LEGS}) - rejected
+    from plangraph.spawner.resolver import OPERATOR_REMOVED_MODELS
+    ids = (({r['id'] for r in rows if catalog_row_admitted(r)} | {l.model for l in DEFAULT_LEGS})
+           - rejected - OPERATOR_REMOVED_MODELS)
+    for model in OPERATOR_REMOVED_MODELS:
+        with pytest.raises(SpawnRefused):
+            validate_model(model)
     for model in ids:
         assert validate_model(model) == model
     for model in rejected:

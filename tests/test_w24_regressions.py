@@ -48,6 +48,12 @@ def test_empty_sqlite_fallback_admits_registered_legs(monkeypatch):
     monkeypatch.setattr(resolver, '_DEFAULT_CATALOG_DB', db)
     rows = {r['id']: r for r in resolver.get_catalog_models()}
     for leg in DEFAULT_LEGS:
+        if leg.model in resolver.OPERATOR_REMOVED_MODELS:
+            assert not resolver.catalog_row_admitted(rows[leg.model])
+            from plangraph.planner.routing import SpawnRefused
+            with pytest.raises(SpawnRefused):
+                validate_model(leg.model)
+            continue
         assert resolver.catalog_row_admitted(rows[leg.model])
         assert validate_model(leg.model) == leg.model
     assert not resolver.catalog_row_admitted(rows['cxa/gpt-6-astra-max'])
