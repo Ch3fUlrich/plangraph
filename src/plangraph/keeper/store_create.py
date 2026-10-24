@@ -237,14 +237,15 @@ class CreateMixin:
                                       definition.get("title"), definition.get("track"))
         if explicit is not None:
             tier = validated_review_tier(explicit)
-            if tier_needs_router(tier) and principal.role != "router":
+            allowed_lowering = principal.role in ("router", "oversight")
+            if tier_needs_router(tier) and not allowed_lowering:
                 raise Refused("forbidden",
                               "only the router may set review_tier='none'")
             # Check if explicit tier is lower than default
             # Order: none < standard < high (none already handled above)
             tier_order = {"standard": 1, "high": 2}
             if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
-                if principal.role != "router":
+                if not allowed_lowering:
                     raise Refused("forbidden",
                                   f"explicit review_tier '{tier}' is lower than "
                                   f"default '{default}'; only the router may lower the tier")
@@ -326,7 +327,7 @@ class CreateMixin:
                  if name != "priority"} if has_priority else fields)
         if has_priority:
             # Same order as ``_priority``: role, value, then the item lookup.
-            self._require_role(principal, "router")
+            self._require_role(principal, "router", "oversight")
             self._checked_priority(prio)
             if not rest:
                 with self._write():
@@ -554,7 +555,7 @@ class CreateMixin:
                          lambda now: self._priority(principal, key, n, now))
 
     def _priority(self, principal, key, n, now):
-        self._require_role(principal, "router")
+        self._require_role(principal, "router", "oversight")
         self._checked_priority(n)
         with self._write():
             self._apply_priority(principal, key, n, now)

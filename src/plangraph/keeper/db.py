@@ -19,7 +19,7 @@ from pathlib import Path
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema import (ALIASES_DDL, DESIGN3_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
-                     OUTBOX_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
+                     OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
 
@@ -152,6 +152,10 @@ def _upgrade(conn):
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
+    conn.executescript(
+        "DROP TRIGGER IF EXISTS trg_oversight_tokens_revoke_only_update;\n"
+        "DROP TRIGGER IF EXISTS trg_oversight_tokens_append_only_delete;")
+    conn.executescript(OVERSIGHT_DDL)
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
 

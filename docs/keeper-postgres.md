@@ -46,6 +46,10 @@ busy timeout (5 s); expiry maps to the same `conflict` refusal as a SQLite busy 
 
 ## Schema and migrations
 
+Migration 8 adds the scoped oversight token and append-only op audit tables
+(SQLite schema v14, `OVERSIGHT_DDL`). Migrations 1–7 remain unchanged,
+including all five exec ownership columns in Migration 7.
+
 `schema_pg.py` holds a versioned migration list; each migration is one DDL script. Version 1 is the logical equivalent of
 SQLite schema v9 (tables, indexes, locking triggers, aliases, run_tokens, outbox_seen). `schema_migrations(version, name,
 applied_at)` records what ran. `open_db(create=True)` and `pg admin migrate` apply pending migrations under an advisory
