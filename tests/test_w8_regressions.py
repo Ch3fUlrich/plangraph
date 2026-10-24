@@ -24,7 +24,7 @@ def test_existing_private(tmp_path):
 def test_steer_without_stdin():
     runner = SpawnerRunner()
     runner.jobs['j'] = JobInfo('j', 'dry_run', '', '')
-    assert asyncio.run(runner.steer('j', 'hello')) == {'ok': False, 'error': 'no stdin'}
+    assert asyncio.run(runner.steer('j', 'hello')) == {'ok': False, 'steered': False, 'error': 'no stdin'}
 
 def test_bench_typed():
     from plangraph.planner import routing

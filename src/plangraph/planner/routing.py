@@ -215,7 +215,12 @@ class BenchRequired(SpawnRefused):
 
     def __init__(self, message, legs=()):
         super().__init__(message)
-        self.legs = tuple(legs)
+        self.gaps = [leg for leg in legs if isinstance(leg, dict)]
+        self.legs = [leg['leg'] if isinstance(leg, dict) else leg for leg in legs]
+
+
+class BenchDataError(BenchRequired):
+    """Benchmark storage could not be read; not missing model coverage."""
 
 
 # Table-specific aliases to the resolver's canonical columns. No fuzzy model aliases.
@@ -292,9 +297,17 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         raise SpawnRefused("card required")
     if role not in ("implement", "review"):
         raise ValueError("role must be implement|review")
+    from plangraph.spawner.risk import evaluate_risk
+    assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
+                               bucket=card.get('bucket', 'S1'),
+                               has_tests=card.get('has_tests', True),
+                               risk_tags=card.get('risk_tags', ()),
+                               is_pure_doc=card.get('is_pure_doc', False))
+    if (assessment.risk in ('high', 'critical') or card.get('risk') in ('high', 'critical')) and card.get('reviewer_count', 2) < 2:
+        raise SpawnRefused('high/critical changes require two reviewers')
     if card.get('reviewer_count') == 0 and (
-            not card.get('review_exempt') or card.get('risk', 'normal') in ('high', 'critical')
-            or card.get('risk_tags')):
+            not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
+            ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
     from plangraph.spawner.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status

@@ -33,15 +33,21 @@ def create_private(path):
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
-        secure_sqlite_files(path)
-        return
+        return secure_sqlite_files(path)
     os.close(fd)
+    return True
 
 
 def secure_sqlite_files(path):
     """Best-effort privacy for existing databases and SQLite sidecars."""
+    import logging
+    ok = True
     for suffix in ('', '-wal', '-shm', '-journal'):
         try:
             os.chmod(str(path) + suffix, 0o600)
-        except OSError:
-            pass
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            ok = False
+            logging.getLogger(__name__).warning('sqlite_permissions_failed: %s', type(exc).__name__)
+    return ok

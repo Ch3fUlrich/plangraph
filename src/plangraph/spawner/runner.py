@@ -100,13 +100,16 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
                         continue
                     except Exception as exc:
                         logging.getLogger(__name__).warning('telemetry_failed: %s', type(exc).__name__)
+                        continue
 
-    if not served_model and fallback_model:
-        served_model = fallback_model
     if not served_family and served_model:
         served_family = detect_model_family(served_model)
 
     return served_model, served_family
+
+
+class NonceCapacity(RuntimeError):
+    """All nonce slots belong to live runs."""
 
 
 class SpawnerRunner:
@@ -121,8 +124,10 @@ class SpawnerRunner:
         self.tree_killer = tree_killer or kill_process_tree
         self.provider_responses = {}
         self._nonces = {}
+        self._adapter_tokens = {}
 
-    def provider_response(self, job_id, leg, status, body, headers, *, account=None, combo=None, store=None):
+    def provider_response(self, job_id, leg, status, body, headers, *, source=None,
+                          nonce=None, adapter_token=None, account=None, combo=None, store=None):
         """Consume trusted gateway transport evidence, never free-text output.
 
         Public calls are restricted to trusted gateway adapters. The nonce-checked
@@ -133,6 +138,14 @@ class SpawnerRunner:
 
         if job_id not in self.jobs:
             raise KeyError(job_id)
+        if source == 'stderr_envelope':
+            if not nonce or nonce != self._nonces.get(job_id):
+                raise ValueError('invalid run nonce')
+        elif source == 'gateway_adapter':
+            if adapter_token is None or adapter_token is not self._adapter_tokens.get(job_id):
+                raise ValueError('invalid adapter token')
+        else:
+            raise ValueError('unknown provider response source')
         target = store or leg_state
         if '/' not in leg:
             leg = 'agy/' + leg
@@ -166,17 +179,20 @@ class SpawnerRunner:
         import secrets
         nonce = secrets.token_hex(32)
         if len(self._nonces) >= 4096:
+            for key in list(self._nonces):
+                if key not in self.jobs:
+                    self._nonces.pop(key)
             finished = sorted(
                 (key for key in self._nonces if key in self.jobs
                  and self.jobs[key].status != 'running'),
                 key=lambda key: self.jobs[key].end_time or self.jobs[key].start_time,
             )
-            for key in finished:
+            for key in finished if len(self._nonces) >= 4096 else ():
                 self._nonces.pop(key, None)
                 if len(self._nonces) < 4096:
                     break
             if len(self._nonces) >= 4096:
-                raise RuntimeError('active run nonce capacity reached')
+                raise NonceCapacity('active run nonce capacity reached')
         # Build routing envelope headers if not provided
         envelope_headers = dict(headers or {})
         if not envelope_headers:
@@ -246,16 +262,25 @@ class SpawnerRunner:
 
         import shutil
         resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-        proc = await self.process_factory(
-            resolved_exe,
-            *cmd[1:],
-            cwd=work_dir,
-            env=child_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
-            **({"start_new_session": True} if os.name != "nt" else {}),
-        )
+        self._adapter_tokens[job_id] = object()
+        try:
+            proc = await self.process_factory(
+                resolved_exe,
+                *cmd[1:],
+                cwd=work_dir,
+                env=child_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+                **({"start_new_session": True} if os.name != "nt" else {}),
+            )
+        except Exception as exc:
+            self._adapter_tokens.pop(job_id, None)
+            job.status = 'failed'
+            job.exit_code = 1
+            job.end_time = time.time()
+            job.events.append({'event': 'spawn_failed', 'error': type(exc).__name__})
+            raise
         self._processes[job_id] = proc
         self._nonces[job_id] = nonce
 
@@ -304,7 +329,8 @@ class SpawnerRunner:
                         and isinstance(response['body'], str) and response['body'].strip()
                         and isinstance(response['headers'], dict)
                         and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
-                    self.provider_response(job_id, **response)
+                    self.provider_response(job_id, **response, source='stderr_envelope',
+                                           nonce=self._nonces[job_id])
             job.stdout = redact(stdout_text)
             job.stderr = redact(stderr_text)
             job.exit_code = exit_code
@@ -321,7 +347,16 @@ class SpawnerRunner:
             if job_id in self.jobs:
                 self.jobs[job_id].status = "cancelled"
                 self.jobs[job_id].end_time = time.time()
+                self.jobs[job_id].exit_code = 1
+        except Exception as exc:
+            job = self.jobs[job_id]
+            job.status = 'failed'
+            job.exit_code = 1
+            job.end_time = time.time()
+            job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
+            logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
 
@@ -342,18 +377,21 @@ class SpawnerRunner:
 
         proc = self._processes.get(job_id)
         if not proc or getattr(proc, 'stdin', None) is None:
-            return {'ok': False, 'error': 'no stdin'}
+            return {'ok': False, 'steered': False, 'error': 'no stdin'}
+        if proc.stdin.is_closing():
+            return {'ok': False, 'steered': False, 'error': 'stdin closing'}
         if not proc.stdin.is_closing():
             try:
                 proc.stdin.write((message + "\n").encode("utf-8"))
                 await proc.stdin.drain()
             except (BrokenPipeError, ConnectionResetError) as exc:
                 job.events.append({"event": "steer_failed", "error": type(exc).__name__})
+                return {'ok': False, 'steered': False, 'error': type(exc).__name__}
             except Exception as exc:
                 job.events.append({"event": "steer_failed", "error": type(exc).__name__})
-                return {'ok': False, 'error': type(exc).__name__}
+                return {'ok': False, 'steered': False, 'error': type(exc).__name__}
 
-        return {"job_id": job_id, "steered": True, "message": message, "status": job.status}
+        return {'ok': True, 'steered': True, 'error': None}
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a running job."""
@@ -420,7 +458,7 @@ def spawn_service(*args, **kwargs):
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, writer_family=None, status='running', started=time.time(),
-                ended=None, attempts=[], stdout_tail='')
+                ended=None, attempts=[], stdout_tail='', exit_code=None)
             self._save(record)
 
             if not plan.legs or plan.error:
@@ -450,7 +488,7 @@ def spawn_service(*args, **kwargs):
                         stop = self.runner.provider_responses.get(job.job_id)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                             skip_reason='provider_stop' if stop else None, provider_response=stop))
-                        record.update(status=job.status, served_model=job.served_model,
+                        record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, writer_family=job.served_family or chosen.family,
                             stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                         if not stop or no_fallthrough or dry_run:
@@ -463,9 +501,10 @@ def spawn_service(*args, **kwargs):
                     if isinstance(exc, SpawnRefused):
                         record.update(status='refused', exit_code=3 if isinstance(exc, BenchRequired) else 2,
                                       refusal=type(exc).__name__, error=redact(str(exc)),
-                                      evidence=list(exc.legs) if isinstance(exc, BenchRequired) else [])
+                                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [],
+                                      legs=list(exc.legs) if isinstance(exc, BenchRequired) else [])
                         return
-                    record.update(status='failed', error=redact(str(exc)))
+                    record.update(status='failed', exit_code=1, error=redact(str(exc)))
                 finally:
                     record['ended'] = time.time()
                     self._save(record)

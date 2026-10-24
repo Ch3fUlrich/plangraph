@@ -162,6 +162,6 @@ def test_mid_fallthrough_bench_refusal(tmp_path, monkeypatch):
             'params': {'name': 'plangraph_agent_spawn', 'arguments': {'card': {'estimate_tokens': 100}, 'prompt': 'task', 'require_bench': True, 'wait_seconds': 1}}})
         assert response['error']['code'] == -32602
         assert response['error']['data']['type'] == 'BenchRequired'
-        assert response['error']['data']['legs'] == record['evidence']
+        assert response['error']['data']['legs'] == [gap['leg'] for gap in record['evidence']]
         assert 'result' not in response
     asyncio.run(run())

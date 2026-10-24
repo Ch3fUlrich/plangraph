@@ -573,3 +573,9 @@ that flag are invalid, and high/critical risk cannot claim the exemption.
 The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
 output); Flash retains its existing 1,048,576 context limit. The unused OmniRoute
 model registry is omitted while its transport configuration remains available.
+# Routing hardening
+
+Mimo IDs are case-sensitive: only `mimo/mimo-v2.6-flash` and
+`mimo/mimo-v2.6-pro` are accepted. Mixed-case variants are refused.
+SQLite files are created privately before connecting. On Windows, mode bits do
+not establish a private ACL; operators must secure the state directory ACL.

@@ -246,10 +246,10 @@ class MCPSpawnerServer:
                         'error': {'code': -32602, 'message': 'card required'}}
             try:
                 result = await self.call_tool(tool_name, tool_args)
-                if isinstance(result, dict) and result.get('refusal') == 'BenchRequired':
+                if isinstance(result, dict) and result.get('status') == 'refused':
                     return {'jsonrpc': '2.0', 'id': req_id, 'error': {
                         'code': -32602, 'message': result.get('error', 'benchmark rows missing'),
-                        'data': {'type': 'BenchRequired', 'legs': result.get('evidence', []),
+                        'data': {'type': result.get('refusal', 'SpawnRefused'), 'legs': result.get('legs', []),
                                  'run_id': result.get('run_id')}}}
                 return {
                     "jsonrpc": "2.0",
@@ -264,7 +264,7 @@ class MCPSpawnerServer:
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, SpawnRefused
                 if isinstance(exc, SpawnRefused):
-                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'type': type(exc).__name__, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -293,6 +293,7 @@ async def run_stdio_server() -> None:
         line = await reader.readline()
         if not line:
             break
+        req = {}
         try:
             req = json.loads(line.decode("utf-8").strip())
             resp = await server.handle_rpc_request(req)
@@ -301,6 +302,9 @@ async def run_stdio_server() -> None:
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning('stdio_failed: %s', type(exc).__name__)
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req.get('id') if isinstance(req, dict) else None,
+                'error': {'code': -32603, 'message': 'Internal error'}}) + '\n')
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":

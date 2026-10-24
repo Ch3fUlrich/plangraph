@@ -78,7 +78,7 @@ class SpawnService:
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg), served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running',
-            started=time.time(), ended=None, attempts=[], stdout_tail='')
+            started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None)
         self._save(record)
 
         async def execute():
@@ -97,7 +97,7 @@ class SpawnService:
                     stop = self.runner.provider_responses.get(job.job_id)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         skip_reason='provider_stop' if stop else None, provider_response=stop))
-                    record.update(status=job.status, served_model=job.served_model,
+                    record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                         served_family=job.served_family, writer_family=job.served_family or chosen.family,
                         stdout_tail=job.stdout[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
@@ -108,10 +108,11 @@ class SpawnService:
                 if isinstance(exc, SpawnRefused):
                     record.update(status='refused', refusal=type(exc).__name__,
                                   exit_code=3 if isinstance(exc, BenchRequired) else 2,
-                                  evidence=list(exc.legs) if isinstance(exc, BenchRequired) else [],
+                                  evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [],
+                                  legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                                   error=str(exc))
                 else:
-                    record.update(status='failed', error=str(exc))
+                    record.update(status='failed', exit_code=1, error=str(exc))
             finally:
                 record['ended'] = time.time()
                 self._save(record)

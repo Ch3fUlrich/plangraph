@@ -101,7 +101,12 @@ def main(argv=None):
         else:
             result = service.result(args.run_id)
         print(json.dumps(result, indent=2))
-        return result.get('exit_code', 0) if isinstance(result, dict) else 0
+        if isinstance(result, dict):
+            if 'status' not in result:
+                return 0
+            code = result.get('exit_code')
+            return code if code is not None else (0 if result.get('status') == 'running' else 1)
+        return 0
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchRequired) else 2

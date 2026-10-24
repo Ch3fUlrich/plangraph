@@ -75,7 +75,8 @@ def test_replan_and_all_limited(tmp_path):
             model = list(runner.jobs.values())[-1].model_or_combo
             if len(runner.jobs) <= 2:
                 runner.provider_response(list(runner.jobs)[-1], model,
-                    429 if len(runner.jobs) == 1 else 402, 'provider quota exhausted', {}, store=store)
+                    429 if len(runner.jobs) == 1 else 402, 'provider quota exhausted', {}, store=store,
+                    source='gateway_adapter', adapter_token=runner._adapter_tokens[list(runner.jobs)[-1]])
             return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("done")', **kwargs)
         runner.process_factory = factory
         service = spawn_service(runner, tmp_path, store)
@@ -196,7 +197,8 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
             if provider_stop and len(runner.jobs) == 1:
                 job_id = next(iter(runner.jobs))
                 runner.provider_response(job_id, 'omniroute/cx-gpt-6.1-sol', 429,
-                    'provider quota exhausted', {}, store=store)
+                    'provider quota exhausted', {}, store=store, source='gateway_adapter',
+                    adapter_token=runner._adapter_tokens[job_id])
             return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("429")', **kwargs)
         runner.process_factory = factory
         service = SpawnService(runner, tmp_path, store)

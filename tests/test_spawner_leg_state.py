@@ -86,7 +86,10 @@ def test_runner_response_not_agent_claim(store):
     runner = SpawnerRunner()
     runner.jobs["test"] = JobInfo("test", "failed", "429 quota", "cx/sol", stdout="429 quota")
     assert store.leg_status("cx/sol")["state"] == "ok"
-    runner.provider_response("test", "cx/sol", 429, "quota", {}, store=store)
+    runner._adapter_tokens['test'] = object()
+    runner.provider_response("test", "cx/sol", 429, "quota", {}, store=store,
+                             source='gateway_adapter', adapter_token=runner._adapter_tokens['test'])
     assert store.leg_status("cx/sol")["state"] == "limited"
-    runner.provider_response("test", "cx/sol", 200, "success", {}, store=store)
+    runner.provider_response("test", "cx/sol", 200, "success", {}, store=store,
+                             source='gateway_adapter', adapter_token=runner._adapter_tokens['test'])
     assert store.leg_status("cx/sol")["state"] == "ok"

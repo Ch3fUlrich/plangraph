@@ -163,6 +163,7 @@ def evaluate_risk(
     fanout: int = 0,
     is_docs_only: bool = False,
     is_pure_doc: bool = False,
+    risk_tags: Sequence[str] = (),
 ) -> RiskAssessment:
     """Evaluate risk band, required intelligence threshold, and reviewer count.
 
@@ -188,9 +189,14 @@ def evaluate_risk(
 
     risk_band = "normal"
 
+    if risk_tags:
+        risk_band = 'high'
+        reasons.append('Explicit risk tags require independent review')
     if crit_paths:
         risk_band = "critical"
         reasons.append(f"Touches critical path(s): {', '.join(crit_paths)}")
+    elif risk_tags:
+        risk_band = 'high'
     elif hr_paths and (not has_tests or bucket == "S4"):
         risk_band = "critical"
         reasons.append(f"High-risk path(s) {', '.join(hr_paths)} combined with unverified/S4 state")

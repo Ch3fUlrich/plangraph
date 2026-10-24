@@ -552,6 +552,8 @@ def resolve_review_plan(
     account=None,
     reviewer_count=None,
     review_exempt=False,
+    paths=(), bucket='S1', has_tests=True, is_pure_doc=False,
+    risk_tags=(),
 ) -> dict[str, Any]:
     """Resolve cross-family review plan on shared combo layers.
 
@@ -568,6 +570,12 @@ def resolve_review_plan(
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
+    from .risk import evaluate_risk
+    assessment = evaluate_risk(paths=paths, bucket=bucket, has_tests=has_tests,
+                               is_pure_doc=is_pure_doc, risk_tags=risk_tags)
+    review_exempt = assessment.review_exempt
+    if assessment.risk in ('high', 'critical'):
+        risk_l = assessment.risk
     if reviewer_count == 0:
         if not review_exempt or risk_l in ('high', 'critical'):
             raise ValueError('zero reviewers requires low/normal review_exempt')
