@@ -177,3 +177,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Preserve owners on projector resumes, audit owner changes in the event chain,
   bound retired runs to 16, and explicitly reject removed `new_run` takeover.
 - Repair Postgres fence setup and Rust worker formatting.
+# Bus discovery
+
+- Add keeper-owned tailnet identity registry, MagicDNS resolution, retry/health
+  lifecycle and file-only per-host write authentication. Unknown nodes are
+  observable but never enrolled. No sample store is added.
