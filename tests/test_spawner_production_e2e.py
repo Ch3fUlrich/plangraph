@@ -593,6 +593,7 @@ class ProductionGatewayChildRunner(SpawnerRunner):
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
+        client: str | None = None,
     ) -> JobInfo:
         if dry_run:
             return await super().spawn(
@@ -714,7 +715,9 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
             "plangraph_agent_spawn",
             {
                 "prompt": "Implement distributed rate limiter",
-                "model_or_combo": "mimo/mimo-v2.6-pro",
+                    "model_or_combo": "mimo/mimo-v2.6-pro",
+                    "card": {"estimate_tokens": 1000},
+                    "override_reason": "Hermetic gateway telemetry contract test",
                 "role": "implement",
                 "risk": "normal",
                 "dry_run": False,

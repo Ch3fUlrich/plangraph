@@ -1,5 +1,41 @@
 # Plangraph Spawner & Model Routing Architecture
 
+## Spawn by card
+
+Install the package on each host, then use `python -m plangraph.spawner.cli`
+(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
+or Temporal service is required for this slice.
+
+```bash
+python -m plangraph.spawner.cli route --card @card.json --role implement --json
+python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
+python -m plangraph.spawner.cli spawn --card @card.json --role review --review-of run-ID "Review"
+python -m plangraph.spawner.cli ps
+python -m plangraph.spawner.cli result run-ID
+```
+
+Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
+`PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`--dry-run` plans without a child. CLI currently waits through completion;
+`--wait` is reserved (MCP `wait_seconds` supports bounded asynchronous return).
+`--no-fallthrough` disables automatic advancement after a captured provider stop.
+Plain stdout, including text saying 429, is never provider evidence.
+
+Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
+chosen leg, served model/family, writer family, status, started/ended timestamps,
+attempts with provider stop details, job id, pid, and stdout tail.
+These records are the only source for `--review-of`; unknown ids refuse.
+`--model`/`--leg` require `--override-reason` of at least ten characters,
+audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
+The Mimo path fence still applies to overrides.
+
+MCP tools `plangraph_agent_route`, `spawn`, `ps`, `result`, `status`, `cancel`
+(all with the `plangraph_agent_` prefix) share these records. Spawn requires
+`card` and `prompt` in its schema; model_or_combo requires override_reason.
+Result/status/cancel accept `run_id`; legacy job-id operations remain available.
+No CLI or MCP endpoint writes leg state. Gateway adapters call
+`runner.provider_response` with actual captured responses.
+
 Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
 import `plangraph.spawner` at runtime; the boundary is enforced by
 `tests/test_spawner_import_guard.py`, and the switch

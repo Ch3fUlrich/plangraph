@@ -627,7 +627,7 @@ def test_mcp_tools_and_rpc_dispatch():
                 "name": "plangraph_agent_spawn",
                 "arguments": {
                     "prompt": "Test agent via MCP",
-                    "model_or_combo": "l2-worker",
+                    "card": {"estimate_tokens": 1000},
                     "dry_run": True,
                 },
             },
@@ -790,4 +790,3 @@ def test_deepseek_flash_cost_and_tier_ranking():
     qwen = models["opencode-go/qwen3.8-max"]
     score_qwen = score_model(qwen, role="implement", risk="normal")
     assert score_sub > score_qwen
-

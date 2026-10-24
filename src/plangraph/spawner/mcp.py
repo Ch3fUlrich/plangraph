@@ -101,31 +101,51 @@ TOOLS_METADATA = [
 ]
 
 
+for _tool in TOOLS_METADATA:
+    if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):
+        _tool['inputSchema']['properties']['run_id'] = {'type': 'string'}
+        _tool['inputSchema'].pop('required', None)
+    if _tool['name'] == 'plangraph_agent_spawn':
+        _tool['inputSchema']['required'] = ['prompt', 'card']
+        _tool['inputSchema']['properties'].update({
+            'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
+            'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'}})
+        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
+        _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
+for _verb in ('route', 'ps', 'result'):
+    TOOLS_METADATA.append({'name': 'plangraph_agent_' + _verb,
+        'description': 'Card-based agent ' + _verb,
+        'inputSchema': {'type': 'object', 'properties': {
+            'card': {'type': 'object'}, 'role': {'type': 'string'},
+            'run_id': {'type': 'string'}, 'writer_families': {'type': 'array', 'items': {'type': 'string'}}},
+            'required': ['card'] if _verb == 'route' else (['run_id'] if _verb == 'result' else [])}})
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
-    def __init__(self, runner: SpawnerRunner | None = None):
+    def __init__(self, runner: SpawnerRunner | None = None, *, state=None):
         self.runner = runner or SpawnerRunner()
+        from .service import SpawnService
+        self.service = SpawnService(self.runner, state=state)
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
+        if name == 'plangraph_agent_route':
+            return self.service.route(arguments['card'], arguments.get('role', 'implement'),
+                arguments.get('writer_families', ()), arguments.get('review_of')).to_dict()
+        if name == 'plangraph_agent_ps':
+            return self.service.ps()
+        if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
+            return self.service.result(arguments['run_id'])
+        if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
+            return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":
-            prompt = str(arguments["prompt"])
-            model_or_combo = str(arguments.get("model_or_combo", "l2-worker"))
-            role = str(arguments.get("role", "implement"))
-            risk = str(arguments.get("risk", "normal"))
-            dry_run = bool(arguments.get("dry_run", False))
-            wait_seconds = float(arguments.get("wait_seconds", 0.0))
-
-            job = await self.runner.spawn(
-                prompt=prompt,
-                model_or_combo=model_or_combo,
-                role=role,
-                risk=risk,
-                dry_run=dry_run,
-                wait_seconds=wait_seconds,
-            )
-            return job.to_dict()
+            return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
+                role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
+                override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
+                dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
+                no_fallthrough=arguments.get('no_fallthrough', False))
 
         if name == "plangraph_agent_status":
             job_id = arguments.get("job_id")

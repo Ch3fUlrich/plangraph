@@ -94,11 +94,14 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
 class SpawnerRunner:
     """Async process runner for Plangraph agent tasks."""
 
-    def __init__(self, default_cwd: str | None = None):
+    def __init__(self, default_cwd: str | None = None, *, process_factory=None, tree_killer=None):
         self.default_cwd = default_cwd or os.getcwd()
         self.jobs: dict[str, JobInfo] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self.process_factory = process_factory or asyncio.create_subprocess_exec
+        self.tree_killer = tree_killer or kill_process_tree
+        self.provider_responses = {}
 
     def provider_response(self, job_id, leg, status, body, headers, *, account=None, combo=None, store=None):
         """Gateway transport callback, NOT child stdout or agent-generated JSON.
@@ -113,6 +116,8 @@ class SpawnerRunner:
         target = store or leg_state
         if status in (429, 402):
             target.record_provider_response(leg, status, body, headers, "runner:gateway-response", account=account, combo=combo)
+            from plangraph.spawner.leg_state import _redact
+            self.provider_responses[job_id] = {"status": status, "body": _redact(body), "headers": dict(headers or {})}
         elif 200 <= status < 300:
             target.record_probe_pass(leg, caller="runner:gateway-response", account=account, combo=combo)
 
@@ -129,6 +134,7 @@ class SpawnerRunner:
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
+        client: str | None = None,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         check_mimo_path(model_or_combo)
@@ -153,6 +159,7 @@ class SpawnerRunner:
             gateway=gateway,
             gateway_online=gateway_online,
             headers=envelope_headers,
+            client=client,
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
@@ -201,7 +208,7 @@ class SpawnerRunner:
 
         import shutil
         resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-        proc = await asyncio.create_subprocess_exec(
+        proc = await self.process_factory(
             resolved_exe,
             *cmd[1:],
             cwd=work_dir,
@@ -209,6 +216,7 @@ class SpawnerRunner:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.DEVNULL,
+            **({"start_new_session": True} if os.name != "nt" else {}),
         )
         self._processes[job_id] = proc
 
@@ -291,7 +299,7 @@ class SpawnerRunner:
         proc = self._processes.get(job_id)
         if proc:
             try:
-                proc.terminate()
+                await self.tree_killer(proc.pid)
             except ProcessLookupError:
                 pass
 
@@ -302,3 +310,15 @@ class SpawnerRunner:
         job.status = "cancelled"
         job.end_time = time.time()
         return {"job_id": job_id, "status": "cancelled"}
+
+
+async def kill_process_tree(pid, *, platform=None, command_factory=None):
+    """Terminate the isolated POSIX group or Windows process tree."""
+    if (platform or os.name) == 'nt':
+        factory = command_factory or asyncio.create_subprocess_exec
+        proc = await factory('taskkill', '/PID', str(pid), '/T', '/F',
+                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await proc.communicate()
+    else:
+        import signal
+        os.killpg(pid, signal.SIGKILL)
