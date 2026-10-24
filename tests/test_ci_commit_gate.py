@@ -99,7 +99,7 @@ def test_missing_writer_trailer_fails(repo: Path):
     assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
 
 
-@pytest.mark.parametrize("vector", [f"V{i}" for i in range(1, 12)])
+@pytest.mark.parametrize("vector", [f"V{i}" for i in range(1, 13)])
 def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, vector):
     fork = _head(repo)
     _git(repo, "checkout", "-q", "-b", "lane")
@@ -119,6 +119,8 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
     merge = _head(repo)
     heads = tmp_path / "open-heads.txt"
     listed = unrelated if vector == "V3" else advanced
+    if vector in {"V2", "V12"}:
+        listed = other if vector == "V2" else other + "\n" + merge
     if vector in {"V7", "V8"}:
         _git(repo, "checkout", "-q", "-b", "stacked")
         stacked = _commit(repo, OK_MSG, files={"stacked.txt": "stacked\n"})
@@ -135,8 +137,8 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
     monkeypatch.chdir(repo)
     rc = main(args)
     captured = capsys.readouterr()
-    expected = f"{merge}: open_pr_merged {other}\n" if vector in {"V2", "V5", "V8", "V11"} else ""
-    assert rc == (1 if vector in {"V2", "V5", "V8", "V11"} else 0)
+    expected = f"{merge}: open_pr_merged {other}\n" if vector in {"V2", "V5", "V8", "V11", "V12"} else ""
+    assert rc == (1 if vector in {"V2", "V5", "V8", "V11", "V12"} else 0)
     assert captured.out == expected
     notice = ci_commit_gate.OPEN_PR_SKIP_NOTICE
     assert captured.err == (notice if vector == "V4" else "")
@@ -174,21 +176,16 @@ def test_open_heads_octopus_library_and_exempt(repo, tmp_path, encoding):
 
 
 @pytest.mark.parametrize("command", ["rev-list", "merge-base", "cat-file"])
-def test_open_heads_git_called_process_error(repo, tmp_path, monkeypatch, capsys, command):
+def test_open_heads_real_git_failure(repo, tmp_path, monkeypatch, capsys, command):
     base = _head(repo)
     head = _commit(repo, OK_MSG)
     path = tmp_path / "heads.txt"
-    path.write_text(base + "\n", encoding="utf-8")
-    run = subprocess.run
-
-    def fail(args, **kwargs):
-        if args[:2] == ["git", command] and not (
-            command == "cat-file" and ":tools/ci_commit_exempt.txt" in args[-1]
-        ):
-            raise subprocess.CalledProcessError(128, args, stderr=b"fatal: inspection failed\n")
-        return run(args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", fail)
+    missing = "0" * 40
+    path.write_text((missing if command == "cat-file" else base) + "\n", encoding="utf-8")
+    if command == "merge-base":
+        head = missing
+    elif command == "rev-list":
+        base = missing
     monkeypatch.chdir(repo)
     with pytest.raises(ci_commit_gate.GateError, match=f"git {command} failed"):
         check(base, head, cwd=repo, open_heads=path)

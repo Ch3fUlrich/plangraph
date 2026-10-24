@@ -431,16 +431,20 @@ def _open_pr_merges(
     base: str, head: str, path: str | Path, cwd: str | Path | None = None
 ) -> list[str]:
     '''Refuse merged-in parents reachable from foreign open heads but not base.'''
-    def run_git(args: list[str]) -> subprocess.CompletedProcess:
-        try:
-            return subprocess.run(['git', *args], cwd=cwd, capture_output=True)
-        except subprocess.CalledProcessError as exc:
-            raise GateError(f'git {args[0]} failed (exit {exc.returncode})') from exc
+    def run_git(
+        args: list[str], allowed: tuple[int, ...] = (0,), context: str = ''
+    ) -> subprocess.CompletedProcess:
+        probe = subprocess.run(['git', *args], cwd=cwd, capture_output=True)
+        if probe.returncode not in allowed:
+            detail = probe.stderr.decode('utf-8', errors='replace').strip()
+            raise GateError(
+                f'git {args[0]} failed (exit {probe.returncode}): {detail}{context}'
+            )
+        return probe
 
     def is_ancestor(ancestor: str, descendant: str) -> bool:
-        probe = run_git(['merge-base', '--is-ancestor', ancestor, descendant])
-        if probe.returncode not in (0, 1):
-            raise GateError(f'git merge-base failed (exit {probe.returncode})')
+        # Exit 1 is a valid negative ancestry answer, not a failed probe.
+        probe = run_git(['merge-base', '--is-ancestor', ancestor, descendant], allowed=(0, 1))
         return probe.returncode == 0
 
     reachability: dict[tuple[str, str], bool] = {}
@@ -449,8 +453,6 @@ def _open_pr_merges(
         key = (parent, tip)
         if key not in reachability:
             probe = run_git(['rev-list', '-1', parent, '--not', tip])
-            if probe.returncode != 0:
-                raise GateError(f'git rev-list failed (exit {probe.returncode})')
             reachability[key] = not probe.stdout.strip()
         return reachability[key]
 
@@ -465,16 +467,16 @@ def _open_pr_merges(
             continue
         if OPEN_HEAD_SHA_RE.fullmatch(sha) is None:
             raise GateError(f'open-heads file {path}:{lineno}: not a 40-hex sha')
-        probe = run_git(['cat-file', '-e', f'{sha}^{{commit}}'])
-        if probe.returncode != 0:
-            raise GateError(f'open-heads file {path}:{lineno}: not a local commit; fetch open PR heads first')
+        run_git(
+            ['cat-file', '-e', f'{sha}^{{commit}}'],
+            context=f'; open-heads file {path}:{lineno}: not a local commit; fetch open PR heads first',
+        )
         heads.add(sha)
-    # Own history and stacked descendants are not evidence of a foreign PR.
+    # A merged foreign head is an ancestor of head: keep it as evidence.
+    # Only the checked head itself and stacked descendants are not foreign PRs.
     heads = {sha for sha in heads
-             if not is_ancestor(sha, head) and not is_ancestor(head, sha)}
+             if sha != head and not is_ancestor(head, sha)}
     probe = run_git(['rev-list', '--min-parents=2', '--parents', f'{base}..{head}'])
-    if probe.returncode != 0:
-        raise GateError(f'git rev-list failed (exit {probe.returncode})')
     merges = probe.stdout.decode('utf-8', errors='replace')
     violations: list[str] = []
     for line in merges.splitlines():

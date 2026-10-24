@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **LESSONS-TO-ALGORITHM L9 fix4:** retain unadvanced foreign open heads even when they are ancestors of the checked head, so directly merging an open PR cannot evade detection. Exclude only the checked head and stacked descendants; preserve first-parent and base-history safeguards. Restore direct-head vectors with and without the lane head listed. Replace dead subprocess exception handling with uniform return-code checks and real failing Git probe coverage, retaining file-line diagnostics for invalid snapshot commits.
+
 - **LESSONS-TO-ALGORITHM L9 fix3:** exclude the checked head, its ancestors, and stacked descendants from foreign open PR detection, while still refusing merged ancestors of advanced foreign heads. Normalize Git inspection failures to clean gate errors and cache repeated parent/tip reachability queries within a check. An exempt entry does not waive `open_pr_merged`; it only skips trailer rules.
 
 - **LESSONS-TO-ALGORITHM L9 fix2:** check only merged-in parents, not the lane's first-parent lineage, so snapshots may include the PR's own head and stacked descendants without rejecting legitimate main merges. Validate every listed head as a local commit before ancestry checks, with file-line errors and a documented fetch prerequisite. Restore blank-lines-only snapshot coverage and pin second-parent rejection.
