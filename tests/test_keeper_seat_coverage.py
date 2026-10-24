@@ -64,6 +64,42 @@ def writer(value):
     return {"Writer": value}
 
 
+@pytest.mark.parametrize("value,family", [
+    ("deepseek.mimo", None), ("mimo_deepseek", None),
+    ("deepseek-r1-L2", None), ("gpt-4o.qwen3", None),
+    ("deepseek_l2", None), ("deepseek.o3", None),
+    ("qwen3.8-flash", "alibaba"), ("cx-gpt-6.1-sol", "openai"),
+    ("xiaomi-mimo/mimo-v2.6-flash", "xiaomi"),
+    ("deepseek-v4.1-flash-free", "deepseek"),
+])
+def test_fix9_interior_punctuation_preserves_every_family(w, value, family):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    if family is None:
+        with pytest.raises(Refused, match="writer_unknown"):
+            _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    else:
+        assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == [family]
+
+
+@pytest.mark.parametrize("blank", [None, "", " \t "])
+@pytest.mark.parametrize("kind", ["hand-only", "hand-and-writer", "writer-and-hand", "writers"])
+def test_fix9_blank_attribution_never_supplies_a_family(w, blank, kind):
+    trailer = {
+        "hand-only": {"Hand-Edit": blank},
+        "hand-and-writer": {"Hand-Edit": blank, "Writer": "deepseek-r1"},
+        "writer-and-hand": {"Writer": blank, "Hand-Edit": "manual"},
+        "writers": {"Writer": ["deepseek-r1", blank]},
+    }[kind]
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: trailer})
+    if kind == "hand-and-writer":
+        assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == ["deepseek"]
+    else:
+        with pytest.raises(Refused, match="writer_unknown"):
+            _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+
+
 @pytest.mark.parametrize("value", ["", " \t ", ":;,/()[]...---"])
 def test_fix8_empty_writer_values_refuse_closing_verdict(w, value):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
@@ -281,7 +317,7 @@ def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
     ("deepseek-r1 run1", "deepseek"),
     ("deepseek-r1 run-claude", None),
 ])
-def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
+def test_writer_family_counts_model_mentions_in_every_token(w, trailer, family):
     """All tokens count: run-claude resolves to anthropic, so two families refuse."""
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(trailer)})
@@ -399,6 +435,7 @@ def test_coverage_reuses_the_review_family_table():
     source = inspect.getsource(cov)
     # No second family table or regex table: both live in plangraph.review.family.
     assert "FAMILIES" not in vars(cov)
+    assert cov.review_family.FAMILIES is review_family.FAMILIES
     assert "gpt|^o" not in source
     assert "family" in source
     if "model_family" in vars(cov):

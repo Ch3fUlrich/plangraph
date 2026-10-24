@@ -25,9 +25,8 @@ from __future__ import annotations
 
 import re
 
-from ..review.family import model_family
+from ..review import family as review_family
 from .errors import Refused
-from .evidence_git import trailer_values
 
 __all__ = ["uncovered", "writer_families"]
 
@@ -43,7 +42,9 @@ def _key_values(trailer, name):
     values = []
     for key, value in trailer.items():
         if isinstance(key, str) and key.strip().lower() == name.lower():
-            values.extend(trailer_values(value))
+            # Preserve blank entries: a blank Writer must not disappear next
+            # to a valid writer or Hand-Edit attribution.
+            values.extend(value if isinstance(value, (list, tuple, set)) else [value])
     return values
 
 
@@ -109,18 +110,21 @@ def writer_families(store, item, ctx):
             writers = _key_values(trailer, "Writer")
             if writers:
                 for writer in writers:
+                    if writer is None or not str(writer).strip():
+                        raise Refused("writer_unknown", "blank Writer value")
                     # Annotations and run ids are harmless unless they name
                     # another family; repeated mentions of one family count once.
                     tokens = (token.strip(".-") for token in
                               re.split(r"[^A-Za-z0-9._-]+", str(writer)))
-                    resolved = {_writer_token_family(token) for token in tokens
-                                if token} - {None}
+                    resolved = {family for token in tokens if token
+                                for family in _writer_token_families(token)}
                     if len(resolved) != 1:
                         raise Refused("writer_unknown",
                                       f"Writer value must resolve to one family: {writer!r}")
                     family = resolved.pop()
                     families.append(family)
-            if _key_values(trailer, "Hand-Edit"):
+            if any(value is not None and str(value).strip()
+                   for value in _key_values(trailer, "Hand-Edit")):
                 families.append("anthropic")
             elif not writers:
                 raise Refused(
@@ -137,7 +141,19 @@ _WRITER_ALIASES.update(dict.fromkeys(
     "agy opencode omniroute cx mimo xiaomi-mimo openrouter spawner tool-less tool-using".split()))
 
 
-def _writer_token_family(token):
-    """Resolve a whole-value token, with launcher/provider words handled first."""
+def _writer_token_families(token):
+    """Keep every match; punctuation cannot conceal a second model or alias."""
     low = token.lower()
-    return _WRITER_ALIASES[low] if low in _WRITER_ALIASES else model_family(token)
+    if low in _WRITER_ALIASES:
+        family = _WRITER_ALIASES[low]
+        return {family} if family else set()
+    found = set()
+    for part in [low, *re.split(r"[._-]+", low)]:
+        if part in _WRITER_ALIASES:
+            family = _WRITER_ALIASES[part]
+            if family:
+                found.add(family)
+        else:
+            found.update(family for pattern, family in review_family.FAMILIES
+                         if re.search(pattern, part))
+    return found

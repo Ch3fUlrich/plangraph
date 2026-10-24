@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- KEEPER-TRAILER-MULTI fix9 (D-2458): retain every family match in Writer tokens and their dot, hyphen and underscore parts, including L2 aliases. Refuse blank Writer entries even alongside other attribution; only non-blank Hand-Edit values add anthropic. Pin the colon-character set instead of scanning Unicode at import, with a recomputed-set regression. Keep the existing conflicting Plan-Item refusal and corpus labels, and name the tests by their actual assertions.
+
 - KEEPER-TRAILER-MULTI fix8b: mask UUIDs as `<uuid>` and hex/high-entropy run-id segments as `<hex>` in fixture VALUEs to pass public scrub checks; preserve every other value byte and every label. Skip fixture comments in both test readers while preserving data-row indexing.
 - KEEPER-TRAILER-MULTI fix8: separate Writer tokens at punctuation while preserving model names and run identifiers, and trim surrounding dots and hyphens so punctuation cannot hide a second writer family. Correct the mixed MiMo and L2 corpus label without changing its value. Add regressions for punctuation, empty writer values, and a punctuated run identifier.
 - KEEPER-TRAILER-MULTI fix7: read the whole Writer value and accept exactly one distinct model family, including repeated mentions, launcher aliases, annotations and arbitrary run identifiers. Refuse a second family anywhere in the value. Keep Writer and Hand-Edit keys case-insensitive and additive. Detect every Unicode character named COLON as well as the existing ratio sign when looking for hidden writer lines. Add the 280-value main writer corpus with explicit expected results and real-commit regressions for these rules.

@@ -657,7 +657,7 @@ def test_fix6_slash_model_list_refused(repo, value):
 
 
 @pytest.mark.parametrize("run_id", ["run-claude"])
-def test_fix6_unknown_second_token_refused(repo, run_id):
+def test_second_token_naming_another_family_is_refused(repo, run_id):
     sha = _commit(repo, "run", {"Writer": f"mimo-v2 {run_id}"})
     with pytest.raises(Refused, match="writer_unknown"):
         _families(repo, sha)
@@ -730,11 +730,11 @@ def test_fix8_punctuated_run_id_preserves_model(repo):
     assert _families(repo, sha) == ["openai"]
 
 
-def test_fix8_corpus_line_169_refuses_mixed_writers(repo):
-    value, _ = [line for line in
+def test_corpus_value_naming_mimo_and_l2_refuses_mixed_writers(repo):
+    value, _ = next(line for line in
                 (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt"
                  ).read_text(encoding="utf-8").splitlines()
-                if not line.startswith("#")][168].split("\t")
+                if not line.startswith("#") and "fixes by L2:" in line).split("\t")
     assert "fixes by L2:" in value
     sha = _commit(repo, "mixed corpus writer", {"Writer": value})
     with pytest.raises(Refused) as exc:
@@ -781,6 +781,16 @@ def test_fix7_every_unicode_named_colon_is_writer_shaped():
         char = chr(code)
         if "COLON" in unicodedata.name(char, ""):
             assert _WRITER_SHAPED_RE.search(f"Writer{char} deepseek-r1"), hex(code)
+
+
+def test_fix9_pinned_colons_equal_unicode_name_scan():
+    import sys
+    import unicodedata
+    from plangraph.keeper.evidence_git import _WRITER_COLONS
+
+    assert set(_WRITER_COLONS) == {"\u2236"} | {
+        chr(code) for code in range(sys.maxunicode + 1)
+        if "COLON" in unicodedata.name(chr(code), "")}
 
 
 @pytest.mark.parametrize("first", ["demo:OTHER", "demo:A"])

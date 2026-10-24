@@ -16,10 +16,8 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 import threading
 import time
-import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -127,12 +125,17 @@ def _trailing_trailer_lines(text: str) -> list[str]:
 #: ``1. Writer: x``, ```Writer: x` ``, ``| Writer: x |``, ``-Writer: x``,
 #: ``- Writer: x``, ``> Writer: x``, ``    Writer: x`` and ``Writer : x`` all
 #: match, while the prose "the writer of this" (no colon) does not.
-# Unicode names cover colon variants without a hand-maintained allowlist;
-# retain RATIO too, because earlier attribution checks already refused it.
+# Generated from Unicode names containing COLON, plus the existing RATIO.
+# The test recomputes the scan so importing this adapter need not do so.
+_WRITER_COLONS = (
+    ":;\u02d0\u02d1\u02f8\u061b\u0703\u0704\u0705\u0706\u0707\u0708\u0709"
+    "\u1364\u1365\u1366\u1804\u204f\u205d\u20a1\u2236\u2254\u2255\u2360\u236e"
+    "\u2982\u2a74\u2af6\u2e35\ua6f4\ua6f6\ua789\ufe13\ufe14\ufe54\ufe55\uff1a\uff1b"
+    "\U00010781\U00010782\U00012471\U00012472\U00012473\U00012474"
+    "\U0001da89\U0001da8a\U000e003a\U000e003b"
+)
 _WRITER_SHAPED_RE = re.compile(
-    r"writer[^A-Za-z0-9]*[" + re.escape("\u2236" + "".join(
-        chr(code) for code in range(sys.maxunicode + 1)
-        if "COLON" in unicodedata.name(chr(code), ""))) + r"][ \t]*\S",
+    r"writer[^A-Za-z0-9]*[" + re.escape(_WRITER_COLONS) + r"][ \t]*\S",
     re.IGNORECASE)
 
 #: A KEY that only *looks* like ``writer``: decoration glued around it
