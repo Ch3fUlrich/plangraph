@@ -46,6 +46,7 @@ the write lock) so it runs unchanged on SQLite and Postgres.
 """
 from __future__ import annotations
 
+import json
 import re
 
 from .errors import Refused
@@ -108,7 +109,30 @@ class WorkerMixin:
     """The worker-facing verbs for :class:`plangraph.keeper.store.Store`."""
 
     # ------------------------------------------------------------- helpers
-    def _exec_expect_state(self, item, expected, principal=None) -> None:
+    def _system_phase_holder(self, principal, item):
+        """Recognize only the system phase-worker claim door, not plain claims."""
+        if not (principal is not None and principal.role == "system"
+                and principal.name == "system" and item["kind"] == "lane"
+                and item["state"] == "claimed"
+                and item["claimed_by"] == principal.name):
+            return False
+        claim = None
+        for row in self.conn.execute(
+                "SELECT payload FROM events WHERE key=? AND type='claimed'"
+                " ORDER BY seq DESC", (item["key"],)):
+            payload = json.loads(row["payload"] or "{}")
+            if payload.get("epoch") == item["epoch"]:
+                claim = payload
+                break
+        if not claim or claim.get("via") != "worker_claim":
+            return False
+        return self.conn.execute(
+            "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
+            " WHERE e.dst=? AND i.kind='gate' AND i.state!='cancelled'"
+            " LIMIT 1", (item["key"],)).fetchone() is not None
+
+    def _exec_expect_state(self, item, expected, principal=None, *, now=None,
+                           claim_checked=False) -> None:
         """Check observed state inside the write lock, before recording ownership."""
         if expected is None:
             return
@@ -121,12 +145,15 @@ class WorkerMixin:
         phase_holder = (isinstance(expected, list)
                         and set(states) == {"open", "ready", "running", "waiting", "needs_input"}
                         and item["state"] == "claimed"
-                        and principal is not None and principal.role == "worker"
+                        and principal is not None
+                        and (principal.role == "worker"
+                             or self._system_phase_holder(principal, item))
                         and item["claimed_by"] == principal.name)
-        if phase_holder:
+        if phase_holder and not claim_checked:
             # The live-set exception must not revive a dead claim on ask or
             # complete; park already enforces this same lease rule.
-            self._park_guard(principal, item, None, self.clock())
+            self._park_guard(principal, item, None,
+                             self.clock() if now is None else now)
         if item["state"] not in states and not phase_holder:
             raise Refused("exec_stale_state",
                           f"{item['key']}: expected {expected!r}, is {item['state']!r}")
@@ -141,8 +168,8 @@ class WorkerMixin:
     def _park_guard(self, principal, item, epoch, now):
         """Bind a park to the card's current claim (same rules as heartbeat/submit).
 
-        Checked, inside the write lock, for every principal except router/system
-        (which act anywhere, as everywhere else in the keeper):
+        Checked, inside the write lock, for workers and verified system phase
+        holders; other router/system calls retain their administrative bypass:
         * a card with no claim (no ``claimed_by``: ``running`` set via set_state)
           has no holder to bind: only project scope applies;
         * otherwise the principal name must be the card's ``claimed_by`` or
@@ -154,7 +181,8 @@ class WorkerMixin:
         * an expired lease (``lease_until`` at or before now) is refused as
           409 epoch_stale: the claim is dead and the reaper will reopen the card.
         """
-        if principal.role in ("router", "system") or not item["claimed_by"]:
+        if (principal.role in ("router", "system")
+                and not self._system_phase_holder(principal, item)) or not item["claimed_by"]:
             return
         self._actor_or_delegate(principal, item)
         if epoch is not None:
@@ -315,8 +343,31 @@ class WorkerMixin:
             #    so a call that fails below acquires nothing).
             self._exec_gate(key, body, principal, record=False)
             # 2. A duplicate complete is a success no-op, ahead of expected_state.
-            if not self._exec_duplicate(item, body, "done"):
-                self._exec_expect_state(item, body.get("expected_state"), principal)
+            duplicate = self._exec_duplicate(item, body, "done")
+            if duplicate:
+                return {"card": key, "merged_sha": merged_sha}
+            # Only proven retries bypass the lease; first completions always
+            # bind the claim before any write, using this verb's clock.
+            self._exec_expect_state(item, body.get("expected_state"), principal,
+                                    now=now, claim_checked=True)
+            self._park_guard(principal, item, None, now)
+            if self._system_phase_holder(principal, item):
+                # Only phase-worker claims may bypass pre-merge evidence.
+                self._assert_unlocked(item)
+                # System holders validate exec fences but cannot record owners.
+                self._exec_gate(key, body, principal, record=False)
+                round_no = int(item.get("round") or 0) + 1
+                self._append(principal, key, "state_set",
+                             {"state": "in_review", "was": "claimed",
+                              "reason": "worker complete", "epoch": item["epoch"],
+                              "round": round_no, "worker_complete": True}, now)
+                cursor = self.conn.execute(
+                    "UPDATE items SET state='in_review', round=?, lease_until=NULL,"
+                    " updated_at=? WHERE key=? AND state='claimed' AND epoch=?",
+                    (round_no, self._iso(now), key, item["epoch"]))
+                self._race_guard(cursor, key, "claimed", item["epoch"])
+                return {"card": key, "merged_sha": merged_sha}
+            if not duplicate:
                 if item["state"] != "done":
                     # 3. Ownership, then the completion write -- a state/epoch
                     #    CAS (``_guarded_touch``) in the SAME transaction as the
@@ -388,6 +439,8 @@ class WorkerMixin:
         reason = _text("reason", reason, required=True, cap=500, key=card)
         key = self._resolve_scoped(principal, card)
         with self._write():
+            item = self._get_or_refuse(key)
+            self._park_guard(principal, item, None, now)
             existing = self.conn.execute(
                 "SELECT 1 FROM projector_alarms WHERE kind='worker_alarm'"
                 " AND workflow_id='' AND key=? AND cleared_at IS NULL",
