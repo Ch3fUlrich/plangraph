@@ -205,11 +205,15 @@ class RestGitHub:
         reply = self._request("PUT", path, {"sha": head, "merge_method": "merge"})
         if not isinstance(reply, dict) or reply.get("merged") is not True:
             raise GitHubError("github merge not confirmed")
+        merge_sha = reply.get("sha")
+        if not isinstance(merge_sha, str) or re.fullmatch(r"[0-9a-f]{40}", merge_sha) is None:
+            raise GitHubError("github merge sha is invalid")
         return {
             "number": number,
             "url": f"https://github.com/{self.repo}/pull/{number}",
             "state": "merged",
             "head": head,
+            "merge_sha": merge_sha,
         }
 
     def push_branch(self, repo_root: Path, branch: str, head: str) -> None:
