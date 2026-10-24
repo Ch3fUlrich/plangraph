@@ -352,7 +352,10 @@ impl Keeper for HttpKeeper {
             Ok(_) | Err(_) => return None,
         };
         let value: serde_json::Value = resp.into_json().ok()?;
-        value.get("state").and_then(|s| s.as_str()).map(str::to_owned)
+        value
+            .get("state")
+            .and_then(|s| s.as_str())
+            .map(str::to_owned)
     }
 
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
@@ -866,7 +869,10 @@ mod tests {
         assert_eq!(captured.method, "GET");
         assert_eq!(captured.path, "/v1/show?key=c-1&fmt=json");
         assert!(
-            captured.head.to_ascii_lowercase().contains("authorization: bearer s3cret\r\n"),
+            captured
+                .head
+                .to_ascii_lowercase()
+                .contains("authorization: bearer s3cret\r\n"),
             "{}",
             captured.head
         );

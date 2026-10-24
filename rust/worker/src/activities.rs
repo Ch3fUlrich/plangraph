@@ -1304,8 +1304,7 @@ impl CardActivities {
                         .filter(|states| !states.is_empty())
                 }
             });
-        let packet =
-            ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
+        let packet = ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
         // EXEC-OBSERVED-STATE: park sends the state this run just read on the
         // keeper; the workflow's live set is what it sends only when it
         // observed nothing (`card_state` is `None` on any failed read).
