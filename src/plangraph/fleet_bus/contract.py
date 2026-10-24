@@ -26,6 +26,7 @@ ERROR_STATUS = {
     "too_large": 413,
     "cursor_gone": 410,
     "rate_limited": 429,
+    "replay_window_full": 503,
 }
 
 
@@ -42,7 +43,10 @@ class BusError(Exception):
 
 def error_body(error):
     """Return the language-neutral error response."""
-    return {"error": {"code": error.code, "message": error.message}}
+    body = {"code": error.code, "message": error.message}
+    if error.retry_after_s is not None:
+        body["retry_after_s"] = error.retry_after_s
+    return {"error": body}
 
 
 def scrub_text(value):
@@ -101,15 +105,14 @@ class RateLimiter:
 
     def check(self, sender, now):
         # Retire idle senders so identities do not accumulate indefinitely.
-        for identity, times in list(self.senders.items()):
-            while times and times[0] <= now - 60:
-                times.popleft()
-            if not times:
-                del self.senders[identity]
-        times = self.senders.setdefault(sender, deque())
+        active = {identity: deque(t for t in times if t > now - 60)
+                  for identity, times in self.senders.items()}
+        active = {identity: times for identity, times in active.items() if times}
+        times = active.setdefault(sender, deque())
         if len(times) >= RATE_PER_MIN:
             raise BusError("rate_limited", retry_after_s=max(1, math.ceil(times[0] + 60 - now)))
         times.append(now)
+        self.senders = active
 
 
 @dataclass
@@ -161,7 +164,7 @@ def _shape(envelope):
             raise BusError("bad_request")
 
 
-def _authenticate(resolve_key, ts, nonce, sender, kid, canonical, signature, now, state):
+def _verify(resolve_key, ts, nonce, sender, kid, canonical, signature, now, state):
     if abs(now - parse_ts(ts)) > SKEW_S:
         raise BusError("skew")
     secret = resolve_key(kid)
@@ -172,13 +175,30 @@ def _authenticate(resolve_key, ts, nonce, sender, kid, canonical, signature, now
         raise BusError("bad_signature")
     if not hmac.compare_digest(expected, signature):
         raise BusError("bad_signature")
-    if nonce in state.seen:
+    if nonce in state.seen and state.seen[nonce] >= now - SKEW_S:
         raise BusError("replayed_nonce")
-    # Only authenticated requests may consume replay or rate state.
-    state.seen[nonce] = now
-    while len(state.seen) > NONCE_CAP:
-        state.seen.popitem(last=False)
+
+
+def _record(ts, nonce, sender, kid, now, state):
+    # Never evict a nonce that could still pass the inclusive skew gate.
+    expired = []
+    if len(state.seen) >= NONCE_CAP:
+        live_count, oldest = 0, None
+        for key, stamp in state.seen.items():
+            if stamp < now - SKEW_S:
+                expired.append(key)
+            else:
+                live_count += 1
+                oldest = stamp if oldest is None else min(oldest, stamp)
+        if live_count >= NONCE_CAP:
+            raise BusError("replay_window_full", retry_after_s=max(1, math.ceil(oldest + SKEW_S - now)))
     state.limiter.check(sender, now)
+    # Commit cleanup only after every refusal gate, including the rate gate.
+    if nonce in state.seen and nonce not in expired:
+        expired.append(nonce)
+    for key in expired:
+        del state.seen[key]
+    state.seen[nonce] = parse_ts(ts)
 
 
 def validate_post(resolve_key, body, signature, now, state):
@@ -193,8 +213,9 @@ def validate_post(resolve_key, body, signature, now, state):
     _shape(envelope)
     if len(body) > BODY_MAX:
         raise BusError("too_large")
-    _authenticate(resolve_key, envelope["ts"], envelope["nonce"], envelope["from"],
+    _verify(resolve_key, envelope["ts"], envelope["nonce"], envelope["from"],
                   envelope.get("kid"), canonical_post(envelope), signature, now, state)
+    _record(envelope["ts"], envelope["nonce"], envelope["from"], envelope.get("kid"), now, state)
     key = (envelope["from"], envelope["msg_id"])
     if key in state.msg_ids:
         return dict(state.msg_ids[key], dup=True)
@@ -241,8 +262,8 @@ def parse_limit(value):
     return value
 
 
-def check_read(resolve_key, headers, cursor, now, state):
-    """Authenticate READ before calling read_records; no unauthenticated GET."""
+def check_read(resolve_key, headers, cursor, now, state, limit=100):
+    """Verify READ and its page arguments before recording acceptance."""
     headers = {name.lower(): value for name, value in headers.items()}
     signature = headers.get("x-fleet-sig")
     if not signature:
@@ -258,15 +279,18 @@ def check_read(resolve_key, headers, cursor, now, state):
     if not isinstance(cursor, str) or "|" in cursor or any(
             0xD800 <= ord(char) <= 0xDFFF for char in cursor):
         raise BusError("bad_request")
-    _authenticate(resolve_key, ts, nonce, reader, kid,
+    _verify(resolve_key, ts, nonce, reader, kid,
                   canonical_read(ts, nonce, reader, kid, cursor), signature, now, state)
-    return reader
-
-
-def read_records(state, cursor="", limit=100):
-    """Shape a page after authentication; cursor tracks the last delivered row."""
     limit = parse_limit(limit)
+    start = check_cursor(cursor, [record["id"] for record in state.ring])
+    _record(ts, nonce, reader, kid, now, state)
+    return reader, limit, start
+
+
+def read_records(state, accepted):
+    """Shape a checked READ result without any further refusal gates."""
+    reader, limit, start = accepted
     ring = list(state.ring)
-    start = check_cursor(cursor, [record["id"] for record in ring])
+    cursor = ring[start - 1]["id"] if start else ""
     records = [record.copy() for record in ring[start:start + limit]]
     return {"cursor": records[-1]["id"] if records else cursor, "records": records}

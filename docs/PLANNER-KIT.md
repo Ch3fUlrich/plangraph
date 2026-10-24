@@ -43,7 +43,11 @@ ops:
         write_set: [src/c.py]
 ```
 
-Other fields: `exports`, `forbid_paths`, `smoke_checks` (lists), `heldout_check` (string).
+Other fields: `exports`, `forbid_paths`, `smoke_checks`, `check_reads` (lists),
+`heldout_check` (string), `check_kind` (`change`, the default, or `regression`).
+Check metadata is persisted and included in worker claims; check inputs outside the write
+set are protected alongside explicit forbidden paths. Gate inputs include smoke checks,
+exports, held-out command, risk-tag presence, and the claimed base SHA.
 Paths must be relative and without `..`.
 
 ## Gate codes (`readiness.check_card`, plus `no_route` from the service)

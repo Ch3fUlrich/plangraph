@@ -130,6 +130,8 @@ CREATE TABLE IF NOT EXISTS cards (
     check_cmd       TEXT,
     smoke_checks    TEXT NOT NULL DEFAULT '[]',
     heldout_check   TEXT,
+    check_kind     TEXT NOT NULL DEFAULT 'change',
+    check_reads    TEXT NOT NULL DEFAULT '[]',
     window_class    TEXT CHECK (window_class IN ({_in(WINDOW_CLASSES)})),
     risk_tags       TEXT NOT NULL DEFAULT '[]',
     estimate_tokens INTEGER,
