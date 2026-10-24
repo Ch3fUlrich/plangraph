@@ -1,6 +1,6 @@
-/* plangraph — "Needs you" view (item A2): render() only.
- * Pure rows/filter/sort/encode/decode/FACETS come from page_needs.js.
- * ES5, createElement/textContent only; no-op without a document.
+/* Needs-you DOM view; pure helpers live in page_needs.js.
+ * Browser target: ES2015 APIs (Map, Array.from, Object.assign, Array.find),
+ * matching page_graph.js; createElement/textContent only for content.
  */
 (function (global) {
   "use strict";
@@ -10,65 +10,46 @@
   var NP = (PlanUI.NeedsPage = PlanUI.NeedsPage || {});
   var LABELS = { type: "Type", project: "Project", priority: "Prio", state: "State" };
   var FACETS = ["type", "project", "priority", "state"];
-  var COLS = [["type", "Type", "tc-type"], ["id", "ID", "tc-key"], ["title", "Title", "tc-title"],
-    ["project", "Project", "tc-project"], ["priority", "Prio", "tc-priority"],
-    ["state", "State", "tc-state"], ["age", "Age", "tc-age"]];
+  var COLS = [["type", "Type"], ["id", "ID"], ["title", "Title"],
+    ["project", "Project"], ["priority", "Prio"], ["state", "State"], ["age", "Age"]];
   var DEFF = { type: [], project: [], priority: [], state: [], age: "" };
   var CAP = 300;
   var f = clone(DEFF), sort = { col: "priority", dir: "desc" };
   var openF = {}, openA = "", showAll = false, init = false, rowId = "", flashed = false, vm = null;
 
-  function clone(o) {
-    var c = {}, k;
-    for (k in o) if (o.hasOwnProperty(k)) c[k] = Array.isArray(o[k]) ? o[k].slice() : o[k];
-    return c;
-  }
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function el(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
-    if (text !== undefined && text !== null) n.textContent = String(text);
+    if (text != null) n.textContent = String(text);
     return n;
   }
   function td(tr, cls, label, node) {
     var d = el("td", cls);
     d.setAttribute("data-label", label);
-    d.appendChild(node);
-    tr.appendChild(d);
+    d.appendChild(node); tr.appendChild(d);
     return d;
   }
 
-  /* ---- filter bar ------------------------------------------------------- */
   function facetItems(all, key) {
-    var map = {}, keys = [], out = [], i, r, v;
-    for (i = 0; i < all.length; i++) {
-      r = all[i];
-      if (key === "priority") {
-        if (r.priority === null || r.priority === undefined) continue;
-        v = String(r.priority);
-      } else v = String(r[key] === null || r[key] === undefined ? "" : r[key]);
-      if (!map[v]) { map[v] = { v: v, n: 0 }; keys.push(v); }
-      map[v].n++;
-    }
-    keys.sort(function (a, b) {
-      if (key === "priority") return (Number(b) || 0) - (Number(a) || 0);
-      if (PlanUI.naturalCmp) return PlanUI.naturalCmp(a, b);
-      return a < b ? -1 : a > b ? 1 : 0;
+    var map = new Map();
+    all.forEach(function (r) {
+      var v = r[key];
+      if (v == null && key === "priority") return;
+      v = v == null ? "" : String(v);
+      map.set(v, (map.get(v) || 0) + 1);
     });
-    for (i = 0; i < keys.length; i++) out.push(map[keys[i]]);
-    return out;
+    return Array.from(map.keys()).sort(function (a, b) {
+      return key === "priority" ? (Number(b) - Number(a) || 0) :
+        PlanUI.naturalCmp ? PlanUI.naturalCmp(a, b) : a < b ? -1 : a > b ? 1 : 0;
+    }).map(function (v) { return {v:v, n:map.get(v)}; });
   }
   function cb(text, checked, aria, apply) {
     var lb = el("label", "tt-fl"), b = el("input");
-    b.type = "checkbox";
-    b.checked = !!checked;
+    b.type = "checkbox"; b.checked = !!checked;
     b.setAttribute("aria-label", aria);
-    lb.appendChild(b);
-    lb.appendChild(el("span", null, text));
-    b.addEventListener("change", function () {
-      apply(b.checked);
-      showAll = false;
-      commit();
-    });
+    lb.appendChild(b); lb.appendChild(el("span", null, text));
+    b.addEventListener("change", function () { apply(b.checked); refresh(); });
     return lb;
   }
   function facet(all, key) {
@@ -83,8 +64,7 @@
           if (!on && i >= 0) sel.splice(i, 1);
         }));
     });
-    d.appendChild(list);
-    d.open = !!openF[key];
+    d.appendChild(list); d.open = !!openF[key];
     d.addEventListener("toggle", function () { openF[key] = d.open; });
     return d;
   }
@@ -94,41 +74,25 @@
     [["", "Any age"], ["1", "1 day or less"], ["7", "7 days or less"],
       ["30", "30 days or less"], ["30+", "Older than 30 days"]].forEach(function (o) {
       var op = el("option", null, o[1]);
-      op.value = o[0];
-      sel.appendChild(op);
+      op.value = o[0]; sel.appendChild(op);
     });
-    sel.value = f.age;
-    sel.setAttribute("aria-label", "Filter by age");
-    sel.addEventListener("change", function () {
-      f.age = sel.value;
-      showAll = false;
-      commit();
-    });
+    sel.value = f.age; sel.setAttribute("aria-label", "Filter by age");
+    sel.addEventListener("change", function () { f.age = sel.value; refresh(); });
     lab.appendChild(el("span", null, "Age"));
-    lab.appendChild(sel);
-    d.appendChild(lab);
+    lab.appendChild(sel); d.appendChild(lab);
     cl = el("button", "tt-btn tt-clear", "Clear filters");
     cl.type = "button";
     cl.setAttribute("aria-label", "Clear all needs-you filters");
-    cl.addEventListener("click", function () {
-      f = clone(DEFF);
-      showAll = false;
-      commit();
-    });
-    d.appendChild(cl);
-    return d;
+    cl.addEventListener("click", function () { f = clone(DEFF); refresh(); });
+    d.appendChild(cl); return d;
   }
 
-  /* ---- URL -------------------------------------------------------------- */
+  function refresh() { showAll = false; commit(); }
   function commit() {
-    var q = NP.encode ? NP.encode(f, sort, rowId) : "", keep = [], s, i, k;
+    var q = NP.encode ? NP.encode(f, sort, rowId) : "";
     try {
-      s = String(global.location.search || "").slice(1).split("&");
-      for (i = 0; i < s.length; i++) {
-        k = s[i] ? s[i].split("=")[0] : "";
-        if (s[i] && k.indexOf("n_") !== 0) keep.push(s[i]);
-      }
-      var parts = [q].concat(keep).filter(function (p) { return !!p; });
+      var parts = [q].concat(String(global.location.search || "").slice(1).split("&")
+        .filter(function (p) { return p && p.indexOf("n_") !== 0; })).filter(Boolean);
       var url = global.location.pathname + (parts.length ? "?" + parts.join("&") : "") +
         (global.location.hash || "");
       global.history.replaceState(null, "", url);
@@ -136,11 +100,10 @@
     render(vm);
   }
 
-  /* ---- table ------------------------------------------------------------ */
   function head() {
     var tr = el("tr"), th;
     COLS.forEach(function (c) {
-      th = el("th");
+      th = el("th", "tc-" + (c[0] === "id" ? "key" : c[0]));
       th.setAttribute("data-label", c[1]);
       th.setAttribute("aria-sort", sort.col === c[0] ?
         (sort.dir === "asc" ? "ascending" : "descending") : "none");
@@ -150,24 +113,19 @@
       b.addEventListener("click", function () {
         sort = sort.col === c[0] ? { col: c[0], dir: sort.dir === "asc" ? "desc" : "asc" }
           : { col: c[0], dir: (c[0] === "priority" || c[0] === "age") ? "desc" : "asc" };
-        showAll = false;
-        commit();
+        refresh();
       });
-      th.appendChild(b);
-      tr.appendChild(th);
+      th.appendChild(b); tr.appendChild(th);
     });
-    th = el("th");
-    th.setAttribute("data-label", "Open");
-    th.textContent = "Open";
-    tr.appendChild(th);
+    th = el("th", null, "Open");
+    th.setAttribute("data-label", "Open"); tr.appendChild(th);
     return tr;
   }
   function row(r) {
-    var tr = el("tr"), i, proj = null;
+    var tr = el("tr");
     tr.id = "ny-row-" + r.id;
-    if (vm && vm.projects) for (i = 0; i < vm.projects.length; i++)
-      if (vm.projects[i].name === r.project) proj = vm.projects[i];
-    if (proj) { try { tr.style.setProperty("--pc", proj.color || "#888"); } catch (e) { /* ignore */ } }
+    var proj = (vm.projects || []).find(function (p) { return p.name === r.project; });
+    try { if (proj) tr.style.setProperty("--pc", proj.color || "#888"); } catch (e) { /* optional styling */ }
 
     td(tr, "tc-type", "Type", el("span", null,
       r.type.charAt(0).toUpperCase() + r.type.slice(1)));
@@ -187,9 +145,10 @@
     td(tr, "tc-key", "ID", a);
 
     var tc = td(tr, "tc-title", "Title", el("span", "ny-tt", r.title || ""));
-    var wk = r.type === "question" ? "answer" : (r.type === "task" ? r.ref && r.ref.wait : "");
-    if (wk) {   // D-677
-      var bd = el("span", "tc-badge", wk === "answer" ? "Needs your answer" : "Needs your task");
+    if (r.ref && r.ref.kind === "operator_wait_unlinked") tc.appendChild(el("span", "tc-badge", "Operator wait unlinked"));
+    var wk = r.type === "question" ? "answer" : r.type === "task" && r.ref ? r.ref.wait : "";
+    if (wk) {
+      var bd = el("span", "tc-badge", "Needs your " + (wk === "answer" ? "answer" : "task"));
       bd.style.background = "var(--wait-" + wk + ")";
       bd.style.color = "#fff";
       tc.appendChild(bd);
@@ -197,41 +156,35 @@
     if (r.type === "question") {
       var ab = el("button", "tt-btn ny-ans", openA === r.id ? "Close" : "Answer");
       ab.type = "button";
-      ab.addEventListener("click", function () {
-        openA = (openA === r.id) ? "" : r.id;
-        render(vm);
-      });
+      ab.addEventListener("click", function () { openA = openA === r.id ? "" : r.id; render(vm); });
       tc.appendChild(ab);
-      if (openA === r.id && PlanUI.QAPage && PlanUI.QAPage.editor) {
+      if (openA === r.id && r.ref && PlanUI.QAPage && PlanUI.QAPage.editor) {
         var ed = PlanUI.QAPage.editor(r.ref, function () { openA = ""; render(vm); });
         if (ed) {
           var box = el("div", "ny-ed");
-          box.appendChild(ed);
-          tc.appendChild(box);
+          box.appendChild(ed); tc.appendChild(box);
         }
       }
     }
 
-    td(tr, "tc-project", "Project", el("span", null, r.project || "-"));
-    td(tr, "tc-priority", "Prio", el("span", null,
-      r.priority === null || r.priority === undefined ? "-" : r.priority));
-    td(tr, "tc-state", "State", el("span", null, r.state || "-"));
-    td(tr, "tc-age", "Age", el("span", null,
-      r.ageDays === null || r.ageDays === undefined ? "-" : r.ageDays + "d"));
+    [["project", "Project", r.project || "-"],
+     ["priority", "Prio", r.priority == null ? "-" : r.priority],
+     ["state", "State", r.state || "-"],
+     ["age", "Age", r.ageDays == null ? "-" : r.ageDays + "d"]].forEach(function (c) {
+      td(tr, "tc-" + c[0], c[1], el("span", null, c[2]));
+    });
 
     var key = r.key || "";
-    var has = !!(key && vm && vm.items && vm.items.get && vm.items.get(key));
+    var has = !!(key && vm.items && typeof vm.items.get === "function" && vm.items.get(key));
     var jb = el("button", "tt-btn ny-jump", "Jump");
-    jb.type = "button";
-    jb.disabled = !has;
+    jb.type = "button"; jb.disabled = !has;
     jb.setAttribute("aria-label", "Jump to " + (key || r.id));
     jb.addEventListener("click", function () {
       if (!has) return;
       if (PlanUI.app && PlanUI.app.jump) PlanUI.app.jump(key);
       else if (typeof PlanPage !== "undefined" && PlanPage.focusNode) PlanPage.focusNode(key);
     });
-    td(tr, "tc-open", "Open", jb);
-    return tr;
+    td(tr, "tc-open", "Open", jb); return tr;
   }
 
   function flash() {
@@ -239,15 +192,11 @@
     var tr = document.getElementById("ny-row-" + rowId);
     if (!tr) return;
     flashed = true;
-    try { tr.scrollIntoView({ block: "center" }); } catch (e) { if (tr.scrollIntoView) tr.scrollIntoView(); }
+    if (tr.scrollIntoView) tr.scrollIntoView({ block: "center" });
     tr.className += " flash";
-    setTimeout(function () {
-      var n = document.getElementById("ny-row-" + rowId);
-      if (n) n.className = n.className.replace(/\s*\bflash\b/g, "");
-    }, 1600);
+    setTimeout(function () { tr.classList.remove("flash"); }, 1600);
   }
 
-  /* ---- render ----------------------------------------------------------- */
   function render(m) {
     vm = m || vm;
     var host = document.getElementById("sb-panel-needs");
@@ -259,28 +208,43 @@
       if (d && d.sort) sort = d.sort;
       rowId = (d && d.row) || "";
     }
-    var now = Date.now();
-    var all = NP.rows(vm, now);
+    var now = Date.now(), seen = new Map(), all = [], rows = NP.rows(vm, now), real = new Map();
+    // D-2458/5: defensive copy of the server's one precedence rule (_needs_you
+    // already drops a flag whose key has a genuine row): a flag row loses to
+    // any genuine row -- task, question or decision -- for the same key.
+    rows.forEach(function (r) {
+      var ref = r.ref || {};
+      if (ref.kind !== "operator_wait_unlinked") real.set(r.key || r.id, true);
+    });
+    rows.forEach(function (r) {
+      var key = r.key || r.id, ref = r.ref || {};
+      if (r.type === "task") {
+        r = Object.assign({}, r, {state: r.state || ref.state});
+        if (key && ref.kind === "operator_wait_unlinked") {
+          if (real.has(key) || seen.has(key)) return;
+          seen.set(key, true);
+        }
+      }
+      all.push(r);
+    });
     var list = NP.sort(NP.filter(all, f, now), sort);
     while (host.firstChild) host.removeChild(host.firstChild);
     host.appendChild(el("h2", "ny-h", "Needs you (" + list.length + " of " + all.length + ")"));
-    if (PlanUI.QAPage && PlanUI.QAPage.exportBar) {
-      var eb = PlanUI.QAPage.exportBar(vm);
-      if (eb) host.appendChild(eb);
-    }
+    var eb = PlanUI.QAPage && PlanUI.QAPage.exportBar && PlanUI.QAPage.exportBar(vm);
+    if (eb) host.appendChild(eb);
     host.appendChild(bar(all));
-    if (!all.length) { host.appendChild(el("p", "ny-empty", "Nothing needs you right now.")); return; }
-    if (!list.length) { host.appendChild(el("p", "ny-empty", "No rows match the current filters.")); return; }
+    if (!list.length) {
+      host.appendChild(el("p", "ny-empty", all.length ? "No rows match the current filters." : "Nothing needs you right now."));
+      return;
+    }
     var t = el("table", "tt ny-t"), thead = el("thead"), tb = el("tbody");
-    thead.appendChild(head());
-    t.appendChild(thead);
+    thead.appendChild(head()); t.appendChild(thead);
     list.slice(0, showAll ? list.length : CAP).forEach(function (r) { tb.appendChild(row(r)); });
-    t.appendChild(tb);
-    host.appendChild(t);
+    t.appendChild(tb); host.appendChild(t);
     if (!showAll && list.length > CAP) {
       var more = el("button", "tt-btn ny-all", "Show all " + list.length + " rows");
       more.type = "button";
-      more.addEventListener("click", function () { showAll = true; render(vm); });
+      more.onclick = function () { showAll = true; render(vm); };
       host.appendChild(more);
     }
     flash();
