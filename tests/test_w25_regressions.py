@@ -38,12 +38,16 @@ def test_watchdog_corrupt_state_skipped_and_recorded(tmp_path, monkeypatch, dama
 
 def test_empty_catalog_uses_admitted_fallback():
     class Catalog:
+        calls = []
+
         def list_models(self, *, active_only):
-            assert active_only is True
+            self.calls.append(active_only)
             return []
     assert resolver.get_catalog_models(Catalog(), active_only=True) == [
         resolver._normalize_catalog_row(r) for r in resolver.DEFAULT_FALLBACK_MODELS
         if resolver.catalog_row_admitted(r)]
+    # D-2631 requires total-row knowledge before admitting offline defaults.
+    assert Catalog.calls == [True, False]
 
 
 def test_nonempty_catalog_does_not_mix_fallback():

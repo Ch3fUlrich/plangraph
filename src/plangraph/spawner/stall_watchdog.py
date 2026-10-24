@@ -113,6 +113,7 @@ def _read_state(state, path, *, stamp=False):
         if not isinstance(record, dict):
             raise ValueError('expected object')
         if stamp and (not isinstance(record.get('sent'), (int, float)) or
+                      isinstance(record.get('count', 1), bool) or
                       not isinstance(record.get('count', 1), int) or
                       record.get('count', 1) < 1):
             raise ValueError('invalid alert stamp')
@@ -180,7 +181,7 @@ def flush_outbox(state, command, *, run=subprocess.run):
         record = _read_state(state, path)
         if record is None:
             continue
-        run(command, input=json.dumps(record, sort_keys=True), text=True,
+        run(command, input=path.read_bytes(),
             check=True, timeout=20)
         path.unlink(missing_ok=True)
 

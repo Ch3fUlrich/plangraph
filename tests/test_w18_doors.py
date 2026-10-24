@@ -87,11 +87,15 @@ def test_inactive_catalog_refused(monkeypatch):
 
 def test_catalog_requests_active_rows_only():
     class Catalog:
+        calls = []
+
         def list_models(self, *, active_only):
-            assert active_only is True
+            self.calls.append(active_only)
             return []
-    # D-2631: an empty SQLite catalog uses the explicitly admitted offline rows.
+    # D-2631: consult active rows first, then total rows to distinguish an empty
+    # SQLite catalog from one whose models the operator has deactivated.
     rows = resolver.get_catalog_models(Catalog(), active_only=True)
+    assert Catalog.calls == [True, False]
     assert rows == [resolver._normalize_catalog_row(r) for r in resolver.DEFAULT_FALLBACK_MODELS
                     if resolver.catalog_row_admitted(r)]
     assert all(resolver.catalog_row_admitted(r) for r in rows)

@@ -519,6 +519,10 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dic
     if target_db is not None:
         if hasattr(target_db, "list_models"):
             models = target_db.list_models(active_only=active_only)
+            # D-2631: no admitted rows is not an empty catalog. Preserve the
+            # active-only query contract, but probe total rows before fallback.
+            if active_only and not models and target_db.list_models(active_only=False):
+                return []
             if models:
                 return [_normalize_catalog_row(m) for m in models
                         if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
