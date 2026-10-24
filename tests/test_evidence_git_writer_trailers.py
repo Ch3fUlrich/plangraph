@@ -322,6 +322,41 @@ def test_fix10_real_parser_blank_attribution(repo, adapter, body, expected):
         assert _families(repo, sha) == expected
 
 
+@pytest.mark.parametrize("blank_first", [True, False], ids=["blank-first", "blank-last"])
+@pytest.mark.parametrize("blank_key", ["Writer", "Hand-Edit"])
+def test_fix11_real_parser_blank_order(repo, adapter, blank_first, blank_key):
+    lines = [f"{blank_key}: ", "Writer: deepseek-v4"]
+    if not blank_first:
+        lines.reverse()
+    _git(repo, "commit", "--allow-empty", "--cleanup=verbatim", "-q", "-m",
+         "blank order\n\nPlan-Item: demo:A\n" + "\n".join(lines) + "\n")
+    sha = _git(repo, "rev-parse", "HEAD")
+    expected = {"Plan-Item": "demo:A"}
+    if blank_key == "Writer":
+        expected["Writer"] = ["", "deepseek-v4"] if blank_first else ["deepseek-v4", ""]
+    else:
+        expected.update({"Writer": "deepseek-v4", "Hand-Edit": ""})
+    assert adapter.writer_trailers(str(repo), sha) == [expected]
+    if blank_key == "Writer":
+        with pytest.raises(Refused, match="blank Writer") as exc:
+            _families(repo, sha)
+        assert exc.value.code == "writer_unknown"
+    else:
+        assert _families(repo, sha) == ["deepseek"]
+
+
+def test_fix11_merge_leaf_without_attribution_refuses(repo, adapter):
+    _commit(repo, "base", {"Writer": "deepseek-v4"})
+    _git(repo, "switch", "-q", "-c", "missing-writer")
+    _commit(repo, "unattributed leaf", {"Plan-Item": "demo:A"})
+    _git(repo, "switch", "-q", "main")
+    sha = _merge(repo, "missing-writer", "demo:A")
+    assert adapter.writer_trailers(str(repo), sha) == [{"Plan-Item": "demo:A"}]
+    with pytest.raises(Refused) as exc:
+        _families(repo, sha)
+    assert exc.value.code == "writer_unknown"
+
+
 def test_prose_hand_edit_and_writer_lines_are_not_trailers(repo):
     """A prose paragraph QUOTING ``Hand-Edit:``/``Writer:`` lines is not a
     trailer block, so it can neither be returned as a trailer nor change the

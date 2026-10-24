@@ -138,7 +138,9 @@ def writer_families(store, item, ctx):
 _WRITER_ALIASES = dict.fromkeys(
     ("qodercli", "qoder", "qoder-cli", "qoder-agent"), "alibaba")
 _WRITER_ALIASES["l2"] = "anthropic"
-_WRITER_ALIASES.update({"cx": "openai", "mimo": "xiaomi", "xiaomi-mimo": "xiaomi"})
+_WRITER_ALIASES.update({"cx": "openai", "codex": "openai",
+                        "mimo": "xiaomi", "xiaomi-mimo": "xiaomi"})
+_WRITER_ALIASES.update({family: family for _, family in review_family.FAMILIES})
 _WRITER_ALIASES.update(dict.fromkeys(
     "agy opencode omniroute openrouter spawner tool-less tool-using".split()))
 

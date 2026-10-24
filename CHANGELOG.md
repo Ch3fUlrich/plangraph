@@ -5,6 +5,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 ## Unreleased
 
 - KEEPER-TRAILER-MULTI fix9 (D-2458): retain every family match in Writer tokens and their dot, hyphen and underscore parts, including L2 aliases. Refuse blank Writer entries even alongside other attribution; only non-blank Hand-Edit values add anthropic. Pin the colon-character set instead of scanning Unicode at import, with a recomputed-set regression. Keep the existing conflicting Plan-Item refusal and corpus labels, and name the tests by their actual assertions.
+  - fix11 (D-2516): count codex as openai and every shared family-name token as itself so provider names cannot conceal mixed writers; verify both blank-attribution orders through real git parsing and refuse unattributed merge leaves without changing corpus labels.
   - fix10: count single-family cx and MiMo provider aliases so they cannot hide mixed writers; verify blank Writer and Hand-Edit attribution through real Git parsing without changing corpus labels.
 
 - KEEPER-TRAILER-MULTI fix8b: mask UUIDs as `<uuid>` and hex/high-entropy run-id segments as `<hex>` in fixture VALUEs to pass public scrub checks; preserve every other value byte and every label. Skip fixture comments in both test readers while preserving data-row indexing.

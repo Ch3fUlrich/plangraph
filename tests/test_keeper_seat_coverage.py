@@ -65,6 +65,28 @@ def writer(value):
 
 
 @pytest.mark.parametrize("value,family", [
+    ("deepseek-v4 codex", None),
+    ("codex/gpt-6.1", "openai"),
+    ("CODEX/gpt-6.1", "openai"),
+    ("deepseek-v4 openai", None),
+    ("DeepSeek-v4 OpenAI", None),
+])
+def test_fix11_codex_and_family_names_cannot_hide_second_writer(w, value, family):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    if family is None:
+        with pytest.raises(Refused, match="writer_unknown"):
+            _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    else:
+        assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == [family]
+
+
+@pytest.mark.parametrize("family", sorted({family for _, family in review_family.FAMILIES}))
+def test_fix11_family_name_tokens_resolve_to_themselves(family):
+    assert _cov()._writer_token_families(family.upper()) == {family}
+
+
+@pytest.mark.parametrize("value,family", [
     ("cx/gpt-6.1-sol mimo", None),
     ("deepseek-v4 xiaomi-mimo", None),
     ("mimo/mimo-v2.6-flash", "xiaomi"),
