@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import urllib.parse
@@ -38,7 +39,7 @@ from .. import inbox, views
 from . import outage
 from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from .snapshot_writer import SnapshotWriter
-from . import api_routes, audit_meta, auth, brief, changelog, fmt
+from . import api_routes, audit_meta, auth, brief, changelog, db_pg, fmt
 from .auth import Principal, RunPrincipal
 from .errors import Refused
 
@@ -108,14 +109,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
         server = self.server
         with server.lock:
             try:
-                principal = auth.authenticate(server.store.conn, self._token())
-            except Refused as exc:
-                audit = getattr(server.store, "audit_auth_failure", None)
-                with suppress(Exception):  # absent or broken: still a 401
-                    audit and audit(exc.msg or exc.code)
-                self._json(401, {"error": exc.code, "msg": exc.msg})
-                return
-            try:
+                try:
+                    principal = auth.authenticate(server.store.conn, self._token())
+                except Refused as exc:
+                    audit = getattr(server.store, "audit_auth_failure", None)
+                    with suppress(Exception):  # absent or broken: still a 401
+                        audit and audit(exc.msg or exc.code)
+                    self._json(401, {"error": exc.code, "msg": exc.msg})
+                    return
                 api_routes.run_gate(principal, name)
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
@@ -134,9 +135,33 @@ class KeeperHandler(BaseHTTPRequestHandler):
             except Refused as exc:
                 self._json(_STATUS.get(exc.code, 400),
                            {"error": exc.code, "msg": exc.msg})
-            except Exception:  # noqa: BLE001 - never leak internals
+            except db_pg.ConnectionLost as exc:
+                # KEEPER-PG-RECONNECT (V1/V3): a statement that could not be
+                # retried safely answers 503, never an empty connection and
+                # never a second apply.  One redacted line, then -- once the
+                # reconnects are exhausted -- the daemon's exit path.
+                if not exc.logged:
+                    self._loss_line("connection lost", exc)
+                    exc.logged = True
+                self._json(503, {"error": "unavailable",
+                                 "msg": "keeper database unavailable"})
+                if exc.fatal:
+                    server.fatal_loss = exc
+            except Exception as exc:  # noqa: BLE001 - never leak internals
+                # V3: every handler exception gets a response and one log line
+                # (the auth path included), DSN-redacted through db_pg.redact.
+                self._loss_line(type(exc).__name__, exc)
                 self._json(500, {"error": "internal",
                                  "msg": "internal server error"})
+
+    def _loss_line(self, what, exc):
+        """Exactly one ``keeper:`` line on stderr for a failed request (V3).
+
+        ``db_pg.redact`` removes anything DSN-shaped, and the detail is
+        flattened to one line so one failure never becomes two log lines.
+        """
+        detail = db_pg.redact(" ".join(str(exc).split()))
+        print(f"keeper: request failed: {what}: {detail}", file=sys.stderr)
 
     # ------------------------------------------------------------- plumbing
     def _token(self):
@@ -412,6 +437,9 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured
         self.snapshot_writer = None
+        #: KEEPER-PG-RECONNECT: a fatal ConnectionLost answered 503 above; the
+        #: daemon polls this and exits non-zero instead of serving on.
+        self.fatal_loss = None
         debounce = float(getattr(config, "snapshot_debounce_s", 0) or 0)
         if debounce > 0:         # KEEPER-SNAPSHOT-PG: 0 = rewrite synchronously after each write
             self.snapshot_writer = SnapshotWriter(

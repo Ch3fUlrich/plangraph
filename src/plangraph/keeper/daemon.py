@@ -11,8 +11,9 @@ import argparse
 import signal
 import sys
 import threading
+from contextlib import suppress
 
-from . import anchor, api, config as config_mod, db as kdb, outage
+from . import anchor, api, config as config_mod, db as kdb, db_pg, outage
 from .errors import KeeperLocked
 from .store import Store
 
@@ -53,10 +54,19 @@ def _backup_prune_loop(settings: dict, stop: threading.Event, log=None) -> None:
 
 
 def run(cfg, *, host=None, port=None, ready=None):
-    """Start the server and block until a signal; returns 0 on clean shutdown."""
+    """Start the server and block until a signal; returns 0 on clean shutdown.
+
+    KEEPER-PG-RECONNECT: a lost Postgres lock session (V4) or an exhausted
+    reconnect (V2) is raised here, after shutdown, so ``main`` exits non-zero
+    instead of serving a keeper whose database or singleton lock is gone.
+    """
     lock = kdb.lock_keeper(cfg.db, **cfg.db_options)
-    conn = kdb.open_db(cfg.db, **cfg.db_options)
+    conn = None
     try:
+        probe = getattr(lock, "probe", None)
+        if probe is not None:    # V4: a dead lock session exits, it never serves
+            probe()
+        conn = kdb.open_db(cfg.db, **cfg.db_options)
         store = Store(conn, ctx=config_mod.verifier_context(cfg),
                       batch_roots=cfg.batch_roots)
         server = api.make_server(store, cfg, host=host, port=port)
@@ -86,7 +96,9 @@ def run(cfg, *, host=None, port=None, ready=None):
         if ready is not None:
             ready(server)
         try:
-            stop.wait()
+            while not stop.wait(0.5):   # KEEPER-PG-RECONNECT: notice a fatal
+                if server.fatal_loss is not None:   # loss answered 503, exit > serve
+                    raise server.fatal_loss
         finally:
             stop.set()
             if prune_thread is not None:
@@ -97,7 +109,9 @@ def run(cfg, *, host=None, port=None, ready=None):
             thread.join(timeout=5)
         return 0
     finally:
-        conn.close()
+        if conn is not None:
+            with suppress(Exception):   # never mask the original failure
+                conn.close()
         lock.release()
 
 
@@ -116,6 +130,13 @@ def main(argv=None) -> int:
         return 1
     try:
         return run(cfg, host=args.host, port=args.port)
+    except db_pg.ConnectionLost as exc:
+        # KEEPER-PG-RECONNECT (V2/V4): exit non-zero for the supervisor, with
+        # the one redacted line -- printed at the failure, printed here only
+        # when no boundary has logged it yet.
+        if not exc.logged:
+            print("keeper: " + db_pg.redact(str(exc)), file=sys.stderr)
+        return 1
     except KeeperLocked as exc:
         print(f"keeper locked: {exc}", file=sys.stderr)
         return 1

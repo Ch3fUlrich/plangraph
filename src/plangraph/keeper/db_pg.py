@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
+from contextlib import suppress
 from pathlib import Path
 
 from . import schema_pg
@@ -16,10 +18,70 @@ from .errors import KeeperLocked
 
 __all__ = ["PgConnection", "PgRow", "PgKeeperLock", "open_pg", "lock_pg", "migrate",
            "translate", "translate_control", "adapt_params", "guard", "DdlDenied",
-           "derive_schema", "check_schema", "redact"]
+           "derive_schema", "check_schema", "redact", "ConnectionLost",
+           "is_connection_lost", "RECONNECT_ATTEMPTS"]
 
 #: first key of the two-int advisory locks; the second is ``hashtext(schema)``.
 _WRITE_LOCK, _MIGRATE_LOCK, _SINGLETON_LOCK = 0x706701, 0x706702, 0x706703
+
+#: KEEPER-PG-RECONNECT (V2): reconnect attempts per lost connection before the
+#: caller gives up.  One attempt keeps the promise "reconnect once or exit
+#: non-zero": an exhausted attempt raises ``ConnectionLost(fatal=True)`` after
+#: exactly one redacted ``keeper:`` line, the HTTP layer answers 503 for the
+#: non-fatal case and the daemon exits non-zero so the supervisor restarts it
+#: against a fresh session.
+RECONNECT_ATTEMPTS = 1
+
+#: SQLSTATEs that mean the *server* is alive: a cancelled/timed-out statement or
+#: a lost row lock.  They keep the old path (raised unchanged, so the store's
+#: "lock"/"busy" branch still turns them into a conflict refusal) and never
+#: trigger a reconnect.
+_ALIVE_STATES = frozenset({"57014", "55P03", "40001", "40P01"})
+
+
+class ConnectionLost(Exception):
+    """The Postgres session is gone and this call could not be safely retried.
+
+    ``fatal=True`` marks an exhausted reconnect: the daemon must exit non-zero
+    instead of serving a keeper whose database it cannot reach.  ``logged``
+    says the one redacted ``keeper:`` line has already been printed, so no
+    boundary ever prints a second one.  Messages are built from fixed words
+    only -- a DSN never enters one (log lines go through :func:`redact` too).
+    """
+
+    def __init__(self, msg: str, *, fatal: bool = False, logged: bool = False):
+        super().__init__(msg)
+        self.fatal = fatal
+        self.logged = logged
+
+
+def is_connection_lost(exc) -> bool:
+    """True when *exc* means the session/socket is gone, not a statement error.
+
+    A ``psycopg.OperationalError`` whose SQLSTATE says the server is still
+    there (lock timeout, statement cancel, serialization failure) is *not* a
+    lost connection: reconnecting behind the store's back would turn a lost
+    write race into a silent retry.
+    """
+    try:
+        import psycopg
+    except ImportError:             # pragma: no cover - PgConnection needs psycopg anyway
+        return False
+    if not isinstance(exc, psycopg.OperationalError):
+        return False
+    state = getattr(exc, "sqlstate", None) or ""
+    return state not in _ALIVE_STATES
+
+
+def _exhausted(last) -> ConnectionLost:
+    """Log the single redacted line for N failed reconnects and build the fatal loss.
+
+    V2: exactly one line per whole failure, then ``fatal=True`` so the daemon
+    boundary can exit non-zero without logging again (``logged=True``).
+    """
+    msg = f"postgres connection lost; {RECONNECT_ATTEMPTS} reconnect attempt(s) failed"
+    print("keeper: " + redact(msg), file=sys.stderr)
+    return ConnectionLost(msg, fatal=True, logged=True)
 
 
 class DdlDenied(Exception):
@@ -69,6 +131,11 @@ _DDL_START = re.compile(
     r"reindex|cluster|comment|do|load|refresh|security|import|call|listen|notify|unlisten|"
     r"discard|prepare|execute|deallocate|declare|fetch|move|close|lock|savepoint|release)\b",
     re.I)
+
+#: A statement re-runnable after a reconnect: a plain read.  The keeper issues
+#: no CTE, ``FOR UPDATE`` or ``SKIP LOCKED``, so anything else is a write side
+#: and is never run a second time (V1).
+_READ_START = re.compile(r"^\s*(select|show|explain|values|table)\b", re.I)
 
 
 def _strip_literals(sql: str) -> str:
@@ -178,21 +245,39 @@ class PgCursor:
 
 # --------------------------------------------------------------- connection
 class PgConnection:
-    """One psycopg connection (autocommit; the store issues its own BEGIN/COMMIT)."""
+    """One psycopg connection (autocommit; the store issues its own BEGIN/COMMIT).
+
+    KEEPER-PG-RECONNECT: a lost session is recovered once and only when nothing
+    can be applied twice -- an idempotent read or a pre-write ``BEGIN`` outside
+    an open transaction.  Anything else raises :class:`ConnectionLost` instead
+    of re-running a statement whose outcome is unknown (V1).
+    """
 
     backend = "postgres"
 
-    def __init__(self, raw, schema: str):
+    def __init__(self, raw, schema: str, *, dsn=None, busy_ms: int = 5000):
         self._raw = raw
         self.schema = schema
+        self._dsn = dsn                # enough to open one fresh session again
+        self._busy_ms = busy_ms
+        self._txn = False              # an open write transaction (own bookkeeping)
         self._open = True
 
     # -- sqlite3.Connection surface used by the store
     def execute(self, sql, params=()):
         control = translate_control(sql)
+        if control is None:
+            guard(sql)
+        try:
+            return self._dispatch(control, sql, params)
+        except Exception as exc:
+            if not is_connection_lost(exc):
+                raise
+            return self._recover(control, sql, params, exc)
+
+    def _dispatch(self, control, sql, params=()):
         if control is not None:
             return self._control(control)
-        guard(sql)
         return self._run(sql, params)
 
     def _run(self, sql, params=()):
@@ -215,9 +300,76 @@ class PgConnection:
             except BaseException:
                 self._raw.execute("ROLLBACK")      # a failed BEGIN IMMEDIATE leaves no transaction
                 raise
+            self._txn = True
         else:
             self._raw.execute(control.upper())
+            self._txn = False
         return PgCursor([], 0)
+
+    def _retryable(self, control, sql) -> bool:
+        """Reconnect + re-run only when no statement of this call can re-apply.
+
+        A read outside a transaction and a pre-write ``BEGIN`` are safe; an open
+        write transaction, its ``COMMIT`` (outcome unknown) and an autocommit
+        write (the post-write audit row) are not -- they become a 503 and are
+        never run twice.
+        """
+        if self._txn:
+            return False
+        if control in ("begin", "rollback"):
+            return True
+        if control == "commit":
+            return False          # an unknown-outcome COMMIT is never re-issued
+        return bool(_READ_START.match(sql))
+
+    def _recover(self, control, sql, params, exc):
+        """One reconnect and one re-run for a safe statement, else ``ConnectionLost``."""
+        self._txn = False              # the dead session's transaction is gone with it
+        last, restored = exc, False
+        for _ in range(max(1, RECONNECT_ATTEMPTS)):
+            try:
+                self.reconnect()
+                restored = True
+            except Exception as conn_exc:    # the server cannot be reached at all
+                last = conn_exc
+            if restored:
+                break
+        if not restored:                     # N reconnect failures: one line, exit path
+            raise _exhausted(last) from last
+        if not self._retryable(control, sql):
+            raise ConnectionLost(
+                "postgres connection lost inside an unfinished write;"
+                " the statement is not retried", fatal=False) from last
+        try:
+            return self._dispatch(control, sql, params)
+        except Exception as retry_exc:
+            if not is_connection_lost(retry_exc):
+                raise
+            last = retry_exc
+        # The session came back and the safe statement lost it again: no second
+        # reconnect (N = RECONNECT_ATTEMPTS), so this is the exhausted path.
+        raise _exhausted(last) from last
+
+    def reconnect(self):
+        """Open one fresh session with the same schema (search_path, lock timeout).
+
+        The old session is closed first: its socket is dead, and closing drops
+        whatever it still held.  Raises whatever ``_connect`` raised -- the
+        caller counts the attempts against ``RECONNECT_ATTEMPTS``.
+        """
+        raw = _connect(self._dsn, self._busy_ms)
+        try:
+            raw.execute(f'SET search_path TO "{self.schema}"')
+        except BaseException:
+            with suppress(Exception):
+                raw.close()
+            raise
+        old, self._raw = self._raw, raw
+        self._txn = False
+        if old is not raw:
+            with suppress(Exception):
+                old.close()
+        return self
 
     @property
     def in_transaction(self) -> bool:
@@ -225,17 +377,36 @@ class PgConnection:
 
     def commit(self):
         """``sqlite3.Connection.commit``: end an open transaction, else nothing."""
-        if self.in_transaction:
-            self._raw.execute("COMMIT")
+        try:
+            if self.in_transaction:
+                self._raw.execute("COMMIT")
+        except Exception as exc:
+            if not is_connection_lost(exc):
+                raise
+            self._txn = False          # the session (and its transaction) is gone
+            raise ConnectionLost(
+                "postgres connection lost during commit;"
+                " the outcome is unknown", fatal=False) from exc
+        self._txn = False
 
     def rollback(self):
-        if self.in_transaction:
-            self._raw.execute("ROLLBACK")
+        try:
+            if self.in_transaction:
+                self._raw.execute("ROLLBACK")
+        except Exception as exc:
+            if not is_connection_lost(exc):
+                raise
+            self._txn = False
+            raise ConnectionLost(
+                "postgres connection lost during rollback;"
+                " the session is gone", fatal=False) from exc
+        self._txn = False
 
     def close(self):
         if self._open:
             self._open = False
-            self._raw.close()
+            with suppress(Exception):     # a dead socket must not mask the real error
+                self._raw.close()
 
 
 # ----------------------------------------------------------------- opening
@@ -321,7 +492,7 @@ def open_pg(path, *, create=False, busy_timeout=5000, dsn=None, schema=None) -> 
     except BaseException:
         raw.close()
         raise
-    return PgConnection(raw, name)
+    return PgConnection(raw, name, dsn=dsn, busy_ms=busy_timeout)
 
 
 class PgKeeperLock:
@@ -329,6 +500,28 @@ class PgKeeperLock:
 
     def __init__(self, raw):
         self._raw = raw
+
+    def probe(self):
+        """One round trip proving the session (and so the singleton lock) is alive.
+
+        KEEPER-PG-RECONNECT (V4): a lost lock session is *fatal* and is never
+        re-acquired here -- taking a fresh lock would leave two keepers serving
+        as the singleton writer (split-brain).  The daemon boundary prints the
+        one line and exits non-zero.
+        """
+        raw = self._raw
+        if raw is None:
+            raise ConnectionLost(
+                "postgres keeper lock connection closed;"
+                " the singleton lock is gone", fatal=True)
+        try:
+            raw.execute("SELECT 1")
+        except Exception as exc:
+            if not is_connection_lost(exc):
+                raise
+            raise ConnectionLost(
+                "postgres keeper lock connection lost;"
+                " the singleton lock is gone", fatal=True) from exc
 
     def release(self):
         if self._raw is not None:
