@@ -87,6 +87,58 @@ def run(tmp_path, name, review, writer=None, extra=(), **ev):
     return sv.main(argv + list(extra))
 
 
+@pytest.mark.parametrize("model", ["qoder/Efficient", "efficient", "EFFICIENT"])
+def test_qoder_efficient_end_turn_pass(tmp_path, capsys, model):
+    assert run(tmp_path, "q", "VERDICT: pass", served_model=model,
+               finish_reason="end_turn", test_gaming="no", extra=("--dry-run",)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["family"] == "alibaba"
+    assert payload["body"]["ok"] is True
+    assert payload["body"]["key"] == "demo:A"
+
+
+@pytest.mark.parametrize("finish", ["length", "max_tokens", "content_filter",
+                                   "tool_use", None, "", "END_TURN", "end_turn ", "missing"])
+def test_pass_finish_reason_gate(tmp_path, capsys, finish):
+    argv = seat(tmp_path, "VERDICT: pass", finish_reason=finish)
+    if finish == "missing":
+        path = Path(argv[argv.index("--seat-dir") + 1]) / "evidence.json"
+        evidence = json.loads(path.read_text())
+        del evidence["finish_reason"]
+        path.write_text(json.dumps(evidence))
+    assert sv.main(argv + ["--dry-run"]) == 4
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "stop" in captured.err and "end_turn" in captured.err
+
+
+@pytest.mark.parametrize("model,family", [("inefficient", None),
+    ("inefficient-x", None), ("efficient-llama", "meta"), ("qoder/unknownmodel", None)])
+def test_efficient_alias_is_exact(tmp_path, capsys, model, family):
+    assert sv.model_family(model) == family
+    assert run(tmp_path, "u", "VERDICT: pass", served_model=model,
+               finish_reason="end_turn", extra=("--dry-run",)) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert ("is unknown" if family is None else "covers no listed writer") in captured.err
+
+
+@pytest.mark.parametrize("model", ["claude-3", "sonnet-5", "haiku-4"])
+@pytest.mark.parametrize("finish", ["stop", "end_turn"])
+def test_claude_alias_writer_rule(tmp_path, model, finish):
+    for i, (writer, expected) in enumerate([("meta", 0), ("anthropic", 2),
+            ("meta,anthropic", 2), ("unknownfam", 2), ("", 2)]):
+        assert run(tmp_path, str(i), "VERDICT: pass", served_model=model,
+                   finish_reason=finish, writer=writer, extra=("--dry-run",)) == expected
+
+
+@pytest.mark.parametrize("gaming", ["yes", "unsure"])
+def test_end_turn_still_refuses_test_gaming(tmp_path, capsys, gaming):
+    assert run(tmp_path, "g", "VERDICT: pass", finish_reason="end_turn",
+               test_gaming=gaming, extra=("--dry-run",)) == 4
+    assert capsys.readouterr().out == ""
+
+
 def test_refusals(tmp_path, capsys):
     assert run(tmp_path, "a", "VERDICT: PASS", served_model="claude-opus",
                extra=("--dry-run",)) == 0
