@@ -324,6 +324,11 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
+def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
+    """Fail closed: both catalog admission signals must be explicit."""
+    return row.get('available') == 1 and row.get('active') is True
+
+
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
     """Check if model is eligible and available.
 
@@ -332,7 +337,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     """
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
-    if int(model.get("available", 1)) == 0:
+    if not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -437,6 +442,8 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
+        if not catalog_row_admitted(c):
+            continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)
         speed = _raw_speed(d)
@@ -496,15 +503,15 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dic
             models = target_db.list_models(active_only=active_only)
             if models is not None:
                 return [_normalize_catalog_row(m) for m in models
-                        if not active_only or m.get('active', True)]
+                        if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
         if hasattr(target_db, "get_models"):
             models = target_db.get_models()
             if models is not None:
                 return [_normalize_catalog_row(m) for m in models
-                        if not active_only or m.get('active', True)]
+                        if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
 
     return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
-            if not active_only or m.get('active', True)]
+            if not active_only or catalog_row_admitted(m)]
 
 def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
     """Check if model satisfies context window and price cliff limits.
@@ -606,7 +613,7 @@ def resolve_review_plan(
             candidates = [
                 annotate(_normalize_catalog_row(r))
                 for r in route_legs
-                if is_model_available(r, reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
+                if is_model_available(_normalize_catalog_row(r), reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
             ]
             combo_priority_legs = True
 

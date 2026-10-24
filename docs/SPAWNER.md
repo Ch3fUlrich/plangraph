@@ -629,3 +629,12 @@ are typed `SpawnRefused` failures.
 For source checkouts, add the repository's `tools` directory to PATH to expose
 the executable `plangraph-spawn` entry point (or use
 `python -m plangraph.spawner.cli`).
+# Completion delivery contract
+
+Completion events carry `idempotency_key = run_id + ':' + status`. Delivery is
+retryable: a delivered-marker write can fail after a successful sink call.
+Each sink MUST durably deduplicate that key per recipient before exposing an
+event, atomically with its observable append. `FileInbox` implements this under
+its inbox lock. Command bridges must implement the same contract at the remote
+sink; a successful command exit alone cannot guarantee exactly-once effects.
+`test_marker_failure_sink_exactly_once` pins marker-failure replay behavior.

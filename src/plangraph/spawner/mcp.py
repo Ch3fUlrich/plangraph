@@ -142,7 +142,7 @@ class MCPSpawnerServer:
         try:
             options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
         except Exception as exc:
-            if name == 'plangraph_agent_spawn':
+            if name in ('plangraph_agent_route', 'plangraph_agent_spawn'):
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
             raise
         if name == 'plangraph_agent_route':
@@ -260,7 +260,7 @@ class MCPSpawnerServer:
                 if isinstance(result, dict) and result.get('status') == 'refused':
                     return {'jsonrpc': '2.0', 'id': req_id, 'error': {
                         'code': -32602, 'message': result.get('error', 'benchmark rows missing'),
-                        'data': {'type': result.get('refusal', 'SpawnRefused'), 'legs': result.get('legs', []),
+                        'data': {'type': result.get('refusal', 'SpawnRefused'), 'exit_code': result.get('exit_code', 2), 'legs': result.get('legs', []),
                                  'run_id': result.get('run_id')}}}
                 return {
                     "jsonrpc": "2.0",
@@ -280,7 +280,7 @@ class MCPSpawnerServer:
                     "jsonrpc": "2.0",
                     "id": req_id,
                     "error": {"code": -32602 if isinstance(exc, (ValueError, KeyError, TypeError)) else -32603,
-                              "message": str(exc)},
+                              "message": str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 1}},
                 }
 
         return {

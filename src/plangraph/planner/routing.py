@@ -385,7 +385,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
                          if ordered[i].model in rows or ordered[i].id in rows]
             missing = [ordered[i] for i in tier_positions if i not in positions]
             measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
-                             model_id=ordered[i].id, tier=tier) for i in positions]
+                             model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
             ranked = rank_candidates(measured, role=role, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}
             for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):
@@ -412,15 +412,15 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
 
 def validate_model(model):
     """The resolver catalog and registered legs are the exact admission door."""
-    from plangraph.spawner.resolver import get_catalog_models
+    from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
     from plangraph.mimo_policy import check_mimo_path
     from .legs import DEFAULT_LEGS
     if not isinstance(model, str) or not model:
         raise SpawnRefused('model must be a nonempty string')
     check_mimo_path(model)
     rows = get_catalog_models()
-    inactive = {row['id'] for row in rows if not row.get('active', True)}
-    allowed = ({row['id'] for row in rows if row.get('active', True)} |
+    inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
+    allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
                {leg.model for leg in DEFAULT_LEGS}) - inactive
     if model not in allowed:
         raise SpawnRefused('unknown model: ' + str(model))

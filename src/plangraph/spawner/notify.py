@@ -51,7 +51,8 @@ class FileInbox:
         path = self.state / 'inbox' / (recipient + '.jsonl')
         with inbox_lock(path):
             previous = path.read_text(encoding='utf-8') if path.exists() else ''
-            if any(json.loads(line)['event_id'] == event['event_id'] for line in previous.splitlines()):
+            if any(json.loads(line).get('idempotency_key', json.loads(line)['event_id']) ==
+                   event.get('idempotency_key', event['event_id']) for line in previous.splitlines()):
                 return
             atomic_write_private(path, previous + json.dumps(event) + '\n')
 
@@ -74,6 +75,7 @@ def completion_event(record, cwd):
         head = None
     rc = record.get('exit_code')
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
+        idempotency_key=record['run_id'] + ':' + record['status'],
         event='DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
         parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
         item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM'),

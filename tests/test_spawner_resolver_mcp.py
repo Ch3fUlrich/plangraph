@@ -718,6 +718,8 @@ def test_two_stage_tie_breaker_speed_within_epsilon_band():
     assert 0 < (score_a - score_b) <= 0.5, "Model B must be within the 0.5 epsilon band of Model A"
     assert (score_a - score_c) > 0.5, "Model C must be outside the 0.5 epsilon band"
 
+    for model in (model_a, model_b, model_c):
+        model.update(available=1, active=True)
     top = select_top_candidate([model_a, model_b, model_c], role="implement", risk="normal")
     assert top is not None
     # Model B wins tie with Model A because Speed(B) 250 > Speed(A) 50

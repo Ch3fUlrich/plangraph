@@ -20,12 +20,20 @@ def _supervise():
     payload = json.loads(sys.stdin.readline())
     service = SpawnService(state=payload.pop('state'))
     async def run():
-        record = await service.spawn(**payload, wait_seconds=0)
+        try:
+            record = await service.spawn(**payload, wait_seconds=0)
+        except Exception as exc:
+            record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
+            if record is None:
+                record = service.save_refusal(exc, payload.get('role', 'implement'))
+            print(json.dumps(record), flush=True)
+            return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
         if record['run_id'] in service.tasks:
             await service.tasks[record['run_id']]
-    asyncio.run(run())
+        return 0
+    return asyncio.run(run())
 
 
 def _card(value):
@@ -34,8 +42,7 @@ def _card(value):
 
 def main(argv=None):
     if (argv if argv is not None else sys.argv[1:]) == ['--supervise']:
-        _supervise()
-        return 0
+        return _supervise()
     parser = argparse.ArgumentParser(description='Spawn by card')
     parser.add_argument('--state')
     commands = parser.add_subparsers(dest='verb', required=True)
@@ -69,7 +76,7 @@ def main(argv=None):
         try:
             options = benchmark_options(args.require_bench, args.bench_db) if args.verb in ('route', 'spawn') else {}
         except Exception as exc:
-            if args.verb == 'spawn':
+            if args.verb in ('route', 'spawn'):
                 service.save_refusal(exc, args.role)
             raise
         if args.verb == 'route':

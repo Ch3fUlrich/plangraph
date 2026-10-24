@@ -34,7 +34,7 @@ _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)
 def redact(value):
     """Scrub credential-shaped strings recursively before persistence or display."""
     if isinstance(value, dict):
-        return {k: ('[REDACTED]' if re.search(r'(?i)(key|authorization|token|secret)', k)
+        return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(r'(?i)(key|authorization|token|secret)', k)
                     else redact(v)) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [redact(v) for v in value]

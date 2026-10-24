@@ -38,11 +38,22 @@ class SpawnService:
         atomic_write_private(self._path(record['run_id']), json.dumps(redact(record), indent=2))
 
     def ps(self):
-        paths = (self.state / 'runs').glob('run-*/record.json')
-        return {'runs': sorted((json.loads(p.read_text(encoding='utf-8')) for p in paths),
-                               key=lambda r: r['started'], reverse=True)}
+        from .stall_watchdog import read_runs
+        return {'runs': sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True)}
 
     def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
+        try:
+            plan = self._route(card, role, writer_families, review_of,
+                               benchmark=benchmark, require_bench=require_bench)
+            if plan.error:
+                from plangraph.planner.routing import SpawnRefused
+                raise SpawnRefused(plan.error)
+            return plan
+        except Exception as exc:
+            self.save_refusal(exc, role)
+            raise
+
+    def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.planner.routing import plan_spawn, SpawnRefused
         families = list(writer_families)
         if review_of:
@@ -66,7 +77,7 @@ class SpawnService:
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
                       started=time.time(), ended=time.time(),
                       status='refused' if isinstance(exc, SpawnRefused) else 'failed',
-                      exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, (SpawnRefused, ValueError, KeyError, OSError)) else 1,
+                      exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [])
@@ -117,6 +128,8 @@ class SpawnService:
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,))
             if review_of and chosen.family == self.result(review_of).get('writer_family'):
+                raise SpawnRefused('excluded writer family')
+            if role == 'review' and chosen.family in writer_families:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:

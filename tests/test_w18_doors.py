@@ -94,7 +94,7 @@ def test_catalog_requests_active_rows_only():
 
 
 @pytest.mark.parametrize('entry', ['route', 'runner', 'override', 'service', 'leg', 'cli', 'mcp'])
-@pytest.mark.parametrize('kind', ['accepted', 'wrong-provider', 'inactive'])
+@pytest.mark.parametrize('kind', ['accepted', 'wrong-provider', 'inactive', 'cxa-astra', 'cxa-sol'])
 def test_admission_entry_matrix(tmp_path, monkeypatch, capsys, entry, kind):
     import asyncio
     from dataclasses import replace
@@ -104,9 +104,11 @@ def test_admission_entry_matrix(tmp_path, monkeypatch, capsys, entry, kind):
     from plangraph.spawner.mcp import MCPSpawnerServer
     model = {'accepted': 'mimo/mimo-v2.6-flash',
              'wrong-provider': 'omniroute/' + 'mi' + 'mo-v2.6-flash',
-             'inactive': 'test/inactive'}[kind]
+             'inactive': 'test/inactive', 'cxa-astra': 'cxa/gpt-6-astra-max',
+             'cxa-sol': 'cxa/gpt-6-sol-max'}[kind]
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        dict(id=model, active=kind != 'inactive')])
+        dict(id=model, **({'available': 0} if kind.startswith('cxa-') else
+                         {'active': kind != 'inactive', 'available': 1}))])
     chosen = replace(legs.DEFAULT_LEGS[0], model=model)
     monkeypatch.setattr(legs, 'DEFAULT_LEGS', (chosen,))
     card = {'estimate_tokens': 100}

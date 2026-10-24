@@ -26,6 +26,8 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
         ended = run.get('ended')
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
             continue
+        if run.get('_completion_acknowledged'):
+            continue
         try:
             last = activity(parent)
         except (ValueError, TypeError):
@@ -66,8 +68,21 @@ def status(findings):
 
 
 def read_runs(state):
-    return [json.loads(p.read_text(encoding='utf-8'))
-            for p in sorted((Path(state) / 'runs').glob('run-*/record.json'))]
+    from .private_io import atomic_write_private
+    runs, bad = [], []
+    for path in sorted((Path(state) / 'runs').glob('run-*/record.json')):
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+            if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
+                raise ValueError('invalid run record')
+            if (path.parent / 'parent.delivered').exists():
+                record['_completion_acknowledged'] = True
+            runs.append(record)
+        except (OSError, ValueError, UnicodeError) as exc:
+            bad.append(dict(path=str(path), error=type(exc).__name__))
+    if bad:
+        atomic_write_private(Path(state) / 'watchdog/bad-records.json', json.dumps(bad))
+    return runs
 
 
 def read_activity(state, session):
@@ -99,8 +114,11 @@ def deliver_event(state, event, *, now=None, interval=None):
     now = time.time() if now is None else now
     interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
     stamp = Path(state) / 'watchdog/alerts' / (key + '.json')
-    if stamp.exists() and now - json.loads(stamp.read_text())['sent'] < interval:
-        return
+    if stamp.exists():
+        if event.get('rule') == 'finished-child' or event.get('kind') == 'completion':
+            return
+        if now - json.loads(stamp.read_text())['sent'] < interval:
+            return
     atomic_write_private(Path(state) / 'watchdog/outbox' / (key + '.json'), payload)
     atomic_write_private(stamp, json.dumps({'sent': now}))
 

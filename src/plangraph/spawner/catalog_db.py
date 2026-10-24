@@ -154,6 +154,7 @@ class CatalogDB:
         if not row:
             return None
         d = dict(row)
+        d['active'] = d.get('status') == 'active'
         d["id"] = d["model_id"]
         d["context_window"] = d["context_tokens"]
         combos_rows = self.conn.execute(
@@ -251,6 +252,7 @@ class CatalogDB:
             combos_by_model.setdefault(lr["model_id"], []).append(lr["route_id"])
 
         for r in rows:
+            r['active'] = r.get('status') == 'active'
             r["id"] = r["model_id"]
             r["context_window"] = r["context_tokens"]
             r["combos"] = combos_by_model.get(r["model_id"], [])
@@ -329,7 +331,8 @@ class CatalogDB:
         WHERE {' AND '.join(where_clauses)}
         ORDER BY rl.position ASC
         """
-        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+        return [dict(r, active=r['status'] == 'active')
+                for r in self.conn.execute(sql, params).fetchall()]
 
     def export_json(self, output_path: str | Path | None = None) -> dict[str, Any]:
         """Export all catalog tables to a deterministic dictionary / JSON file."""
