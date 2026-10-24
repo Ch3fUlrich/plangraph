@@ -84,8 +84,7 @@
       "settings": {
         // no built-in default port: opencode substitutes PLANGRAPH_REVIEW_URL (empty if unset)
         "baseURL": "{env:PLANGRAPH_REVIEW_URL}"
-      },
-      "models": {}
+      }
     },
     "mimo": {
       "package": "@opencode/ai/providers/openai-compatible",
@@ -101,7 +100,9 @@
           "limit": { "context": 1048576, "output": 65536 }
         },
         "mimo-v2.6-pro": {
-          "modelID": "mimo/mimo-v2.6-pro"
+          "modelID": "mimo/mimo-v2.6-pro",
+          "name": "Xiaomi MiMo v2.6 Pro",
+          "limit": { "context": 1000000, "output": 65536 }
         }
       }
     }

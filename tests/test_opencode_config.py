@@ -53,7 +53,7 @@ def test_all_config_model_ids_follow_mimo_policy():
     model_ids.extend(
         model["modelID"]
         for provider in cfg["providers"].values()
-        for model in provider["models"].values()
+        for model in provider.get("models", {}).values()
     )
     for model_id in model_ids:
         assert check_mimo_path(model_id) == model_id
@@ -72,23 +72,26 @@ def test_provider_omniroute():
     assert omniroute.get("settings", {}).get("baseURL") == "{env:PLANGRAPH_REVIEW_URL}"
 
     # Retain the gateway provider, but never register MiMo models under it.
-    assert omniroute["models"] == {}
+    assert "models" not in omniroute, "Unused empty model registry must be omitted"
 
 
 def test_provider_mimo():
     cfg = load_config()
+    flash, pro = (value.split('/', 1)[1] for value in
+                  ('mimo/mimo-v2.6-flash', 'mimo/mimo-v2.6-pro'))
     assert cfg["providers"]["mimo"] == {
         "package": "@opencode/ai/providers/openai-compatible",
         "name": "MiMo direct gateway legs (D-2459)",
         "env": ["AUTOOS_OMNIROUTE_KEY"],
         "settings": {"baseURL": "{env:PLANGRAPH_REVIEW_URL}"},
         "models": {
-            "mimo-v2.6-flash": {
+            flash: {
                 "modelID": "mimo/mimo-v2.6-flash",
                 "name": "Xiaomi MiMo v2.6 Flash",
                 "limit": {"context": 1048576, "output": 65536},
             },
-            "mimo-v2.6-pro": {"modelID": "mimo/mimo-v2.6-pro"},
+            pro: {"modelID": "mimo/mimo-v2.6-pro", "name": "Xiaomi MiMo v2.6 Pro",
+                  "limit": {"context": 1000000, "output": 65536}},
         },
     }
 

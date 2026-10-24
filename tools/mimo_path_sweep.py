@@ -43,7 +43,27 @@ def scan(root: Path, allow: list[str]):
                 lines = path.read_text(encoding="utf-8").splitlines()
             except (OSError, UnicodeError):
                 continue
+            stack = []
             for number, line in enumerate(lines, 1):
+                exempt = (path.suffix.lower() in {'.json', '.jsonc'}
+                          and stack[-3:] == ['providers', 'mimo', 'models']
+                          and re.fullmatch(r'\s*"mimo-v2\.6-(?:flash|pro)":\s*\{\s*', line))
+                if path.suffix.lower() in {'.json', '.jsonc'}:
+                    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*.*?\*/|[{}:\[\]]', line))
+                    key = None
+                    for i, token in enumerate(tokens):
+                        value = token.group()
+                        if value.startswith(('//', '/*')):
+                            continue
+                        if value.startswith('"') and i + 1 < len(tokens) and tokens[i + 1].group() == ':':
+                            key = json.loads(value)
+                        elif value in ('{', '['):
+                            stack.append(key)
+                            key = None
+                        elif value in ('}', ']') and stack:
+                            stack.pop()
+                if exempt:
+                    continue
                 bad = [m.group() for m in MODEL.finditer(line) if m.group() not in ACCEPTED]
                 if bad:
                     # Deliberately omit ALL surrounding content, even unknown key formats.

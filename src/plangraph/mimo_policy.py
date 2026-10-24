@@ -1,5 +1,7 @@
 """Pure, shared Mimo provider-path policy (D-2459/D-2460)."""
 
+import re
+
 ACCEPTED_MIMO_IDS = ("mimo/mimo-v2.6-flash", "mimo/mimo-v2.6-pro")
 
 
@@ -9,10 +11,7 @@ class MimoPathError(ValueError):
 
 def is_mimo_id(model_id: str) -> bool:
     """Recognize bare and provider-qualified Mimo model names."""
-    parts = model_id.lower().split("/")
-    return (parts[-1] == "mimo" or parts[-1].startswith("mimo-")
-            or any(p == "mimo" or p.startswith(("mimo-", "omniroute-mimo"))
-                   for p in parts[:-1]))
+    return 'mimo' in re.split(r'[/\\\-_.:]', model_id.lower())
 
 
 def check_mimo_path(model_id: str) -> str:
