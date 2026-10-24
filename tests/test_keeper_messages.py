@@ -6,6 +6,7 @@ pg_notify, jsonl stays metadata-only (D-2024).
 """
 from __future__ import annotations
 
+import os
 import pytest
 
 from plangraph.keeper import schema
@@ -353,3 +354,211 @@ def test_reader_cannot_post(world):
     with pytest.raises(Refused):
         world.store.post_message(world.p("reader"), **{
             "from": "relay", "to": "keeper", "body": {}})
+
+
+def test_api_relay_ack_only_after_commit(srv, w, monkeypatch):
+    """(a) The relay acks a POST only after the keeper row commits."""
+    original = w.conn.execute
+
+    def execute(sql, *args):
+        if sql == "COMMIT":
+            raise RuntimeError("commit failed")
+        return original(sql, *args)
+
+    class Proxy:
+        def execute(self, sql, *args):
+            return execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(w.conn, name)
+
+    monkeypatch.setattr(w.store, "conn", Proxy())
+    out = srv.call("post_message", {
+        "from": "relay", "to": "keeper", "body": {"m": 1},
+        "trace_id": "t-ack-fail", "ts": NOW,
+    })
+    assert out["status"] == "error"
+    assert out["code"] == 500
+    assert "seq" not in out
+    got = srv.call("messages", {"trace_id": "t-ack-fail"})
+    assert got["status"] == "ok"
+    assert got["rows"] == []
+
+
+def test_long_poll_direct_connection_and_lost_notify_loses_nothing(world, monkeypatch):
+    """(b) pg_notify on insert is only a hint: the long-poll waits on a DIRECT (unpooled)
+    connection and re-reads after the last seq, so a lost NOTIFY loses nothing."""
+    import types
+    from plangraph.keeper.messages_poll import read_messages
+
+    direct_dsns = []
+    listen_called = []
+
+    class FakeNotifies:
+        def __init__(self):
+            self.calls = 0
+
+        def notifies(self, timeout, stop_after=1):
+            self.calls += 1
+            return iter([])
+
+    class FakeListener:
+        def __init__(self, dsn):
+            self.dsn = dsn
+            direct_dsns.append(dsn)
+            self._fake_notifies = FakeNotifies()
+
+        def execute(self, sql):
+            listen_called.append(sql)
+
+        def notifies(self, timeout, stop_after=1):
+            return self._fake_notifies.notifies(timeout, stop_after)
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    fake_psycopg = types.ModuleType("psycopg")
+    fake_psycopg.connect = lambda dsn, autocommit=True: FakeListener(dsn)
+    monkeypatch.setitem(__import__("sys").modules, "psycopg", fake_psycopg)
+
+    class RawInfo:
+        dsn = "postgresql://direct-host:5432/keeper_db"
+
+    class RawConn:
+        info = RawInfo()
+
+    class ConnProxy:
+        def __init__(self, conn):
+            self._conn = conn
+            self._raw = RawConn()
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+        def execute(self, *args, **kwargs):
+            return self._conn.execute(*args, **kwargs)
+
+    monkeypatch.setattr(world.store, "conn", ConnProxy(world.conn))
+
+    class FakeLock:
+        def release(self):
+            pass
+
+        def acquire(self):
+            pass
+
+    server = types.SimpleNamespace(store=world.store, lock=FakeLock())
+
+    world.store.post_message(world.p("router"), **{
+        "from": "relay", "to": "keeper", "body": {"m": 1},
+        "trace_id": "t-b", "ts": NOW,
+    })
+
+    real_messages = world.store.messages
+    calls = []
+
+    def spy_messages(principal, **filters):
+        calls.append(filters)
+        if len(calls) == 1:
+            return []
+        world.store.post_message(world.p("router"), **{
+            "from": "relay", "to": "keeper", "body": {"m": 2},
+            "trace_id": "t-b", "ts": NOW + 1,
+        })
+        return real_messages(principal, **filters)
+
+    monkeypatch.setattr(world.store, "messages", spy_messages)
+
+    res = read_messages(server, world.p("router"), {"since": ["1"], "wait_ms": ["500"]})
+    assert direct_dsns == ["postgresql://direct-host:5432/keeper_db"]
+    assert "LISTEN keeper_messages" in listen_called
+    assert len(res["rows"]) == 1
+    assert res["rows"][0]["seq"] == 2
+
+
+def test_jsonl_and_audit_stay_metadata_only(world: World):
+    """(c) jsonl stays metadata-only (no body)."""
+    hidden_data = "unlogged_body_value_xyz"
+    with message_store(world) as st:
+        st.write("post_message", **{
+            "from": "relay", "to": "keeper",
+            "body": {"payload": hidden_data},
+            "trace_id": "t-c-meta", "key": "K-meta", "ts": NOW,
+        })
+    for path in world.path.parent.glob("*.jsonl"):
+        text = path.read_text(encoding="utf-8")
+        assert hidden_data not in text
+    audit_rows = world.conn.execute(
+        "SELECT * FROM audit_log WHERE key='K-meta'").fetchall()
+    assert len(audit_rows) >= 1
+    for row in audit_rows:
+        row_dict = dict(row)
+        for val in row_dict.values():
+            assert hidden_data not in str(val)
+
+
+def test_messages_read_filters_via_api(srv):
+    """(d) The read verb filters by trace_id, key and time range."""
+    for i in range(4):
+        srv.call("post_message", {
+            "from": "relay", "to": "keeper", "body": {"idx": i},
+            "trace_id": f"trace-{i % 2}", "key": f"K-{i // 2}",
+            "ts": NOW + i * 100,
+        })
+    res_trace = srv.call("messages", {"trace_id": "trace-0"})
+    assert res_trace["status"] == "ok"
+    assert [m["seq"] for m in res_trace["rows"]] == [1, 3]
+
+    res_key = srv.call("messages", {"key": "K-1"})
+    assert res_key["status"] == "ok"
+    assert [m["seq"] for m in res_key["rows"]] == [3, 4]
+
+    res_time = srv.call("messages", {"key": "K-0", "ts_min": NOW + 50, "ts_max": NOW + 150})
+    assert res_time["status"] == "ok"
+    assert [m["seq"] for m in res_time["rows"]] == [2]
+
+
+def test_post_message_links_item_key_run_and_attempt(world: World):
+    """(e) Each row links item key + run/attempt; attempt_n validated."""
+    with message_store(world) as st:
+        row = st.write("post_message", **{
+            "from": "worker", "to": "keeper", "body": {"done": True},
+            "trace_id": "tr-link", "key": "task:build-L1",
+            "run_id": "run-999", "attempt_n": 7, "ts": NOW,
+        })
+        assert row["key"] == "task:build-L1"
+        assert row["run_id"] == "run-999"
+        assert row["attempt_n"] == 7
+
+        with pytest.raises(ValueError):
+            st.write("post_message", **{
+                "from": "worker", "to": "keeper", "body": {},
+                "key": "task:build-L1", "run_id": "run-999", "attempt_n": -1, "ts": NOW,
+            })
+
+
+def test_append_only_refused_on_sqlite_and_pg(world, tmp_path):
+    """(f) Append-only: UPDATE and DELETE refused on both SQLite and PG."""
+    from plangraph.keeper import db_errors
+    with message_store(world) as st:
+        st.write("post_message", **{"from": "relay", "to": "keeper", "body": {"v": 1}})
+    for sql in ("UPDATE messages SET body='{}'", "DELETE FROM messages WHERE seq=1", "DELETE FROM messages"):
+        with pytest.raises(db_errors.INTEGRITY):
+            world.conn.execute(sql)
+
+    dsn = os.environ.get("PG_DSN")
+    if dsn:
+        w_pg = World(tmp_path / "pg_app", backend="postgres", dsn=dsn)
+        try:
+            w_pg.store.post_message(w_pg.p("router"), **{"from": "relay", "to": "keeper", "body": {"v": 1}})
+            for sql in ("UPDATE messages SET body='{}'", "DELETE FROM messages WHERE seq=1", "DELETE FROM messages"):
+                with pytest.raises(db_errors.INTEGRITY + db_errors.DENIED):
+                    w_pg.conn.execute(sql)
+        finally:
+            w_pg.close()

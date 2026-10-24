@@ -476,7 +476,7 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)
-_COLUMN = re.compile(r"^    (\w+)\s+\S")
+_COLUMN = re.compile(r'^    "?(\w+)"?\s+\S')
 _NOT_COLUMNS = frozenset({"PRIMARY", "CHECK", "UNIQUE", "CONSTRAINT", "FOREIGN"})
 
 

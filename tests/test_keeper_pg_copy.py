@@ -20,7 +20,8 @@ needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service 
 TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
-          "projector_applied", "projector_watermark", "projector_alarms")
+          "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
+          "jev_shadow", "messages")
 
 
 @pytest.fixture
@@ -100,6 +101,34 @@ def test_dry_run_flags_a_tampered_chain(source, cfg_path, tmp_path, capsys):
     assert copy(cfg_path, "--dry-run", "--src", str(bad)) != 0
     captured = capsys.readouterr()
     assert "hash_mismatch" in captured.err and "broken" in captured.err
+    assert "source chain ok" not in captured.out
+
+
+def test_dry_run_flags_a_tampered_messages_chain(source, cfg_path, tmp_path, capsys):
+    bad = tmp_path / "tampered_msg.db"
+    src = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    dst = sqlite3.connect(bad)
+    src.backup(dst)
+    src.close()
+    conn = kdb.open_db(bad)
+    from keeper_util import Clock
+    from plangraph.keeper import auth
+    from plangraph.keeper.store import Store
+    token = auth.add_principal(conn, "router_tmp", "router", [])
+    st = Store(conn, clock=Clock())
+    st.post_message(auth.authenticate(conn, token), **{
+        "from": "relay", "to": "keeper", "body": {"m": 1},
+        "trace_id": "t1", "key": "k1",
+    })
+    conn.close()
+    raw = sqlite3.connect(bad)
+    raw.execute("DROP TRIGGER trg_messages_no_update")
+    raw.execute("UPDATE messages SET body = '\"tampered\"' WHERE seq = 1")
+    raw.commit()
+    raw.close()
+    assert copy(cfg_path, "--dry-run", "--src", str(bad)) != 0
+    captured = capsys.readouterr()
+    assert "hash_mismatch" in captured.err and "messages chain is broken" in captured.err
     assert "source chain ok" not in captured.out
 
 
