@@ -1186,6 +1186,56 @@ mod tests {
     }
 
     #[test]
+    fn legacy_empty_check_kind_runs_red_first_then_writer() {
+        assert_legacy_change_path(false);
+    }
+
+    #[test]
+    fn legacy_json_without_check_kind_runs_red_first_then_writer() {
+        assert_legacy_change_path(true);
+    }
+
+    fn assert_legacy_change_path(from_json: bool) {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let mut c = claim(
+            &r.path().to_string_lossy(),
+            &base,
+            &["out.txt"],
+            "if test ! -f out.txt; then echo scratch > marker; exit 1; fi",
+        );
+        if from_json {
+            let mut value = serde_json::to_value(&c).unwrap();
+            value.as_object_mut().unwrap().remove("check_kind");
+            let json = serde_json::to_string(&value).unwrap();
+            c = serde_json::from_str::<Claim>(&json).unwrap();
+        } else {
+            c.check_kind.clear();
+        }
+        assert_eq!(c.check_kind, "");
+        let inp = input(c, 1, root.path());
+        // The red base check creates scratch; cleanup proves that gate ran.
+        let h = Fake::new("test ! -e marker && echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap();
+        assert_eq!(h.runs(), 1);
+        assert_eq!(res.exit_class, ExitClass::Ok);
+        let dest = root
+            .path()
+            .join(AttemptId::new(inp.claim.card.clone(), inp.n).dir_name());
+        assert!(!dest.join("marker").exists());
+
+        // A passing base must park the same legacy claim before the writer.
+        let mut passing = inp.clone();
+        passing.n += 1;
+        passing.claim.check_cmd = "true".into();
+        let h = Fake::new("echo hi > out.txt");
+        let res = run_attempt(&h, &tiny(), &Patterns::default(), &passing, &|| false).unwrap();
+        assert_eq!(res.exit_class, ExitClass::ContractDefect);
+        assert!(res.check_tail.starts_with("red-first:"));
+        assert_eq!(h.runs(), 0);
+    }
+
+    #[test]
     fn unknown_check_kind_is_a_contract_defect() {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();

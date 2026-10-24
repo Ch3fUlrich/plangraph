@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from plangraph.card_paths import normalise_path, path_problem
 from plangraph.keeper.errors import Refused
 from plangraph.planner import gitenv, phase_finish
 from plangraph.planner.readiness import protected_check_paths
@@ -16,6 +17,13 @@ def build_claim(
     check_kind = card.get("check_kind", "change")
     if check_kind not in ("change", "regression"):
         raise Refused("validation", "check_kind must be change or regression")
+    check_reads = card.get("check_reads", [])
+    if not isinstance(check_reads, list) or any(not isinstance(p, str) for p in check_reads):
+        raise Refused("validation", "check_reads must be a list of strings")
+    for entry in check_reads:
+        problem = path_problem("check_reads", entry, normalise_path(entry))
+        if problem is not None:
+            raise Refused("validation", problem)
     return {
         "card": key,
         "repo": repo,
@@ -25,7 +33,7 @@ def build_claim(
         "forbid": list(dict.fromkeys([*card.get("forbid_paths", []),
                                      *protected_check_paths(card)])),
         "check_kind": check_kind,
-        "check_reads": list(card.get("check_reads", [])),
+        "check_reads": list(check_reads),
         "smoke_checks": list(card.get("smoke_checks", [])),
         "exports": list(card.get("exports", [])),
         "heldout_cmd": card.get("heldout_check") or "",

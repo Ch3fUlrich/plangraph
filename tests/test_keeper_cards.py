@@ -7,6 +7,7 @@ store or ``conn.execute`` only.
 import json
 
 import pytest
+from card_path_cases import CHECK_PATH_CASES
 
 from keeper_util import World, pass_review, seed, to_claimed
 from plangraph.keeper import db_errors, events as keeper_events
@@ -64,11 +65,7 @@ def test_other_keeper_path_lists_keep_existing_behavior(w):
         assert got[name] == value
 
 
-@pytest.mark.parametrize("path,valid", [
-    ("tests/a.py", True), ("./tests\\a.py", True), ("src//a", True),
-    ("/root", False), ("\\\\server\\share", False), ("C:\\a", False),
-    ("a\\..\\b", False), ("", False), (".", False),
-])
+@pytest.mark.parametrize("path,valid", CHECK_PATH_CASES)
 def test_planner_and_keeper_agree_on_check_paths(w, path, valid):
     from plangraph.planner.card import CardError, parse_card
 

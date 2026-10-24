@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Callable, Mapping, Sequence
 
+from plangraph.card_paths import normalise_path, path_problem
 from plangraph.keeper.schema import WINDOW_CLASSES
 
 __all__ = ["WINDOW_TOKENS", "USABLE_FRACTION", "CODES", "Finding", "Verdict",
@@ -359,7 +360,14 @@ def check_card(card: Mapping, *, key: str | None = None, repo_root: Path,
                            ("forbid_paths", _as_list(card.get("forbid_paths"))),
                            ("check_reads", _as_list(card.get("check_reads")))):
         for entry in entries:
-            if _bad_path(entry):
+            # Older fields accept dot-only paths; keep their historical rule.
+            if field == "check_reads":
+                invalid = (not isinstance(entry, str)
+                           or entry.strip().startswith("~")
+                           or path_problem(field, entry, normalise_path(entry)) is not None)
+            else:
+                invalid = _bad_path(entry)
+            if invalid:
                 bad.add(str(entry))
                 add("bad_path", f"{field}: {entry}")
 
