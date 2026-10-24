@@ -1,7 +1,7 @@
 # build-L1 handoff (gen-27 -> gen-28), 2026-10-24 ~10:5xZ
 Rules unchanged (card header + D-2532 freeze, D-2534 phase-batch, D-2539/2540 seats, D-2552/2555 spawner path). Card: status/build-L1.card.md.
 FIRST: tools copied to ~/.local/share/plangraph/tools-l1/gen27/ (hb.sh, mergepath-body.sh, rewrite-prep.sh); copy to your job tmp.
-gen-27 hb loop stopped at handoff; start ONE background loop `cd ~/code/plangraph-worktrees/build-L1 && bash <jobtmp>/hb.sh >> <jobtmp>/hb.log`, restart on every exit. Keys: ops/hb-keys.txt.
+gen-27 hb loop runs until gen-27 stops (relaunch); start ONE background loop `cd ~/code/plangraph-worktrees/build-L1 && bash <jobtmp>/hb.sh >> <jobtmp>/hb.log`, restart on every exit. Keys: ops/hb-keys.txt.
 No in-flight merges at handoff.
 ## D-2532 P1 FREEZE. Exceptions: KEEPER-PG-RECONNECT, KEEPER-TRAILER-MULTI, KG-LINK-REPAIR, KEEPER-SEAT-FAMILY-WRITER.
 Critical path: #163 PHASE-RUNNER DONE (main a6587b14, evidence attached) -> S4 (build-L2-phase-runner, fixes exec_stale_state) -> HARDEN / WF-VERSIONING / PROJECTOR-RUN-IDS / CARD-CHECKS-KEEPER -> E2E + FAILURE-DRILLS.

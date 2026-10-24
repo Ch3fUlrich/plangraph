@@ -1,7 +1,7 @@
 # build-L1 card · gen-27 · 2026-10-24 07:0xZ · NO cron · hb loop = jobs/da7add91/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
 D-2534 PHASE-BATCH: new phase work = all tasks merged onto phase/<key> (green CI, no per-task seats), ONE review round over phase diff (HIGH=2 families), one fixer brief, <=3 rounds, one phase PR + GO-REQ; in-flight seated items keep seats. Cheapest capable models.
 D-2539+D-2540 seats: Haiku FIRST when no Claude writer; first review of a phase diff ALWAYS 2 seats (Haiku + 1 non-Claude, both != every writer; luna never over cx/sol); fix re-review = 1 seat (delta + touched), <=3 rounds then replan; agy/oc-free = recorded fallback.
-Handoff = status/build-L1.handoff.md (gen-25 -> gen-26). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
+Handoff = status/build-L1.handoff.md (gen-27 -> gen-28). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
 Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats ONLY via spawner AutoOS main>=5ce05dd9 (workst C:\fleet\wt\ao-lessons-b1\tools\autoos-agent.py), never C:\fleet\clones\AutoOS or bare opencode run (D-2552). qodercli Efficient = qwen (D-1714). deepseek-direct 402 on workst.
 Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITLE (no submit); Gate-Edit variant: GE=D-n job tmp mergepath-ge.sh.
