@@ -92,4 +92,10 @@ else
   "$PYTHON_CMD" "${INIT_ARGS[@]}"
 fi
 
+WATCHDOG_ARGS=("-m" "plangraph.stall_watchdog" "install" "--host" "linux")
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  WATCHDOG_ARGS+=("--dry-run")
+fi
+"$PYTHON_CMD" "${WATCHDOG_ARGS[@]}"
+
 echo "Plangraph bootstrap completed successfully."
