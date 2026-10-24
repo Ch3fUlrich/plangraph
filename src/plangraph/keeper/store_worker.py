@@ -354,7 +354,8 @@ class WorkerMixin:
             if self._system_phase_holder(principal, item):
                 # Only phase-worker claims may bypass pre-merge evidence.
                 self._assert_unlocked(item)
-                self._exec_gate(key, body, principal, record=True)
+                # System holders validate exec fences but cannot record owners.
+                self._exec_gate(key, body, principal, record=False)
                 round_no = int(item.get("round") or 0) + 1
                 self._append(principal, key, "state_set",
                              {"state": "in_review", "was": "claimed",
