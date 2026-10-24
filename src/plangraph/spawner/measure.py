@@ -209,7 +209,7 @@ def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) ->
             continue
         try:
             tree = ast.parse(py_file.read_text(encoding="utf-8", errors="replace"))
-        except (SyntaxError, OSError):
+        except (SyntaxError, OSError, ValueError):
             return None
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

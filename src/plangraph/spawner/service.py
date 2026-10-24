@@ -104,8 +104,7 @@ class SpawnService:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg
                 row = next((r for r in get_catalog_models() if r['id'] == target), None)
-                # A catalog gateway transport explicitly identifies opencode;
-                # absent transport metadata must not silently choose a harness.
+                # Harness registration must be explicit, independently of transport.
                 harness = row.get('harness') if row else None
                 if (row is None or row.get('tier') not in ('trial', 'free', 'subscription', 'paid')
                         or harness not in ('opencode', 'qodercli', 'agy')

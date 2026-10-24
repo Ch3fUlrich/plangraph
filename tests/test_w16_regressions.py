@@ -273,3 +273,21 @@ def test_selection_skip_keeps_window_evidence():
     leg = replace(next(l for l in DEFAULT_LEGS if 'implement' in l.roles), max_request_tokens=1)
     plan = plan_spawn({'estimate_tokens': 100}, role='implement', legs=(leg,))
     assert plan.skipped[0]['evidence']['error']
+
+
+def test_plan_error_is_not_provider_exhaustion(tmp_path, monkeypatch):
+    from plangraph.planner.routing import SpawnPlan
+    service = spawn_service(state=tmp_path)
+    monkeypatch.setattr(service, 'route', lambda *a, **k: SpawnPlan((), (), 'operator-order', (), (), error='invalid order'))
+    record = asyncio.run(service.spawn(card={'estimate_tokens': 100}))
+    assert record['exit_code'] == 2
+    assert record['status'] == 'refused'
+    assert record['error'] == 'invalid order'
+
+
+def test_ast_valueerror_is_unknown(tmp_path, monkeypatch):
+    from plangraph.spawner.measure import ast_caller_fanout
+    (tmp_path / 'changed.py').write_text('')
+    (tmp_path / 'caller.py').write_text('import changed')
+    monkeypatch.setattr('plangraph.spawner.measure.ast.parse', Mock(side_effect=ValueError('null')))
+    assert ast_caller_fanout(tmp_path, ['changed.py']) is None
