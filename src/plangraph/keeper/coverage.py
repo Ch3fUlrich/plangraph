@@ -14,11 +14,19 @@ high) and, for a sensitive (high) item, at least one of them is neither
 family, and Claude can never cover a Claude hand on a high item.
 
 Family names (and the one model-id table) come from
-:mod:`plangraph.review.family`; this module copies neither.  The check fails
-closed on any writer it cannot resolve: a commit with no ``Writer`` or
-``Hand-Edit`` trailer, an unknown model id, or a git error raises
-``Refused('writer_unknown', ...)`` so a closing verdict never rests on a
-guess.  ``Hand-Edit`` also counts as ``anthropic`` alongside any ``Writer``: a hand edit
+:mod:`plangraph.review.family`; this module copies neither.  A ``Writer:``
+value is ``<model-id> <run id>`` and family/alias tokens resolve ONLY in the
+model/provider position -- the token(s) before the run id, split on ``/`` and
+into ``-``/``.``/``_`` segments -- never inside a run-id slug, where ``meta``,
+``google`` and ``nvidia`` are words in a date-stamped name rather than a
+second writer.  The check fails closed on any writer it cannot resolve, with
+three distinct reasons: a commit with no ``Writer`` or ``Hand-Edit`` trailer,
+a blank value or a git error raises ``Refused('writer_unknown', ...)``, a
+value whose model position names no known family raises
+``Refused('writer_unknown_family', ...)``, and a value naming two writer
+families raises ``Refused('writer_mixed_family', ...)``, so a closing verdict
+never rests on a guess.  ``Hand-Edit`` also counts as ``anthropic`` alongside
+any ``Writer``: a hand edit
 is Claude/operator work, not a model writer.
 """
 from __future__ import annotations
@@ -77,8 +85,11 @@ def writer_families(store, item, ctx):
 
     Every ``Writer:`` value of every leaf commit behind those rows is
     resolved, so a squashed commit naming two writer families contributes
-    both.  Raises :class:`Refused` with code ``writer_unknown`` when any
-    evidence commit cannot be resolved to a family.  An item with no commit
+    both.  The refusals are fail closed and distinct: ``writer_unknown`` for
+    a missing or blank attribution and for any git error,
+    ``writer_unknown_family`` for a value whose model position names no
+    known family, ``writer_mixed_family`` for a value that names two.  An
+    item with no commit
     evidence (e.g. decision-only) has no commit writers and returns ``[]``.
     """
     rows = [e for e in store._evidence(item["key"])
@@ -112,17 +123,26 @@ def writer_families(store, item, ctx):
                 for writer in writers:
                     if writer is None or not str(writer).strip():
                         raise Refused("writer_unknown", "blank Writer value")
-                    # Annotations and run ids are harmless unless they name
-                    # another family; repeated mentions of one family count once.
-                    tokens = (token.strip(".-") for token in
-                              re.split(r"[^A-Za-z0-9._-]+", str(writer)))
-                    resolved = {family for token in tokens if token
+                    # Only the model/provider position may name a family; a
+                    # run-id slug is a date-stamped name, not a writer.
+                    tokens = _model_tokens(writer)
+                    if not tokens:
+                        # Punctuation or a bare run id: no model/provider
+                        # token at all, so the attribution is blank.
+                        raise Refused(
+                            "writer_unknown",
+                            f"Writer value names no model token: {writer!r}")
+                    resolved = {family for token in tokens
                                 for family in _writer_token_families(token)}
-                    if len(resolved) != 1:
-                        raise Refused("writer_unknown",
-                                      f"Writer value must resolve to one family: {writer!r}")
-                    family = resolved.pop()
-                    families.append(family)
+                    if len(resolved) > 1:
+                        raise Refused(
+                            "writer_mixed_family",
+                            f"Writer value names several writer families: {writer!r}")
+                    if not resolved:
+                        raise Refused(
+                            "writer_unknown_family",
+                            f"Writer value names no known writer family: {writer!r}")
+                    families.append(resolved.pop())
             if any(value is not None and str(value).strip()
                    for value in _key_values(trailer, "Hand-Edit")):
                 families.append("anthropic")
@@ -161,3 +181,42 @@ def _writer_token_families(token):
             found.update(family for pattern, family in review_family.FAMILIES
                          if re.search(pattern, part))
     return found
+
+
+#: The first segment of a run id: date/time stamped, as in
+#: ``20261024-061038-meta-review-18b0fc`` or ``20261024-1-nvidia-driver-x``.
+_RUN_ID_RE = re.compile(r"^\d{4,8}[-_]")
+
+
+def _model_position(value):
+    """*value* with its run id removed: where model/provider tokens live.
+
+    A ``Writer:`` value is ``<model-id> <run id>`` (the run id is optional).
+    From the first date-stamped segment on, the value is a slug of names --
+    ``...-meta-review-...``, ``...-google-sync-...``, ``...-nvidia-driver-x``
+    -- and no family or alias may resolve there: those words are a run, not a
+    second writer.  A value that is only a run id therefore has no model
+    position at all (and so no family: it fails closed).  Tokens before the
+    stamp are untouched, so a second MODEL token such as ``codex`` in
+    ``deepseek-v4 codex`` still names its own family.
+    """
+    parts = str(value).split()
+    for index, part in enumerate(parts):
+        if _RUN_ID_RE.match(part):
+            return " ".join(parts[:index])
+    return str(value)
+
+
+def _model_tokens(value):
+    """The model/provider tokens of *value*: the run id contributes none.
+
+    The position is split on ``/`` (``omniroute/cx-gpt-6.1-sol``) and each
+    segment on ``-``/``.``/``_`` (``cx``), exactly as it always was -- only
+    the run id is excluded.  Empty when the value holds no model token at
+    all, which tells a blank attribution (``:;,/()[]...---``, a bare run id)
+    apart from a model id the table cannot resolve.
+    """
+    return [token for token in
+            (part.strip(".-") for part in
+             re.split(r"[^A-Za-z0-9._-]+", _model_position(value)))
+            if token and any(ch.isalnum() for ch in token)]

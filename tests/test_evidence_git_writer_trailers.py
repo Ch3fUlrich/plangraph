@@ -107,7 +107,7 @@ def test_multiple_models_in_one_writer_value_refuse(repo, value):
     sha = _commit(repo, "squash", {"Plan-Item": "demo:A", "Writer": value})
     with pytest.raises(Refused) as exc:
         _families(repo, sha)
-    assert exc.value.code == "writer_unknown"
+    assert exc.value.code == "writer_mixed_family"
 
 
 @pytest.mark.parametrize("seat_family", ["xiaomi", "google"])
@@ -710,14 +710,14 @@ def test_clean_two_writer_block_still_yields_both_families(repo, adapter):
                                         "cx/gpt-6.1-sol/mimo-v2"])
 def test_fix6_slash_model_list_refused(repo, value):
     sha = _commit(repo, "models", {"Writer": value})
-    with pytest.raises(Refused, match="writer_unknown"):
+    with pytest.raises(Refused, match="writer_mixed_family"):
         _families(repo, sha)
 
 
 @pytest.mark.parametrize("run_id", ["run-claude"])
 def test_second_token_naming_another_family_is_refused(repo, run_id):
     sha = _commit(repo, "run", {"Writer": f"mimo-v2 {run_id}"})
-    with pytest.raises(Refused, match="writer_unknown"):
+    with pytest.raises(Refused, match="writer_mixed_family"):
         _families(repo, sha)
 
 
@@ -779,7 +779,7 @@ def test_fix8_glued_punctuation_exposes_second_family(repo, value):
     sha = _commit(repo, "punctuation", {"Writer": value})
     with pytest.raises(Refused) as exc:
         _families(repo, sha)
-    assert exc.value.code == "writer_unknown"
+    assert exc.value.code == "writer_mixed_family"
 
 
 def test_fix8_punctuated_run_id_preserves_model(repo):
@@ -797,7 +797,7 @@ def test_corpus_value_naming_mimo_and_l2_refuses_mixed_writers(repo):
     sha = _commit(repo, "mixed corpus writer", {"Writer": value})
     with pytest.raises(Refused) as exc:
         _families(repo, sha)
-    assert exc.value.code == "writer_unknown"
+    assert exc.value.code == "writer_mixed_family"
 
 
 @pytest.mark.parametrize("value,expected", [
@@ -808,8 +808,16 @@ def test_corpus_value_naming_mimo_and_l2_refuses_mixed_writers(repo):
 def test_fix7_main_writer_corpus(repo, value, expected):
     sha = _commit(repo, "corpus", {"Writer": value})
     if expected == "writer_unknown":
-        with pytest.raises(Refused, match="writer_unknown"):
+        # The label is "refused".  FIX12 (V3) split the single catch-all
+        # reason into three distinct codes: blank/git error keeps
+        # writer_unknown, an unresolvable model position raises
+        # writer_unknown_family, two families raise writer_mixed_family.
+        # The fixture rows (and their labels) are unchanged; only the code
+        # the refusal carries differs for a mixed value.
+        with pytest.raises(Refused) as exc:
             _families(repo, sha)
+        assert exc.value.code in (
+            "writer_unknown", "writer_unknown_family", "writer_mixed_family")
     else:
         assert _families(repo, sha) == [expected]
 

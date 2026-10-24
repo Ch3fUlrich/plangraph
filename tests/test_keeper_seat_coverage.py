@@ -75,15 +75,88 @@ def test_fix11_codex_and_family_names_cannot_hide_second_writer(w, value, family
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(value)})
     if family is None:
-        with pytest.raises(Refused, match="writer_unknown"):
+        with pytest.raises(Refused, match="writer_mixed_family"):
             _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     else:
         assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == [family]
 
 
 @pytest.mark.parametrize("family", sorted({family for _, family in review_family.FAMILIES}))
-def test_fix11_family_name_tokens_resolve_to_themselves(family):
-    assert _cov()._writer_token_families(family.upper()) == {family}
+def test_fix11_family_name_tokens_resolve_to_themselves(w, family):
+    """Public path, not the table: an upper-case family name still resolves."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(family.upper())})
+    assert _cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx) == [family]
+
+
+# --------------------------------------------------------------------------
+# FIX12 (V1): family/alias tokens resolve ONLY in the model/provider
+# position -- the token(s) before the run id -- and never inside a run-id
+# slug, where "meta", "google" and "nvidia" are words, not writers.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value,family", [
+    ("omniroute/cx-gpt-6.1-sol 20261024-061038-meta-review-18b0fc", "openai"),
+    ("omniroute/cx-gpt-6.1-sol 20261024-061038-google-sync-abc", "openai"),
+    ("mimo/mimo-v2.6-flash 20261024-1-nvidia-driver-x", "xiaomi"),
+    ("omniroute/cx-gpt-6.1-sol 20261024-061038-keeper-trailer-multi-fix-18b0fc",
+     "openai"),
+])
+def test_fix12_run_id_slug_never_resolves_a_second_writer_family(w, value, family):
+    """The run id is a slug, not a model: only the model/provider tokens count."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    assert _cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx) == [family]
+
+
+@pytest.mark.parametrize("value", ["deepseek-v4 codex", "cx/gpt-6.1-sol mimo"])
+def test_fix12_two_model_tokens_refuse_as_mixed(w, value):
+    """Two genuine model tokens are two writers: refused, and as MIXED."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    assert exc.value.code == "writer_mixed_family"
+    assert w.store._item(key)["state"] == "in_review"
+
+
+# --------------------------------------------------------------------------
+# FIX12 (V2): an unknown provider/model token in the provider position is a
+# distinct fail-closed reason: writer_unknown_family, not the blank-writer
+# writer_unknown.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value", ["grok-4 test-run-1", "kimi-k2 test-run-1"])
+def test_fix12_unknown_family_in_provider_position_fails_closed(w, value):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    with pytest.raises(Refused) as exc:
+        _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+    assert exc.value.code == "writer_unknown_family"
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+
+# --------------------------------------------------------------------------
+# FIX12 (V3): three distinct refusal reasons, asserted exactly through the
+# seat-coverage check on the verdict that would close the item.
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value,reason", [
+    ("", "writer_unknown"),                          # blank attribution
+    ("grok-4 test-run-1", "writer_unknown_family"),  # no known family token
+    ("deepseek-v4 codex", "writer_mixed_family"),    # two writer families
+])
+def test_fix12_refusal_reason_is_exact_on_the_closing_verdict(w, value, reason):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(value)})
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rGoogle"), key, True, "would close")
+    assert exc.value.code == reason
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
 
 
 @pytest.mark.parametrize("value,family", [
@@ -102,7 +175,7 @@ def test_fix10_single_family_alias_cannot_hide_second_writer(w, value, family):
     if family is None:
         with pytest.raises(Refused) as exc:
             _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
-        assert exc.value.code == "writer_unknown"
+        assert exc.value.code == "writer_mixed_family"
     else:
         assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == [family]
 
@@ -119,7 +192,7 @@ def test_fix9_interior_punctuation_preserves_every_family(w, value, family):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(value)})
     if family is None:
-        with pytest.raises(Refused, match="writer_unknown"):
+        with pytest.raises(Refused, match="writer_mixed_family"):
             _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
     else:
         assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == [family]
@@ -349,7 +422,11 @@ def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
 
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rGoogle"), key, True, "would close")
-    assert exc.value.code == "writer_unknown"
+    # FIX12 (V2): a model token the table cannot map is writer_unknown_family;
+    # a missing trailer or a git error keeps the plain writer_unknown.
+    want = ("writer_unknown_family" if case == "unknown_model"
+            else "writer_unknown")
+    assert exc.value.code == want
     assert w.store._item(key)["state"] == "in_review"
     assert verdict_events(w, key) == []
 
@@ -365,7 +442,7 @@ def test_writer_family_counts_model_mentions_in_every_token(w, trailer, family):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(trailer)})
     if family is None:
-        with pytest.raises(Refused, match="writer_unknown"):
+        with pytest.raises(Refused, match="writer_mixed_family"):
             _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
         return
     assert set(_cov().writer_families(
