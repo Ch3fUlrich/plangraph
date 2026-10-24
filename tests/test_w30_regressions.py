@@ -58,7 +58,8 @@ def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
     leg = next(l for l in DEFAULT_LEGS if l.harness == 'opencode')
     binary = tmp_path / 'opencode'
-    binary.write_text('#!/bin/sh\necho launched >> "' + str(tmp_path / 'launches') + '"\necho "Model unavailable: fixture" >&2\nexit 1\n')
+    # W33B host admission probes are not child attempts: serve the requested id.
+    binary.write_text('#!/bin/sh\nif [ "$1" = models ]; then echo "' + leg.model + '"; exit 0; fi\necho launched >> "' + str(tmp_path / 'launches') + '"\necho "Model unavailable: fixture" >&2\nexit 1\n')
     binary.chmod(0o755)
     monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ['PATH'])
     monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))

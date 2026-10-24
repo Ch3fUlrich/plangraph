@@ -101,17 +101,26 @@ def test_native_harness_preserves_model(client):
 
 def test_native_runner_does_not_apply_overlay(monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
-    def forbidden(*a, **kw):
-        raise AssertionError('native argv must not receive provider overlay')
-    monkeypatch.setattr(o, 'overlay_env', forbidden)
+    # Admission may build an opencode probe overlay; only the native child's
+    # actual launch environment is constrained here.
     monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', '{"private":"must-not-leak"}')
     for client in ('gemini', 'qwen', 'codex'):
-        runner = SpawnerRunner()
-        result = asyncio.run(runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash',
-                                                  client=client, dry_run=True))
+        captured = []
+        async def factory(*args, **kwargs):
+            import sys
+            captured.append(dict(kwargs['env']))
+            return await asyncio.create_subprocess_exec(sys.executable, '-c', 'print("done")', **kwargs)
+        runner = SpawnerRunner(process_factory=factory)
+        async def run():
+            job = await runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash', client=client)
+            await runner._tasks[job.job_id]
+            return job
+        result = asyncio.run(run())
         assert result
-        assert runner._child_envs
-        assert all('OPENCODE_CONFIG_CONTENT' not in env for env in runner._child_envs.values())
+        assert len(captured) == 1
+        assert 'OPENCODE_CONFIG_CONTENT' not in captured[0]
+        # W33A item 3 clears sensitive cached environments on every return path.
+        assert runner._child_envs == {}
 
 
 def test_async_probe_offloads_real_function(monkeypatch):

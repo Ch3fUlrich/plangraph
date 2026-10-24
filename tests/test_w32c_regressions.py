@@ -61,16 +61,23 @@ def test_probe_failure_launches(monkeypatch, tmp_path, error):
     assert commands
 
 
-def test_unrelated_test_credentials_survive(monkeypatch, request):
+@pytest.fixture(scope='session')
+def host_test_credential():
+    previous = os.environ.get('MY_TEST_SECRET')
+    os.environ['MY_TEST_SECRET'] = 'host-owned'
+    yield
+    if previous is None:
+        os.environ.pop('MY_TEST_SECRET', None)
+    else:
+        os.environ['MY_TEST_SECRET'] = previous
+
+
+def test_unrelated_test_credentials_survive(monkeypatch, host_test_credential):
+    # W33B item 9: host credentials are scrubbed at fixture entry; test-owned
+    # values must be installed afterwards, inside the test body.
+    assert 'MY_TEST_SECRET' not in os.environ
     monkeypatch.setenv('MY_TEST_SECRET', 'test-owned')
-    # Re-enter the fixture after a test-owned variable exists: broad scrubbing
-    # would remove it even though it is unrelated to host provider credentials.
-    import conftest
-    fixture = conftest.hermetic_spawner_host.__wrapped__(
-        monkeypatch, request.getfixturevalue('tmp_path_factory'), request)
-    next(fixture)
     assert os.environ['MY_TEST_SECRET'] == 'test-owned'
-    next(fixture, None)
 
 
 def test_missing_log_directory_still_drains(monkeypatch, tmp_path):
@@ -129,7 +136,19 @@ def test_concurrent_supervisors_and_pruning(monkeypatch, tmp_path):
         return Path(cmd[3]).read_text()
     with ThreadPoolExecutor(2) as pool:
         assert list(pool.map(run, range(2))) == ['child-0\n', 'child-1\n']
-    for index in range(25):
+    for index in range(26):
         (tmp_path / f'supervisor-old-{index}.stderr.log').touch()
-    launch(monkeypatch, tmp_path, 'raise SystemExit(3)')
+    # W33B item 7: only logs older than 24h beyond the newest 20 are pruned.
+    import time
+    stale = time.time() - 25 * 3600
+    aged = [tmp_path / f'supervisor-old-{index}.stderr.log' for index in range(9)]
+    for path in aged:
+        os.utime(path, (stale, stale))
+    recent = set(tmp_path.glob('supervisor-*.stderr.log')) - set(aged)
+    cli._prune_supervisor_logs(tmp_path)
     assert len(list(tmp_path.glob('supervisor-*.stderr.log'))) == 20
+    assert all(not path.exists() for path in aged)
+    assert all(path.exists() for path in recent)
+    launch(monkeypatch, tmp_path, 'raise SystemExit(3)')
+    assert len(list(tmp_path.glob('supervisor-*.stderr.log'))) == 21
+    assert all(path.exists() for path in recent)
