@@ -21,7 +21,7 @@ the event queued for retry; success acknowledges it. Without a configured bridge
 events remain durably queued: deployment must wire the bridge before claiming
 end-to-end nudges. Delivery is at-least-once; consumers must tolerate duplicates.
 
-`python -m plangraph.stall_watchdog status` emits the persisted `! stall` lines
+`python -m plangraph.spawner.stall_watchdog status` emits the persisted `! stall` lines
 for routerctl status to include. Routerctl lives outside this repository; its
 host integration must invoke this command or read `watchdog/status.txt`.
 

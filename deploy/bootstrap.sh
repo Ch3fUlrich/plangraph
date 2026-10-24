@@ -92,7 +92,7 @@ else
   "$PYTHON_CMD" "${INIT_ARGS[@]}"
 fi
 
-WATCHDOG_ARGS=("-m" "plangraph.stall_watchdog" "install" "--host" "linux")
+WATCHDOG_ARGS=("-m" "plangraph.spawner.stall_watchdog" "install" "--host" "linux")
 if [[ "$DRY_RUN" -eq 1 ]]; then
   WATCHDOG_ARGS+=("--dry-run")
 fi
