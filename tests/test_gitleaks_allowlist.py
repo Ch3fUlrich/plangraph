@@ -365,7 +365,7 @@ def _phase_card_entries(config: Path) -> list[dict]:
 
 
 def test_both_configs_pin_all_18_replay_ids_by_value_and_nothing_broader():
-    """r4: the 12 historical replay ids join the 6 current ones, one literal each.
+    """The 12 historical replay ids join the 6 current ones, one literal each.
 
     `gitleaks git -c .gitleaks.toml --redact` over the real clone still reports the older
     id generations left in the RT-P1-PHASE-RUNNER S2 commits, so BOTH configs must waive
