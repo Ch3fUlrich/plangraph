@@ -225,14 +225,17 @@ class SpawnerRunner:
             served_model = model_or_combo
             served_family = detect_model_family(model_or_combo)
             if "/" not in model_or_combo:
-                from plangraph.spawner.resolver import get_catalog_models
+                from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                 combo_legs = [
                     m for m in get_catalog_models()
-                    if model_or_combo in (m.get("combos") or []) and int(m.get("available", 1)) == 1
+                    if model_or_combo in (m.get("combos") or []) and catalog_row_admitted(m)
                 ]
                 if combo_legs:
                     served_model = combo_legs[0]["id"]
                     served_family = detect_model_family(served_model)
+                else:
+                    from plangraph.routing_errors import SpawnRefused
+                    raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
             job = JobInfo(
                 job_id=job_id,
                 status="dry_run",

@@ -213,6 +213,22 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     },
 ]
 
+# Registered seats are the authoritative offline routing surface. Legacy rows
+# remain visible for diagnostics but must not become new offline spawn routes.
+from plangraph.planner.legs import DEFAULT_LEGS
+_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS}
+for _row in DEFAULT_FALLBACK_MODELS:
+    _row['active'] = _row['id'] in _fallback_legs
+    if not _row['active']:
+        _row['available'] = 0
+for _model, _leg in _fallback_legs.items():
+    if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
+        DEFAULT_FALLBACK_MODELS.append(dict(
+            id=_model, family=_leg.family, harness=_leg.harness,
+            tier=_leg.tier, available=1, active=True,
+            context_window=_leg.max_request_tokens,
+            aa_intelligence=0.0, combos=[]))
+
 _DEFAULT_CATALOG_DB: Any = None
 _MISSING = object()
 _VALID_RISKS = frozenset({"low", "normal", "high", "critical"})
@@ -486,6 +502,8 @@ def select_top_candidate(
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
+    d.setdefault('available', 0)
+    d.setdefault('active', False)
     if "id" not in d and "model_id" in d:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
@@ -501,12 +519,12 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dic
     if target_db is not None:
         if hasattr(target_db, "list_models"):
             models = target_db.list_models(active_only=active_only)
-            if models is not None:
+            if models:
                 return [_normalize_catalog_row(m) for m in models
                         if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
         if hasattr(target_db, "get_models"):
             models = target_db.get_models()
-            if models is not None:
+            if models:
                 return [_normalize_catalog_row(m) for m in models
                         if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
 
