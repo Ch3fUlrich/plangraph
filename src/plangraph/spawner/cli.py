@@ -9,7 +9,6 @@ import sys
 import os
 import subprocess
 import time
-import tempfile
 
 _start_supervisor = subprocess.Popen
 
@@ -113,12 +112,64 @@ def main(argv=None):
                 import plangraph
                 env = os.environ.copy()
                 root = str(Path(plangraph.__file__).resolve().parent.parent)
-                env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
-                # A file avoids PIPE backpressure during the detached child's lifetime.
-                # TemporaryFile is private and disappears when the child releases it.
+                installed = subprocess.run([sys.executable, '-I', '-c', 'import plangraph'],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+                if not installed:
+                    env['PYTHONPATH'] = (env['PYTHONPATH'] + os.pathsep if env.get('PYTHONPATH') else '') + root
+                # Drain fd 2 in the child so Python AND native writes rotate, even
+                # after the launching CLI exits. Keep the startup tail readable.
                 service.state.mkdir(parents=True, exist_ok=True)
-                with tempfile.TemporaryFile(dir=service.state) as errors:
-                    child = _start_supervisor([sys.executable, '-m', __package__ + '.cli', '--supervise'],
+                log_path = service.state / 'supervisor.stderr.log'
+                bootstrap = '''import os, sys, threading
+from plangraph.spawner import cli as supervisor
+path = sys.argv[1]
+read_fd, write_fd = os.pipe()
+os.dup2(write_fd, 2)
+os.close(write_fd)
+def drain():
+    def open_log():
+        return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab", buffering=0)
+    output = open_log()
+    try:
+        while True:
+            chunk = os.read(read_fd, 8192)
+            if not chunk:
+                break
+            if output.tell() + len(chunk) > 1024 * 1024:
+                output.close()
+                os.replace(path, path + ".1")
+                output = open_log()
+            output.write(chunk)
+    finally:
+        output.close()
+        os.close(read_fd)
+thread = threading.Thread(target=drain, daemon=True)
+thread.start()
+factory = supervisor.SpawnService
+def service_with_log(*args, **kwargs):
+    service = factory(*args, **kwargs)
+    save = service._save
+    def save_with_log(record):
+        record["supervisor_stderr_path"] = path
+        return save(record)
+    service._save = save_with_log
+    return service
+supervisor.SpawnService = service_with_log
+try:
+    code = supervisor.main(["--supervise"])
+except BaseException:
+    import traceback
+    traceback.print_exc()
+    code = 1
+finally:
+    sys.stderr.flush()
+    os.close(2)
+    thread.join(timeout=5)
+raise SystemExit(code)
+'''
+                with open(log_path, 'a+b') as errors:
+                    os.chmod(log_path, 0o600)
+                    child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
                         env=env, text=True, **({'start_new_session': True} if os.name != 'nt' else
                                       {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
