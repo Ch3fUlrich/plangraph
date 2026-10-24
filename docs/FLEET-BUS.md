@@ -145,10 +145,10 @@ or the input cursor when no rows are delivered. Records contain `id`, server
 
 ## Errors
 
-Errors serialize as `{"error":{"code":"...","message":"..."}}`.
+Errors serialize as `{"error":{"code":"...","message":"..."}}`; `rate_limited` (429)
+and `replay_window_full` (503) add `"retry_after_s": <int>` inside the error object.
 Messages must not echo request payloads, signatures or secret material.
-Rate errors additionally carry `retry_after_s` in the error body for the adapter to
-publish as a Retry-After header; it is not an extra JSON response field.
+Adapters also publish `retry_after_s` as a Retry-After header.
 
 | Code | HTTP status |
 | --- | --- |
