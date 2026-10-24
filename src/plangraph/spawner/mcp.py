@@ -16,6 +16,7 @@ import sys
 from typing import Any, Mapping
 
 from plangraph.spawner.clients import effective_child_base_url
+from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -100,31 +101,75 @@ TOOLS_METADATA = [
 ]
 
 
+for _tool in TOOLS_METADATA:
+    if _tool['name'] in ('plangraph_agent_status', 'plangraph_agent_cancel'):
+        _tool['inputSchema']['properties']['run_id'] = {'type': 'string'}
+        _tool['inputSchema'].pop('required', None)
+    if _tool['name'] == 'plangraph_agent_spawn':
+        _tool['inputSchema']['required'] = ['prompt', 'card']
+        _tool['inputSchema']['properties'].update({
+            'card': {'type': 'object'}, 'override_reason': {'type': 'string'},
+            'writer_families': {'type': 'array', 'items': {'type': 'string'}},
+            'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'}})
+        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
+        _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
+for _verb in ('route', 'ps', 'result'):
+    TOOLS_METADATA.append({'name': 'plangraph_agent_' + _verb,
+        'description': 'Card-based agent ' + _verb,
+        'inputSchema': {'type': 'object', 'properties': {
+            'card': {'type': 'object'}, 'role': {'type': 'string'},
+            'run_id': {'type': 'string'}, 'writer_families': {'type': 'array', 'items': {'type': 'string'}}},
+            'required': ['card'] if _verb == 'route' else (['run_id'] if _verb == 'result' else [])}})
+
+
+for _tool in TOOLS_METADATA:
+    if _tool['name'] in ('plangraph_agent_route', 'plangraph_agent_spawn'):
+        _tool['inputSchema']['properties'].update({
+            'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'}})
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
-    def __init__(self, runner: SpawnerRunner | None = None):
+    def __init__(self, runner: SpawnerRunner | None = None, *, state=None):
         self.runner = runner or SpawnerRunner()
+        from .runner import spawn_service
+        self.service = spawn_service(self.runner, state=state)
 
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
+        from .bench_entry import benchmark_options
+        try:
+            options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
+        except Exception as exc:
+            if name in ('plangraph_agent_route', 'plangraph_agent_spawn'):
+                self.service.save_refusal(exc, arguments.get('role', 'implement'))
+            raise
+        if name == 'plangraph_agent_route':
+            return self.service.route(arguments['card'], arguments.get('role', 'implement'),
+                arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
+        if name == 'plangraph_agent_ps':
+            return self.service.ps()
+        if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
+            return self.service.result(arguments['run_id'])
+        if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
+            return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":
-            prompt = str(arguments["prompt"])
-            model_or_combo = str(arguments.get("model_or_combo", "l2-worker"))
-            role = str(arguments.get("role", "implement"))
-            risk = str(arguments.get("risk", "normal"))
-            dry_run = bool(arguments.get("dry_run", False))
-            wait_seconds = float(arguments.get("wait_seconds", 0.0))
-
-            job = await self.runner.spawn(
-                prompt=prompt,
-                model_or_combo=model_or_combo,
-                role=role,
-                risk=risk,
-                dry_run=dry_run,
-                wait_seconds=wait_seconds,
-            )
-            return job.to_dict()
+            if 'prompt' not in arguments:
+                exc = KeyError('prompt')
+                self.service.save_refusal(exc, arguments.get('role', 'implement'))
+                raise exc
+            if not arguments.get('card'):
+                from plangraph.planner.routing import SpawnRefused
+                exc = SpawnRefused('spawn by card; card required')
+                self.service.save_refusal(exc, arguments.get('role', 'implement'))
+                raise exc
+            return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
+                role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
+                override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
+                writer_families=arguments.get('writer_families', ()),
+                dry_run=arguments.get('dry_run', False), wait_seconds=arguments.get('wait_seconds', 0),
+                no_fallthrough=arguments.get('no_fallthrough', False), **options)
 
         if name == "plangraph_agent_status":
             job_id = arguments.get("job_id")
@@ -152,7 +197,8 @@ class MCPSpawnerServer:
             models = get_catalog_models()
             matched: list[dict[str, Any]] = []
             for m in models:
-                if not is_model_available(m):
+                m = dict(m, leg_state=leg_status(m["id"], combo=combo))
+                if not is_model_available(m, lambda *a, **kw: {"state": "ok"}):
                     continue
                 if combo and combo not in m.get("combos", []):
                     continue
@@ -182,6 +228,8 @@ class MCPSpawnerServer:
 
     async def handle_rpc_request(self, req: Mapping[str, Any]) -> dict[str, Any]:
         """Dispatch a single JSON-RPC 2.0 request."""
+        if not isinstance(req, Mapping) or req.get('jsonrpc') != '2.0' or not isinstance(req.get('method'), str) or not isinstance(req.get('params', {}), Mapping):
+            return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid request'}}
         req_id = req.get("id")
         method = req.get("method")
         params = req.get("params", {})
@@ -209,6 +257,11 @@ class MCPSpawnerServer:
             tool_args = params.get("arguments", {})
             try:
                 result = await self.call_tool(tool_name, tool_args)
+                if isinstance(result, dict) and result.get('status') == 'refused':
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {
+                        'code': -32602, 'message': result.get('error', 'benchmark rows missing'),
+                        'data': {'type': result.get('refusal', 'SpawnRefused'), 'exit_code': result.get('exit_code', 2), 'legs': result.get('legs', []),
+                                 'run_id': result.get('run_id')}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -220,13 +273,14 @@ class MCPSpawnerServer:
                     },
                 }
             except Exception as exc:
+                from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
+                if isinstance(exc, SpawnRefused):
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 3 if isinstance(exc, BenchmarkError) else 2, 'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": f"Error: {exc}"}],
-                        "isError": True,
-                    },
+                    "error": {"code": -32602 if isinstance(exc, (ValueError, KeyError, TypeError)) else -32603,
+                              "message": str(exc), 'data': {'type': type(exc).__name__, 'exit_code': 1}},
                 }
 
         return {
@@ -248,13 +302,22 @@ async def run_stdio_server() -> None:
         line = await reader.readline()
         if not line:
             break
+        req = {}
         try:
             req = json.loads(line.decode("utf-8").strip())
             resp = await server.handle_rpc_request(req)
             sys.stdout.write(json.dumps(resp) + "\n")
             sys.stdout.flush()
-        except Exception:
-            pass
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': None,
+                'error': {'code': -32700, 'message': 'Parse error'}}) + '\n')
+            sys.stdout.flush()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning('stdio_failed: %s', type(exc).__name__)
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': req.get('id') if isinstance(req, dict) else None,
+                'error': {'code': -32603, 'message': 'Internal error'}}) + '\n')
+            sys.stdout.flush()
 
 
 if __name__ == "__main__":

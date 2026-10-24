@@ -26,6 +26,7 @@ __all__ = [
     "brief",
     "TERMINAL",
     "STATES",
+    "leg_state",
 ]
 
 STATES = ("open", "ready", "claimed", "in_review", "done", "cancelled", "running",
@@ -68,6 +69,15 @@ def _clean(value):
 
 
 # ---------------------------------------------------------------- API
+
+def leg_state(candidates):
+    """Read-only route-leg projection; caller supplies resolver evidence.
+
+    No spawner import: the runtime integration remains in planner/routing.py.
+    """
+    return [{"id": c.get("id", c.get("model_id")),
+             "leg_state": c.get("leg_state", {"state": "ok", "evidence": None})}
+            for c in candidates]
 
 def index(items):
     """Map ``key -> item``.  A duplicate key keeps the last occurrence."""

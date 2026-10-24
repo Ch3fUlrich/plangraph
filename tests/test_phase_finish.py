@@ -1,4 +1,5 @@
 import fcntl
+import json
 import subprocess
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from keeper_util import World, defn
 from plangraph.keeper.errors import Refused
 from plangraph.planner import phase_finish
+from test_phase_merge_trailers import git, merge_commit
 
 @pytest.fixture
 def w(tmp_path):
@@ -26,7 +28,7 @@ def gate(w):
 
 def finish_cards(w, *keys):
     for key in keys:
-        w.store.conn.execute("UPDATE items SET state='done' WHERE key=?", (key,))
+        w.store.conn.execute("UPDATE items SET state='in_review' WHERE key=?", (key,))
     w.store.conn.commit()
 
 def git_repo(tmp_path):
@@ -49,6 +51,7 @@ def git_repo(tmp_path):
         check=True,
     )
     subprocess.run(["git", "branch", "-M", "phase/demo-PH-X"], cwd=root, check=True)
+    git(root, "commit", "--allow-empty", "-m", "phase")
     head = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
@@ -70,6 +73,7 @@ class FakeGitHub:
         }
 
     def push_branch(self, repo_root, branch, head):
+        self.root = repo_root
         self.calls.append(("push_branch", repo_root, branch, head))
         if self.fail is not None:
             raise self.fail
@@ -86,9 +90,11 @@ class FakeGitHub:
         self.calls.append(("ci_green", head))
         return self.ci
 
-    def merge_pr(self, number, head):
+    def merge_pr(self, number, head, *, commit_message=None):
         self.calls.append(("merge_pr", number, head))
-        return self._pr(number, "merged", head)
+        self.merge_sha = merge_commit(self.root, head)
+        self.pr = {**self._pr(number, "merged", head), "merge_sha": self.merge_sha}
+        return self.pr
 
 class ExplodingStore:
     def __getattr__(self, name):
@@ -114,6 +120,13 @@ def test_all_cards_done_opens_pr_and_merges_when_ci_green(w, tmp_path):
     assert result["state"] == "merged"
     assert result["pr"]["number"] == 7
     assert result["cards"] == ["demo:C1", "demo:C2"]
+    assert result["merge_sha"] == github.merge_sha
+    rows = w.store.conn.execute(
+        "SELECT key, ref FROM evidence WHERE kind='commit+ci'"
+    ).fetchall()
+    assert len(rows) == 2
+    assert {row[0] for row in rows} == {"demo:C1", "demo:C2"}
+    assert all(json.loads(row[1]) == {"commit": github.merge_sha} for row in rows)
     assert [c[0] for c in github.calls] == [
         "find_pr",
         "push_branch",
@@ -140,6 +153,7 @@ def test_waiting_ci_does_not_merge(w, tmp_path):
 
     assert result["state"] == "waiting_ci"
     assert "merge_pr" not in [c[0] for c in github.calls]
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
 
 def test_already_merged_pr_is_idempotent(w, tmp_path):
     gate(w)
@@ -168,6 +182,7 @@ def test_already_merged_pr_is_idempotent(w, tmp_path):
     assert result["state"] == "merged"
     assert result["pr"]["number"] == 3
     assert github.calls == [("find_pr", branch)]
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
 
 def test_open_pr_is_reused(w, tmp_path):
     gate(w)
@@ -423,6 +438,8 @@ def test_no_store_write(w, tmp_path):
     finish_cards(w, "demo:C1", "demo:C2")
     root, head = git_repo(tmp_path)
     before_count = w.store.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    before_events = w.store.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    before_evidence = w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
     before_state = w.store.conn.execute(
         "SELECT state FROM items WHERE key=?", ("demo:PH-X",)
     ).fetchone()[0]
@@ -434,13 +451,16 @@ def test_no_store_write(w, tmp_path):
         phase_finish.phase_branch("demo:PH-X"),
         head,
         repo_root=root,
-        github=FakeGitHub(ci=True),
+        github=FakeGitHub(ci=False),
     )
 
     after_count = w.store.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     after_state = w.store.conn.execute(
         "SELECT state FROM items WHERE key=?", ("demo:PH-X",)
     ).fetchone()[0]
-    assert result["state"] == "merged"
+    assert result["state"] == "waiting_ci"
     assert after_count == before_count
     assert after_state == before_state
+    assert w.store.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before_events
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == before_evidence
+    assert w.store.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0

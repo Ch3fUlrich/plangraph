@@ -1,9 +1,126 @@
 # Plangraph Spawner & Model Routing Architecture
 
+## Spawn by card
+
+Install the package on each host, then use `python -m plangraph.spawner.cli`
+(or `python tools/plangraph-spawn.py` from a source checkout). No central keeper
+or Temporal service is required for this slice.
+
+```bash
+python -m plangraph.spawner.cli route --card @card.json --role implement --json
+python -m plangraph.spawner.cli spawn --card @card.json --role implement "Implement the card"
+python -m plangraph.spawner.cli spawn --card @card.json --role review --review-of run-ID "Review"
+python -m plangraph.spawner.cli ps
+python -m plangraph.spawner.cli result run-ID
+```
+
+Cards may also be inline JSON. `--state PATH` precedes the verb; otherwise
+`PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`--dry-run` plans without a child. Spawn returns a `wait_cmd`:
+`plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
+Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
+the waiting shell itself. Wait reads atomic run records, not process names;
+its timeout stops waiting, not the writer.
+`--no-fallthrough` disables automatic advancement after a captured provider stop.
+Plain stdout, including text saying 429, is never provider evidence.
+
+Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
+chosen leg, served model/family, writer family, status, started/ended timestamps,
+attempts with provider stop details, job id, pid, and stdout tail.
+These records are the only source for `--review-of`; unknown ids refuse.
+
+On terminal save the supervisor publishes exactly one completion per run to
+`inbox/parent.jsonl` and `inbox/keeper.jsonl` under the state directory. Events
+include stable `event_id`, DONE/FAILED, run_id, rc, head_sha, take_cmd and
+discard_cmd. `PLANGRAPH_SPAWN_PARENT_SESSION` and `PLANGRAPH_SPAWN_ITEM` identify
+the destination session and keeper item. These are private durable outboxes;
+they do not by themselves inject a message into an agent session.
+The pluggable `deliver(recipient, event)` sink can bridge a fleet bus. Keeper's
+authenticated evidence API requires a principal/claim epoch, which the spawner
+does not own: the default keeper sink is an item-event outbox stub for an
+authorized consumer, not a bypass of that API and not automatic item closure.
+`PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell);
+it receives recipient as its final argument and event JSON on stdin. Consumers
+must deduplicate by event_id: external delivery is at-least-once across crashes.
+Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds;
+expiry kills its process tree and records rc 124 with FAILED completion.
+The detached supervisor must survive the child; killing the supervisor itself
+requires a future recovery service. This interim event contract carries over to
+the later Temporal implementation (also covers FLEET-STATUS-HOOK).
+`--model`/`--leg` require `--override-reason` of at least ten characters,
+audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
+The Mimo path fence still applies to overrides.
+
+MCP tools `plangraph_agent_route`, `spawn`, `ps`, `result`, `status`, `cancel`
+(all with the `plangraph_agent_` prefix) share these records. Spawn requires
+`card` and `prompt` in its schema; model_or_combo requires override_reason.
+Result/status/cancel accept `run_id`; legacy job-id operations remain available.
+No CLI or MCP endpoint writes leg state. Gateway adapters call
+`runner.provider_response` with actual captured responses.
+
 Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
 import `plangraph.spawner` at runtime; the boundary is enforced by
-`tests/test_spawner_import_guard.py`, and the switch
-`SPAWNER_SELECTION_ENABLED` defaults to `False`.
+`tests/test_spawner_import_guard.py`. Selection runs without a feature flag.
+
+### Card-driven routing core
+
+`planner.routing.plan_spawn(card, role="implement"|"review")` applies the
+canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
+Writers start with `omniroute/cx-gpt-6.1-sol`, then agy Gemini, Mimo Flash,
+and direct DeepSeek. Review seats start with Qoder Qwen, free DeepSeek, free
+GLM, agy Gemini, then Mimo; Claude is not a default writer or review seat.
+Two review seats must have different families from every writer and each other;
+an impossible fence returns fewer seats and an explicit plan error, not a fallback.
+
+An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
+row), or sequence of rows with `model_id`, ranks measured legs only inside their
+existing tier. Legs without rows go **last inside their tier**, retaining their
+relative operator order. `plan.gaps` (also in `to_dict()`) records each missing
+role-policy leg as `{leg, model, reason: "no benchmark row"}`; reasons name each
+gap, including legs filtered by eligibility or provider state. With `benchmark=None`,
+all role-policy legs are gaps, `p_source` is `operator-order`, and reasons explicitly
+say `benchmark data absent` (the legacy `no benchmark p` reason remains compatible).
+`plan_spawn(..., strict=True)` refuses any missing role-policy row with
+`SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
+production CLI's `--require-bench`.
+
+Operator rules and `route_card` tier order come first; U_core only permutes within a tier.
+CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
+Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
+
+`benchmark_rows_from_db(path)` returns `(rows_by_model_id, errors)` using SQLite
+read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
+or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
+`BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
+missing tables and malformed model IDs return an empty mapping with explicit errors.
+Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
+
+### Required benchmark release/swap gate (D-2576)
+
+Before an OmniRoute image release or swap, check both host database snapshots:
+
+```bash
+python tools/bench_gate.py --db workstation.sqlite --db server.sqlite --json
+```
+
+Every distinct model in `DEFAULT_LEGS` with an `implement` or `review` role must
+have at least one row **in each database**. Output includes per-model counts and
+total rows per database as evidence. Exit codes: **0** complete coverage, **1**
+missing policy rows (models and database named), **2** unreadable database or
+unsupported/missing benchmark table. No data is synthesized or seeded by this gate;
+benchmark preparation/shipping lanes must supply the real rows.
+
+`leg_reader=` accepts a store or leg-status callable; card `account` and `combo`
+scope live provider evidence exactly. `next_leg_after_provider_stop` records
+actual 429/402 responses with nonempty provider text and advances to the next
+currently eligible leg. Other responses do not suppress a leg. Transport adapters
+must supply actual provider responses, never agent output or exit-code guesses.
+
+`hand_picked` always requires an override reason of at least ten nonblank characters,
+enforces the Mimo provider fence, and appends an audit JSON line to
+`$XDG_STATE_HOME/plangraph/spawn-overrides.jsonl` (or injected `log_path`).
+Readiness remains separate in `planner/readiness.py`.
 
 Plangraph Spawner provisions, routes, and supervises autonomous agents across multi-model coding workflows. It combines a local WAL-mode SQLite benchmark catalog, a 5-rung tier priority ladder, fine-grained task complexity and risk measurement, OmniRoute ACP-first execution with full Windows Tailnet environment preservation, cross-family code review isolation, and a JSON-RPC 2.0 MCP server.
 
@@ -181,6 +298,7 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 - For high and critical risk bands, a candidate below `I_min` fails closed. The only escape is `relax_floor=True` with a non-empty `relax_reason`; when applied, result keys `relaxed` and `relax_reason` are set. A blank reason is not accepted.
 - For low and normal risk bands a floor miss does not raise: the highest-intelligence candidates are kept and ranked, and `relaxed` stays false.
 - There is no hardcoded fallback model. If no candidate is eligible, both `resolve_review_plan` and `resolve_model_for_task` raise instead of returning a default.
+- Catalog fallback (W27/D-2637): during a DB read failure, registered offline legs remain eligible; operator deactivation cannot be enforced while the DB is unreadable. A `catalog_db_error` alert is emitted once per failure episode and rows carry `catalog_source=offline_fallback_db_error`.
 - Exclusions (family/author/gated/availability) are applied in every fallback path, including relaxed-floor paths.
 - The context gate requires `ctx >= need_tokens * trajectory_factor`; role trajectory factors are applied consistently.
 - Risk monotonicity uses `envelope_intelligence` as a best-effort envelope: candidates are filtered to intelligence at or above the best lower-band pick; when that leaves none, resolution falls back to the floor rules, so the envelope cannot be met in every case.
@@ -290,7 +408,7 @@ sequenceDiagram
     Note over Orchestrator,Gateway: Cross-Family Review 1 (Task Role: review, Exclude: claude)
     Orchestrator->>Gateway: POST /v1/chat/completions (combo: l2-worker, X-OmniRoute-Exclude-Family: claude)
     Note over Gateway: Gateway excludes all 'claude' legs & bypasses session stickiness
-    Gateway->>Rev1: Dispatches to top non-claude leg (mimo-v2.6-pro)
+    Gateway->>Rev1: Dispatches to top non-claude leg (mimo/mimo-v2.6-pro)
     Rev1-->>Gateway: Review Verdict & Lints
     Gateway-->>Orchestrator: 200 OK (X-OmniRoute-Selected-Family: mimo)
 
@@ -418,3 +536,127 @@ Host binary and client prerequisites are delegated to AutoOS (`deploy/requiremen
 - Agent CLIs: `claude-code`, `qwen-code`, `gemini-cli`, `qoder-cli`, `agent-skill-links`
 
 For host provisioning instructions, refer to [`deploy/README.md`](../deploy/README.md).
+# Bounded dispatch and gateway evidence
+
+`spawn --wait S` waits at most S seconds after supervisor startup. The default,
+`--wait 0`, returns the run id immediately with `status: running`; a detached
+supervisor keeps the child and record monitor alive. Use `result RUN_ID` to read
+the eventual result. If all eligible legs are limited, dispatch returns exit code
+3 with the plan's evidence list and starts no child. Provider stops trigger a
+fresh eligibility plan with the original card, role and writer-family exclusions;
+already attempted legs are never retried during that run.
+
+The OmniRoute fork emits provider failures as one JSON line on **stderr**:
+
+```json
+{"autoos_provider_response":{"leg":"omniroute/cx-gpt-6.1-sol","status":429,"body":"provider quota exhausted","headers":{"Retry-After":"60"}}}
+```
+
+The outer object must contain only `autoos_provider_response`; its object must
+contain exactly `leg`, `status`, `body`, and `headers`. Leg and nonempty body are
+strings, status is the integer 429 or 402, and headers map strings to strings.
+The real child monitor passes this envelope to `runner.provider_response`.
+Stdout JSON, free-text errors, other statuses and additional keys are not evidence.
+This is a trusted harness transport convention, not cryptographic authentication:
+the harness must reserve this envelope and not relay agent-authored stderr as it.
+MCP tools do not expose any leg-state mutation operation.
+
+CLI and MCP persist records through private 0600 temporary files and atomic rename.
+Records and output tails redact `sk-` tokens, Bearer credentials and `*_KEY=`
+assignments; child environment mappings are never persisted. Public entry points
+use the shared hardened dispatch adapter in `spawner.runner` (the legacy service
+remains available for compatibility).
+
+### Transport envelope nonce (defense in depth)
+
+Each runner invocation generates a random nonce sent as the
+`X-OmniRoute-Run-Nonce` request header. A stderr provider envelope must echo
+that value as `nonce` inside `autoos_provider_response`. Missing or mismatched
+values are ignored and recorded as a `forged_envelope` run event, never a leg
+mark. This does **not** close child-controlled stderr forgery: the child process
+can still read its own environment, including request-header configuration.
+Production must verify the nonce against the OmniRoute call log before trusting
+provider evidence; call-log verification remains a follow-up.
+
+CLI route/spawn accept `--require-bench` and repeatable `--bench-db PATH`.
+MCP route/spawn accept `require_bench` and `bench_db`. The entry-point default
+`PLANGRAPH_REQUIRE_BENCH=1` enables strict coverage; missing rows refuse before
+starting a child and name the missing legs.
+# Phase-review hardening
+
+Strict benchmark refusals use `BenchRequired`, a `SpawnRefused` subtype carrying
+the missing legs; refusal text is not an error classifier. A fallthrough refusal
+preserves prior attempts in the run record.
+
+`provider_response` is a trusted gateway-adapter API, not a child-output API.
+Child evidence is accepted only through the exact nonce-checked stderr envelope.
+Nonces are limited to 4096 active runs and removed on completion or cancellation;
+dry runs do not retain nonces. Steering a job without stdin returns an explicit
+`no stdin` error rather than claiming delivery.
+
+Pure-document review exemptions carry `review_exempt`; zero reviewers without
+that flag are invalid, and high/critical risk cannot claim the exemption.
+Regression contracts: `test_existing_safety_contracts` in
+`tests/test_w13_regressions.py` rejects card-asserted exemptions;
+`test_provider_requires_authenticated_source` in the same file pins the trusted
+adapter boundary. `test_candidate_json_and_limit` in `tests/test_w11_selection.py`
+pins route JSON utility, prior/measured source, and skip evidence.
+The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
+output); Flash follows the catalog seed's 1,000,000 context limit. The unused OmniRoute
+model registry is omitted while its transport configuration remains available.
+# Routing hardening
+
+Mimo IDs are case-sensitive: only `mimo/mimo-v2.6-flash` and
+`mimo/mimo-v2.6-pro` are accepted. Mixed-case variants are refused.
+SQLite files are created privately before connecting. On Windows, mode bits do
+not establish a private ACL; operators must secure the state directory ACL.
+# Round-five failure contracts
+
+Spawn refusals, including CLI/MCP preflight failures, persist private run records
+with an exit code. Codes are 1 for execution/I/O failure, 2 for card/policy
+refusal, 3 for benchmark policy/data failure, and 4 for exhausted provider legs.
+If storage itself fails, the original refusal is retained and the persistence
+failure is logged. Explicit override leg IDs are preserved even for shared models.
+
+State queries do not initialize empty SQLite files. AST fanout that cannot read
+or parse a Python file is unknown (`not_measured`), conservatively treated as
+fanout 13 for sizing. Routing exclusion reasons are typed metadata, not parsed
+exception messages. JSON-RPC requests must explicitly include `jsonrpc: "2.0"`.
+Every model admission requires exact membership in the resolver catalog or
+registered DEFAULT_LEGS. Case-insensitive Mimo detection chooses error text only;
+it is not an admission gate. Unknown IDs, including glued and homoglyph variants,
+are typed `SpawnRefused` failures.
+
+For source checkouts, add the repository's `tools` directory to PATH to expose
+the executable `plangraph-spawn` entry point (or use
+`python -m plangraph.spawner.cli`).
+# Completion delivery contract
+
+Completion events carry `idempotency_key = run_id + ':' + status`. Delivery is
+retryable: a delivered-marker write can fail after a successful sink call.
+Each sink MUST durably deduplicate that key per recipient before exposing an
+event, atomically with its observable append. `FileInbox` implements this under
+its inbox lock. Command bridges must implement the same contract at the remote
+sink; a successful command exit alone cannot guarantee exactly-once effects.
+`test_marker_failure_sink_exactly_once` pins marker-failure replay behavior.
+# Fixer writers and remaining gaps
+
+Cards may carry `findings`, each with `text` and optional `files`. The pure
+`split_findings` helper, also exposed through `plan_spawn.writer_groups`, merges
+connected file ownership before balancing components into roughly ten-finding
+writers. A shared file is never assigned to two writers. Indivisible components
+may exceed ten; findings without files form a final unassigned bucket appended
+to the smallest group. Dispatch fans these groups out in parallel.
+
+`render_fixer_brief` numbers every finding and requires each to be fixed or
+refuted by a named test, affected tests only (TEST-SPEED-AFFECTED), and
+COMMIT before finishing.
+
+Both dispatch paths inspect the full writer output, before tail truncation.
+A non-empty Remaining gaps section or unchecked Markdown checklist triggers
+one continuation with only those gaps, on the same sandbox and selected leg.
+The separate run record has `parent_run_id` and `continuation=1`; the parent
+has `continuation_run_id`. A continuation cannot continue again. Clean reports,
+nonzero exit codes, review runs, and continuation-limit refusals record their
+reason in `continuation_reason`. Dry runs never continue. Live execution proof
+belongs to L2/L1; unit tests use synthetic processes.
