@@ -50,7 +50,7 @@ import os
 import pytest
 
 from keeper_util import World, defn
-from plangraph.keeper import api_routes, auth, db_errors
+from plangraph.keeper import api_routes, auth, db as kdb, db_errors
 from plangraph.keeper import events as keeper_events
 from plangraph.keeper.errors import Refused
 
@@ -1554,3 +1554,118 @@ def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
     assert "plangraph:OTHER" in row["reason"]
     assert token not in str(dict(row))
     assert len(_open_guard_alarms(w)) == 1
+
+
+# =========================================================================
+# Round 3: ``OVERSIGHT_DDL`` (tables + triggers) is installed BY THE OPEN
+# PATH -- a fresh file through ``create=True``, and main's shipped v13 shape
+# through the presence-based ``db._upgrade`` at ``create=False``.
+# =========================================================================
+#: The two guard triggers the brief pins (plus the tables' DELETE guards below).
+_OVERSIGHT_TRIGGERS = ("trg_oversight_tokens_revoke_only_update",
+                       "trg_oversight_ops_append_only_update",
+                       "trg_oversight_ops_append_only_delete")
+
+#: Exactly which ``(sqlite_master.type, name)`` rows an open must leave behind.
+_OVERSIGHT_OBJECTS = sorted(
+    [("table", "oversight_tokens"), ("table", "oversight_ops")]
+    + [("trigger", t) for t in _OVERSIGHT_TRIGGERS])
+
+
+def _oversight_objects(conn):
+    """The pinned oversight objects, a sorted list of every matching row.
+
+    A list, never a set: an install that ran twice would repeat an entry and
+    fail the ``== _OVERSIGHT_OBJECTS`` comparison, so duplicates cannot hide.
+    """
+    marks = ",".join("?" for _ in _OVERSIGHT_TRIGGERS)
+    return sorted(
+        (row["type"], row["name"]) for row in conn.execute(
+            "SELECT type, name FROM sqlite_master WHERE"
+            " (type='table' AND name IN ('oversight_tokens','oversight_ops'))"
+            f" OR (type='trigger' AND name IN ({marks}))",
+            _OVERSIGHT_TRIGGERS))
+
+
+def _assert_oversight_trigger_refusals(conn):
+    """Seed one probe row per table; the guard triggers refuse every mutation."""
+    now, later = "2026-01-01T00:00:00+00:00", "2027-01-01T00:00:00+00:00"
+    conn.execute(
+        "INSERT INTO oversight_tokens(id,token_sha256,principal,generation,"
+        "created_at,expires_at) VALUES(?,?,?,?,?,?)",
+        (1, "f" * 64, "probe", 1, now, later))
+    conn.execute(
+        "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
+        "batch_ref,op_index,op,outcome) VALUES(?,?,?,?,?,?,?,?,?)",
+        (1, now, 1, "probe", 1, "batch-probe", 0, "edit", "applied"))
+    for sql, reason in (
+            # a DELETE on oversight_tokens ...
+            ("DELETE FROM oversight_tokens", "revoke-only"),
+            # ... a non-revoke UPDATE on it ...
+            ("UPDATE oversight_tokens SET mint_reason='tampered'",
+             "revoke-only"),
+            # ... and any UPDATE / DELETE on the append-only audit table
+            ("UPDATE oversight_ops SET reason='rewritten'", "append-only"),
+            ("DELETE FROM oversight_ops", "append-only")):
+        with pytest.raises(db_errors.INTEGRITY, match=reason):
+            conn.execute(sql)
+    # every refusal aborted its whole statement: one probe row each, unchanged
+    assert conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                        ).fetchone()[0] == 1
+    assert conn.execute("SELECT mint_reason FROM oversight_tokens"
+                        ).fetchone()["mint_reason"] is None
+    assert conn.execute("SELECT COUNT(*) FROM oversight_ops"
+                        ).fetchone()[0] == 1
+    assert conn.execute("SELECT reason FROM oversight_ops"
+                        ).fetchone()["reason"] == ""
+
+
+def test_oversight_ddl_is_installed_at_open_fresh_and_upgraded_from_v13(
+        tmp_path):
+    """The open path owns the oversight schema: fresh files AND main's v13.
+
+    FRESH -- ``open_db(create=True)`` leaves both oversight tables and the
+    three guard triggers in ``sqlite_master``, and the guards refuse a DELETE
+    on ``oversight_tokens``, a non-revoke UPDATE on it, and any UPDATE or
+    DELETE on ``oversight_ops``.
+
+    UPGRADED -- the same file stripped to main's shipped v13 shape (oversight
+    tables and triggers dropped, ``PRAGMA user_version = 13``) gains exactly
+    the same objects back through ``open_db(create=False)`` (``db._upgrade``'s
+    presence-based ``OVERSIGHT_DDL``), refuses the same mutations, keeps
+    ``user_version = 13``, and reopens twice with no error and no duplicate.
+    """
+    path = tmp_path / "keeper.db"
+
+    # FRESH: a brand-new file through the normal open path.
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    assert _oversight_objects(conn) == _OVERSIGHT_OBJECTS
+    _assert_oversight_trigger_refusals(conn)
+
+    # Test surgery: build main's v13 shape on this very file -- drop every
+    # oversight guard trigger, drop both tables, stamp user_version = 13.
+    # The DDL authorizer is lifted only on this connection, which is closed
+    # and replaced by a fresh ``open_db`` right after.
+    conn.set_authorizer(None)
+    for trigger in (*_OVERSIGHT_TRIGGERS,
+                    "trg_oversight_tokens_append_only_delete"):
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    for table in ("oversight_tokens", "oversight_ops"):
+        conn.execute(f"DROP TABLE {table}")
+    conn.execute("PRAGMA user_version=13")
+    assert _oversight_objects(conn) == []
+    conn.close()
+
+    # UPGRADED: the same open path re-installs what v13 never had.
+    conn = kdb.open_db(path, backend="sqlite")
+    assert _oversight_objects(conn) == _OVERSIGHT_OBJECTS
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    _assert_oversight_trigger_refusals(conn)
+    conn.close()
+
+    # Idempotent: two more opens neither fail nor add a duplicate row.
+    for _ in range(2):
+        again = kdb.open_db(path, backend="sqlite")
+        assert _oversight_objects(again) == _OVERSIGHT_OBJECTS
+        assert again.execute("PRAGMA user_version").fetchone()[0] == 13
+        again.close()
