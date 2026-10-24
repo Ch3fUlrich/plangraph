@@ -109,7 +109,14 @@ regexes = ['''^sentinel-wf8-opkey$''']
 # The recorded replay histories carry synthetic phase/card ids under a "key" field, which the
 # generic-api-key entropy gate reads as a credential: "phase-<digits>" and "e2e-phase|defer-a|b-<digits>"
 # are replay identifiers (unix-time + counter), not secrets of any kind.
-description = "synthetic phase/card ids in the Temporal replay fixtures (reviewed 2026-10-23)"
+# r4: the 12 older id generations still sitting in the git history (RT-P1-PHASE-RUNNER S2,
+# commits fe2645a3 + 64cdb5f3) join the 6 the current fixtures hold: 18 reviewed values, each
+# under its OWN ^...$ regex, so a new id or any other credential-shaped value in either fixture
+# is still reported.  The entry keeps the shared 2-path form rather than one path per value:
+# this snapshot carries no git history, so which fixture file each historical id was recorded
+# in cannot be proven here -- the shared entry is the same reviewed two-fixture path set and a
+# superset of per-file scoping, so the history gate on the real clone cannot miss a value.
+description = "synthetic phase/card ids in the Temporal replay fixtures (reviewed 2026-10-23, 12 historical ids added r4 2026-10-24)"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^rust/worker/tests/fixtures/phase_defer\.json$''',
@@ -119,7 +126,19 @@ regexes = ['''^e2e-defer-a-33069540525861094644722115702876536833$''',
            '''^phase-33069540525861169132674685342045962243$''',
            '''^e2e-phase-a-33069540670160061784166484599698882561$''',
            '''^e2e-phase-b-33069540670160144222665750007685054466$''',
-           '''^phase-33069540670160152892635464651174313987$''']
+           '''^phase-33069540670160152892635464651174313987$''',
+           '''^e2e-defer-a-33069397607394545167591213328121200644$''',
+           '''^e2e-defer-a-33069465295839244738770422596414472193$''',
+           '''^e2e-defer-b-33069397607394594328164169764076257285$''',
+           '''^e2e-defer-b-33069465295839301296487752589899726850$''',
+           '''^phase-33069397607394603385515509955466100742$''',
+           '''^phase-33069465295839305354771448806001082371$''',
+           '''^e2e-phase-a-33069397622649438415115238476464783369$''',
+           '''^e2e-phase-a-33069465440153862981330642214886309889$''',
+           '''^e2e-phase-b-33069397622649511593348978882256044042$''',
+           '''^e2e-phase-b-33069465440153917306991939289515819010$''',
+           '''^phase-33069397622649516942904760258026012683$''',
+           '''^phase-33069465440153924519668872109950500867$''']
 
 [[allowlists]]
 # Reason: the worker-core check/redaction tests redact an obviously fake PEM block that sits in

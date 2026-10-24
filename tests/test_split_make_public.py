@@ -383,6 +383,18 @@ def test_leaks_allowlist_only_names_test_paths():
         r"^e2e-phase-a-33069540670160061784166484599698882561$",
         r"^e2e-phase-b-33069540670160144222665750007685054466$",
         r"^phase-33069540670160152892635464651174313987$",
+        r"^e2e-defer-a-33069397607394545167591213328121200644$",
+        r"^e2e-defer-a-33069465295839244738770422596414472193$",
+        r"^e2e-defer-b-33069397607394594328164169764076257285$",
+        r"^e2e-defer-b-33069465295839301296487752589899726850$",
+        r"^phase-33069397607394603385515509955466100742$",
+        r"^phase-33069465295839305354771448806001082371$",
+        r"^e2e-phase-a-33069397622649438415115238476464783369$",
+        r"^e2e-phase-a-33069465440153862981330642214886309889$",
+        r"^e2e-phase-b-33069397622649511593348978882256044042$",
+        r"^e2e-phase-b-33069465440153917306991939289515819010$",
+        r"^phase-33069397622649516942904760258026012683$",
+        r"^phase-33069465440153924519668872109950500867$",
     }
     assert {r for al in lists if al.get("targetRules") == ["generic-api-key"]
             for r in al["regexes"]} == values
@@ -408,8 +420,9 @@ def test_public_phase_values_are_exact():
     import tomllib
     lists = tomllib.loads(LEAKS_CFG.read_text())["allowlists"]
     entry = next(al for al in lists if r"^rust/worker/tests/fixtures/phase_defer\.json$" in al["paths"])
-    assert len(entry["regexes"]) == 6
-    assert all("[0-9]" not in value for value in entry["regexes"])
+    # 6 ids the current fixtures hold + the 12 older generations only git history still has.
+    assert len(entry["regexes"]) == 18
+    assert all("[0-9]" not in value and "\\d" not in value for value in entry["regexes"])
 
 
 def test_public_config_provenance_and_guardrail():

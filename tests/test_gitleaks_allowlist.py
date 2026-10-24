@@ -292,3 +292,88 @@ def test_real_key_inside_the_historical_shape_is_still_reported(tmp_path):
     rc, findings = _scan(exe, tree, CONFIG)
     assert rc == 1 and any(f["RuleID"] == "private-key" for f in findings), \
         f"a real key inside the historical builder shape must never be waived: {findings}"
+
+
+# --- PG-PUBLIC-READY: every replay id the two fixtures ever carried is pinned by value -----
+
+#: The two fixture paths the replay-id waiver is scoped to, and to nothing else.
+PHASE_CARD_PATHS = {
+    r"^rust/worker/tests/fixtures/phase_defer\.json$",
+    r"^rust/worker/tests/fixtures/phase_two_cards\.json$",
+}
+
+#: Synthetic Temporal replay ids carried by `phase_defer.json`: the three the CURRENT fixture
+#: still holds and the six older generations that exist only in git history (the
+#: RT-P1-PHASE-RUNNER S2 commits the history scan still walks).  Hand-listed from the reviewed
+#: brief, never generated -- a config value may only be one of these literals.
+DEFER_REPLAY_IDS = (
+    "e2e-defer-a-33069540525861094644722115702876536833",
+    "e2e-defer-b-33069540525861163949139600629661958146",
+    "phase-33069540525861169132674685342045962243",
+    "e2e-defer-a-33069397607394545167591213328121200644",
+    "e2e-defer-a-33069465295839244738770422596414472193",
+    "e2e-defer-b-33069397607394594328164169764076257285",
+    "e2e-defer-b-33069465295839301296487752589899726850",
+    "phase-33069397607394603385515509955466100742",
+    "phase-33069465295839305354771448806001082371",
+)
+
+#: Same split for `phase_two_cards.json`: three current ids, six historical ones.
+TWO_CARDS_REPLAY_IDS = (
+    "e2e-phase-a-33069540670160061784166484599698882561",
+    "e2e-phase-b-33069540670160144222665750007685054466",
+    "phase-33069540670160152892635464651174313987",
+    "e2e-phase-a-33069397622649438415115238476464783369",
+    "e2e-phase-a-33069465440153862981330642214886309889",
+    "e2e-phase-b-33069397622649511593348978882256044042",
+    "e2e-phase-b-33069465440153917306991939289515819010",
+    "phase-33069397622649516942904760258026012683",
+    "phase-33069465440153924519668872109950500867",
+)
+
+#: The whole reviewed set: 6 ids the current fixtures hold + 12 that live only in history.
+REPLAY_IDS = DEFER_REPLAY_IDS + TWO_CARDS_REPLAY_IDS
+
+
+def _phase_card_entries(config: Path) -> list[dict]:
+    lists = tomllib.loads(config.read_text(encoding="utf-8"))["allowlists"]
+    return [al for al in lists if set(al.get("paths", ())) & PHASE_CARD_PATHS]
+
+
+def test_both_configs_pin_all_18_replay_ids_by_value_and_nothing_broader():
+    """r4: the 12 historical replay ids join the 6 current ones, one literal each.
+
+    `gitleaks git -c .gitleaks.toml --redact` over the real clone still reports the older
+    id generations left in the RT-P1-PHASE-RUNNER S2 commits, so BOTH configs must waive
+    exactly these 18 values -- and the waiver must stay value-scoped:
+
+    * every regex is `^` + one literal from the list + `$`, so a pattern waiver that would
+      also hide a NEW id (`phase-\\d+`, a class, `.*`) can never be pinned here by accident;
+    * the paths stay the reviewed two-fixture set, so no other file is ever exempt;
+    * condition = AND keeps a planted credential-shaped value in the same fixture reported
+      (the generic-api-key findings the waiver does not name are never touched).
+    """
+    for config in (CONFIG, ROOT / "tools/split/gitleaks.toml"):
+        entries = _phase_card_entries(config)
+        assert len(entries) == 1, \
+            f"{config}: exactly one shared phase/card allowlist entry expected: {entries}"
+        entry = entries[0]
+        assert set(entry["paths"]) == PHASE_CARD_PATHS, entry["paths"]
+        assert entry.get("condition") == "AND"
+        assert entry.get("targetRules") == ["generic-api-key"]
+
+        pinned = entry["regexes"]
+        assert len(pinned) == len(REPLAY_IDS) == 18, \
+            f"{config}: {len(pinned)} replay ids pinned, 18 expected"
+
+        literals: set[str] = set()
+        for regex in pinned:
+            assert regex[:1] == "^" and regex[-1:] == "$", f"unanchored: {regex!r}"
+            assert "\\" not in regex and "[" not in regex and "*" not in regex \
+                and "+" not in regex and "?" not in regex and "." not in regex, \
+                f"{config}: not a plain literal: {regex!r}"
+            literal = regex[1:-1]
+            assert literal in REPLAY_IDS, f"{config}: unexpected waiver: {regex!r}"
+            literals.add(literal)
+        assert literals == set(REPLAY_IDS), \
+            f"{config}: missing {sorted(set(REPLAY_IDS) - literals)}"
