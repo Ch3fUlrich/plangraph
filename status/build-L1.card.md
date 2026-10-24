@@ -16,7 +16,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| WAIT-GUARD #158 / LESSONS #156 / B1 | L1 | 04:32Z: l1fix2 mimo running 1h30, B1 L4 mimo f91e71 running; #156 MERGED 5f4782b0 (evidence); #158 l1fix2 mimo run 57f4c8 -> CI + seats; B1 build-L2-lessons-b1 workst |
+| WAIT-GUARD #158 / LESSONS #156 / B1 | L1 | B1-KEEPER GO 05:3xZ (plangraph lane/lessons-b1-keeper off 7e53f0d1, HIGH, D-2506 tier check); 04:32Z: l1fix2 mimo running 1h30, B1 L4 mimo f91e71 running; #156 MERGED 5f4782b0 (evidence); #158 l1fix2 mimo run 57f4c8 -> CI + seats; B1 build-L2-lessons-b1 workst |
 | SEAT-VERDICT-QODER-ALIAS p9 | L1 | D-2495 claimed; writer queued workst after sq10 -> 1 dsfree seat |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (parking) | C1-C3 local 1aa74d0 (contains #139 merge f6b4f6c, no push); STOPPED, handoff C:\fleet\handoff\build-L2-phase-runner.card.md (workst); relaunch with "#139+#140 ON MAIN <sha>" + its handoff |
 | CARD-CHECKS #157 / WF-VERSIONING | build-L2-rt-cards | WFV lane 3 r3 off 7e53f0d1: legs A-F go, Gate-Edit D-n asked router (H1-H4 tests.yml + ci_select); HIGH -> 2 seats + GO. D-2506: standard closes on 1 verdict; tier-check fwd to B1. CARD-CHECKS DONE: merged 7e53f0d1, main CI green, keeper done 2/2 (alibaba). Next lane 3 WF-VERSIONING GO-REQ (Gate-Edit). OLD: 2b b9fc8a7f CI green, qwen delta FIX -> (a) writer F2+F3+sweep -> re-seat -> MERGE-READY |
