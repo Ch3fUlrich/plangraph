@@ -15,7 +15,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | PG-PUBLIC-READY #162 (HIGH) | L1 | MERGED 5bb75e5f (D-2577), main CI green, commit+ci attached; NOT submitted: D-2579 rewrite AFTER PH-MODEL-ROUTE, one announced window + private bundle of old history, then submit + qwen(r8)/gemini(r9,r10) verdicts |
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
-| GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
+| D-2576 FREEZE (ends D-2580 after PH-MODEL-ROUTE prod run) | L1 | only PH-MODEL-ROUTE + incidents merge; HELD: #171 LESSONS-TO-ALGORITHM 2c6dd634 (D-2619: post-freeze judge GO + migration note, escape review_tier high, list existing items); OS-149 M2B, #162 rewrite, flow-oversight-3 relaunch, parked items after |
 | KEEPER-TRAILER-MULTI (HIGH) | L1 via workst | D-2570: #139 CLOSED (fix13 HIGH L1-repro: token-order fail-open). Re-cut lane/keeper-trailer-strict from a6587b14, brief seats/trailer-multi/recut sent 11:4xZ (cx else agy, no mimo). First review 2 non-Claude families != writer, <=3 rounds then stop+report |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
