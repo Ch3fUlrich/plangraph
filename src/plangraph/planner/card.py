@@ -16,10 +16,11 @@ adds the batch glue:
 from __future__ import annotations
 
 import copy
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
+
+from plangraph.card_paths import normalise_path as _normalise_path, path_problem as _path_problem
 
 from plangraph.keeper.credential_guard import guard
 from plangraph.keeper.errors import Refused
@@ -31,12 +32,11 @@ __all__ = ["Card", "CardError", "parse_card", "cards_from_batch", "strip_cards",
 _TEXT_CAP = 2000
 _LIST_CAP = 500
 _ITEM_CAP = 500
-_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks")
-_PATH_LISTS = ("read_set", "write_set", "forbid_paths")
+_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks", "check_reads")
+_PATH_LISTS = ("read_set", "write_set", "forbid_paths", "check_reads")
 _TEXTS = ("check_cmd", "heldout_check", "check_kind")
 _FIELDS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
                      *_LISTS, *_TEXTS))
-_DRIVE_RE = re.compile(r"[A-Za-z]:")
 
 
 class CardError(ValueError):
@@ -65,9 +65,10 @@ class Card:
     risk_tags: tuple[str, ...] = ()
     estimate_tokens: int | None = None
     check_kind: str = "change"
+    check_reads: tuple[str, ...] = ()
 
     def to_store(self) -> dict[str, Any]:
-        """Serialize lists as lists, omitting the legacy-compatible default check kind."""
+        """Serialize all keeper fields, including explicit check defaults."""
         out = {
             "outcome": self.outcome,
             "read_set": list(self.read_set),
@@ -80,34 +81,15 @@ class Card:
             "window_class": self.window_class,
             "risk_tags": list(self.risk_tags),
             "estimate_tokens": self.estimate_tokens,
+            "check_kind": self.check_kind,
+            "check_reads": list(self.check_reads),
         }
-        # Keeper does not yet accept check_kind; preserve its legacy default wire shape.
-        if self.check_kind != "change":
-            out["check_kind"] = self.check_kind
         return out
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "Card":
         """Validate ``raw`` (see :func:`parse_card`) and build the card."""
         return parse_card(raw)
-
-
-def _normalise_path(value: str) -> str | None:
-    """Strip, use forward slashes, collapse ``//``, drop ``.`` components and a trailing
-    ``/`` (so ``src//``, ``src/`` and ``./src`` all become ``src``); ``None`` if empty."""
-    path = value.strip().replace("\\", "/")
-    parts = [p for p in path.split("/") if p not in ("", ".")]
-    return ("/" if path.startswith("/") else "") + "/".join(parts) or None
-
-
-def _path_problem(name: str, original: str, path: str | None) -> str | None:
-    if path is None:
-        return f"{name} entry {original!r} is empty after normalisation"
-    if path.startswith("/") or _DRIVE_RE.match(path):
-        return f"{name} entry {original!r} must be a relative path"
-    if ".." in path.split("/"):
-        return f"{name} entry {original!r} must not contain '..'"
-    return None
 
 
 def _guard_problem(name: str, value: str, problems: list[str]) -> bool:

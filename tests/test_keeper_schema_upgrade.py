@@ -21,6 +21,36 @@ needs_pg = pytest.mark.skipif(not PG_DSN,
                               reason="PG_DSN not set (Postgres service container)")
 
 
+def test_old_cards_gain_check_columns_idempotently(tmp_path):
+    path = tmp_path / "keeper.db"
+    raw = kdb.open_db(path, create=True)
+    tokens = {n: auth.add_principal(raw, n, role, projects, family=fam)
+              for n, role, projects, fam in PRINCIPALS}
+    router = auth.authenticate(raw, tokens["router"])
+    store = Store(raw, clock=Clock())
+    store.create_items(router, [defn("A", []), defn("GOAL", ["A"], kind="goal")])
+    store.put_card(router, "demo:A", {
+        "outcome": "survive upgrade", "check_kind": "regression",
+        "check_reads": ["tests/existing.py"],
+    })
+    raw.close()
+    raw = sqlite3.connect(path, isolation_level=None)
+    raw.execute("ALTER TABLE cards DROP COLUMN check_kind")
+    raw.execute("ALTER TABLE cards DROP COLUMN check_reads")
+    raw.close()
+    for _ in range(2):
+        conn = kdb.open_db(path)
+        cols = {r[1]: r for r in conn.execute("PRAGMA table_info(cards)")}
+        assert cols["check_kind"][4] == "'change'"
+        assert cols["check_reads"][4] == "'[]'"
+        card = Store(conn, clock=Clock()).get_card(
+            auth.authenticate(conn, tokens["router"]), "demo:A")
+        assert card["outcome"] == "survive upgrade"
+        assert card["check_kind"] == "change"
+        assert card["check_reads"] == []
+        conn.close()
+
+
 def make_v9(path):
     """Build a database exactly as schema v9 installed it: today's DDL minus the design-3 part."""
     assert schema.DESIGN3_DDL in schema.SCHEMA

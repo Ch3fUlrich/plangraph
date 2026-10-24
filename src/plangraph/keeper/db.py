@@ -112,7 +112,9 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   # RT-P1 sq5: the owner's principal (V2-1) and the retired-run
                   # fence kept across owner clears (V1-1), SQLite v13 path.
                   ("items", "exec_principal", "TEXT"),
-                  ("items", "exec_retired_runs", "TEXT"))
+                  ("items", "exec_retired_runs", "TEXT"),
+                  ("cards", "check_kind", "TEXT NOT NULL DEFAULT 'change'"),
+                  ("cards", "check_reads", "TEXT NOT NULL DEFAULT '[]'"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
@@ -140,7 +142,8 @@ def _upgrade(conn):
     """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-        if column not in have:
+        # A pre-design-3 database has no cards yet; its CREATE below adds defaults.
+        if have and column not in have:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
     conn.executescript(ALIASES_DDL)
     conn.executescript(RUN_TOKENS_DDL)

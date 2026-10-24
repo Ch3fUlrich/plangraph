@@ -13,7 +13,8 @@
         "not_found": 404,
         "too_large": 413,
         "cursor_gone": 410,
-        "rate_limited": 429
+        "rate_limited": 429,
+        "replay_window_full": 503
       }
     }
   },
