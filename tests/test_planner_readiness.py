@@ -394,3 +394,11 @@ def test_dry_run_too_many_segments_fails_closed(tmp_path):
         False, "too many chained commands (max 5)")
     assert default_dry_run(" && ".join(["true"] * 6), tmp_path) == (
         False, "too many chained commands (max 5)")
+def test_explicit_check_reads_protect_only_non_writes():
+    from plangraph.planner.readiness import protected_check_paths
+
+    assert protected_check_paths({
+        "check_cmd": "pytest tests/check.py",
+        "check_reads": ["fixtures/data.json", "src/a.py", "tests/check.py"],
+        "write_set": ["src/a.py"],
+    }) == ["tests/check.py", "fixtures/data.json"]
