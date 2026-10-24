@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
+import subprocess
+from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -343,6 +346,36 @@ def detect_model_family(model_id: str) -> str:
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
     return row.get('available') == 1 and row.get('active') is True
+
+
+@lru_cache(maxsize=8)
+def served_models(config):
+    """A failed probe is UNKNOWN, never evidence that a model is absent."""
+    from .opencode_overlay import overlay_env
+    env = overlay_env(dict(os.environ))
+    env['OPENCODE_CONFIG_CONTENT'] = config
+    try:
+        result = subprocess.run(['opencode', 'models'], env=env, capture_output=True,
+                                text=True, timeout=10)
+        if result.returncode == 0:
+            return frozenset(line.strip() for line in result.stdout.splitlines()
+                             if '/' in line.strip() and ' ' not in line.strip())
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def host_skip_reason(row, *, probe=None, env=None):
+    from .opencode_overlay import overlay_env
+    harness = row.get('harness')
+    if harness in ('agy', 'qodercli'):
+        return None if shutil.which(harness) else 'harness_missing: ' + harness
+    if harness != 'opencode':
+        return None
+    child = overlay_env(dict(os.environ) if env is None else env)
+    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
+    model = row.get('model') or row.get('id') or row.get('model_id')
+    return 'not_served_on_host: ' + model if models is not None and model not in models else None
 
 
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:

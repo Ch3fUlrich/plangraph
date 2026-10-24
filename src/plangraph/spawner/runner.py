@@ -220,6 +220,9 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        if cmd[0] == 'opencode':
+            from .opencode_overlay import overlay_env
+            child_env = overlay_env(child_env)
 
         if dry_run:
             served_model = model_or_combo
@@ -553,6 +556,18 @@ def spawn_service(*args, **kwargs):
                 return await super()._spawn(card, prompt, role, writer_families, review_of,
                     model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            from .resolver import host_skip_reason
+            admitted, skipped = [], list(getattr(plan, 'skipped', ()))
+            for candidate in plan.legs:
+                reason = (host_skip_reason(dict(model=candidate.model, harness=candidate.harness))
+                          if getattr(self.runner, 'process_factory', None) is asyncio.create_subprocess_exec else None)
+                if reason:
+                    skipped.append(dict(leg=candidate.id, reason=reason, skip_reason=reason))
+                else:
+                    admitted.append(candidate)
+            from dataclasses import replace
+            if hasattr(plan, '__dataclass_fields__'):
+                plan = replace(plan, legs=tuple(admitted), skipped=tuple(skipped))
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
@@ -592,8 +607,14 @@ def spawn_service(*args, **kwargs):
                             await asyncio.shield(task)
                         stop = self.runner.provider_responses.get(job.job_id)
                         reason = None
+                        unavailable = next((line for line in (job.stdout + '\n' + job.stderr).splitlines()
+                            if any(marker in line.lower() for marker in ('model unavailable', 'not served', 'unknown model'))), None)
+                        if unavailable:
+                            job.status = 'failed'
                         if job.status in ('failed', 'skipped'):
                             reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                        if unavailable:
+                            reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop))
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
@@ -601,13 +622,17 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=redact(job.stdout).encode('utf-8')[-4096:].decode('utf-8', errors='ignore'),
                             stderr_tail=redact(job.stderr).encode('utf-8')[-4096:].decode('utf-8', errors='ignore'),
                             events=record.get('events', []) + getattr(job, 'events', []))
-                        if not stop or no_fallthrough or dry_run:
+                        if (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run:
                                 await self._continue_writer(record, job.stdout)
                             return
-                        current = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+                        current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         record['plan'] = current.to_dict()
-                    record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
+                    if any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model')) for a in record['attempts']):
+                        record.update(status='failed', exit_code=1,
+                            error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
+                    else:
+                        record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
                 except Exception as exc:
                     from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                     if isinstance(exc, SpawnRefused):
