@@ -1,0 +1,16 @@
+[
+  {
+    "name": "rate-rejection-preserves-state-and-exact-retry",
+    "fn": "validate_post",
+    "inputs": {
+      "rate_full": true,
+      "retry_after_s": 60
+    },
+    "expect": {
+      "id": "1700000060000-000001",
+      "ts": 1700000060,
+      "msg_id": "message-1",
+      "dup": false
+    }
+  }
+]
