@@ -36,7 +36,7 @@ def test_spawn_starts_nothing(monkeypatch, dry_run, model):
         pytest.fail("process started")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", forbidden)
     runner = SpawnerRunner()
-    with pytest.raises(MimoPathError, match="Mimo requires an exact catalog id") as exc:
+    with pytest.raises(MimoPathError, match=r"Mimo requires one of: mimo/mimo-v2\.6-flash, mimo/mimo-v2\.6-pro") as exc:
         asyncio.run(runner.spawn("test", model_or_combo=model, dry_run=dry_run))
     assert isinstance(exc.value, SpawnRefused)
     assert not runner.jobs and not runner._processes and not runner._tasks

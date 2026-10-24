@@ -90,7 +90,7 @@ def test_catalog_requests_active_rows_only():
         def list_models(self, *, active_only):
             assert active_only is True
             return []
-    assert resolver.get_catalog_models(Catalog()) == []
+    assert resolver.get_catalog_models(Catalog(), active_only=True) == []
 
 
 @pytest.mark.parametrize('entry', ['route', 'runner', 'override', 'service', 'leg', 'cli', 'mcp'])

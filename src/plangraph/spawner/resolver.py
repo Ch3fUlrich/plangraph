@@ -488,20 +488,23 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d.setdefault('harness', 'opencode')
     return d
 
-def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
-    """Retrieve models from SQLite CatalogDB (or fallback dictionary if unavailable)."""
+def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dict[str, Any]]:
+    """Retrieve catalog models, including inactive rows unless explicitly filtered."""
     target_db = db if db is not None else _get_default_catalog_db()
     if target_db is not None:
         if hasattr(target_db, "list_models"):
-            models = target_db.list_models(active_only=True)
+            models = target_db.list_models(active_only=active_only)
             if models is not None:
-                return [_normalize_catalog_row(m) for m in models]
+                return [_normalize_catalog_row(m) for m in models
+                        if not active_only or m.get('active', True)]
         if hasattr(target_db, "get_models"):
             models = target_db.get_models()
             if models is not None:
-                return [_normalize_catalog_row(m) for m in models]
+                return [_normalize_catalog_row(m) for m in models
+                        if not active_only or m.get('active', True)]
 
-    return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS]
+    return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
+            if not active_only or m.get('active', True)]
 
 def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
     """Check if model satisfies context window and price cliff limits.
