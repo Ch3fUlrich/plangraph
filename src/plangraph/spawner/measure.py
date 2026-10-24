@@ -181,7 +181,7 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int | None:
         return None
 
 
-def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) -> int:
+def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) -> int | None:
     """Count the number of files in the repo that import any of the modified modules using AST analysis.
 
     Scopes the fanout check so only files that actually import the modified module(s) are counted,
@@ -210,7 +210,7 @@ def ast_caller_fanout(repo: str | Path | None, modified_paths: Sequence[str]) ->
         try:
             tree = ast.parse(py_file.read_text(encoding="utf-8", errors="replace"))
         except (SyntaxError, OSError):
-            continue
+            return None
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
@@ -342,6 +342,9 @@ def measure(
     else:
         computed_fanout = 0
         sources["fanout"] = "default_zero"
+    if computed_fanout is None:
+        computed_fanout = 13
+        sources['fanout'] = 'not_measured'
 
     docs_only = is_docs_only(norm_paths) if norm_paths else False
 

@@ -94,8 +94,7 @@ class LegStateStore:
         if not self.path.exists():
             return {"state": "ok", "evidence": None}
         if self.path.stat().st_size == 0:
-            with self._connect():
-                pass
+            return {"state": "ok", "evidence": None}
         # Read-only: querying state never creates a database or mutates expiry.
         with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
             db.row_factory = sqlite3.Row

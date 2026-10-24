@@ -158,7 +158,7 @@ def test_mid_fallthrough_bench_refusal(tmp_path, monkeypatch):
         server = MCPSpawnerServer(state=tmp_path)
         calls.clear()
         server.service = service
-        response = await server.handle_rpc_request({'id': 1, 'method': 'tools/call',
+        response = await server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
             'params': {'name': 'plangraph_agent_spawn', 'arguments': {'card': {'estimate_tokens': 100}, 'prompt': 'task', 'require_bench': True, 'wait_seconds': 1}}})
         assert response['error']['code'] == -32602
         assert response['error']['data']['type'] == 'BenchRequired'

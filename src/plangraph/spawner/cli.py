@@ -63,12 +63,19 @@ def main(argv=None):
     service = SpawnService(state=args.state)
     try:
         from .bench_entry import benchmark_options
-        options = benchmark_options(args.require_bench, args.bench_db) if args.verb in ('route', 'spawn') else {}
+        try:
+            options = benchmark_options(args.require_bench, args.bench_db) if args.verb in ('route', 'spawn') else {}
+        except Exception as exc:
+            if args.verb == 'spawn':
+                service.save_refusal(exc, args.role)
+            raise
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':
             if not args.card:
-                raise SpawnRefused('spawn by card; card required')
+                exc = SpawnRefused('spawn by card; card required')
+                service.save_refusal(exc, args.role)
+                raise exc
             payload = dict(card=args.card, prompt=args.prompt, role=args.role,
                 writer_families=args.writer_family, review_of=args.review_of, model=args.model,
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
@@ -77,7 +84,11 @@ def main(argv=None):
             if not args.model and not args.leg:
                 if not args.card:
                     raise ValueError('spawn by card; card required')
-                service.route(args.card, args.role, args.writer_family, args.review_of, **options)
+                try:
+                    service.route(args.card, args.role, args.writer_family, args.review_of, **options)
+                except Exception as exc:
+                    service.save_refusal(exc, args.role)
+                    raise
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:

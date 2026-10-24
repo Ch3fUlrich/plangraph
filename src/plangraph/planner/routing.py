@@ -48,6 +48,10 @@ _PARK_EXITS = frozenset({"contract_defect", "needs_input", "flaky_check", "cance
 class RouteError(ValueError):
     """No usable route (estimate too big, or no eligible leg)."""
 
+    def __init__(self, message, *, exclusion_reasons=None):
+        super().__init__(message)
+        self.exclusion_reasons = dict(exclusion_reasons or {})
+
 
 @dataclass(frozen=True)
 class Route:
@@ -161,7 +165,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         reasons.append(f"excluded {count} legs: {why}")
     if not eligible:
         raise RouteError(f"no eligible leg for {window_class} (effective {effective}): "
-                         + "; ".join(reasons))
+                         + "; ".join(reasons), exclusion_reasons=dropped)
     eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
     level, seats = _review(tags)
@@ -358,7 +362,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
             try:
                 route_card(card, legs=(leg,))
             except RouteError as exc:
-                reason = str(exc).split("excluded 1 legs: ")[-1]
+                reason = next(iter(exc.exclusion_reasons), 'routing_error')
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})

@@ -139,7 +139,12 @@ class MCPSpawnerServer:
     async def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Execute tool and return structured payload."""
         from .bench_entry import benchmark_options
-        options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
+        try:
+            options = benchmark_options(arguments.get('require_bench', False), arguments.get('bench_db')) if name in ('plangraph_agent_route', 'plangraph_agent_spawn') else {}
+        except Exception as exc:
+            if name == 'plangraph_agent_spawn':
+                self.service.save_refusal(exc, arguments.get('role', 'implement'))
+            raise
         if name == 'plangraph_agent_route':
             return self.service.route(arguments['card'], arguments.get('role', 'implement'),
                 arguments.get('writer_families', ()), arguments.get('review_of'), **options).to_dict()
@@ -152,7 +157,9 @@ class MCPSpawnerServer:
         if name == "plangraph_agent_spawn":
             if not arguments.get('card'):
                 from plangraph.planner.routing import SpawnRefused
-                raise SpawnRefused('spawn by card; card required')
+                exc = SpawnRefused('spawn by card; card required')
+                self.service.save_refusal(exc, arguments.get('role', 'implement'))
+                raise exc
             return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
                 role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
@@ -217,7 +224,7 @@ class MCPSpawnerServer:
 
     async def handle_rpc_request(self, req: Mapping[str, Any]) -> dict[str, Any]:
         """Dispatch a single JSON-RPC 2.0 request."""
-        if not isinstance(req, Mapping) or req.get('jsonrpc', '2.0') != '2.0' or not isinstance(req.get('method'), str) or not isinstance(req.get('params', {}), Mapping):
+        if not isinstance(req, Mapping) or req.get('jsonrpc') != '2.0' or not isinstance(req.get('method'), str) or not isinstance(req.get('params', {}), Mapping):
             return {'jsonrpc': '2.0', 'id': None, 'error': {'code': -32600, 'message': 'Invalid request'}}
         req_id = req.get("id")
         method = req.get("method")

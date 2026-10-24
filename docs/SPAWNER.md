@@ -581,3 +581,17 @@ Mimo IDs are case-sensitive: only `mimo/mimo-v2.6-flash` and
 `mimo/mimo-v2.6-pro` are accepted. Mixed-case variants are refused.
 SQLite files are created privately before connecting. On Windows, mode bits do
 not establish a private ACL; operators must secure the state directory ACL.
+# Round-five failure contracts
+
+Spawn refusals, including CLI/MCP preflight failures, persist private run records
+with an exit code. Codes are 1 for execution/I/O failure, 2 for card/policy
+refusal, 3 for benchmark policy/data failure, and 4 for exhausted provider legs.
+If storage itself fails, the original refusal is retained and the persistence
+failure is logged. Explicit override leg IDs are preserved even for shared models.
+
+State queries do not initialize empty SQLite files. AST fanout that cannot read
+or parse a Python file is unknown (`not_measured`), conservatively treated as
+fanout 13 for sizing. Routing exclusion reasons are typed metadata, not parsed
+exception messages. JSON-RPC requests must explicitly include `jsonrpc: "2.0"`.
+Mimo acceptance remains case-sensitive; broad case-insensitive detection only
+identifies malformed spellings for refusal, never for acceptance.

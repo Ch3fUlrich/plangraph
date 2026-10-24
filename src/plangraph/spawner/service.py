@@ -54,17 +54,29 @@ class SpawnService:
         return plan_spawn(card, role=role, writer_families=families, leg_reader=self.leg_reader, benchmark=benchmark, strict=require_bench)
 
     async def spawn(self, *args, **kwargs):
-        from plangraph.planner.routing import SpawnRefused, BenchmarkError
         try:
             return await self._spawn(*args, **kwargs)
         except Exception as exc:
-            record = dict(run_id='run-' + uuid.uuid4().hex, role=kwargs.get('role', 'implement'),
-                          started=time.time(), ended=time.time(),
-                          status='refused' if isinstance(exc, SpawnRefused) else 'failed',
-                          exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
-                          refusal=type(exc).__name__, error=str(exc))
-            self._save(record)
+            self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'))
             raise
+
+    def save_refusal(self, exc, role='implement'):
+        """Persist pre-service refusals using the same record contract."""
+        from plangraph.planner.routing import SpawnRefused, BenchmarkError, BenchRequired
+        record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
+                      started=time.time(), ended=time.time(),
+                      status='refused' if isinstance(exc, SpawnRefused) else 'failed',
+                      exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
+                      refusal=type(exc).__name__, error=str(exc),
+                      legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
+                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [])
+        try:
+            self._save(record)
+        except OSError as storage_error:
+            import logging
+            logging.getLogger(__name__).warning('refusal_save_failed: %s', type(storage_error).__name__)
+            exc.add_note('Refusal record could not be persisted: ' + type(storage_error).__name__)
+        return record
 
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
@@ -87,17 +99,24 @@ class SpawnService:
                 raise SpawnRefused('spawn by card; explicit model required for override')
             hand_picked(target, card, override_reason,
                         log_path=self.state / 'spawn-overrides.jsonl', caller='spawner')
-            chosen = next((l for l in DEFAULT_LEGS if l.model == target), None)
+            chosen = chosen or next((l for l in DEFAULT_LEGS if l.model == target), None)
             if chosen is None:
                 from .resolver import get_catalog_models, detect_model_family
                 from plangraph.planner.legs import Leg
                 row = next((r for r in get_catalog_models() if r['id'] == target), None)
-                if row is None:
+                # A catalog gateway transport explicitly identifies opencode;
+                # absent transport metadata must not silently choose a harness.
+                harness = row.get('harness') if row else None
+                if row and row.get('provider_gateway_mode') == 'omniroute_acp':
+                    harness = harness or 'opencode'
+                if (row is None or row.get('tier') not in ('trial', 'free', 'subscription', 'paid')
+                        or harness not in ('opencode', 'qodercli', 'agy')
+                        or type(row.get('context_tokens')) is not int or row['context_tokens'] <= 0):
                     raise SpawnRefused('override model missing registry data')
                 context = row.get('context_tokens', 0)
                 from plangraph.planner.routing import WINDOW_TOKENS
                 windows = tuple(w for w, n in WINDOW_TOKENS.items() if n <= context)
-                chosen = Leg('override', row['tier'], row.get('harness', 'opencode'), target,
+                chosen = Leg('override', row['tier'], harness, target,
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,))
             if review_of and chosen.family == self.result(review_of).get('writer_family'):

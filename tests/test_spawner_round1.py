@@ -54,7 +54,7 @@ def test_cli_bench_required(tmp_path, capsys):
 def test_mcp_bench_required(tmp_path):
     from plangraph.spawner.mcp import MCPSpawnerServer
     server = MCPSpawnerServer(state=tmp_path)
-    result = asyncio.run(server.handle_rpc_request({'id': 1, 'method': 'tools/call',
+    result = asyncio.run(server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
         'params': {'name': 'plangraph_agent_route', 'arguments': {
             'card': {'estimate_tokens': 100}, 'require_bench': True}}}))
     assert 'benchmark rows missing' in result['error']['message']
@@ -84,7 +84,7 @@ def test_benchmark_entry_roundtrips(tmp_path, capsys, monkeypatch, verb):
     arguments = dict(card={'estimate_tokens': 100}, prompt='task', dry_run=True,
                      require_bench=True, bench_db=str(path))
     def call():
-        return asyncio.run(server.handle_rpc_request({'id': 2, 'method': 'tools/call',
+        return asyncio.run(server.handle_rpc_request({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
             'params': {'name': 'plangraph_agent_' + verb, 'arguments': arguments}}))
     assert call()['result']['isError'] is False
     monkeypatch.setenv('PLANGRAPH_REQUIRE_BENCH', '1')

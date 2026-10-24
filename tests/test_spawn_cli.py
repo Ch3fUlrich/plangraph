@@ -90,7 +90,7 @@ def test_replan_and_all_limited(tmp_path):
                     429, 'provider quota exhausted', {}, 'test')
         count = len(runner.jobs)
         record = await service.spawn(card={'estimate_tokens': 1000}, wait_seconds=None)
-        assert record['exit_code'] == 3
+        assert record['exit_code'] == 4
         assert record['evidence']
         assert record['attempts'] == []
         assert len(runner.jobs) == count

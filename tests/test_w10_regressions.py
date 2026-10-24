@@ -132,7 +132,7 @@ def test_bench_error_public_entries(tmp_path, capsys):
                  '--bench-db', path, '--require-bench']) == 3
     assert 'cannot read' in capsys.readouterr().err
     response = asyncio.run(MCPSpawnerServer(state=tmp_path).handle_rpc_request({
-        'id': 7, 'method': 'tools/call', 'params': {'name': 'plangraph_agent_route',
+        'jsonrpc': '2.0', 'id': 7, 'method': 'tools/call', 'params': {'name': 'plangraph_agent_route',
         'arguments': {'card': {'estimate_tokens': 1}, 'require_bench': True, 'bench_db': path}}}))
     assert response['error']['data']['type'] == 'BenchDataError'
     assert response['error']['data']['legs'] == []

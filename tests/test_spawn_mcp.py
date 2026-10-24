@@ -7,7 +7,7 @@ from plangraph.spawner.mcp import MCPSpawnerServer, TOOLS_METADATA
 def test_missing_card_rpc_error(tmp_path):
     async def run():
         server = MCPSpawnerServer(state=tmp_path)
-        response = await server.handle_rpc_request({'id': 1, 'method': 'tools/call',
+        response = await server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
             'params': {'name': 'plangraph_agent_spawn', 'arguments': {'prompt': 'task',
             'model_or_combo': 'mimo/mimo-v2.6-pro', 'override_reason': 'explicit override test', 'dry_run': True}}})
         assert response['error']['code'] == -32602
@@ -46,11 +46,11 @@ def test_all_six_rpc_tools(tmp_path, monkeypatch):
     async def run():
         server = MCPSpawnerServer(Runner(), state=tmp_path)
         async def call(verb, **arguments):
-            response = await server.handle_rpc_request({'id': 1, 'method': 'tools/call',
+            response = await server.handle_rpc_request({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
                 'params': {'name': 'plangraph_agent_' + verb, 'arguments': arguments}})
             assert not response['result']['isError'], response
             return json.loads(response['result']['content'][0]['text'])
-        listed = await server.handle_rpc_request({'id': 2, 'method': 'tools/list'})
+        listed = await server.handle_rpc_request({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
         schema = next(t for t in listed['result']['tools'] if t['name'] == 'plangraph_agent_spawn')
         assert 'card' in schema['inputSchema']['required']
         assert (await call('route', card={'estimate_tokens': 1000}))['first_leg']

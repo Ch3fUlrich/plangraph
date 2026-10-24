@@ -21,8 +21,10 @@ DEFAULT_ROOTS = (Path(__file__).resolve().parents[1], Path("~/code/AutoOS"),
 
 def model_key_exemptions(text):
     """Tokenize JSONC once, retaining real object ancestry and source lines."""
-    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*[\s\S]*?(?:\*/|$)|[{}:\[\],]', text))
-    if any(t.group().startswith('/*') and not t.group().endswith('*/') for t in tokens):
+    tokens = list(re.finditer(r'"(?:[^"\\]|\\.)*"|//[^\n]*|/\*[\s\S]*?(?:\*/|$)|[{}:\[\],]|"', text))
+    if any(t.group() == '"' for t in tokens):
+        raise ValueError('unterminated string')
+    if any(t.group().startswith('/*') and (len(t.group()) < 4 or not t.group().endswith('*/')) for t in tokens):
         raise ValueError('unterminated block comment')
     tokens = [t for t in tokens if not t.group().startswith(('//', '/*'))]
     stack, key, exempt = [], None, {}

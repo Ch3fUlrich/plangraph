@@ -371,7 +371,7 @@ class SpawnerRunner:
     async def steer(self, job_id: str, message: str) -> dict[str, Any]:
         """Send steer instruction to an active job."""
         if job_id not in self.jobs:
-            raise KeyError(f"Job {job_id} not found")
+            return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
         job.steer_messages.append(message)
 
@@ -380,7 +380,7 @@ class SpawnerRunner:
             return {'ok': False, 'steered': False, 'error': 'no stdin'}
         if proc.stdin.is_closing():
             return {'ok': False, 'steered': False, 'error': 'stdin closing'}
-        if not proc.stdin.is_closing():
+        if proc.stdin is not None:
             try:
                 proc.stdin.write((message + "\n").encode("utf-8"))
                 await proc.stdin.drain()
@@ -462,7 +462,7 @@ def spawn_service(*args, **kwargs):
             self._save(record)
 
             if not plan.legs or plan.error:
-                record.update(status='limited', exit_code=3, ended=time.time(),
+                record.update(status='limited', exit_code=4, ended=time.time(),
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
                 return self.result(run_id)
@@ -495,7 +495,7 @@ def spawn_service(*args, **kwargs):
                             return
                         current = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         record['plan'] = current.to_dict()
-                    record.update(status='limited', exit_code=3, evidence=current.to_dict()['skipped'])
+                    record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
                 except Exception as exc:
                     from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                     if isinstance(exc, SpawnRefused):
