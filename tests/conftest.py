@@ -22,6 +22,16 @@ if str(_SRC) not in sys.path:
 
 def _use_tmpfs_tempdir() -> None:
     # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if worker:
+        # The controller's TMPDIR is inherited. Give non-pytest daemon helpers
+        # their own worker root too (tmp_path is already isolated by xdist).
+        parent = os.environ.get("TMPDIR")
+        path = tempfile.mkdtemp(prefix=f"pgtest-{worker}-", dir=parent)
+        atexit.register(shutil.rmtree, path, ignore_errors=True)
+        os.environ["TMPDIR"] = path
+        tempfile.tempdir = path
+        return
     shm = "/dev/shm"
     if not sys.platform.startswith("linux"):
         return
