@@ -38,8 +38,7 @@ No CLI or MCP endpoint writes leg state. Gateway adapters call
 
 Runtime path: `src/plangraph/planner/routing.py` is the only module allowed to
 import `plangraph.spawner` at runtime; the boundary is enforced by
-`tests/test_spawner_import_guard.py`, and the switch
-`SPAWNER_SELECTION_ENABLED` defaults to `False`.
+`tests/test_spawner_import_guard.py`. Selection runs without a feature flag.
 
 ### Card-driven routing core
 
@@ -61,8 +60,11 @@ all role-policy legs are gaps, `p_source` is `operator-order`, and reasons expli
 say `benchmark data absent` (the legacy `no benchmark p` reason remains compatible).
 `plan_spawn(..., strict=True)` refuses any missing role-policy row with
 `SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
-production CLI's `--require-bench`; CLI wiring is separate. Automatic catalog
-selection stays disabled under the existing import-guard contract.
+production CLI's `--require-bench`.
+
+Operator rules and `route_card` tier order come first; U_core only permutes within a tier.
+CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
+Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
 `benchmark_rows_from_db(path)` returns `(rows_by_model_id, errors)` using SQLite
 read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`

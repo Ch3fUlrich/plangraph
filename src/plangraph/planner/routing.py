@@ -26,7 +26,7 @@ from .legs import DEFAULT_LEGS, TIERS, Leg
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
-            "SPAWNER_SELECTION_ENABLED", "SpawnRefused", "SpawnPlan", "plan_spawn",
+            "SpawnRefused", "SpawnPlan", "plan_spawn",
              "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
 #: Window sizes in tokens.
@@ -37,8 +37,6 @@ USABLE_FRACTION = USABLE_FRACTION_PCT / 100
 #: Attempts on one tier before promotion, and promotions allowed.
 ATTEMPT_BUDGET = 3
 PROMOTIONS = 1
-#: Off until SPAWNER-UTILITY-PROPS closes; the only runtime path for spawner selection is this module.
-SPAWNER_SELECTION_ENABLED = False
 #: Risk tags that keep training-on-data legs away from the card.
 _NO_TRAIN_TAGS = frozenset({"auth", "secrets", "money", "live-step"})
 #: Exit classes where the provider, not the card, failed: rotate inside the tier.
@@ -275,6 +273,7 @@ class SpawnPlan:
     reasons: tuple[str, ...]
     error: str | None = None
     gaps: tuple[dict, ...] = ()
+    candidates: tuple[dict, ...] = ()
 
     @property
     def first_leg(self) -> Leg | None:
@@ -326,6 +325,8 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
                             combo=card.get("combo")) for l in candidates}
     limited = {key for key, state in states.items() if state["state"] == "limited"}
     skipped = []
+    from plangraph.spawner.resolver import score_model
+    candidate_details = []
     # Route each leg through the same canonical eligibility rules to retain
     # individual exclusion reasons even when there is no eligible route.
     for leg in candidates:
@@ -342,12 +343,20 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})
+        row = rows.get(leg.model, rows.get(leg.id))
+        detail = {"leg": leg.id, "tier": leg.tier,
+                  "u_core": score_model(dict(row, tier=leg.tier), role=role,
+                                        need_tokens=card["estimate_tokens"]) if row is not None else None,
+                  "p_source": "measured" if row is not None else "prior"}
+        if reason:
+            detail.update(reason=reason, evidence=states[leg.id]["evidence"])
+        candidate_details.append(detail)
     try:
         route = route_card(card, legs=candidates, unavailable=limited,
                            exclude_families=excluded)
     except RouteError as exc:
         return SpawnPlan((), tuple(skipped), "operator-order", (),
-                         tuple([str(exc), *bench_reasons]), str(exc), gaps)
+                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details))
     ordered = list(route.legs)
     reasons = [*route.reasons, *bench_reasons]
     source = "operator-order"
@@ -378,7 +387,10 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     error = "two distinct review families unavailable" if role == "review" and len(seats) < 2 else None
     if error:
         reasons.append(error)
-    return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps)
+    order = {leg.id: i for i, leg in enumerate(ordered)}
+    candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
+    return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
+                     tuple(candidate_details))
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

@@ -24,8 +24,8 @@ real successful provider response clears it. Queries never update the database.
 Resolver results include state/evidence on every candidate (including excluded
 limited candidates) and the selected leg. MCP catalog queries retain limited
 legs for inspection. `views.leg_state(candidates)` exposes a pure web projection
-without introducing a forbidden runtime spawner import. The planner's existing
-`SPAWNER_SELECTION_ENABLED` flag remains false.
+without introducing a forbidden runtime spawner import. Planner selection runs
+by default, with benchmark utility confined to each operator-selected tier.
 
 The card-driven planner now reads this evidence through `plan_spawn` in
 `planner/routing.py`. Only `limited` excludes a leg; expired and `reprobe` legs
