@@ -16,7 +16,7 @@ unknown or contains anthropic, or a seat whose family covers no listed writer),
 3 no parseable verdict, 4 pass refused.  A Claude (anthropic) seat is accepted
 only over a known non-anthropic writer list.  coverage() computes which writer
 families the recorded seats cover.  A PASS is sent only when finish_reason is
-"stop" AND test_gaming is "no" (case-insensitive); missing, "unsure", "yes" or
+"stop" or "end_turn" AND test_gaming is "no" (case-insensitive); missing, "unsure", "yes" or
 anything else refuses it.  fix/halt verdicts are sent regardless of test_gaming.  The token is read at send time and never printed.
 """
 from __future__ import annotations
@@ -54,6 +54,9 @@ _FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I
 def model_family(model):
     """Family name for a model id, or None when unknown or ambiguous."""
     name = str(model or "").lower().rsplit("/", 1)[-1]
+    # D-1714: qodercli's Efficient alias serves the qwen3.8-flash Alibaba seat.
+    if name == "efficient":
+        return "alibaba"
     found = {family for pattern, family in FAMILIES if re.search(pattern, name)}
     return found.pop() if len(found) == 1 else None
 
@@ -188,9 +191,9 @@ def main(argv=None):
         print("seat_verdict: no parseable VERDICT line", file=sys.stderr)
         return EXIT_NO_VERDICT
     gaming = evidence.get("test_gaming")
-    if ok and (evidence.get("finish_reason") != "stop" or not isinstance(gaming, str)
+    if ok and (evidence.get("finish_reason") not in ("stop", "end_turn") or not isinstance(gaming, str)
                or gaming.strip().lower() != "no"):
-        print("seat_verdict: pass refused (finish_reason not stop or test_gaming not no)",
+        print("seat_verdict: pass refused (finish_reason not stop or end_turn, or test_gaming not no)",
               file=sys.stderr)
         return EXIT_PASS_REFUSED
     covers = sorted({writer for writer in writer_families if writer != family})

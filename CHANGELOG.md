@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- Seat verdicts recognize the exact Efficient model alias from qodercli as an Alibaba seat and accept end_turn as a completed response alongside stop. Other finish reasons, unknown models, writer-family restrictions and test-gaming refusals remain unchanged.
+
 - **RT-P1-EXEC-OWNERSHIP sq9:** check the claim lease before accepting the phase holder's live-set expectation on ask and complete, using park's existing expiry rule. Check hand-back permissions before validating its fields. Cover live and expired leases, delegates and administrators, still-claimed completion and the park path on both keeper backends. Claim the card before the Postgres alarm test records its execution owner.
 
 - **RT-P1-EXEC-OWNERSHIP sq8:** phase cards stay claimed during child runs; accept the worker live-set CAS only for their worker claim holder, without widening Rust states. Refuse first-owner recording on unclaimed cards and remove fabricated delegation from test seeds. Owner-clear audit events use the acting principal and verb time. Reject invalid hand-back flags, and leave owned needs_input cards to their execution instead of moving them backwards through the planner gate. Add a keeper HTTP claim/ask/park/complete regression.
