@@ -16,7 +16,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD p4 | L1 | PR #159 7ef86569 CI green; r4 qwen PASS + dsfree doc-only -> Hand-Edit; GO-REQ sent 02:4xZ (HIGH auth); follow-up BUS-SENDER-KEY-BIND proposed |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| WAIT-GUARD #158 (L1 owns; L2-lessons stopped) + LESSONS B2 #156 | L1 | #156 GO-REQ sent; #158 73a0f669 CI green, r2 dsfree FIX (cycle under lock, regex contract) -> l1fix2 brief seats/wait-guard/FIX-L2-BRIEF.md sent workst |
+| WAIT-GUARD #158 + LESSONS B2 #156 | L1 | #156 GO-REQ sent; #158 l1fix2 writer mimo run 20261024-030128-...57f4c8 (cx 429) -> CI + seats qwen+dsfree |
 | ROUTING-STALL | routing | no reply since 21:20Z; open: GO #140 #139 #156 #159, PG-PUBLIC ruling, BUS-SENDER-KEY-BIND leaf |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (parking) | C1-C3 local 1aa74d0 (contains #139 merge f6b4f6c, no push); STOPPED, handoff C:\fleet\handoff\build-L2-phase-runner.card.md (workst); relaunch with "#139+#140 ON MAIN <sha>" + its handoff |
 | CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | #147 MERGED 34382a1d (dispatch flake rerun -> evidence); lane 2b GO D-2478 (presence-based cols, merge after #140) running; then WF-VERSIONING |
@@ -30,7 +30,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | OCGO-PROBE / OCGO-L1-FALLBACK | released D-2409 | trigger OS-OCL1-ENV |
 - D-2418: plangraph CI stays GitHub-hosted (public repo, D-1718); no runs-on change; BUS-RUST windows build = GitHub-hosted windows.
 ## Traps
-- D-2466: remove coding.vm ~/.claude/CLAUDE.md mimo block when SEAT-FREE-OPENCODE merges (21:4xZ: not on AutoOS main; prepush r2 writer fixing 33-documentation modelID check; B1 waits).
+- D-2466 DONE: SEAT-FREE-OPENCODE on AutoOS main 5ce05dd9; coding.vm CLAUDE.md mimo block removed (backup job tmp). B1 L2-LAUNCH build-L2-lessons-b1 sent workst ~03:1xZ.
 - Keeper refuses reviewer-anthropic verdicts on build-L1 claims (same_family): Haiku seats cannot be recorded; ruling asked 12:4xZ.
 - Never eval a range of mergepath.sh. Verdict needs in_review; mergepath does not submit.
 - ONE final trailer block per commit; Hand-Edit <=10 lines; workflow edit needs Gate-Edit D-n.
