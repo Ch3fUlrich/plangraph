@@ -58,7 +58,8 @@ def _assert_narrow_entry(entry):
         assert _OPEN_BODY.search(value) is None, f"open body: {value!r}"
 
 
-def test_root_and_public_allowlists_match():
+def test_root_and_public_allowlists_match_except_rust_pem():
+    """Name kept for history: the two allowlists now match EXACTLY, nothing is excepted."""
     root = tomllib.loads(CONFIG.read_text(encoding="utf-8"))["allowlists"]
     public = tomllib.loads((ROOT / "tools/split/gitleaks.toml").read_text(
         encoding="utf-8"))["allowlists"]
