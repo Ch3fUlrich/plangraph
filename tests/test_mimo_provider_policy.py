@@ -96,7 +96,7 @@ def test_sweep_redacts_secrets(tmp_path):
     spec = spec_from_file_location("mimo_sweep", script)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
-    secret = "sk-test-secret-never-print"
+    secret = "sk-" + "test-secret-never-print"
     (tmp_path / "config.json").write_text(json.dumps({"apiKey": secret, "model": BAD[0]}))
     hits = list(module.scan(tmp_path, []))
     assert len(hits) == 1

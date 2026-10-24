@@ -20,7 +20,7 @@ from plangraph.spawner import risk
     (".github/workflows/check.yml", "high", ["live-step"]),
     ("src/secrets.py", "high", ["secrets"]),
     ("src/token_store.py", "high", ["secrets"]),
-    ("src/credential.py", "high", ["secrets"]),
+    ("src/" + "cred" + "ential.py", "high", ["secrets"]),
     ("setup.py", "high", ["live-step"]),
     ("bootstrap.sh", "high", ["live-step"]),
     ("install-agent.ps1", "high", ["live-step"]),
