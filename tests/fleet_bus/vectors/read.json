@@ -10,7 +10,7 @@
         "X-Fleet-Sig": "488b1afe220d1c36b558302bcd21c3666e73963d2fce64e924507c1b81ad0d31"
       }
     },
-    "expect": "reader"
+    "expect": ["reader", 100, 0]
   },
   {
     "name": "signed-bad",

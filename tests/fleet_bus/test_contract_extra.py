@@ -34,9 +34,10 @@ def test_authenticated_read_then_page():
     first = send(state)
     second = send(state, nonce="nonce-2", msg_id="message-2", text="second")
     cursor = first["id"]
-    assert c.check_read(lambda kid: SECRET, read_headers(cursor=cursor),
-                        cursor, NOW, state) == "reader"
-    page = c.read_records(state, cursor=cursor, limit=1)
+    accepted = c.check_read(lambda kid: SECRET, read_headers(cursor=cursor),
+                            cursor, NOW, state, limit=1)
+    assert accepted == ("reader", 1, 1)
+    page = c.read_records(state, accepted)
     assert page == {"cursor": second["id"], "records": [
         {"from": "sender", "to": "receiver", "msg_id": "message-2",
          "text": "second", "id": second["id"], "ts": NOW}]}
@@ -92,14 +93,23 @@ def test_read_records_rejects_cursor_evicted_by_ring_overflow():
     state = c.new_state()
     first = send(state)
     for n in range(1, c.RING_CAP + 1):
-        # Independent senders avoid the unrelated per-sender rate limit.
+        # Separate senders and key scopes avoid unrelated rate and nonce caps.
         send(state, **{"from": f"sender-{n}", "nonce": f"nonce-{n + 1}",
+                       "kid": f"key-{n // (c.NONCE_CAP // 32)}",
                        "msg_id": f"message-{n + 1}"})
     assert len(state.ring) == c.RING_CAP
     assert first["id"] not in {record["id"] for record in state.ring}
+    seen = state.seen.copy()
+    rates = {sender: list(stamps) for sender, stamps in state.limiter.senders.items()}
+    nonce_keys, key_counts = state.nonce_keys.copy(), state.key_counts.copy()
     with pytest.raises(c.BusError) as err:
-        c.read_records(state, cursor=first["id"])
+        c.check_read(lambda kid: SECRET, read_headers(cursor=first["id"]),
+                     first["id"], NOW, state)
     assert (err.value.code, err.value.status) == ("cursor_gone", 410)
+    assert state.seen == seen
+    assert {sender: list(stamps) for sender, stamps in state.limiter.senders.items()} == rates
+    assert state.nonce_keys == nonce_keys
+    assert state.key_counts == key_counts
 
 
 def reject_key_lookup(kid):
