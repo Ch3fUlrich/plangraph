@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- Install gitleaks 8.30.1 in the CI pytest job from the pinned GitHub release (tarball plus checksums file fetched with `curl -fsSL`, the asset's own line grepped out of the downloaded checksums file and checked with `sha256sum -c`, fail-closed on mismatch or missing line), extract the single binary to `~/.local/bin`, and require `gitleaks version` to print `8.30.1` before pytest runs.
 - Allowlist the 12 historical synthetic Temporal replay ids by exact `^...$` value in both gitleaks configs (root and public build), beside the 6 the current fixtures hold, so the git-history scan stops reporting the older RT-P1-PHASE-RUNNER S2 fixture generations while a new id or any other credential-shaped value stays reported; pin all 18 ids in both configs, value by value with no pattern regex, and extend the public-build pins to match.
 
 - Pin public leak-scanner exceptions to reviewed fixture values, preserve the exact historical Markdown fixture path, share the narrow fake-PEM waivers, and replace the operational domain with a placeholder while aligning public leak scanner exceptions by exact fixture path and value.
