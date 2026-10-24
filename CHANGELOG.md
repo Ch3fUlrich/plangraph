@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **RT-P1-PHASE-RUNNER S3d holder fix:** accept the real system phase worker's five-state live set only for a current worker_claim-marked lane claim under a non-cancelled gate. Share the claim-door predicate with pre-merge completion and enforce lease expiry through the existing guard; preserve worker-holder and other administrative behavior.
 - **RT-P1-PHASE-RUNNER S3d fix2:** bind system merge evidence to a live gate of the in-review card with an exact shared `Merge phase <gate key>` subject and exactly two parents. Use bounded GitAdapter inspection, reject unverified system proof before lifecycle/evidence writes, and recheck gate binding under the write lock; retain refusal auditing and router behavior.
 - **RT-P1-EXEC-OWNERSHIP sq11:** accept proven completion retries after lease expiry without changing the card or owner, check first completions once with the verb clock, bind worker questions to the live claim, and refuse worker HTTP role overrides.
 - **RT-P1-EXEC-OWNERSHIP sq10:** bind worker completion and alarms to the current claim holder and live lease even when the body has no expected state. Refuse expired claims before recording an execution owner or alarm, inside the write transaction. Keep ask and park behavior unchanged. Add production-body regressions and Postgres parity cases. This is separate from EXEC-PHASE-LEASE renewal during child runs.
