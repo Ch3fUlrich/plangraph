@@ -14,10 +14,10 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
-| BUS-NONCE-FLOOD p4 | L1 | PR #159 fbe5e973 CI green; r2 qwen+dsfree PASS w/ HIGH (per-key window DoS) + MEDs -> fix2 brief seats/bus-nonce-flood/FIX2-BRIEF.md sent workst -> CI + 1 delta seat -> merge (standard, self-approve) |
+| BUS-NONCE-FLOOD p4 | L1 | PR #159 7ef86569 CI green; r4 qwen PASS + dsfree doc-only -> Hand-Edit; GO-REQ sent 02:4xZ (HIGH auth); follow-up BUS-SENDER-KEY-BIND proposed |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| KEEPER-OPERATOR-WAIT-GUARD (p6) + LESSONS-TO-ALGORITHM (p9) | build-L2-lessons (Sonnet, D-2476 A) | #156 L9 MERGE-READY 22583b42 -> GO-REQ sent 02:1xZ; #158 WAIT-GUARD ed68465 CI green, last small fix -> MERGE-READY; B1 after SEAT-FREE-OPENCODE |
-| ROUTING-STALL | routing | no reply since 21:20Z (session "waiting"); open: GO #140 #139 #156, PG-PUBLIC domain ruling, BUS-SENDER-KEY-BIND leaf |
+| WAIT-GUARD #158 (L1 owns; L2-lessons stopped) + LESSONS B2 #156 | L1 | #156 GO-REQ sent; #158 73a0f669 CI green, r2 dsfree FIX (cycle under lock, regex contract) -> l1fix2 brief seats/wait-guard/FIX-L2-BRIEF.md sent workst |
+| ROUTING-STALL | routing | no reply since 21:20Z; open: GO #140 #139 #156 #159, PG-PUBLIC ruling, BUS-SENDER-KEY-BIND leaf |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (parking) | C1-C3 local 1aa74d0 (contains #139 merge f6b4f6c, no push); STOPPED, handoff C:\fleet\handoff\build-L2-phase-runner.card.md (workst); relaunch with "#139+#140 ON MAIN <sha>" + its handoff |
 | CARD-CHECKS #147 / WF-VERSIONING | build-L2-rt-cards | #147 MERGED 34382a1d (dispatch flake rerun -> evidence); lane 2b GO D-2478 (presence-based cols, merge after #140) running; then WF-VERSIONING |
 | RT-OVERSIGHT-KEEPER-SCOPE #138 (HIGH) | build-L2-flow-oversight-3 | IDLE head 448e80a0 (5551bc done); trigger = #140 on main -> I send "#140 ON MAIN" -> Mig8 merge, CI, luna+Haiku |
