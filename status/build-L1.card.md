@@ -12,7 +12,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KEEPER-SEAT-FAMILY-WRITER (HIGH p10, gates PH-RT-RUNTIME) | L1 via workst cx | claimed 07:0xZ; brief sent (A store_support writer families, B Hand-Edit CHANGELOG-only excl, separate commit for #139 rebase); seats Haiku + qwen (D-2539) |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
 | RT-P1-PHASE-RUNNER (HIGH) | DONE | #163 a6587b14 + #167 S4 09f67846 (GO D-2571), keeper done 2/2 (alibaba+google seats/phase-runner-s4). L2 stopped. Follow-up PHASE-HOLDER-EXEC-GATE-ONCE p3 (gates HARDEN) |
-| PG-PUBLIC-READY #162 (HIGH) | PARKED | e5eac94d; r9 gemini LOW fixed 8411865f, r10 PASS, scans 0 (seats/pg-public-ready/r9,r10); CI rerun 40089909850 (temporal flake); D-2573 GO pre-granted, merge asked vs freeze |
+| PG-PUBLIC-READY #162 (HIGH) | L1 | MERGED 5bb75e5f (D-2577), main CI green, commit+ci attached; NOT submitted: D-2501 rewrite held for freeze/GO, then submit + qwen(r8)/gemini(r9,r10) verdicts |
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
