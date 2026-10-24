@@ -1,4 +1,4 @@
-# build-L1 card · gen-25 -> RECYCLE · 2026-10-24 04:5xZ · NO cron · hb loop = job-tmp hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
+# build-L1 card · gen-26 · 2026-10-24 04:3xZ · NO cron · hb loop = jobs/a3c0b4df/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
 Handoff = status/build-L1.handoff.md (gen-25 -> gen-26). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
 Writers: cx/gpt-6.1-sol on workst (inline briefs) > mimo/mimo-v2.6-flash (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats D-2449/2450: qwen qodercli (job-tmp qseat.sh; efficient fallback ok), Haiku (Agent haiku), mimo, luna (workst); deepseek API OUT (402).
@@ -9,14 +9,14 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 2e3253b6, in_review, qwen pass 1/2; dsfree FIX (expired-lease complete/alarm) -> sq10 writer queued workst (D-2498) -> dsfree delta -> deepseek verdict |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | router HOLD; dsfree r6 FIX (interior ./-/_ hides family) -> fix9 writer workst 04:46Z -> CI + dsfree+qwen delta -> GO |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | 04:32Z fix9 launches 04:46Z (main merge local 6b87ec5 unpushed); sq10 + qoder-alias queued behind; router HOLD; dsfree r6 FIX (interior ./-/_ hides family) -> fix9 writer workst 04:46Z -> CI + dsfree+qwen delta -> GO |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
-| PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
+| PG-PUBLIC-READY (HIGH) | L1 | 04:3xZ workst: F2+F3 writer a8de52 stopped on real domain (keeper-proxy README:18,:40, compose:3); *A relayed -> relaunch rebased e612b836 w/ [DOMAIN] scrub. criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
 | JEV-ATTEMPT-THREAD + #96 JEV-SHADOW | DONE | #154 merged de54bb22; JEV-SHADOW closed D-2448 |
 | BUS-NONCE-FLOOD #159 | DONE | merged e612b836, keeper done 2/2 |
 | EXEC-OBSERVED-STATE | L1 queue | follow-up of #140 (router created) |
-| WAIT-GUARD #158 / LESSONS #156 / B1 | L1 | #156 MERGED 5f4782b0 (evidence); #158 l1fix2 mimo run 57f4c8 -> CI + seats; B1 build-L2-lessons-b1 workst |
+| WAIT-GUARD #158 / LESSONS #156 / B1 | L1 | 04:32Z: l1fix2 mimo running 1h30, B1 L4 mimo f91e71 running; #156 MERGED 5f4782b0 (evidence); #158 l1fix2 mimo run 57f4c8 -> CI + seats; B1 build-L2-lessons-b1 workst |
 | SEAT-VERDICT-QODER-ALIAS p9 | L1 | D-2495 claimed; writer queued workst after sq10 -> 1 dsfree seat |
 | RT-P1-PHASE-RUNNER #150 (HIGH) | build-L2-phase-runner (parking) | C1-C3 local 1aa74d0 (contains #139 merge f6b4f6c, no push); STOPPED, handoff C:\fleet\handoff\build-L2-phase-runner.card.md (workst); relaunch with "#139+#140 ON MAIN <sha>" + its handoff |
 | CARD-CHECKS #157 / WF-VERSIONING | build-L2-rt-cards | 2b b9fc8a7f CI green, qwen delta FIX -> (a) writer F2+F3+sweep -> re-seat -> MERGE-READY |
