@@ -99,6 +99,22 @@ class SpawnerRunner:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
 
+    def provider_response(self, job_id, leg, status, body, headers, *, account=None, combo=None, store=None):
+        """Gateway transport callback, NOT child stdout or agent-generated JSON.
+
+        A gateway adapter must call this for the actual HTTP response, including
+        a provider stop before the child exits. Exit codes alone are not evidence.
+        """
+        from plangraph.spawner import leg_state
+
+        if job_id not in self.jobs:
+            raise KeyError(job_id)
+        target = store or leg_state
+        if status in (429, 402):
+            target.record_provider_response(leg, status, body, headers, "runner:gateway-response", account=account, combo=combo)
+        elif 200 <= status < 300:
+            target.record_probe_pass(leg, caller="runner:gateway-response", account=account, combo=combo)
+
     async def spawn(
         self,
         prompt: str,

@@ -69,3 +69,24 @@ def test_no_mcp_writer():
 def test_view():
     from plangraph.views import leg_state
     assert leg_state([{"id": "cx/sol", "leg_state": {"state": "reprobe", "evidence": None}}]) == [{"id": "cx/sol", "leg_state": {"state": "reprobe", "evidence": None}}]
+
+
+@pytest.mark.parametrize("headers,body,reset", [
+    ({"x-ratelimit-reset": "160"}, "", 160),
+    ({}, "quota resets in 2 minutes", 220),
+    ({"Retry-After": "60"}, "", 160),
+])
+def test_reset_formats(store, headers, body, reset):
+    store.record_provider_response("cx/sol", 429, body, headers, "gateway", now=100)
+    assert store.leg_status("cx/sol", now=101)["evidence"]["reset_at"] == reset
+
+
+def test_runner_response_not_agent_claim(store):
+    from plangraph.spawner.runner import SpawnerRunner, JobInfo
+    runner = SpawnerRunner()
+    runner.jobs["test"] = JobInfo("test", "failed", "429 quota", "cx/sol", stdout="429 quota")
+    assert store.leg_status("cx/sol")["state"] == "ok"
+    runner.provider_response("test", "cx/sol", 429, "quota", {}, store=store)
+    assert store.leg_status("cx/sol")["state"] == "limited"
+    runner.provider_response("test", "cx/sol", 200, "success", {}, store=store)
+    assert store.leg_status("cx/sol")["state"] == "ok"

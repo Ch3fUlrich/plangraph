@@ -17,6 +17,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.catalog_seed import TIER_RUNG
 from plangraph.spawner.clients import build_routing_envelope_headers
 from plangraph.spawner.risk import (
@@ -322,7 +323,7 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
-def is_model_available(model: Mapping[str, Any]) -> bool:
+def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
     """Check if model is eligible and available.
 
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
@@ -336,7 +337,8 @@ def is_model_available(model: Mapping[str, Any]) -> bool:
     mid = str(model.get("id") or model.get("model_id") or "").lower()
     if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
         return False
-    return True
+    reader = leg_state_reader or leg_status
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
@@ -543,6 +545,8 @@ def resolve_review_plan(
     combo_name: str = "l2-worker",
     need_tokens: int = 32000,
     db: Any = None,
+    leg_state_reader=None,
+    account=None,
 ) -> dict[str, Any]:
     """Resolve cross-family review plan on shared combo layers.
 
@@ -561,7 +565,12 @@ def resolve_review_plan(
     writer_family = detect_model_family(writer_model)
     reviewer_count = 2 if risk_l in ("high", "critical") else 1
 
-    all_models = get_catalog_models(db)
+    reader = leg_state_reader or leg_status
+    def annotate(m):
+        d = dict(m)
+        d["leg_state"] = reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)
+        return d
+    all_models = [annotate(m) for m in get_catalog_models(db)]
 
     # Filter candidate models
     target_db = db if db is not None else _get_default_catalog_db()
@@ -572,15 +581,15 @@ def resolve_review_plan(
         route_legs = target_db.get_route_legs(combo_name, active_only=True)
         if route_legs:
             candidates = [
-                _normalize_catalog_row(r)
+                annotate(_normalize_catalog_row(r))
                 for r in route_legs
-                if _passes_context_and_cliff(r, need_tokens, role="review")
+                if is_model_available(r, reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
             ]
             combo_priority_legs = True
 
     if not candidates:
         for m in all_models:
-            if not is_model_available(m):
+            if not is_model_available(m, reader, account=account, combo=combo_name):
                 continue
             combos = m.get("combos")
             if combos and combo_name not in combos:
@@ -608,7 +617,7 @@ def resolve_review_plan(
             eligible = [
                 dict(c)
                 for c in all_models
-                if is_model_available(c)
+                if is_model_available(c, reader, account=account, combo=combo_name)
                 and _passes_context_and_cliff(c, need_tokens, role="review")
                 and detect_model_family(str(c.get("id") or c.get("model_id") or ""))
                 not in excluded_families
@@ -656,6 +665,7 @@ def resolve_review_plan(
         {
             "index": 1,
             "model": reviewer_1_id,
+            "leg_state": reviewer_1["leg_state"],
             "family": family_1,
             "combo": combo_name,
             "headers": headers_1,
@@ -687,6 +697,7 @@ def resolve_review_plan(
             {
                 "index": 2,
                 "model": reviewer_2_id,
+                "leg_state": reviewer_2["leg_state"],
                 "family": family_2,
                 "combo": combo_name,
                 "headers": headers_2,
@@ -704,6 +715,7 @@ def resolve_review_plan(
         "need_tokens": need_tokens,
         "reviewer_count": reviewer_count,
         "reviewers": reviewers,
+        "candidates": all_models,
     }
 
 # New helper name: _risk_envelope_intelligence
@@ -717,6 +729,8 @@ def _risk_envelope_intelligence(
     effort: str,
     author_model: str | None,
     db: Any,
+    leg_state_reader=None,
+    account=None,
 ) -> float | None:
     order = ("low", "normal", "high", "critical")
     if risk_l not in order:
@@ -737,6 +751,8 @@ def _risk_envelope_intelligence(
                 relax_floor=True,
                 relax_reason="monotone-envelope",
                 _envelope=False,
+                leg_state_reader=leg_state_reader,
+                account=account,
             )
         except ValueError:
             continue
@@ -759,6 +775,8 @@ def resolve_model_for_task(
     relax_floor: bool = False,
     relax_reason: str = "",
     _envelope: bool = True,
+    leg_state_reader=None,
+    account=None,
 ) -> dict[str, Any]:
     """Resolve the optimal model candidate for a given task role and risk band.
 
@@ -797,13 +815,17 @@ def resolve_model_for_task(
             effort=effort,
             author_model=author_model,
             db=db,
+            leg_state_reader=leg_state_reader,
+            account=account,
         )
 
     min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
+    reader = leg_state_reader or leg_status
     all_models = get_catalog_models(db)
+    all_models = [dict(m, leg_state=reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)) for m in all_models]
 
     def _eligible(m: Mapping[str, Any], require_combo: bool) -> bool:
-        if not is_model_available(m):
+        if not is_model_available(m, reader, account=account, combo=combo_name):
             return False
         combos = m.get("combos")
         if require_combo and combo_name and combos and combo_name not in combos:
@@ -890,6 +912,8 @@ def resolve_model_for_task(
 
     return {
         "model": selected_id,
+        "leg_state": selected["leg_state"],
+        "candidates": all_models,
         "family": selected_family,
         "tier": str(selected.get("tier", "subscription")).lower(),
         "score": score_model(

@@ -16,6 +16,7 @@ import sys
 from typing import Any, Mapping
 
 from plangraph.spawner.clients import effective_child_base_url
+from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.resolver import (
     DEFAULT_FALLBACK_MODELS,
     detect_model_family,
@@ -152,7 +153,8 @@ class MCPSpawnerServer:
             models = get_catalog_models()
             matched: list[dict[str, Any]] = []
             for m in models:
-                if not is_model_available(m):
+                m = dict(m, leg_state=leg_status(m["id"], combo=combo))
+                if not is_model_available(m, lambda *a, **kw: {"state": "ok"}):
                     continue
                 if combo and combo not in m.get("combos", []):
                     continue
