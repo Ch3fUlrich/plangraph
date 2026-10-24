@@ -9,7 +9,7 @@
 
 use crate::attempt::{self, AttemptInput, AttemptResult, LegSpec};
 use crate::harness::HarnessRegistry;
-use crate::keeper::{Alarm, AttemptReport, Claim, Fence, Keeper};
+use crate::keeper::{Alarm, AttemptReport, Claim, ExecId, Fence, Keeper};
 use crate::mergelock::{self, MergeOutcome};
 use crate::question::Question;
 use pg_worker_core::budget;
@@ -115,8 +115,18 @@ pub struct PhaseBranchResult {
 /// Ask the keeper to store an agent question for a card.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AskInput {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_expected_state"
+    )]
+    pub expected_state: Option<Vec<String>>,
     pub card: String,
     pub question: Question,
+    /// The card attempt number (monotone per run), not Temporal's activity
+    /// retry count. Unset on older inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
 }
 
 /// Result of the `card` workflow.
@@ -271,8 +281,18 @@ pub struct MergeResult {
 /// Tell the keeper a card is done.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DoneInput {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_expected_state"
+    )]
+    pub expected_state: Option<Vec<String>>,
     pub card: String,
     pub merged_sha: String,
+    /// The card attempt number (monotone per run), not Temporal's activity
+    /// retry count. Unset on older inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
 }
 
 /// Sweep dead attempts of one repo.
@@ -392,6 +412,86 @@ fn gate_error(e: std::io::Error) -> ActivityError {
     } else {
         activity_error(e)
     }
+}
+
+// Old activity histories carry a single string; keep them readable on replay.
+fn deserialize_expected_state<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum States {
+        One(String),
+        Any(Vec<String>),
+    }
+    Ok(
+        Option::<States>::deserialize(deserializer)?.map(|states| match states {
+            States::One(state) => vec![state],
+            States::Any(states) => states,
+        }),
+    )
+}
+
+/// The execution identity for a keeper call made by this activity: workflow
+/// and run from the activity context, the attempt from the activity input —
+/// the *card* attempt number, monotone per run, never Temporal's
+/// `ActivityInfo::attempt` (the activity retry count, which resets per
+/// activity and would be refused as lower by the Python keeper).
+fn exec_of(
+    ctx: &ActivityContext,
+    attempt: Option<u32>,
+    expected_state: Option<Vec<String>>,
+) -> ExecId {
+    let info = ctx.info();
+    ExecId {
+        workflow_id: info.workflow_id.clone(),
+        run_id: info.workflow_run_id.clone(),
+        attempt,
+        expected_state,
+    }
+}
+
+/// The card attempt a `park` activity input carries as an extra `"attempt"`
+/// key beside the packet fields, `None` when absent, unparseable or outside
+/// `u32` (an unknown key is ignored by `ParkPacket::from_json`, so a bad value
+/// only costs the identity, never the park itself).
+fn park_attempt_of(input: &str) -> Option<u32> {
+    serde_json::from_str::<serde_json::Value>(input)
+        .ok()?
+        .get("attempt")?
+        .as_u64()?
+        .try_into()
+        .ok()
+}
+
+/// The park packet JSON the workflow hands to the `park` activity, with the
+/// card attempt and observed state added as extra top-level keys when known.
+/// [`ParkPacket::from_json`] ignores the extra keys (the activity re-reads them
+/// there to build the [`ExecId`]), so the packet itself round-trips.
+pub fn park_json_with_attempt(
+    p: &ParkPacket,
+    attempt: Option<u32>,
+    expected_state: Option<Vec<String>>,
+) -> String {
+    let mut v: serde_json::Value =
+        serde_json::from_str(&p.to_json()).expect("packet serializes to JSON");
+    if let Some(obj) = v.as_object_mut() {
+        if let Some(attempt) = attempt {
+            obj.insert("attempt".into(), serde_json::json!(attempt));
+        }
+        if let Some(state) = expected_state {
+            obj.insert(
+                "expected_state".into(),
+                if state.len() == 1 {
+                    serde_json::json!(state[0])
+                } else {
+                    serde_json::json!(state)
+                },
+            );
+        }
+    }
+    v.to_string()
 }
 
 /// A wall-clock tick with fresh jitter. Nondeterminism stays in the activity so
@@ -1164,11 +1264,12 @@ impl CardActivities {
     #[activity]
     pub async fn report(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: AttemptReport,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        tokio::task::spawn_blocking(move || keeper.report_attempt(&input))
+        let exec = exec_of(&ctx, Some(input.n.max(1)), None);
+        tokio::task::spawn_blocking(move || keeper.report_attempt(&input, &exec))
             .await
             .map_err(activity_error)?
             .map_err(activity_error)
@@ -1178,14 +1279,30 @@ impl CardActivities {
     #[activity]
     pub async fn park(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: String,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
+        // The card attempt rides along as an extra key of the packet JSON
+        // (`ParkPacket::from_json` ignores it); read it before the blocking
+        // task so the exec identity is built from this activity's context.
+        let expected_state = serde_json::from_str::<serde_json::Value>(&input)
+            .ok()
+            .and_then(|v| {
+                let state = v.get("expected_state")?;
+                if let Some(state) = state.as_str() {
+                    Some(vec![state.to_owned()])
+                } else {
+                    serde_json::from_value::<Vec<String>>(state.clone())
+                        .ok()
+                        .filter(|states| !states.is_empty())
+                }
+            });
+        let exec = exec_of(&ctx, park_attempt_of(&input), expected_state);
         tokio::task::spawn_blocking(move || {
             let packet =
                 ParkPacket::from_json(&input).map_err(|e| activity_error(e.to_string()))?;
-            keeper.park(&packet).map_err(activity_error)
+            keeper.park(&packet, &exec).map_err(activity_error)
         })
         .await
         .map_err(activity_error)?
@@ -1195,11 +1312,12 @@ impl CardActivities {
     #[activity]
     pub async fn complete(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: DoneInput,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        tokio::task::spawn_blocking(move || keeper.complete(&input.card, &input.merged_sha))
+        let exec = exec_of(&ctx, input.attempt, input.expected_state.clone());
+        tokio::task::spawn_blocking(move || keeper.complete(&input.card, &input.merged_sha, &exec))
             .await
             .map_err(activity_error)?
             .map_err(activity_error)
@@ -1209,11 +1327,12 @@ impl CardActivities {
     #[activity]
     pub async fn alarm(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: Alarm,
     ) -> Result<(), ActivityError> {
         let keeper = self.deps.keeper.clone();
-        tokio::task::spawn_blocking(move || keeper.alarm(&input))
+        let exec = exec_of(&ctx, input.attempt, None);
+        tokio::task::spawn_blocking(move || keeper.alarm(&input, &exec))
             .await
             .map_err(activity_error)?
             .map_err(activity_error)
@@ -1227,13 +1346,14 @@ impl CardActivities {
     #[activity]
     pub async fn ask_question(
         self: Arc<Self>,
-        _ctx: ActivityContext,
+        ctx: ActivityContext,
         input: AskInput,
     ) -> Result<Option<i64>, ActivityError> {
         let keeper = self.deps.keeper.clone();
+        let exec = exec_of(&ctx, input.attempt, input.expected_state.clone());
         let res = tokio::task::spawn_blocking(move || {
             retry_transient(&TRANSIENT_BACKOFF, || {
-                keeper.ask_question(&input.card, &input.question)
+                keeper.ask_question(&input.card, &input.question, &exec)
             })
         })
         .await
@@ -1467,6 +1587,81 @@ mod tests {
         }
     }
 
+    // Exercise Activities::report itself: testing exec_of alone would not catch
+    // replacing its call in report with ExecId::default(). No git fixture needed.
+    #[temporalio_macros::workflow]
+    #[derive(Default)]
+    pub struct ReportIdentity;
+
+    #[temporalio_macros::workflow_methods]
+    impl ReportIdentity {
+        #[run]
+        pub async fn run(
+            ctx: &mut temporalio_sdk::WorkflowContext<Self>,
+            input: AttemptReport,
+        ) -> temporalio_sdk::WorkflowResult<()> {
+            ctx.execute_activity(
+                CardActivities::report,
+                input,
+                temporalio_sdk::ActivityOptions::start_to_close_timeout(Duration::from_secs(10)),
+            )
+            .await?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn report_carries_the_real_workflow_run_and_card_attempt() {
+        use temporalio_client::{
+            Client, ClientOptions, Connection, ConnectionOptions, Url, WorkflowFetchHistoryOptions,
+            WorkflowGetResultOptions, WorkflowStartOptions,
+        };
+        use temporalio_sdk::{Runtime, Worker, WorkerOptions};
+        let Ok(addr) = std::env::var("PG_TEMPORAL_ADDR") else {
+            return;
+        };
+        if addr.is_empty() {
+            return;
+        }
+        tokio::task::LocalSet::new().run_until(async move {
+            let runtime = Runtime::from_current_tokio(Default::default()).expect("runtime");
+            let conn = Connection::connect(ConnectionOptions::new(addr.parse::<Url>().unwrap()).build())
+                .await.unwrap();
+            let client = Client::new(conn, ClientOptions::new("default").build()).unwrap();
+            let id = format!("report-identity-{}-{}", std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+            let keeper = Arc::new(StubKeeper::default());
+            let mut d = deps();
+            d.keeper = keeper.clone();
+            let opts = WorkerOptions::new(id.as_str())
+                .register_workflow::<ReportIdentity>().unwrap()
+                .register_activities(CardActivities::new(d)).build();
+            let mut worker = Worker::new(&runtime, client.clone(), opts).unwrap();
+            let polling = tokio::task::spawn_local(async move { worker.run().await });
+            let report = AttemptReport {
+                card: "identity-card".into(), n: 7, leg: "leg".into(),
+                exit_class: pg_worker_core::exit_class::ExitClass::Ok,
+                diff_hash: "hash".into(), check_tail: String::new(),
+            };
+            client.start_workflow(ReportIdentity::run, report.clone(),
+                WorkflowStartOptions::new(id.as_str(), id.as_str()).build()).await.unwrap();
+            let handle = client.get_workflow_handle::<ReportIdentity>(id.as_str());
+            tokio::time::timeout(Duration::from_secs(30),
+                handle.get_result(WorkflowGetResultOptions::default())).await.unwrap().unwrap();
+            let bytes = handle.fetch_history(WorkflowFetchHistoryOptions::default()).to_json().await.unwrap();
+            polling.abort();
+            let history: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let run_id = history["events"][0]["attributes"]["WorkflowExecutionStartedEventAttributes"]
+                ["first_execution_run_id"].as_str().expect("real server run id");
+            assert!(!run_id.is_empty());
+            assert_eq!(keeper.attempts(), vec![report]);
+            assert_eq!(keeper.attempt_execs(), vec![ExecId {
+                workflow_id: Some(id), run_id: Some(run_id.to_owned()),
+                attempt: Some(7), expected_state: None,
+            }]);
+        }).await;
+    }
+
     /// Defaults with the watchdogs shrunk so probes finish quickly.
     fn tiny() -> Config {
         Config {
@@ -1555,8 +1750,10 @@ mod tests {
             detail: String::new(),
         });
         round_trip(&DoneInput {
+            expected_state: None,
             card: "c1".to_string(),
             merged_sha: "sha".to_string(),
+            attempt: None,
         });
         round_trip(&JanitorInput {
             repo: "/r".to_string(),
@@ -1601,6 +1798,99 @@ mod tests {
         assert_eq!(out.detail, "");
         assert_eq!(out.merged_sha.as_deref(), Some("sha"));
         assert_eq!(out.attempts, 1);
+    }
+
+    /// The park activity input carries the card attempt as an extra top-level
+    /// key: `park_json_with_attempt` adds it, and `ParkPacket::from_json` still
+    /// parses the result because it ignores unknown keys.
+    #[test]
+    fn park_json_with_attempt_carries_the_attempt_and_still_parses() {
+        use pg_worker_core::exit_class::ExitClass;
+        use std::collections::BTreeSet;
+        let p = ParkPacket {
+            card: "c1".to_string(),
+            tier: Tier::Free,
+            exit_class: ExitClass::CheckFail,
+            check_tail: "boom".to_string(),
+        };
+
+        let tagged = park_json_with_attempt(&p, Some(4), Some(vec!["running".into()]));
+        let any = park_json_with_attempt(
+            &p,
+            Some(4),
+            Some(
+                crate::keeper::WORKER_LIVE_STATES
+                    .iter()
+                    .map(|s| (*s).to_owned())
+                    .collect(),
+            ),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&any).unwrap()["expected_state"],
+            serde_json::json!(["open", "ready", "running", "waiting", "needs_input"])
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&tagged).unwrap()["expected_state"],
+            "running"
+        );
+        let v: serde_json::Value = serde_json::from_str(&tagged).unwrap();
+        assert_eq!(v["attempt"], 4);
+        assert_eq!(
+            v.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "card",
+                "tier",
+                "exit_class",
+                "check_tail",
+                "attempt",
+                "expected_state",
+            ])
+        );
+        assert_eq!(ParkPacket::from_json(&tagged).unwrap(), p);
+        // The activity reads the same key back out of the input.
+        assert_eq!(park_attempt_of(&tagged), Some(4));
+
+        let attempt_only = park_json_with_attempt(&p, Some(4), None);
+        let v: serde_json::Value = serde_json::from_str(&attempt_only).unwrap();
+        assert_eq!(
+            v.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["card", "tier", "exit_class", "check_tail", "attempt"])
+        );
+        assert_eq!(v["attempt"], 4);
+        assert_eq!(ParkPacket::from_json(&attempt_only).unwrap(), p);
+        assert_eq!(park_attempt_of(&attempt_only), Some(4));
+
+        // Unset attempt: the plain packet JSON, no extra key at all.
+        let plain = park_json_with_attempt(&p, None, None);
+        let v: serde_json::Value = serde_json::from_str(&plain).unwrap();
+        assert_eq!(
+            v.as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["card", "tier", "exit_class", "check_tail"])
+        );
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&plain)
+                .unwrap()
+                .get("expected_state")
+                .is_none()
+        );
+        assert_eq!(
+            v,
+            serde_json::from_str::<serde_json::Value>(&p.to_json()).unwrap()
+        );
+        assert_eq!(ParkPacket::from_json(&plain).unwrap(), p);
+        assert_eq!(park_attempt_of(&plain), None);
     }
 
     #[test]

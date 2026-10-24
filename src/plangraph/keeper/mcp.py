@@ -40,6 +40,8 @@ def _tool(name, description, props=None, required=()):
 
 #: Terse on purpose: tools/list is paid for on every session.
 TOOLS = (
+    _tool("requeue", "Router: revive a parked card and retire its exec run.",
+          {"key": {"type": "string"}, "reason": {"type": "string"}}, ("key",)),
     _tool("ready", "Open items whose deps are done; mine=your items, agent=no operator steps.",
           {"project": {"type": "string"}, "n": {"type": "integer"}, "owner": {"type": "string"},
            "mine": {"type": "boolean"}, "agent": {"type": "boolean"}}),
@@ -141,6 +143,7 @@ _ROUTES = {
     "withdraw_review": ("POST", "withdraw_review"),
     "reopen": ("POST", "reopen"),
     "set_kind": ("POST", "set_kind"),
+    "requeue": ("POST", "requeue"),
     "answer": ("POST", "answer"),
     "set_legacy_state": ("POST", "set_legacy_state"),
     "apply_ops": ("POST", "apply_ops"),

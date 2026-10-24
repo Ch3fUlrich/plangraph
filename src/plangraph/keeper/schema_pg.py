@@ -307,6 +307,8 @@ CREATE TABLE cards (
     check_cmd       TEXT COLLATE "C",
     smoke_checks    TEXT COLLATE "C" NOT NULL DEFAULT '[]',
     heldout_check   TEXT COLLATE "C",
+    check_kind     TEXT COLLATE "C" NOT NULL DEFAULT 'change',
+    check_reads    TEXT COLLATE "C" NOT NULL DEFAULT '[]',
     window_class    TEXT COLLATE "C" CHECK (window_class IN ({_in(WINDOW_CLASSES)})),
     risk_tags       TEXT COLLATE "C" NOT NULL DEFAULT '[]',
     estimate_tokens BIGINT,
@@ -445,12 +447,30 @@ CREATE TABLE jev_shadow (
 CREATE INDEX idx_jev_shadow_key ON jev_shadow(key);
 """
 
+#: RT-P1-EXEC-OWNERSHIP: exec-ownership columns on ``items``.  These land as PG
+#: migration 7 because migration 6 already shipped with the JEV shadow table
+#: (#96, merged first).  The store records the columns when a set-state move
+#: carries a ``(workflow_id, run_id, attempt)`` run; see ``store_cards._exec_check``.
+#: sq5: ``exec_principal`` binds the owner to the worker principal that recorded
+#: it (V2-1) and ``exec_retired_runs`` is the retired-run fence every owner clear
+#: keeps (V1-1) -- both are additive parts of the SAME migration 7 and of the
+#: SQLite v13 upgrade path, so ``LATEST`` stays 7.
+_V7 = """
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_workflow_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_run_id TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_attempt BIGINT;
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_principal TEXT COLLATE "C";
+ALTER TABLE items ADD COLUMN IF NOT EXISTS exec_retired_runs TEXT COLLATE "C";
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
               Migration(4, "governor: metrics", _V4),
               Migration(5, "locks: merge_locks", _V5),
-              Migration(6, "jev: jev_shadow", _V6))
+              Migration(6, "jev: jev_shadow", _V6),
+              Migration(7, "exec ownership: items exec_workflow_id/exec_run_id/exec_attempt"
+                           "/exec_principal/exec_retired_runs", _V7))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (\w+) \(\n(.*?)\n\);", re.S)
@@ -473,4 +493,8 @@ def parse_tables(ddl: str) -> dict:
             if m and m.group(1) not in _NOT_COLUMNS:
                 cols.append((m.group(1), "NOT NULL" in line))
         out[name] = cols
+    for match in re.finditer(
+            r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]+);", ddl):
+        table, column, declaration = match.groups()
+        out[table].append((column, "NOT NULL" in declaration))
     return out

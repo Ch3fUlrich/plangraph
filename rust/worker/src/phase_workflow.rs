@@ -20,6 +20,40 @@ use crate::phase::{
 };
 use crate::workflow::{Card, CardInput};
 
+fn with_gate_inputs(legacy: crate::activities::CardInput) -> CardInput {
+    CardInput {
+        risk_tagged: legacy.claim.risk_tagged,
+        heldout_cmd: legacy.claim.heldout_cmd.clone(),
+        smoke_checks: legacy.claim.smoke_checks.clone(),
+        exports: legacy.claim.exports.clone(),
+        base_sha: Some(legacy.claim.base_sha.clone()),
+        legacy,
+    }
+}
+
+#[cfg(test)]
+mod gate_input_tests {
+    use super::*;
+
+    #[test]
+    fn claim_gate_metadata_reaches_card_input() {
+        let legacy = serde_json::from_value(serde_json::json!({
+            "claim": {"card":"a", "repo":"r", "base_sha":"abc",
+                "check_cmd":"check", "allow":[], "forbid":[], "prompt":"fix",
+                "risk_tagged":true, "heldout_cmd":"heldout",
+                "smoke_checks":["smoke"], "exports":["api"]},
+            "legs":[], "workroot":"work", "main_branch":"main"
+        }))
+        .unwrap();
+        let input = with_gate_inputs(legacy);
+        assert!(input.risk_tagged);
+        assert_eq!(input.heldout_cmd, "heldout");
+        assert_eq!(input.smoke_checks, vec!["smoke"]);
+        assert_eq!(input.exports, vec!["api"]);
+        assert_eq!(input.base_sha.as_deref(), Some("abc"));
+    }
+}
+
 #[workflow]
 #[derive(Default)]
 pub struct Phase {}
@@ -182,21 +216,14 @@ impl Phase {
                     ..claim
                 };
 
-                let card_input = CardInput {
-                    legacy: crate::activities::CardInput {
-                        claim,
-                        legs,
-                        workroot: input.workroot.clone(),
-                        main_branch: branch.clone(),
-                        question_wait_cap_s: None,
-                        max_question_rounds: None,
-                    },
-                    risk_tagged: false,
-                    heldout_cmd: String::new(),
-                    smoke_checks: Vec::new(),
-                    exports: Vec::new(),
-                    base_sha: None,
-                };
+                let card_input = with_gate_inputs(crate::activities::CardInput {
+                    claim,
+                    legs,
+                    workroot: input.workroot.clone(),
+                    main_branch: branch.clone(),
+                    question_wait_cap_s: None,
+                    max_question_rounds: None,
+                });
 
                 let child_id = card_workflow_id(input.key.as_str(), card.key.as_str(), 1);
                 match ctx
