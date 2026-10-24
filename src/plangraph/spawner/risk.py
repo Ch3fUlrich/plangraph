@@ -112,12 +112,12 @@ def _path_rules(path: str, *, include_non_code: bool = False) -> list[tuple[str,
         or bool(set(segments[:-1]) & {"docs", "doc", "tests", "test"})
         or stem.startswith("test_") or stem.endswith("_test")
     )
-    if non_code and not include_non_code:
-        return []
-    matches = [(band, tags) for keywords, band, tags in _TOKEN_RULES if keywords & tokens]
+    matches = [(band, tags) for keywords, band, tags in _TOKEN_RULES
+               if keywords & tokens and (include_non_code or not non_code)]
     # Structural rules use exact directory segments. The two explicit filename
     # families (engine*, install*) are the only intentional prefix matches.
     structural_rules = (
+        ("keeper" in segments[:-1] and stem == "schema", ("migration",)),
         ("keeper" in segments[:-1] and stem.startswith("engine"), ("live-step",)),
         ("schema" in segments[:-1] and extension == "sql", ("migration",)),
         (any(segments[i:i + 2] == (".github", "workflows")
@@ -195,8 +195,6 @@ def evaluate_risk(
     if crit_paths:
         risk_band = "critical"
         reasons.append(f"Touches critical path(s): {', '.join(crit_paths)}")
-    elif risk_tags:
-        risk_band = 'high'
     elif hr_paths and (not has_tests or bucket == "S4"):
         risk_band = "critical"
         reasons.append(f"High-risk path(s) {', '.join(hr_paths)} combined with unverified/S4 state")
@@ -212,6 +210,8 @@ def evaluate_risk(
     elif fanout > 10:
         risk_band = "high"
         reasons.append(f"High fanout reference count: {fanout}")
+    elif risk_tags:
+        risk_band = 'high'
     elif is_docs_only or is_pure_doc or (bucket == "S0" and not hr_paths and fanout == 0):
         risk_band = "low"
         reasons.append("Docs-only or trivial S0 change")
@@ -228,7 +228,8 @@ def evaluate_risk(
     reviewer_count = max(2 if risk_band in ("high", "critical") else 1,
                          RISK_REVIEWER_COUNT[risk_band])
 
-    if risk_band in ("low", "normal") and is_pure_doc and bucket == "S0" and not (crit_paths or hr_paths):
+    pure_paths = bool(normalized_paths) and all(p.rsplit('.', 1)[-1] in _DOC_EXTENSIONS for p in normalized_paths)
+    if risk_band in ("low", "normal") and pure_paths and is_pure_doc and bucket == "S0" and not (crit_paths or hr_paths):
         reviewer_count = 0
 
     return RiskAssessment(

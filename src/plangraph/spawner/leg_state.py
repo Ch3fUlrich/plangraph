@@ -77,7 +77,7 @@ class LegStateStore:
             raise LegStateError("requires provider 429/402 and caller")
         if not isinstance(body, str) or (not body.strip() and not any(headers.get(k) for k in ("retry-after", "x-ratelimit-reset"))):
             raise LegStateError("requires provider body or reset header")
-        if not isinstance(leg, str) or "/" not in leg:
+        if not isinstance(leg, str) or not leg.strip():
             raise LegStateError("requires provider/model leg")
         reset = _reset(headers, body, now)
         with self._connect() as db:
@@ -93,6 +93,9 @@ class LegStateStore:
         now = time.time() if now is None else now
         if not self.path.exists():
             return {"state": "ok", "evidence": None}
+        if self.path.stat().st_size == 0:
+            with self._connect():
+                pass
         # Read-only: querying state never creates a database or mutates expiry.
         with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
             db.row_factory = sqlite3.Row

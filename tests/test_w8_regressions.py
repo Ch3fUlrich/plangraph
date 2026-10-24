@@ -34,7 +34,7 @@ def test_bench_typed():
 
 def test_review_exemption_explicit():
     from plangraph.spawner.risk import evaluate_risk
-    assert evaluate_risk(is_pure_doc=True, bucket='S0').review_exempt is True
+    assert evaluate_risk(paths=['docs/guide.md'], is_pure_doc=True, bucket='S0').review_exempt is True
     assert evaluate_risk(paths=['auth.py'], is_pure_doc=True, bucket='S0').review_exempt is False
 
 @pytest.mark.parametrize('risk', ['normal', 'high', 'critical'])

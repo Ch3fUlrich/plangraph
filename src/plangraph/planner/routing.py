@@ -208,7 +208,11 @@ class SpawnRefused(RouteError):
     """A spawn lacks its mandatory card or explicit audited override."""
 
 
-class BenchRequired(SpawnRefused):
+class BenchmarkError(SpawnRefused):
+    """Benchmark policy or storage failure."""
+
+
+class BenchRequired(BenchmarkError):
     """Strict benchmark policy refused one or more candidate legs."""
 
     def __init__(self, message, legs=()):
@@ -217,7 +221,7 @@ class BenchRequired(SpawnRefused):
         self.legs = [leg['leg'] if isinstance(leg, dict) else leg for leg in legs]
 
 
-class BenchDataError(BenchRequired):
+class BenchDataError(BenchmarkError):
     """Benchmark storage could not be read; not missing model coverage."""
 
 
@@ -294,6 +298,21 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required")
+    for field in ('paths', 'write_set', 'risk_tags'):
+        if field in card and (not isinstance(card[field], (list, tuple)) or
+                              not all(isinstance(v, str) for v in card[field])):
+            raise SpawnRefused(f'{field} must be a list of strings')
+    for field in ('has_tests', 'is_pure_doc', 'is_docs_only'):
+        if field in card and type(card[field]) is not bool:
+            raise SpawnRefused(f'{field} must be boolean')
+    for field in ('estimate_tokens', 'reviewer_count', 'fanout'):
+        if field in card and (not _is_int(card[field]) or card[field] < (1 if field == 'estimate_tokens' else 0)):
+            raise SpawnRefused(f'{field} must be a valid integer')
+    for field, allowed in (('bucket', ('S0', 'S1', 'S2', 'S3', 'S4')), ('window_class', WINDOW_CLASSES)):
+        if field in card and card[field] not in allowed:
+            raise SpawnRefused(f'{field} has invalid value')
+    if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
+        raise SpawnRefused('risk_tags has invalid value')
     if role not in ("implement", "review"):
         raise ValueError("role must be implement|review")
     from plangraph.spawner.risk import evaluate_risk
