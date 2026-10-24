@@ -90,7 +90,11 @@ def test_catalog_requests_active_rows_only():
         def list_models(self, *, active_only):
             assert active_only is True
             return []
-    assert resolver.get_catalog_models(Catalog(), active_only=True) == []
+    # D-2631: an empty SQLite catalog uses the explicitly admitted offline rows.
+    rows = resolver.get_catalog_models(Catalog(), active_only=True)
+    assert rows == [resolver._normalize_catalog_row(r) for r in resolver.DEFAULT_FALLBACK_MODELS
+                    if resolver.catalog_row_admitted(r)]
+    assert all(resolver.catalog_row_admitted(r) for r in rows)
 
 
 @pytest.mark.parametrize('entry', ['route', 'runner', 'override', 'service', 'leg', 'cli', 'mcp'])
