@@ -171,7 +171,9 @@ def test_wait_signals_are_additive(w, monkeypatch, signal):
     assert any(r.get("kind") == "operator_wait_unlinked" for r in rows)
 
 
-@pytest.mark.parametrize("text", ["Status: IDLE until operator", "Work is waiting on OS-12"])
+@pytest.mark.parametrize("text", ["Status: IDLE until operator", "waiting_on: operator",
+                                      "Waiting on OS-123", "Notes. IDLE until operator",
+                                      "Notes; waiting on operator", "Notes\nIDLE until operator"])
 def test_labeled_wait_marker(w, text):
     w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
     to_claimed(w, "demo:WORK", "workerA")
@@ -186,6 +188,45 @@ def test_genuine_wait_preferred(w, monkeypatch):
     rows = [r for r in w.store.needs_you(w.p("reader")) if r["key"] == "demo:WORK"]
     assert len(rows) == 1
     assert rows[0]["kind"] == "question"
+
+
+@pytest.mark.parametrize("text", ["Work is waiting on OS-12", "Notes about IDLE until operator",
+                                      "IDLE notes: see ticket operator-123",
+                                      "IDLE until operator-sync", "IDLE until team-operator-sync",
+                                      "IDLE until operator_x"])
+def test_wait_rejects_prose_and_identifiers(w, text):
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
+    to_claimed(w, "demo:WORK", "workerA")
+    assert not any(r.get("kind") == "operator_wait_unlinked"
+                   for r in w.store.needs_you(w.p("reader")))
+
+
+@pytest.mark.parametrize("signal,expected", [("operator", True), ("OS-123", True),
+    ("operator approval", True), ("operator-123", False), ("operator-sync", False),
+    ("team-operator-sync", False), ("operator_x", False)])
+def test_waiting_on_standalone_operator(w, monkeypatch, signal, expected):
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item.update(waiting_on=signal)
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    assert any(r.get("kind") == "operator_wait_unlinked"
+               for r in w.store.needs_you(w.p("reader"))) == expected
+
+
+@pytest.mark.parametrize("kind", ["question", "operator_task"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_genuine_wait_preferred_in_both_row_orders(w, monkeypatch, kind, reverse):
+    from plangraph.keeper import store_needs
+
+    to_claimed(w, "demo:WORK", "workerA")
+    item = w.store._item("demo:WORK")
+    item.update(note="IDLE until operator")
+    monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+    human = {"key": item["key"], "kind": kind, "wait": "answer" if kind == "question" else "task"}
+    flag = {"key": item["key"], "kind": "operator_wait_unlinked", "wait": "task"}
+    rows = [flag, human] if reverse else [human, flag]
+    monkeypatch.setattr(store_needs.views, "needs_you", lambda *args, **kwargs: rows)
+    assert w.store.needs_you(w.p("reader")) == [human]
 
 
 def test_missing_project_and_empty_scope(w, monkeypatch):

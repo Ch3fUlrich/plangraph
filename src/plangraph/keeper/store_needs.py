@@ -6,8 +6,11 @@ import re
 
 from .. import views
 
-_OPERATOR = re.compile(r"\boperator\b|\bOS-\d+", re.I)
-_WAIT = re.compile(r"\b(?:IDLE|waiting(?:_on| on))\b[^\n.;]*(?:" + _OPERATOR.pattern + ")", re.I)
+# Hyphens belong to identifiers, not standalone human-wait signals.
+_OPERATOR = re.compile(r"(?<![\w-])(?:operator|OS-\d+)(?![\w-])", re.I)
+_WAIT = re.compile(
+    r"(?:^|[\n.;])[ \t]*(?:[A-Za-z][A-Za-z ]{0,19}:[ \t]*)?"
+    r"(?:IDLE|waiting(?:_on| on))\b[^\n.;]*(?:" + _OPERATOR.pattern + ")", re.I)
 
 
 class NeedsMixin:
@@ -23,13 +26,18 @@ class NeedsMixin:
                  if principal.role in ("router", "reader", "system")
                  or it.get("project") in (principal.projects or [])]
         rows = views.needs_you(items, project=project)
+        # Prefer genuine waits regardless of the order supplied by the view.
+        human_keys = {row["key"] for row in rows
+                      if row.get("kind") != "operator_wait_unlinked"}
+        rows = [row for row in rows if row.get("kind") != "operator_wait_unlinked"
+                or row["key"] not in human_keys]
         by_key = {item["key"]: item for item in items}
         for item in items:
             if item["state"] not in ("claimed", "in_review"):
                 continue
             if project is not None and item.get("project") != project:
                 continue
-            text = " ".join(str(item.get(field) or "") for field in
+            text = "\n".join(str(item.get(field) or "") for field in
                             ("note", "description", "done_criteria"))
             waiting = _OPERATOR.search(str(item.get("waiting_on") or "")) or _WAIT.search(text)
             if not waiting:
