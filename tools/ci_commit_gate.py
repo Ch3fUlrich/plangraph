@@ -9,6 +9,8 @@ cannot exempt the commits it introduces.
 that ref's second parent is the PR's own head. The --open-heads file must be
 regenerated per run from OPEN PRs only (drop closed-unmerged PRs). The merge
 check is inert until a caller writes the file and supplies --open-heads.
+The PR under test's own head may be listed. The caller must fetch open PR heads first
+so every listed SHA resolves to a commit in the local object database.
 '''
 
 from __future__ import annotations
@@ -427,7 +429,7 @@ def check(
 def _open_pr_merges(
     base: str, head: str, path: str | Path, cwd: str | Path | None = None
 ) -> list[str]:
-    '''Refuse merge parents reachable from open PR heads but not from base.'''
+    '''Refuse merged-in parents reachable from open PR heads but not from base.'''
     try:
         lines = Path(path).read_text(encoding='utf-8-sig').splitlines()
     except (OSError, UnicodeError) as exc:
@@ -439,6 +441,11 @@ def _open_pr_merges(
             continue
         if OPEN_HEAD_SHA_RE.fullmatch(sha) is None:
             raise GateError(f'open-heads file {path}:{lineno}: not a 40-hex sha')
+        probe = subprocess.run(
+            ['git', 'cat-file', '-e', f'{sha}^{{commit}}'], cwd=cwd, capture_output=True
+        )
+        if probe.returncode != 0:
+            raise GateError(f'open-heads file {path}:{lineno}: not a local commit; fetch open PR heads first')
         heads.add(sha)
     merges = _git_text(
         ['rev-list', '--min-parents=2', '--parents', f'{base}..{head}'], cwd=cwd
@@ -446,7 +453,9 @@ def _open_pr_merges(
     violations: list[str] = []
     for line in merges.splitlines():
         merge, *parents = line.split()
-        for parent in parents:
+        # Parent zero is the lane lineage, not a merged-in branch. It may be
+        # reachable from the lane's own listed head or a stacked descendant.
+        for parent in parents[1:]:
             # Main remains safe even after base advances past the merged commit.
             outside_base = _git_text(
                 ['rev-list', '-1', parent, '--not', base], cwd=cwd
@@ -466,7 +475,7 @@ def main(argv: list[str] | None = None) -> int:
     check_parser = subparsers.add_parser('check')
     check_parser.add_argument('--base', required=True, help='Base commit SHA')
     check_parser.add_argument('--head', required=True, help='PR head SHA, not GitHub speculative pull_request merge ref (whose second parent is the PR head)')
-    check_parser.add_argument('--open-heads', help='File regenerated per run from OPEN PRs only; drop closed-unmerged PRs. One 40-hex SHA per line, case-insensitive, blanks allowed, UTF-8 BOM accepted. Check is inert until a caller writes and supplies this file.')
+    check_parser.add_argument('--open-heads', help='File regenerated per run from OPEN PRs only; drop closed-unmerged PRs. The PR under test\'s own head may be listed; fetch open PR heads first so each SHA is a local commit. One 40-hex SHA per line, case-insensitive, blanks allowed, UTF-8 BOM accepted. Check is inert until a caller writes and supplies this file.')
     check_parser.add_argument(
         '--exempt',
         default=None,

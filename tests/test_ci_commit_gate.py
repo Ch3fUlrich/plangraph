@@ -99,7 +99,7 @@ def test_missing_writer_trailer_fails(repo: Path):
     assert check(base, sha, cwd=repo) == [f"{sha}: missing Writer trailer"]
 
 
-@pytest.mark.parametrize("vector", ["V1", "V2", "V3", "V4", "V5", "V6"])
+@pytest.mark.parametrize("vector", ["V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"])
 def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, vector):
     fork = _head(repo)
     _git(repo, "checkout", "-q", "-b", "lane")
@@ -107,7 +107,7 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
     _git(repo, "checkout", "-q", "-b", "other", fork)
     other = _commit(repo, OK_MSG, files={"other.txt": "other\n"})
     # V1 models main advancing to B after the lane forked.
-    base = other if vector == "V1" else fork
+    base = other if vector in {"V1", "V7"} else fork
     advanced = _commit(repo, OK_MSG, files={"advance.txt": "advance\n"})
     if vector == "V6":
         base = advanced
@@ -119,6 +119,10 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
     merge = _head(repo)
     heads = tmp_path / "open-heads.txt"
     listed = unrelated if vector == "V3" else advanced if vector in {"V5", "V6"} else other
+    if vector in {"V7", "V8"}:
+        _git(repo, "checkout", "-q", "-b", "stacked")
+        stacked = _commit(repo, OK_MSG, files={"stacked.txt": "stacked\n"})
+        listed = merge + "\n" + stacked
     heads.write_text(listed + "\n", encoding="utf-8")
     args = ["check", "--base", base, "--head", merge]
     if vector != "V4":
@@ -126,8 +130,8 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
     monkeypatch.chdir(repo)
     rc = main(args)
     captured = capsys.readouterr()
-    expected = f"{merge}: open_pr_merged {other}\n" if vector in {"V2", "V5"} else ""
-    assert rc == (1 if vector in {"V2", "V5"} else 0)
+    expected = f"{merge}: open_pr_merged {other}\n" if vector in {"V2", "V5", "V8"} else ""
+    assert rc == (1 if vector in {"V2", "V5", "V8"} else 0)
     assert captured.out == expected
     notice = ci_commit_gate.OPEN_PR_SKIP_NOTICE
     assert captured.err == (notice if vector == "V4" else "")
@@ -136,7 +140,7 @@ def test_open_pr_merge_vectors(repo: Path, tmp_path: Path, monkeypatch, capsys, 
 def test_open_heads_help_contract(capsys):
     assert main(["check", "--help"]) == 0
     help_text = " ".join(capsys.readouterr().out.split())
-    for phrase in ("PR head SHA", "speculative", "OPEN PRs only", "regenerated per run", "inert"):
+    for phrase in ("PR head SHA", "speculative", "OPEN PRs only", "regenerated per run", "inert", "own head may be listed", "fetch open PR heads first"):
         assert phrase in help_text
     assert "open_pr_merged" in ci_commit_gate.__doc__.splitlines()[0]
 
@@ -178,6 +182,34 @@ def test_open_heads_errors(repo, tmp_path, monkeypatch, capsys, kind):
     if kind in {"malformed", "short"}:
         assert ":2:" in captured.err
     assert "skipped" not in captured.err
+
+
+@pytest.mark.parametrize("kind", ["absent", "tree"])
+def test_open_heads_noncommit_reports_line(repo, tmp_path, monkeypatch, capsys, kind):
+    base = _head(repo)
+    sha = "0" * 40 if kind == "absent" else _git(repo, "rev-parse", f"{base}:").strip()
+    path = tmp_path / "heads.txt"
+    path.write_text(base + "\n" + sha + "\n", encoding="utf-8")
+    with pytest.raises(ci_commit_gate.GateError, match=r"heads.txt:2:.*commit"):
+        check(base, base, cwd=repo, open_heads=path)
+    monkeypatch.chdir(repo)
+    assert main(["check", "--base", base, "--head", base, "--open-heads", str(path)]) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "heads.txt:2:" in captured.err
+    assert "commit" in captured.err
+    assert "skipped" not in captured.err
+
+
+def test_open_heads_blank_lines_pass(repo, tmp_path, monkeypatch, capsys):
+    base = _head(repo)
+    head = _commit(repo, OK_MSG)
+    path = tmp_path / "heads.txt"
+    path.write_text("\n  \n\t\n", encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert main(["check", "--base", base, "--head", head, "--open-heads", str(path)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 @pytest.mark.parametrize("at_base", [False, True])
