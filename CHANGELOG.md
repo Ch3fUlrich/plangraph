@@ -4,9 +4,11 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **LESSONS-TO-ALGORITHM L9 fix3:** exclude the checked head, its ancestors, and stacked descendants from foreign open PR detection, while still refusing merged ancestors of advanced foreign heads. Normalize Git inspection failures to clean gate errors and cache repeated parent/tip reachability queries within a check. An exempt entry does not waive `open_pr_merged`; it only skips trailer rules.
+
 - **LESSONS-TO-ALGORITHM L9 fix2:** check only merged-in parents, not the lane's first-parent lineage, so snapshots may include the PR's own head and stacked descendants without rejecting legitimate main merges. Validate every listed head as a local commit before ancestry checks, with file-line errors and a documented fetch prerequisite. Restore blank-lines-only snapshot coverage and pin second-parent rejection.
 
-- **LESSONS-TO-ALGORITHM L9 fix1:** detect merged ancestors of advanced open PR heads, while allowing parents already reachable from base, including octopus merges and exempt-listed merges. Document PR-head-only input and per-run OPEN-only head snapshots (no workflow wiring); accept BOM-prefixed SHA files and uppercase heads, preserve strict full-length SHA validation, and centralize the flag-absent skip notice. Add CLI error, library, and ancestry regression coverage.
+- **LESSONS-TO-ALGORITHM L9 fix1:** detect merged ancestors of advanced open PR heads, while allowing parents already reachable from base, with coverage for octopus merges. An exempt entry does not waive `open_pr_merged`; it only skips trailer rules. Document PR-head-only input and per-run OPEN-only head snapshots (no workflow wiring); accept BOM-prefixed SHA files and uppercase heads, preserve strict full-length SHA validation, and centralize the flag-absent skip notice. Add CLI error, library, and ancestry regression coverage.
 
 - **LESSONS-TO-ALGORITHM L9:** the commit gate accepts offline `--open-heads` input and refuses `open_pr_merged` when a merge parent is an open PR head outside base history, preventing cross-lane PR merges while allowing main merges. Without the input, it emits a one-line skip notice.
 

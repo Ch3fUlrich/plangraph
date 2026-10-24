@@ -1,7 +1,8 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
 Trailer checks use ``git log --no-merges base..head``. Merge parents are checked
-separately when open PR heads are supplied. Exempt commits skip trailer rules. A repo-relative
+separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
 
@@ -429,7 +430,30 @@ def check(
 def _open_pr_merges(
     base: str, head: str, path: str | Path, cwd: str | Path | None = None
 ) -> list[str]:
-    '''Refuse merged-in parents reachable from open PR heads but not from base.'''
+    '''Refuse merged-in parents reachable from foreign open heads but not base.'''
+    def run_git(args: list[str]) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run(['git', *args], cwd=cwd, capture_output=True)
+        except subprocess.CalledProcessError as exc:
+            raise GateError(f'git {args[0]} failed (exit {exc.returncode})') from exc
+
+    def is_ancestor(ancestor: str, descendant: str) -> bool:
+        probe = run_git(['merge-base', '--is-ancestor', ancestor, descendant])
+        if probe.returncode not in (0, 1):
+            raise GateError(f'git merge-base failed (exit {probe.returncode})')
+        return probe.returncode == 0
+
+    reachability: dict[tuple[str, str], bool] = {}
+
+    def reachable(parent: str, tip: str) -> bool:
+        key = (parent, tip)
+        if key not in reachability:
+            probe = run_git(['rev-list', '-1', parent, '--not', tip])
+            if probe.returncode != 0:
+                raise GateError(f'git rev-list failed (exit {probe.returncode})')
+            reachability[key] = not probe.stdout.strip()
+        return reachability[key]
+
     try:
         lines = Path(path).read_text(encoding='utf-8-sig').splitlines()
     except (OSError, UnicodeError) as exc:
@@ -441,15 +465,17 @@ def _open_pr_merges(
             continue
         if OPEN_HEAD_SHA_RE.fullmatch(sha) is None:
             raise GateError(f'open-heads file {path}:{lineno}: not a 40-hex sha')
-        probe = subprocess.run(
-            ['git', 'cat-file', '-e', f'{sha}^{{commit}}'], cwd=cwd, capture_output=True
-        )
+        probe = run_git(['cat-file', '-e', f'{sha}^{{commit}}'])
         if probe.returncode != 0:
             raise GateError(f'open-heads file {path}:{lineno}: not a local commit; fetch open PR heads first')
         heads.add(sha)
-    merges = _git_text(
-        ['rev-list', '--min-parents=2', '--parents', f'{base}..{head}'], cwd=cwd
-    )
+    # Own history and stacked descendants are not evidence of a foreign PR.
+    heads = {sha for sha in heads
+             if not is_ancestor(sha, head) and not is_ancestor(head, sha)}
+    probe = run_git(['rev-list', '--min-parents=2', '--parents', f'{base}..{head}'])
+    if probe.returncode != 0:
+        raise GateError(f'git rev-list failed (exit {probe.returncode})')
+    merges = probe.stdout.decode('utf-8', errors='replace')
     violations: list[str] = []
     for line in merges.splitlines():
         merge, *parents = line.split()
@@ -457,11 +483,8 @@ def _open_pr_merges(
         # reachable from the lane's own listed head or a stacked descendant.
         for parent in parents[1:]:
             # Main remains safe even after base advances past the merged commit.
-            outside_base = _git_text(
-                ['rev-list', '-1', parent, '--not', base], cwd=cwd
-            ).strip()
-            if outside_base and any(
-                not _git_text(['rev-list', '-1', parent, '--not', open_head], cwd=cwd).strip()
+            if not reachable(parent, base) and any(
+                reachable(parent, open_head)
                 for open_head in sorted(heads)
             ):
                 violations.append(f'{merge}: open_pr_merged {parent}')
