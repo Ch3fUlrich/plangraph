@@ -28,7 +28,7 @@ def w(tmp_path):
     world.store.create_items(world.p("router"), [
         defn("ISSUE", evidence_kinds=("decision",), done_criteria="upstream issue filed"),
         defn("RUN", evidence_kinds=("semaphore-task",), done_criteria="semaphore run green"),
-        defn("CODE", evidence_kinds=("commit+ci",), done_criteria="merged; CI green; 2 seats"),
+        defn("CODE", evidence_kinds=("commit+ci",), done_criteria="merged; CI green"),
         defn("G", ["ISSUE", "RUN", "CODE"], kind="goal")])
     world.store.ctx = SimpleNamespace(decisions=_decisions(
         tmp_path, "| D-900 | closes | Closes: demo:ISSUE demo:RUN demo:CODE |\n"
