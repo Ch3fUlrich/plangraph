@@ -11,6 +11,7 @@ D-437: no new agent runs on coding.vm -> seats/writers via workst-L1-autoos.
 - CI RED after merge = rc=3: inspect, fix via writer, do not revert blind.
 
 ## Open
+- #157 (build-L2-rt-cards, lane 2b, RT-P1-CARD-CHECKS): head b9fc8a7f (main 2e3253b merged, CI green); qwen delta seat FIX; L1 picked (a): one cx writer F3+F2+sweep+Rust "" arm test, CI, one delta re-seat -> MERGE-READY expected.
 - FIRST: plangraph:SEAT-VERDICT-QODER-ALIAS (router D-2495, p9 standard, claimed by build-L1, in hb-keys): writer brief seats/seat-verdict-qoder/WRITER-BRIEF.md SENT workst ~04:4xZ. On sha: CI + 1 dsfree seat (not alibaba) -> self-approve standard -> mergepath -> submit -> verdict (PGTOK=reviewer-deepseek).
 - #139 KEEPER-TRAILER-MULTI: 2nd seat dsfree r6 (seats/trailer-multi/r6-ds/dsfree/review.txt) = FIX: HIGH interior ./-/_ hides 2nd family (deepseek.mimo, deepseek-r1-L2), MED blank Hand-Edit grants anthropic, LOWs. fix9 brief seats/trailer-multi/fix9/WRITER-BRIEF.md SENT workst ~04:3xZ (cx after 04:45Z cooldown, else mimo/mimo-v2.6-flash). On sha: CI + delta re-review by dsfree (r7, same family as r6, non-openai/non-xiaomi) + qwen (HIGH: 2 families on delta) -> GO-REQ router -> mergepath 139 -> submit -> verdict. Router: propose follow-up leaf JSON "family table completeness" (unknown model names e.g. kimi-k2 -> no family) + gate edge.
 - After #139 AND #140 on main: relaunch build-L2-phase-runner (L2-LAUNCH via workst, OpenCode impossible -> ask router).
