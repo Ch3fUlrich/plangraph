@@ -132,7 +132,7 @@ def test_nonce_and_ring_storage_are_bounded(c):
     state = fleet_state(c)
     for n in range(c.NONCE_CAP):
         # Distinct senders avoid the unrelated per-sender rate gate.
-        send(c, state, post(**{"from": f"sender-{n}", "nonce": f"n-{n}", "msg_id": f"m-{n}"}))
+        send(c, state, post(**{"from": f"sender-{n}", "kid": f"k-{n // (c.NONCE_CAP // 32)}", "nonce": f"n-{n}", "msg_id": f"m-{n}"}))
     assert len(state.seen) <= c.NONCE_CAP
     assert len(state.ring) == c.RING_CAP
     with pytest.raises(c.BusError) as err:
@@ -172,7 +172,7 @@ def test_accepted_flood_fails_closed_and_purges_by_message_ts(c):
     state = fleet_state(c)
     for n in range(c.NONCE_CAP):
         send(c, state, post(**{"from": f"sender-{n // 30}", "nonce": f"n-{n}",
-                              "msg_id": f"m-{n}", "ts": NOW + 10}))
+                              "kid": f"k-{n // (c.NONCE_CAP // 32)}", "msg_id": f"m-{n}", "ts": NOW + 10}))
     seen = state.seen.copy()
     rates = {key: list(value) for key, value in state.limiter.senders.items()}
     with pytest.raises(c.BusError) as err:
@@ -238,12 +238,58 @@ def test_read_response_and_delivery_cursor(c):
     envelope = post(trace_id="trace", key="group", run_id="run", attempt_n=1)
     ack = send(c, state, envelope)
     # read_records is the response-shaping seam; authentication is check_read.
-    response = c.read_records(state, cursor="", limit=100)
+    response = c.read_records(state, ("reader", 100, 0))
     assert set(response) == {"cursor", "records"}
     assert response["cursor"] == ack["id"]
     record, = response["records"]
     assert record == dict({k: envelope[k] for k in
                           ("from", "to", "msg_id", "text", "trace_id", "key", "run_id", "attempt_n")},
                          id=ack["id"], ts=ack["ts"])
-    assert c.read_records(state, cursor=response["cursor"], limit=100) == {
+    assert c.read_records(state, ("reader", 100, 1)) == {
         "cursor": response["cursor"], "records": []}
+
+
+def test_key_cap_and_retry_scope(c):
+    state = fleet_state(c)
+    for n in range(c.NONCE_CAP // 32):
+        send(c, state, post(**{"from": f"identity-{n}", "nonce": str(n), "ts": NOW + 10}))
+    before = state.seen.copy()
+    with pytest.raises(c.BusError) as err:
+        send(c, state, post(nonce="overflow"), now=NOW + 0.5)
+    assert (err.value.code, err.value.status, err.value.retry_after_s) == ("replay_window_full", 503, 70)
+    assert state.seen == before
+    send(c, state, post(kid="other", nonce="other"))
+    before = state.seen.copy()
+    rates = {key: list(value) for key, value in state.limiter.senders.items()}
+    headers = {"X-Fleet-From": "new-reader", "X-Fleet-Ts": str(NOW), "X-Fleet-Nonce": "read-full"}
+    headers["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(NOW, "read-full", "new-reader"))
+    with pytest.raises(c.BusError) as err:
+        c.check_read(lambda kid: SECRET, headers, "", NOW, state)
+    assert (err.value.code, err.value.retry_after_s) == ("replay_window_full", 70)
+    assert state.seen == before
+    assert {key: list(value) for key, value in state.limiter.senders.items()} == rates
+    send(c, state, post(nonce="after-expiry", ts=NOW + 71), now=NOW + 71)
+    assert state.seen == OrderedDict([("after-expiry", NOW + 71)])
+    assert state.key_counts == {"": 1}
+    assert state.nonce_keys == {"after-expiry": ""}
+
+
+def test_no_replay_scan_below_cap(c):
+    class NoScan(OrderedDict):
+        def items(self):
+            raise AssertionError("replay scan below cap")
+    state = fleet_state(c)
+    state.seen = NoScan()
+    send(c, state)
+    send(c, state, post(nonce="next"))
+
+
+def test_read_validated_result_is_only_page_input(c):
+    state = fleet_state(c)
+    send(c, state)
+    headers = {"X-Fleet-From": "reader", "X-Fleet-Ts": str(NOW), "X-Fleet-Nonce": "read"}
+    headers["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(NOW, "read", "reader"))
+    accepted = c.check_read(lambda kid: SECRET, headers, "", NOW, state, limit="1")
+    assert accepted == ("reader", 1, 0)
+    with patch.object(c, "parse_limit", side_effect=AssertionError("late validation")), patch.object(c, "check_cursor", side_effect=AssertionError("late validation")):
+        assert len(c.read_records(state, accepted)["records"]) == 1

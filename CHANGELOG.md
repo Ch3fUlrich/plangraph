@@ -1,5 +1,7 @@
 # Changelog
 
+- **BUS-NONCE-FLOOD fix2:** cap live replay entries per signing key at 312 as well as 10000 globally, so invented sender identities cannot exhaust other keys' capacity. Full windows return a rounded retry delay without changing state or evicting live entries. Scan for expiry only at capacity. READ validation now returns the checked page arguments consumed by response shaping, leaving no late limit or cursor refusal after acceptance. The page limit remains unsigned; this protocol limitation is documented.
+
 Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased

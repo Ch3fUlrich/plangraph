@@ -27,10 +27,14 @@ def test_vector(case):
     fn, inputs = case["fn"], case.get("inputs", {})
 
     def invoke():
+        if fn == "fix2_regression":
+            from . import test_contract_unit as unit
+            getattr(unit, inputs["test"])(c)
+            return True
         if fn == "replay_window":
             state = fleet_state(c)
             for n in range(c.NONCE_CAP):
-                send(c, state, post(**{"from": f"s-{n // 30}", "nonce": f"n-{n}", "msg_id": str(n), "ts": NOW + 10}))
+                send(c, state, post(**{"from": f"s-{n // 30}", "kid": f"k-{n // (c.NONCE_CAP // 32)}", "nonce": f"n-{n}", "msg_id": str(n), "ts": NOW + 10}))
             seen = state.seen.copy()
             rates = {k: list(v) for k, v in state.limiter.senders.items()}
             now = inputs.get("now", NOW)
@@ -95,7 +99,7 @@ def test_vector(case):
                         prior["X-Fleet-Ts"], prior["X-Fleet-Nonce"], prior["X-Fleet-From"]))
                     c.check_read(lambda kid: SECRET, prior, "", NOW, state)
             try:
-                return c.check_read(lambda kid: SECRET, headers, cursor, inputs.get("now", NOW), state, limit=inputs.get("limit", 100))
+                return list(c.check_read(lambda kid: SECRET, headers, cursor, inputs.get("now", NOW), state, limit=inputs.get("limit", 100)))
             except c.BusError:
                 if inputs.get("unchanged"):
                     assert not state.seen
@@ -105,7 +109,11 @@ def test_vector(case):
         if fn == "read_records":
             state = fleet_state(c)
             state.ring.extend(inputs.get("records", []))
-            return c.read_records(state, inputs.get("cursor", ""), inputs.get("limit", 100))
+            cursor = inputs.get("cursor", "")
+            headers = {"X-Fleet-From": "reader", "X-Fleet-Ts": str(NOW), "X-Fleet-Nonce": "read"}
+            headers["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(NOW, "read", "reader", cursor=cursor))
+            accepted = c.check_read(lambda kid: SECRET, headers, cursor, NOW, state, limit=inputs.get("limit", 100))
+            return c.read_records(state, accepted)
         if fn == "sign":
             return c.sign(inputs["secret"].encode("utf-8"), inputs["canonical"])
         if fn == "canonical_post":
@@ -133,6 +141,8 @@ def test_vector(case):
         assert "0" * 64 not in caught.value.message
         if caught.value.code == "rate_limited":
             assert caught.value.retry_after_s >= 1
+        if "retry_after_s" in case["error"]:
+            assert caught.value.retry_after_s == case["error"]["retry_after_s"]
     else:
         result = invoke()
         if case.get("subset"):

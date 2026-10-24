@@ -52,7 +52,7 @@ The first failing gate wins:
 4. Key lookup (`kid`).
 5. Signature verification.
 6. Nonce replay check.
-7. Replay capacity: refuse with `replay_window_full` (503) if 10000 live nonces remain.
+7. Replay capacity: refuse with `replay_window_full` (503) if 10000 live nonces remain globally or 312 (`NONCE_CAP // 32`) remain for the signing key.
 8. Rate: 30 authenticated requests per rolling 60 seconds per sender.
 9. Purge expired nonces, record the nonce, then dedupe by `(from, msg_id)`.
 
@@ -64,6 +64,13 @@ timestamp, not acceptance time. Only entries with `ts < now - 60` may be purged;
 the inclusive boundary remains protected. Never evict an in-window nonce to make
 room: a full window returns 503 without changing state. READ and POST share this
 window, including capacity and expiry rules.
+Key scope is `kid`, or the empty string for the default key, not the caller-chosen
+sender or reader identity. A key at its cap cannot block other keys below the
+global cap. A 503 carries `retry_after_s = max(1, ceil(oldest live ts in the
+refusing scope + 60 - now))`; global capacity takes precedence if both are full.
+Cleanup scans run only when global storage or that key's stored count reaches
+its cap, not on every authenticated request. Expired entries may remain below
+capacity; cleanup is committed only on acceptance. Live entries are never evicted.
 Rate-rejected (429) requests consume no replay state: they neither insert nor
 evict nonces and do not change message-ID dedupe state. Their nonces remain unseen;
 clients should retry with a fresh nonce and fresh timestamp. An exact retry can
@@ -101,9 +108,8 @@ strictly after that record. Cursor validation has two distinct layers:
   unambiguously into the UTF-8 signed canonical form. Real record IDs never contain
   `|` or surrogates. A missing or empty signature header returns `bad_signature` first;
   timestamp and identifier shape checks also precede the cursor shape check.
-- `check_cursor`, the pure ring lookup called by `check_read` after verification
-  and again by `read_records` after
-  authentication, treats every nonempty malformed, evicted or unknown value
+- `check_cursor`, the pure ring lookup called by `check_read` after verification,
+  treats every nonempty malformed, evicted or unknown value
   (including one containing `|`) as **410 `cursor_gone`** and never replays the
   ring for such a value.
 
@@ -114,13 +120,18 @@ READ requires `X-Fleet-From`, `X-Fleet-Ts`, `X-Fleet-Nonce`, `X-Fleet-Sig`, and
 optionally `X-Fleet-Kid` (header names case-insensitive). Its signature binds the
 exact cursor. Apply skew, key, signature, replay and per-reader rate gates
 before disclosing records. There is **no open GET**. `check_read` is the
-authentication seam; pass the same query `limit` to `check_read` and
-`read_records`. After signature and replay verification, `check_read` validates
+authentication seam; pass the query `limit` only to `check_read`. It returns the
+validated `(reader, limit, start)` tuple; pass that result to `read_records(state, accepted)`
+under the same serialized access, without intervening ring changes.
+After signature and replay verification, `check_read` validates
 the limit and retained cursor before capacity/rate checks and nonce recording.
 Thus a bad signature wins over a stale cursor (401 before 410). Every refused
 POST or READ leaves nonce, message-ID dedupe and rate state unchanged, including
 expired entries; cleanup occurs only on acceptance. `read_records` only shapes data and must not be exposed
 directly by a transport.
+It accepts no raw limit or cursor and performs no validation that can refuse
+after recording acceptance. The READ signature covers the cursor but **not the
+page limit**; changing limit within its valid range does not invalidate a signature.
 
 Page limit defaults to 100, accepts integers or ASCII decimal query strings,
 and must be 1..200; booleans are invalid. Strings are restricted to one through

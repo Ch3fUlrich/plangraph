@@ -117,6 +117,8 @@ class BusState:
     """In-memory contract state; transport adapters must serialize access."""
 
     seen: OrderedDict = field(default_factory=OrderedDict)
+    nonce_keys: dict = field(default_factory=dict)
+    key_counts: dict = field(default_factory=dict)
     msg_ids: dict = field(default_factory=dict)
     limiter: RateLimiter = field(default_factory=RateLimiter)
     ring: deque = field(default_factory=deque)
@@ -176,15 +178,33 @@ def _verify(resolve_key, ts, nonce, sender, kid, canonical, signature, now, stat
         raise BusError("replayed_nonce")
 
 
-def _record(ts, nonce, sender, now, state):
+def _record(ts, nonce, sender, kid, now, state):
     # Never evict a nonce that could still pass the inclusive skew gate.
-    expired = [key for key, stamp in state.seen.items() if stamp < now - SKEW_S]
-    if len(state.seen) - len(expired) >= NONCE_CAP:
-        raise BusError("replay_window_full")
+    kid = kid or ""
+    expired = []
+    if len(state.seen) >= NONCE_CAP or state.key_counts.get(kid, 0) >= NONCE_CAP // 32:
+        expired = [key for key, stamp in state.seen.items() if stamp < now - SKEW_S]
+        live = [(key, stamp) for key, stamp in state.seen.items() if stamp >= now - SKEW_S]
+        scope = [stamp for key, stamp in live if state.nonce_keys.get(key, "") == kid]
+        if len(live) >= NONCE_CAP:
+            scope = [stamp for key, stamp in live]
+        elif len(scope) < NONCE_CAP // 32:
+            scope = []
+        if scope:
+            raise BusError("replay_window_full", retry_after_s=max(1, math.ceil(min(scope) + SKEW_S - now)))
     state.limiter.check(sender, now)
+    # Commit cleanup only after every refusal gate, including the rate gate.
+    if nonce in state.seen and nonce not in expired:
+        expired.append(nonce)
     for key in expired:
         del state.seen[key]
+        owner = state.nonce_keys.pop(key, "")
+        state.key_counts[owner] -= 1
+        if not state.key_counts[owner]:
+            del state.key_counts[owner]
     state.seen[nonce] = parse_ts(ts)
+    state.nonce_keys[nonce] = kid
+    state.key_counts[kid] = state.key_counts.get(kid, 0) + 1
 
 
 def validate_post(resolve_key, body, signature, now, state):
@@ -201,7 +221,7 @@ def validate_post(resolve_key, body, signature, now, state):
         raise BusError("too_large")
     _verify(resolve_key, envelope["ts"], envelope["nonce"], envelope["from"],
                   envelope.get("kid"), canonical_post(envelope), signature, now, state)
-    _record(envelope["ts"], envelope["nonce"], envelope["from"], now, state)
+    _record(envelope["ts"], envelope["nonce"], envelope["from"], envelope.get("kid"), now, state)
     key = (envelope["from"], envelope["msg_id"])
     if key in state.msg_ids:
         return dict(state.msg_ids[key], dup=True)
@@ -267,16 +287,16 @@ def check_read(resolve_key, headers, cursor, now, state, limit=100):
         raise BusError("bad_request")
     _verify(resolve_key, ts, nonce, reader, kid,
                   canonical_read(ts, nonce, reader, kid, cursor), signature, now, state)
-    parse_limit(limit)
-    check_cursor(cursor, [record["id"] for record in state.ring])
-    _record(ts, nonce, reader, now, state)
-    return reader
-
-
-def read_records(state, cursor="", limit=100):
-    """Shape a page after authentication; cursor tracks the last delivered row."""
     limit = parse_limit(limit)
+    start = check_cursor(cursor, [record["id"] for record in state.ring])
+    _record(ts, nonce, reader, kid, now, state)
+    return reader, limit, start
+
+
+def read_records(state, accepted):
+    """Shape a checked READ result without any further refusal gates."""
+    reader, limit, start = accepted
     ring = list(state.ring)
-    start = check_cursor(cursor, [record["id"] for record in ring])
+    cursor = ring[start - 1]["id"] if start else ""
     records = [record.copy() for record in ring[start:start + limit]]
     return {"cursor": records[-1]["id"] if records else cursor, "records": records}
