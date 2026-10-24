@@ -23,6 +23,7 @@ from plangraph.spawner.clients import (
     build_routing_envelope_headers,
 )
 from plangraph.spawner.resolver import detect_model_family
+from plangraph.spawner.mimo_policy import check_mimo_path
 
 _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
@@ -130,6 +131,7 @@ class SpawnerRunner:
         wait_seconds: float = 0.0,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
+        check_mimo_path(model_or_combo)
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
 

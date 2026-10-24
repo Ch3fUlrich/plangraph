@@ -355,6 +355,8 @@ def build_command(
     OmniRoute ACP/Gateway is ALWAYS first (gateway=True).
     Standalone direct CLI spawning is used ONLY when gateway_online=False.
     """
+    from plangraph.spawner.mimo_policy import check_mimo_path
+    check_mimo_path(model_or_combo)
     # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(

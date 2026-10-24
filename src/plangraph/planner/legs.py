@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.keeper.schema import WINDOW_CLASSES
+from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
 __all__ = ["TIERS", "HARNESSES", "Leg", "DEFAULT_LEGS", "load_legs", "with_measured"]
 
@@ -66,7 +67,7 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
     _leg("ovh-gpt-oss-120b", "free", "opencode", "omniroute/ovh-gpt-oss-120b", "openai",
          ("128k",), 90000, False),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
-         "omniroute/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
+         "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
     _leg("agy-gemini-3.8-flash", "subscription", "agy", "gemini-3.8-flash", "gemini",
          ("128k", "256k", "1m"), 900000, False,
          note="gemini after its Friday-evening reset"),
@@ -93,6 +94,11 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         problems.append(f"{where}: must be an object")
         return None
     start = len(problems)
+    if isinstance(raw.get("model"), str):
+        try:
+            check_mimo_path(raw["model"])
+        except MimoPathError as exc:
+            problems.append(f"{where}.model: {exc}")
     for key in raw:
         if key not in _FIELDS:
             problems.append(f"{where}: unknown field {key!r}")

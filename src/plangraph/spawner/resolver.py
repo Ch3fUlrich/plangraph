@@ -19,6 +19,7 @@ from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.catalog_seed import TIER_RUNG
+from plangraph.spawner.mimo_policy import mimo_path_allowed
 from plangraph.spawner.clients import build_routing_envelope_headers
 from plangraph.spawner.risk import (
     RISK_BETA_EXCESS,
@@ -329,6 +330,8 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
+    if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
+        return False
     if int(model.get("available", 1)) == 0:
         return False
     status = str(model.get("status", "active")).lower()
