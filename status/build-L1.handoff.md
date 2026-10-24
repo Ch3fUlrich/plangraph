@@ -5,7 +5,7 @@ Tools: ~/.local/share/plangraph/tools-l1/job-tmp/{mergepath.sh PR HEAD40 KEY TIT
 D-437: no new agent runs on coding.vm -> seats/writers via workst-L1-autoos.
 
 ## D-2487 GOs (router 04:1xZ) - chain running in bg at handoff: logs 6fcfe5fa/tmp/mp140.log, mp156.log, mp159.log (each ends rc=N)
-- #140 DONE-ish: merged 2e3253b6, main CI green, evidence+submit, qwen verdict pass; Haiku verdict refused same_family; router D-2493 -> B: dsfree seat on 9de61094..cc563b1e running (seats/exec-ownership/ds140, log 6fcfe5fa/tmp/ds140.log, builder mk140c.py); PASS -> PGTOK=reviewer-deepseek verdict --pass; FIX -> report router; 429 -> retry hourly. "#140 ON MAIN" sent to build-L2-rt-cards.
+- #140: merged 2e3253b6 main green, submit + qwen pass. dsfree seat ds140 = FIX: REAL HIGH worker_complete w/o expected_state skips lease guard (store_worker.py:126-129 only in phase_holder branch), alarms too, test uses wrong path; V3/V5 false. BLOCKED sent router (*A sq10 cx writer new lane off main + dsfree delta re-review -> deepseek verdict; B verdict now + leaf). Await router. "#140 ON MAIN" sent rt-cards.
 - #156: CHANGELOG union-resolved merge in worktree merge-156; merge-cont running (log 6fcfe5fa/tmp/mp156b.log), evidence only, NO submit.
 - #159: mergepath re-run after #156 (log mp159b.log); expect CHANGELOG conflict again (rc=1) -> in merge-159: sed -i '/^<<<<<<< HEAD$/d;/^=======$/d;/^>>>>>>> origin\/main$/d' CHANGELOG.md, commit "Merge origin/main into lane (CHANGELOG union)" + Plan-Item, check `git show --cc` touches only CHANGELOG, then merge-cont.sh 159 plangraph:BUS-NONCE-FLOOD BUS-NONCE-FLOOD; then submit + qwen verdict (+2nd family per keeper).
 - CI RED after merge = rc=3: inspect, fix via writer, do not revert blind.
