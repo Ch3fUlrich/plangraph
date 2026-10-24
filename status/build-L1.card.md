@@ -11,7 +11,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KG-LINK-REPAIR (p9, D-2541 freeze exc.) | L1 + workst cx | LIVE done 07:09Z: kg.conf -> live Omnigraph (backup backups/kg-conf-pre-d2541.conf), export 2041 nodes 0 err, token 0 hits; code brief sent (loud failures, --check alarm, example placeholder) |
 | KEEPER-SEAT-FAMILY-WRITER (HIGH p10, gates PH-RT-RUNTIME) | L1 via workst cx | claimed 07:0xZ; brief sent (A store_support writer families, B Hand-Edit CHANGELOG-only excl, separate commit for #139 rebase); seats Haiku + qwen (D-2539) |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
-| RT-P1-PHASE-RUNNER #163 (HIGH, was #150 closed) | build-L2-phase-runner | #163 8721941 spine/phase-runner-s3d-r2 (D-2545); CI running; seats Haiku+qwen; prove 3 WSL env fails in CI -> MERGE-READY -> GO-REQ |
+| RT-P1-PHASE-RUNNER #163 (HIGH) | build-L2-phase-runner | MERGE-READY 8410dfe8, CI 40084473200 green (L1-verified), seats R1 Haiku CHANGES/qwen ACCEPT, R3 Haiku delta APPROVE -> GO-REQ sent 10:1xZ; on GO mergepath + evidence. S4 started stacked; then phase-batch (D-2534) |
 | PG-PUBLIC-READY #162 (HIGH) | L1 via workst cx | r5 7595d833: L1 gitleaks clean, r7 qwen delta PASS. CI 40080830860 red: F4 test needs gitleaks, none in CI -> Gate-Edit D-2557 GO (a): r6 writer brief sent (pinned gitleaks 8.30.1 + sha256 in pytest job); 1 non-Claude seat on workflow delta. Then GO-REQ -> D-2501 rewrite |
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
