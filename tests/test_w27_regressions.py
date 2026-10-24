@@ -35,6 +35,8 @@ def test_catalog_db_errors_use_registered_offline_rows(tmp_path, monkeypatch, ca
     try:
         with caplog.at_level(logging.WARNING):
             rows = resolver.get_catalog_models(active_only=True)
+            for _ in range(4):
+                assert resolver.get_catalog_models(active_only=True) == rows
         expected = {r['id'] for r in resolver.DEFAULT_FALLBACK_MODELS if resolver.catalog_row_admitted(r)}
         assert {r['id'] for r in rows} == expected
         assert rows and all(r['catalog_source'] == 'offline_fallback_db_error' for r in rows)

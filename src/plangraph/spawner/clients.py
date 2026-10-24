@@ -324,19 +324,20 @@ def build_standalone_fallback_command(
             cmd.extend(["--model", model])
         cmd.extend(["-p", prompt])
         return cmd
-    if cname == "qoder":
+    if cname in ("qoder", "qodercli"):
         cmd = ["qodercli", "-p", prompt]
         if model:
             cmd.extend(["--model", model])
         return cmd
     if cname == "codex":
-        return ["codex", "exec", prompt]
-    if cname == "claude":
-        cmd = ["claude", "-p", prompt]
+        return ["codex", "exec", *(["--model", model] if model else []), prompt]
+    if cname in ("claude", "gemini", "qwen"):
+        cmd = [cname, "-p", prompt]
         if model:
             cmd.extend(["--model", model])
         return cmd
-    # Default fallback
+    # Legacy callers may pass a gateway name. Explicit harnesses are validated
+    # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run"]
     if model:
         cmd.extend(["--model", model])
@@ -358,11 +359,16 @@ def build_command(
 ) -> list[str]:
     """Build executable command for an agent task.
 
-    OmniRoute ACP/Gateway is ALWAYS first (gateway=True).
-    Standalone direct CLI spawning is used ONLY when gateway_online=False.
+    An explicit registered harness is authoritative. Calls without a harness
+    retain the legacy gateway-first transport policy.
     """
     from plangraph.spawner.mimo_policy import check_mimo_path
     check_mimo_path(model_or_combo)
+    if client is not None:
+        if client not in (*CLIENTS, "qodercli"):
+            raise ValueError(f"unknown harness: {client}")
+        if client != "opencode":
+            return build_standalone_fallback_command(client, prompt, model_or_combo)
     # 1. Gateway route (first priority)
     if gateway and gateway_online:
         return build_opencode_command(

@@ -31,6 +31,9 @@ _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
 
 
+from .env_redact import unavailable_reason
+
+
 def redact(value):
     """Scrub credential-shaped strings recursively before persistence or display."""
     if isinstance(value, dict):
@@ -127,6 +130,7 @@ class SpawnerRunner:
         self.provider_responses = {}
         self._nonces = {}
         self._adapter_tokens = {}
+        self._child_envs = {}
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
@@ -220,89 +224,109 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        if cmd[0] == 'opencode':
+            from .opencode_overlay import overlay_env
+            child_env = overlay_env(child_env)
+        else:
+            child_env.pop('OPENCODE_CONFIG_CONTENT', None)
+        self._child_envs[job_id] = child_env
 
-        if dry_run:
-            served_model = model_or_combo
-            served_family = detect_model_family(model_or_combo)
-            if "/" not in model_or_combo:
-                from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
-                combo_legs = [
-                    m for m in get_catalog_models()
-                    if model_or_combo in (m.get("combos") or []) and catalog_row_admitted(m)
-                ]
-                if combo_legs:
-                    served_model = combo_legs[0]["id"]
-                    served_family = detect_model_family(served_model)
-                else:
-                    from plangraph.routing_errors import SpawnRefused
-                    raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
+        try:
+            if dry_run:
+                served_model = model_or_combo
+                served_family = detect_model_family(model_or_combo)
+                if "/" not in model_or_combo:
+                    from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
+                    combo_legs = [
+                        m for m in get_catalog_models()
+                        if model_or_combo in (m.get("combos") or []) and catalog_row_admitted(m)
+                    ]
+                    if combo_legs:
+                        served_model = combo_legs[0]["id"]
+                        served_family = detect_model_family(served_model)
+                    else:
+                        from plangraph.routing_errors import SpawnRefused
+                        raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
+                job = JobInfo(
+                    job_id=job_id,
+                    status="dry_run",
+                    task_prompt=prompt,
+                    model_or_combo=model_or_combo,
+                    role=role,
+                    risk=risk,
+                    command=cmd,
+                    end_time=time.time(),
+                    exit_code=0,
+                    stdout=f"[dry-run] Planned command: {' '.join(cmd)}",
+                    served_model=served_model,
+                    served_family=served_family,
+                    dry_run=True,
+                    cwd=work_dir,
+                )
+                self.jobs[job_id] = job
+                return job
+
             job = JobInfo(
                 job_id=job_id,
-                status="dry_run",
+                status="running",
                 task_prompt=prompt,
                 model_or_combo=model_or_combo,
                 role=role,
                 risk=risk,
                 command=cmd,
-                end_time=time.time(),
-                exit_code=0,
-                stdout=f"[dry-run] Planned command: {' '.join(cmd)}",
-                served_model=served_model,
-                served_family=served_family,
-                dry_run=True,
+                dry_run=False,
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
-            return job
 
-        job = JobInfo(
-            job_id=job_id,
-            status="running",
-            task_prompt=prompt,
-            model_or_combo=model_or_combo,
-            role=role,
-            risk=risk,
-            command=cmd,
-            dry_run=False,
-            cwd=work_dir,
-        )
-        self.jobs[job_id] = job
+            from .resolver import host_skip_reason_async
+            unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
+            if unavailable:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = unavailable
+                job.end_time = time.time()
+                return job
 
-        import shutil
-        resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-        self._adapter_tokens[job_id] = object()
-        try:
-            proc = await self.process_factory(
-                resolved_exe,
-                *cmd[1:],
-                cwd=work_dir,
-                env=child_env,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.DEVNULL,
-                **({"start_new_session": True} if os.name != "nt" else {}),
-            )
-        except Exception as exc:
-            self._adapter_tokens.pop(job_id, None)
-            job.status = 'failed'
-            job.exit_code = 1
-            job.end_time = time.time()
-            job.events.append({'event': 'spawn_failed', 'error': type(exc).__name__})
-            raise
-        self._processes[job_id] = proc
-        self._nonces[job_id] = nonce
-
-        # Start background monitor
-        task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
-        self._tasks[job_id] = task
-
-        if wait_seconds > 0:
+            import shutil
+            resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
+            self._adapter_tokens[job_id] = object()
             try:
-                await asyncio.wait_for(asyncio.shield(task), timeout=wait_seconds)
-            except asyncio.TimeoutError:
-                pass
+                proc = await self.process_factory(
+                    resolved_exe,
+                    *cmd[1:],
+                    cwd=work_dir,
+                    env=child_env,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    **({"start_new_session": True} if os.name != "nt" else {}),
+                )
+            except Exception as exc:
+                self._adapter_tokens.pop(job_id, None)
+                job.status = 'failed'
+                job.exit_code = 1
+                job.end_time = time.time()
+                job.events.append({'event': 'spawn_failed', 'error': type(exc).__name__})
+                raise
+            self._processes[job_id] = proc
+            self._nonces[job_id] = nonce
 
-        return self.jobs[job_id]
+            # Start background monitor
+            task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
+            self._tasks[job_id] = task
+
+            if wait_seconds > 0:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=wait_seconds)
+                except asyncio.TimeoutError:
+                    pass
+
+            return self.jobs[job_id]
+        finally:
+            # A running monitor owns the environment until output is scrubbed.
+            if job_id not in self._tasks:
+                self._child_envs.pop(job_id, None)
 
     async def _monitor_process(
         self,
@@ -352,8 +376,10 @@ class SpawnerRunner:
                         and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
                     self.provider_response(job_id, **response, source='stderr_envelope',
                                            nonce=self._nonces[job_id])
-            job.stdout = redact(stdout_text)
-            job.stderr = redact(stderr_text)
+            from .env_redact import redact_env_values
+            env = self._child_envs.get(job_id, os.environ)
+            job.stdout = redact(redact_env_values(stdout_text, env))
+            job.stderr = redact(redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
@@ -377,6 +403,7 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
@@ -465,6 +492,14 @@ def spawn_service(*args, **kwargs):
 
         def _save(self, record, *, retry=False):
             from .notify import completion_event, CommandSink
+            job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+            if job is not None:
+                for stream in ('stdout', 'stderr'):
+                    record[stream + '_tail'] = getattr(job, stream, '')
+                for attempt in record.get('attempts', []):
+                    if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
+                        attempt['skip_reason'] = (redact(job.stderr.strip().splitlines()[0])
+                            if job.stderr.strip() else f'harness exit code {job.exit_code}')
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -545,20 +580,29 @@ def spawn_service(*args, **kwargs):
                 return await super()._spawn(card, prompt, role, writer_families, review_of,
                     model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            from .resolver import plan_for_launch_async
+            if hasattr(plan, '__dataclass_fields__'):
+                plan = await plan_for_launch_async(plan, dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, writer_family=None, status='running', started=time.time(),
-                ended=None, attempts=[], stdout_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+            for skipped in plan.to_dict()['skipped']:
+                if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')):
+                    record.setdefault('skipped', []).append(skipped)
+                    record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
+                        skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
 
             if not plan.legs or plan.error:
+                host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
                 exhausted = not plan.legs and (not plan.error or
                     bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
-                record.update(status='limited' if exhausted else 'refused',
-                              exit_code=4 if exhausted else 2, ended=time.time(),
-                              error=plan.error,
+                record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
+                              exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
+                              error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
                 return self.result(run_id)
@@ -567,7 +611,7 @@ def spawn_service(*args, **kwargs):
                 tried = set()
                 current = plan
                 try:
-                    for _ in range(len(plan.legs)):
+                    for _ in range(len(plan.legs) + 2):
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
@@ -583,18 +627,46 @@ def spawn_service(*args, **kwargs):
                         if task:
                             await asyncio.shield(task)
                         stop = self.runner.provider_responses.get(job.job_id)
+                        reason = None
+                        unavailable = unavailable_reason(job.exit_code, job.stdout, job.stderr)
+                        if unavailable:
+                            job.status = 'failed'
+                            job.exit_code = job.exit_code or 1
+                        if job.status in ('failed', 'skipped'):
+                            reason = redact(job.stderr.strip().splitlines()[0]) if job.stderr.strip() else ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+                        if unavailable:
+                            reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                            skip_reason='provider_stop' if stop else None, provider_response=stop))
+                            skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop))
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                            stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
-                        if not stop or no_fallthrough or dry_run:
+                            stdout_tail=job.stdout,
+                            stderr_tail=job.stderr,
+                            events=record.get('events', []) + getattr(job, 'events', []))
+                        if (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run:
                                 await self._continue_writer(record, job.stdout)
                             return
-                        current = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+                        current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+                        if hasattr(current, '__dataclass_fields__'):
+                            current = await plan_for_launch_async(current, dry_run=dry_run)
+                        for skipped in current.to_dict()['skipped']:
+                            if any(marker in str(skipped) for marker in ('not_served_on_host', 'harness_missing')) and skipped not in record.setdefault('skipped', []):
+                                record['skipped'].append(skipped)
+                                record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
+                                    skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
                         record['plan'] = current.to_dict()
-                    record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
+                    else:
+                        record.update(status='failed', exit_code=1, error='attempt iteration limit exceeded')
+                        return
+                    if any(a.get('skip_reason') and any(m in a['skip_reason'].lower() for m in ('model unavailable', 'not served', 'unknown model', 'not_served_on_host', 'harness_missing')) for a in record['attempts']):
+                        record.update(status='failed', exit_code=1,
+                            error='; '.join(a['skip_reason'] for a in record['attempts'] if a.get('skip_reason')))
+                    elif record['attempts'] and all(l.id in tried for l in current.legs) and current.legs:
+                        record.update(status='failed', exit_code=1,
+                            error='router repeated exhausted legs')
+                    else:
+                        record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
                 except Exception as exc:
                     from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                     if isinstance(exc, SpawnRefused):

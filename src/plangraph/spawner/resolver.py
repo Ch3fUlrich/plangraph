@@ -14,6 +14,15 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
+import subprocess
+import asyncio
+import hashlib
+import json
+import time
+import threading
+import weakref
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -345,6 +354,164 @@ def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     return row.get('available') == 1 and row.get('active') is True
 
 
+_served_cache = {}
+_served_lock = threading.Lock()
+_served_inflight = {}
+_probe_child_env = ContextVar('probe_child_env', default=None)
+
+
+def provider_config_digest(config):
+    """Identity of model discovery; request headers never affect discovery."""
+    try:
+        providers = json.loads(config).get('providers', {})
+        def stable(node):
+            if isinstance(node, dict):
+                return {k: stable(v) for k, v in node.items() if k.lower() != 'headers'}
+            if isinstance(node, list):
+                return [stable(v) for v in node]
+            return node
+        payload = json.dumps(stable(providers), sort_keys=True)
+    except (ValueError, AttributeError, TypeError):
+        payload = config
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def host_probe_env(env=None):
+    from .clients import build_child_env
+    from .opencode_overlay import overlay_env
+    return overlay_env(build_child_env(extra_env=env))
+
+
+def served_models(config, *, env=None, clock=time.monotonic):
+    """A failed probe is UNKNOWN, never evidence that a model is absent."""
+    from concurrent.futures import Future
+    from .opencode_overlay import credential_names
+    env = host_probe_env(env)
+    try:
+        providers = json.loads(config).get('providers', {})
+    except (ValueError, AttributeError, TypeError):
+        providers = {}
+    present = sorted(name for name in credential_names(providers) if env.get(name))
+    key = (provider_config_digest(config), hashlib.sha256(json.dumps(present).encode()).hexdigest())
+    with _served_lock:
+        cached = _served_cache.get(key)
+        if cached and clock() < cached[0]:
+            return cached[1]
+        future = _served_inflight.get(key)
+        owner = future is None
+        if owner:
+            future = _served_inflight[key] = Future()
+    if not owner:
+        return future.result()
+    try:
+        token = _probe_child_env.set(env)
+        try:
+            result = _probe_served_models(config)
+        finally:
+            _probe_child_env.reset(token)
+        with _served_lock:
+            if len(_served_cache) >= 8:
+                _served_cache.pop(next(iter(_served_cache)))
+            _served_cache[key] = (clock() + (30 if not result else 300), result)
+        future.set_result(result)
+        return result
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _served_lock:
+            _served_inflight.pop(key, None)
+
+
+def _probe_served_models(config, *, env=None):
+    env = dict(env or _probe_child_env.get() or host_probe_env())
+    env['OPENCODE_CONFIG_CONTENT'] = config
+    try:
+        result = subprocess.run(['opencode', 'models'], env=env, capture_output=True,
+                                text=True, timeout=10)
+        if result.returncode == 0:
+            import re
+            parsed = frozenset(line.strip() for line in result.stdout.splitlines()
+                               if re.fullmatch(r'[^\s/]+/[^\s/]+', line.strip()))
+            return parsed or None
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+served_models.cache_clear = _served_cache.clear
+# Real function retained for tests whose autouse fixture stubs served_models.
+_served_models_real = served_models
+
+
+async def served_models_async(config, *, env=None, clock=time.monotonic):
+    return await asyncio.to_thread(_served_models_real, config, env=env, clock=clock)
+
+
+async def host_skip_reason_async(row, *, env=None):
+    child = host_probe_env(env)
+    models = await served_models_async(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child) if row.get('harness') == 'opencode' else None
+    return host_skip_reason(row, env=child, probe=lambda env: models)
+
+
+def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
+    """Apply host admission at the shared real-launch boundary, never offline."""
+    if dry_run:
+        return plan
+    from dataclasses import replace
+    admitted, skipped = [], list(plan.skipped)
+    options = {}
+    if probe is not None:
+        options['probe'] = probe
+    if env is not None:
+        options['env'] = env
+    for leg in plan.legs:
+        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness),
+                                  **options)
+        if reason:
+            # W30 callers consume skip_reason; reason remains canonical like
+            # the planner's pre-existing skipped entries.
+            skipped.append(dict(leg=leg.id, reason=reason, skip_reason=reason))
+        else:
+            admitted.append(leg)
+    return replace(plan, legs=tuple(admitted), skipped=tuple(skipped))
+
+
+async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None):
+    # W32A runner: await this boundary; the synchronous API remains for CLI use.
+    return await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run, probe=probe, env=env)
+
+
+def host_skip_reason(row, *, probe=None, env=None):
+    harness = row.get('harness')
+    if harness in ('agy', 'qodercli'):
+        return None if shutil.which(harness) else 'harness_missing: ' + harness
+    if harness != 'opencode':
+        return None
+    model = row.get('model') or row.get('id') or row.get('model_id')
+    if not model or '/' not in model:
+        return None
+    child = host_probe_env(env)
+    from .opencode_overlay import OVERLAY_UNKNOWN
+    if child.get(OVERLAY_UNKNOWN):
+        return None
+    try:
+        cfg = json.loads(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
+        provider, name = model.split('/', 1)
+        entry = cfg.get('providers', {}).get(provider, {}).get('models', {}).get(name, {})
+        if isinstance(entry, dict) and (entry.get('combo') or entry.get('alias')):
+            return None
+    except (ValueError, AttributeError, TypeError):
+        pass
+    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child)
+    base = model.lower().split('#', 1)[0]
+    listing = {m.lower() for m in models or ()}
+    variants = {m for m in listing if m.startswith(base + '#')}
+    present = models is None or (base in {m.split('#', 1)[0] for m in listing}
+        and ('#' not in model or not variants or model.lower() in variants))
+    return None if present else 'not_served_on_host: ' + model
+
+
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
     """Check if model is eligible and available.
 
@@ -513,9 +680,29 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d.setdefault('harness', 'opencode')
     return d
 
-def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dict[str, Any]]:
+_catalog_failures = {}
+
+
+def get_catalog_models(db: Any = None, *, active_only: bool = False,
+                       clock=time.monotonic) -> list[dict[str, Any]]:
     """Retrieve catalog models, including inactive rows unless explicitly filtered."""
     catalog_source = None
+    identity = db if db is not None else _get_default_catalog_db
+    try:
+        # Weak identity prevents id reuse without retaining the DB or factory.
+        key = weakref.ref(identity)
+        hash(key)
+    except TypeError:
+        key = (type(identity).__name__, id(identity))
+    now = clock()
+    for expired in [k for k, v in _catalog_failures.items()
+                    if (isinstance(k, weakref.ReferenceType) and k() is None)
+                    or now >= v['warned_at'] + 30]:
+        _catalog_failures.pop(expired, None)
+    failure = _catalog_failures.get(key)
+    if failure:
+        return [dict(_normalize_catalog_row(m), catalog_source='offline_fallback_db_error')
+                for m in DEFAULT_FALLBACK_MODELS if not active_only or catalog_row_admitted(m)]
     try:
         target_db = db if db is not None else _get_default_catalog_db()
         if target_db is not None:
@@ -523,24 +710,34 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dic
                 models = target_db.list_models(active_only=active_only)
                 # D-2631: no admitted rows is not an empty catalog. Preserve the
                 # active-only query contract, but probe total rows before fallback.
-                if active_only and not models and target_db.list_models(active_only=False):
-                    return []
+                if active_only and not models:
+                    if target_db.list_models(active_only=False):
+                        _catalog_failures.pop(key, None)
+                        return []
                 if models:
+                    _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
                             if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
             if hasattr(target_db, "get_models"):
                 models = target_db.get_models()
                 if models:
+                    _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
                             if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).warning(
-            "catalog_db_error fallback=offline err=%s: %s", type(exc).__name__, exc)
+        if not failure:
+            logging.getLogger(__name__).warning(
+                "catalog_db_error fallback=offline err=%s", type(exc).__name__)
+        if len(_catalog_failures) >= 8:
+            _catalog_failures.pop(next(iter(_catalog_failures)))
+        _catalog_failures[key] = dict(error=type(exc).__name__, warned_at=now)
         catalog_source = "offline_fallback_db_error"
 
+    if not catalog_source:
+        _catalog_failures.pop(key, None)
     rows = [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
-            if not (catalog_source or active_only) or catalog_row_admitted(m)]
+            if not active_only or catalog_row_admitted(m)]
     if catalog_source:
         rows = [dict(m, catalog_source=catalog_source) for m in rows]
     return rows

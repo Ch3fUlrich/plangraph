@@ -9,11 +9,59 @@ import sys
 import os
 import subprocess
 import time
+import uuid
 
 _start_supervisor = subprocess.Popen
 
-from .runner import spawn_service as SpawnService
+from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
+
+
+def _drain_chunks(chunks, write, observe=lambda size: None):
+    """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
+    from .env_redact import redact_env_values
+    def clean(data):
+        return redact(redact_env_values(data.decode('utf-8', errors='replace'), os.environ)).encode()
+    pending = b''
+    for chunk in chunks:
+        pending += chunk
+        observe(len(pending))
+        while b'\n' in pending:
+            line, pending = pending.split(b'\n', 1)
+            write(clean(line + b'\n'))
+        if len(pending) >= 65536:
+            # Redact before choosing the boundary, so a known secret spanning
+            # that boundary cannot leave either half in the output.
+            safe = clean(pending)
+            write(safe[:-4096] + b' [truncated chunk]\n')
+            pending = safe[-4096:]
+    if pending:
+        write(clean(pending))
+
+
+def _prune_supervisor_logs(state):
+    logs = []
+    for path in state.glob('supervisor-*.stderr.log'):
+        try:
+            logs.append((path.stat().st_mtime, path))
+        except FileNotFoundError:
+            pass
+    for modified, old in sorted(logs, reverse=True)[20:]:
+        if time.time() - modified <= 86400:
+            continue
+        try:
+            pid = int(Path(str(old) + '.pid').read_text())
+            os.kill(pid, 0)
+            continue
+        except PermissionError:
+            continue  # A live process owned by another user.
+        except (OSError, ValueError):
+            pass
+        for path in (old, Path(str(old) + '.1')):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _supervise():
@@ -109,16 +157,137 @@ def main(argv=None):
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
             else:
-                child = _start_supervisor([sys.executable, '-m', __package__ + '.cli', '--supervise'],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                    text=True, **({'start_new_session': True} if os.name != 'nt' else
-                                  {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
-                child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
-                child.stdin.close()
-                line = child.stdout.readline()
-                child.stdout.close()
-                if not line:
-                    raise ValueError('spawn supervisor failed; check card and override reason')
+                import plangraph
+                env = os.environ.copy()
+                root = str(Path(plangraph.__file__).resolve().parent.parent)
+                try:
+                    installed = subprocess.run([sys.executable, '-I', '-c', 'import plangraph'],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10).returncode == 0
+                except (OSError, subprocess.TimeoutExpired):
+                    installed = False
+                checkout = (any((Path(root).parent / name).is_file() for name in ('pyproject.toml', 'setup.cfg'))
+                            or (Path(root).name == 'src' and (Path(root).parent / '.git').exists()))
+                if checkout:
+                    env['PYTHONPATH'] = root + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
+                elif not installed:
+                    env['PYTHONPATH'] = (env['PYTHONPATH'] + os.pathsep if env.get('PYTHONPATH') else '') + root
+                # Drain fd 2 in the child so Python AND native writes rotate, even
+                # after the launching CLI exits. Keep the startup tail readable.
+                service.state.mkdir(parents=True, exist_ok=True)
+                log_path = service.state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
+                _prune_supervisor_logs(service.state)
+                bootstrap = '''import os, sys, threading
+from plangraph.spawner import cli as supervisor
+from plangraph.spawner.env_redact import redact_env_values
+path = sys.argv[1]
+from pathlib import Path
+try:
+    Path(path + ".pid").write_text(str(os.getpid()))
+except OSError:
+    pass
+read_fd, write_fd = os.pipe()
+os.dup2(write_fd, 2)
+os.close(write_fd)
+def drain():
+    def open_log():
+        return os.fdopen(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "ab", buffering=0)
+    output = None
+    try:
+        try:
+            output = open_log()
+        except OSError:
+            pass
+        def emit(line):
+            nonlocal output
+            data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), os.environ)).encode()
+            # Bound even a native writer's multi-megabyte unterminated line,
+            # but only after redaction so truncation cannot expose a secret suffix.
+            data = data[-1024 * 1024:]
+            if output is None:
+                return
+            try:
+                if output.tell() + len(data) > 1024 * 1024:
+                    output.close()
+                    output = None
+                    try:
+                        os.replace(path, path + ".1")
+                    except FileNotFoundError:
+                        pass
+                    output = open_log()
+                output.write(data)
+            except OSError:
+                if output is not None:
+                    output.close()
+                output = None
+        def chunks():
+            while True:
+                chunk = os.read(read_fd, 8192)
+                if not chunk:
+                    return
+                yield chunk
+        supervisor._drain_chunks(chunks(), emit)
+    finally:
+        if output is not None:
+            output.close()
+        os.close(read_fd)
+thread = threading.Thread(target=drain, daemon=True)
+thread.start()
+factory = supervisor.SpawnService
+def service_with_log(*args, **kwargs):
+    service = factory(*args, **kwargs)
+    save = service._save
+    def save_with_log(record):
+        record["supervisor_stderr_path"] = path
+        return save(record)
+    service._save = save_with_log
+    return service
+supervisor.SpawnService = service_with_log
+try:
+    code = supervisor.main(["--supervise"])
+except Exception:
+    import traceback
+    traceback.print_exc()
+    code = 1
+finally:
+    sys.stderr.flush()
+    os.close(2)
+    thread.join(timeout=5)
+raise SystemExit(code)
+'''
+                with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
+                    child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
+                        env=env, text=True, **({'start_new_session': True} if os.name != 'nt' else
+                                      {'creationflags': subprocess.CREATE_NEW_PROCESS_GROUP}))
+                    try:
+                        child.stdin.write(json.dumps(dict(payload, state=str(service.state))) + '\n')
+                        child.stdin.close()
+                    except BrokenPipeError:
+                        pass  # Read the startup diagnostic below, including early import failures.
+                    line = child.stdout.readline()
+                    child.stdout.close()
+                    if not line:
+                        child.wait()
+                        from .env_redact import redact_env_values
+                        from .opencode_overlay import overlay_env
+                        text = ''
+                        size = 0
+                        for path in (Path(str(log_path) + '.1'), log_path):
+                            try:
+                                with path.open('rb') as current:
+                                    current.seek(0, os.SEEK_END)
+                                    size = current.tell()
+                                    current.seek(max(0, size - 262144))
+                                    text += current.read(262144).decode('utf-8', errors='replace')
+                            except FileNotFoundError:
+                                pass
+                        # Discard the possibly partial first line before displaying a suffix.
+                        if size > 262144:
+                            text = text.partition('\n')[2]
+                        tail = '\n'.join(redact(redact_env_values(text, overlay_env(os.environ))).splitlines()[-20:])
+                        tail = tail.encode()[-4096:].decode('utf-8', errors='ignore')
+                        raise ValueError('spawn supervisor failed; check card and override reason' +
+                                         ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
                 while result['status'] == 'running' and time.monotonic() < deadline:

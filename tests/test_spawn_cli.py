@@ -11,6 +11,23 @@ import sys
 import os
 
 
+@pytest.fixture(autouse=True)
+def fake_host_binaries(tmp_path, monkeypatch):
+    """Keep real probes (including worker processes) off the host installation."""
+    from plangraph.planner.legs import DEFAULT_LEGS
+    directory = tmp_path / 'bin'
+    directory.mkdir()
+    models = '\n'.join(leg.model for leg in DEFAULT_LEGS if leg.harness == 'opencode')
+    for name in ('opencode', 'agy'):
+        binary = directory / name
+        binary.write_text('#!' + sys.executable + '\nimport sys\n'
+                          'if sys.argv[1:] == ["models"]:\n'
+                          '    print(' + repr(models) + ')\n'
+                          'else:\n    raise SystemExit("unexpected real harness launch")\n')
+        binary.chmod(0o755)
+    monkeypatch.setenv('PATH', str(directory) + os.pathsep + os.environ['PATH'])
+
+
 def test_gateway_envelope_and_redaction(tmp_path):
     async def run():
         runner = SpawnerRunner()
@@ -237,7 +254,9 @@ def test_cancel_real_child(tmp_path):
         runner = SpawnerRunner(process_factory=factory)
         service = SpawnService(runner, tmp_path)
         record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=0.05)
+        assert 'job_id' in record, record
         process = runner._processes[record['job_id']]
+        assert process.pid and process.returncode is None
         assert (await service.cancel(record['run_id']))['status'] == 'cancelled'
         await asyncio.wait_for(process.wait(), 3)
         assert process.returncode != 0
