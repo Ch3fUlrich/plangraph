@@ -8,6 +8,7 @@ import pytest
 
 from keeper_util import World, defn, to_claimed, to_done
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.events import read_events
 
 
 @pytest.fixture
@@ -28,8 +29,8 @@ def test_v1_holder_adds_operator_audited(w):
     assert result["epoch"] == epoch + 1
     assert after["round"] == (before["round"] or 0) + 1
     assert after["claimed_by"] == "workerA"
-    event = w.conn.execute("SELECT payload FROM events WHERE key=? AND type='item_defined' ORDER BY seq DESC", ("demo:WORK",)).fetchone()
-    payload = json.loads(event["payload"])
+    payload = [e["payload"] for e in read_events(w.conn)
+               if e["key"] == "demo:WORK" and e["type"] == "item_defined"][-1]
     assert payload["who"] == "workerA"
     assert payload["before"] == {"depends_on": []}
     assert payload["after"] == {"depends_on": ["demo:OP"]}
@@ -85,12 +86,15 @@ def test_v6_unlinked_open_and_done_operator(w, field, text, state):
 
 
 @pytest.mark.skipif(not shutil.which("node"), reason="node unavailable")
-@pytest.mark.parametrize("case", ["base", "missing_ref", "missing_key", "prefer_wait", "prefer_wait_reverse", "headers", "facets"])
-def test_flag_row_rendered(case):
+@pytest.mark.parametrize("case", ["base", "missing_ref", "missing_key", "prefer_wait", "prefer_wait_reverse", "headers", "facets", "two_real", "aria", "server"])
+def test_flag_row_rendered(case, w):
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": "IDLE until operator"})
+    to_claimed(w, "demo:WORK", "workerA")
+    server_rows = w.store.needs_you(w.p("reader"))
     web = Path(__file__).resolve().parents[1] / "src/plangraph/web"
     script = r"""
 const nodes=[];
-function el(){const n={children:[],style:{setProperty(){}},appendChild(x){this.children.push(x)},removeChild(x){this.children.splice(this.children.indexOf(x),1)},get firstChild(){return this.children[0]},set textContent(x){this.children=[];this.text=String(x)},get textContent(){return (this.text||'')+this.children.map(c=>c.textContent).join('')},setAttribute(){},addEventListener(){}};nodes.push(n);return n;}
+function el(){const n={children:[],attrs:{},style:{setProperty(){}},appendChild(x){this.children.push(x)},removeChild(x){this.children.splice(this.children.indexOf(x),1)},get firstChild(){return this.children[0]},set textContent(x){this.children=[];this.text=String(x)},get textContent(){return (this.text||'')+this.children.map(c=>c.textContent).join('')},setAttribute(k,v){this.attrs[k]=v},addEventListener(){}};nodes.push(n);return n;}
 const host=el();global.document={createElement:el,getElementById(id){return id==='sb-panel-needs'?host:null}};
 global.location={search:'',pathname:''};
 require(process.argv[1]+'/page_needs.js');
@@ -108,7 +112,13 @@ for(const items of [new Map([[it.key,it]]),[it]]) {
 }
 const row={type:'task',id:'a',title:'A',project:'demo',priority:1,state:''};
 const mode=process.argv[2];
+if(mode==='server'){
+ PlanUI.NeedsPage.render({needsYou:JSON.parse(process.argv[3])});
+ if(!host.textContent.includes('Operator wait unlinked')||!host.textContent.includes('demo:WORK')||!host.textContent.includes('claimed'))throw Error('server flag missing');
+}
 let rs=[];
+if(mode==='two_real')rs=[{...row,key:'a',title:'First wait',ref:{wait:'task'}},{...row,key:'a',title:'Second wait',ref:{wait:'answer'}}];
+if(mode==='aria')rs=[{...row,id:'Q-1',key:'demo:WORK',ref:{}}];
 if(mode==='missing_ref')rs=[row,{...row,type:'question',id:'q'}];
 if(mode==='missing_key')rs=[{...row,ref:{}},{...row,id:'b',ref:{}},{...row,id:'',ref:{}},{...row,id:'',ref:{}}];
 if(mode.startsWith('prefer_wait'))rs=[{...row,key:'a',ref:{kind:'operator_wait_unlinked'}},{...row,key:'a',title:'Human question',ref:{kind:'question',wait:'answer'}}];
@@ -116,6 +126,7 @@ if(mode==='prefer_wait_reverse')rs.reverse();
 if(mode==='headers')rs=[{...row,ref:{}}];
 if(mode==='facets')rs=[{...row,key:'a',project:'a',priority:'odd',ref:{}},{...row,key:'b',id:'b',project:'Z',priority:2,ref:{}}];
 if(rs.length){
+  nodes.length=0;
  if(mode==='missing_ref')rs.forEach(Object.freeze);
  PlanUI.NeedsPage.rows=()=>rs;
  if(mode==='facets'){
@@ -123,7 +134,9 @@ if(rs.length){
   const original=Array.prototype.sort;
   Array.prototype.sort=function(cmp){return original.call(this,cmp?function(a,b){const n=cmp(a,b);if(Number.isNaN(n))throw Error('NaN comparator');return n}:cmp)};
  }
- PlanUI.NeedsPage.render({});
+  PlanUI.NeedsPage.render({});
+  if(mode==='two_real'&&(!host.textContent.includes('First wait')||!host.textContent.includes('Second wait')||!host.textContent.includes('(2 of 2)')))throw Error('genuine wait lost');
+  if(mode==='aria'&&!nodes.some(n=>n.attrs['aria-label']==='Jump to demo:WORK'))throw Error('jump label lacks key');
  if(mode==='missing_key'&&!host.textContent.includes('(4 of 4)'))throw Error('keyless row lost');
  if(mode.startsWith('prefer_wait')&&(!host.textContent.includes('Human question')||host.textContent.includes('Operator wait unlinked')))throw Error('human wait lost');
  if(mode==='headers'){
@@ -133,7 +146,7 @@ if(rs.length){
  }
 }
 """
-    result = subprocess.run([shutil.which("node"), "-e", script, str(web), case], capture_output=True, text=True)
+    result = subprocess.run([shutil.which("node"), "-e", script, str(web), case, json.dumps(server_rows)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
 
@@ -156,8 +169,8 @@ def test_nonstring_wait_fields_do_not_crash(w, value, monkeypatch):
 def test_needs_scope(w):
     w.store.edit_definition(w.p("router"), "demo:WORK", {"note": "IDLE until operator"})
     to_claimed(w, "demo:WORK", "workerA")
-    assert w.store.needs_you(w.p("l1other")) == []
-    assert w.store.needs_you(w.p("l1other"), project="demo") == []
+    assert any(r["key"] == "demo:WORK" for r in w.store.needs_you(w.p("l1other")))
+    assert any(r["key"] == "demo:WORK" for r in w.store.needs_you(w.p("l1other"), project="demo"))
     assert any(r["key"] == "demo:WORK" for r in w.store.needs_you(w.p("workerA")))
 
 
@@ -236,7 +249,27 @@ def test_missing_project_and_empty_scope(w, monkeypatch):
     monkeypatch.setattr(w.store, "_all_items", lambda: [item])
     assert w.store.needs_you(w.p("workerA")) == []
     item.update(project="demo", operator=True)
-    assert w.store._needs_you(None, replace(w.p("workerA"), projects=[])) == []
+    assert any(r["key"] == "demo:WORK" for r in
+               w.store._needs_you(None, replace(w.p("workerA"), projects=[])))
+
+
+@pytest.mark.parametrize("role", ["router", "reader", "system", "l1", "l2", "worker", "reviewer"])
+@pytest.mark.parametrize("projects", [None, [], ["other"], ["demo"]])
+def test_needs_read_role_matrix(w, role, projects):
+    from dataclasses import replace
+    from plangraph.keeper import auth
+
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": "IDLE until operator"})
+    to_claimed(w, "demo:WORK", "workerA")
+    if role == "l2":
+        with pytest.raises(Refused, match="unknown role"):
+            auth.add_principal(w.conn, "matrix", role, projects or [])
+        return
+    token = auth.add_principal(w.conn, "matrix", role, projects or [])
+    principal = replace(auth.authenticate(w.conn, token), projects=projects)
+    assert w.store.show(principal, "demo:WORK")["key"] == "demo:WORK"
+    assert any(r["key"] == "demo:WORK" for r in w.store.needs_you(principal))
+    assert w.store.needs_you(principal, project="other") == []
 
 
 @pytest.mark.parametrize("text", [

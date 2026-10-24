@@ -7833,7 +7833,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var tr = el("tr");
     tr.id = "ny-row-" + r.id;
     var proj = (vm.projects || []).find(function (p) { return p.name === r.project; });
-    if (proj) tr.style.setProperty("--pc", proj.color || "#888");
+    try { if (proj) tr.style.setProperty("--pc", proj.color || "#888"); } catch (e) { /* optional styling */ }
 
     td(tr, "tc-type", "Type", el("span", null,
       r.type.charAt(0).toUpperCase() + r.type.slice(1)));
@@ -7886,7 +7886,7 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     var has = !!(key && vm.items && typeof vm.items.get === "function" && vm.items.get(key));
     var jb = el("button", "tt-btn ny-jump", "Jump");
     jb.type = "button"; jb.disabled = !has;
-    jb.setAttribute("aria-label", "Jump to " + r.id);
+    jb.setAttribute("aria-label", "Jump to " + (key || r.id));
     jb.addEventListener("click", function () {
       if (!has) return;
       if (PlanUI.app && PlanUI.app.jump) PlanUI.app.jump(key);
@@ -7916,16 +7916,18 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
       if (d && d.sort) sort = d.sort;
       rowId = (d && d.row) || "";
     }
-    var now = Date.now(), seen = new Map(), all = [];
-    NP.rows(vm, now).forEach(function (r) {
-      var key = r.key || r.id, ref = r.ref || {}, i = seen.get(key);
+    var now = Date.now(), seen = new Map(), all = [], rows = NP.rows(vm, now), real = new Map();
+    rows.forEach(function (r) {
+      if (r.type === "task" && (!r.ref || r.ref.kind !== "operator_wait_unlinked")) real.set(r.key || r.id, true);
+    });
+    rows.forEach(function (r) {
+      var key = r.key || r.id, ref = r.ref || {};
       if (r.type === "task") {
         r = Object.assign({}, r, {state: r.state || ref.state});
-        if (key && i != null) {
-          if (all[i].ref && all[i].ref.kind === "operator_wait_unlinked" && ref.kind !== "operator_wait_unlinked") all[i] = r;
-          return;
+        if (key && ref.kind === "operator_wait_unlinked") {
+          if (real.has(key) || seen.has(key)) return;
+          seen.set(key, true);
         }
-        if (key) seen.set(key, all.length);
       }
       all.push(r);
     });

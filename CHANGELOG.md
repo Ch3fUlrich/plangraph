@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **KEEPER-OPERATOR-WAIT-GUARD review follow-up:** preserve the authenticated cross-project read contract of ready/show for needs-you (project remains an explicit filter), including the plan-page reader. Only diagnostic flags are deduplicated against genuine waits; multiple real waits on one item survive. Verify serialized keeper rows through the real page mapper and view, restore qualified-key jump labels and optional styling protection, and state the ES2015 browser API target already used by page_graph. Assert normalized before/after audit payloads for cancelled router dependencies and concurrent additions; event inspection uses the shared backend-neutral reader. Fault-injection UPDATEs use World's portable connection seam, not sqlite3 directly.
+
 - **KEEPER-OPERATOR-WAIT-GUARD server hardening:** holder dependency additions require a live claim lease, including under the write lock, and refuse foreign, missing and non-operator targets identically. Qualify old edges before comparing additions and normalize dependency edits to sorted unique edges for holders and routers, keeping the stored graph and before/after audit aligned. Preserve the narrow claimed-only, dependencies-only holder exception and explicit additions-only refusal on resubmission.
 
 - **KEEPER-OPERATOR-WAIT-GUARD:** claim holders may add only open operator dependencies to their own claimed item, retaining the active-edit epoch/round and before/after audit. Needs-you JSON and rows flag active operator waits in note/description/done criteria without an open operator edge.

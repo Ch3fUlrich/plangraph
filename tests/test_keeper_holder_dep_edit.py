@@ -1,11 +1,11 @@
 """Holder dependency edits: authority, normalized edges and atomic audit."""
-import json
 from contextlib import contextmanager
 
 import pytest
 
 from keeper_util import World, defn, to_claimed, to_done, to_in_review
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.events import read_events
 
 
 @pytest.fixture
@@ -23,6 +23,11 @@ def w(tmp_path):
 def edit(w, deps, who="workerA", **fields):
     return w.store.edit_definition(w.p(who), "demo:WORK",
                                    {"depends_on": deps, **fields})
+
+
+def definition_payload(w):
+    return [e["payload"] for e in read_events(w.conn)
+            if e["key"] == "demo:WORK" and e["type"] == "item_defined"][-1]
 
 
 def test_target_refusals_do_not_disclose_existence(w):
@@ -59,9 +64,7 @@ def test_duplicates_normalized_and_resubmit_clear(w):
     assert edit(w, ["OP", "demo:OP", "OP"])["epoch"] == epoch + 1
     item = w.store._item("demo:WORK")
     assert item["depends_on"] == ["demo:OP"]
-    payload = json.loads(w.conn.execute(
-        "SELECT payload FROM events WHERE key=? AND type='item_defined' ORDER BY seq DESC",
-        ("demo:WORK",)).fetchone()["payload"])
+    payload = definition_payload(w)
     assert payload["after"]["depends_on"] == item["depends_on"]
     with pytest.raises(Refused, match="additions only"):
         edit(w, ["OP"])
@@ -125,6 +128,8 @@ def test_router_cancelled_dep_audit_matches_storage(w):
     to_claimed(w, "demo:WORK", "workerA")
     edit(w, ["OP", "OTHER"], who="router")
     assert w.store._item("demo:WORK")["depends_on"] == ["demo:OTHER"]
+    assert definition_payload(w)["before"] == {"depends_on": []}
+    assert definition_payload(w)["after"] == {"depends_on": ["demo:OTHER"]}
     assert w.store.verify_integrity() == []
 
 
@@ -193,6 +198,8 @@ def test_concurrent_dependency_add_is_not_overwritten(w, monkeypatch):
     with pytest.raises(Refused, match="changed under the transaction"):
         edit(w, ["OP"])
     assert w.store._item("demo:WORK")["depends_on"] == ["demo:OTHER"]
+    assert definition_payload(w)["before"] == {"depends_on": []}
+    assert definition_payload(w)["after"] == {"depends_on": ["demo:OTHER"]}
     assert w.store.verify_integrity() == []
 
 

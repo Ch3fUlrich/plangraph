@@ -21,17 +21,17 @@ _WAIT = re.compile(
 
 
 class NeedsMixin:
-    """Read-only; any authenticated principal may call them."""
+    """Read-only; any authenticated principal may call them, across projects.
+
+    As with ready/show, project is an explicit filter, not an authority scope.
+    """
 
     def needs_you(self, principal, project=None):
         return self._run(principal, "needs_you", None,
                          lambda now: self._needs_you(project, principal))
 
     def _needs_you(self, project, principal):
-        # Readers retain the public read contract; scoped actors see only their projects.
-        items = [it for it in self._all_items()
-                 if principal.role in ("router", "reader", "system")
-                 or it.get("project") in (principal.projects or [])]
+        items = self._all_items()
         rows = views.needs_you(items, project=project)
         # Prefer genuine waits regardless of the order supplied by the view.
         human_keys = {row.get("key") for row in rows
