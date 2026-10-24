@@ -27,6 +27,8 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
             continue
         if run.get('_completion_acknowledged'):
+            if deliver:
+                deliver(dict(rule='finished-child', run_id=run['run_id'], kind='clear'))
             continue
         try:
             last = activity(parent)
@@ -34,6 +36,8 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
             findings.append(dict(rule='invalid-parent-session', run_id=run.get('run_id')))
             continue
         if last is None or now - ended <= 300 or now - last <= 300 or last > ended:
+            if deliver and last is not None and last > ended:
+                deliver(dict(rule='finished-child', run_id=run['run_id'], kind='clear'))
             continue
         finding = dict(rule='finished-child', run_id=run['run_id'],
                        parent_session=parent, ended=ended, exit_code=run.get('exit_code'))
@@ -109,18 +113,30 @@ def deliver_event(state, event, *, now=None, interval=None):
     """
     from plangraph.spawner.private_io import atomic_write_private
     payload = json.dumps(event, sort_keys=True)
+    if event.get('kind') == 'clear':
+        for folder in ('alerts', 'outbox'):
+            for path in (Path(state) / 'watchdog' / folder).glob('*.json'):
+                record = json.loads(path.read_text())
+                if record.get('run_id') == event.get('run_id') and record.get('rule') == event.get('rule'):
+                    path.unlink(missing_ok=True)
+        return
     identity = {k: event.get(k) for k in ('rule', 'run_id', 'item_key', 'kind', 'recipient')}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     now = time.time() if now is None else now
     interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
     stamp = Path(state) / 'watchdog/alerts' / (key + '.json')
+    count = 0
     if stamp.exists():
-        if event.get('rule') == 'finished-child' or event.get('kind') == 'completion':
+        if event.get('kind') == 'completion':
             return
-        if now - json.loads(stamp.read_text())['sent'] < interval:
+        previous = json.loads(stamp.read_text())
+        count = previous.get('count', 1)
+        if event.get('rule') == 'finished-child':
+            interval = min(300 * 2 ** min(count - 1, 4), 3600)
+        if now - previous['sent'] < interval:
             return
     atomic_write_private(Path(state) / 'watchdog/outbox' / (key + '.json'), payload)
-    atomic_write_private(stamp, json.dumps({'sent': now}))
+    atomic_write_private(stamp, json.dumps(dict(event, sent=now, count=count + 1)))
 
 
 def flush_outbox(state, command, *, run=subprocess.run):
