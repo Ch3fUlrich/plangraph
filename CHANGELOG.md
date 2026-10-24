@@ -4,6 +4,16 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **LESSONS-TO-ALGORITHM L9 fix4:** retain unadvanced foreign open heads even when they are ancestors of the checked head, so directly merging an open PR cannot evade detection. Exclude only the checked head and stacked descendants; preserve first-parent and base-history safeguards. Restore direct-head vectors with and without the lane head listed. Replace dead subprocess exception handling with uniform return-code checks and real failing Git probe coverage, retaining file-line diagnostics for invalid snapshot commits.
+
+- **LESSONS-TO-ALGORITHM L9 fix3:** exclude the checked head, its ancestors, and stacked descendants from foreign open PR detection, while still refusing merged ancestors of advanced foreign heads. Normalize Git inspection failures to clean gate errors and cache repeated parent/tip reachability queries within a check. An exempt entry does not waive `open_pr_merged`; it only skips trailer rules.
+
+- **LESSONS-TO-ALGORITHM L9 fix2:** check only merged-in parents, not the lane's first-parent lineage, so snapshots may include the PR's own head and stacked descendants without rejecting legitimate main merges. Validate every listed head as a local commit before ancestry checks, with file-line errors and a documented fetch prerequisite. Restore blank-lines-only snapshot coverage and pin second-parent rejection.
+
+- **LESSONS-TO-ALGORITHM L9 fix1:** detect merged ancestors of advanced open PR heads, while allowing parents already reachable from base, with coverage for octopus merges. An exempt entry does not waive `open_pr_merged`; it only skips trailer rules. Document PR-head-only input and per-run OPEN-only head snapshots (no workflow wiring); accept BOM-prefixed SHA files and uppercase heads, preserve strict full-length SHA validation, and centralize the flag-absent skip notice. Add CLI error, library, and ancestry regression coverage.
+
+- **LESSONS-TO-ALGORITHM L9:** the commit gate accepts offline `--open-heads` input and refuses `open_pr_merged` when a merge parent is an open PR head outside base history, preventing cross-lane PR merges while allowing main merges. Without the input, it emits a one-line skip notice.
+
 - **RT-P1-EXEC-OWNERSHIP sq9:** check the claim lease before accepting the phase holder's live-set expectation on ask and complete, using park's existing expiry rule. Check hand-back permissions before validating its fields. Cover live and expired leases, delegates and administrators, still-claimed completion and the park path on both keeper backends. Claim the card before the Postgres alarm test records its execution owner.
 
 - **RT-P1-EXEC-OWNERSHIP sq8:** phase cards stay claimed during child runs; accept the worker live-set CAS only for their worker claim holder, without widening Rust states. Refuse first-owner recording on unclaimed cards and remove fabricated delegation from test seeds. Owner-clear audit events use the acting principal and verb time. Reject invalid hand-back flags, and leave owned needs_input cards to their execution instead of moving them backwards through the planner gate. Add a keeper HTTP claim/ask/park/complete regression.
