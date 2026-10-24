@@ -1,7 +1,5 @@
 [
-  {"name":"V1-key-isolation","fn":"fix2_regression","inputs":{"test":"test_key_cap_and_retry_scope"},"expect":true},
-  {"name":"V2-global-retry","fn":"replay_window","error":{"code":"replay_window_full","status":503,"retry_after_s":70}},
-  {"name":"V3-no-scan-below-cap","fn":"fix2_regression","inputs":{"test":"test_no_replay_scan_below_cap"},"expect":true},
-  {"name":"V4-checked-read-page","fn":"fix2_regression","inputs":{"test":"test_read_validated_result_is_only_page_input"},"expect":true},
-  {"name":"V5-fix1-retry","fn":"fix2_regression","inputs":{"test":"test_exact_retry_at_inclusive_skew_and_rate_boundary"},"expect":true}
+  {"name":"global-retry-body","fn":"replay_window","error":{"code":"replay_window_full","status":503,"retry_after_s":70,"body":{"error":{"code":"replay_window_full","message":"Request rejected","retry_after_s":70}}}},
+  {"name":"purge-by-message-ts","fn":"replay_window","inputs":{"now":1700000071},"expect":{"fresh":1700000071}},
+  {"name":"rate-retry-body","fn":"validate_post","inputs":{"rate_full":true},"error":{"code":"rate_limited","status":429,"body":{"error":{"code":"rate_limited","message":"Request rejected","retry_after_s":60}}}}
 ]

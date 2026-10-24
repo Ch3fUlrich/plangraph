@@ -27,10 +27,6 @@ def test_vector(case):
     fn, inputs = case["fn"], case.get("inputs", {})
 
     def invoke():
-        if fn == "fix2_regression":
-            from . import test_contract_unit as unit
-            getattr(unit, inputs["test"])(c)
-            return True
         if fn == "replay_window":
             state = fleet_state(c)
             for n in range(c.NONCE_CAP):
@@ -123,7 +119,7 @@ def test_vector(case):
         if fn == "check_cursor":
             return c.check_cursor(inputs["cursor"], inputs["ring_ids"])
         if fn == "error_body":
-            err = c.BusError(inputs["code"], inputs["message"])
+            err = c.BusError(inputs["code"], inputs["message"], inputs.get("retry_after_s"))
             assert err.status == c.ERROR_STATUS[err.code]
             assert err.message == inputs["message"]
             return c.error_body(err)
@@ -143,6 +139,8 @@ def test_vector(case):
             assert caught.value.retry_after_s >= 1
         if "retry_after_s" in case["error"]:
             assert caught.value.retry_after_s == case["error"]["retry_after_s"]
+        if "body" in case["error"]:
+            assert c.error_body(caught.value) == case["error"]["body"]
     else:
         result = invoke()
         if case.get("subset"):

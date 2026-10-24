@@ -93,7 +93,7 @@ def test_read_records_rejects_cursor_evicted_by_ring_overflow():
     state = c.new_state()
     first = send(state)
     for n in range(1, c.RING_CAP + 1):
-        # Separate senders and key scopes avoid unrelated rate and nonce caps.
+        # Separate senders avoid the unrelated per-sender rate cap.
         send(state, **{"from": f"sender-{n}", "nonce": f"nonce-{n + 1}",
                        "kid": f"key-{n // (c.NONCE_CAP // 32)}",
                        "msg_id": f"message-{n + 1}"})
@@ -101,15 +101,12 @@ def test_read_records_rejects_cursor_evicted_by_ring_overflow():
     assert first["id"] not in {record["id"] for record in state.ring}
     seen = state.seen.copy()
     rates = {sender: list(stamps) for sender, stamps in state.limiter.senders.items()}
-    nonce_keys, key_counts = state.nonce_keys.copy(), state.key_counts.copy()
     with pytest.raises(c.BusError) as err:
         c.check_read(lambda kid: SECRET, read_headers(cursor=first["id"]),
                      first["id"], NOW, state)
     assert (err.value.code, err.value.status) == ("cursor_gone", 410)
     assert state.seen == seen
     assert {sender: list(stamps) for sender, stamps in state.limiter.senders.items()} == rates
-    assert state.nonce_keys == nonce_keys
-    assert state.key_counts == key_counts
 
 
 def reject_key_lookup(kid):

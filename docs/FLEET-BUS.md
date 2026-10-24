@@ -52,7 +52,7 @@ The first failing gate wins:
 4. Key lookup (`kid`).
 5. Signature verification.
 6. Nonce replay check.
-7. Replay capacity: refuse with `replay_window_full` (503) if 10000 live nonces remain globally or 312 (`NONCE_CAP // 32`) remain for the signing key.
+7. Replay capacity: refuse with `replay_window_full` (503) if 10000 live nonces remain globally. There is no per-key cap.
 8. Rate: 30 authenticated requests per rolling 60 seconds per sender.
 9. Purge expired nonces, record the nonce, then dedupe by `(from, msg_id)`.
 
@@ -64,12 +64,12 @@ timestamp, not acceptance time. Only entries with `ts < now - 60` may be purged;
 the inclusive boundary remains protected. Never evict an in-window nonce to make
 room: a full window returns 503 without changing state. READ and POST share this
 window, including capacity and expiry rules.
-Key scope is `kid`, or the empty string for the default key, not the caller-chosen
-sender or reader identity. A key at its cap cannot block other keys below the
-global cap. A 503 carries `retry_after_s = max(1, ceil(oldest live ts in the
-refusing scope + 60 - now))`; global capacity takes precedence if both are full.
-Cleanup scans run only when global storage or that key's stored count reaches
-its cap, not on every authenticated request. Expired entries may remain below
+A holder of a valid signing key can fill the global window and cause 503 for all
+senders until entries age out (at most `2*SKEW_S`). Integrity is preferred over
+availability. Mitigation needs sender-to-key binding, a follow-up outside this item.
+A 503 carries `retry_after_s = max(1, ceil(oldest live ts + 60 - now))`, globally scoped.
+Cleanup uses one scan only when global storage reaches its cap, not on every
+authenticated request. Expired entries may remain below
 capacity; cleanup is committed only on acceptance. Live entries are never evicted.
 Rate-rejected (429) requests consume no replay state: they neither insert nor
 evict nonces and do not change message-ID dedupe state. Their nonces remain unseen;
@@ -147,7 +147,7 @@ or the input cursor when no rows are delivered. Records contain `id`, server
 
 Errors serialize as `{"error":{"code":"...","message":"..."}}`.
 Messages must not echo request payloads, signatures or secret material.
-Rate errors additionally carry an internal `retry_after_s` for the adapter to
+Rate errors additionally carry `retry_after_s` in the error body for the adapter to
 publish as a Retry-After header; it is not an extra JSON response field.
 
 | Code | HTTP status |

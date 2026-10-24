@@ -43,7 +43,10 @@ class BusError(Exception):
 
 def error_body(error):
     """Return the language-neutral error response."""
-    return {"error": {"code": error.code, "message": error.message}}
+    body = {"code": error.code, "message": error.message}
+    if error.retry_after_s is not None:
+        body["retry_after_s"] = error.retry_after_s
+    return {"error": body}
 
 
 def scrub_text(value):
@@ -117,8 +120,6 @@ class BusState:
     """In-memory contract state; transport adapters must serialize access."""
 
     seen: OrderedDict = field(default_factory=OrderedDict)
-    nonce_keys: dict = field(default_factory=dict)
-    key_counts: dict = field(default_factory=dict)
     msg_ids: dict = field(default_factory=dict)
     limiter: RateLimiter = field(default_factory=RateLimiter)
     ring: deque = field(default_factory=deque)
@@ -180,31 +181,24 @@ def _verify(resolve_key, ts, nonce, sender, kid, canonical, signature, now, stat
 
 def _record(ts, nonce, sender, kid, now, state):
     # Never evict a nonce that could still pass the inclusive skew gate.
-    kid = kid or ""
     expired = []
-    if len(state.seen) >= NONCE_CAP or state.key_counts.get(kid, 0) >= NONCE_CAP // 32:
-        expired = [key for key, stamp in state.seen.items() if stamp < now - SKEW_S]
-        live = [(key, stamp) for key, stamp in state.seen.items() if stamp >= now - SKEW_S]
-        scope = [stamp for key, stamp in live if state.nonce_keys.get(key, "") == kid]
-        if len(live) >= NONCE_CAP:
-            scope = [stamp for key, stamp in live]
-        elif len(scope) < NONCE_CAP // 32:
-            scope = []
-        if scope:
-            raise BusError("replay_window_full", retry_after_s=max(1, math.ceil(min(scope) + SKEW_S - now)))
+    if len(state.seen) >= NONCE_CAP:
+        live_count, oldest = 0, None
+        for key, stamp in state.seen.items():
+            if stamp < now - SKEW_S:
+                expired.append(key)
+            else:
+                live_count += 1
+                oldest = stamp if oldest is None else min(oldest, stamp)
+        if live_count >= NONCE_CAP:
+            raise BusError("replay_window_full", retry_after_s=max(1, math.ceil(oldest + SKEW_S - now)))
     state.limiter.check(sender, now)
     # Commit cleanup only after every refusal gate, including the rate gate.
     if nonce in state.seen and nonce not in expired:
         expired.append(nonce)
     for key in expired:
         del state.seen[key]
-        owner = state.nonce_keys.pop(key, "")
-        state.key_counts[owner] -= 1
-        if not state.key_counts[owner]:
-            del state.key_counts[owner]
     state.seen[nonce] = parse_ts(ts)
-    state.nonce_keys[nonce] = kid
-    state.key_counts[kid] = state.key_counts.get(kid, 0) + 1
 
 
 def validate_post(resolve_key, body, signature, now, state):

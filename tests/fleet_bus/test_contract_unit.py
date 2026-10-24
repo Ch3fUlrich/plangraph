@@ -238,27 +238,35 @@ def test_read_response_and_delivery_cursor(c):
     envelope = post(trace_id="trace", key="group", run_id="run", attempt_n=1)
     ack = send(c, state, envelope)
     # read_records is the response-shaping seam; authentication is check_read.
-    response = c.read_records(state, ("reader", 100, 0))
+    def page(nonce, cursor):
+        headers = {"X-Fleet-From": "reader", "X-Fleet-Ts": str(NOW),
+                   "X-Fleet-Nonce": nonce}
+        headers["X-Fleet-Sig"] = c.sign(SECRET, c.canonical_read(NOW, nonce, "reader", cursor=cursor))
+        return c.read_records(state, c.check_read(lambda kid: SECRET, headers, cursor, NOW, state))
+    response = page("page-1", "")
     assert set(response) == {"cursor", "records"}
     assert response["cursor"] == ack["id"]
     record, = response["records"]
     assert record == dict({k: envelope[k] for k in
                           ("from", "to", "msg_id", "text", "trace_id", "key", "run_id", "attempt_n")},
                          id=ack["id"], ts=ack["ts"])
-    assert c.read_records(state, ("reader", 100, 1)) == {
+    assert page("page-2", response["cursor"]) == {
         "cursor": response["cursor"], "records": []}
 
 
-def test_key_cap_and_retry_scope(c):
+def test_global_window_shared_by_keys_and_default_senders(c):
     state = fleet_state(c)
-    for n in range(c.NONCE_CAP // 32):
+    for n in range(c.NONCE_CAP - 1):
         send(c, state, post(**{"from": f"identity-{n}", "nonce": str(n), "ts": NOW + 10}))
+    send(c, state, post(kid="other", nonce="other", ts=NOW + 20))
     before = state.seen.copy()
     with pytest.raises(c.BusError) as err:
         send(c, state, post(nonce="overflow"), now=NOW + 0.5)
     assert (err.value.code, err.value.status, err.value.retry_after_s) == ("replay_window_full", 503, 70)
     assert state.seen == before
-    send(c, state, post(kid="other", nonce="other"))
+    with pytest.raises(c.BusError) as err:
+        send(c, state, post(kid="third", nonce="third"))
+    assert (err.value.code, err.value.retry_after_s) == ("replay_window_full", 70)
     before = state.seen.copy()
     rates = {key: list(value) for key, value in state.limiter.senders.items()}
     headers = {"X-Fleet-From": "new-reader", "X-Fleet-Ts": str(NOW), "X-Fleet-Nonce": "read-full"}
@@ -269,9 +277,24 @@ def test_key_cap_and_retry_scope(c):
     assert state.seen == before
     assert {key: list(value) for key, value in state.limiter.senders.items()} == rates
     send(c, state, post(nonce="after-expiry", ts=NOW + 71), now=NOW + 71)
-    assert state.seen == OrderedDict([("after-expiry", NOW + 71)])
-    assert state.key_counts == {"": 1}
-    assert state.nonce_keys == {"after-expiry": ""}
+    assert state.seen == OrderedDict([("other", NOW + 20), ("after-expiry", NOW + 71)])
+
+
+def test_at_cap_scans_once(c):
+    class OneScan(OrderedDict):
+        scans = 0
+
+        def items(self):
+            self.scans += 1
+            assert self.scans == 1
+            return super().items()
+
+    state = fleet_state(c)
+    state.seen = OneScan((str(n), NOW) for n in range(c.NONCE_CAP))
+    with pytest.raises(c.BusError) as err:
+        send(c, state)
+    assert (err.value.code, err.value.retry_after_s) == ("replay_window_full", 60)
+    assert state.seen.scans == 1
 
 
 def test_no_replay_scan_below_cap(c):
