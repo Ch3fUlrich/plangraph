@@ -23,11 +23,36 @@ needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service 
 RUN2 = {"workflow_id": "wf", "run_id": "run", "attempt": 2}
 
 
+@needs_pg
+@pytest.mark.parametrize("verb", ["complete", "alarm"])
+@pytest.mark.parametrize("owned", [False, True])
+def test_expired_production_claim_pg(tmp_path, verb, owned):
+    from test_keeper_exec_sq10 import check_expired_claim
+
+    w = World(tmp_path, backend="postgres", dsn=DSN)
+    try:
+        check_expired_claim(w, verb, owned)
+    finally:
+        w.close()
+
+
 def owner(w, key):
     row = w.conn.execute(
         "SELECT exec_workflow_id, exec_run_id, exec_attempt FROM items WHERE key=?",
         (key,)).fetchone()
     return tuple(row)
+
+
+@needs_pg
+@pytest.mark.parametrize("who", ["workerA", "workerB"])
+def test_duplicate_complete_pg(tmp_path, who):
+    from test_keeper_exec_sq11 import check_duplicate_complete
+
+    w = World(tmp_path, backend="postgres", dsn=DSN)
+    try:
+        check_duplicate_complete(w, who)
+    finally:
+        w.close()
 
 
 @needs_pg

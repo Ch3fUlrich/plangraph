@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from . import auth, events
 from .errors import Refused
+from .phase_merge import merge_subject
 from .schema import STATES
 
 #: every live state (the design-3 ones included); done/cancelled are final.
@@ -29,15 +30,33 @@ class VerbsMixin:
                                                            ref, now))
 
     def _router_evidence(self, principal, key, kind, ref, now):
-        self._require_role(principal, "router")
+        self._require_role(principal, "router", "system")
+        # System access exists only for phase merge proof.
+        if principal.role == "system" and kind != "commit+ci":
+            raise Refused("forbidden", "system may attach only commit+ci evidence")
         item = self._get_or_refuse(key)
+        if principal.role == "system":
+            gates = self._phase_evidence_scope(item)
+            git = self._adapter("git")
+            sha = ref.get("commit") if isinstance(ref, dict) else None
+            repo = git.repo_path(item["project"]) if git is not None else None
+            inspect = getattr(git, "two_parent_merge_subject", None)
+            subject = inspect(repo, sha) if repo and inspect else None
+            if subject not in {merge_subject(gate) for gate in gates}:
+                raise Refused("forbidden", "system evidence requires a two-parent phase merge")
         self._assert_unlocked(item)
         if item["state"] not in ("claimed", "in_review"):
             raise Refused("bad_state", f"{key} is {item['state']}")
         # Slow verification (git/gh/http) happens before the write lock.
         result = self._verify_evidence(item, kind, ref, now)
+        if principal.role == "system" and not result.ok:
+            raise Refused("evidence", result.detail)
         with self._write():
             fresh = self._get_or_refuse(key)
+            if principal.role == "system":
+                gates = self._phase_evidence_scope(fresh)
+                if subject not in {merge_subject(gate) for gate in gates}:
+                    raise Refused("forbidden", "phase merge no longer matches the card's gate")
             self._assert_unlocked(fresh)
             if fresh["state"] not in ("claimed", "in_review"):
                 raise Refused("conflict",
@@ -46,6 +65,16 @@ class VerbsMixin:
                                 fresh["epoch"])
             return self._record_evidence(principal, fresh, kind, ref, now,
                                          result)
+
+    def _phase_evidence_scope(self, item):
+        # Recheck under the write lock: cancellation/state changes revoke this door.
+        gates = self.conn.execute(
+            "SELECT i.key FROM edges e JOIN items i ON i.key=e.src"
+            " WHERE e.dst=? AND i.kind='gate' AND i.state!='cancelled'",
+            (item["key"],)).fetchall()
+        if item["kind"] != "lane" or item["state"] != "in_review" or not gates:
+            raise Refused("forbidden", "system evidence requires an in_review phase card")
+        return [gate["key"] for gate in gates]
 
     def add_evidence(self, principal, key, epoch, kind, ref):
         return self._run(principal, "add_evidence", key,
@@ -121,6 +150,8 @@ class VerbsMixin:
                 "claimed_by": principal.name,
                 "lease_until": lease,
             }
+            if allow_system and principal.role == "system":
+                payload["via"] = "worker_claim"
             base = self._ref_head(item["project"])
             if base is not None:
                 payload["base"] = base

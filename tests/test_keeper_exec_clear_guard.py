@@ -62,6 +62,7 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
 # every hand-back it writes (explicit ``hand_back=True``, open/ready, changing)
 # calls ``_exec_clear``.
 STATE_WRITER_EXCEPTIONS = {
+    ("store_worker.py", "_worker_complete"): "Phase completion submits to review, not to new work; preserves exec ownership.",
     ("store_legacy.py", "_set_legacy_state"): "Legacy set_state compatibility path, not a work handback.",
     ("store_verbs.py", "_claim"): "A worker may claim before running; claim must preserve ownership.",
     ("store_verbs.py", "_submit"): "Submits to review, not to new work.",
