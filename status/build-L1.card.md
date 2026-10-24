@@ -9,7 +9,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | sq9 seats qwen PASS + Haiku PASS (seats/exec-ownership/sq9); cb0303ac rust-worker RED (semantic merge: #147 4-arg park_and_alarm) -> Hand-Edit cc563b1e pushed, CI running -> green: GO-REQ |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
-| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix6 84b49a36 CI green; qwen delta FIX (over-refusal 175/280 main shapes, run- grammar, slash vendor list, Writer key case, colon) -> fix7 brief seats/trailer-multi/fix7 sent workst 23:3xZ (cx after 23:45Z else mimo) -> seat qwen delta -> GO-REQ |
+| KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | fix7 fda0f026 (corpus) qwen FIX ("L2:" glued token) + CI RED scrub (fixture high-entropy) -> fix8 cx d060ec + scrub addendum -> CI -> qwen delta -> GO-REQ (residual: unknown 2nd model ignored) |
 | PG-PUBLIC-FIX | DONE | closed D-2430 |
 | PG-PUBLIC-READY (HIGH) | L1 | criteria = D-2471 (repo public; no squash/flip; real find -> STOP rotate); D-2463 names waived; r5 Haiku fix (87cfb29d, not counted); D-2467 A: writer lane/pg-public-f3 queued workst (F3 allowlist parity + F2 site grep) -> PR, CI -> seats luna + opencode glm (after SEAT-FREE-OPENCODE) -> submit, GO-REQ. luna r5 c218b921 PASS (workst review sha c788ba6c, prompt 3b993a0c; superseded by f3 head) |
 | KEEPER-CLOSE-SKIP-UNVERIFIED #148 | DONE | closed D-2439; tell routing when LIVE-SYNC-9 runs it (PW-ROTATE+MT-226) |
