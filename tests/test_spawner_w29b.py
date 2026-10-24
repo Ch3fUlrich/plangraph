@@ -36,12 +36,22 @@ def test_probe_admission():
     assert resolver.host_skip_reason(row, probe=lambda env: {'omniroute/cx'}) is None
 
 
-def test_probe_timeout(monkeypatch):
+@pytest.mark.parametrize('failure', ['timeout', 'missing', 'nonzero'])
+def test_probe_timeout(monkeypatch, failure):
+    calls = []
     def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired('opencode', 10)
+        calls.append(args)
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired('opencode', 10)
+        if failure == 'missing':
+            raise FileNotFoundError('opencode')
+        return SimpleNamespace(returncode=1)
     monkeypatch.setattr(subprocess, 'run', timeout)
-    resolver.served_models.cache_clear()
-    assert resolver.served_models('{}') is None
+    resolver._served_models_real.cache_clear()
+    assert resolver._served_models_real('{}') is None
+    assert len(calls) == 1
+    assert resolver.host_skip_reason({'id': 'missing/model', 'harness': 'opencode'},
+                                    probe=lambda env: resolver._served_models_real('{}')) is None
 
 
 @pytest.mark.parametrize('all_bad,no_fallthrough,count,status', [

@@ -330,13 +330,15 @@ def build_standalone_fallback_command(
             cmd.extend(["--model", model])
         return cmd
     if cname == "codex":
-        return ["codex", "exec", prompt]
-    if cname == "claude":
-        cmd = ["claude", "-p", prompt]
+        return ["codex", "exec", *(["--model", model] if model else []), prompt]
+    if cname in ("claude", "gemini", "qwen"):
+        cmd = [cname, "-p", prompt]
         if model:
             cmd.extend(["--model", model])
         return cmd
-    # Default fallback
+    if cname != 'opencode':
+        raise ValueError(f'unsupported harness: {client_name}')
+    # Explicit OpenCode fallback
     cmd = ["opencode", "run"]
     if model:
         cmd.extend(["--model", model])

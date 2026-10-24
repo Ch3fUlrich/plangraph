@@ -16,7 +16,11 @@ import math
 import os
 import shutil
 import subprocess
-from functools import lru_cache
+import asyncio
+import hashlib
+import json
+import time
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -348,11 +352,48 @@ def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     return row.get('available') == 1 and row.get('active') is True
 
 
-@lru_cache(maxsize=8)
-def served_models(config):
-    """A failed probe is UNKNOWN, never evidence that a model is absent."""
+_served_cache = {}
+_served_lock = threading.Lock()
+
+
+def provider_config_digest(config):
+    """Identity of model discovery; request headers never affect discovery."""
+    try:
+        providers = json.loads(config).get('providers', {})
+        def stable(node):
+            if isinstance(node, dict):
+                return {k: stable(v) for k, v in node.items() if k.lower() != 'headers'}
+            if isinstance(node, list):
+                return [stable(v) for v in node]
+            return node
+        payload = json.dumps(stable(providers), sort_keys=True)
+    except (ValueError, AttributeError, TypeError):
+        payload = config
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def host_probe_env(env=None):
+    from .clients import build_child_env
     from .opencode_overlay import overlay_env
-    env = overlay_env(dict(os.environ))
+    return overlay_env(build_child_env(extra_env=env))
+
+
+def served_models(config, *, clock=time.monotonic):
+    """A failed probe is UNKNOWN, never evidence that a model is absent."""
+    key = provider_config_digest(config)
+    with _served_lock:
+        cached = _served_cache.get(key)
+        if cached and clock() < cached[0]:
+            return cached[1]
+        result = _probe_served_models(config)
+        if len(_served_cache) >= 32:
+            _served_cache.pop(next(iter(_served_cache)))
+        _served_cache[key] = (clock() + (30 if result is None else 300), result)
+        return result
+
+
+def _probe_served_models(config):
+    env = host_probe_env()
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
         result = subprocess.run(['opencode', 'models'], env=env, capture_output=True,
@@ -363,6 +404,21 @@ def served_models(config):
     except (OSError, subprocess.SubprocessError):
         pass
     return None
+
+
+served_models.cache_clear = _served_cache.clear
+# Real function retained for tests whose autouse fixture stubs served_models.
+_served_models_real = served_models
+
+
+async def served_models_async(config, *, clock=time.monotonic):
+    return await asyncio.to_thread(_served_models_real, config, clock=clock)
+
+
+async def host_skip_reason_async(row, *, env=None):
+    child = host_probe_env(env)
+    models = await served_models_async(child.get('OPENCODE_CONFIG_CONTENT', '{}')) if row.get('harness') == 'opencode' else None
+    return host_skip_reason(row, env=child, probe=lambda env: models)
 
 
 def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
@@ -380,6 +436,8 @@ def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
         reason = host_skip_reason(dict(model=leg.model, harness=leg.harness),
                                   **options)
         if reason:
+            # W30 callers consume skip_reason; reason remains canonical like
+            # the planner's pre-existing skipped entries.
             skipped.append(dict(leg=leg.id, reason=reason, skip_reason=reason))
         else:
             admitted.append(leg)
@@ -387,16 +445,26 @@ def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
 
 
 def host_skip_reason(row, *, probe=None, env=None):
-    from .opencode_overlay import overlay_env
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
         return None if shutil.which(harness) else 'harness_missing: ' + harness
     if harness != 'opencode':
         return None
-    child = overlay_env(dict(os.environ) if env is None else env)
-    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
     model = row.get('model') or row.get('id') or row.get('model_id')
-    return 'not_served_on_host: ' + model if models is not None and model not in models else None
+    if not model or '/' not in model:
+        return None
+    child = host_probe_env(env)
+    try:
+        cfg = json.loads(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
+        provider, name = model.split('/', 1)
+        entry = cfg.get('providers', {}).get(provider, {}).get('models', {}).get(name, {})
+        if (isinstance(entry, dict) and (entry.get('combo') or entry.get('alias'))) or name in cfg.get('agents', {}):
+            return None
+    except (ValueError, AttributeError, TypeError):
+        pass
+    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
+    present = models is None or model.lower() in {m.lower() for m in models} or model.lower() in {m.lower().split('#', 1)[0] for m in models}
+    return None if present else 'not_served_on_host: ' + model
 
 
 def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
@@ -567,9 +635,23 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d.setdefault('harness', 'opencode')
     return d
 
-def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dict[str, Any]]:
+_catalog_failures = {}
+
+
+def get_catalog_models(db: Any = None, *, active_only: bool = False,
+                       clock=time.monotonic) -> list[dict[str, Any]]:
     """Retrieve catalog models, including inactive rows unless explicitly filtered."""
     catalog_source = None
+    # Retain the object as well as its id to prevent id reuse crossing episodes.
+    identity = db if db is not None else _get_default_catalog_db
+    key = id(identity)
+    failure = _catalog_failures.get(key)
+    if failure and clock() < failure['until']:
+        if failure['closed'] and active_only:
+            return []
+        return [dict(_normalize_catalog_row(m), catalog_source='offline_fallback_db_error')
+                for m in DEFAULT_FALLBACK_MODELS if not active_only or catalog_row_admitted(m)]
+    followup = False
     try:
         target_db = db if db is not None else _get_default_catalog_db()
         if target_db is not None:
@@ -577,24 +659,37 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dic
                 models = target_db.list_models(active_only=active_only)
                 # D-2631: no admitted rows is not an empty catalog. Preserve the
                 # active-only query contract, but probe total rows before fallback.
-                if active_only and not models and target_db.list_models(active_only=False):
-                    return []
+                if active_only and not models:
+                    followup = True
+                    if target_db.list_models(active_only=False):
+                        _catalog_failures.pop(key, None)
+                        return []
+                    followup = False
                 if models:
+                    _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
                             if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
             if hasattr(target_db, "get_models"):
                 models = target_db.get_models()
                 if models:
+                    _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
                             if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).warning(
-            "catalog_db_error fallback=offline err=%s: %s", type(exc).__name__, exc)
+        if not failure:
+            logging.getLogger(__name__).warning(
+                "catalog_db_error fallback=offline err=%s", type(exc).__name__)
+        _catalog_failures[key] = dict(identity=identity, until=clock() + 30,
+                                      closed=followup)
+        if followup and active_only:
+            # The successful empty active read is authoritative. An unavailable
+            # all-rows read cannot turn registered defaults back into active rows.
+            return []
         catalog_source = "offline_fallback_db_error"
 
     rows = [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
-            if not (catalog_source or active_only) or catalog_row_admitted(m)]
+            if not active_only or catalog_row_admitted(m)]
     if catalog_source:
         rows = [dict(m, catalog_source=catalog_source) for m in rows]
     return rows

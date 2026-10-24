@@ -4,19 +4,58 @@ import json
 import os
 from pathlib import Path
 import re
+import logging
+
+_parse_warned = False
+
+
+def _strip_jsonc(text):
+    out, i, quoted = [], 0, False
+    while i < len(text):
+        c = text[i]
+        if quoted:
+            out.append(c)
+            if c == '\\' and i + 1 < len(text):
+                i += 1
+                out.append(text[i])
+            elif c == '"':
+                quoted = False
+        elif c == '"':
+            quoted = True
+            out.append(c)
+        elif text.startswith('//', i):
+            end = text.find('\n', i)
+            i = len(text) if end < 0 else end
+            out.append('\n')
+            continue
+        elif text.startswith('/*', i):
+            end = text.find('*/', i + 2)
+            if end < 0:
+                raise ValueError('unterminated comment')
+            out.append(' ')
+            i = end + 2
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return re.sub(r'("(?:\\.|[^"\\])*")|,\s*(?=[}\]])',
+                  lambda m: m.group(1) or '', ''.join(out))
 
 
 def load_root_providers(root=None):
+    global _parse_warned
     try:
         root = root or os.environ.get('AUTOOS_ROOT') or Path.home() / 'code/AutoOS'
         text = (Path(root) / 'opencode.jsonc').read_text()
-        text = re.sub(r'^\s*//[^\n]*', '', text, flags=re.M)
-        # Remove trailing commas outside strings only.
-        text = re.sub(r'("(?:\\.|[^"\\])*" )|,\s*(?=[}\]])',
-                      lambda m: m.group(1) or '', text, flags=re.X)
+        text = _strip_jsonc(text)
         providers = json.loads(text).get('providers')
         return copy.deepcopy(providers) if isinstance(providers, dict) else None
-    except (OSError, ValueError, TypeError, AttributeError):
+    except OSError:
+        return None
+    except (ValueError, TypeError, AttributeError):
+        if not _parse_warned:
+            logging.getLogger(__name__).warning('root_provider_config_parse_error')
+            _parse_warned = True
         return None
 
 
@@ -37,6 +76,8 @@ def overlay_env(base_env):
             original = providers.get(name)
             if isinstance(original, dict) and isinstance(value, dict):
                 for key, item in value.items():
+                    if key in ('package', 'name', 'env', 'models') and key in original:
+                        continue
                     if isinstance(original.get(key), dict) and isinstance(item, dict):
                         original[key].update(item)
                     else:
