@@ -223,6 +223,8 @@ class SpawnerRunner:
         if cmd[0] == 'opencode':
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
+        else:
+            child_env.pop('OPENCODE_CONFIG_CONTENT', None)
 
         if dry_run:
             served_model = model_or_combo
@@ -270,6 +272,15 @@ class SpawnerRunner:
             cwd=work_dir,
         )
         self.jobs[job_id] = job
+
+        from .resolver import host_skip_reason
+        unavailable = host_skip_reason(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
+        if unavailable:
+            job.status = 'failed'
+            job.exit_code = 1
+            job.stderr = unavailable
+            job.end_time = time.time()
+            return job
 
         import shutil
         resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
@@ -556,18 +567,9 @@ def spawn_service(*args, **kwargs):
                 return await super()._spawn(card, prompt, role, writer_families, review_of,
                     model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
-            from .resolver import host_skip_reason
-            admitted, skipped = [], list(getattr(plan, 'skipped', ()))
-            for candidate in plan.legs:
-                reason = (host_skip_reason(dict(model=candidate.model, harness=candidate.harness))
-                          if getattr(self.runner, 'process_factory', None) is asyncio.create_subprocess_exec else None)
-                if reason:
-                    skipped.append(dict(leg=candidate.id, reason=reason, skip_reason=reason))
-                else:
-                    admitted.append(candidate)
-            from dataclasses import replace
+            from .resolver import plan_for_launch
             if hasattr(plan, '__dataclass_fields__'):
-                plan = replace(plan, legs=tuple(admitted), skipped=tuple(skipped))
+                plan = plan_for_launch(plan, dry_run=dry_run)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),

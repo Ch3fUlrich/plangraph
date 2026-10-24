@@ -365,6 +365,27 @@ def served_models(config):
     return None
 
 
+def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
+    """Apply host admission at the shared real-launch boundary, never offline."""
+    if dry_run:
+        return plan
+    from dataclasses import replace
+    admitted, skipped = [], list(plan.skipped)
+    options = {}
+    if probe is not None:
+        options['probe'] = probe
+    if env is not None:
+        options['env'] = env
+    for leg in plan.legs:
+        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness),
+                                  **options)
+        if reason:
+            skipped.append(dict(leg=leg.id, reason=reason, skip_reason=reason))
+        else:
+            admitted.append(leg)
+    return replace(plan, legs=tuple(admitted), skipped=tuple(skipped))
+
+
 def host_skip_reason(row, *, probe=None, env=None):
     from .opencode_overlay import overlay_env
     harness = row.get('harness')

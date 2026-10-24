@@ -13,6 +13,7 @@ import os
 import shutil
 import sys
 import tempfile
+import pytest
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
@@ -52,6 +53,24 @@ def _use_tmpfs_tempdir() -> None:
 
 
 _use_tmpfs_tempdir()
+
+
+@pytest.fixture(autouse=True)
+def hermetic_spawner_host(monkeypatch):
+    """Host capabilities are UNKNOWN unless a test explicitly supplies them."""
+    from plangraph.spawner import resolver
+    probe = resolver.served_models
+    probe.cache_clear()
+    def unknown(config):
+        return None
+    unknown.cache_clear = probe.cache_clear
+    monkeypatch.setattr(resolver, 'served_models', unknown)
+    original_which = shutil.which
+    monkeypatch.setattr(shutil, 'which', lambda command, *a, **kw:
+                        (original_which(command, *a, **kw) or command)
+                        if command in ('agy', 'qodercli') else original_which(command, *a, **kw))
+    yield
+    probe.cache_clear()
 
 _PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 
