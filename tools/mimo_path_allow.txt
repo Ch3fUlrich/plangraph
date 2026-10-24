@@ -2,3 +2,6 @@
 docs/decisions/
 docs/history/
 docs/archive/
+# Provider-map keys for the dedicated mimo provider (bare key under provider "mimo" is the allowed shape).
+opencode.jsonc
+tests/test_opencode_config.py
