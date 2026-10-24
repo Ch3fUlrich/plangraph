@@ -13,7 +13,7 @@ The 192.0.2.x placeholder addresses in `nginx.conf` fail closed (no real peer ma
    `curl -s http://127.0.0.1:8789/healthz` → `ok`, and
    `curl --cacert tls/ca.crt --cert tls/client.crt --key tls/client.key https://keeper.example.invalid:8788/v1/whoami` → 401
    (TLS ok, no bearer), while `curl --cacert tls/ca.crt https://keeper.example.invalid:8788/v1/whoami` fails the handshake.
-2. PG-PROXY-VHOST (prox, Server repo `server/network/opnsense/caddy.d/`):
+2. PG-PROXY-VHOST (site router; the vhost file goes in the Server repo's Caddy vhost directory, `<caddy-vhost-dir>`):
    ```
    [DOMAIN] {
        import secure_headers
@@ -39,4 +39,4 @@ The 192.0.2.x placeholder addresses in `nginx.conf` fail closed (no real peer ma
    OPNsense rule allowing 8788 only from the edge).
 3. Check from each remote L1: MCP env `PG_URL=https://[DOMAIN]`,
    `PG_TOKEN_FILE=~/.config/plangraph/<name>.token` → `whoami` answers with its principal.
-4. PG-PROXY-CUTOVER: `tailscale serve --https=8787 off`; remove the ssh relay forced command for prox-L1.
+4. PG-PROXY-CUTOVER: retire the legacy serve endpoint (`tailscale serve --https=<legacy-port> off`); remove the ssh relay forced command for `<site>-L1`.

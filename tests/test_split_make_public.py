@@ -356,15 +356,35 @@ def test_words_content_never_in_output(tmp_path, src, manifest, capsys):
 
 LEAKS_CFG = ROOT / "tools" / "split" / "gitleaks.toml"
 FAKE = "Zx81kQ92" + "LmPq77Vb"  # the reviewed synthetic demo value
+#: The two private-key waiver regexes, exactly as BOTH configs must carry them:
+#: pinned as text so a widened waiver (prefix-only, open-ended body) fails the pin even
+#: while every scan test still passes.  The "\s*" spellings keep this file's own text
+#: from ever matching the rule the config exempts.
+PEM_WAIVER_FAKE = (
+    r"^-----BEGIN TEST\s*PRIVATE KEY-----(?:\r?\nA{64})+\r?\n"
+    r"-----END TEST\s*PRIVATE KEY-----$"
+)
+PEM_WAIVER_HISTORICAL = (
+    r'^-----BEGIN TEST\s*PRIVATE KEY-----"\.to_string\(\)\];\s+for _ in 0\.\.body_lines'
+    r'\s*\{\s+v\.push\("A"\.repeat\(64\)\);\s+\}\s+v\.push\("-----END TEST\s*PRIVATE KEY-----$'
+)
 
 
 def test_leaks_allowlist_only_names_test_paths():
+    """Exact pins per entry: count, sorted path list, targetRules list, value set.
+
+    Every entry of BOTH configs is compared as a whole
+    ``(sorted paths, targetRules, value set)``, so a NEW entry, path, rule or value
+    fails here -- not just a broad one.  Historical prose and Rust test fixtures are
+    the only non-tests/ exceptions.
+    """
     import tomllib
     cfg = tomllib.loads(LEAKS_CFG.read_text())
     assert cfg["extend"]["useDefault"] is True
     lists = cfg["allowlists"]
     root = tomllib.loads((ROOT / ".gitleaks.toml").read_text())
     assert lists == root["allowlists"]
+
     # Historical prose and Rust test fixtures are the only non-tests/ exceptions.
     exceptions = {
         r"^PROMPT\.md$", r"^docs/plans/2026-10-16-orchestration-setup\.md$",
@@ -373,10 +393,9 @@ def test_leaks_allowlist_only_names_test_paths():
         r"^rust/worker/tests/fixtures/phase_two_cards\.json$",
         r"^rust/worker-core/src/check\.rs$", r"^rust/worker-core/src/redact\.rs$",
     }
-    values = {
-        r"^bool/str/negative$", r"^RT\-P2\-DECISIONS$",
-        r"^svcacct/Zq9xk2LmPw$", r"^svc/Xk9fT2mQ$",
-        r"^Zx81kQ92LmPq77Vb$", r"^AbCd1234Efgh$", r"^sentinel-wf8-opkey$",
+    generic = ("generic-api-key",)
+    #: 6 replay ids the current fixtures hold + 12 older generations only git history has.
+    replay = frozenset({
         r"^e2e-defer-a-33069540525861094644722115702876536833$",
         r"^e2e-defer-b-33069540525861163949139600629661958146$",
         r"^phase-33069540525861169132674685342045962243$",
@@ -395,14 +414,43 @@ def test_leaks_allowlist_only_names_test_paths():
         r"^e2e-phase-b-33069465440153917306991939289515819010$",
         r"^phase-33069397622649516942904760258026012683$",
         r"^phase-33069465440153924519668872109950500867$",
+    })
+    expected = {
+        ((r"^PROMPT\.md$",), generic, frozenset({r"^bool/str/negative$"})),
+        ((r"^docs/plans/2026-10-16-orchestration-setup\.md$",), generic,
+         frozenset({r"^RT\-P2\-DECISIONS$"})),
+        ((r"^tests/test_keeper_"
+          r"credential_guard\.py$",), generic,
+         frozenset({r"^svcacct/Zq9xk2LmPw$"})),
+        ((r"^tests/test_keeper_estimate_src_edit\.py$",), generic,
+         frozenset({r"^svcacct/Zq9xk2LmPw$"})),
+        ((r"^tests/test_keeper_guard_key\.py$",), generic,
+         frozenset({r"^svc/Xk9fT2mQ$"})),
+        ((r"^tests/fixtures/md_sync/QUESTIONS\.md$",
+          r"^tests/fixtures/md_sync/sample_questions\.md$"),
+         generic, frozenset({r"^Zx81kQ92LmPq77Vb$"})),
+        ((r"^tests/test_md_sync_e2e\.py$",), generic, frozenset({r"^Zx81kQ92LmPq77Vb$"})),
+        ((r"^tests/test_md_sync_parse\.py$",), generic, frozenset({r"^Zx81kQ92LmPq77Vb$"})),
+        ((r"^tests/test_md_sync_parse\.py$",), generic, frozenset({r"^AbCd1234Efgh$"})),
+        ((r"^tests/test_md_sync_plan\.py$",), generic, frozenset({r"^Zx81kQ92LmPq77Vb$"})),
+        ((r"^rust/worker-core/src/sandbox_env\.rs$",), generic,
+         frozenset({r"^sentinel-wf8-opkey$"})),
+        ((r"^rust/worker/tests/fixtures/phase_defer\.json$",
+          r"^rust/worker/tests/fixtures/phase_two_cards\.json$"), generic, replay),
+        ((r"^rust/worker-core/src/check\.rs$", r"^rust/worker-core/src/redact\.rs$"),
+         ("private-key",), frozenset({PEM_WAIVER_FAKE})),
+        ((r"^rust/worker-core/src/check\.rs$", r"^rust/worker-core/src/redact\.rs$"),
+         ("private-key",), frozenset({PEM_WAIVER_HISTORICAL})),
     }
-    assert {r for al in lists if al.get("targetRules") == ["generic-api-key"]
-            for r in al["regexes"]} == values
-    assert any(r"^tests/fixtures/md_sync/QUESTIONS\.md$" in al["paths"]
-               and al["regexes"] == [r"^Zx81kQ92LmPq77Vb$"] for al in lists)
+    actual = {(tuple(sorted(al["paths"])), tuple(al["targetRules"]),
+               frozenset(al["regexes"])) for al in lists}
+    assert len(lists) == len(expected) == 14, f"{len(lists)} allowlist entries, 14 pinned"
+    missing, unexpected = expected - actual, actual - expected
+    assert not missing and not unexpected, (
+        f"missing pinned entries: {sorted(map(repr, missing))}; "
+        f"unexpected entries: {sorted(map(repr, unexpected))}")
     for al in lists:
-        assert al["condition"] == "AND" and al.get("targetRules")
-        assert al["regexes"] and al["paths"]
+        assert al["condition"] == "AND"
         assert all(p.startswith("^tests/") or p in exceptions for p in al["paths"])
         assert all(p.startswith("^") and p.endswith("$") for p in al["paths"])
         assert all(r.startswith("^") and r.endswith("$") for r in al["regexes"])
@@ -425,19 +473,61 @@ def test_public_phase_values_are_exact():
     assert all("[0-9]" not in value and "\\d" not in value for value in entry["regexes"])
 
 
+def test_public_pem_waivers_are_exact():
+    """Both configs: exactly two private-key entries, exact rule, paths and regexes.
+
+    The regex text is pinned verbatim (PEM_WAIVER_*), so a widened waiver -- a
+    header-only prefix or an open-ended body -- fails this pin even while every
+    scan test still passes.
+    """
+    import tomllib
+    for config in (LEAKS_CFG, ROOT / ".gitleaks.toml"):
+        lists = tomllib.loads(config.read_text())["allowlists"]
+        entries = [al for al in lists if "private-key" in al.get("targetRules", ())]
+        assert len(entries) == 2, f"{config}: exactly two private-key entries expected"
+        for entry in entries:
+            assert entry["targetRules"] == ["private-key"]
+            assert entry["condition"] == "AND"
+            assert tuple(entry["paths"]) == (r"^rust/worker-core/src/check\.rs$",
+                                             r"^rust/worker-core/src/redact\.rs$")
+        assert {tuple(entry["regexes"]) for entry in entries} == {
+            (PEM_WAIVER_FAKE,), (PEM_WAIVER_HISTORICAL,)}
+
+
 def test_public_config_provenance_and_guardrail():
-    text = LEAKS_CFG.read_text()
-    assert "public build" in text and "make_public" in text
-    assert "Never add a non-test path here" in text
+    """Parse-and-compare: the public config is the make_public build of the root one.
+
+    Structured fields are compared as parsed data (title, extend, allowlists -- the
+    allowlists themselves value-by-value in test_leaks_allowlist_only_names_test_paths);
+    the provenance/guardrail sentences live in the header comment, so they are checked
+    against the parsed comment lines instead of anywhere in the raw text.
+    """
+    import tomllib
+    cfg = tomllib.loads(LEAKS_CFG.read_text(encoding="utf-8"))
+    root = tomllib.loads((ROOT / ".gitleaks.toml").read_text(encoding="utf-8"))
+    assert cfg["title"] == "plangraph public build"
+    assert cfg["extend"] == {"useDefault": True} == root["extend"]
+    assert cfg["allowlists"] == root["allowlists"]
+    comments = "\n".join(line for line in LEAKS_CFG.read_text(encoding="utf-8").splitlines()
+                         if line.lstrip().startswith("#"))
+    assert "passed with -c by make_public" in comments
+    assert "Never add a non-test path here" in comments
 
 
-@pytest.mark.skipif(shutil.which("gitleaks") is None, reason="gitleaks not installed")
 def test_public_real_pem_in_other_file_is_reported(tmp_path):
+    """gitleaks is REQUIRED here -- no skip when the binary is absent.
+
+    A gate test that silently skips on a gitleaks-less runner proves nothing, so the
+    binary must exist (PATH or ~/.local/bin) or this test FAILS.  The public config
+    must report a real PEM outside the two allow-listed fixture paths.
+    """
+    exe = shutil.which("gitleaks") or str(Path.home() / ".local" / "bin" / "gitleaks")
+    assert Path(exe).exists(), "gitleaks is required for this gate test (PATH or ~/.local/bin)"
     header = "-----BEGIN " + "PRIVATE KEY-----"
     footer = "-----END " + "PRIVATE KEY-----"
     body = "MIIEvQIBADANBgkqhkiG" + str(9) + "w" + str(0) + "BAQEFAASCBKcwggSjAgEAAoIBAQC"
     write(tmp_path, "src/other.pem", header + "\n" + body + "\n" + footer)
-    hits, error = mp.run_gitleaks(tmp_path, shutil.which("gitleaks"), LEAKS_CFG)
+    hits, error = mp.run_gitleaks(tmp_path, exe, LEAKS_CFG)
     assert not error and hits
 
 

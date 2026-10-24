@@ -7,6 +7,7 @@ a literal in this file) planted in a copy of the same paths IS still reported.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tomllib
@@ -33,16 +34,31 @@ PROMPT_PROSE = _join("It accepts tokens, ", WAIVED_PROMPT_SECRET, " values.\n")
 PLAN_PROSE = _join("Phases: Q-API-PUSH, ", WAIVED_PLAN_SECRET, " are done.\n")
 
 
+#: An open body: an any-content atom (`.`, `[\s\S]`, `[^\n]`, `[^\r\n]`) or a
+#: non-space run (`\S`) under an UNBOUNDED quantifier (`*`, `+`, `{n,}`) swallows
+#: everything between the `^` and `$` anchors, so `[\s\S]*`, `\S*` or `.{2,}` would
+#: waive any value in the path while still looking anchored.  Whitespace runs
+#: (`\s*`, `\s+`) are not open bodies -- they can only match spaces, which is what
+#: the pinned PEM regexes legitimately use.
+_OPEN_BODY = re.compile(
+    r"\.\*|\.\+|\.\{\d*,\}"                 # .*  .+  .{n,}
+    r"|\[\\s\\S\][*+]|\[\\s\\S\]\{\d*,\}"   # [\s\S]*  [\s\S]+  [\s\S]{n,}
+    r"|\[\^\\r\\n\][*+]|\[\^\\r\\n\]\{\d*,\}"   # [^\r\n]* ...
+    r"|\[\^\\n\][*+]|\[\^\\n\]\{\d*,\}"     # [^\n]* ...
+    r"|\\S[*+]|\\S\{\d*,\}"                 # \S*  \S+  \S{n,}
+)
+
+
 def _assert_narrow_entry(entry):
     assert entry.get("targetRules"), "allowlist must name targetRules"
     assert entry.get("condition") == "AND"
     for value in entry["paths"] + entry["regexes"]:
         assert value.startswith("^") and value.endswith("$")
         assert ".*" not in value and ".+" not in value
+        assert _OPEN_BODY.search(value) is None, f"open body: {value!r}"
 
 
-def test_root_and_public_allowlists_match_except_rust_pem():
-    # Retain the historical test name: PEM entries are now shared too, not omitted.
+def test_root_and_public_allowlists_match():
     root = tomllib.loads(CONFIG.read_text(encoding="utf-8"))["allowlists"]
     public = tomllib.loads((ROOT / "tools/split/gitleaks.toml").read_text(
         encoding="utf-8"))["allowlists"]
@@ -59,6 +75,13 @@ def test_root_and_public_allowlists_match_except_rust_pem():
      "paths": ["rust/x"], "regexes": ["^x$"]},
     {"condition": "AND", "targetRules": ["generic-api-key"],
      "paths": ["^tests/x$"], "regexes": ["^.*$"]},
+    # open bodies that keep every `^...$` anchor and evade a plain ".*"/".+" check
+    {"condition": "AND", "targetRules": ["private-key"],
+     "paths": [r"^tests/x[\s\S]*$"], "regexes": ["^x$"]},
+    {"condition": "AND", "targetRules": ["generic-api-key"],
+     "paths": ["^tests/x$"], "regexes": [r"^\S*$"]},
+    {"condition": "AND", "targetRules": ["generic-api-key"],
+     "paths": ["^tests/x$"], "regexes": [r"^v.{2,}$"]},
 ])
 def test_allowlist_validation_rejects_broad_or_unscoped_entries(entry):
     with pytest.raises(AssertionError):
