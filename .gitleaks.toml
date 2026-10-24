@@ -31,15 +31,6 @@ paths = ['''^docs/plans/2026-10-16-orchestration-setup\.md$''']
 regexes = ['''^RT\-P2\-DECISIONS$''']
 
 [[allowlists]]
-# The md_sync fixtures carry the fake demo token the redactor test suite asserts on.  Covers the
-# history of the directory (QUESTIONS.md was renamed to sample_questions.md).
-description = "synthetic demo token in md_sync fixtures (reviewed 2026-10-17)"
-condition = "AND"
-targetRules = ["generic-api-key"]
-paths = ['''^tests/fixtures/md_sync/''']
-regexes = ['''^Zx81kQ92LmPq77Vb$''']
-
-[[allowlists]]
 # Fake credential the keeper credential-guard tests assert are found and masked.
 description = "synthetic secret in the credential-guard test (reviewed 2026-10-17)"
 condition = "AND"
@@ -72,16 +63,35 @@ paths = ['''^tests/test_keeper_guard_key\.py$''']
 regexes = ['''^svc/Xk9fT2mQ$''']
 
 [[allowlists]]
-# Fake token handed to the redactor so the test can assert it is masked and counted.
-description = "synthetic demo token in the md_sync parse test (reviewed 2026-10-17)"
+description = "synthetic demo value in tests/fixtures/md_sync/sample_questions.md"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/fixtures/md_sync/sample_questions\.md$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_e2e.py"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_e2e\.py$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_parse.py"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_md_sync_parse\.py$''']
 regexes = ['''^Zx81kQ92LmPq77Vb$''']
 
 [[allowlists]]
-# Same fake token, in the plan-building redaction tests.
-description = "synthetic demo token in the md_sync plan test (reviewed 2026-10-17)"
+description = "synthetic demo value in tests/test_md_sync_parse.py"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_parse\.py$''']
+regexes = ['''^AbCd1234Efgh$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_plan.py"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_md_sync_plan\.py$''']

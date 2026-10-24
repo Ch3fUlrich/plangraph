@@ -1,35 +1,49 @@
-# Leak-scanner config for the public build (make_public passes it with -c).
-# Default rules stay on; the allowlists below are a REVIEWED set of synthetic, credential-shaped
-# strings in test fixtures that exercise the credential guard / redactor.  Each entry needs the
-# exact test path AND the exact fake value (condition = AND), so nothing else in those files, and
-# nothing outside tests/, is ever exempt.  Never add a non-test path here.
-title = "plangraph public build"
+# Root leak-scanner config (gitleaks 8.30.1), auto-discovered by `gitleaks git`/`gitleaks dir`
+# and by CI.  Default rules stay on; the allowlists below are a REVIEWED set of paths whose only
+# findings are (a) ordinary prose that the entropy rule mis-fires on, or (b) synthetic,
+# credential-shaped fixtures that exercise the credential guard / redactor.  No entry below
+# exempts a whole file blindly: prose files are limited to the one mis-firing rule, and every
+# fixture entry names the exact fake value, so a NEW credential-shaped string in these files
+# still fails the gate.  Never add a path here without reviewing its findings.
+#
+# Gate: gitleaks git --log-opts=--all --redact -c .gitleaks.toml   (must exit 0)
+title = "plangraph public repo"
 
 [extend]
 useDefault = true
 
 [[allowlists]]
-description = "synthetic demo credential in md_sync fixtures and tests (reviewed 2026-10-10)"
+# generic-api-key mis-fires on the prose "tokens, bool/str/negative" in the historical
+# PROMPT.md (deleted from the tree, still in git history).  Not a credential of any kind.
+description = "plan/prompt prose false positive in PROMPT.md (reviewed 2026-10-17)"
 condition = "AND"
-targetRules = ["generic-api-key"]  # required (observed with the pinned scanner 8.30.1): without it only the paths are applied, not the values
-paths = [
-  '''^tests/fixtures/md_sync/sample_questions\.md$''',
-  '''^tests/test_md_sync_parse\.py$''',
-  '''^tests/test_md_sync_plan\.py$''',
-]
-regexes = ['''^(?:Zx81kQ92LmPq77Vb|AbCd1234Efgh)$''']
+targetRules = ["generic-api-key"]
+paths = ['''^PROMPT\.md$''']
+regexes = ['''^bool/str/negative$''']
 
 [[allowlists]]
-description = "synthetic secret in the credential-guard test (reviewed 2026-10-10)"
+# generic-api-key mis-fires on the plan-id list "Q-API-PUSH, RT-P2-DECISIONS" in the historical
+# orchestration-setup plan (deleted from the tree, still in git history).  Not a credential.
+description = "plan prose false positive in docs/plans/2026-10-16-orchestration-setup.md (reviewed 2026-10-17)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^docs/plans/2026-10-16-orchestration-setup\.md$''']
+regexes = ['''^RT\-P2\-DECISIONS$''']
+
+[[allowlists]]
+# Fake credential the keeper credential-guard tests assert are found and masked.
+description = "synthetic secret in the credential-guard test (reviewed 2026-10-17)"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_keeper_credential_guard\.py$''']
 regexes = ['''^svcacct/Zq9xk2LmPw$''']
 
 [[allowlists]]
-# PG-PUBLIC-FIX: the estimate/src-edit guard test asserts this exact pair is refused and never
-# echoed, so it sits in the source as one plain literal (no splitting around the scanner).
-# Same reviewed fake value as the credential-guard entry, scoped to this file AND this value.
+# Reason: the estimate/src-edit guard test asserts that "login " plus exactly this synthetic
+# pair is refused (and never echoed), so the value has to sit in the source as one plain
+# literal the leak gate can read: no split fragments to reassemble around the scanner.  Fake,
+# no credential of any kind.  Scope is this file AND this exact value only (condition = AND):
+# any other credential-shaped string written into the same file is still reported.
 description = "synthetic credential the estimate-src-edit guard refuses (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["generic-api-key"]
@@ -37,11 +51,66 @@ paths = ['''^tests/test_keeper_estimate_src_edit\.py$''']
 regexes = ['''^svcacct/Zq9xk2LmPw$''']
 
 [[allowlists]]
-# PG-PUBLIC-FIX: the key-guard refusal corpus (REAL) expects this pair refused and masked, so it
-# is one plain literal too.  Scoped to this file AND this value: another credential-shaped
-# string written here is still reported.
+# Reason: the key-guard refusal corpus (REAL) is the set of credential pairs the guard must
+# refuse and the mask tests must mask, so the slash pair sits there as one plain literal the
+# leak gate can read: no split fragments to reassemble around the scanner.  Fake, no
+# credential of any kind.  Scope is this file AND this exact value only (condition = AND):
+# any other credential-shaped string written into the same file is still reported.
 description = "synthetic password the key-guard refusal corpus expects refused (reviewed 2026-10-23)"
 condition = "AND"
 targetRules = ["generic-api-key"]
 paths = ['''^tests/test_keeper_guard_key\.py$''']
 regexes = ['''^svc/Xk9fT2mQ$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/fixtures/md_sync/sample_questions.md"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/fixtures/md_sync/sample_questions\.md$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_e2e.py"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_e2e\.py$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_parse.py"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_parse\.py$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_parse.py"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_parse\.py$''']
+regexes = ['''^AbCd1234Efgh$''']
+
+[[allowlists]]
+description = "synthetic demo value in tests/test_md_sync_plan.py"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/test_md_sync_plan\.py$''']
+regexes = ['''^Zx81kQ92LmPq77Vb$''']
+
+[[allowlists]]
+description = "test sentinel for OPENCODE_API_KEY in worker-core sandbox_env tests (fake, reviewed 2026-10-18)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^rust/worker-core/src/sandbox_env\.rs$''']
+regexes = ['''^sentinel-wf8-opkey$''']
+
+[[allowlists]]
+# The recorded replay histories carry synthetic phase/card ids under a "key" field, which the
+# generic-api-key entropy gate reads as a credential: "phase-<digits>" and "e2e-phase|defer-a|b-<digits>"
+# are replay identifiers (unix-time + counter), not secrets of any kind.
+description = "synthetic phase/card ids in the Temporal replay fixtures (reviewed 2026-10-23)"
+condition = "AND"
+targetRules = ["generic-api-key"]
+paths = ['''^rust/worker/tests/fixtures/phase_defer\.json$''',
+         '''^rust/worker/tests/fixtures/phase_two_cards\.json$''']
+regexes = ['''^(?:e2e-(?:phase|defer)-[ab]-|phase-)[0-9]+$''']

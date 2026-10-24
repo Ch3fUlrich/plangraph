@@ -363,21 +363,16 @@ def test_leaks_allowlist_only_names_test_paths():
     cfg = tomllib.loads(LEAKS_CFG.read_text())
     assert cfg["extend"]["useDefault"] is True
     lists = cfg["allowlists"]
-    assert len(lists) == 4  # a new entry must be reviewed here
-    assert sorted(p for al in lists for p in al["paths"]) == sorted([
-        r"^tests/fixtures/md_sync/sample_questions\.md$", r"^tests/test_md_sync_parse\.py$",
-        r"^tests/test_md_sync_plan\.py$", r"^tests/test_keeper_cred" + r"ential_guard\.py$",
-        r"^tests/test_keeper_estimate_src_edit\.py$", r"^tests/test_keeper_guard_key\.py$"])
-    assert all(len(al["regexes"]) == 1 for al in lists)   # no extra (broad) regex slips in
-    # the estimate/src-edit fixture reuses the credential-guard value (same fake pair, own path)
-    assert sorted(al["regexes"][0] for al in lists) == sorted([
-        "^(?:Zx81kQ92LmPq77Vb|AbCd1234Efgh)$", "^svcacct/" + "Zq9xk2LmPw$",
-        "^svcacct/" + "Zq9xk2LmPw$", "^svc/" + "Xk9fT2mQ$"])
+    root = tomllib.loads((ROOT / ".gitleaks.toml").read_text())
+    assert lists == [al for al in root["allowlists"]
+                     if al["targetRules"] != ["private-key"]]
+    assert len(lists) == 12  # reviewed exact paths, including history and Rust fixtures
     for al in lists:
         assert al["condition"] == "AND" and al["targetRules"] == ["generic-api-key"]
-        assert al["regexes"] and al["paths"]
-        assert all(p.startswith("^tests/") and p.endswith("$") for p in al["paths"])
+        assert len(al["regexes"]) == 1 and al["paths"]
+        assert all(p.startswith("^") and p.endswith("$") for p in al["paths"])
         assert all(r.startswith("^") and r.endswith("$") for r in al["regexes"])
+
 
 
 @pytest.mark.skipif(shutil.which("gitleaks") is None

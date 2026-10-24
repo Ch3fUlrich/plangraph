@@ -9,12 +9,31 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / ".gitleaks.toml"
+
+
+def test_root_and_public_allowlists_match_except_rust_pem():
+    root = tomllib.loads(CONFIG.read_text(encoding="utf-8"))["allowlists"]
+    public = tomllib.loads((ROOT / "tools/split/gitleaks.toml").read_text(
+        encoding="utf-8"))["allowlists"]
+    pem = [entry for entry in root if entry["targetRules"] == ["private-key"]]
+    assert len(pem) == 2
+    assert all(path.startswith("^rust/") for entry in pem for path in entry["paths"])
+    assert not any(entry["targetRules"] == ["private-key"] for entry in public)
+    manifest = tomllib.loads((ROOT / "tools/split/manifest.toml").read_text(
+        encoding="utf-8"))
+    assert not any(path.startswith("rust") for path in manifest["public"]["include"])
+    assert [entry for entry in root if entry not in pem] == public
+    for entry in public:
+        assert entry["condition"] == "AND"
+        assert entry["targetRules"]
+        assert all(path.startswith("^") and path.endswith("$") for path in entry["paths"])
 
 PROMPT_REL = Path("PROMPT.md")
 PLAN_REL = Path("docs/plans/2026-10-16-orchestration-setup.md")
