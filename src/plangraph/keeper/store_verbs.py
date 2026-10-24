@@ -30,6 +30,9 @@ class VerbsMixin:
 
     def _router_evidence(self, principal, key, kind, ref, now):
         self._require_role(principal, "router", "system")
+        # System access exists only for phase merge proof.
+        if principal.role == "system" and kind != "commit+ci":
+            raise Refused("forbidden", "system may attach only commit+ci evidence")
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         if item["state"] not in ("claimed", "in_review"):
