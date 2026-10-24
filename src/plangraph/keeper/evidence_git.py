@@ -212,6 +212,20 @@ class GitAdapter:
         return proc.returncode == 0
 
     # -- operations ---------------------------------------------------------
+    def two_parent_merge_subject(self, repo: str, sha: str) -> str | None:
+        """Return the subject of an exact two-parent merge; fail closed otherwise."""
+        if not repo or not valid_commit_ref(sha):
+            return None
+        try:
+            proc = self._run(repo, ["show", "-s", "--format=%P%n%s",
+                                    "--end-of-options", sha])
+            lines = proc.stdout.splitlines()
+            if proc.returncode == 0 and len(lines) == 2 and len(lines[0].split()) == 2:
+                return lines[1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return None
+
     def commit_exists(self, repo: str, sha: str) -> bool:
         if not valid_commit_ref(sha):
             return False

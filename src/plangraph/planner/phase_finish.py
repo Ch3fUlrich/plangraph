@@ -17,6 +17,7 @@ from typing import Any, Protocol, TextIO
 from plangraph.keeper.errors import Refused
 from plangraph.keeper import events
 from plangraph.keeper.evidence_git import GitAdapter
+from plangraph.keeper.phase_merge import merge_subject
 from plangraph.planner import gitenv
 
 __all__ = ["GitHub", "GitHubError", "finish_phase", "phase_branch", "attach_merge_evidence"]
@@ -39,7 +40,7 @@ class GitHub(Protocol):
 
 def merge_message(gate: str, cards: list[str]) -> str:
     """Bind one merge to every phase card in a single trailer block."""
-    return f"Merge phase {gate}\n\n" + "".join(
+    return merge_subject(gate) + "\n\n" + "".join(
         f"Plan-Item: {card}\n" for card in sorted(set(cards)))
 
 def phase_branch(key: str) -> str:

@@ -26,9 +26,16 @@ def w(tmp_path):
     world.non_merge = git("rev-parse", "HEAD")
     git("checkout", "-b", "phase")
     git("commit", "--allow-empty", "-m", "phase")
+    world.single_parent = git("rev-parse", "HEAD")
     git("checkout", "main")
-    git("merge", "--no-ff", "phase", "-m", "phase merge")
+    git("merge", "--no-ff", "phase", "-m", "Merge phase demo:GATE")
     world.merge = git("rev-parse", "HEAD")
+    tree = git("rev-parse", "HEAD^{tree}")
+    world.wrong_subject = git("commit-tree", tree, "-p", world.non_merge,
+                              "-p", world.single_parent, "-m", "Merge phase demo:OTHER")
+    world.octopus = git("commit-tree", tree, "-p", world.non_merge,
+                        "-p", world.single_parent, "-p", world.merge,
+                        "-m", "Merge phase demo:GATE")
     world.store.ctx = {"git": GitAdapter({"demo": str(repo)})}
     world.store.create_items(
         world.p("router"),
@@ -48,6 +55,7 @@ def test_system_cannot_attach_non_merge_evidence(w, kind):
             w.p("system"), "demo:C1", kind, {"commit": "a" * 40, "id": "D-1"}
         )
     assert exc.value.code == "forbidden"
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("who,kind", [
@@ -67,8 +75,9 @@ def test_authorized_evidence_is_not_role_refused(w, who, kind, case):
     w.conn.commit()
     ref = {"commit": w.non_merge if case == "non_merge" else w.merge, "id": "D-1"}
     if who == "system" and case != "allowed":
-        with pytest.raises(Refused):
+        with pytest.raises(Refused) as exc:
             w.store.add_evidence_router(w.p(who), "demo:C1", kind, ref)
+        assert exc.value.code == "forbidden"
         assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
     else:
         w.store.add_evidence_router(w.p(who), "demo:C1", kind, ref)
@@ -87,3 +96,48 @@ def test_worker_and_l1_cannot_use_router_evidence_door(w, who, kind):
             w.p(who), "demo:C1", kind, {"commit": "a" * 40, "id": "D-1"}
         )
     assert exc.value.code == "forbidden"
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("commit", ["single_parent", "octopus", "wrong_subject"])
+def test_system_rejects_unbound_merge(w, commit):
+    with pytest.raises(Refused) as exc:
+        w.store.add_evidence_router(w.p("system"), "demo:C1", "commit+ci",
+                                    {"commit": getattr(w, commit)})
+    assert exc.value.code == "forbidden"
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
+
+
+def test_system_rejects_unverified_without_writes(w):
+    w.verifiers["commit+ci"].ok = False
+    before = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    with pytest.raises(Refused) as exc:
+        w.store.add_evidence_router(w.p("system"), "demo:C1", "commit+ci",
+                                    {"commit": w.merge})
+    assert exc.value.code == "evidence"
+    # Refusal auditing is intentional; no lifecycle/evidence writes are allowed.
+    assert w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("change", [
+    "UPDATE items SET state='cancelled' WHERE key='demo:GATE'",
+    "UPDATE items SET state='claimed' WHERE key='demo:C1'",
+    "DELETE FROM edges WHERE src='demo:GATE'",
+    "UPDATE items SET id='OTHER', key='demo:OTHER' WHERE key='demo:GATE'",
+])
+def test_system_rechecks_scope_under_lock(w, monkeypatch, change):
+    verify = w.store._verify_evidence
+
+    def racing_verify(*args):
+        result = verify(*args)
+        w.conn.execute(change)
+        w.conn.commit()
+        return result
+
+    monkeypatch.setattr(w.store, "_verify_evidence", racing_verify)
+    with pytest.raises(Refused) as exc:
+        w.store.add_evidence_router(w.p("system"), "demo:C1", "commit+ci",
+                                    {"commit": w.merge})
+    assert exc.value.code == "forbidden"
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
