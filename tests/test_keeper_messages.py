@@ -11,6 +11,58 @@ import pytest
 from plangraph.keeper import schema
 from plangraph.keeper.api_routes import READ_VERBS, WRITE_VERBS
 from tests.keeper_util import World
+from test_keeper_api import srv as http_srv, w, call, jbody
+from plangraph.keeper.errors import Refused
+from plangraph.keeper.store import Store
+from contextlib import contextmanager
+
+
+@pytest.fixture
+def world(w):
+    return w
+
+
+@contextmanager
+def message_store(world):
+    class Adapter:
+        def write(self, verb, **fields):
+            try:
+                return world.store.post_message(world.p("router"), **fields)
+            except Refused as exc:
+                raise ValueError(exc.msg) from exc
+
+        def read(self, verb, **filters):
+            return world.store.messages(world.p("router"), **filters)
+    yield Adapter()
+
+
+@pytest.fixture
+def srv(http_srv, w):
+    class Response:
+        def __init__(self, status, raw):
+            self.status_code = status
+            self.raw = raw
+
+        def json(self):
+            return jbody(self.raw)
+
+    class Client:
+        def get(self, path):
+            status, _, raw = call(http_srv, "/v1" + path, token=w.tok("router"))
+            return Response(status, raw)
+
+        def call(self, verb, fields):
+            from urllib.parse import urlencode
+            if verb == "messages":
+                response = self.get("/messages?" + urlencode(fields))
+            else:
+                status, _, raw = call(http_srv, "/v1/" + verb, method="POST",
+                                      body=fields, token=w.tok("router"))
+                response = Response(status, raw)
+            data = response.json()
+            return dict(data, status="ok" if response.status_code == 200 else "error",
+                        code=response.status_code)
+    return Client()
 
 NOW = 1_700_000_000_000
 
@@ -18,9 +70,11 @@ NOW = 1_700_000_000_000
 # ---------------------------------------------------------------- unit: schema
 
 def test_messages_table_declared_in_both_ddls():
-    assert "messages" in schema.TABLES
-    assert "messages" in schema.TABLES_PG
-    cols = schema.parse_tables(schema.MESSAGES_DDL)["messages"]
+    from plangraph.keeper import schema_pg
+    import re
+    assert "messages" in schema.SCHEMA
+    assert "messages" in schema_pg.MIGRATIONS[-1].sql
+    cols = re.findall(r'^    "?(\w+)"? \w+', schema.MESSAGES_DDL, re.M)
     assert list(cols) == [
         "seq", "from", "to", "body", "trace_id", "key", "run_id",
         "attempt_n", "ack_state", "ts", "prev_hash", "hash",
@@ -28,11 +82,11 @@ def test_messages_table_declared_in_both_ddls():
 
 
 def test_messages_indexes_and_ack_trigger_declared():
-    idx = schema.parse_indexes(schema.MESSAGES_DDL)
+    idx = schema.MESSAGES_DDL
     assert "idx_messages_trace_id" in idx
     assert "idx_messages_key_ts" in idx
     assert "idx_messages_ts" in idx
-    trig = schema.parse_triggers(schema.MESSAGES_DDL)
+    trig = schema.MESSAGES_DDL
     assert "trg_messages_no_update" in trig
     assert "trg_messages_no_delete" in trig
 
@@ -45,9 +99,8 @@ def test_verbs_declared():
 # ------------------------------------------------------------------ store: write
 
 def test_post_message_persists_full_linkage(world: World):
-    from plangraph.keeper.store import KeeperStore
 
-    with KeeperStore(world.dbpath) as st:
+    with message_store(world) as st:
         row = st.write(
             "post_message",
             **{
@@ -70,9 +123,8 @@ def test_post_message_hash_chain_links_rows(world: World):
     import hashlib
     import json
 
-    from plangraph.keeper.store import KeeperStore
 
-    with KeeperStore(world.dbpath) as st:
+    with message_store(world) as st:
         r1 = st.write("post_message", **{
             "from": "a", "to": "b", "body": {"n": 1},
             "trace_id": "t-1", "ts": NOW,
@@ -95,9 +147,8 @@ def test_post_message_hash_chain_links_rows(world: World):
 
 
 def test_post_message_rejects_bad_enum_and_types(world: World):
-    from plangraph.keeper.store import KeeperStore
 
-    with KeeperStore(world.dbpath) as st:
+    with message_store(world) as st:
         with pytest.raises(ValueError):
             st.write("post_message", **{
                 "from": "relay", "to": "nope", "body": {}, "ts": NOW,
@@ -116,9 +167,8 @@ def test_post_message_rejects_bad_enum_and_types(world: World):
 # ------------------------------------------------------------------ store: read
 
 def test_messages_read_filters_by_trace_key_and_range(world: World):
-    from plangraph.keeper.store import KeeperStore
 
-    with KeeperStore(world.dbpath) as st:
+    with message_store(world) as st:
         for i, (tid, key) in enumerate([
             ("t-1", "K-1"), ("t-1", "K-2"), ("t-2", "K-1"),
         ]):
@@ -137,9 +187,8 @@ def test_messages_read_filters_by_trace_key_and_range(world: World):
 
 
 def test_messages_read_returns_body_and_linkage(world: World):
-    from plangraph.keeper.store import KeeperStore
 
-    with KeeperStore(world.dbpath) as st:
+    with message_store(world) as st:
         st.write("post_message", **{
             "from": "relay", "to": "keeper", "body": {"op": "ping"},
             "trace_id": "t-9", "key": "K-9", "run_id": "R-9",
@@ -156,16 +205,15 @@ def test_messages_read_returns_body_and_linkage(world: World):
 # ----------------------------------------------------------------- jsonl: no body
 
 def test_jsonl_outbox_stays_metadata_only(world: World):
-    from plangraph.keeper.store import KeeperStore
 
-    with KeeperStore(world.dbpath) as st:
+    with message_store(world) as st:
         st.write("post_message", **{
             "from": "relay", "to": "keeper",
             "body": {"secret": "do-not-log"},
             "trace_id": "t-5", "key": "K-5", "ts": NOW,
         })
-    text = (world.dir / "outbox.jsonl").read_text(encoding="utf-8") \
-        if (world.dir / "outbox.jsonl").exists() else ""
+    text = (world.path.parent / "outbox.jsonl").read_text(encoding="utf-8") \
+        if (world.path.parent / "outbox.jsonl").exists() else ""
     assert "do-not-log" not in text
     if text.strip():
         for line in text.strip().splitlines():
@@ -176,13 +224,12 @@ def test_jsonl_outbox_stays_metadata_only(world: World):
 
 def test_no_ack_when_insert_fails(world: World, monkeypatch):
     from plangraph.keeper import store as store_mod
-    from plangraph.keeper.store import KeeperStore
 
     def boom(self, **kw):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(store_mod.KeeperStore, "_insert_message", boom)
-    with KeeperStore(world.dbpath) as st:
+    monkeypatch.setattr(store_mod.Store, "_insert_message", boom)
+    with message_store(world) as st:
         with pytest.raises(RuntimeError):
             st.write("post_message", **{
                 "from": "relay", "to": "keeper", "body": {},
@@ -256,3 +303,53 @@ def test_long_poll_get_empty_beyond_last_seq(srv):
 def test_long_poll_get_requires_since(srv):
     resp = srv.get("/messages")
     assert resp.status_code == 400
+
+
+def test_append_only_enforced(world):
+    with message_store(world) as st:
+        st.write("post_message", **{"from": "relay", "to": "keeper", "body": {}})
+    from plangraph.keeper import db_errors
+    for sql in ("UPDATE messages SET body='{}'", "DELETE FROM messages"):
+        with pytest.raises(db_errors.INTEGRITY):
+            world.conn.execute(sql)
+
+
+def test_commit_failure_never_returns_receipt(world, monkeypatch):
+    original = world.conn.execute
+
+    def execute(sql, *args):
+        if sql == "COMMIT":
+            raise RuntimeError("commit failed")
+        return original(sql, *args)
+
+    class Proxy:
+        def execute(self, sql, *args):
+            return execute(sql, *args)
+    monkeypatch.setattr(world.store, "conn", Proxy())
+    with pytest.raises(RuntimeError):
+        world.store.post_message(world.p("router"), **{
+            "from": "relay", "to": "keeper", "body": {}})
+    assert not world.conn.in_transaction
+    assert world.store.messages(world.p("router")) == []
+
+
+def test_wait_releases_lock_and_rereads_without_notify(srv):
+    import threading
+    import time
+    result = []
+    thread = threading.Thread(target=lambda: result.append(
+        srv.get("/messages?since=0&wait_ms=1000")))
+    thread.start()
+    try:
+        time.sleep(.1)
+        srv.call("post_message", {"from": "relay", "to": "keeper", "body": {}})
+    finally:
+        thread.join(3)
+    assert not thread.is_alive()
+    assert result[0].json()["rows"][0]["seq"] == 1
+
+
+def test_reader_cannot_post(world):
+    with pytest.raises(Refused):
+        world.store.post_message(world.p("reader"), **{
+            "from": "relay", "to": "keeper", "body": {}})

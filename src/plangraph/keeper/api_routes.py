@@ -37,6 +37,8 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "attempts", "park", "complete", "alarms", "locks",
                "jev_shadow", "jev_outcome"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
+READ_VERBS.add("messages")
+WRITE_VERBS.add("post_message")
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
