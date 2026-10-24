@@ -1,4 +1,5 @@
 """Holder dependency edits: authority, normalized edges and atomic audit."""
+import os
 from contextlib import contextmanager
 
 import pytest
@@ -40,20 +41,47 @@ def test_target_refusals_do_not_disclose_existence(w):
     assert len(set(errors)) == 1
 
 
-@pytest.mark.parametrize("elapsed", [7200, 7201])
-def test_expired_holder_refused(w, elapsed):
+@pytest.mark.parametrize("elapsed,accepted", [(7199, True), (7200, False),
+                                              (7201, False)])
+def test_expired_holder_refused(w, elapsed, accepted):
+    """V4: the lease boundary is 7200s -- one second inside is still live."""
     to_claimed(w, "demo:WORK", "workerA")
     w.clock.advance(elapsed)
-    with pytest.raises(Refused) as exc:
-        edit(w, ["OP"])
-    assert exc.value.code == "forbidden"
-    assert w.store._item("demo:WORK")["depends_on"] == []
+    if not accepted:
+        with pytest.raises(Refused) as exc:
+            edit(w, ["OP"])
+        assert exc.value.code == "forbidden"
+        assert w.store._item("demo:WORK")["depends_on"] == []
+        return
+    edit(w, ["OP"])
+    assert w.store._item("demo:WORK")["depends_on"] == ["demo:OP"]
+    assert w.store.verify_integrity() == []
 
 
-@pytest.mark.parametrize("lease", [None, "invalid-date"])
+#: The unparsable string cannot be written through a timestamp column on PG,
+#: so that one input is SQLite-only; the portable case below covers the seam.
+_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
+_PG_ONLY_INVALID = pytest.param(
+    "invalid-date",
+    marks=pytest.mark.skipif(_PG,
+                             reason="lease_until is a timestamp column on PG;"
+                                    " an unparsable string cannot be written there"))
+
+
+@pytest.mark.parametrize("lease", [None, _PG_ONLY_INVALID])
 def test_missing_or_unparsable_holder_lease_refused(w, lease):
     to_claimed(w, "demo:WORK", "workerA")
     w.conn.execute("UPDATE items SET lease_until=? WHERE key=?", (lease, "demo:WORK"))
+    with pytest.raises(Refused, match="live claim lease"):
+        edit(w, ["OP"])
+    assert w.store._item("demo:WORK")["depends_on"] == []
+
+
+def test_expired_lease_timestamp_refused(w):
+    """V6: a real past timestamp through World's clock seam, portable to PG."""
+    to_claimed(w, "demo:WORK", "workerA")
+    past = w.store._iso(w.clock() - 1)
+    w.conn.execute("UPDATE items SET lease_until=? WHERE key=?", (past, "demo:WORK"))
     with pytest.raises(Refused, match="live claim lease"):
         edit(w, ["OP"])
     assert w.store._item("demo:WORK")["depends_on"] == []
@@ -121,6 +149,31 @@ def test_cycle_refused(w):
     with pytest.raises(Refused):
         edit(w, ["OP"])
     assert w.store._item("demo:WORK")["depends_on"] == []
+
+
+def test_cycle_rechecked_under_write_lock_on_fresh_graph(w, monkeypatch):
+    """V1: the reverse edge lands after the pre-lock check; the lock must see it."""
+    to_claimed(w, "demo:WORK", "workerA")
+    original = w.store._write
+
+    @contextmanager
+    def write_after_reverse_edge():
+        # Committed between _validate_change (pre-lock) and BEGIN IMMEDIATE:
+        # exactly the window the holder's own graph check cannot see.
+        w.conn.execute("INSERT INTO edges(src,dst,rel) VALUES(?,?, 'depends_on')",
+                       ("demo:OP", "demo:WORK"))
+        with original():
+            yield
+
+    monkeypatch.setattr(w.store, "_write", write_after_reverse_edge)
+    with pytest.raises(Refused) as exc:
+        edit(w, ["OP"])
+    assert exc.value.code == "cycle"
+    monkeypatch.setattr(w.store, "_write", original)
+    # Nothing of the refused edit was persisted; the reverse edge stands.
+    assert w.store._item("demo:WORK")["depends_on"] == []
+    assert w.store._item("demo:OP")["depends_on"] == ["demo:WORK"]
+    assert w.store.verify_integrity() == []
 
 
 def test_router_cancelled_dep_audit_matches_storage(w):

@@ -150,6 +150,49 @@ if(rs.length){
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.skipif(not shutil.which("node"), reason="node unavailable")
+def test_question_row_drops_flag_end_to_end(w, monkeypatch):
+    """V5 (finding 5): one precedence rule, server first and JS defensive.
+
+    A genuine ``type: "question"`` row for the same key beats the diagnostic
+    flag: the server drops the flag in ``_needs_you`` and the view repeats
+    that same rule as defence.  The mapper runs for real (no ``rows()`` stub).
+    """
+    from plangraph.keeper import store_needs
+
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": "IDLE until operator"})
+    to_claimed(w, "demo:WORK", "workerA")
+    server_rows = w.store.needs_you(w.p("reader"))
+    flag = [r for r in server_rows if r.get("kind") == "operator_wait_unlinked"]
+    assert len(flag) == 1
+    question = {"key": "demo:WORK", "kind": "question", "wait": "answer"}
+    with monkeypatch.context() as patch:
+        patch.setattr(store_needs.views, "needs_you",
+                      lambda *args, **kwargs: [question, flag[0]])
+        assert w.store.needs_you(w.p("reader")) == [question]
+
+    web = Path(__file__).resolve().parents[1] / "src/plangraph/web"
+    script = r"""
+const nodes=[];
+function el(){const n={children:[],attrs:{},style:{setProperty(){}},appendChild(x){this.children.push(x)},removeChild(x){this.children.splice(this.children.indexOf(x),1)},get firstChild(){return this.children[0]},set textContent(x){this.children=[];this.text=String(x)},get textContent(){return (this.text||'')+this.children.map(c=>c.textContent).join('')},setAttribute(k,v){this.attrs[k]=v},addEventListener(){}};nodes.push(n);return n;}
+const host=el();global.document={createElement:el,getElementById(id){return id==='sb-panel-needs'?host:null}};
+global.location={search:'',pathname:''};
+require(process.argv[1]+'/page_needs.js');
+require(process.argv[1]+'/page_needs_view.js');
+const vm={needsYou:JSON.parse(process.argv[2]),
+          questions:[{id:'Q-1', project:'demo', text:'Q: ship it?', status:'open', item:'demo:WORK'}]};
+const raw=PlanUI.NeedsPage.rows(vm, Date.now());
+if(raw.length!==2)throw Error('real mapper derives flag + question, got '+raw.length);
+PlanUI.NeedsPage.render(vm);
+const txt=host.textContent;
+if(!txt.includes('Q: ship it?'))throw Error('question row lost: '+txt);
+if(txt.includes('Operator wait unlinked'))throw Error('flag survived a genuine question row');
+if(!txt.includes('(1 of 1)'))throw Error('expected one deduped row: '+txt);
+"""
+    result = subprocess.run([shutil.which("node"), "-e", script, str(web), json.dumps(flag)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("text", ["no operator intervention needed", "operator approval", "OS-12 is documented"])
 def test_wait_requires_marker(w, text):
     w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
@@ -203,7 +246,7 @@ def test_genuine_wait_preferred(w, monkeypatch):
     assert rows[0]["kind"] == "question"
 
 
-@pytest.mark.parametrize("text", ["Work is waiting on OS-12", "Notes about IDLE until operator",
+@pytest.mark.parametrize("text", ["Notes about IDLE until operator",
                                       "IDLE notes: see ticket operator-123",
                                       "IDLE until operator-sync", "IDLE until team-operator-sync",
                                       "IDLE until operator_x"])
@@ -214,8 +257,39 @@ def test_wait_rejects_prose_and_identifiers(w, text):
                    for r in w.store.needs_you(w.p("reader")))
 
 
+@pytest.mark.parametrize("text", [
+    "IDLE until the operator",                  # article after the connective
+    "waiting on the operator",                  # article, other marker
+    "Work is waiting on OS-12",                 # mid-sentence verb phrase
+    "waiting_on: operator not confirmed",       # colon form, negation of the awaited state
+    "IDLE until operator approval, not urgent yet",  # negation after the wait clause
+])
+def test_wait_false_negatives_flag(w, text):
+    """V3: the five reported phrases must flag."""
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
+    to_claimed(w, "demo:WORK", "workerA")
+    assert any(r.get("kind") == "operator_wait_unlinked"
+               for r in w.store.needs_you(w.p("reader")))
+
+
+@pytest.mark.parametrize("text", [
+    "Work is not waiting on operator",          # negation governing the wait
+    "waiting_on: operator sign-off not required",  # negation of necessity
+    "IDLE until no operator needed",            # negation before the target
+])
+def test_negated_waits_stay_unflagged(w, text):
+    """V3: a negation that governs the wait itself still suppresses the flag."""
+    w.store.edit_definition(w.p("router"), "demo:WORK", {"note": text})
+    to_claimed(w, "demo:WORK", "workerA")
+    assert not any(r.get("kind") == "operator_wait_unlinked"
+                   for r in w.store.needs_you(w.p("reader")))
+
+
 @pytest.mark.parametrize("signal,expected", [("operator", True), ("OS-123", True),
-    ("operator approval", True), ("operator-123", False), ("operator-sync", False),
+    ("operator approval", True),
+    # D-2458/2: one rule, so the numeric-suffix tokens flag on this path too
+    # (the IDLE/prose path already accepted them; see the V2 test below).
+    ("operator-123", True), ("operator-sync", False),
     ("team-operator-sync", False), ("operator_x", False)])
 def test_waiting_on_standalone_operator(w, monkeypatch, signal, expected):
     to_claimed(w, "demo:WORK", "workerA")
@@ -224,6 +298,30 @@ def test_waiting_on_standalone_operator(w, monkeypatch, signal, expected):
     monkeypatch.setattr(w.store, "_all_items", lambda: [item])
     assert any(r.get("kind") == "operator_wait_unlinked"
                for r in w.store.needs_you(w.p("reader"))) == expected
+
+
+@pytest.mark.parametrize("signal,expected", [
+    ("operator-123", True), ("OS-123-B", True),
+    ("operator-sync", False), ("operator_x", False)])
+def test_operator_token_rule_identical_on_both_paths(w, monkeypatch, signal, expected):
+    """V2 (finding 2): one rule for ``_OPERATOR`` and ``_WAIT``.
+
+    The ``waiting_on`` field and the IDLE/prose paths must read a hyphenated
+    token the same way, whichever way each phrase is spelled.
+    """
+    to_claimed(w, "demo:WORK", "workerA")
+    base = w.store._item("demo:WORK")
+
+    def flags(**update):
+        item = dict(base)
+        item.update(update)
+        monkeypatch.setattr(w.store, "_all_items", lambda: [item])
+        return any(r.get("kind") == "operator_wait_unlinked"
+                   for r in w.store.needs_you(w.p("reader")))
+
+    assert flags(waiting_on=signal) == expected          # waiting_on path
+    assert flags(note="IDLE until " + signal) == expected  # IDLE/prose path
+    assert flags(note="waiting on " + signal) == expected  # prose, other marker
 
 
 @pytest.mark.parametrize("kind", ["question", "operator_task"])
@@ -298,7 +396,10 @@ def test_nonwait_clauses(w, text):
 @pytest.mark.parametrize("signal,expected", [
     ("operator sign-off not required", False), ("no operator needed", False),
     ("not waiting for operator", False), ("without operator", False),
-    ("see ticket operator-123", False), ("OS-123-B", False),
+    ("see ticket operator-123", False),
+    # D-2458/2: one rule for both paths -- the prose form below already
+    # accepted this token, so the waiting_on field must too.
+    ("OS-123-B", True),
     ("IDLE until operator-123", True), ("waiting on OS-123-B", True),
 ])
 def test_waiting_on_marker_consistency(w, monkeypatch, signal, expected):

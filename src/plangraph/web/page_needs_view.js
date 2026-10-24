@@ -209,8 +209,12 @@
       rowId = (d && d.row) || "";
     }
     var now = Date.now(), seen = new Map(), all = [], rows = NP.rows(vm, now), real = new Map();
+    // D-2458/5: defensive copy of the server's one precedence rule (_needs_you
+    // already drops a flag whose key has a genuine row): a flag row loses to
+    // any genuine row -- task, question or decision -- for the same key.
     rows.forEach(function (r) {
-      if (r.type === "task" && (!r.ref || r.ref.kind !== "operator_wait_unlinked")) real.set(r.key || r.id, true);
+      var ref = r.ref || {};
+      if (ref.kind !== "operator_wait_unlinked") real.set(r.key || r.id, true);
     });
     rows.forEach(function (r) {
       var key = r.key || r.id, ref = r.ref || {};

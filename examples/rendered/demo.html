@@ -7918,7 +7918,8 @@ body.sb-resizing { cursor: col-resize; user-select: none; }
     }
     var now = Date.now(), seen = new Map(), all = [], rows = NP.rows(vm, now), real = new Map();
     rows.forEach(function (r) {
-      if (r.type === "task" && (!r.ref || r.ref.kind !== "operator_wait_unlinked")) real.set(r.key || r.id, true);
+      var ref = r.ref || {};
+      if (ref.kind !== "operator_wait_unlinked") real.set(r.key || r.id, true);
     });
     rows.forEach(function (r) {
       var key = r.key || r.id, ref = r.ref || {};

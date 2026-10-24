@@ -534,6 +534,12 @@ class CreateMixin:
             else:
                 self._guarded_touch(key, ("open",), item["epoch"])
             if "depends_on" in edit_fields:
+                # D-2458/1: _validate_change above ran on the pre-lock graph;
+                # a reverse edge committed in that window would land here
+                # unchecked.  Repeat it on the graph as it is under the lock,
+                # through the same call, so the refusal code is identical and
+                # no cycle can be stored.
+                self._recheck_change_under_lock(key, me["depends_on"])
                 self.conn.execute("DELETE FROM edges WHERE src=?", (key,))
                 for dep in me["depends_on"]:
                     self.conn.execute(
@@ -590,6 +596,25 @@ class CreateMixin:
         lease = self._parse_iso(item.get("lease_until"))
         if lease is None or lease.timestamp() <= now:
             raise Refused("forbidden", "a live claim lease is required to add operator dependencies")
+
+    def _recheck_change_under_lock(self, key, deps):
+        """Repeat the pre-lock ``_validate_change`` on the graph under the lock.
+
+        D-2458/1: the holder's cycle check runs before ``BEGIN IMMEDIATE``, so
+        a concurrent writer committing the reverse edge in that window would
+        not be seen and the new edge would close a cycle.  ``_all_items`` reads
+        inside the transaction and ``_validate_change`` is the very call the
+        pre-lock check used, so a refused edit reports the same code and
+        message (``cycle`` first) and nothing of it is written.
+        """
+        current = self._all_items()
+        after = []
+        for row in current:
+            candidate = dict(row)
+            if candidate["key"] == key:
+                candidate["depends_on"] = list(deps)
+            after.append(candidate)
+        self._validate_change(after, current, affected={key})
 
     def set_priority(self, principal, key, n):
         return self._run(principal, "set_priority", key,
