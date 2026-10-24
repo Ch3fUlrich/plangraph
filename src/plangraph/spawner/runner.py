@@ -540,8 +540,10 @@ def spawn_service(*args, **kwargs):
             self._save(record)
 
             if not plan.legs or plan.error:
-                record.update(status='refused' if plan.error else 'limited',
-                              exit_code=2 if plan.error else 4, ended=time.time(),
+                exhausted = not plan.legs and (not plan.error or
+                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                record.update(status='limited' if exhausted else 'refused',
+                              exit_code=4 if exhausted else 2, ended=time.time(),
                               error=plan.error,
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
