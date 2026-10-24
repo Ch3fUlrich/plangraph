@@ -35,7 +35,7 @@ class SpawnService:
     def _save(self, record):
         from .private_io import atomic_write_private
         from .runner import redact
-        from .env_redact import redact_env_values
+        from .env_redact import IDENTIFIER_KEYS, redact_env_values
         env = dict(os.environ)
         env.update(getattr(self.runner, '_child_envs', {}).get(record.get('job_id'), {}))
         def clean(value):
@@ -44,7 +44,7 @@ class SpawnService:
             if isinstance(value, (list, tuple, set)):
                 return [clean(v) for v in value]
             if isinstance(value, dict):
-                return {k: clean(v) for k, v in value.items()}
+                return {k: v if k in IDENTIFIER_KEYS else clean(v) for k, v in value.items()}
             return value
         record.update(clean(record))
         for attempt in record.get('attempts', []):

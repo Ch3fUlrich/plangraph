@@ -62,17 +62,22 @@ def test_repeating_router_terminates(tmp_path, monkeypatch):
     calls = []
     async def spawn(**kw):
         calls.append(kw)
-        return JobInfo('j', 'failed', 'x', leg.model, exit_code=1, stderr='unknown model')
+        return JobInfo('j', 'failed', 'x', leg.model, exit_code=1, stderr='provider throttled')
     runner = SimpleNamespace(spawn=spawn, _processes={}, _tasks={},
                              provider_responses={'j': {'status': 429}})
     service = spawn_service(runner=runner, state=tmp_path)
-    monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
+    routes = []
+    def route(*a, **kw):
+        routes.append(True)
+        return SpawnPlan((leg,), (), 'test', (), ())
+    monkeypatch.setattr(service, '_route', route)
     from plangraph.spawner import resolver
     monkeypatch.setattr(resolver, 'host_skip_reason', lambda *a, **kw: None)
     result = asyncio.run(asyncio.wait_for(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None), 2))
     assert len(calls) == 1
     assert result['status'] == 'failed'
-    assert result['error']
+    assert len(routes) == 2
+    assert result['error'] == 'router repeated exhausted legs'
 
 
 def test_probe_does_not_block_loop(tmp_path, monkeypatch):
@@ -81,17 +86,25 @@ def test_probe_does_not_block_loop(tmp_path, monkeypatch):
     leg = DEFAULT_LEGS[0]
     service = spawn_service(state=tmp_path)
     monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
-    ticks = []
     def probe(plan, **kw):
-        time.sleep(.15)
-        assert ticks
+        time.sleep(.3)
         return SpawnPlan((), ({'leg': leg.id, 'reason': 'harness_missing: fixture'},), 'test', (), ())
     monkeypatch.setattr(resolver, 'plan_for_launch', probe)
     async def run():
+        ticks = []
         async def tick():
-            await asyncio.sleep(.02)
-            ticks.append(True)
-        await asyncio.gather(service.spawn(card={'estimate_tokens': 100}, wait_seconds=None), tick())
+            while True:
+                await asyncio.sleep(.01)
+                ticks.append(True)
+        ticker = asyncio.create_task(tick())
+        try:
+            result = await service.spawn(card={'estimate_tokens': 100}, wait_seconds=None)
+        finally:
+            ticker.cancel()
+            await asyncio.gather(ticker, return_exceptions=True)
+        assert len(ticks) >= 20
+        assert result['status'] == 'failed'
+        assert 'harness_missing: fixture' in result['error']
     asyncio.run(run())
 
 
@@ -121,16 +134,21 @@ def test_iteration_cap_for_router_inventing_legs(tmp_path, monkeypatch):
     ('', 'Model unavailable: omniroute/x'),
     ('begin\n{"error":{"message":"model unavailable"}}\nend', ''),
     ('begin\nHTTP 404: unknown model\nend', ''),
+    ('ERROR: unknown model', ''),
 ])
 def test_unavailable_any_line(stdout, stderr):
     from plangraph.spawner.env_redact import unavailable_reason
     assert unavailable_reason(1, stdout, stderr)
     assert unavailable_reason(0, stdout, stderr) is None
+    assert unavailable_reason(1, 'Review complete.\nunknown model was mentioned in the diff', '') is None
+    assert unavailable_reason(1, 'Edited parser; TODO: handle unknown model string in fixture', '') is None
 
 
 @pytest.mark.parametrize('name', ['MY_TOKEN', 'GATEWAY_AUTH', 'CUSTOM_BEARER'])
 def test_short_credentials(name):
-    assert 'abcd' not in redact_env_values('value=abcd', {name: 'abcd'})
+    env = {name: 'abcd', 'OPENCODE_CONFIG_CONTENT': '{"providers":{"x":{"env":["' + name + '"]}}}'}
+    assert 'abcd' not in redact_env_values('value=abcd', env)
+    assert redact_env_values('value=abcd', {name: 'abcd'}) == 'value=abcd'
 
 
 def test_save_nested_collections_and_boundary(tmp_path, monkeypatch):
