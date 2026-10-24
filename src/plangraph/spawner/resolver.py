@@ -17,7 +17,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.catalog_seed import TIER_RUNG
+from plangraph.spawner.mimo_policy import mimo_path_allowed
 from plangraph.spawner.clients import build_routing_envelope_headers
 from plangraph.spawner.risk import (
     RISK_BETA_EXCESS,
@@ -211,6 +213,22 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     },
 ]
 
+# Registered seats are the authoritative offline routing surface. Legacy rows
+# remain visible for diagnostics but must not become new offline spawn routes.
+from plangraph.planner.legs import DEFAULT_LEGS
+_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS}
+for _row in DEFAULT_FALLBACK_MODELS:
+    _row['active'] = _row['id'] in _fallback_legs
+    if not _row['active']:
+        _row['available'] = 0
+for _model, _leg in _fallback_legs.items():
+    if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
+        DEFAULT_FALLBACK_MODELS.append(dict(
+            id=_model, family=_leg.family, harness=_leg.harness,
+            tier=_leg.tier, available=1, active=True,
+            context_window=_leg.max_request_tokens,
+            aa_intelligence=0.0, combos=[]))
+
 _DEFAULT_CATALOG_DB: Any = None
 _MISSING = object()
 _VALID_RISKS = frozenset({"low", "normal", "high", "critical"})
@@ -322,13 +340,20 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
-def is_model_available(model: Mapping[str, Any]) -> bool:
+def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
+    """Fail closed: both catalog admission signals must be explicit."""
+    return row.get('available') == 1 and row.get('active') is True
+
+
+def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
     """Check if model is eligible and available.
 
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
-    if int(model.get("available", 1)) == 0:
+    if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
+        return False
+    if not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -336,7 +361,8 @@ def is_model_available(model: Mapping[str, Any]) -> bool:
     mid = str(model.get("id") or model.get("model_id") or "").lower()
     if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
         return False
-    return True
+    reader = leg_state_reader or leg_status
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
@@ -432,6 +458,8 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
+        if not catalog_row_admitted(c):
+            continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)
         speed = _raw_speed(d)
@@ -474,26 +502,38 @@ def select_top_candidate(
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
+    d.setdefault('available', 0)
+    d.setdefault('active', False)
     if "id" not in d and "model_id" in d:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
+    # Explicit harness registration, not an inference from gateway transport.
+    if d.get('id') == 'mimo/mimo-v2.6-pro':
+        d.setdefault('harness', 'opencode')
     return d
 
-def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
-    """Retrieve models from SQLite CatalogDB (or fallback dictionary if unavailable)."""
+def get_catalog_models(db: Any = None, *, active_only: bool = False) -> list[dict[str, Any]]:
+    """Retrieve catalog models, including inactive rows unless explicitly filtered."""
     target_db = db if db is not None else _get_default_catalog_db()
     if target_db is not None:
         if hasattr(target_db, "list_models"):
-            models = target_db.list_models(active_only=False)
-            if models is not None:
-                return [_normalize_catalog_row(m) for m in models]
+            models = target_db.list_models(active_only=active_only)
+            # D-2631: no admitted rows is not an empty catalog. Preserve the
+            # active-only query contract, but probe total rows before fallback.
+            if active_only and not models and target_db.list_models(active_only=False):
+                return []
+            if models:
+                return [_normalize_catalog_row(m) for m in models
+                        if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
         if hasattr(target_db, "get_models"):
             models = target_db.get_models()
-            if models is not None:
-                return [_normalize_catalog_row(m) for m in models]
+            if models:
+                return [_normalize_catalog_row(m) for m in models
+                        if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
 
-    return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS]
+    return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
+            if not active_only or catalog_row_admitted(m)]
 
 def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
     """Check if model satisfies context window and price cliff limits.
@@ -543,6 +583,12 @@ def resolve_review_plan(
     combo_name: str = "l2-worker",
     need_tokens: int = 32000,
     db: Any = None,
+    leg_state_reader=None,
+    account=None,
+    reviewer_count=None,
+    review_exempt=False,
+    paths=(), bucket='S1', has_tests=True, is_pure_doc=False,
+    risk_tags=(),
 ) -> dict[str, Any]:
     """Resolve cross-family review plan on shared combo layers.
 
@@ -559,9 +605,24 @@ def resolve_review_plan(
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
-    reviewer_count = 2 if risk_l in ("high", "critical") else 1
+    from .risk import evaluate_risk
+    assessment = evaluate_risk(paths=paths, bucket=bucket, has_tests=has_tests,
+                               is_pure_doc=is_pure_doc, risk_tags=risk_tags)
+    review_exempt = assessment.review_exempt
+    if assessment.risk in ('high', 'critical'):
+        risk_l = assessment.risk
+    if reviewer_count == 0:
+        if not review_exempt or risk_l in ('high', 'critical'):
+            raise ValueError('zero reviewers requires low/normal review_exempt')
+        return {'reviewer_count': 0, 'reviewers': [], 'review_exempt': True}
+    reviewer_count = max(reviewer_count or 1, 2 if risk_l in ("high", "critical") else 1)
 
-    all_models = get_catalog_models(db)
+    reader = leg_state_reader or leg_status
+    def annotate(m):
+        d = dict(m)
+        d["leg_state"] = reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)
+        return d
+    all_models = [annotate(m) for m in get_catalog_models(db)]
 
     # Filter candidate models
     target_db = db if db is not None else _get_default_catalog_db()
@@ -572,15 +633,15 @@ def resolve_review_plan(
         route_legs = target_db.get_route_legs(combo_name, active_only=True)
         if route_legs:
             candidates = [
-                _normalize_catalog_row(r)
+                annotate(_normalize_catalog_row(r))
                 for r in route_legs
-                if _passes_context_and_cliff(r, need_tokens, role="review")
+                if is_model_available(_normalize_catalog_row(r), reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
             ]
             combo_priority_legs = True
 
     if not candidates:
         for m in all_models:
-            if not is_model_available(m):
+            if not is_model_available(m, reader, account=account, combo=combo_name):
                 continue
             combos = m.get("combos")
             if combos and combo_name not in combos:
@@ -608,7 +669,7 @@ def resolve_review_plan(
             eligible = [
                 dict(c)
                 for c in all_models
-                if is_model_available(c)
+                if is_model_available(c, reader, account=account, combo=combo_name)
                 and _passes_context_and_cliff(c, need_tokens, role="review")
                 and detect_model_family(str(c.get("id") or c.get("model_id") or ""))
                 not in excluded_families
@@ -656,6 +717,7 @@ def resolve_review_plan(
         {
             "index": 1,
             "model": reviewer_1_id,
+            "leg_state": reviewer_1["leg_state"],
             "family": family_1,
             "combo": combo_name,
             "headers": headers_1,
@@ -687,6 +749,7 @@ def resolve_review_plan(
             {
                 "index": 2,
                 "model": reviewer_2_id,
+                "leg_state": reviewer_2["leg_state"],
                 "family": family_2,
                 "combo": combo_name,
                 "headers": headers_2,
@@ -704,6 +767,7 @@ def resolve_review_plan(
         "need_tokens": need_tokens,
         "reviewer_count": reviewer_count,
         "reviewers": reviewers,
+        "candidates": all_models,
     }
 
 # New helper name: _risk_envelope_intelligence
@@ -717,6 +781,8 @@ def _risk_envelope_intelligence(
     effort: str,
     author_model: str | None,
     db: Any,
+    leg_state_reader=None,
+    account=None,
 ) -> float | None:
     order = ("low", "normal", "high", "critical")
     if risk_l not in order:
@@ -737,6 +803,8 @@ def _risk_envelope_intelligence(
                 relax_floor=True,
                 relax_reason="monotone-envelope",
                 _envelope=False,
+                leg_state_reader=leg_state_reader,
+                account=account,
             )
         except ValueError:
             continue
@@ -759,6 +827,8 @@ def resolve_model_for_task(
     relax_floor: bool = False,
     relax_reason: str = "",
     _envelope: bool = True,
+    leg_state_reader=None,
+    account=None,
 ) -> dict[str, Any]:
     """Resolve the optimal model candidate for a given task role and risk band.
 
@@ -797,13 +867,17 @@ def resolve_model_for_task(
             effort=effort,
             author_model=author_model,
             db=db,
+            leg_state_reader=leg_state_reader,
+            account=account,
         )
 
     min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
+    reader = leg_state_reader or leg_status
     all_models = get_catalog_models(db)
+    all_models = [dict(m, leg_state=reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)) for m in all_models]
 
     def _eligible(m: Mapping[str, Any], require_combo: bool) -> bool:
-        if not is_model_available(m):
+        if not is_model_available(m, reader, account=account, combo=combo_name):
             return False
         combos = m.get("combos")
         if require_combo and combo_name and combos and combo_name not in combos:
@@ -890,6 +964,8 @@ def resolve_model_for_task(
 
     return {
         "model": selected_id,
+        "leg_state": selected["leg_state"],
+        "candidates": all_models,
         "family": selected_family,
         "tier": str(selected.get("tier", "subscription")).lower(),
         "score": score_model(

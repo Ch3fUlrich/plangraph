@@ -1,0 +1,4 @@
+# Historical decision records may quote retired model paths.
+docs/decisions/
+docs/history/
+docs/archive/

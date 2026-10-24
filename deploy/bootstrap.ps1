@@ -106,6 +106,11 @@ function Invoke-PlangraphBootstrap {
         }
     }
 
+    $watchdogArgs = @("-m", "plangraph.spawner.stall_watchdog", "install", "--host", "windows")
+    if ($DryRun) { $watchdogArgs += "--dry-run" }
+    & python @watchdogArgs
+    if ($LASTEXITCODE -ne 0) { throw "Watchdog installation failed" }
+
     Write-Host "Plangraph bootstrap completed successfully."
 }
 

@@ -77,6 +77,7 @@ def row(
         "pool_burn_weight": float(kw.pop("burn", 1.0)),
         "tier": tier,
         "available": int(kw.pop("available", 1)),
+        "active": True,
         "context_window": int(ctx),
         "combos": list(combos),
     }

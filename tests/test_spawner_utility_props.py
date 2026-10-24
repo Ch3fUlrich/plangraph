@@ -93,6 +93,7 @@ def row(
         "pool_burn_weight": burn,
         "tier": tier,
         "available": available,
+        "active": True,
         "context_window": ctx,
         "combos": list(combos),
     }

@@ -137,7 +137,7 @@ def test_risk_evaluation_and_thresholds():
     )
     assert low_res.risk == "low"
     assert low_res.min_intelligence == RISK_MIN_INTELLIGENCE["low"]
-    assert low_res.reviewer_count == 0  # 0 for pure doc S0
+    assert low_res.reviewer_count == 0  # Pure-doc S0 is exempt below high risk
 
     # Normal risk: standard code change with tests
     norm_res = evaluate_risk(
@@ -563,7 +563,7 @@ def test_runner_dry_run_spawn_and_status():
 
         # Steer check
         steer_res = await runner.steer(job.job_id, "Keep it concise")
-        assert steer_res["steered"] is True
+        assert steer_res == {"ok": False, "steered": False, "error": "no stdin"}
         assert "Keep it concise" in runner.jobs[job.job_id].steer_messages
 
     asyncio.run(_run())
@@ -627,7 +627,7 @@ def test_mcp_tools_and_rpc_dispatch():
                 "name": "plangraph_agent_spawn",
                 "arguments": {
                     "prompt": "Test agent via MCP",
-                    "model_or_combo": "l2-worker",
+                    "card": {"estimate_tokens": 1000},
                     "dry_run": True,
                 },
             },
@@ -718,6 +718,8 @@ def test_two_stage_tie_breaker_speed_within_epsilon_band():
     assert 0 < (score_a - score_b) <= 0.5, "Model B must be within the 0.5 epsilon band of Model A"
     assert (score_a - score_c) > 0.5, "Model C must be outside the 0.5 epsilon band"
 
+    for model in (model_a, model_b, model_c):
+        model.update(available=1, active=True)
     top = select_top_candidate([model_a, model_b, model_c], role="implement", risk="normal")
     assert top is not None
     # Model B wins tie with Model A because Speed(B) 250 > Speed(A) 50
@@ -790,4 +792,3 @@ def test_deepseek_flash_cost_and_tier_ranking():
     qwen = models["opencode-go/qwen3.8-max"]
     score_qwen = score_model(qwen, role="implement", risk="normal")
     assert score_sub > score_qwen
-

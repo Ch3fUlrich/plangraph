@@ -14,6 +14,8 @@ import os
 import re
 import time
 import uuid
+import logging
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -23,9 +25,24 @@ from plangraph.spawner.clients import (
     build_routing_envelope_headers,
 )
 from plangraph.spawner.resolver import detect_model_family
+from plangraph.spawner.mimo_policy import check_mimo_path
 
 _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
+
+
+def redact(value):
+    """Scrub credential-shaped strings recursively before persistence or display."""
+    if isinstance(value, dict):
+        return {k: ('[REDACTED]' if k != 'idempotency_key' and re.search(r'(?i)(key|authorization|token|secret)', k)
+                    else redact(v)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact(v) for v in value]
+    if isinstance(value, str):
+        value = re.sub(r'sk-[\w-]+', '[REDACTED]', value)
+        value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
+        return re.sub(r'(?i)(\b\w*_KEY=)[^\s"\x27]+', r'\1[REDACTED]', value)
+    return value
 
 
 @dataclass
@@ -46,7 +63,9 @@ class JobInfo:
     served_model: str | None = None
     served_family: str | None = None
     dry_run: bool = False
+    events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
+    cwd: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -79,30 +98,70 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
                                 served_model = str(data["served_model"])
                             if not served_family and "served_family" in data:
                                 served_family = str(data["served_family"])
-                    except Exception:
-                        pass
+                    except (ValueError, TypeError):
+                        continue
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning('telemetry_failed: %s', type(exc).__name__)
+                        continue
 
-    if not served_model and fallback_model:
-        served_model = fallback_model
     if not served_family and served_model:
         served_family = detect_model_family(served_model)
 
     return served_model, served_family
 
 
+class NonceCapacity(RuntimeError):
+    """All nonce slots belong to live runs."""
+
+
 class SpawnerRunner:
     """Async process runner for Plangraph agent tasks."""
 
-    def __init__(self, default_cwd: str | None = None):
+    def __init__(self, default_cwd: str | None = None, *, process_factory=None, tree_killer=None):
         self.default_cwd = default_cwd or os.getcwd()
         self.jobs: dict[str, JobInfo] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._tasks: dict[str, asyncio.Task[Any]] = {}
+        self.process_factory = process_factory or asyncio.create_subprocess_exec
+        self.tree_killer = tree_killer or kill_process_tree
+        self.provider_responses = {}
+        self._nonces = {}
+        self._adapter_tokens = {}
+
+    def provider_response(self, job_id, leg, status, body, headers, *, source=None,
+                          nonce=None, adapter_token=None, account=None, combo=None, store=None):
+        """Consume trusted gateway transport evidence, never free-text output.
+
+        Public calls are restricted to trusted gateway adapters. The nonce-checked
+        stderr envelope parser is the only entry point for child-supplied data.
+        Exit codes alone are not evidence.
+        """
+        from plangraph.spawner import leg_state
+
+        if job_id not in self.jobs:
+            raise KeyError(job_id)
+        if source == 'stderr_envelope':
+            if not nonce or nonce != self._nonces.get(job_id):
+                raise ValueError('invalid run nonce')
+        elif source == 'gateway_adapter':
+            if adapter_token is None or adapter_token is not self._adapter_tokens.get(job_id):
+                raise ValueError('invalid adapter token')
+        else:
+            raise ValueError('unknown provider response source')
+        target = store or leg_state
+        if '/' not in leg:
+            leg = 'agy/' + leg
+        if status in (429, 402):
+            target.record_provider_response(leg, status, body, headers, "runner:gateway-response", account=account, combo=combo)
+            from plangraph.spawner.leg_state import _redact
+            self.provider_responses[job_id] = redact({"status": status, "body": _redact(body), "headers": dict(headers or {})})
+        elif 200 <= status < 300:
+            target.record_probe_pass(leg, caller="runner:gateway-response", account=account, combo=combo)
 
     async def spawn(
         self,
         prompt: str,
-        model_or_combo: str = "l2-worker",
+        model_or_combo: str = "mimo/mimo-v2.6-flash",
         role: str = "implement",
         risk: str = "normal",
         headers: Mapping[str, str] | None = None,
@@ -112,11 +171,31 @@ class SpawnerRunner:
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
+        client: str | None = None,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
+        from plangraph.planner.routing import validate_model
+        validate_model(model_or_combo)
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
 
+        import secrets
+        nonce = secrets.token_hex(32)
+        if len(self._nonces) >= 4096:
+            for key in list(self._nonces):
+                if key not in self.jobs:
+                    self._nonces.pop(key)
+            finished = sorted(
+                (key for key in self._nonces if key in self.jobs
+                 and self.jobs[key].status != 'running'),
+                key=lambda key: self.jobs[key].end_time or self.jobs[key].start_time,
+            )
+            for key in finished if len(self._nonces) >= 4096 else ():
+                self._nonces.pop(key, None)
+                if len(self._nonces) < 4096:
+                    break
+            if len(self._nonces) >= 4096:
+                raise NonceCapacity('active run nonce capacity reached')
         # Build routing envelope headers if not provided
         envelope_headers = dict(headers or {})
         if not envelope_headers:
@@ -127,6 +206,8 @@ class SpawnerRunner:
                 required_context=32000,
             )
 
+        envelope_headers["X-OmniRoute-Run-Nonce"] = build_routing_envelope_headers(nonce=nonce)["X-OmniRoute-Run-Nonce"]
+
         cmd = build_command(
             prompt=prompt,
             model_or_combo=model_or_combo,
@@ -135,6 +216,7 @@ class SpawnerRunner:
             gateway=gateway,
             gateway_online=gateway_online,
             headers=envelope_headers,
+            client=client,
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
@@ -143,14 +225,17 @@ class SpawnerRunner:
             served_model = model_or_combo
             served_family = detect_model_family(model_or_combo)
             if "/" not in model_or_combo:
-                from plangraph.spawner.resolver import get_catalog_models
+                from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                 combo_legs = [
                     m for m in get_catalog_models()
-                    if model_or_combo in (m.get("combos") or []) and int(m.get("available", 1)) == 1
+                    if model_or_combo in (m.get("combos") or []) and catalog_row_admitted(m)
                 ]
                 if combo_legs:
                     served_model = combo_legs[0]["id"]
                     served_family = detect_model_family(served_model)
+                else:
+                    from plangraph.routing_errors import SpawnRefused
+                    raise SpawnRefused('no admitted legs for combo: ' + model_or_combo)
             job = JobInfo(
                 job_id=job_id,
                 status="dry_run",
@@ -165,6 +250,7 @@ class SpawnerRunner:
                 served_model=served_model,
                 served_family=served_family,
                 dry_run=True,
+                cwd=work_dir,
             )
             self.jobs[job_id] = job
             return job
@@ -178,21 +264,33 @@ class SpawnerRunner:
             risk=risk,
             command=cmd,
             dry_run=False,
+            cwd=work_dir,
         )
         self.jobs[job_id] = job
 
         import shutil
         resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-        proc = await asyncio.create_subprocess_exec(
-            resolved_exe,
-            *cmd[1:],
-            cwd=work_dir,
-            env=child_env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
-        )
+        self._adapter_tokens[job_id] = object()
+        try:
+            proc = await self.process_factory(
+                resolved_exe,
+                *cmd[1:],
+                cwd=work_dir,
+                env=child_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+                **({"start_new_session": True} if os.name != "nt" else {}),
+            )
+        except Exception as exc:
+            self._adapter_tokens.pop(job_id, None)
+            job.status = 'failed'
+            job.exit_code = 1
+            job.end_time = time.time()
+            job.events.append({'event': 'spawn_failed', 'error': type(exc).__name__})
+            raise
         self._processes[job_id] = proc
+        self._nonces[job_id] = nonce
 
         # Start background monitor
         task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
@@ -214,14 +312,48 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
-            stdout_bytes, stderr_bytes = await proc.communicate()
+            timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
+            if timeout:
+                try:
+                    seconds = float(timeout)
+                    if not math.isfinite(seconds) or seconds <= 0:
+                        raise ValueError('invalid run timeout')
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), seconds)
+                except (asyncio.TimeoutError, ValueError):
+                    await self.tree_killer(proc.pid)
+                    stdout_bytes, stderr_bytes = await proc.communicate()
+                    self.jobs[job_id].events.append({'event': 'run_timeout'})
+                    self.jobs[job_id].exit_code = 124
+            else:
+                stdout_bytes, stderr_bytes = await proc.communicate()
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
-            exit_code = proc.returncode
+            exit_code = self.jobs[job_id].exit_code if self.jobs[job_id].exit_code == 124 else proc.returncode
 
             job = self.jobs[job_id]
-            job.stdout = stdout_text
-            job.stderr = stderr_text
+            # Only the fork's exact stderr transport envelope is evidence.
+            for line in stderr_text.splitlines():
+                try:
+                    envelope = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
+                    continue
+                response = envelope['autoos_provider_response']
+                if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
+                    job.events.append({'event': 'forged_envelope'})
+                    continue
+                response = {k: v for k, v in response.items() if k != 'nonce'}
+                if (isinstance(response, dict) and set(response) == {'leg', 'status', 'body', 'headers'}
+                        and isinstance(response['leg'], str) and response['leg']
+                        and type(response['status']) is int and response['status'] in (429, 402)
+                        and isinstance(response['body'], str) and response['body'].strip()
+                        and isinstance(response['headers'], dict)
+                        and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
+                    self.provider_response(job_id, **response, source='stderr_envelope',
+                                           nonce=self._nonces[job_id])
+            job.stdout = redact(stdout_text)
+            job.stderr = redact(stderr_text)
             job.exit_code = exit_code
             job.end_time = time.time()
             job.status = "completed" if exit_code == 0 else "failed"
@@ -236,7 +368,17 @@ class SpawnerRunner:
             if job_id in self.jobs:
                 self.jobs[job_id].status = "cancelled"
                 self.jobs[job_id].end_time = time.time()
+                self.jobs[job_id].exit_code = 1
+        except Exception as exc:
+            job = self.jobs[job_id]
+            job.status = 'failed'
+            job.exit_code = 1
+            job.end_time = time.time()
+            job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
+            logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            self._adapter_tokens.pop(job_id, None)
+            self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
 
     async def status(self, job_id: str | None = None) -> Any:
@@ -250,19 +392,28 @@ class SpawnerRunner:
     async def steer(self, job_id: str, message: str) -> dict[str, Any]:
         """Send steer instruction to an active job."""
         if job_id not in self.jobs:
-            raise KeyError(f"Job {job_id} not found")
+            return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
+        # Audit attempted instructions; success is reported separately.
         job.steer_messages.append(message)
 
         proc = self._processes.get(job_id)
-        if proc and proc.stdin and not proc.stdin.is_closing():
+        if not proc or getattr(proc, 'stdin', None) is None:
+            return {'ok': False, 'steered': False, 'error': 'no stdin'}
+        if proc.stdin.is_closing():
+            return {'ok': False, 'steered': False, 'error': 'stdin closing'}
+        if proc.stdin is not None:
             try:
                 proc.stdin.write((message + "\n").encode("utf-8"))
                 await proc.stdin.drain()
-            except Exception:
-                pass
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                job.events.append({"event": "steer_failed", "error": type(exc).__name__})
+                return {'ok': False, 'steered': False, 'error': type(exc).__name__}
+            except Exception as exc:
+                job.events.append({"event": "steer_failed", "error": type(exc).__name__})
+                return {'ok': False, 'steered': False, 'error': type(exc).__name__}
 
-        return {"job_id": job_id, "steered": True, "message": message, "status": job.status}
+        return {'ok': True, 'steered': True, 'error': None}
 
     async def cancel(self, job_id: str) -> dict[str, Any]:
         """Cancel a running job."""
@@ -273,7 +424,7 @@ class SpawnerRunner:
         proc = self._processes.get(job_id)
         if proc:
             try:
-                proc.terminate()
+                await self.tree_killer(proc.pid)
             except ProcessLookupError:
                 pass
 
@@ -282,5 +433,192 @@ class SpawnerRunner:
             task.cancel()
 
         job.status = "cancelled"
+        self._nonces.pop(job_id, None)
         job.end_time = time.time()
         return {"job_id": job_id, "status": "cancelled"}
+
+
+async def kill_process_tree(pid, *, platform=None, command_factory=None):
+    """Terminate the isolated POSIX group or Windows process tree."""
+    if (platform or os.name) == 'nt':
+        factory = command_factory or asyncio.create_subprocess_exec
+        proc = await factory('taskkill', '/PID', str(pid), '/T', '/F',
+                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await proc.communicate()
+    else:
+        import signal
+        os.killpg(pid, signal.SIGKILL)
+
+
+def spawn_service(*args, **kwargs):
+    """Shared hardened dispatch for the public CLI and MCP entry points."""
+    from .service import SpawnService
+    from dataclasses import asdict
+    from pathlib import Path
+
+    class DispatchService(SpawnService):
+        def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            from .notify import FileInbox
+            self.completion_sink = completion_sink or FileInbox(self.state)
+            self.keeper_sink = keeper_sink or self.completion_sink
+
+        def _save(self, record, *, retry=False):
+            from .notify import completion_event, CommandSink
+            terminal = record.get('ended') is not None and record.get('status') != 'running'
+            record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
+            if not retry:
+                super()._save(record)
+            changed = False
+            if terminal:
+                if 'completion' not in record:
+                    record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
+                    changed = True
+            if changed:
+                super()._save(record)
+            if terminal:
+                for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
+                    marker = self._path(record['run_id']).parent / (recipient + '.delivered')
+                    if marker.exists():
+                        continue
+                    try:
+                        sink.deliver(recipient, record['completion'])
+                        from .private_io import atomic_write_private
+                        atomic_write_private(marker, 'delivered\n')
+                    except Exception:
+                        logging.getLogger(__name__).exception('completion delivery failed: %s', recipient)
+                command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')
+                if command:
+                    for recipient in ('parent', 'keeper'):
+                        marker = self._path(record['run_id']).parent / (recipient + '.hook.delivered')
+                        if not marker.exists():
+                            try:
+                                CommandSink(command).deliver(recipient, record['completion'])
+                                from .private_io import atomic_write_private
+                                atomic_write_private(marker, 'delivered\n')
+                            except Exception:
+                                logging.getLogger(__name__).exception('completion hook failed')
+
+        def retry_completions(self):
+            """Re-drive durable terminal records after a supervisor/bridge outage."""
+            for record in self.ps()['runs']:
+                recipients = ['parent', 'keeper']
+                markers = [r + '.delivered' for r in recipients]
+                if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
+                    markers += [r + '.hook.delivered' for r in recipients]
+                pending = 'completion' not in record or any(
+                    not (self._path(record['run_id']).parent / marker).exists()
+                    for marker in markers)
+                if record.get('ended') is not None and record.get('status') != 'running' and pending:
+                    try:
+                        self._save(record, retry=True)
+                    except Exception:
+                        logging.getLogger(__name__).exception('completion retry failed')
+
+        async def wait(self, run_id, timeout=None):
+            if timeout is not None and timeout < 0:
+                raise ValueError('timeout must be nonnegative')
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                record = self.result(run_id)
+                if record.get('ended') is not None and record['status'] != 'running':
+                    return record
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError('run wait timed out: ' + run_id)
+                await asyncio.sleep(.02)
+
+        def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
+            from . import leg_state
+            reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
+            original = self.leg_reader
+            self.leg_reader = lambda model, **kw: reader(model if '/' in model else 'agy/' + model, **kw)
+            try:
+                return super()._route(card, role, writer_families, review_of, **options)
+            finally:
+                self.leg_reader = original
+
+        async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
+                        review_of=None, model=None, leg=None, override_reason=None,
+                        dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False):
+            # Let the base service handle audited overrides, which never fall through.
+            if model or leg or not card:
+                return await super()._spawn(card, prompt, role, writer_families, review_of,
+                    model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
+            plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            run_id = 'run-' + uuid.uuid4().hex
+            import hashlib
+            record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
+                role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
+                served_family=None, writer_family=None, status='running', started=time.time(),
+                ended=None, attempts=[], stdout_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
+            self._save(record)
+
+            if not plan.legs or plan.error:
+                exhausted = not plan.legs and (not plan.error or
+                    bool(plan.skipped) and all(s['reason'] == 'limited' for s in plan.skipped))
+                record.update(status='limited' if exhausted else 'refused',
+                              exit_code=4 if exhausted else 2, ended=time.time(),
+                              error=plan.error,
+                              evidence=plan.to_dict()['skipped'])
+                self._save(record)
+                return self.result(run_id)
+
+            async def execute():
+                tried = set()
+                current = plan
+                try:
+                    for _ in range(len(plan.legs)):
+                        chosen = next((l for l in current.legs if l.id not in tried), None)
+                        if chosen is None or current.error:
+                            break
+                        tried.add(chosen.id)
+                        job = await self.runner.spawn(prompt=prompt, model_or_combo=chosen.model,
+                            role=role, dry_run=dry_run, client=chosen.harness)
+                        process = self.runner._processes.get(job.job_id)
+                        record.update(job_id=job.job_id, pid=process.pid if process else None,
+                                      chosen_leg=asdict(chosen), writer_family=chosen.family,
+                                      cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
+                        self._save(record)
+                        task = self.runner._tasks.get(job.job_id)
+                        if task:
+                            await asyncio.shield(task)
+                        stop = self.runner.provider_responses.get(job.job_id)
+                        record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                            skip_reason='provider_stop' if stop else None, provider_response=stop))
+                        record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
+                            served_family=job.served_family, writer_family=job.served_family or chosen.family,
+                            stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
+                        if not stop or no_fallthrough or dry_run:
+                            if not dry_run:
+                                await self._continue_writer(record, job.stdout)
+                            return
+                        current = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+                        record['plan'] = current.to_dict()
+                    record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
+                except Exception as exc:
+                    from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
+                    if isinstance(exc, SpawnRefused):
+                        record.update(status='refused', exit_code=3 if isinstance(exc, BenchmarkError) else 2,
+                                      refusal=type(exc).__name__, error=redact(str(exc)),
+                                      evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [],
+                                      legs=list(exc.legs) if isinstance(exc, BenchRequired) else [])
+                        return
+                    record.update(status='failed', exit_code=1, error=redact(str(exc)))
+                finally:
+                    if record['status'] == 'running':
+                        record.update(status='cancelled', exit_code=1)
+                    record['ended'] = time.time()
+                    self._save(record)
+
+            task = asyncio.create_task(execute())
+            self.tasks[run_id] = task
+            if dry_run or wait_seconds is None:
+                await task
+            elif wait_seconds > 0:
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), wait_seconds)
+                except asyncio.TimeoutError:
+                    pass
+            return self.result(run_id)
+
+    return DispatchService(*args, **kwargs)

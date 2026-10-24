@@ -13,14 +13,22 @@ from __future__ import annotations
 import math
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import asdict
+import json
+import os
+import sqlite3
+from pathlib import Path
+import time
 
 from plangraph.keeper.schema import EXIT_CLASSES, RISK_TAGS, WINDOW_CLASSES
+from plangraph.routing_errors import RouteError, SpawnRefused
 
 from .legs import DEFAULT_LEGS, TIERS, Leg
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
-           "SPAWNER_SELECTION_ENABLED"]
+            "SpawnRefused", "SpawnPlan", "plan_spawn",
+             "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
@@ -30,18 +38,12 @@ USABLE_FRACTION = USABLE_FRACTION_PCT / 100
 #: Attempts on one tier before promotion, and promotions allowed.
 ATTEMPT_BUDGET = 3
 PROMOTIONS = 1
-#: Off until SPAWNER-UTILITY-PROPS closes; the only runtime path for spawner selection is this module.
-SPAWNER_SELECTION_ENABLED = False
 #: Risk tags that keep training-on-data legs away from the card.
 _NO_TRAIN_TAGS = frozenset({"auth", "secrets", "money", "live-step"})
 #: Exit classes where the provider, not the card, failed: rotate inside the tier.
 _PROVIDER_EXITS = frozenset({"usage_limit", "outage"})
 #: Exit classes that leave the routing loop (planner queue or inbox).
 _PARK_EXITS = frozenset({"contract_defect", "needs_input", "flaky_check", "cancelled"})
-
-
-class RouteError(ValueError):
-    """No usable route (estimate too big, or no eligible leg)."""
 
 
 @dataclass(frozen=True)
@@ -113,6 +115,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
+    legs = tuple(legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
     bad = [t for t in tags if t not in RISK_TAGS]
@@ -156,7 +159,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         reasons.append(f"excluded {count} legs: {why}")
     if not eligible:
         raise RouteError(f"no eligible leg for {window_class} (effective {effective}): "
-                         + "; ".join(reasons))
+                         + "; ".join(reasons), exclusion_reasons=dropped)
     eligible.sort(key=lambda t: (t[0], t[1]))
     plan = tuple(leg for _, _, leg in eligible)
     level, seats = _review(tags)
@@ -197,3 +200,266 @@ def next_after_failure(route: Route, tried: Sequence[str], exit_class: str,
         if TIERS.index(leg.tier) > rank:
             return ("promote", leg)
     return ("park", None)
+
+
+class BenchmarkError(SpawnRefused):
+    """Benchmark policy or storage failure."""
+
+
+class BenchRequired(BenchmarkError):
+    """Strict benchmark policy refused one or more candidate legs."""
+
+    def __init__(self, message, legs=()):
+        super().__init__(message)
+        self.gaps = [leg for leg in legs if isinstance(leg, dict)]
+        self.legs = [leg['leg'] if isinstance(leg, dict) else leg for leg in legs]
+
+
+class BenchDataError(BenchmarkError):
+    """Benchmark storage could not be read; not missing model coverage."""
+
+
+# Table-specific aliases to the resolver's canonical columns. No fuzzy model aliases.
+BENCHMARK_COLUMNS = {
+    "catalog_benchmarks": {"model_id": "model_id"},
+    "model_benchmarks": {"model_id": "model_id", "intelligence": "aa_intelligence",
+                         "tok_per_s": "verified_tok_per_s"},
+}
+
+
+def benchmark_rows_from_db(path):
+    """Return (model-id rows, errors) without creating or modifying a database.
+
+    Prefer the catalog table when both supported tables exist. Duplicate model rows
+    are counted in ``benchmark_row_count``; the first row supplies ranking metrics.
+    """
+    try:
+        uri = Path(path).expanduser().resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            table = next((t for t in BENCHMARK_COLUMNS if t in tables), None)
+            if table is None:
+                return {}, [f"{path}: missing benchmark table (catalog_benchmarks or model_benchmarks)"]
+            result = {}
+            for raw in conn.execute(f'SELECT * FROM "{table}"'):
+                row = dict(raw)
+                for original, canonical in BENCHMARK_COLUMNS[table].items():
+                    if original in row and canonical not in row:
+                        row[canonical] = row[original]
+                model = row.get("model_id")
+                if not isinstance(model, str) or not model:
+                    return {}, [f"{path}: {table} row missing model_id"]
+                if model in result:
+                    result[model]["benchmark_row_count"] += 1
+                else:
+                    result[model] = dict(row, benchmark_row_count=1)
+            return result, []
+        finally:
+            conn.close()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        return {}, [f"{path}: cannot read benchmark database: {exc}"]
+
+
+@dataclass(frozen=True)
+class SpawnPlan:
+    legs: tuple[Leg, ...]
+    skipped: tuple[dict, ...]
+    p_source: str
+    review_seats: tuple[Leg, ...]
+    reasons: tuple[str, ...]
+    error: str | None = None
+    gaps: tuple[dict, ...] = ()
+    candidates: tuple[dict, ...] = ()
+    writer_groups: tuple = ()
+
+    @property
+    def first_leg(self) -> Leg | None:
+        return self.legs[0] if self.legs else None
+
+    def to_dict(self):
+        result = asdict(self)
+        if not self.writer_groups:
+            result.pop('writer_groups')
+        result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
+        return result
+
+
+def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
+                legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
+    """Plan by canonical rules; benchmark utility can only permute one tier.
+
+    Readers may be a LegStateStore or a callable with the leg_status contract.
+    Account/combo scope comes from the card and is never a wildcard.
+    """
+    if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
+        raise SpawnRefused("card required")
+    for field in ('paths', 'write_set', 'risk_tags'):
+        if field in card and (not isinstance(card[field], (list, tuple)) or
+                              not all(isinstance(v, str) for v in card[field])):
+            raise SpawnRefused(f'{field} must be a list of strings')
+    for field in ('has_tests', 'is_pure_doc', 'is_docs_only'):
+        if field in card and type(card[field]) is not bool:
+            raise SpawnRefused(f'{field} must be boolean')
+    for field in ('estimate_tokens', 'reviewer_count', 'fanout'):
+        if field in card and (not _is_int(card[field]) or card[field] < (1 if field == 'estimate_tokens' else 0)):
+            raise SpawnRefused(f'{field} must be a valid integer')
+    for field, allowed in (('bucket', ('S0', 'S1', 'S2', 'S3', 'S4')), ('window_class', WINDOW_CLASSES)):
+        if field in card and card[field] not in allowed:
+            raise SpawnRefused(f'{field} has invalid value')
+    if any(t not in RISK_TAGS for t in card.get('risk_tags', ())):
+        raise SpawnRefused('risk_tags has invalid value')
+    if role not in ("implement", "review"):
+        raise ValueError("role must be implement|review")
+    from plangraph.spawner.risk import evaluate_risk
+    assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
+                               bucket=card.get('bucket', 'S1'),
+                               has_tests=card.get('has_tests', True),
+                               risk_tags=card.get('risk_tags', ()),
+                               is_pure_doc=card.get('is_pure_doc', False))
+    if (assessment.risk in ('high', 'critical') or card.get('risk') in ('high', 'critical')) and card.get('reviewer_count', 2) < 2:
+        raise SpawnRefused('high/critical changes require two reviewers')
+    if card.get('reviewer_count') == 0 and (
+            not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
+            ):
+        raise SpawnRefused('zero reviewers requires low/normal review_exempt')
+    from plangraph.spawner.leg_state import leg_status
+    reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
+    legs = tuple(legs)
+    for candidate in legs:
+        validate_model(candidate.model)
+    candidates = tuple(l for l in legs if role in l.roles)
+    rows = (benchmark if isinstance(benchmark, Mapping) else {
+        row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
+    gaps = tuple({"leg": l.id, "model": l.model, "reason": "no benchmark row"}
+                 for l in candidates if l.model not in rows and l.id not in rows)
+    if strict and gaps:
+        raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
+    bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
+    if benchmark is None:
+        bench_reasons.extend(["benchmark data absent", "no benchmark p"])
+    excluded = set(writer_families) if role == "review" else set()
+    states = {l.id: reader(l.model, now=now, account=card.get("account"),
+                            combo=card.get("combo")) for l in candidates}
+    limited = {key for key, state in states.items() if state["state"] == "limited"}
+    skipped = []
+    from plangraph.spawner.resolver import score_model
+    candidate_details = []
+    # Route each leg through the same canonical eligibility rules to retain
+    # individual exclusion reasons even when there is no eligible route.
+    for leg in candidates:
+        reason = None
+        if leg.id in limited:
+            reason = "limited"
+        elif leg.family in excluded:
+            reason = "excluded_family"
+        else:
+            try:
+                route_card(card, legs=(leg,))
+            except RouteError as exc:
+                reason = next(iter(exc.exclusion_reasons), 'routing_error')
+                states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
+        if reason:
+            skipped.append({"leg": leg.id, "reason": reason,
+                            "evidence": states[leg.id]["evidence"]})
+        row = rows.get(leg.model, rows.get(leg.id))
+        detail = {"leg": leg.id, "tier": leg.tier,
+                  "u_core": score_model(dict(row, tier=leg.tier), role=role,
+                                        need_tokens=card["estimate_tokens"]) if row is not None else None,
+                  "p_source": "measured" if row is not None else "prior"}
+        if reason:
+            detail.update(reason=reason, evidence=states[leg.id]["evidence"])
+        candidate_details.append(detail)
+    try:
+        route = route_card(card, legs=candidates, unavailable=limited,
+                           exclude_families=excluded)
+    except RouteError as exc:
+        return SpawnPlan((), tuple(skipped), "operator-order", (),
+                         tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details))
+    ordered = list(route.legs)
+    reasons = [*route.reasons, *bench_reasons]
+    source = "operator-order"
+    if benchmark is not None:
+        from plangraph.spawner.resolver import rank_candidates
+        for tier in TIERS:
+            tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]
+            positions = [i for i in tier_positions
+                         if ordered[i].model in rows or ordered[i].id in rows]
+            missing = [ordered[i] for i in tier_positions if i not in positions]
+            measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
+                             model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
+            ranked = rank_candidates(measured, role=role, need_tokens=card["estimate_tokens"])
+            by_id = {ordered[i].id: ordered[i] for i in positions}
+            for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):
+                ordered[i] = leg
+            if positions:
+                source = "benchmark"
+    seats = []
+    families = set(excluded)
+    if role == "review":
+        for leg in ordered:
+            if leg.family not in families:
+                seats.append(leg)
+                families.add(leg.family)
+            if len(seats) == 2:
+                break
+    error = "two distinct review families unavailable" if role == "review" and len(seats) < 2 else None
+    if error:
+        reasons.append(error)
+    order = {leg.id: i for i, leg in enumerate(ordered)}
+    candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
+    from plangraph.spawner.fixer import split_findings
+    groups = split_findings(card.get('findings', ())) if role == 'implement' else ()
+    return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
+                     tuple(candidate_details), groups)
+
+
+def validate_model(model):
+    """The resolver catalog and registered legs are the exact admission door."""
+    from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
+    from plangraph.mimo_policy import check_mimo_path
+    from .legs import DEFAULT_LEGS
+    if not isinstance(model, str) or not model:
+        raise SpawnRefused('model must be a nonempty string')
+    check_mimo_path(model)
+    rows = get_catalog_models()
+    inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
+    allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
+               {leg.model for leg in DEFAULT_LEGS}) - inactive
+    if model not in allowed:
+        raise SpawnRefused('unknown model: ' + str(model))
+    return model
+
+
+def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):
+    """Explicit model selection always needs a durable override audit."""
+    if not isinstance(override_reason, str) or len(override_reason.strip()) < 10:
+        raise SpawnRefused("spawn by card; --override-reason required")
+    validate_model(model)
+    path = Path(log_path) if log_path is not None else Path(
+        os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph/spawn-overrides.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    from plangraph.spawner.private_io import append_private
+    append_private(path, json.dumps({"ts": time.time(), "model": model,
+                    "reason": override_reason, "caller": caller or "planner"}) + "\n")
+    return model
+
+
+def next_leg_after_provider_stop(plan, leg_id, status, body, headers, caller, *,
+                                 store=None, now=None, account=None, combo=None):
+    """Consume an actual provider stop; unrelated failures never suppress a leg."""
+    from plangraph.spawner import leg_state
+    state = store or leg_state
+    by_id = {leg.id: leg for leg in plan.legs}
+    if leg_id not in by_id:
+        raise ValueError("leg not in plan")
+    if type(status) is not int or status not in (429, 402) or not isinstance(body, str) or not body.strip():
+        return by_id[leg_id]
+    state.record_provider_response(by_id[leg_id].model, status, body, headers, caller,
+                                   now=now, account=account, combo=combo)
+    start = list(by_id).index(leg_id) + 1
+    for leg in plan.legs[start:]:
+        if state.leg_status(leg.model, now=now, account=account, combo=combo)["state"] != "limited":
+            return leg
+    return None

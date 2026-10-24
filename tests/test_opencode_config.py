@@ -2,6 +2,8 @@ import json
 import re
 from pathlib import Path
 
+from plangraph.spawner.mimo_policy import check_mimo_path
+
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "opencode.jsonc"
 
@@ -40,9 +42,21 @@ def test_agents_exist_with_model():
     assert "t2-worker" in agents, "Agent 't2-worker' not found in agents"
     assert "l2-worker" in agents, "Agent 'l2-worker' not found in agents"
 
-    assert agents["t2-worker"]["model"] == "omniroute/mimo-v2.6-flash"
-    assert agents["l2-worker"]["model"] == "omniroute/mimo-v2.6-flash"
+    assert agents["t2-worker"]["model"] == "mimo/mimo-v2.6-flash"
+    assert agents["l2-worker"]["model"] == "mimo/mimo-v2.6-flash"
     assert agents["t2-worker"] == agents["l2-worker"], "t2-worker and l2-worker must have identical definitions"
+
+
+def test_all_config_model_ids_follow_mimo_policy():
+    cfg = load_config()
+    model_ids = [agent["model"] for agent in cfg["agents"].values() if "model" in agent]
+    model_ids.extend(
+        model["modelID"]
+        for provider in cfg["providers"].values()
+        for model in provider.get("models", {}).values()
+    )
+    for model_id in model_ids:
+        assert check_mimo_path(model_id) == model_id
 
 
 def test_provider_omniroute():
@@ -57,10 +71,29 @@ def test_provider_omniroute():
     assert omniroute.get("package") == "@opencode/ai/providers/openai-compatible"
     assert omniroute.get("settings", {}).get("baseURL") == "{env:PLANGRAPH_REVIEW_URL}"
 
-    models = omniroute.get("models", {})
-    assert "mimo-v2.6-flash" in models, "Model 'mimo-v2.6-flash' not found under omniroute"
-    mimo = models["mimo-v2.6-flash"]
-    assert mimo.get("modelID") == "mimo-v2.6-flash"
+    # Retain the gateway provider, but never register MiMo models under it.
+    assert "models" not in omniroute, "Unused empty model registry must be omitted"
+
+
+def test_provider_mimo():
+    cfg = load_config()
+    flash, pro = (value.split('/', 1)[1] for value in
+                  ('mimo/mimo-v2.6-flash', 'mimo/mimo-v2.6-pro'))
+    assert cfg["providers"]["mimo"] == {
+        "package": "@opencode/ai/providers/openai-compatible",
+        "name": "MiMo direct gateway legs (D-2459)",
+        "env": ["AUTOOS_OMNIROUTE_KEY"],
+        "settings": {"baseURL": "{env:PLANGRAPH_REVIEW_URL}"},
+        "models": {
+            flash: {
+                "modelID": "mimo/mimo-v2.6-flash",
+                "name": "Xiaomi MiMo v2.6 Flash",
+                "limit": {"context": 1000000, "output": 65536},
+            },
+            pro: {"modelID": "mimo/mimo-v2.6-pro", "name": "Xiaomi MiMo v2.6 Pro",
+                  "limit": {"context": 1000000, "output": 65536}},
+        },
+    }
 
 
 def test_secret_deny_rules_exist():

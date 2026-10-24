@@ -44,6 +44,8 @@ class CatalogDB:
         else:
             self.db_path = str(Path(db_path).resolve())
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            from .private_io import create_private
+            self.permissions_secure = create_private(self.db_path)
 
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
@@ -51,9 +53,13 @@ class CatalogDB:
         if not self.is_memory:
             try:
                 self.conn.execute("PRAGMA journal_mode=WAL;")
-            except sqlite3.OperationalError:
-                pass
+            except sqlite3.OperationalError as exc:
+                import logging
+                logging.getLogger(__name__).warning('sqlite_wal_failed: %s', type(exc).__name__)
         self.conn.execute("PRAGMA foreign_keys=ON;")
+        if not self.is_memory:
+            from .private_io import secure_sqlite_files
+            self.permissions_secure = secure_sqlite_files(self.db_path) and self.permissions_secure
 
     def close(self) -> None:
         """Close database connection."""
@@ -148,6 +154,7 @@ class CatalogDB:
         if not row:
             return None
         d = dict(row)
+        d['active'] = d.get('status') == 'active'
         d["id"] = d["model_id"]
         d["context_window"] = d["context_tokens"]
         combos_rows = self.conn.execute(
@@ -245,6 +252,7 @@ class CatalogDB:
             combos_by_model.setdefault(lr["model_id"], []).append(lr["route_id"])
 
         for r in rows:
+            r['active'] = r.get('status') == 'active'
             r["id"] = r["model_id"]
             r["context_window"] = r["context_tokens"]
             r["combos"] = combos_by_model.get(r["model_id"], [])
@@ -323,7 +331,8 @@ class CatalogDB:
         WHERE {' AND '.join(where_clauses)}
         ORDER BY rl.position ASC
         """
-        return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
+        return [dict(r, active=r['status'] == 'active')
+                for r in self.conn.execute(sql, params).fetchall()]
 
     def export_json(self, output_path: str | Path | None = None) -> dict[str, Any]:
         """Export all catalog tables to a deterministic dictionary / JSON file."""
@@ -345,8 +354,8 @@ class CatalogDB:
         if output_path:
             p = Path(output_path).resolve()
             p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(payload, f, indent=2, sort_keys=True)
+            from .private_io import atomic_write_private
+            atomic_write_private(p, json.dumps(payload, indent=2, sort_keys=True))
 
         return payload
 
@@ -383,8 +392,8 @@ class CatalogDB:
         if output_path:
             p = Path(output_path).resolve()
             p.parent.mkdir(parents=True, exist_ok=True)
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump(result, f, indent=2, sort_keys=True)
+            from .private_io import atomic_write_private
+            atomic_write_private(p, json.dumps(result, indent=2, sort_keys=True))
 
         return result
 
