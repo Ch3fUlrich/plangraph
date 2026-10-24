@@ -31,12 +31,18 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 /// One unit of work handed to a worker.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Claim {
     pub card: String,
     pub repo: String,
     pub base_sha: String,
     pub check_cmd: String,
+    /// Empty or `change` requires a red base; `regression` skips that gate.
+    #[serde(default)]
+    pub check_kind: String,
+    /// Repo-relative check inputs, protected unless explicitly allowed.
+    #[serde(default)]
+    pub check_reads: Vec<String>,
     pub allow: Vec<String>,
     pub forbid: Vec<String>,
     pub prompt: String,
@@ -638,7 +644,16 @@ mod tests {
             allow: vec!["src/**".into()],
             forbid: vec![".env".into()],
             prompt: "do the thing".into(),
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn old_claim_json_defaults_check_metadata() {
+        let old = r#"{"card":"c","repo":"r","base_sha":"abc","check_cmd":"false","allow":[],"forbid":[],"prompt":"p"}"#;
+        let c: Claim = serde_json::from_str(old).unwrap();
+        assert!(c.check_kind.is_empty());
+        assert!(c.check_reads.is_empty());
     }
 
     fn report() -> AttemptReport {
