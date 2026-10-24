@@ -95,11 +95,27 @@ Worker park, complete and ask_question may carry optional `expected_state`, a
 string or non-empty list of strings from `SETTABLE_STATES` (any-of). When supplied,
 the card's current state must equal the string or be in the list, and the exec
 identity/attempt checks must still pass. Every list element is validated.
-The worker sends the live set `["open", "ready", "running", "needs_input",
-"waiting"]` for `ask_question`, question parks, generic park **and complete**
-(`workflow.rs` `done_input`: the Rust complete sets `expected_state` to the
-observed live set instead of `None`, so the real completion carries the same
-CAS the keeper tests assume). Alarm still sends none. `waiting` belongs to the set: the projector writes `waiting`
+**EXEC-OBSERVED-STATE:** park and ask_question present the state the run
+observed -- the activity reads `GET /v1/show?key=<card>&fmt=json` through
+`Keeper::card_state` just before the call and sends what it answered, so a card
+a projector event moved while the run was away is compared against what the run
+then read. The live set `["open", "ready", "running", "needs_input",
+"waiting"]` is only the fallback for a run that observed nothing: an unreadable
+keeper, a `claimed` card (not in `SETTABLE_STATES`, so the phase-holder rule
+below stays its CAS) or a terminal state, none of which can stand in for an
+observation. Because a park closes the card, the keeper refuses a park that
+presents only the live-set fallback while the card sits in `waiting` or
+`needs_input` -- the states a projector event wrote while this run was away --
+with `exec_stale_state` (`"the live set is not an observation"`); the same-run,
+same-attempt park that presents that state parks there, so the wait-cap park
+after usage_limit/outage still lands on a waiting card. ask_question and
+complete keep the any-of CAS they shipped with -- an ask never moves the card
+and a complete does not close it -- so the fallback still stands for them on a
+waiting card.
+(`workflow.rs` `done_input`: the Rust complete still sets `expected_state` to
+the live set instead of `None`, so the real completion carries the same
+CAS the keeper tests assume; only park and ask observe, because a complete
+does not close the card). Alarm still sends none. `waiting` belongs to the set: the projector writes `waiting`
 after usage_limit/outage and on a timer, so the cap-park must still land on a
 waiting card instead of being refused `exec_stale_state` on every retry. The
 attempt report writes no state, so the card is still seeded `open` or `ready`
