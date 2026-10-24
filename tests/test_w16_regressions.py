@@ -49,11 +49,16 @@ def test_watchdog_malformed_parent_records_and_continues(tmp_path):
 
 
 def test_exact_catalog_allowlist():
-    from plangraph.spawner.resolver import get_catalog_models
+    from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
     from plangraph.planner.legs import DEFAULT_LEGS
-    ids = {r['id'] for r in get_catalog_models()} | {l.model for l in DEFAULT_LEGS}
+    rows = get_catalog_models()
+    rejected = {r['id'] for r in rows if not catalog_row_admitted(r)}
+    ids = ({r['id'] for r in rows if catalog_row_admitted(r)} | {l.model for l in DEFAULT_LEGS}) - rejected
     for model in ids:
         assert validate_model(model) == model
+    for model in rejected:
+        with pytest.raises(SpawnRefused, match='unknown model'):
+            validate_model(model)
 
 
 def malformed_ids():
@@ -98,7 +103,9 @@ def test_mcp_missing_prompt_persists_keyerror(tmp_path):
         asyncio.run(server.call_tool('plangraph_agent_spawn', {'card': {'estimate_tokens': 100}}))
     record, = server.service.ps()['runs']
     assert record['refusal'] == 'KeyError'
-    assert record['exit_code'] == 2
+    assert record['status'] == 'failed'
+    assert record['error'] == "'prompt'"
+    assert record['exit_code'] == 1  # Missing input is an unexpected KeyError, not SpawnRefused.
 
 
 def test_terminal_saved_before_event_builder(tmp_path, monkeypatch):
@@ -175,7 +182,7 @@ def test_spawn_executable_entrypoint():
 def test_acp_transport_does_not_infer_harness(tmp_path, monkeypatch):
     from plangraph.spawner.service import SpawnService
     monkeypatch.setattr('plangraph.spawner.resolver.get_catalog_models', lambda: [
-        dict(id='test/custom', tier='paid', context_tokens=131072, provider_gateway_mode='omniroute_acp')])
+        dict(id='test/custom', available=1, active=True, tier='paid', context_tokens=131072, provider_gateway_mode='omniroute_acp')])
     with pytest.raises(SpawnRefused, match='registry data'):
         asyncio.run(SpawnService(state=tmp_path).spawn(card={'estimate_tokens': 100},
             model='test/custom', override_reason='explicit regression override', dry_run=True))
@@ -275,7 +282,7 @@ def test_selection_skip_keeps_window_evidence():
 def test_plan_error_is_not_provider_exhaustion(tmp_path, monkeypatch):
     from plangraph.planner.routing import SpawnPlan
     service = spawn_service(state=tmp_path)
-    monkeypatch.setattr(service, 'route', lambda *a, **k: SpawnPlan((), (), 'operator-order', (), (), error='invalid order'))
+    monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan((), (), 'operator-order', (), (), error='invalid order'))
     record = asyncio.run(service.spawn(card={'estimate_tokens': 100}))
     assert record['exit_code'] == 2
     assert record['status'] == 'refused'

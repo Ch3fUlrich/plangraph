@@ -98,7 +98,7 @@ def test_limit_exit_distinct_from_benchmark(tmp_path, monkeypatch):
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.runner import spawn_service
     service = spawn_service(state=tmp_path)
-    monkeypatch.setattr(service, 'route', lambda *a, **k: SpawnPlan((), (), 'operator-order', (), ()))
+    monkeypatch.setattr(service, '_route', lambda *a, **k: SpawnPlan((), (), 'operator-order', (), ()))
     record = asyncio.run(service.spawn(card={'estimate_tokens': 100}))
     assert record['status'] == 'limited'
     assert record['exit_code'] == 4
@@ -156,7 +156,7 @@ def test_benchmark_preflight_persisted(tmp_path):
 def test_override_missing_harness_refused(tmp_path, monkeypatch):
     from plangraph.spawner import resolver
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        {'id': 'test/custom', 'tier': 'paid', 'context_tokens': 131072}])
+        {'id': 'test/custom', 'available': 1, 'active': True, 'tier': 'paid', 'context_tokens': 131072}])
     with pytest.raises(SpawnRefused, match='registry data'):
         asyncio.run(SpawnService(state=tmp_path).spawn(
             card={'estimate_tokens': 100}, model='test/custom',

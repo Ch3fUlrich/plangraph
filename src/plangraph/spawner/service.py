@@ -133,7 +133,9 @@ class SpawnService:
                 raise SpawnRefused('excluded writer family')
             plan = SpawnPlan((chosen,), (), 'override', (), ())
         else:
-            plan = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            # The spawn wrapper owns refusal persistence; route() owns it only
+            # for standalone route requests, otherwise one error is saved twice.
+            plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(

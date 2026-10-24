@@ -131,7 +131,7 @@ def test_mid_fallthrough_bench_refusal(tmp_path, monkeypatch):
             raise BenchRequired('benchmark disappeared', [{'leg': plan.legs[1].id}])
         return plan
 
-    monkeypatch.setattr(SpawnService, 'route', route)
+    monkeypatch.setattr(SpawnService, '_route', route)
 
     async def run():
         runner = SpawnerRunner()

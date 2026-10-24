@@ -28,7 +28,7 @@ class FakeDB:
         self._rows = [dict(row) for row in rows]
 
     def list_models(self, active_only: bool = False) -> list[dict[str, Any]]:
-        # Every generated row has available=1, so active_only does not matter.
+        # Every generated row is explicitly admitted, so active_only does not matter.
         return [dict(row) for row in self._rows]
 
 def _make_catalog(rng: random.Random, catalog_idx: int) -> list[dict[str, Any]]:
@@ -44,6 +44,7 @@ def _make_catalog(rng: random.Random, catalog_idx: int) -> list[dict[str, Any]]:
                 "verified_tok_per_s": rng.uniform(1.0, 300.0),
                 "tier": rng.choice(TIERS),
                 "available": 1,
+                "active": True,
                 "context_window": 1000000,
                 "combos": ["l2-worker"],
             }

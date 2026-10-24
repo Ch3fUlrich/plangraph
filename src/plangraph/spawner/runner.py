@@ -524,13 +524,13 @@ def spawn_service(*args, **kwargs):
                     raise TimeoutError('run wait timed out: ' + run_id)
                 await asyncio.sleep(.02)
 
-        def route(self, card, role='implement', writer_families=(), review_of=None, **options):
+        def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             reader = getattr(self.leg_reader, 'leg_status', self.leg_reader) or leg_state.leg_status
             original = self.leg_reader
             self.leg_reader = lambda model, **kw: reader(model if '/' in model else 'agy/' + model, **kw)
             try:
-                return super().route(card, role, writer_families, review_of, **options)
+                return super()._route(card, role, writer_families, review_of, **options)
             finally:
                 self.leg_reader = original
 
@@ -541,7 +541,7 @@ def spawn_service(*args, **kwargs):
             if model or leg or not card:
                 return await super()._spawn(card, prompt, role, writer_families, review_of,
                     model, leg, override_reason, dry_run, wait_seconds, True, benchmark, require_bench)
-            plan = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+            plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             run_id = 'run-' + uuid.uuid4().hex
             import hashlib
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
@@ -587,7 +587,7 @@ def spawn_service(*args, **kwargs):
                             stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                         if not stop or no_fallthrough or dry_run:
                             return
-                        current = self.route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
+                        current = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         record['plan'] = current.to_dict()
                     record.update(status='limited', exit_code=4, evidence=current.to_dict()['skipped'])
                 except Exception as exc:

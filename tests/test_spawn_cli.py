@@ -67,7 +67,12 @@ def test_bounded_wait_and_private_record(tmp_path, wait):
     asyncio.run(run())
 
 
-def test_replan_and_all_limited(tmp_path):
+def test_replan_and_all_limited(tmp_path, monkeypatch):
+    from plangraph.spawner import resolver
+    rows = resolver.get_catalog_models()
+    # Exercise quota fallback independently of the host catalog's admission state.
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
+        dict(row, available=1, active=True) for row in rows])
     async def run():
         store = LegStateStore(tmp_path / 'legs.sqlite')
         runner = SpawnerRunner()

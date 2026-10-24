@@ -50,7 +50,7 @@ def test_route(store):
     from plangraph.spawner.resolver import resolve_model_for_task
     class Catalog:
         def list_models(self, **kwargs):
-            return [dict(id=leg, aa_intelligence=50, cost_per_task_usd=cost, context_window=1000000) for leg, cost in [("cx/gpt-6.1-sol", 0), ("other/sol", 1)]]
+            return [dict(id=leg, available=1, active=True, aa_intelligence=50, cost_per_task_usd=cost, context_window=1000000) for leg, cost in [("cx/gpt-6.1-sol", 0), ("other/sol", 1)]]
     store.record_provider_response("cx/gpt-6.1-sol", 429, "quota", {"Retry-After": "60"}, "gateway", now=100, combo="l2-worker")
     def route(now):
         return resolve_model_for_task(db=Catalog(), leg_state_reader=partial(store.leg_status, now=now))
