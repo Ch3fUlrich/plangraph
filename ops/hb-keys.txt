@@ -5,3 +5,4 @@ plangraph:PG-PUBLIC-READY
 plangraph:KEEPER-PG-RECONNECT
 plangraph:RT-P1-BUS-KEEPER
 plangraph:EXEC-OBSERVED-STATE
+plangraph:RT-QC-ACCEPTS
