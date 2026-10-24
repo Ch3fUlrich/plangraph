@@ -37,7 +37,7 @@ ops:
     item: {project: server, id: PH-SSO, kind: gate, track: SSO, title: "Phase SSO done",
            done_criteria: "every SSO task done", budget: "16 h, 400k tokens", depends_on: [SSO-OIDC, SSO-REDIS]}
   - op: create
-    item: {project: server, id: SSO-REDIS, kind: lane, track: SSO, owner: prox, title: "Redis session store for Authelia",
+    item: {project: server, id: SSO-REDIS, kind: lane, track: SSO, owner: server-L1-main, title: "Redis session store for Authelia",
            done_criteria: "Authelia uses Redis; one announced logout window", evidence_kinds: [semaphore-task], review_tier: high,
            estimate_h: 3, priority: 2, depends_on: [OP-LOGOUT-WINDOW]}
   - op: create
