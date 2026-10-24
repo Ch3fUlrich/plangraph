@@ -12,7 +12,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | KEEPER-SEAT-FAMILY-WRITER (HIGH p10, gates PH-RT-RUNTIME) | L1 via workst cx | claimed 07:0xZ; brief sent (A store_support writer families, B Hand-Edit CHANGELOG-only excl, separate commit for #139 rebase); seats Haiku + qwen (D-2539) |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
 | RT-P1-PHASE-RUNNER #163 (HIGH, was #150 closed) | build-L2-phase-runner | #163 8721941 spine/phase-runner-s3d-r2 (D-2545); CI running; seats Haiku+qwen; prove 3 WSL env fails in CI -> MERGE-READY -> GO-REQ |
-| PG-PUBLIC-READY #162 (HIGH) | L1 via workst cx | r3 0af5ab57 CI green but gitleaks HEAD history 42 hits (12 old replay ids, seats/pg-public-ready/r6/l1-history-hits.txt) -> r4 brief sent; then seats r6 -> GO -> D-2501 rewrite |
+| PG-PUBLIC-READY #162 (HIGH) | L1 via workst cx | r4 08bf8000 gitleaks clean (L1-verified); seats r6: qwen PASS, Haiku FIX (1 HIGH README site literals, 3 MED test pins) -> r5 fixer brief sent; then 1 seat delta -> GO -> D-2501 rewrite |
 | RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 0d3a3898 main green; evidence refused (in_review) -> router |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
