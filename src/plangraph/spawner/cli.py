@@ -13,6 +13,7 @@ import time
 _start_supervisor = subprocess.Popen
 
 from .runner import spawn_service as SpawnService
+from plangraph.planner.routing import BenchRequired, SpawnRefused
 
 
 def _supervise():
@@ -101,9 +102,9 @@ def main(argv=None):
             result = service.result(args.run_id)
         print(json.dumps(result, indent=2))
         return result.get('exit_code', 0) if isinstance(result, dict) else 0
-    except (ValueError, KeyError, OSError) as exc:
+    except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(str(exc), file=sys.stderr)
-        return 3 if 'benchmark' in str(exc) else 2
+        return 3 if isinstance(exc, BenchRequired) else 2
 
 
 if __name__ == '__main__':

@@ -257,8 +257,9 @@ class MCPSpawnerServer:
                     },
                 }
             except Exception as exc:
-                if 'benchmark' in str(exc):
-                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc)}}
+                from plangraph.planner.routing import BenchRequired, SpawnRefused
+                if isinstance(exc, SpawnRefused):
+                    return {'jsonrpc': '2.0', 'id': req_id, 'error': {'code': -32602, 'message': str(exc), 'data': {'legs': list(exc.legs) if isinstance(exc, BenchRequired) else []}}}
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
@@ -292,8 +293,9 @@ async def run_stdio_server() -> None:
             resp = await server.handle_rpc_request(req)
             sys.stdout.write(json.dumps(resp) + "\n")
             sys.stdout.flush()
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning('stdio_failed: %s', type(exc).__name__)
 
 
 if __name__ == "__main__":

@@ -56,6 +56,9 @@ class CatalogDB:
             except sqlite3.OperationalError:
                 pass
         self.conn.execute("PRAGMA foreign_keys=ON;")
+        if not self.is_memory:
+            from .private_io import secure_sqlite_files
+            secure_sqlite_files(self.db_path)
 
     def close(self) -> None:
         """Close database connection."""

@@ -550,6 +550,8 @@ def resolve_review_plan(
     db: Any = None,
     leg_state_reader=None,
     account=None,
+    reviewer_count=None,
+    review_exempt=False,
 ) -> dict[str, Any]:
     """Resolve cross-family review plan on shared combo layers.
 
@@ -566,7 +568,11 @@ def resolve_review_plan(
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
-    reviewer_count = 2 if risk_l in ("high", "critical") else 1
+    if reviewer_count == 0:
+        if not review_exempt or risk_l in ('high', 'critical'):
+            raise ValueError('zero reviewers requires low/normal review_exempt')
+        return {'reviewer_count': 0, 'reviewers': [], 'review_exempt': True}
+    reviewer_count = max(reviewer_count or 1, 2 if risk_l in ("high", "critical") else 1)
 
     reader = leg_state_reader or leg_status
     def annotate(m):

@@ -175,7 +175,9 @@ def grep_fanout(repo: str | Path | None, symbol: str) -> int:
                 except ValueError:
                     pass
         return total
-    except Exception:
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning('fanout_failed: %s', type(exc).__name__)
         return 0
 
 

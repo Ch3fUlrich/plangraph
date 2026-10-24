@@ -563,7 +563,7 @@ def test_runner_dry_run_spawn_and_status():
 
         # Steer check
         steer_res = await runner.steer(job.job_id, "Keep it concise")
-        assert steer_res["steered"] is True
+        assert steer_res == {"ok": False, "error": "no stdin"}
         assert "Keep it concise" in runner.jobs[job.job_id].steer_messages
 
     asyncio.run(_run())

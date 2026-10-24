@@ -14,6 +14,7 @@ import os
 import re
 import time
 import uuid
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -97,6 +98,8 @@ def extract_served_telemetry(output: str, fallback_model: str = "") -> tuple[str
                                 served_family = str(data["served_family"])
                     except (ValueError, TypeError):
                         continue
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning('telemetry_failed: %s', type(exc).__name__)
 
     if not served_model and fallback_model:
         served_model = fallback_model
@@ -122,7 +125,8 @@ class SpawnerRunner:
     def provider_response(self, job_id, leg, status, body, headers, *, account=None, combo=None, store=None):
         """Consume trusted gateway transport evidence, never free-text output.
 
-        Called by adapters or the strict stderr envelope parser at child exit.
+        Public calls are restricted to trusted gateway adapters. The nonce-checked
+        stderr envelope parser is the only entry point for child-supplied data.
         Exit codes alone are not evidence.
         """
         from plangraph.spawner import leg_state
@@ -161,7 +165,8 @@ class SpawnerRunner:
 
         import secrets
         nonce = secrets.token_hex(32)
-        self._nonces[job_id] = nonce
+        if len(self._nonces) >= 4096:
+            raise RuntimeError('active run nonce capacity reached')
         # Build routing envelope headers if not provided
         envelope_headers = dict(headers or {})
         if not envelope_headers:
@@ -242,6 +247,7 @@ class SpawnerRunner:
             **({"start_new_session": True} if os.name != "nt" else {}),
         )
         self._processes[job_id] = proc
+        self._nonces[job_id] = nonce
 
         # Start background monitor
         task = asyncio.create_task(self._monitor_process(job_id, proc, model_or_combo))
@@ -306,6 +312,7 @@ class SpawnerRunner:
                 self.jobs[job_id].status = "cancelled"
                 self.jobs[job_id].end_time = time.time()
         finally:
+            self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
 
     async def status(self, job_id: str | None = None) -> Any:
@@ -324,12 +331,17 @@ class SpawnerRunner:
         job.steer_messages.append(message)
 
         proc = self._processes.get(job_id)
-        if proc and proc.stdin and not proc.stdin.is_closing():
+        if not proc or getattr(proc, 'stdin', None) is None:
+            return {'ok': False, 'error': 'no stdin'}
+        if not proc.stdin.is_closing():
             try:
                 proc.stdin.write((message + "\n").encode("utf-8"))
                 await proc.stdin.drain()
             except (BrokenPipeError, ConnectionResetError) as exc:
-                job.events.append({"event": "steer_failed", "error": str(exc)})
+                job.events.append({"event": "steer_failed", "error": type(exc).__name__})
+            except Exception as exc:
+                job.events.append({"event": "steer_failed", "error": type(exc).__name__})
+                return {'ok': False, 'error': type(exc).__name__}
 
         return {"job_id": job_id, "steered": True, "message": message, "status": job.status}
 
@@ -351,6 +363,7 @@ class SpawnerRunner:
             task.cancel()
 
         job.status = "cancelled"
+        self._nonces.pop(job_id, None)
         job.end_time = time.time()
         return {"job_id": job_id, "status": "cancelled"}
 
@@ -436,6 +449,12 @@ def spawn_service(*args, **kwargs):
                         record['plan'] = current.to_dict()
                     record.update(status='limited', exit_code=3, evidence=current.to_dict()['skipped'])
                 except Exception as exc:
+                    from plangraph.planner.routing import BenchRequired, SpawnRefused
+                    if isinstance(exc, SpawnRefused):
+                        record.update(status='refused', exit_code=3 if isinstance(exc, BenchRequired) else 2,
+                                      refusal=type(exc).__name__, error=redact(str(exc)),
+                                      evidence=list(exc.legs) if isinstance(exc, BenchRequired) else [])
+                        return
                     record.update(status='failed', error=redact(str(exc)))
                 finally:
                     record['ended'] = time.time()

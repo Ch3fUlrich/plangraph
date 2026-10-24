@@ -147,6 +147,7 @@ class RiskAssessment:
     risk: str  # "low" | "normal" | "high" | "critical"
     min_intelligence: float
     reviewer_count: int
+    review_exempt: bool = False
     target_intelligence: float = 44.0
     gamma_cost: float = 10.0
     beta_excess: float = 0.4
@@ -228,6 +229,7 @@ def evaluate_risk(
         risk=risk_band,
         min_intelligence=min_intel,
         reviewer_count=reviewer_count,
+        review_exempt=reviewer_count == 0,
         target_intelligence=target_intel,
         gamma_cost=gamma_cost,
         beta_excess=beta_excess,

@@ -556,3 +556,20 @@ CLI route/spawn accept `--require-bench` and repeatable `--bench-db PATH`.
 MCP route/spawn accept `require_bench` and `bench_db`. The entry-point default
 `PLANGRAPH_REQUIRE_BENCH=1` enables strict coverage; missing rows refuse before
 starting a child and name the missing legs.
+# Phase-review hardening
+
+Strict benchmark refusals use `BenchRequired`, a `SpawnRefused` subtype carrying
+the missing legs; refusal text is not an error classifier. A fallthrough refusal
+preserves prior attempts in the run record.
+
+`provider_response` is a trusted gateway-adapter API, not a child-output API.
+Child evidence is accepted only through the exact nonce-checked stderr envelope.
+Nonces are limited to 4096 active runs and removed on completion or cancellation;
+dry runs do not retain nonces. Steering a job without stdin returns an explicit
+`no stdin` error rather than claiming delivery.
+
+Pure-document review exemptions carry `review_exempt`; zero reviewers without
+that flag are invalid, and high/critical risk cannot claim the exemption.
+The Pro provider limits follow the catalog seed (1,000,000 context and 65,536
+output); Flash retains its existing 1,048,576 context limit. The unused OmniRoute
+model registry is omitted while its transport configuration remains available.

@@ -210,6 +210,14 @@ class SpawnRefused(RouteError):
     """A spawn lacks its mandatory card or explicit audited override."""
 
 
+class BenchRequired(SpawnRefused):
+    """Strict benchmark policy refused one or more candidate legs."""
+
+    def __init__(self, message, legs=()):
+        super().__init__(message)
+        self.legs = tuple(legs)
+
+
 # Table-specific aliases to the resolver's canonical columns. No fuzzy model aliases.
 BENCHMARK_COLUMNS = {
     "catalog_benchmarks": {"model_id": "model_id"},
@@ -284,6 +292,10 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         raise SpawnRefused("card required")
     if role not in ("implement", "review"):
         raise ValueError("role must be implement|review")
+    if card.get('reviewer_count') == 0 and (
+            not card.get('review_exempt') or card.get('risk', 'normal') in ('high', 'critical')
+            or card.get('risk_tags')):
+        raise SpawnRefused('zero reviewers requires low/normal review_exempt')
     from plangraph.spawner.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     candidates = tuple(l for l in legs if role in l.roles)
@@ -292,7 +304,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     gaps = tuple({"leg": l.id, "model": l.model, "reason": "no benchmark row"}
                  for l in candidates if l.model not in rows and l.id not in rows)
     if strict and gaps:
-        raise SpawnRefused("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps))
+        raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])

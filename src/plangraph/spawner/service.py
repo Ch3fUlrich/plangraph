@@ -104,7 +104,14 @@ class SpawnService:
                     if not stop or no_fallthrough or dry_run:
                         break
             except Exception as exc:
-                record.update(status='failed', error=str(exc))
+                from plangraph.planner.routing import BenchRequired, SpawnRefused
+                if isinstance(exc, SpawnRefused):
+                    record.update(status='refused', refusal=type(exc).__name__,
+                                  exit_code=3 if isinstance(exc, BenchRequired) else 2,
+                                  evidence=list(exc.legs) if isinstance(exc, BenchRequired) else [],
+                                  error=str(exc))
+                else:
+                    record.update(status='failed', error=str(exc))
             finally:
                 record['ended'] = time.time()
                 self._save(record)

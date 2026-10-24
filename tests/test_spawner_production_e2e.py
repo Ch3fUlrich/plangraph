@@ -745,8 +745,7 @@ def test_production_e2e_mcp_server_workflow(live_gateway: GatewayServerInfo):
             "plangraph_agent_steer",
             {"job_id": job_id, "message": "Enforce sliding window token bucket"},
         )
-        assert steer_resp["steered"] is True
-        assert steer_resp["message"] == "Enforce sliding window token bucket"
+        assert steer_resp == {"ok": False, "error": "no stdin"}
         assert "Enforce sliding window token bucket" in runner.jobs[job_id].steer_messages
 
     asyncio.run(_test())
