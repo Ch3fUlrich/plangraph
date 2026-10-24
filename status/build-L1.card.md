@@ -6,7 +6,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 ## Main = e612b836 (#159). LIVE keeper = live-2d61e281 (never ff)
 | Item | Owner | State / next |
 |---|---|---|
-| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | MERGED 2e3253b6, in_review, qwen pass 1/2; dsfree FIX (expired-lease complete/alarm) -> sq10 writer queued workst (D-2498) -> dsfree delta -> deepseek verdict |
+| RT-P1-EXEC-OWNERSHIP #140 (HIGH) | L1 | 06:0xZ sq10 a390cca2 PR #160 CI green; fresh qwen REJECT (M1 dup-complete after lease expiry refused, M2 ask no guard, M4 no HTTP role test; M3 refuted PG_DSN tests.yml:174) -> sq11 writer brief sent -> delta qwen+dsfree. OLD: MERGED 2e3253b6, in_review, qwen pass 1/2; dsfree FIX (expired-lease complete/alarm) -> sq10 writer queued workst (D-2498) -> dsfree delta -> deepseek verdict |
 | UI-BROWSER-TESTS #143 | DONE | #152 merged 135b1685, main CI green, keeper done (qwen r3) |
 | GOV-CTX-METRICS #144 | DONE | merged 2aaaf35f, keeper done |
 | KEEPER-TRAILER-MULTI #139 (HIGH) | L1 | 05:4xZ 53f5924f CI green; delta: agy APPROVE, qoder REJECT refuted by L1 probe+441 tests (dispute to router), mimo void (D-2511); fresh qwen APPROVE 87c578ce but MED-1 REAL (bare mimo alias -> None fail-open) -> fix10 brief sent (aliases mimo/xiaomi-mimo->xiaomi, cx->openai; real-parser blank tests) -> delta qwen+agy -> GO-REQ; D-2513 *A: GO on .out files, verdicts post after GW-QODER-401 widened adapter + QODER-ALIAS (+agy finish value); 04:32Z fix9 launches 04:46Z (main merge local 6b87ec5 unpushed); sq10 + qoder-alias queued behind; router HOLD; dsfree r6 FIX (interior ./-/_ hides family) -> fix9 writer workst 04:46Z -> CI + dsfree+qwen delta -> GO |
