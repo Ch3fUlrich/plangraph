@@ -3,3 +3,4 @@ plangraph:EXEC-OBSERVED-STATE
 plangraph:RT-QC-ACCEPTS
 plangraph:BUS-WAKE-STOPGAP-2
 plangraph:BUS-WATCHER-TRACKED
+plangraph:RT-P1-BUS-DISCOVERY
