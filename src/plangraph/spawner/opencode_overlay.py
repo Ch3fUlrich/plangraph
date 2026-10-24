@@ -7,6 +7,23 @@ import re
 import logging
 
 _parse_warned = False
+UNKNOWN_PROVIDERS = object()
+OVERLAY_UNKNOWN = '_PLANGRAPH_OVERLAY_UNKNOWN'
+
+
+def credential_names(node):
+    """Environment references only; never return credential values."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == 'env' and isinstance(value, list):
+                yield from (name for name in value if isinstance(name, str))
+            else:
+                yield from credential_names(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from credential_names(value)
+    elif isinstance(node, str):
+        yield from re.findall(r'\{env:([A-Za-z_][A-Za-z0-9_]*)\}', node)
 
 
 def _strip_jsonc(text):
@@ -44,24 +61,28 @@ def _strip_jsonc(text):
 
 def load_root_providers(root=None):
     global _parse_warned
+    root = root or os.environ.get('AUTOOS_ROOT') or Path.home() / 'code/AutoOS'
+    path = Path(root) / 'opencode.jsonc'
     try:
-        root = root or os.environ.get('AUTOOS_ROOT') or Path.home() / 'code/AutoOS'
-        text = (Path(root) / 'opencode.jsonc').read_text()
+        text = path.read_text()
         text = _strip_jsonc(text)
         providers = json.loads(text).get('providers')
         return copy.deepcopy(providers) if isinstance(providers, dict) else None
-    except OSError:
+    except FileNotFoundError:
         return None
-    except (ValueError, TypeError, AttributeError):
+    except (OSError, ValueError, TypeError, AttributeError):
         if not _parse_warned:
-            logging.getLogger(__name__).warning('root_provider_config_parse_error')
+            logging.getLogger(__name__).warning('root_provider_config_parse_error path=%s', path)
             _parse_warned = True
-        return None
+        return UNKNOWN_PROVIDERS
 
 
 def overlay_env(base_env):
     env = dict(base_env)
     providers = load_root_providers()
+    if providers is UNKNOWN_PROVIDERS:
+        env[OVERLAY_UNKNOWN] = '1'
+        return env
     if providers is None:
         return env
     try:
@@ -76,7 +97,13 @@ def overlay_env(base_env):
             original = providers.get(name)
             if isinstance(original, dict) and isinstance(value, dict):
                 for key, item in value.items():
-                    if key in ('package', 'name', 'env', 'models') and key in original:
+                    if key in ('package', 'name') and key in original:
+                        continue
+                    if key == 'env' and isinstance(original.get(key), list) and isinstance(item, list):
+                        original[key] = list(dict.fromkeys(original[key] + item))
+                        continue
+                    if key == 'models' and isinstance(original.get(key), dict) and isinstance(item, dict):
+                        original[key] = {**item, **original[key]}
                         continue
                     if isinstance(original.get(key), dict) and isinstance(item, dict):
                         original[key].update(item)
@@ -86,18 +113,7 @@ def overlay_env(base_env):
                 providers[name] = value
         existing['providers'] = providers
     env['OPENCODE_CONFIG_CONTENT'] = json.dumps(existing)
-    def names(node):
-        if isinstance(node, dict):
-            for value in node.values():
-                yield from names(value)
-        elif isinstance(node, list):
-            for value in node:
-                yield from names(value)
-        elif isinstance(node, str):
-            if re.fullmatch(r'[A-Z][A-Z0-9_]+', node):
-                yield node
-            yield from re.findall(r'\{env:([A-Za-z_][A-Za-z0-9_]*)\}', node)
-    for name in names(providers):
+    for name in credential_names(providers):
         if name not in env and name in os.environ:
             env[name] = os.environ[name]
     return env

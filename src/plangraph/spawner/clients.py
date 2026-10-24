@@ -336,9 +336,8 @@ def build_standalone_fallback_command(
         if model:
             cmd.extend(["--model", model])
         return cmd
-    if cname != 'opencode':
-        raise ValueError(f'unsupported harness: {client_name}')
-    # Explicit OpenCode fallback
+    # Legacy callers may pass a gateway name. Explicit harnesses are validated
+    # by build_command, while this offline helper retains its OpenCode default.
     cmd = ["opencode", "run"]
     if model:
         cmd.extend(["--model", model])

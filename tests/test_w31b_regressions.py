@@ -13,9 +13,16 @@ from plangraph.spawner.clients import build_child_env, build_command
 def test_root_definition_beats_generated_defaults(monkeypatch):
     monkeypatch.setattr(o, 'load_root_providers', lambda: {'omniroute': {
         'env': ['OMNI_REAL_KEY'], 'package': 'real-pkg', 'name': 'real', 'models': {'alias': {}}}})
-    cfg = json.loads(o.overlay_env(build_child_env(headers={'X-OmniRoute-Run-Nonce': 'n1'}))['OPENCODE_CONFIG_CONTENT'])
-    assert cfg['providers']['omniroute']['env'] == ['OMNI_REAL_KEY']
+    child = build_child_env(headers={'X-OmniRoute-Run-Nonce': 'n1'})
+    generated = json.loads(child['OPENCODE_CONFIG_CONTENT'])
+    generated['providers']['omniroute'].update(package='generated', name='generated',
+        env=['GENERATED_KEY'], models={'alias': {'wrong': True}, 'generated': {}})
+    child['OPENCODE_CONFIG_CONTENT'] = json.dumps(generated)
+    cfg = json.loads(o.overlay_env(child)['OPENCODE_CONFIG_CONTENT'])
+    assert cfg['providers']['omniroute']['env'] == ['OMNI_REAL_KEY', 'GENERATED_KEY']
     assert cfg['providers']['omniroute']['package'] == 'real-pkg'
+    assert cfg['providers']['omniroute']['name'] == 'real'
+    assert cfg['providers']['omniroute']['models'] == {'alias': {}, 'generated': {}}
 
 
 @pytest.mark.parametrize('model', [None, 'l2-worker', 'omniroute/alias'])
@@ -70,16 +77,19 @@ def test_catalog_failure_episode_and_listing(monkeypatch, caplog):
         now[0] = 31
         r.get_catalog_models(db, clock=lambda: now[0])
         assert db.calls == 2
-        assert len([x for x in caplog.records if 'catalog_db_error' in x.message]) == 1
+        assert len([x for x in caplog.records if 'catalog_db_error' in x.message]) == 2
 
 
 def test_second_query_failure_fail_closed_without_last_good_rows():
+    # Updated policy: unverifiable deactivation uses registered offline rows.
     class Broken:
         def list_models(self, active_only):
             if active_only:
                 return []
             raise OSError('unknown inactive catalog')
-    assert r.get_catalog_models(Broken(), active_only=True) == []
+    rows = r.get_catalog_models(Broken(), active_only=True)
+    assert rows and {row['id'] for row in rows} <= set(r._fallback_legs)
+    assert all(row['catalog_source'] == 'offline_fallback_db_error' for row in rows)
 
 
 @pytest.mark.parametrize('client', ['gemini', 'qwen', 'codex'])
@@ -93,10 +103,14 @@ def test_native_runner_does_not_apply_overlay(monkeypatch):
     def forbidden(*a, **kw):
         raise AssertionError('native argv must not receive provider overlay')
     monkeypatch.setattr(o, 'overlay_env', forbidden)
+    monkeypatch.setenv('OPENCODE_CONFIG_CONTENT', '{"private":"must-not-leak"}')
     for client in ('gemini', 'qwen', 'codex'):
-        result = asyncio.run(SpawnerRunner().spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash',
+        runner = SpawnerRunner()
+        result = asyncio.run(runner.spawn('prompt', model_or_combo='mimo/mimo-v2.6-flash',
                                                   client=client, dry_run=True))
         assert result
+        assert runner._child_envs
+        assert all('OPENCODE_CONFIG_CONTENT' not in env for env in runner._child_envs.values())
 
 
 def test_async_probe_offloads_real_function(monkeypatch):
@@ -112,8 +126,8 @@ def test_jsonc_parse_warning_once_without_values(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(o, '_parse_warned', False)
     (tmp_path / 'opencode.jsonc').write_text('{private-value-invalid')
     with caplog.at_level(logging.WARNING):
-        assert o.load_root_providers(tmp_path) is None
-        assert o.load_root_providers(tmp_path) is None
+        assert o.load_root_providers(tmp_path) is o.UNKNOWN_PROVIDERS
+        assert o.load_root_providers(tmp_path) is o.UNKNOWN_PROVIDERS
     assert len(caplog.records) == 1
     assert 'private-value' not in caplog.text
 
