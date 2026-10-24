@@ -10,7 +10,7 @@ import json
 
 from .. import views
 from ..views_progress import progress
-from . import jev_report
+from . import auth, jev_report
 from .brief import build as _build_brief
 from .errors import Refused
 from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
@@ -82,6 +82,9 @@ class ReadMixin:
 
     def progress(self, principal, project=None):
         """PROGRESS-PANEL: per-project / per-phase progress of the snapshot rows."""
+        # build-L1 MED: oversight tokens are project-scoped on reads too
+        if isinstance(principal, auth.OversightPrincipal) and project is not None:
+            self._require_project(principal, project)
         return self._run(principal, "progress", None,
                          lambda now: progress(self._snapshot(now)["items"], project=project))
 

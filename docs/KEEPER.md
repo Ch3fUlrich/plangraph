@@ -40,8 +40,8 @@ replay it, so `fold(events, unknown=…)` records `{"seq","type","key"}` in an o
 event is otherwise skipped, so the cache cannot drift and an old rebuild cannot undo it). `verify_integrity` turns each entry into one
 problem `{"key": key-or-None, "code": "unknown_event_type", "field": "type", "expected": None, "got": kind, "seq": seq}`; `pg admin
 verify` prints it as `KEY unknown_event_type type=… seq=…` (`-` for a keeper-level, keyless event). Types in `EVENT_TYPES` with no fold
-branch — `review_verdict`, `token_minted`, `outage_recorded`, `oversight_token_minted` — are known no-ops (replayed by `token_fold`/the store) and are **never**
-reported as unknown.
+branch — `review_verdict`, `token_minted`, `outage_recorded` — are known no-ops (replayed by `token_fold`/the store) and are **never**
+reported as unknown. `oversight_token_minted` has a fold branch (events.py) that updates the token ledger.
 
 ## Oversight principal (RT-OVERSIGHT-KEEPER-SCOPE)
 

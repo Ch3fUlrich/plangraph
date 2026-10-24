@@ -152,9 +152,8 @@ def _upgrade(conn):
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
-    conn.executescript(
-        "DROP TRIGGER IF EXISTS trg_oversight_tokens_revoke_only_update;\n"
-        "DROP TRIGGER IF EXISTS trg_oversight_tokens_append_only_delete;")
+    # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
+    # No DROP on open - triggers stay in place across reopens (build-L1 MED)
     conn.executescript(OVERSIGHT_DDL)
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)

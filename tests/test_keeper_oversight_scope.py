@@ -464,18 +464,32 @@ def test_every_write_verb_is_classified_for_oversight():
     ("question", "standard", ["any"]),
 ])
 def test_create_allowed_kinds_and_tiers(w, monkeypatch, kind, tier, evidence):
+    """Oversight can create items, but plangraph items default to 'high' tier.
+
+    build-L1 HIGH: oversight may only RAISE tiers, never lower below default.
+    So a plangraph item with tier='standard' is raised to 'high' (the default).
+    """
     _, principal = live(w, monkeypatch)
     item = fresh("NEW", kind=kind, tier=tier, evidence=evidence)
     out = create_linked(w, principal, item)
     assert out["applied"] == 2
     stored = w.store._item("plangraph:NEW")
     assert stored["kind"] == kind
-    assert stored["review_tier"] == tier
+    # plangraph items default to 'high', so oversight can't lower to 'standard'
+    # The tier is either the requested tier (if >= default) or the default
+    # For questions with tier='none', it's allowed (per policy)
+    if tier == "none" and kind == "question":
+        expected_tier = "none"
+    elif tier == "standard":
+        expected_tier = "high"  # raised to default
+    else:
+        expected_tier = tier
+    assert stored["review_tier"] == expected_tier
     assert stored["evidence_kinds"] == evidence
     created = [e for e in keeper_events.read_events(w.conn)
                if e["type"] == "item_created"
                and e["key"] == "plangraph:NEW"]
-    assert created and created[-1]["payload"]["review_tier"] == tier
+    assert created and created[-1]["payload"]["review_tier"] == expected_tier
 
 
 def test_edit_note_description_and_priority_on_open_lane(w, monkeypatch):
@@ -791,6 +805,21 @@ def test_edit_tier_of_an_existing_item_denied(w, monkeypatch):
     assert snap(w) == before
 
 
+def test_oversight_cannot_lower_tier_below_default(w, monkeypatch):
+    """Oversight may only RAISE tiers, never lower below default_review_tier.
+
+    plangraph items default to 'high', so oversight creating with tier='standard'
+    has the tier raised to 'high' (build-L1 HIGH: tier lowering is a grant escape).
+    """
+    _, principal = live(w, monkeypatch)
+    item = fresh("LOW_TIER", kind="lane", tier="standard")
+    out = create_linked(w, principal, item)
+    assert out["applied"] == 2
+    stored = w.store._item("plangraph:LOW_TIER")
+    # Tier is raised to 'high' (the default for plangraph)
+    assert stored["review_tier"] == "high"
+
+
 def test_create_unknown_field_denied(w, monkeypatch):
     """The create allowlist is closed: an unknown field is never folded to note."""
     _, principal = live(w, monkeypatch)
@@ -836,6 +865,29 @@ def test_batch_ref_is_required(w, monkeypatch):
                                          fields={"note": "x"})])
     assert exc.value.code == "validation"
     assert has("batch_ref_required", exc.value.msg)
+    assert snap(w) == before
+
+
+def test_batch_ref_is_bounded_and_guarded(w, monkeypatch):
+    """build-L1 LOW: batch_ref is bounded + guarded like reason/finding.
+
+    A batch_ref with control characters or exceeding the cap is refused.
+    """
+    _, principal = live(w, monkeypatch)
+    before = snap(w)
+    # Control characters
+    err = refusal(apply, w, principal,
+                  [op("edit", key="plangraph:OTHER", fields={"note": "x"})],
+                  batch_ref="bad\x00ref")
+    assert err.code == "validation"
+    assert has("field_denied", err.msg) or has("control", err.msg)
+    assert snap(w) == before
+    # Exceeds cap (200 chars)
+    err2 = refusal(apply, w, principal,
+                   [op("edit", key="plangraph:OTHER", fields={"note": "x"})],
+                   batch_ref="x" * 201)
+    assert err2.code == "validation"
+    assert has("field_denied", err2.msg) or has("exceeds", err2.msg)
     assert snap(w) == before
 
 
@@ -1342,6 +1394,21 @@ def test_revoked_token_refusal_is_audited(w, monkeypatch):
                                  reason="token_revoked")
 
 
+def test_token_rechecked_inside_write_transaction(w, monkeypatch):
+    """build-L1 LOW: token is re-checked inside BEGIN IMMEDIATE to close mint/revoke race.
+
+    A token revoked between the verb-seam check and the write lock must still be refused.
+    """
+    token, principal = live(w, monkeypatch)
+    # Revoke the token
+    mint(w)  # generation 2 revokes gen 1
+    # Try to use the old principal - should be refused inside the transaction
+    err = refusal(apply, w, principal,
+                  [op("priority", key="plangraph:OTHER", priority=1)],
+                  batch_ref="race-test")
+    assert err.code == "forbidden" and has("token_revoked", err.msg)
+
+
 def test_generation_and_scope_drift_refusals_are_audited(w, monkeypatch):
     """A stale/forged principal is refused at use time and still audited."""
     token, principal = live(w, monkeypatch)
@@ -1513,18 +1580,21 @@ def test_oversight_dry_run_checks_the_gate_and_writes_nothing(w, monkeypatch):
                   batch_ref=BATCH, dry_run=True)
     assert err.code == "forbidden" and has("target_high", err.msg)
     assert snap(w) == before
+    # build-L1 LOW: a refused dry run writes no oversight_ops / projector_alarms
+    # / audit rows (dry run writes nothing, even on refusal)
     assert _applied_rows(w) == []
-    rows = _denied_rows(w)
-    assert len(rows) == 1
-    assert (rows[0]["op"], rows[0]["key"]) == ("edit", "plangraph:HIGH")
-    assert "oversight:" in (rows[0]["code"] or "")
-    assert len(_open_guard_alarms(w)) == 1
+    assert _denied_rows(w) == []
+    assert _open_guard_alarms(w) == []
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
         w, monkeypatch, dry_run):
-    """The precondition behaves as on the router door, dry run or not."""
+    """The precondition behaves as on the router door, dry run or not.
+
+    build-L1 LOW: a refused dry run writes no oversight_ops / projector_alarms
+    / audit rows (dry run writes nothing, even on refusal).
+    """
     token, principal = live(w, monkeypatch)
     batch_ref = "batch-stale"
     base_seq = _head_seq(w)
@@ -1545,15 +1615,54 @@ def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
     assert _applied_rows(w) == []
 
     rows = _denied_rows(w)
-    assert len(rows) == 1, [dict(r) for r in rows]
-    row = rows[0]
-    assert row["principal"] == OPP
-    assert row["batch_ref"] == batch_ref
-    assert row["code"] == "conflict"
-    assert "changed after base_seq" in row["reason"]
-    assert "plangraph:OTHER" in row["reason"]
-    assert token not in str(dict(row))
-    assert len(_open_guard_alarms(w)) == 1
+    if dry_run:
+        # build-L1 LOW: a refused dry run writes nothing
+        assert len(rows) == 0
+        assert len(_open_guard_alarms(w)) == 0
+    else:
+        assert len(rows) == 1, [dict(r) for r in rows]
+        row = rows[0]
+        assert row["principal"] == OPP
+        assert row["batch_ref"] == batch_ref
+        assert row["code"] == "conflict"
+        assert "changed after base_seq" in row["reason"]
+        assert "plangraph:OTHER" in row["reason"]
+        assert token not in str(dict(row))
+        assert len(_open_guard_alarms(w)) == 1
+
+
+@pytest.mark.parametrize("op_kind,op_builder", [
+    ("edit", lambda key: op("edit", key=key, fields={"note": "stale"})),
+    ("priority", lambda key: op("priority", key=key, priority=5)),
+    ("add_dep", lambda key: op("add_dep", key=key, dep="plangraph:HOST")),
+    ("edit-depends_on-list", lambda key: op("edit", key=key,
+                                             fields={"depends_on": ["plangraph:LINK"]})),
+    ("edit-depends_on-add", lambda key: op("edit", key=key,
+                                            fields={"depends_on": {"add": ["plangraph:LINK"]}})),
+])
+def test_oversight_stale_base_seq_all_op_kinds(
+        w, monkeypatch, op_kind, op_builder):
+    """base_seq is checked for EVERY op key oversight can send (build-L1 MED).
+
+    Table-driven test over edit, priority, add_dep, and depends_on add/remove forms.
+    Cancel is not an oversight op, so it's not tested here.
+    """
+    token, principal = live(w, monkeypatch)
+    batch_ref = f"batch-stale-{op_kind}"
+    base_seq = _head_seq(w)
+    # Move the target item forward
+    w.store.edit_definition(w.p("router"), "plangraph:OTHER",
+                            {"note": "moved on"})
+    assert _head_seq(w) > base_seq
+    before = snap(w)
+
+    err = refusal(w.store.apply_ops, principal,
+                  [op_builder("plangraph:OTHER")],
+                  batch_ref=batch_ref, base_seq=base_seq)
+    assert err.code == "conflict"
+    assert "changed after base_seq" in err.msg
+    assert "plangraph:OTHER" in err.msg
+    assert snap(w) == before
 
 
 # =========================================================================
@@ -1669,3 +1778,101 @@ def test_oversight_ddl_is_installed_at_open_fresh_and_upgraded_from_v13(
         assert _oversight_objects(again) == _OVERSIGHT_OBJECTS
         assert again.execute("PRAGMA user_version").fetchone()[0] == 13
         again.close()
+
+
+def test_oversight_triggers_persist_across_reopens_and_concurrent_open(tmp_path):
+    """build-L1 MED: triggers are create-if-absent (NO DROP on open), in one transaction.
+
+    Test that a concurrent open and a re-open keep the guards in place.
+    """
+    path = tmp_path / "triggers-persist.db"
+    # First open: creates the schema with oversight tables and triggers
+    conn1 = kdb.open_db(path, create=True)
+    triggers1 = {row[0] for row in conn1.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    assert "trg_oversight_tokens_revoke_only_update" in triggers1
+    assert "trg_oversight_tokens_append_only_delete" in triggers1
+    assert "trg_oversight_ops_append_only_update" in triggers1
+    assert "trg_oversight_ops_append_only_delete" in triggers1
+    conn1.close()
+
+    # Second open: triggers must still be there (no DROP on open)
+    conn2 = kdb.open_db(path)
+    triggers2 = {row[0] for row in conn2.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    assert triggers2 == triggers1
+    conn2.close()
+
+    # Concurrent opens: both should see the same triggers
+    conn3 = kdb.open_db(path)
+    conn4 = kdb.open_db(path)
+    triggers3 = {row[0] for row in conn3.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    triggers4 = {row[0] for row in conn4.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    assert triggers3 == triggers4 == triggers1
+    conn3.close()
+    conn4.close()
+
+
+def test_cli_mint_failed_write_keeps_old_token_valid(w, monkeypatch, tmp_path):
+    """build-L1 LOW: if the file write fails, the old token stays valid.
+
+    The mint is two-phase: prepare (validate + generate token), write file,
+    then commit (revoke old + insert new). If the write fails, the commit
+    never happens, so the old token remains valid and no new token is inserted.
+    """
+    from plangraph.keeper import cli
+
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    # Mint the first token
+    out1 = mint(w)
+    token1 = out1["token"]
+    assert auth.authenticate(w.conn, token1).role == "oversight"
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 1
+    # Try to mint a second token with an unwritable output path
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text(json.dumps({"db": str(w.path),
+                               "snapshot": str(tmp_path / "s.json")}),
+                   encoding="utf-8")
+    os.chmod(cfg, 0o600)
+    # Use a non-existent directory to force a write failure
+    bad_path = tmp_path / "nonexistent" / "token.txt"
+    code = cli.main(["--config", str(cfg), "admin", "mint-oversight-token",
+                     OPP, "--go", GO, "--token-out", str(bad_path)])
+    assert code != 0
+    # The old token is still valid (commit never happened)
+    assert auth.authenticate(w.conn, token1).role == "oversight"
+    # No new token was inserted
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 1
+    # The old token is not revoked
+    row = w.conn.execute("SELECT revoked_at FROM oversight_tokens"
+                         " WHERE principal=?", (OPP,)).fetchone()
+    assert row["revoked_at"] is None
+
+
+# =========================================================================
+# build-L1 MED: READ_VERBS are project-scoped for oversight tokens.
+# =========================================================================
+@pytest.mark.parametrize("verb,call", [
+    ("needs_you", lambda s, p: s.needs_you(p, project="demo")),
+    ("answers", lambda s, p: s.answers(p, project="demo")),
+    ("progress", lambda s, p: s.progress(p, project="demo")),
+    ("jev_report", lambda s, p: s.jev_report(p, project="demo")),
+])
+def test_oversight_read_verbs_are_project_scoped(w, monkeypatch, verb, call):
+    """An oversight token's reads are project-scoped (only its project).
+
+    build-L1 MED: test a cross-project read is refused for every read verb
+    an oversight token may call.
+    """
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch)
+    # The principal is scoped to ['plangraph'], so a read on 'demo' is refused
+    err = refusal(call, w.store, principal)
+    assert err.code == "forbidden"
+    assert "demo" in err.msg

@@ -128,15 +128,22 @@ class OpsMixin:
         ``_run`` records every oversight refusal at the VERB seam, so this path
         marks the denial it already wrote with ``_oversight_denied_written``:
         the batch row carries the op/finding context, the seam row would not.
+
+        build-L1 LOW: a refused dry run writes no oversight_ops / projector_alarms
+        / audit rows (dry run writes nothing, even on refusal).
         """
         oversight = principal.role == "oversight"
         self._oversight_fail = None
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
+        # build-L1 LOW: mark dry run early so _run's deny() skips writing
+        if oversight and dry_run:
+            self._oversight_denied_written = True
         try:
             return self._apply_ops(principal, ops, batch_ref, now,
                                    base_seq=base_seq, dry_run=dry_run)
         except Refused as exc:
-            if oversight:
+            # A refused dry run writes nothing (build-L1 LOW)
+            if oversight and not dry_run:
                 self._record_oversight_denied(principal, batch_ref, exc, now)
                 self._oversight_denied_written = True
             raise
@@ -346,11 +353,18 @@ class OpsMixin:
         return {"key": item["key"], "warnings": warnings}
 
     def _check_base_seq(self, ops, base_seq):
-        """Refuse with conflict if any key touched by edit/cancel has events newer than base_seq."""
+        """Refuse with conflict if any key touched by an op has events newer than base_seq.
+
+        Checks all op kinds that oversight can send: edit, cancel, priority, add_dep.
+        Create ops are excluded (they reference new keys with no prior events).
+        """
         check_keys = []
         seen = set()
         for op in ops:
-            if op.get("op") in ("edit", "cancel"):
+            op_name = op.get("op")
+            # Check all ops that oversight can send (edit, cancel, priority, add_dep)
+            # Create is excluded as it references new keys
+            if op_name in ("edit", "cancel", "priority", "add_dep"):
                 k = op.get("key")
                 if k and k not in seen:
                     seen.add(k)
@@ -372,9 +386,13 @@ class OpsMixin:
     def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None,
                    dry_run=False):
         oversight = principal.role == "oversight"
-        if oversight and (not isinstance(batch_ref, str) or not batch_ref.strip()):
-            raise Refused("validation",
-                          "oversight:batch_ref_required batch_ref is required")
+        if oversight:
+            if not isinstance(batch_ref, str) or not batch_ref.strip():
+                raise Refused("validation",
+                              "oversight:batch_ref_required batch_ref is required")
+            # build-L1 LOW: batch_ref bounded + guarded like reason/finding
+            from .store_oversight import OversightMixin, _REASON_CAP
+            batch_ref = OversightMixin._oversight_text("batch_ref", batch_ref, _REASON_CAP)
         self._require_role(principal, "router", "oversight")
         if base_seq is not None:
             if isinstance(base_seq, bool) or not isinstance(base_seq, int) \
@@ -407,6 +425,10 @@ class OpsMixin:
         try:
             if base_seq is not None:
                 self._check_base_seq(ops, base_seq)
+            # Re-check token inside the write transaction to close mint/revoke race
+            # (build-L1 LOW: token check inside BEGIN IMMEDIATE)
+            if oversight:
+                self._check_oversight_principal(principal, "apply_ops", None, now)
             before = self._all_items()
             if oversight:
                 self._oversight_gate(principal, ops, before)

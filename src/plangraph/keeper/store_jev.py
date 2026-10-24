@@ -274,6 +274,9 @@ class JevMixin:
         return [dict(row) for row in rows]
 
     def jev_report(self, principal, project=None):
+        # build-L1 MED: oversight tokens are project-scoped on reads too
+        if isinstance(principal, auth.OversightPrincipal) and project is not None:
+            self._require_project(principal, project)
         return self._run(principal, "jev_report", None,
                          lambda now: self._jev_report(project))
 

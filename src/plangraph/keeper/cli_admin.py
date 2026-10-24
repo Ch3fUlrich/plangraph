@@ -111,22 +111,45 @@ def _cmd_revoke(args, cfg) -> int:
 
 
 def _cmd_mint_oversight_token(args, cfg) -> int:
-    """R2: the only door.  Plaintext goes to a 0600 file, never to stdout."""
+    """R2: the only door.  Plaintext goes to a 0600 file, never to stdout.
+
+    build-L1 LOW: write the new plaintext file first (0600, atomic rename),
+    THEN revoke the old tokens. If the write fails, the old tokens are kept.
+    """
+    import tempfile
     conn = _open(cfg)
     try:
-        out = Store(conn).mint_oversight_token(
+        store = Store(conn)
+        # Phase 1: validate and generate token WITHOUT DB changes
+        prepared = store.prepare_oversight_token(
             args.name, go_decision=args.go, reason=args.reason)
     finally:
         conn.close()
     path = args.token_out
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # Write to a temporary file first, then atomic rename (build-L1 LOW)
+    dir_name = os.path.dirname(os.path.abspath(path))
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".token-", suffix=".tmp")
     try:
-        os.write(fd, (out["token"] + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.chmod(path, 0o600)
-    print(f"oversight token written to {path}")
-    return 0
+        try:
+            os.write(fd, (prepared["token"] + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, path)
+        # Phase 2: ONLY AFTER successful file write, do the DB operations
+        conn = _open(cfg)
+        try:
+            Store(conn).commit_oversight_token(prepared)
+        finally:
+            conn.close()
+        print(f"oversight token written to {path}")
+        return 0
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _problem_line(problem) -> str:

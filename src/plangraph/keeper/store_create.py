@@ -237,18 +237,23 @@ class CreateMixin:
                                       definition.get("title"), definition.get("track"))
         if explicit is not None:
             tier = validated_review_tier(explicit)
-            allowed_lowering = principal.role in ("router", "oversight")
-            if tier_needs_router(tier) and not allowed_lowering:
+            # Oversight may only RAISE tiers, never lower below default
+            # But oversight can set tier='none' for questions (per policy)
+            allowed_lowering = principal.role == "router"
+            oversight_can_set_none = (principal.role == "oversight" 
+                                     and tier == "none" 
+                                     and definition.get("kind") == "question")
+            if tier_needs_router(tier) and not (allowed_lowering or oversight_can_set_none):
                 raise Refused("forbidden",
                               "only the router may set review_tier='none'")
             # Check if explicit tier is lower than default
             # Order: none < standard < high (none already handled above)
             tier_order = {"standard": 1, "high": 2}
             if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
-                if not allowed_lowering:
-                    raise Refused("forbidden",
-                                  f"explicit review_tier '{tier}' is lower than "
-                                  f"default '{default}'; only the router may lower the tier")
+                if not (allowed_lowering or oversight_can_set_none):
+                    # build-L1 HIGH: oversight may only RAISE, never lower
+                    # Instead of refusing, raise the tier to the default
+                    tier = default
             return validated_decision_tier(tier, definition["evidence_kinds"])
         return default
 

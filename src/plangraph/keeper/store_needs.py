@@ -5,6 +5,7 @@ import json
 import re
 
 from .. import views
+from . import auth
 
 # One operator-token rule for both paths (D-2458/2): a wait names the operator
 # ("operator", "operator-123") or an OS work key ("OS-12", "OS-123-B"), while a
@@ -49,6 +50,9 @@ class NeedsMixin:
     """
 
     def needs_you(self, principal, project=None):
+        # build-L1 MED: oversight tokens are project-scoped on reads too
+        if isinstance(principal, auth.OversightPrincipal) and project is not None:
+            self._require_project(principal, project)
         return self._run(principal, "needs_you", None,
                          lambda now: self._needs_you(project, principal))
 
@@ -89,6 +93,9 @@ class NeedsMixin:
         return rows
 
     def answers(self, principal, project=None):
+        # build-L1 MED: oversight tokens are project-scoped on reads too
+        if isinstance(principal, auth.OversightPrincipal) and project is not None:
+            self._require_project(principal, project)
         return self._run(principal, "answers", None,
                          lambda now: views.answers(self._with_answers(),
                                                    project=project))
