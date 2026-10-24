@@ -112,7 +112,8 @@ def _read_state(state, path, *, stamp=False):
         record = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(record, dict):
             raise ValueError('expected object')
-        if stamp and (not isinstance(record.get('sent'), (int, float)) or
+        if stamp and (isinstance(record.get('sent'), bool) or
+                      not isinstance(record.get('sent'), (int, float)) or
                       isinstance(record.get('count', 1), bool) or
                       not isinstance(record.get('count', 1), int) or
                       record.get('count', 1) < 1):
