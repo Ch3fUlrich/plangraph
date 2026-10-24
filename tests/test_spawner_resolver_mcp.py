@@ -137,7 +137,7 @@ def test_risk_evaluation_and_thresholds():
     )
     assert low_res.risk == "low"
     assert low_res.min_intelligence == RISK_MIN_INTELLIGENCE["low"]
-    assert low_res.reviewer_count == 0  # 0 for pure doc S0
+    assert low_res.reviewer_count == 1  # Documentation still requires review
 
     # Normal risk: standard code change with tests
     norm_res = evaluate_risk(

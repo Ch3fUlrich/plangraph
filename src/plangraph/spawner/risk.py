@@ -9,7 +9,6 @@ Maps risk bands to:
 """
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -46,7 +45,7 @@ RISK_BETA_EXCESS: dict[str, float] = {
     "critical": 0.6,
 }
 
-# Required cross-family reviewer count per risk band (0 for pure doc S0)
+# Required cross-family reviewer count per risk band, including documentation.
 RISK_REVIEWER_COUNT: dict[str, int] = {
     "low": 1,
     "normal": 1,
@@ -73,23 +72,73 @@ def _normalize_path(path: str) -> str:
 
 def is_critical_path(path: str) -> bool:
     """Whether a path touches critical security/policy/auth/crypto components."""
-    norm = _normalize_path(path)
-    base = norm.rsplit("/", 1)[-1]
-    if base in ("policy.py", "auth.py", "crypto.py", "security.py"):
-        return True
-    return any(kw in norm.split("/") or kw in base for kw in CRITICAL_KEYWORDS)
+    return any(band == "critical" for band, _ in _path_rules(path))
 
 
 def is_high_risk_path(path: str) -> bool:
     """Whether a path touches high-risk operational, installer, or security files."""
+    return bool(_path_rules(path))
+
+
+# Whole-token rules: (tokens, band, proposed planner tags). Public keyword
+# constants above remain available for callers that import them.
+_TOKEN_RULES = (
+    ({"auth", "security"}, "critical", ("auth",)),
+    ({"crypto"}, "critical", ("secrets",)),
+    ({"policy"}, "critical", ("public-contract",)),
+    ({"secret", "secrets", "token", "tokens", "credential", "credentials"},
+     "high", ("secrets",)),
+    ({"migration", "migrations"}, "high", ("migration",)),
+    ({"live", "systemd", "deploy"}, "high", ("live-step",)),
+)
+_DOC_EXTENSIONS = {"md", "rst", "txt", "adoc"}
+_UNIT_EXTENSIONS = {"service", "socket", "timer", "target", "mount", "automount",
+                    "path", "slice", "scope", "swap"}
+
+
+def _path_rules(path: str, *, include_non_code: bool = False) -> list[tuple[str, tuple[str, ...]]]:
     norm = _normalize_path(path)
-    base = norm.rsplit("/", 1)[-1]
-    for kw in HIGH_RISK_KEYWORDS:
-        if kw == base or kw in norm.split("/") or f"/{kw}/" in norm or norm.endswith(kw):
-            return True
-        if kw in norm:
-            return True
-    return False
+    segments = tuple(part for part in norm.split("/") if part)
+    if not segments:
+        return []
+    base = segments[-1]
+    stem, dot, extension = base.rpartition(".")
+    stem = stem if dot else base
+    tokens = set(segments)
+    for segment in (*segments[:-1], stem):
+        tokens.update(filter(None, re.split(r"[^a-z0-9]+", segment)))
+    non_code = (
+        extension in _DOC_EXTENSIONS
+        or bool(set(segments[:-1]) & {"docs", "doc", "tests", "test"})
+        or stem.startswith("test_") or stem.endswith("_test")
+    )
+    if non_code and not include_non_code:
+        return []
+    matches = [(band, tags) for keywords, band, tags in _TOKEN_RULES if keywords & tokens]
+    # Structural rules use exact directory segments. The two explicit filename
+    # families (engine*, install*) are the only intentional prefix matches.
+    structural_rules = (
+        ("keeper" in segments[:-1] and stem.startswith("engine"), ("live-step",)),
+        ("schema" in segments[:-1] and extension == "sql", ("migration",)),
+        (any(segments[i:i + 2] == (".github", "workflows")
+             for i in range(len(segments) - 2)), ("live-step",)),
+        (stem in {"setup", "bootstrap"}, ("live-step",)),
+        (stem.startswith("install") and extension in {"ps1", "sh"}, ("live-step",)),
+        (extension in _UNIT_EXTENSIONS, ("live-step",)),
+    )
+    matches.extend(("high", tags) for matched, tags in structural_rules if matched)
+    return matches
+
+
+def propose_risk_tags(paths: Sequence[str]) -> list[str]:
+    """Propose sorted, unique planner risk tags from paths; card tags decide.
+
+    These advisory hints do not assign or override a planner card's risk_tags.
+    Documentation and tests can propose tags without escalating the path band.
+    """
+    return sorted({tag for path in paths
+                   for _, tags in _path_rules(path, include_non_code=True)
+                   for tag in tags})
 
 
 @dataclass
@@ -127,6 +176,9 @@ def evaluate_risk(
     hr_paths: list[str] = []
 
     normalized_paths = [_normalize_path(p) for p in (paths or [])]
+    proposed_tags = propose_risk_tags(normalized_paths)
+    if proposed_tags:
+        reasons.append(f"Proposed risk tags: {', '.join(proposed_tags)} (card tags decide)")
     for p in normalized_paths:
         if is_critical_path(p):
             crit_paths.append(p)
@@ -165,12 +217,9 @@ def evaluate_risk(
     gamma_cost = RISK_GAMMA_COST[risk_band]
     beta_excess = RISK_BETA_EXCESS[risk_band]
 
-    # Reviewer count: 0 for pure doc S0, otherwise mapped from band
-    if bucket == "S0" and (is_docs_only or is_pure_doc):
-        reviewer_count = 0
-        reasons.append("Reviewer count 0: pure documentation S0 change requires no cross-family code review")
-    else:
-        reviewer_count = RISK_REVIEWER_COUNT[risk_band]
+    # Documentation flags must never bypass review of critical or high paths.
+    reviewer_count = max(2 if risk_band in ("high", "critical") else 1,
+                         RISK_REVIEWER_COUNT[risk_band])
 
     return RiskAssessment(
         risk=risk_band,
