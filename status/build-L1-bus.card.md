@@ -3,6 +3,7 @@ Owner build-L1-bus; claims via build-L1.token (D-2536). hb loop: job 56e7e287 tm
 Control branch build-L1-bus (local control.git only). Phase branch phase/rt-p1-bus (origin) base main 0d3a3898, head 12a182f9. CI only PR->main: lanes run via `gh workflow run tests.yml --ref <lane>`.
 Review rule D-2534: lanes -> PR into phase branch, green CI, no per-task seats; then ONE HIGH review of phase diff vs main
 D-2539: Haiku 5.5 first + 1 non-Claude family != every writer (cx writers -> qwen | mimo/mimo-v2.6-flash | deepseek-direct-flash; luna only w/o openai writer; never sol). Haiku verdict refused by keeper until KEEPER-SEAT-FAMILY-WRITER: keep .out+sha256, post after. D-2540: 1st review = 2 seats (Haiku + 1 non-Claude); then ONE fixer brief -> re-review ONE seat (delta + touched files), loop <=3 rounds then replan; phase PR; GO-REQ to routing.
+D-2569 writers: cx -> (429) agy gemini-3.8-flash -> mimo -> qodercli; probe first, record skips. Phase writer families so far: xiaomi (EOS r1), openai (KEEPER r2, DISCOVERY) -> seat 2 = qwen.
 | Item | State / next |
 |---|---|
 | RT-P1-BUS-KEEPER (HIGH p8) | r2 cx launched 11:03Z from 91f6a1f1 (red tests tests/test_keeper_messages.py); out build-L1/l3-20261024/rt-p1-bus-keeper.r2.out |
