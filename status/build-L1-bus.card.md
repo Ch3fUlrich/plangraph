@@ -14,7 +14,7 @@ D-2569 writers: cx -> (429) agy gemini-3.8-flash -> mimo -> qodercli; probe firs
 | RT-QC-ACCEPTS (HIGH p1) | claimed; L2 build-L2-qc-accepts |
 | BUS-WAKE-STOPGAP-2 | claimed; D-2539 hold, close superseded when BUS-WAKE lands |
 | RT-P1-BUS-RUST (p6) | deps CI-WORKST-RUNNER(in_review), OCGO-BUS-INBOUND(open) |
-| RT-P1-BUS-DISCOVERY (p6) | D-2564 edge dropped; claimed 10:33Z; writer cx running ~11:0xZ lane/rt-p1-bus-discovery |
+| RT-P1-BUS-DISCOVERY (p6) | PARKED: run done 11:14Z, lane @629dafad, PR #168 -> phase, CI 40089375376 (no merge during freeze) |
 | BUS-ANY-AGENT-CLI (HIGH p10, D-2562) | after KEEPER; needs WAKE + DISCOVERY; prod round trip routing<->workst Claude + 1 OpenCode; relay :58690 down (FLEET-BUS-RELAY-RESTORE) |
 | EXEC-PHASE-LEASE (p8) | dep #140 RT-P1-EXEC-OWNERSHIP in_review (verdict pending) |
 07:55Z workst-L1-autoos writing DIRECT (no L2): lane/rt-p1-bus-keeper + lane/exec-observed-state (cx 429 -> mimo/mimo-v2.6-flash, runs 20261024-075304-rt-p1-bus-keeper-a514ed, 20261024-075350-exec-observed-state-86cb4f). Writer families so far: xiaomi (+openai if cx later) -> phase seats Haiku + qwen. Queue: QC A-E in free slots; after KEEPER merge WAKE || DISCOVERY -> ANY-AGENT-CLI. Workst opencode mass-kill 07:20Z (routing informed).
