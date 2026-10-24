@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from dataclasses import asdict
 import json
 import os
+import sqlite3
 from pathlib import Path
 import time
 
@@ -26,7 +27,7 @@ from .legs import DEFAULT_LEGS, TIERS, Leg
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
             "SPAWNER_SELECTION_ENABLED", "SpawnRefused", "SpawnPlan", "plan_spawn",
-            "hand_picked", "next_leg_after_provider_stop"]
+             "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
 #: Window sizes in tokens.
 WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
@@ -209,6 +210,49 @@ class SpawnRefused(RouteError):
     """A spawn lacks its mandatory card or explicit audited override."""
 
 
+# Table-specific aliases to the resolver's canonical columns. No fuzzy model aliases.
+BENCHMARK_COLUMNS = {
+    "catalog_benchmarks": {"model_id": "model_id"},
+    "model_benchmarks": {"model_id": "model_id", "intelligence": "aa_intelligence",
+                         "tok_per_s": "verified_tok_per_s"},
+}
+
+
+def benchmark_rows_from_db(path):
+    """Return (model-id rows, errors) without creating or modifying a database.
+
+    Prefer the catalog table when both supported tables exist. Duplicate model rows
+    are counted in ``benchmark_row_count``; the first row supplies ranking metrics.
+    """
+    try:
+        uri = Path(path).expanduser().resolve().as_uri() + "?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        try:
+            conn.row_factory = sqlite3.Row
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            table = next((t for t in BENCHMARK_COLUMNS if t in tables), None)
+            if table is None:
+                return {}, [f"{path}: missing benchmark table (catalog_benchmarks or model_benchmarks)"]
+            result = {}
+            for raw in conn.execute(f'SELECT * FROM "{table}"'):
+                row = dict(raw)
+                for original, canonical in BENCHMARK_COLUMNS[table].items():
+                    if original in row and canonical not in row:
+                        row[canonical] = row[original]
+                model = row.get("model_id")
+                if not isinstance(model, str) or not model:
+                    return {}, [f"{path}: {table} row missing model_id"]
+                if model in result:
+                    result[model]["benchmark_row_count"] += 1
+                else:
+                    result[model] = dict(row, benchmark_row_count=1)
+            return result, []
+        finally:
+            conn.close()
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        return {}, [f"{path}: cannot read benchmark database: {exc}"]
+
+
 @dataclass(frozen=True)
 class SpawnPlan:
     legs: tuple[Leg, ...]
@@ -217,6 +261,7 @@ class SpawnPlan:
     review_seats: tuple[Leg, ...]
     reasons: tuple[str, ...]
     error: str | None = None
+    gaps: tuple[dict, ...] = ()
 
     @property
     def first_leg(self) -> Leg | None:
@@ -229,7 +274,7 @@ class SpawnPlan:
 
 
 def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
-               legs=DEFAULT_LEGS, benchmark=None) -> SpawnPlan:
+                legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
     Readers may be a LegStateStore or a callable with the leg_status contract.
@@ -242,6 +287,15 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     from plangraph.spawner.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
     candidates = tuple(l for l in legs if role in l.roles)
+    rows = (benchmark if isinstance(benchmark, Mapping) else {
+        row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
+    gaps = tuple({"leg": l.id, "model": l.model, "reason": "no benchmark row"}
+                 for l in candidates if l.model not in rows and l.id not in rows)
+    if strict and gaps:
+        raise SpawnRefused("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps))
+    bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
+    if benchmark is None:
+        bench_reasons.extend(["benchmark data absent", "no benchmark p"])
     excluded = set(writer_families) if role == "review" else set()
     states = {l.id: reader(l.model, now=now, account=card.get("account"),
                             combo=card.get("combo")) for l in candidates}
@@ -267,29 +321,26 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         route = route_card(card, legs=candidates, unavailable=limited,
                            exclude_families=excluded)
     except RouteError as exc:
-        return SpawnPlan((), tuple(skipped), "operator-order", (), (str(exc),), str(exc))
+        return SpawnPlan((), tuple(skipped), "operator-order", (),
+                         tuple([str(exc), *bench_reasons]), str(exc), gaps)
     ordered = list(route.legs)
-    reasons = list(route.reasons)
+    reasons = [*route.reasons, *bench_reasons]
     source = "operator-order"
     if benchmark is not None:
         from plangraph.spawner.resolver import rank_candidates
-        rows = benchmark if isinstance(benchmark, Mapping) else {
-            row["model_id"]: row for row in benchmark}
         for tier in TIERS:
-            positions = [i for i, l in enumerate(ordered) if l.tier == tier
-                         and (l.model in rows or l.id in rows)]
+            tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]
+            positions = [i for i in tier_positions
+                         if ordered[i].model in rows or ordered[i].id in rows]
+            missing = [ordered[i] for i in tier_positions if i not in positions]
             measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
                              model_id=ordered[i].id, tier=tier) for i in positions]
             ranked = rank_candidates(measured, role=role, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}
-            for i, row in zip(positions, ranked):
-                ordered[i] = by_id[row["model_id"]]
+            for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):
+                ordered[i] = leg
             if positions:
                 source = "benchmark"
-        if any(l.model not in rows and l.id not in rows for l in ordered):
-            reasons.append("no benchmark p")
-    else:
-        reasons.append("no benchmark p")
     seats = []
     families = set(excluded)
     if role == "review":
@@ -302,7 +353,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     error = "two distinct review families unavailable" if role == "review" and len(seats) < 2 else None
     if error:
         reasons.append(error)
-    return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error)
+    return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

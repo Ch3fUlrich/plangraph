@@ -86,15 +86,16 @@ def gate(*paths, json_output=False):
 
 def test_gate_complete_short_and_two_databases(tmp_path):
     models = list(dict.fromkeys(l.model for l in POLICY))
+    missing_writer = WRITERS[0].model
     complete = database(tmp_path / "complete.db", models)
-    short = database(tmp_path / "short.db", models[1:])
+    short = database(tmp_path / "short.db", [m for m in models if m != missing_writer])
     assert gate(complete).returncode == 0
     result = gate(short)
-    assert result.returncode == 1 and models[0] in result.stdout
+    assert result.returncode == 1 and missing_writer in result.stdout
     result = gate(complete, short, json_output=True)
     assert result.returncode == 1
     evidence = json.loads(result.stdout)
-    assert str(short) in result.stdout and models[0] in result.stdout
+    assert str(short) in result.stdout and missing_writer in result.stdout
     assert len(evidence["databases"]) == 2
 
 
@@ -108,3 +109,22 @@ def test_gate_unreadable(tmp_path):
 def test_gate_import_guard():
     import runpy
     runpy.run_path(str(Path(__file__).resolve().parents[1] / "tools/bench_gate.py"), run_name="import_guard")
+
+
+def test_review_gaps_include_filtered_policy_legs():
+    reviewers = tuple(l for l in POLICY if "review" in l.roles)
+    missing = reviewers[0]
+    p = routing.plan_spawn({"estimate_tokens": 1000}, role="review",
+                           writer_families=(missing.family,), benchmark=rows(reviewers[1:]),
+                           leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
+    assert p.gaps == ({"leg": missing.id, "model": missing.model, "reason": "no benchmark row"},)
+    with pytest.raises(routing.SpawnRefused, match=missing.id):
+        routing.plan_spawn({"estimate_tokens": 1000}, role="review", strict=True,
+                           writer_families=(missing.family,), benchmark=rows(reviewers[1:]))
+
+
+def test_duplicate_rows_counted(tmp_path):
+    model = WRITERS[0].model
+    path = database(tmp_path / "duplicates.db", [model, model], "model_benchmarks")
+    data, errors = routing.benchmark_rows_from_db(path)
+    assert not errors and data[model]["benchmark_row_count"] == 2

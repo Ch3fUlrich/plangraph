@@ -52,9 +52,39 @@ Two review seats must have different families from every writer and each other;
 an impossible fence returns fewer seats and an explicit plan error, not a fallback.
 
 An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
-row) ranks measured legs only inside their existing tier. Unmeasured positions
-retain operator order and the plan reports `no benchmark p`. Automatic catalog
+row), or sequence of rows with `model_id`, ranks measured legs only inside their
+existing tier. Legs without rows go **last inside their tier**, retaining their
+relative operator order. `plan.gaps` (also in `to_dict()`) records each missing
+role-policy leg as `{leg, model, reason: "no benchmark row"}`; reasons name each
+gap, including legs filtered by eligibility or provider state. With `benchmark=None`,
+all role-policy legs are gaps, `p_source` is `operator-order`, and reasons explicitly
+say `benchmark data absent` (the legacy `no benchmark p` reason remains compatible).
+`plan_spawn(..., strict=True)` refuses any missing role-policy row with
+`SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
+production CLI's `--require-bench`; CLI wiring is separate. Automatic catalog
 selection stays disabled under the existing import-guard contract.
+
+`benchmark_rows_from_db(path)` returns `(rows_by_model_id, errors)` using SQLite
+read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
+or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
+`BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
+missing tables and malformed model IDs return an empty mapping with explicit errors.
+Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics.
+
+### Required benchmark release/swap gate (D-2576)
+
+Before an OmniRoute image release or swap, check both host database snapshots:
+
+```bash
+python tools/bench_gate.py --db workstation.sqlite --db server.sqlite --json
+```
+
+Every distinct model in `DEFAULT_LEGS` with an `implement` or `review` role must
+have at least one row **in each database**. Output includes per-model counts and
+total rows per database as evidence. Exit codes: **0** complete coverage, **1**
+missing policy rows (models and database named), **2** unreadable database or
+unsupported/missing benchmark table. No data is synthesized or seeded by this gate;
+benchmark preparation/shipping lanes must supply the real rows.
 
 `leg_reader=` accepts a store or leg-status callable; card `account` and `combo`
 scope live provider evidence exactly. `next_leg_after_provider_stop` records
