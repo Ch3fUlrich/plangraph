@@ -105,7 +105,14 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "layer", "TEXT"), ("items", "role", "TEXT"),
                   ("items", "agent_id", "TEXT"), ("items", "phase_kind", "TEXT"),
                   ("items", "fixes", "TEXT"), ("items", "choices", "TEXT"),
-                  ("items", "kg_refs", "TEXT"))
+                  ("items", "kg_refs", "TEXT"),
+                  ("items", "exec_workflow_id", "TEXT"),
+                  ("items", "exec_run_id", "TEXT"),
+                  ("items", "exec_attempt", "INTEGER"),
+                  # RT-P1 sq5: the owner's principal (V2-1) and the retired-run
+                  # fence kept across owner clears (V1-1), SQLite v13 path.
+                  ("items", "exec_principal", "TEXT"),
+                  ("items", "exec_retired_runs", "TEXT"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
