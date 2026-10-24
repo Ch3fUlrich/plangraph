@@ -19,7 +19,7 @@ def validate_model(model):
 def test_bootstrap_watchdog_default_root(tmp_path, host):
     w.install(host, tmp_path, run=lambda *a, **k: None)
     root = Path(__file__).resolve().parents[1]
-    text = ''.join(p.read_text() for p in tmp_path.iterdir())
+    text = ''.join(p.read_text(encoding='utf-16' if host == 'windows' else 'utf-8') for p in tmp_path.iterdir())
     assert str(root) in text
     assert str(root / 'src/src') not in text
     bootstrap = (root / 'deploy' / ('bootstrap.sh' if host == 'linux' else 'bootstrap.ps1')).read_text()

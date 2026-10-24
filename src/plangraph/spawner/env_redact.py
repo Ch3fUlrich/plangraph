@@ -9,6 +9,9 @@ def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
     if exit_code == 0:
         return None
+    def normalize(text):
+        return re.sub(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1b\\))', '', text).replace('\r\n', '\n').replace('\r', '\n')
+    stdout, stderr = normalize(stdout), normalize(stderr)
     markers = ('model unavailable', 'not served', 'unknown model', 'not_served_on_host')
     def marked(value):
         return any(marker in value.lower() for marker in markers)

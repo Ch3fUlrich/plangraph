@@ -82,7 +82,7 @@ def test_real_probe_marker_bypasses_stub(real_served_models, monkeypatch):
         return SimpleNamespace(returncode=0, stdout='provider/model\nnot a model\n')
     monkeypatch.setattr(subprocess, 'run', run)
     assert resolver.served_models('{}') == frozenset({'provider/model'})
-    assert calls == [['opencode', 'models']]
+    assert calls == [[resolver.shutil.which('opencode') or 'opencode', 'models']]
 
 
 def test_default_probe_is_stubbed(monkeypatch):

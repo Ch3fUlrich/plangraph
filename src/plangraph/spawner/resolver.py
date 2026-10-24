@@ -443,18 +443,25 @@ def served_models(config, *, env=None, clock=time.monotonic):
 
 
 def _probe_served_models(config, *, env=None):
+    import logging
+    logger = logging.getLogger(__name__)
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
-        result = subprocess.run(['opencode', 'models'], env=env, capture_output=True,
+        executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
+        result = subprocess.run([executable, 'models'], env=env, capture_output=True,
                                 text=True, timeout=10)
         if result.returncode == 0:
             import re
             parsed = frozenset(line.strip() for line in result.stdout.splitlines()
                                if re.fullmatch(r'[^\s/]+/[^\s/]+', line.strip()))
-            return parsed or None
-    except (OSError, subprocess.SubprocessError):
-        pass
+            if parsed:
+                return parsed
+            logger.warning('host_probe_error: empty or unrecognised model listing; availability unknown')
+        else:
+            logger.warning('host_probe_error: opencode models exit %s; availability unknown', result.returncode)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning('host_probe_error: %s; availability unknown', type(exc).__name__)
     return None
 
 
