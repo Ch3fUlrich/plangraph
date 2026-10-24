@@ -75,6 +75,13 @@ def main(argv=None):
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':
+            if args.model:
+                from plangraph.planner.routing import validate_model
+                try:
+                    validate_model(args.model)
+                except Exception as exc:
+                    service.save_refusal(exc, args.role)
+                    raise
             if not args.card:
                 exc = SpawnRefused('spawn by card; card required')
                 service.save_refusal(exc, args.role)

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from plangraph import stall_watchdog as w
+from plangraph.spawner import stall_watchdog as w
 
 
 @pytest.mark.parametrize('age', [301, 5400])
@@ -97,7 +97,7 @@ def test_scheduler_installation(tmp_path, host):
     w.install(host, tmp_path, python='/usr/bin/python3', root=Path.cwd(),
               run=lambda args, **kw: calls.append(args))
     content = '\n'.join(p.read_text() for p in tmp_path.iterdir())
-    assert 'plangraph.stall_watchdog' in content
+    assert 'plangraph.spawner.stall_watchdog' in content
     if host == 'linux':
         assert 'OnUnitActiveSec=120' in content
         assert ['systemctl', '--user', 'enable', '--now', 'plangraph-stall-watchdog.timer'] in calls
@@ -105,5 +105,5 @@ def test_scheduler_installation(tmp_path, host):
         assert '<Interval>PT2M</Interval>' in content
         assert calls[0][:2] == ['schtasks', '/Create']
     bootstrap = Path('deploy/bootstrap.' + ('sh' if host == 'linux' else 'ps1')).read_text()
-    assert 'plangraph.stall_watchdog' in bootstrap
+    assert 'plangraph.spawner.stall_watchdog' in bootstrap
     assert 'install' in bootstrap

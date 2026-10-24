@@ -26,7 +26,11 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
         ended = run.get('ended')
         if not parent or ended is None or run.get('status') in ('running', 'queued'):
             continue
-        last = activity(parent)
+        try:
+            last = activity(parent)
+        except (ValueError, TypeError):
+            findings.append(dict(rule='invalid-parent-session', run_id=run.get('run_id')))
+            continue
         if last is None or now - ended <= 300 or now - last <= 300 or last > ended:
             continue
         finding = dict(rule='finished-child', run_id=run['run_id'],
@@ -40,7 +44,11 @@ def tick(runs, claims, activity, *, now=None, deliver=None):
         if claim.get('state') != 'claimed' or claim['key'] in live:
             continue
         session = claim.get('session_id') or claim.get('claimed_by')
-        last = activity(session) if session else None
+        try:
+            last = activity(session) if session else None
+        except (ValueError, TypeError):
+            findings.append(dict(rule='invalid-claim-session', item_key=claim['key']))
+            continue
         if last is None or now - last <= 1800:
             continue
         finding = dict(rule='idle-claim', item_key=claim['key'],
@@ -78,16 +86,22 @@ def read_claims(session=None):
     return [c for c in session.call('GET', 'snapshot')['items'] if c.get('state') == 'claimed']
 
 
-def deliver_event(state, event):
+def deliver_event(state, event, *, now=None, interval=None):
     """Idempotent, private mailbox. Consumers acknowledge by removing the file.
 
     An unacknowledged completion survives ticks and process restarts. A still
-    stalled parent gets another delivery after acknowledgement on the next tick.
+    stalled parent is re-alerted only after the configured interval.
     """
     from plangraph.spawner.private_io import atomic_write_private
     payload = json.dumps(event, sort_keys=True)
     key = hashlib.sha256(payload.encode()).hexdigest()
+    now = time.time() if now is None else now
+    interval = float(os.environ.get('PLANGRAPH_WATCHDOG_REALERT_SECONDS', '1800')) if interval is None else interval
+    stamp = Path(state) / 'watchdog/alerts' / (key + '.json')
+    if stamp.exists() and now - json.loads(stamp.read_text())['sent'] < interval:
+        return
     atomic_write_private(Path(state) / 'watchdog/outbox' / (key + '.json'), payload)
+    atomic_write_private(stamp, json.dumps({'sent': now}))
 
 
 def flush_outbox(state, command, *, run=subprocess.run):
@@ -100,7 +114,7 @@ def flush_outbox(state, command, *, run=subprocess.run):
 
 def install(host, destination, *, python=None, root=None, run=subprocess.run):
     python = python or sys.executable
-    root = Path(root or Path(__file__).resolve().parents[2]).resolve()
+    root = Path(root or Path(__file__).resolve().parents[3]).resolve()
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     templates = root / 'deploy/watchdog'
@@ -142,6 +156,8 @@ def main(argv=None):
         print(path.read_text() if path.exists() else '', end='')
         return
     # Completion delivery must not be blocked by an unavailable keeper.
+    from .runner import spawn_service
+    spawn_service(state=state).retry_completions()
     runs = read_runs(state)
     findings = tick(runs, [], lambda s: read_activity(state, s),
                     deliver=lambda e: deliver_event(state, e))

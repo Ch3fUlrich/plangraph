@@ -483,6 +483,9 @@ def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
+    # Explicit harness registration, not an inference from gateway transport.
+    if d.get('id') == 'mimo/mimo-v2.6-pro':
+        d.setdefault('harness', 'opencode')
     return d
 
 def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:

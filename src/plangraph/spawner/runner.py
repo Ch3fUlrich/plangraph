@@ -15,6 +15,7 @@ import re
 import time
 import uuid
 import logging
+import math
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -64,6 +65,7 @@ class JobInfo:
     dry_run: bool = False
     events: list[dict] = field(default_factory=list)
     steer_messages: list[str] = field(default_factory=list)
+    cwd: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -159,7 +161,7 @@ class SpawnerRunner:
     async def spawn(
         self,
         prompt: str,
-        model_or_combo: str = "l2-worker",
+        model_or_combo: str = "mimo/mimo-v2.6-flash",
         role: str = "implement",
         risk: str = "normal",
         headers: Mapping[str, str] | None = None,
@@ -172,7 +174,8 @@ class SpawnerRunner:
         client: str | None = None,
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
-        check_mimo_path(model_or_combo)
+        from plangraph.planner.routing import validate_model
+        validate_model(model_or_combo)
         job_id = f"job-{uuid.uuid4().hex[:8]}"
         work_dir = cwd or self.default_cwd
 
@@ -244,6 +247,7 @@ class SpawnerRunner:
                 served_model=served_model,
                 served_family=served_family,
                 dry_run=True,
+                cwd=work_dir,
             )
             self.jobs[job_id] = job
             return job
@@ -257,6 +261,7 @@ class SpawnerRunner:
             risk=risk,
             command=cmd,
             dry_run=False,
+            cwd=work_dir,
         )
         self.jobs[job_id] = job
 
@@ -307,8 +312,11 @@ class SpawnerRunner:
             timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
             if timeout:
                 try:
-                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), float(timeout))
-                except asyncio.TimeoutError:
+                    seconds = float(timeout)
+                    if not math.isfinite(seconds) or seconds <= 0:
+                        raise ValueError('invalid run timeout')
+                    stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), seconds)
+                except (asyncio.TimeoutError, ValueError):
                     await self.tree_killer(proc.pid)
                     stdout_bytes, stderr_bytes = await proc.communicate()
                     self.jobs[job_id].events.append({'event': 'run_timeout'})
@@ -383,6 +391,7 @@ class SpawnerRunner:
         if job_id not in self.jobs:
             return {'ok': False, 'steered': False, 'error': 'unknown job'}
         job = self.jobs[job_id]
+        # Audit attempted instructions; success is reported separately.
         job.steer_messages.append(message)
 
         proc = self._processes.get(job_id)
@@ -455,9 +464,10 @@ def spawn_service(*args, **kwargs):
             from .notify import completion_event, CommandSink
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
+            super()._save(record)
             if terminal:
                 if 'completion' not in record:
-                    record['completion'] = completion_event(record, getattr(self.runner, 'default_cwd', os.getcwd()))
+                    record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
             super()._save(record)
             if terminal:
                 for recipient, sink in (('parent', self.completion_sink), ('keeper', self.keeper_sink)):
@@ -481,6 +491,15 @@ def spawn_service(*args, **kwargs):
                                 atomic_write_private(marker, 'delivered\n')
                             except Exception:
                                 logging.getLogger(__name__).exception('completion hook failed')
+
+        def retry_completions(self):
+            """Re-drive durable terminal records after a supervisor/bridge outage."""
+            for record in self.ps()['runs']:
+                if record.get('ended') is not None and record.get('job_id'):
+                    try:
+                        self._save(record)
+                    except Exception:
+                        logging.getLogger(__name__).exception('completion retry failed')
 
         async def wait(self, run_id, timeout=None):
             if timeout is not None and timeout < 0:
@@ -517,7 +536,7 @@ def spawn_service(*args, **kwargs):
             record = dict(run_id=run_id, card_hash=hashlib.sha256(json.dumps(card, sort_keys=True).encode()).hexdigest(),
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, writer_family=None, status='running', started=time.time(),
-                ended=None, attempts=[], stdout_tail='', exit_code=None)
+                ended=None, attempts=[], stdout_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
             self._save(record)
 
             if not plan.legs or plan.error:
@@ -539,7 +558,8 @@ def spawn_service(*args, **kwargs):
                             role=role, dry_run=dry_run, client=chosen.harness)
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
-                                      chosen_leg=asdict(chosen), writer_family=chosen.family)
+                                      chosen_leg=asdict(chosen), writer_family=chosen.family,
+                                      cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
                         self._save(record)
                         task = self.runner._tasks.get(job.job_id)
                         if task:

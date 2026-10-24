@@ -616,5 +616,11 @@ State queries do not initialize empty SQLite files. AST fanout that cannot read
 or parse a Python file is unknown (`not_measured`), conservatively treated as
 fanout 13 for sizing. Routing exclusion reasons are typed metadata, not parsed
 exception messages. JSON-RPC requests must explicitly include `jsonrpc: "2.0"`.
-Mimo acceptance remains case-sensitive; broad case-insensitive detection only
-identifies malformed spellings for refusal, never for acceptance.
+Every model admission requires exact membership in the resolver catalog or
+registered DEFAULT_LEGS. Case-insensitive Mimo detection chooses error text only;
+it is not an admission gate. Unknown IDs, including glued and homoglyph variants,
+are typed `SpawnRefused` failures.
+
+For source checkouts, add the repository's `tools` directory to PATH to expose
+the executable `plangraph-spawn` entry point (or use
+`python -m plangraph.spawner.cli`).

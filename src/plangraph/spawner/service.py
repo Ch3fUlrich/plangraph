@@ -66,13 +66,13 @@ class SpawnService:
         record = dict(run_id='run-' + uuid.uuid4().hex, role=role,
                       started=time.time(), ended=time.time(),
                       status='refused' if isinstance(exc, SpawnRefused) else 'failed',
-                      exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
+                      exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, (SpawnRefused, ValueError, KeyError, OSError)) else 1,
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [])
         try:
             self._save(record)
-        except OSError as storage_error:
+        except Exception as storage_error:
             import logging
             logging.getLogger(__name__).warning('refusal_save_failed: %s', type(storage_error).__name__)
             exc.add_note('Refusal record could not be persisted: ' + type(storage_error).__name__)
@@ -107,8 +107,6 @@ class SpawnService:
                 # A catalog gateway transport explicitly identifies opencode;
                 # absent transport metadata must not silently choose a harness.
                 harness = row.get('harness') if row else None
-                if row and row.get('provider_gateway_mode') == 'omniroute_acp':
-                    harness = harness or 'opencode'
                 if (row is None or row.get('tier') not in ('trial', 'free', 'subscription', 'paid')
                         or harness not in ('opencode', 'qodercli', 'agy')
                         or type(row.get('context_tokens')) is not int or row['context_tokens'] <= 0):
@@ -130,7 +128,8 @@ class SpawnService:
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg), served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running',
-            started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None)
+            started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
+            cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
         self._save(record)
 
         async def execute():
@@ -139,6 +138,7 @@ class SpawnService:
                     job = await self.runner.spawn(prompt=prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness)
                     record['job_id'] = job.job_id
+                    record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
                     record['pid'] = process.pid if process else None
                     record['chosen_leg'] = asdict(chosen)

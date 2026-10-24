@@ -20,8 +20,12 @@ the parent, and routes `alert` events to the named recipient. Nonzero exit leave
 the event queued for retry; success acknowledges it. Without a configured bridge,
 events remain durably queued: deployment must wire the bridge before claiming
 end-to-end nudges. Delivery is at-least-once; consumers must tolerate duplicates.
+Acknowledgement does not reset alert state: each condition/recipient has a private
+persisted timestamp. `PLANGRAPH_WATCHDOG_REALERT_SECONDS` (default 1800) controls
+re-alerting while a condition remains stalled. Invalid session identifiers are
+skipped and reported in status rather than aborting other run checks.
 
-`python -m plangraph.stall_watchdog status` emits the persisted `! stall` lines
+`python -m plangraph.spawner.stall_watchdog status` emits the persisted `! stall` lines
 for routerctl status to include. Routerctl lives outside this repository; its
 host integration must invoke this command or read `watchdog/status.txt`.
 

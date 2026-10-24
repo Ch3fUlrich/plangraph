@@ -1,5 +1,4 @@
 ---
-
 name: plangraph-planning
 description: Use when planning and executing multi-step work with layered agents (project, phase, task). Defines the three layers, which model/effort each runs at, how planning and work phases spawn research, implementer and reviewer agents, the one-agent-per-task rule, the task-size contract, failure handling and report schemas, all mirrored as items in the plangraph plan graph; emits execution cards (readiness-gated, routed) for every task in that batch.
 ---

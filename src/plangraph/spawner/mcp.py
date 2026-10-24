@@ -155,6 +155,10 @@ class MCPSpawnerServer:
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
             return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":
+            if 'prompt' not in arguments:
+                exc = KeyError('prompt')
+                self.service.save_refusal(exc, arguments.get('role', 'implement'))
+                raise exc
             if not arguments.get('card'):
                 from plangraph.planner.routing import SpawnRefused
                 exc = SpawnRefused('spawn by card; card required')
@@ -275,10 +279,8 @@ class MCPSpawnerServer:
                 return {
                     "jsonrpc": "2.0",
                     "id": req_id,
-                    "result": {
-                        "content": [{"type": "text", "text": f"Error: {exc}"}],
-                        "isError": True,
-                    },
+                    "error": {"code": -32602 if isinstance(exc, (ValueError, KeyError, TypeError)) else -32603,
+                              "message": str(exc)},
                 }
 
         return {

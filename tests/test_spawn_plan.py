@@ -37,7 +37,7 @@ def test_override(tmp_path):
     with pytest.raises(SpawnRefused, match="spawn by card; --override-reason required"):
         hand_picked("x", CARD)
     log = tmp_path / "overrides.jsonl"
-    hand_picked("x", override_reason="explicit test override", log_path=log, caller="test")
+    hand_picked("mimo/mimo-v2.6-flash", override_reason="explicit test override", log_path=log, caller="test")
     assert json.loads(log.read_text())["reason"] == "explicit test override"
     with pytest.raises(ValueError):
         hand_picked("omniroute/mimo-v2.6-flash", override_reason="explicit test override", log_path=log)

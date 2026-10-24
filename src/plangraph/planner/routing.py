@@ -122,6 +122,9 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
+    legs = tuple(legs)
+    for candidate in legs:
+        validate_model(candidate.model)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
     bad = [t for t in tags if t not in RISK_TAGS]
@@ -333,6 +336,9 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
     from plangraph.spawner.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
+    legs = tuple(legs)
+    for candidate in legs:
+        validate_model(candidate.model)
     candidates = tuple(l for l in legs if role in l.roles)
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
@@ -363,6 +369,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
                 route_card(card, legs=(leg,))
             except RouteError as exc:
                 reason = next(iter(exc.exclusion_reasons), 'routing_error')
+                states[leg.id] = dict(states[leg.id], evidence={'state': states[leg.id]['evidence'], 'error': str(exc)})
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})
@@ -416,12 +423,23 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
                      tuple(candidate_details))
 
 
+def validate_model(model):
+    """The resolver catalog and registered legs are the exact admission door."""
+    from plangraph.spawner.resolver import get_catalog_models
+    from plangraph.mimo_policy import is_mimo_id
+    from .legs import DEFAULT_LEGS
+    allowed = {row['id'] for row in get_catalog_models()} | {leg.model for leg in DEFAULT_LEGS}
+    if model not in allowed:
+        raise SpawnRefused('Mimo requires an exact catalog id' if is_mimo_id(model)
+                           else 'unknown model: ' + str(model))
+    return model
+
+
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):
     """Explicit model selection always needs a durable override audit."""
     if not isinstance(override_reason, str) or len(override_reason.strip()) < 10:
         raise SpawnRefused("spawn by card; --override-reason required")
-    from plangraph.mimo_policy import check_mimo_path
-    check_mimo_path(model)
+    validate_model(model)
     path = Path(log_path) if log_path is not None else Path(
         os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph/spawn-overrides.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
