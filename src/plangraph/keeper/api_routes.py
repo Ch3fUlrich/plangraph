@@ -82,6 +82,8 @@ def worker_write(store, principal, name, extra, body):
     if name != "locks":
         if not isinstance(body, dict):
             raise Refused("validation", "body must be a JSON object")
+        if principal.role == "worker" and "role" in body:
+            raise Refused("forbidden", "body cannot override token role")
         if name == "attempts":
             store.worker_attempt(principal, body)
         elif name == "park":
