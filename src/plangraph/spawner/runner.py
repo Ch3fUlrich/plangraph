@@ -586,6 +586,8 @@ def spawn_service(*args, **kwargs):
                             served_family=job.served_family, writer_family=job.served_family or chosen.family,
                             stdout_tail=redact(job.stdout)[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                         if not stop or no_fallthrough or dry_run:
+                            if not dry_run:
+                                await self._continue_writer(record, job.stdout)
                             return
                         current = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         record['plan'] = current.to_dict()

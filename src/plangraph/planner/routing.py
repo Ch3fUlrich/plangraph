@@ -272,6 +272,7 @@ class SpawnPlan:
     error: str | None = None
     gaps: tuple[dict, ...] = ()
     candidates: tuple[dict, ...] = ()
+    writer_groups: tuple = ()
 
     @property
     def first_leg(self) -> Leg | None:
@@ -279,6 +280,8 @@ class SpawnPlan:
 
     def to_dict(self):
         result = asdict(self)
+        if not self.writer_groups:
+            result.pop('writer_groups')
         result["first_leg"] = asdict(self.first_leg) if self.first_leg else None
         return result
 
@@ -406,8 +409,10 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         reasons.append(error)
     order = {leg.id: i for i, leg in enumerate(ordered)}
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
+    from plangraph.spawner.fixer import split_findings
+    groups = split_findings(card.get('findings', ())) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details))
+                     tuple(candidate_details), groups)
 
 
 def validate_model(model):

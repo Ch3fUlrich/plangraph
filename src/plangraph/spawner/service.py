@@ -66,10 +66,59 @@ class SpawnService:
 
     async def spawn(self, *args, **kwargs):
         try:
+            import inspect
+            bound = inspect.signature(self._spawn).bind(*args, **kwargs)
+            options = dict(bound.arguments)
+            card = options.get('card')
+            if card and card.get('findings') and options.get('role', 'implement') == 'implement':
+                from .fixer import split_findings, render_fixer_brief
+                groups = split_findings(card['findings'])
+                if len(groups) > 1:
+                    async def dispatch(group):
+                        child = dict(card, findings=list(group))
+                        child_options = dict(options, card=child, prompt=render_fixer_brief(group))
+                        return await self._spawn(**child_options)
+                    return {'writers': await asyncio.gather(*(dispatch(g) for g in groups))}
+                options['prompt'] = render_fixer_brief(groups[0])
+                return await self._spawn(**options)
             return await self._spawn(*args, **kwargs)
         except Exception as exc:
             self.save_refusal(exc, kwargs.get('role', args[2] if len(args) > 2 else 'implement'))
             raise
+
+    async def _continue_writer(self, record, output):
+        from .fixer import remaining_gaps, render_fixer_brief
+        gaps = remaining_gaps(output)
+        reason = ('nonzero_exit' if record.get('exit_code') != 0 else
+                  'continuation_limit' if record.get('continuation') else
+                  'not_writer' if record.get('role') != 'implement' else
+                  'clean_report' if not gaps else 'remaining_gaps')
+        record['continuation_reason'] = reason
+        if reason != 'remaining_gaps' or record.get('continuation_run_id'):
+            return
+        child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
+                     continuation=1, role='implement', cwd=record['cwd'],
+                     chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
+                     status='running', exit_code=None, gaps=gaps)
+        record['continuation_run_id'] = child['run_id']
+        self._save(record)
+        self._save(child)
+        try:
+            chosen = child['chosen_leg']
+            job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
+                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=child['cwd'])
+            child['job_id'] = job.job_id
+            self._save(child)
+            task = self.runner._tasks.get(job.job_id)
+            if task:
+                await asyncio.shield(task)
+            child.update(status=job.status, exit_code=job.exit_code, stdout_tail=job.stdout[-16000:])
+            await self._continue_writer(child, job.stdout)
+        except Exception as exc:
+            child.update(status='failed', exit_code=1, error=str(exc), continuation_reason='spawn_failed')
+        finally:
+            child['ended'] = time.time()
+            self._save(child)
 
     def save_refusal(self, exc, role='implement'):
         """Persist pre-service refusals using the same record contract."""
@@ -168,6 +217,8 @@ class SpawnService:
                         stdout_tail=job.stdout[-16000:], events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
                     if not stop or no_fallthrough or dry_run:
+                        if not dry_run:
+                            await self._continue_writer(record, job.stdout)
                         break
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused

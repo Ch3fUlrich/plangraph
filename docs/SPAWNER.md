@@ -638,3 +638,24 @@ event, atomically with its observable append. `FileInbox` implements this under
 its inbox lock. Command bridges must implement the same contract at the remote
 sink; a successful command exit alone cannot guarantee exactly-once effects.
 `test_marker_failure_sink_exactly_once` pins marker-failure replay behavior.
+# Fixer writers and remaining gaps
+
+Cards may carry `findings`, each with `text` and optional `files`. The pure
+`split_findings` helper, also exposed through `plan_spawn.writer_groups`, merges
+connected file ownership before balancing components into roughly ten-finding
+writers. A shared file is never assigned to two writers. Indivisible components
+may exceed ten; findings without files form a final unassigned bucket appended
+to the smallest group. Dispatch fans these groups out in parallel.
+
+`render_fixer_brief` numbers every finding and requires each to be fixed or
+refuted by a named test, affected tests only (TEST-SPEED-AFFECTED), and
+COMMIT before finishing.
+
+Both dispatch paths inspect the full writer output, before tail truncation.
+A non-empty Remaining gaps section or unchecked Markdown checklist triggers
+one continuation with only those gaps, on the same sandbox and selected leg.
+The separate run record has `parent_run_id` and `continuation=1`; the parent
+has `continuation_run_id`. A continuation cannot continue again. Clean reports,
+nonzero exit codes, review runs, and continuation-limit refusals record their
+reason in `continuation_reason`. Dry runs never continue. Live execution proof
+belongs to L2/L1; unit tests use synthetic processes.
