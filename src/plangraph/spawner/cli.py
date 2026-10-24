@@ -17,6 +17,53 @@ from .runner import spawn_service as SpawnService, redact
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 
 
+def _drain_chunks(chunks, write, observe=lambda size: None):
+    """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
+    from .env_redact import redact_env_values
+    def clean(data):
+        return redact(redact_env_values(data.decode('utf-8', errors='replace'), os.environ)).encode()
+    pending = b''
+    for chunk in chunks:
+        pending += chunk
+        observe(len(pending))
+        while b'\n' in pending:
+            line, pending = pending.split(b'\n', 1)
+            write(clean(line + b'\n'))
+        if len(pending) >= 65536:
+            # Redact before choosing the boundary, so a known secret spanning
+            # that boundary cannot leave either half in the output.
+            safe = clean(pending)
+            write(safe[:-4096] + b' [truncated chunk]\n')
+            pending = safe[-4096:]
+    if pending:
+        write(clean(pending))
+
+
+def _prune_supervisor_logs(state):
+    logs = []
+    for path in state.glob('supervisor-*.stderr.log'):
+        try:
+            logs.append((path.stat().st_mtime, path))
+        except FileNotFoundError:
+            pass
+    for modified, old in sorted(logs, reverse=True)[20:]:
+        if time.time() - modified <= 86400:
+            continue
+        try:
+            pid = int(Path(str(old) + '.pid').read_text())
+            os.kill(pid, 0)
+            continue
+        except PermissionError:
+            continue  # A live process owned by another user.
+        except (OSError, ValueError):
+            pass
+        for path in (old, Path(str(old) + '.1')):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def _supervise():
     payload = json.loads(sys.stdin.readline())
     service = SpawnService(state=payload.pop('state'))
@@ -128,23 +175,16 @@ def main(argv=None):
                 # after the launching CLI exits. Keep the startup tail readable.
                 service.state.mkdir(parents=True, exist_ok=True)
                 log_path = service.state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
-                logs = []
-                for path in service.state.glob('supervisor-*.stderr.log'):
-                    try:
-                        logs.append((path.stat().st_mtime, path))
-                    except FileNotFoundError:
-                        pass  # Another launcher may already have pruned this file.
-                logs = [path for _, path in sorted(logs, reverse=True)]
-                for old in logs[19:]:
-                    for path in (old, Path(str(old) + '.1')):
-                        try:
-                            path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
+                _prune_supervisor_logs(service.state)
                 bootstrap = '''import os, sys, threading
 from plangraph.spawner import cli as supervisor
 from plangraph.spawner.env_redact import redact_env_values
 path = sys.argv[1]
+from pathlib import Path
+try:
+    Path(path + ".pid").write_text(str(os.getpid()))
+except OSError:
+    pass
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
 os.close(write_fd)
@@ -157,7 +197,6 @@ def drain():
             output = open_log()
         except OSError:
             pass
-        pending = b""
         def emit(line):
             nonlocal output
             data = supervisor.redact(redact_env_values(line.decode("utf-8", errors="replace"), os.environ)).encode()
@@ -170,23 +209,23 @@ def drain():
                 if output.tell() + len(data) > 1024 * 1024:
                     output.close()
                     output = None
-                    os.replace(path, path + ".1")
+                    try:
+                        os.replace(path, path + ".1")
+                    except FileNotFoundError:
+                        pass
                     output = open_log()
                 output.write(data)
             except OSError:
                 if output is not None:
                     output.close()
                 output = None
-        while True:
-            chunk = os.read(read_fd, 8192)
-            if not chunk:
-                break
-            pending += chunk
-            while b"\\n" in pending:
-                line, pending = pending.split(b"\\n", 1)
-                emit(line + b"\\n")
-        if pending:
-            emit(pending)
+        def chunks():
+            while True:
+                chunk = os.read(read_fd, 8192)
+                if not chunk:
+                    return
+                yield chunk
+        supervisor._drain_chunks(chunks(), emit)
     finally:
         if output is not None:
             output.close()

@@ -7,6 +7,7 @@ import re
 import logging
 
 _parse_warned = False
+_content_warned = False
 UNKNOWN_PROVIDERS = object()
 OVERLAY_UNKNOWN = '_PLANGRAPH_OVERLAY_UNKNOWN'
 
@@ -78,37 +79,52 @@ def load_root_providers(root=None):
 
 
 def overlay_env(base_env):
+    global _content_warned
     env = dict(base_env)
+    try:
+        existing = json.loads(env.get('OPENCODE_CONFIG_CONTENT', '{}'))
+        if not isinstance(existing, dict):
+            raise ValueError('not an object')
+    except (ValueError, TypeError):
+        if not _content_warned:
+            logging.getLogger(__name__).warning('caller_provider_config_parse_error')
+            _content_warned = True
+        env[OVERLAY_UNKNOWN] = '1'
+        return env
     providers = load_root_providers()
     if providers is UNKNOWN_PROVIDERS:
         env[OVERLAY_UNKNOWN] = '1'
         return env
     if providers is None:
         return env
-    try:
-        existing = json.loads(env.get('OPENCODE_CONFIG_CONTENT', '{}'))
-    except (ValueError, TypeError):
-        return env
-    if not isinstance(existing, dict):
-        return env
+    from .clients import effective_gateway_base_url
+    gateway = effective_gateway_base_url(env)
+
+    def merge(root, generated, path=()):
+        result = copy.deepcopy(generated)
+        for key, value in root.items():
+            location = path + (key,)
+            if key not in generated:
+                result[key] = copy.deepcopy(value)
+            elif location == ('headers',):
+                result[key] = {**value, **generated[key]} if isinstance(value, dict) and isinstance(generated[key], dict) else value
+            elif location == ('env',) and isinstance(value, list) and isinstance(generated[key], list):
+                result[key] = list(dict.fromkeys(value + generated[key]))
+            elif location in (('settings', 'baseURL'), ('options', 'baseURL')) and gateway and generated[key] == gateway:
+                pass  # Only the resolved per-run gateway displaces root URLs.
+            elif isinstance(value, dict) and isinstance(generated[key], dict) and location != ('models',):
+                result[key] = merge(value, generated[key], location)
+            elif location == ('models',) and isinstance(value, dict) and isinstance(generated[key], dict):
+                result[key] = {**generated[key], **value}
+            else:
+                result[key] = copy.deepcopy(value)
+        return result
     overlay = existing.get('providers', {})
     if isinstance(overlay, dict):
         for name, value in overlay.items():
             original = providers.get(name)
             if isinstance(original, dict) and isinstance(value, dict):
-                for key, item in value.items():
-                    if key in ('package', 'name') and key in original:
-                        continue
-                    if key == 'env' and isinstance(original.get(key), list) and isinstance(item, list):
-                        original[key] = list(dict.fromkeys(original[key] + item))
-                        continue
-                    if key == 'models' and isinstance(original.get(key), dict) and isinstance(item, dict):
-                        original[key] = {**item, **original[key]}
-                        continue
-                    if isinstance(original.get(key), dict) and isinstance(item, dict):
-                        original[key].update(item)
-                    else:
-                        original[key] = item
+                providers[name] = merge(original, value)
             else:
                 providers[name] = value
         existing['providers'] = providers

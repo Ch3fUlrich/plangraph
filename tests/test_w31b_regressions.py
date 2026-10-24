@@ -80,14 +80,15 @@ def test_catalog_failure_episode_and_listing(monkeypatch, caplog):
         assert len([x for x in caplog.records if 'catalog_db_error' in x.message]) == 2
 
 
-def test_second_query_failure_fail_closed_without_last_good_rows():
-    # Updated policy: unverifiable deactivation uses registered offline rows.
+def test_second_query_failure_serves_registered_offline_legs_with_warning(caplog):
+    """W27/D-2637: DB failure cannot stall spawns; deactivation is unverifiable."""
     class Broken:
         def list_models(self, active_only):
             if active_only:
                 return []
             raise OSError('unknown inactive catalog')
     rows = r.get_catalog_models(Broken(), active_only=True)
+    assert 'catalog_db_error' in caplog.text
     assert rows and {row['id'] for row in rows} <= set(r._fallback_legs)
     assert all(row['catalog_source'] == 'offline_fallback_db_error' for row in rows)
 

@@ -22,6 +22,7 @@ import json
 import time
 import threading
 import weakref
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -356,6 +357,7 @@ def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
 _served_cache = {}
 _served_lock = threading.Lock()
 _served_inflight = {}
+_probe_child_env = ContextVar('probe_child_env', default=None)
 
 
 def provider_config_digest(config):
@@ -380,11 +382,11 @@ def host_probe_env(env=None):
     return overlay_env(build_child_env(extra_env=env))
 
 
-def served_models(config, *, clock=time.monotonic):
+def served_models(config, *, env=None, clock=time.monotonic):
     """A failed probe is UNKNOWN, never evidence that a model is absent."""
     from concurrent.futures import Future
     from .opencode_overlay import credential_names
-    env = host_probe_env()
+    env = host_probe_env(env)
     try:
         providers = json.loads(config).get('providers', {})
     except (ValueError, AttributeError, TypeError):
@@ -402,7 +404,11 @@ def served_models(config, *, clock=time.monotonic):
     if not owner:
         return future.result()
     try:
-        result = _probe_served_models(config)
+        token = _probe_child_env.set(env)
+        try:
+            result = _probe_served_models(config)
+        finally:
+            _probe_child_env.reset(token)
         with _served_lock:
             if len(_served_cache) >= 8:
                 _served_cache.pop(next(iter(_served_cache)))
@@ -417,15 +423,17 @@ def served_models(config, *, clock=time.monotonic):
             _served_inflight.pop(key, None)
 
 
-def _probe_served_models(config):
-    env = host_probe_env()
+def _probe_served_models(config, *, env=None):
+    env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
         result = subprocess.run(['opencode', 'models'], env=env, capture_output=True,
                                 text=True, timeout=10)
         if result.returncode == 0:
-            return frozenset(line.strip() for line in result.stdout.splitlines()
-                             if '/' in line.strip() and ' ' not in line.strip())
+            import re
+            parsed = frozenset(line.strip() for line in result.stdout.splitlines()
+                               if re.fullmatch(r'[^\s/]+/[^\s/]+', line.strip()))
+            return parsed or None
     except (OSError, subprocess.SubprocessError):
         pass
     return None
@@ -436,13 +444,13 @@ served_models.cache_clear = _served_cache.clear
 _served_models_real = served_models
 
 
-async def served_models_async(config, *, clock=time.monotonic):
-    return await asyncio.to_thread(_served_models_real, config, clock=clock)
+async def served_models_async(config, *, env=None, clock=time.monotonic):
+    return await asyncio.to_thread(_served_models_real, config, env=env, clock=clock)
 
 
 async def host_skip_reason_async(row, *, env=None):
     child = host_probe_env(env)
-    models = await served_models_async(child.get('OPENCODE_CONFIG_CONTENT', '{}')) if row.get('harness') == 'opencode' else None
+    models = await served_models_async(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child) if row.get('harness') == 'opencode' else None
     return host_skip_reason(row, env=child, probe=lambda env: models)
 
 
@@ -495,8 +503,12 @@ def host_skip_reason(row, *, probe=None, env=None):
             return None
     except (ValueError, AttributeError, TypeError):
         pass
-    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
-    present = models is None or model.lower().split('#', 1)[0] in {m.lower().split('#', 1)[0] for m in models}
+    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child)
+    base = model.lower().split('#', 1)[0]
+    listing = {m.lower() for m in models or ()}
+    variants = {m for m in listing if m.startswith(base + '#')}
+    present = models is None or (base in {m.split('#', 1)[0] for m in listing}
+        and ('#' not in model or not variants or model.lower() in variants))
     return None if present else 'not_served_on_host: ' + model
 
 

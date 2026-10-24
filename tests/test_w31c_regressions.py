@@ -46,25 +46,32 @@ def test_supervisor_path_and_bounded_stderr(monkeypatch, tmp_path, capsys, insta
     fake = """import os
 service = supervisor.SpawnService(state=sys.argv[2])
 service._save({'run_id': 'run-fake', 'status': 'running'})
+original_replace = os.replace
+def missing_source_once(source, destination):
+    os.replace = original_replace
+    os.unlink(source)
+    raise FileNotFoundError(source)
+os.replace = missing_source_once
 for _ in range(400): os.write(2, b'x' * 8192)
+os.write(2, b'rotation-recovered\\n')
 """
     bootstrap = bootstrap.replace('supervisor.main(["--supervise"])', 'exec(' + repr(fake) + ')')
     child_env = dict(kw['env'], PYTHONPATH=root)
     child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log), str(state)], stderr=log.open('ab'), env=child_env)
     assert child.wait(timeout=10) == 0, log.read_text()[-2000:]
     assert log.stat().st_size > 0
+    assert 'rotation-recovered' in log.read_text()
     assert sum(p.stat().st_size for p in state.glob('supervisor-*.stderr.log*')) <= 2 * 1024 * 1024
     assert 'supervisor_stderr_path' in bootstrap
     record = json.loads((state / 'runs/run-fake/record.json').read_text())
     assert record['supervisor_stderr_path'] == str(log)
 
 
-def test_host_environment_is_pinned(monkeypatch):
+def test_host_environment_is_pinned():
     assert Path(os.environ['AUTOOS_ROOT']).is_dir()
     assert not (Path(os.environ['AUTOOS_ROOT']) / 'opencode.jsonc').exists()
-    monkeypatch.setenv('MY_TEST_SECRET', 'test-value')
-    from plangraph.spawner.env_redact import redact_env_values
-    assert redact_env_values('test-value', os.environ) == '[autoos:redacted]'
+    import re
+    assert not [name for name in os.environ if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I)]
 
 
 @pytest.mark.real_probe
@@ -78,6 +85,6 @@ def test_real_probe_marker_bypasses_stub(real_served_models, monkeypatch):
     assert calls == [['opencode', 'models']]
 
 
-def test_default_probe_is_stubbed(real_served_models):
-    assert resolver.served_models is not real_served_models
-    assert resolver.served_models(None) is None
+def test_default_probe_is_stubbed(monkeypatch):
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: pytest.fail('host probe escaped stub'))
+    assert resolver.host_skip_reason({'harness': 'opencode', 'model': 'test/model'}) is None

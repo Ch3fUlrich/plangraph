@@ -8,6 +8,7 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 ``admin verify``, and ``tests/test_keeper_pg_parity.py`` compares every (seq, hash) pair and the
 head against SQLite through the adapter.
 """
+import re
 import atexit
 import os
 import shutil
@@ -73,13 +74,13 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
     for name in list(os.environ):
-        if name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
+        if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I) or name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()
-    def unknown(config):
+    def unknown(config, **kwargs):
         return None
     unknown.cache_clear = probe.cache_clear
     if request.node.get_closest_marker('real_probe') is None:
