@@ -102,7 +102,7 @@ def test_whitespace_paragraph_separator_is_not_writer_continuation(repo, adapter
 
 
 @pytest.mark.parametrize("value", ["mimo-v2 deepseek-v4 test-run-1", "mimo-v2, deepseek-v4",
-                                        "mimo-v2 mimo-v3 test-run-1"])
+                                        "mimo-v2 [deepseek-v4]", "mimo-v2 (deepseek-v4)"])
 def test_multiple_models_in_one_writer_value_refuse(repo, value):
     sha = _commit(repo, "squash", {"Plan-Item": "demo:A", "Writer": value})
     with pytest.raises(Refused) as exc:
@@ -649,14 +649,14 @@ def test_clean_two_writer_block_still_yields_both_families(repo, adapter):
 
 
 @pytest.mark.parametrize("value", ["mimo-v2/deepseek-r1", "deepseek-r1/mimo-v2",
-                                        "cx/gpt-6.1-sol/mimo-v2", "mimo-v2/mimo-v3"])
+                                        "cx/gpt-6.1-sol/mimo-v2"])
 def test_fix6_slash_model_list_refused(repo, value):
     sha = _commit(repo, "models", {"Writer": value})
     with pytest.raises(Refused, match="writer_unknown"):
         _families(repo, sha)
 
 
-@pytest.mark.parametrize("run_id", ["kimi-k2", "run1", "two-words", "run-claude"])
+@pytest.mark.parametrize("run_id", ["run-claude"])
 def test_fix6_unknown_second_token_refused(repo, run_id):
     sha = _commit(repo, "run", {"Writer": f"mimo-v2 {run_id}"})
     with pytest.raises(Refused, match="writer_unknown"):
@@ -667,6 +667,7 @@ def test_fix6_unknown_second_token_refused(repo, run_id):
     "20261023-184701-seat-free-opencode-write-13e736",  # spawner stamp
     "ses_abc12XYZ",                                     # session id (V2)
     "keeper-trailer-multi-fix5",                        # >=3 segments (V2/V7)
+    "kimi-k2", "run1", "two-words", "8f4c7d",
 ])
 def test_fix6_valid_second_token_accepted_as_run_id(repo, run_id):
     """V2: a recognised run id keeps exactly the model token's family."""
@@ -677,6 +678,15 @@ def test_fix6_valid_second_token_accepted_as_run_id(repo, run_id):
 # Fixed compatibility corpus: this sandbox has no origin/main history. These
 # are the concrete shapes supplied by build-L1, not live-git expectations.
 FIX6_WRITER_SHAPES = [
+    ("deepseek-flash 20261022-142814-task-1dc4da [tool-less]", "deepseek"),
+    ("qwen3.8-flash qodercli aabb-1234-5678", "alibaba"),
+    ("mimo-v2.6-flash (xiaomi, omniroute) run [spawner]", "xiaomi"),
+    ("omniroute/cx-gpt-6.1-sol title run", "openai"),
+    ("qodercli Qwen3.8-Flash qt-w1-67abcd", "alibaba"),
+    ("openai/gpt-4o", "openai"),
+    ("deepseek/deepseek-r1", "deepseek"),
+    ("mimo-v2/mimo-v3", "xiaomi"),
+    ("L2", "anthropic"),
     ("omniroute/cx-gpt-6.1-sol keeper-trailer-multi-fix5", "openai"),
     ("omniroute/cx-gpt-6.1-sol exec-ownership-sq8-sol2-a3a264", "openai"),
     ("omniroute/cx-gpt-6.1-sol ui-browser-fix3-r2-382049", "openai"),
@@ -695,7 +705,28 @@ def test_fix6_fixed_writer_shapes_resolve_once(repo, value, family):
     assert _families(repo, sha) == [family]
 
 
-@pytest.mark.parametrize("colon", ["\uff1a", "\ua789", "\u2236"])
+@pytest.mark.parametrize("value", ["n/a merge commit", "opencode run1", "unknown [tool-less]"])
+def test_fix7_zero_families_refused(repo, value):
+    sha = _commit(repo, "unknown", {"Writer": value})
+    with pytest.raises(Refused, match="writer_unknown"):
+        _families(repo, sha)
+
+
+@pytest.mark.parametrize("value,expected", [
+    line.split("\t") for line in
+    (Path(__file__).parent / "fixtures" / "main_writer_trailers.txt").read_text(
+        encoding="utf-8").splitlines()
+])
+def test_fix7_main_writer_corpus(repo, value, expected):
+    sha = _commit(repo, "corpus", {"Writer": value})
+    if expected == "writer_unknown":
+        with pytest.raises(Refused, match="writer_unknown"):
+            _families(repo, sha)
+    else:
+        assert _families(repo, sha) == [expected]
+
+
+@pytest.mark.parametrize("colon", ["\uff1a", "\ua789", "\u2236", "\ufe55", "\u205d", " :"])
 @pytest.mark.parametrize("position", ["prose", "block"])
 def test_fix6_colon_variant_refuses(repo, adapter, colon, position):
     line = f"Writer{colon} deepseek-r1"
@@ -709,6 +740,17 @@ def test_fix6_colon_variant_refuses(repo, adapter, colon, position):
     assert adapter.writer_trailers(str(repo), sha) == []
     with pytest.raises(Refused, match="writer_unknown"):
         _families(repo, sha)
+
+
+def test_fix7_every_unicode_named_colon_is_writer_shaped():
+    import sys
+    import unicodedata
+    from plangraph.keeper.evidence_git import _WRITER_SHAPED_RE
+
+    for code in range(sys.maxunicode + 1):
+        char = chr(code)
+        if "COLON" in unicodedata.name(char, ""):
+            assert _WRITER_SHAPED_RE.search(f"Writer{char} deepseek-r1"), hex(code)
 
 
 @pytest.mark.parametrize("first", ["demo:OTHER", "demo:A"])

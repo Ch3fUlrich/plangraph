@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -125,8 +127,13 @@ def _trailing_trailer_lines(text: str) -> list[str]:
 #: ``1. Writer: x``, ```Writer: x` ``, ``| Writer: x |``, ``-Writer: x``,
 #: ``- Writer: x``, ``> Writer: x``, ``    Writer: x`` and ``Writer : x`` all
 #: match, while the prose "the writer of this" (no colon) does not.
+# Unicode names cover colon variants without a hand-maintained allowlist;
+# retain RATIO too, because earlier attribution checks already refused it.
 _WRITER_SHAPED_RE = re.compile(
-    r"writer[^A-Za-z0-9]*[:\uff1a\ua789\u2236][ \t]*\S", re.IGNORECASE)
+    r"writer[^A-Za-z0-9]*[" + re.escape("\u2236" + "".join(
+        chr(code) for code in range(sys.maxunicode + 1)
+        if "COLON" in unicodedata.name(chr(code), ""))) + r"][ \t]*\S",
+    re.IGNORECASE)
 
 #: A KEY that only *looks* like ``writer``: decoration glued around it
 #: (``-Writer``, ``**Writer``, `` `Writer ``).  Such a key parses as its own

@@ -183,11 +183,12 @@ def test_sensitive_high_cannot_close_with_claude_seats_only(w):
 
 
 @pytest.mark.parametrize("with_writer", [False, True])
-def test_fix6_hand_edit_case_and_writer_are_additive(w, with_writer):
+@pytest.mark.parametrize("keys", [("Writer", "Hand-Edit"), ("writer", "hand-edit")])
+def test_fix6_hand_edit_case_and_writer_are_additive(w, with_writer, keys):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",), review_tier="high")
-    trailer = {"hand-edit": "manual correction"}
+    trailer = {keys[1]: "manual correction"}
     if with_writer:
-        trailer["writer"] = "mimo-v2"
+        trailer[keys[0]] = "mimo-v2"
     to_review_with_commits(w, key, {SHA_A: trailer})
     assert set(_cov().writer_families(w.store, w.store._item(key), w.store.ctx)) == (
         {"anthropic", "xiaomi"} if with_writer else {"anthropic"})
@@ -266,11 +267,17 @@ def test_unresolvable_writer_family_refuses_the_closing_verdict(w, case):
 @pytest.mark.parametrize("trailer,family", [
     ("mimo-v2 test-task-abc123", "xiaomi"),
     ("deepseek-r1 test-task-def456", "deepseek"),
+    ("deepseek-r1 run1", "deepseek"),
+    ("deepseek-r1 run-claude", None),
 ])
 def test_writer_family_uses_only_the_first_trailer_token(w, trailer, family):
-    """The run id may name another family; only ``<model-id>`` decides."""
+    """All tokens count: run-claude resolves to anthropic, so two families refuse."""
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer(trailer)})
+    if family is None:
+        with pytest.raises(Refused, match="writer_unknown"):
+            _cov().writer_families(w.store, w.store._item(key), w.store.ctx)
+        return
     assert set(_cov().writer_families(
         w.store, w.store._item(key), w.store.ctx)) == {family}
     assert w.store.verdict(w.p("rAnthropic1"), key, True, "covered")["state"] == "done"
