@@ -221,6 +221,9 @@ def evaluate_risk(
     reviewer_count = max(2 if risk_band in ("high", "critical") else 1,
                          RISK_REVIEWER_COUNT[risk_band])
 
+    if risk_band in ("low", "normal") and is_pure_doc and bucket == "S0" and not (crit_paths or hr_paths):
+        reviewer_count = 0
+
     return RiskAssessment(
         risk=risk_band,
         min_intelligence=min_intel,

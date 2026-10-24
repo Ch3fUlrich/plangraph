@@ -62,9 +62,9 @@ def test_empty_and_combined_tags():
 
 
 @pytest.mark.parametrize("path", ["auth.md", "docs/architecture.md", "src/auth.py", "deploy/app.sh"])
-def test_documentation_flags_never_bypass_review(path):
+def test_pure_docs_exempt_only_below_high(path):
     result = evaluate_risk([path], bucket="S0", is_docs_only=True, is_pure_doc=True)
-    assert result.reviewer_count >= (2 if result.risk in ("high", "critical") else 1)
+    assert result.reviewer_count == (2 if result.risk in ("high", "critical") else 0)
     if path.endswith(".md"):
         assert result.risk in ("low", "normal")
 
