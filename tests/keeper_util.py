@@ -101,7 +101,7 @@ def defn(pid, deps=(), project="demo", kind="lane", evidence_kinds=("any",),
     return item
 
 
-def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True,
+def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True, delegate=False,
          **tier):
     """Create ``lanes`` plus a goal that depends on every lane.
 
@@ -117,6 +117,11 @@ def seed(world, lanes, project="demo", evidence_kinds=("any",), goal=True,
         items.append(defn("GOAL", [pid for pid, _ in lanes], project=project,
                           kind="goal", **tier))
     world.store.create_items(world.p("router"), items)
+    if delegate:
+        for pid, _ in lanes:
+            key = f"{project}:{pid}"
+            world.store.claim(world.p("l1main"), key)
+            world.store.delegate(world.p("l1main"), key, "workerA")
     return [f"{project}:{pid}" for pid, _ in lanes]
 
 
@@ -150,6 +155,22 @@ def seed_stranded_claim(world, key, note=""):
         assert cursor.rowcount == 1, "stranded seed: item was not open"
     assert world.store.verify_integrity() == [], "stranded seed must fold clean"
     return key
+
+
+def seed_exec_owner(world, key, run, who="workerA"):
+    """Write *run* as the card's exec owner, the way a recording worker left it.
+
+    RT-P1 sq5 fix 1 (V2-1): only a worker principal may RECORD an owner now, so
+    a test that needs a pre-owned card before a router/l1/system run-carrying
+    ``set_state`` writes the triple (plus ``exec_principal``) directly -- setup,
+    not behaviour.  ``tests/test_keeper_exec_ownership.py`` pins who may record.
+    """
+    workflow_id, run_id, attempt = run
+    world.conn.execute(
+        "UPDATE items SET exec_workflow_id=?, exec_run_id=?, exec_attempt=?,"
+        " exec_principal=? WHERE key=?",
+        (workflow_id, run_id, attempt, who, key))
+    world.conn.commit()
 
 
 def to_claimed(world, key, who="l1main", lease_s=7200):

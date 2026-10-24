@@ -52,8 +52,11 @@ and may set `corrects` to a DONE key (validated by the store: target must be `do
 
 ## Verbs (Store) — role rules, state machine, errors
 Every verb: authenticate → authorise → validate → one transaction (event + cache + edges) → audit_log row (ok or refused).
-Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, locked, epoch_stale, lease_held, cycle, validation,
-evidence_missing, evidence_unverified, same_principal, same_family, family_unknown, conflict`. A refused attempt writes only `audit_log`.
+Refusals raise `Refused(code, msg)`; codes: `forbidden, not_found, bad_state, bad_transition, locked, epoch_stale, lease_held, cycle, validation,
+evidence_missing, evidence_unverified, same_principal, same_family, family_unknown, conflict, exec_stale, exec_stale_state`. A refused attempt writes only `audit_log`.
+`exec_stale`/`exec_stale_state` and `bad_transition` are the exec-ownership fence (see `docs/adr-exec-ownership.md`): a stale or retired run, a
+worker that is not the recorded owner, a card whose observed state fails the live-set CAS, and a back move on an OWNED card without
+`run`/`hand_back`. Recording an owner is `forbidden` for every principal but a worker (the recording principal is stored in `items.exec_principal`).
 | verb | who | effect |
 |---|---|---|
 | `create_items(p, items)` | router (any project); l1 (own projects) | batch of definitions as `item_created` events (state `open`); whole batch validated with `views.validate` over existing+new (cycle, unknown dep, unreachable…) or refused atomically; optional per-item `under: <key>` attaches the gate → new edge in the same transaction (paragraph below) |
