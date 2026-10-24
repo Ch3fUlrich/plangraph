@@ -43,3 +43,8 @@ Each brief becomes the card emitted in the same batch: `Objective:` -> `outcome`
 `check_cmd` (one command, exit 0), `Interfaces:` -> `exports`, `Forbidden:` -> `forbid_paths`,
 `Toolchain:` -> `smoke_checks`. The planner adds `heldout_check` (hidden from the implementer),
 `window_class`, explicit `risk_tags` (`[]` = reviewed, none) and an honest `estimate_tokens`.
+# Completion contract for every writer/seat brief
+
+The spawner delivers DONE/FAILED events automatically. If blocking is necessary,
+use `plangraph-spawn wait RUN_ID --timeout SECONDS`, which reads the run record.
+Never use `pgrep -f` wait loops or agent-written process-name polling loops.

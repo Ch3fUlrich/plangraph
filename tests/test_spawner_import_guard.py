@@ -72,6 +72,7 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/__init__.py": "",
         "plangraph/keeper/__init__.py": "",
         "plangraph/keeper/x.py": "from plangraph.spawner.resolver import resolve\n",
+        "plangraph/stall_watchdog.py": "from plangraph.spawner.stall_watchdog import main\n",
         "plangraph/keeper/a.py": "from plangraph import spawner\n",
         "plangraph/keeper/b.py": "import plangraph.spawner.clients as c\n",
         "plangraph/foo/__init__.py": "",
@@ -94,14 +95,14 @@ def test_fixture_red(tmp_path: Path) -> None:
         "plangraph/keeper/a.py",
         "plangraph/keeper/b.py",
         "plangraph/keeper/x.py",
+        "plangraph/stall_watchdog.py",
     ]
 
-def test_flag_default_off(monkeypatch) -> None:
+def test_selection_has_no_feature_flag(monkeypatch) -> None:
     monkeypatch.setenv("PLANGRAPH_SPAWNER_SELECTION", "1")
     from plangraph.planner import routing
 
-    flag = routing.SPAWNER_SELECTION_ENABLED
-    assert flag is False
-    assert type(flag) is bool  # plain bool: not the str an env read would yield
+    assert not hasattr(routing, 'SPAWNER_SELECTION_ENABLED')
+    assert 'SPAWNER_SELECTION_ENABLED' not in routing.__all__
     source = Path(routing.__file__).read_text(encoding="utf-8")
     assert "PLANGRAPH_SPAWNER_SELECTION" not in source

@@ -350,8 +350,10 @@ class CommitCiVerifier:
         except Exception:  # noqa: BLE001
             trailers = {}
         wanted = [value for value in (item.get("key"), item.get("id")) if value]
-        trailer = _trailer(trailers, "Plan-Item")
-        if not trailer or trailer not in wanted:
+        values = [value for key, raw in (trailers.items() if isinstance(trailers, dict) else [])
+                  if str(key).lower() == "plan-item"
+                  for value in (raw if isinstance(raw, list) else [raw])]
+        if not any(value in wanted for value in values):
             label = item.get("key") or item.get("id")
             return _fail(
                 f"commit {commit} does not carry trailer 'Plan-Item: {label}'", ref

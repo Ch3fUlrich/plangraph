@@ -47,8 +47,9 @@ def test_exhausted_first_family_moves_to_next():
     )
     gate = guard_start("planner", "agent", NOW, source=source, quotas={"qwen": 10})
     assert gate.allowed
-    assert gate.fallback == "muse"
-    assert gate.leg.family == "muse"
+    expected = next(leg for leg in DEFAULT_LEGS if not leg.claude_family and leg.family != DEFAULT_LEGS[0].family)
+    assert gate.fallback == expected.family
+    assert gate.leg is expected
 
 
 def test_every_non_claude_exhausted_denies():
@@ -143,7 +144,8 @@ def test_raising_fallback_callback_does_not_block():
 
 def test_fallback_providers_dedups_and_skips_claude():
     assert "claude" not in fallback_providers(DEFAULT_LEGS)
-    assert fallback_providers(DEFAULT_LEGS)[:3] == ("qwen", "muse", "north")
+    expected = tuple(dict.fromkeys(leg.family for leg in DEFAULT_LEGS if not leg.claude_family))
+    assert fallback_providers(DEFAULT_LEGS) == expected
     dup = (
         _leg("a", "qwen"),
         _leg("b", "qwen"),

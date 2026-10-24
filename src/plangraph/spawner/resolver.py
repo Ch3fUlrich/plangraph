@@ -14,10 +14,21 @@ from __future__ import annotations
 
 import math
 import os
+import shutil
+import subprocess
+import asyncio
+import hashlib
+import json
+import time
+import threading
+import weakref
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from plangraph.spawner.leg_state import leg_status
 from plangraph.spawner.catalog_seed import TIER_RUNG
+from plangraph.spawner.mimo_policy import mimo_path_allowed
 from plangraph.spawner.clients import build_routing_envelope_headers
 from plangraph.spawner.risk import (
     RISK_BETA_EXCESS,
@@ -211,6 +222,40 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     },
 ]
 
+# Registered seats are the authoritative offline routing surface. Legacy rows
+# remain visible for diagnostics but must not become new offline spawn routes.
+from plangraph.planner.legs import DEFAULT_LEGS
+
+# OVH removed by operator, muse-spark-1.3-free gone D-1714, D-2655 G3.
+OPERATOR_REMOVED_MODELS = frozenset({
+    'omniroute/ovh-gpt-oss-120b',
+    'omniroute/or-north-mini-code-free',
+    'omniroute/or-laguna-s-2.1-free',
+    'omniroute/or-nemotron-3-super-free',
+    'opencode/muse-spark-1.3-contributor-free',
+})
+
+
+def admission_models() -> set[str]:
+    """Registered offline routes, excluding models removed by the operator."""
+    return {leg.model for leg in DEFAULT_LEGS} - OPERATOR_REMOVED_MODELS
+
+
+_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
+for _row in DEFAULT_FALLBACK_MODELS:
+    _row['active'] = _row['id'] in _fallback_legs
+    if not _row['active']:
+        _row['available'] = 0
+for _leg in DEFAULT_LEGS:
+    _model = _leg.model
+    if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
+        DEFAULT_FALLBACK_MODELS.append(dict(
+            id=_model, family=_leg.family, harness=_leg.harness,
+            tier=_leg.tier, available=int(_model in _fallback_legs),
+            active=_model in _fallback_legs,
+            context_window=_leg.max_request_tokens,
+            aa_intelligence=0.0, combos=[]))
+
 _DEFAULT_CATALOG_DB: Any = None
 _MISSING = object()
 _VALID_RISKS = frozenset({"low", "normal", "high", "critical"})
@@ -322,13 +367,187 @@ def detect_model_family(model_id: str) -> str:
         return mid.split("/", 1)[0]
     return mid
 
-def is_model_available(model: Mapping[str, Any]) -> bool:
+def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
+    """Fail closed: both catalog admission signals must be explicit."""
+    return (row.get('id') not in OPERATOR_REMOVED_MODELS
+            and row.get('available') == 1 and row.get('active') is True)
+
+
+_served_cache = {}
+_served_lock = threading.Lock()
+_served_inflight = {}
+_probe_child_env = ContextVar('probe_child_env', default=None)
+
+
+def provider_config_digest(config):
+    """Identity of model discovery; request headers never affect discovery."""
+    try:
+        providers = json.loads(config).get('providers', {})
+        def stable(node):
+            if isinstance(node, dict):
+                return {k: stable(v) for k, v in node.items() if k.lower() != 'headers'}
+            if isinstance(node, list):
+                return [stable(v) for v in node]
+            return node
+        payload = json.dumps(stable(providers), sort_keys=True)
+    except (ValueError, AttributeError, TypeError):
+        payload = config
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def host_probe_env(env=None):
+    from .clients import build_child_env
+    from .opencode_overlay import overlay_env
+    return overlay_env(build_child_env(extra_env=env))
+
+
+def served_models(config, *, env=None, clock=time.monotonic):
+    """A failed probe is UNKNOWN, never evidence that a model is absent."""
+    from concurrent.futures import Future
+    from .opencode_overlay import credential_names
+    env = host_probe_env(env)
+    try:
+        providers = json.loads(config).get('providers', {})
+    except (ValueError, AttributeError, TypeError):
+        providers = {}
+    present = sorted(name for name in credential_names(providers) if env.get(name))
+    key = (provider_config_digest(config), hashlib.sha256(json.dumps(present).encode()).hexdigest())
+    with _served_lock:
+        cached = _served_cache.get(key)
+        if cached and clock() < cached[0]:
+            return cached[1]
+        future = _served_inflight.get(key)
+        owner = future is None
+        if owner:
+            future = _served_inflight[key] = Future()
+    if not owner:
+        return future.result()
+    try:
+        token = _probe_child_env.set(env)
+        try:
+            result = _probe_served_models(config)
+        finally:
+            _probe_child_env.reset(token)
+        with _served_lock:
+            if len(_served_cache) >= 8:
+                _served_cache.pop(next(iter(_served_cache)))
+            _served_cache[key] = (clock() + (30 if not result else 300), result)
+        future.set_result(result)
+        return result
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _served_lock:
+            _served_inflight.pop(key, None)
+
+
+def _probe_served_models(config, *, env=None):
+    import logging
+    logger = logging.getLogger(__name__)
+    env = dict(env or _probe_child_env.get() or host_probe_env())
+    env['OPENCODE_CONFIG_CONTENT'] = config
+    try:
+        executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
+        result = subprocess.run([executable, 'models'], env=env, capture_output=True,
+                                text=True, timeout=10)
+        if result.returncode == 0:
+            import re
+            parsed = frozenset(line.strip() for line in result.stdout.splitlines()
+                               if re.fullmatch(r'[^\s/]+/[^\s/]+', line.strip()))
+            if parsed:
+                return parsed
+            logger.warning('host_probe_error: empty or unrecognised model listing; availability unknown')
+        else:
+            logger.warning('host_probe_error: opencode models exit %s; availability unknown', result.returncode)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning('host_probe_error: %s; availability unknown', type(exc).__name__)
+    return None
+
+
+served_models.cache_clear = _served_cache.clear
+# Real function retained for tests whose autouse fixture stubs served_models.
+_served_models_real = served_models
+
+
+async def served_models_async(config, *, env=None, clock=time.monotonic):
+    return await asyncio.to_thread(_served_models_real, config, env=env, clock=clock)
+
+
+async def host_skip_reason_async(row, *, env=None):
+    child = host_probe_env(env)
+    models = await served_models_async(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child) if row.get('harness') == 'opencode' else None
+    return host_skip_reason(row, env=child, probe=lambda env: models)
+
+
+def plan_for_launch(plan, *, dry_run=False, probe=None, env=None):
+    """Apply host admission at the shared real-launch boundary, never offline."""
+    if dry_run:
+        return plan
+    from dataclasses import replace
+    admitted, skipped = [], list(plan.skipped)
+    options = {}
+    if probe is not None:
+        options['probe'] = probe
+    if env is not None:
+        options['env'] = env
+    for leg in plan.legs:
+        reason = host_skip_reason(dict(model=leg.model, harness=leg.harness),
+                                  **options)
+        if reason:
+            # W30 callers consume skip_reason; reason remains canonical like
+            # the planner's pre-existing skipped entries.
+            skipped.append(dict(leg=leg.id, reason=reason, skip_reason=reason))
+        else:
+            admitted.append(leg)
+    return replace(plan, legs=tuple(admitted), skipped=tuple(skipped))
+
+
+async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None):
+    # W32A runner: await this boundary; the synchronous API remains for CLI use.
+    return await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run, probe=probe, env=env)
+
+
+def host_skip_reason(row, *, probe=None, env=None):
+    harness = row.get('harness')
+    if harness in ('agy', 'qodercli'):
+        return None if shutil.which(harness) else 'harness_missing: ' + harness
+    if harness != 'opencode':
+        return None
+    model = row.get('model') or row.get('id') or row.get('model_id')
+    if not model or '/' not in model:
+        return None
+    child = host_probe_env(env)
+    from .opencode_overlay import OVERLAY_UNKNOWN
+    if child.get(OVERLAY_UNKNOWN):
+        return None
+    try:
+        cfg = json.loads(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
+        provider, name = model.split('/', 1)
+        entry = cfg.get('providers', {}).get(provider, {}).get('models', {}).get(name, {})
+        if isinstance(entry, dict) and (entry.get('combo') or entry.get('alias')):
+            return None
+    except (ValueError, AttributeError, TypeError):
+        pass
+    models = probe(child) if probe else served_models(child.get('OPENCODE_CONFIG_CONTENT', '{}'), env=child)
+    base = model.lower().split('#', 1)[0]
+    listing = {m.lower() for m in models or ()}
+    variants = {m for m in listing if m.startswith(base + '#')}
+    present = models is None or (base in {m.split('#', 1)[0] for m in listing}
+        and ('#' not in model or not variants or model.lower() in variants))
+    return None if present else 'not_served_on_host: ' + model
+
+
+def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, account=None, combo=None) -> bool:
     """Check if model is eligible and available.
 
     Enforces Codex ACP luna-only: cxa/gpt-6-luna-high is eligible,
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
-    if int(model.get("available", 1)) == 0:
+    if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
+        return False
+    # Ranking historical catalog seats is not a new-spawn admission decision.
+    if not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()
     if status not in ("active", ""):
@@ -336,7 +555,8 @@ def is_model_available(model: Mapping[str, Any]) -> bool:
     mid = str(model.get("id") or model.get("model_id") or "").lower()
     if mid.startswith("cxa/") and not mid.startswith("cxa/gpt-6-luna"):
         return False
-    return True
+    reader = leg_state_reader or leg_status
+    return reader(str(model.get("id") or model.get("model_id") or ""), account=account, combo=combo)["state"] != "limited"
 
 def clamp_effort(model_id: str, requested_effort: str) -> str:
     """Clamp reasoning effort for models with vendor-specific constraints.
@@ -432,6 +652,8 @@ def rank_candidates(
     # loop finite even when a caller passes a malformed later candidate.
     prepared: list[tuple[dict[str, Any], float, float]] = []
     for c in candidates:
+        if not catalog_row_admitted(c):
+            continue
         d = dict(c)
         score = score_model(d, role=role_l, risk=risk_l, need_tokens=need_tokens)
         speed = _raw_speed(d)
@@ -474,26 +696,78 @@ def select_top_candidate(
 
 def _normalize_catalog_row(row: Mapping[str, Any]) -> dict[str, Any]:
     d = dict(row)
+    d.setdefault('available', 0)
+    d.setdefault('active', False)
     if "id" not in d and "model_id" in d:
         d["id"] = d["model_id"]
     if "context_window" not in d and "context_tokens" in d:
         d["context_window"] = d["context_tokens"]
+    # Explicit harness registration, not an inference from gateway transport.
+    if d.get('id') == 'mimo/mimo-v2.6-pro':
+        d.setdefault('harness', 'opencode')
     return d
 
-def get_catalog_models(db: Any = None) -> list[dict[str, Any]]:
-    """Retrieve models from SQLite CatalogDB (or fallback dictionary if unavailable)."""
-    target_db = db if db is not None else _get_default_catalog_db()
-    if target_db is not None:
-        if hasattr(target_db, "list_models"):
-            models = target_db.list_models(active_only=False)
-            if models is not None:
-                return [_normalize_catalog_row(m) for m in models]
-        if hasattr(target_db, "get_models"):
-            models = target_db.get_models()
-            if models is not None:
-                return [_normalize_catalog_row(m) for m in models]
+_catalog_failures = {}
 
-    return [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS]
+
+def get_catalog_models(db: Any = None, *, active_only: bool = False,
+                       clock=time.monotonic) -> list[dict[str, Any]]:
+    """Retrieve catalog models, including inactive rows unless explicitly filtered."""
+    catalog_source = None
+    identity = db if db is not None else _get_default_catalog_db
+    try:
+        # Weak identity prevents id reuse without retaining the DB or factory.
+        key = weakref.ref(identity)
+        hash(key)
+    except TypeError:
+        key = (type(identity).__name__, id(identity))
+    now = clock()
+    for expired in [k for k, v in _catalog_failures.items()
+                    if (isinstance(k, weakref.ReferenceType) and k() is None)
+                    or now >= v['warned_at'] + 30]:
+        _catalog_failures.pop(expired, None)
+    failure = _catalog_failures.get(key)
+    if failure:
+        return [dict(_normalize_catalog_row(m), catalog_source='offline_fallback_db_error')
+                for m in DEFAULT_FALLBACK_MODELS if not active_only or catalog_row_admitted(m)]
+    try:
+        target_db = db if db is not None else _get_default_catalog_db()
+        if target_db is not None:
+            if hasattr(target_db, "list_models"):
+                models = target_db.list_models(active_only=active_only)
+                # D-2631: no admitted rows is not an empty catalog. Preserve the
+                # active-only query contract, but probe total rows before fallback.
+                if active_only and not models:
+                    if target_db.list_models(active_only=False):
+                        _catalog_failures.pop(key, None)
+                        return []
+                if models:
+                    _catalog_failures.pop(key, None)
+                    return [_normalize_catalog_row(m) for m in models
+                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+            if hasattr(target_db, "get_models"):
+                models = target_db.get_models()
+                if models:
+                    _catalog_failures.pop(key, None)
+                    return [_normalize_catalog_row(m) for m in models
+                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+    except Exception as exc:
+        import logging
+        if not failure:
+            logging.getLogger(__name__).warning(
+                "catalog_db_error fallback=offline err=%s", type(exc).__name__)
+        if len(_catalog_failures) >= 8:
+            _catalog_failures.pop(next(iter(_catalog_failures)))
+        _catalog_failures[key] = dict(error=type(exc).__name__, warned_at=now)
+        catalog_source = "offline_fallback_db_error"
+
+    if not catalog_source:
+        _catalog_failures.pop(key, None)
+    rows = [_normalize_catalog_row(m) for m in DEFAULT_FALLBACK_MODELS
+            if not active_only or catalog_row_admitted(m)]
+    if catalog_source:
+        rows = [dict(m, catalog_source=catalog_source) for m in rows]
+    return rows
 
 def _passes_context_and_cliff(m: Mapping[str, Any], need_tokens: int, role: str = "implement") -> bool:
     """Check if model satisfies context window and price cliff limits.
@@ -543,6 +817,12 @@ def resolve_review_plan(
     combo_name: str = "l2-worker",
     need_tokens: int = 32000,
     db: Any = None,
+    leg_state_reader=None,
+    account=None,
+    reviewer_count=None,
+    review_exempt=False,
+    paths=(), bucket='S1', has_tests=True, is_pure_doc=False,
+    risk_tags=(),
 ) -> dict[str, Any]:
     """Resolve cross-family review plan on shared combo layers.
 
@@ -556,15 +836,32 @@ def resolve_review_plan(
           Rev 2: X-OmniRoute-Task-Role: review, X-OmniRoute-Exclude-Family: <writer_family>,<family_1>
       - Raises ValueError if no eligible reviewer exists.
     """
+    if review_exempt:
+        raise ValueError("caller cannot assert review_exempt; zero reviewers requires evaluated exemption")
     need_tokens = _validate_need_tokens(need_tokens)
     risk_l = _validate_risk(risk)
     writer_family = detect_model_family(writer_model)
-    reviewer_count = 2 if risk_l in ("high", "critical") else 1
+    from .risk import evaluate_risk
+    assessment = evaluate_risk(paths=paths, bucket=bucket, has_tests=has_tests,
+                               is_pure_doc=is_pure_doc, risk_tags=risk_tags)
+    review_exempt = assessment.review_exempt
+    if assessment.risk in ('high', 'critical'):
+        risk_l = assessment.risk
+    if reviewer_count == 0:
+        if not review_exempt or risk_l in ('high', 'critical'):
+            raise ValueError('zero reviewers requires low/normal review_exempt')
+        return {'reviewer_count': 0, 'reviewers': [], 'review_exempt': True}
+    reviewer_count = max(reviewer_count or 1, 2 if risk_l in ("high", "critical") else 1)
 
-    all_models = get_catalog_models(db)
+    reader = leg_state_reader or leg_status
+    def annotate(m):
+        d = dict(m)
+        d["leg_state"] = reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)
+        return d
+    all_models = [annotate(m) for m in get_catalog_models(db)]
 
     # Filter candidate models
-    target_db = db if db is not None else _get_default_catalog_db()
+    target_db = None if any(m.get("catalog_source") == "offline_fallback_db_error" for m in all_models) else (db if db is not None else _get_default_catalog_db())
     combo_priority_legs = False
     candidates: list[dict[str, Any]] = []
 
@@ -572,15 +869,15 @@ def resolve_review_plan(
         route_legs = target_db.get_route_legs(combo_name, active_only=True)
         if route_legs:
             candidates = [
-                _normalize_catalog_row(r)
+                annotate(_normalize_catalog_row(r))
                 for r in route_legs
-                if _passes_context_and_cliff(r, need_tokens, role="review")
+                if is_model_available(_normalize_catalog_row(r), reader, account=account, combo=combo_name) and _passes_context_and_cliff(r, need_tokens, role="review")
             ]
             combo_priority_legs = True
 
     if not candidates:
         for m in all_models:
-            if not is_model_available(m):
+            if not is_model_available(m, reader, account=account, combo=combo_name):
                 continue
             combos = m.get("combos")
             if combos and combo_name not in combos:
@@ -608,7 +905,7 @@ def resolve_review_plan(
             eligible = [
                 dict(c)
                 for c in all_models
-                if is_model_available(c)
+                if is_model_available(c, reader, account=account, combo=combo_name)
                 and _passes_context_and_cliff(c, need_tokens, role="review")
                 and detect_model_family(str(c.get("id") or c.get("model_id") or ""))
                 not in excluded_families
@@ -656,6 +953,7 @@ def resolve_review_plan(
         {
             "index": 1,
             "model": reviewer_1_id,
+            "leg_state": reviewer_1["leg_state"],
             "family": family_1,
             "combo": combo_name,
             "headers": headers_1,
@@ -687,6 +985,7 @@ def resolve_review_plan(
             {
                 "index": 2,
                 "model": reviewer_2_id,
+                "leg_state": reviewer_2["leg_state"],
                 "family": family_2,
                 "combo": combo_name,
                 "headers": headers_2,
@@ -704,6 +1003,7 @@ def resolve_review_plan(
         "need_tokens": need_tokens,
         "reviewer_count": reviewer_count,
         "reviewers": reviewers,
+        "candidates": all_models,
     }
 
 # New helper name: _risk_envelope_intelligence
@@ -717,6 +1017,8 @@ def _risk_envelope_intelligence(
     effort: str,
     author_model: str | None,
     db: Any,
+    leg_state_reader=None,
+    account=None,
 ) -> float | None:
     order = ("low", "normal", "high", "critical")
     if risk_l not in order:
@@ -737,6 +1039,8 @@ def _risk_envelope_intelligence(
                 relax_floor=True,
                 relax_reason="monotone-envelope",
                 _envelope=False,
+                leg_state_reader=leg_state_reader,
+                account=account,
             )
         except ValueError:
             continue
@@ -759,6 +1063,8 @@ def resolve_model_for_task(
     relax_floor: bool = False,
     relax_reason: str = "",
     _envelope: bool = True,
+    leg_state_reader=None,
+    account=None,
 ) -> dict[str, Any]:
     """Resolve the optimal model candidate for a given task role and risk band.
 
@@ -797,13 +1103,17 @@ def resolve_model_for_task(
             effort=effort,
             author_model=author_model,
             db=db,
+            leg_state_reader=leg_state_reader,
+            account=account,
         )
 
     min_intelligence = RISK_MIN_INTELLIGENCE[risk_l]
+    reader = leg_state_reader or leg_status
     all_models = get_catalog_models(db)
+    all_models = [dict(m, leg_state=reader(str(m.get("id") or m.get("model_id") or ""), account=account, combo=combo_name)) for m in all_models]
 
     def _eligible(m: Mapping[str, Any], require_combo: bool) -> bool:
-        if not is_model_available(m):
+        if not is_model_available(m, reader, account=account, combo=combo_name):
             return False
         combos = m.get("combos")
         if require_combo and combo_name and combos and combo_name not in combos:
@@ -890,6 +1200,8 @@ def resolve_model_for_task(
 
     return {
         "model": selected_id,
+        "leg_state": selected["leg_state"],
+        "candidates": all_models,
         "family": selected_family,
         "tier": str(selected.get("tier", "subscription")).lower(),
         "score": score_model(

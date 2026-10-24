@@ -76,9 +76,21 @@ def test_projected_waiting_refuses_delayed_any_of(w, verb, initial):
         worker_call(w, key, verb, STALE_SET)
     assert err.value.code == "exec_stale_state"
     assert snapshot(w, key) == before
-    # ... while the live set, which carries waiting now, is accepted.
-    worker_call(w, key, verb, LIVE_STATES)
-    assert snapshot(w, key)[0] == ("waiting" if verb == "ask_question" else "parked")
+    # ... and the live set, which carries waiting now, is still refused for a
+    # park (EXEC-OBSERVED-STATE: it only says "I observed nothing"), while an
+    # ask keeps accepting it -- an ask never moves the card, so it needs no
+    # observation of the state a projector event wrote.
+    if verb == "park":
+        with pytest.raises(Refused) as err:
+            worker_call(w, key, verb, LIVE_STATES)
+        assert err.value.code == "exec_stale_state"
+        assert snapshot(w, key) == before
+        # The run that observed the projection's waiting parks for real.
+        worker_call(w, key, verb, "waiting")
+        assert snapshot(w, key)[0] == "parked"
+    else:
+        worker_call(w, key, verb, LIVE_STATES)
+        assert snapshot(w, key)[0] == "waiting"
 
 
 @pytest.mark.parametrize("verb", ["ask_question", "park"])
