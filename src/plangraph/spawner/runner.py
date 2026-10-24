@@ -620,7 +620,7 @@ def spawn_service(*args, **kwargs):
                             role=role, dry_run=dry_run, client=chosen.harness)
                         process = self.runner._processes.get(job.job_id)
                         record.update(job_id=job.job_id, pid=process.pid if process else None,
-                                      chosen_leg=asdict(chosen), writer_family=chosen.family,
+                                      writer_family=chosen.family,
                                       cwd=job.cwd or getattr(self.runner, 'default_cwd', os.getcwd()))
                         self._save(record)
                         task = self.runner._tasks.get(job.job_id)
@@ -637,11 +637,14 @@ def spawn_service(*args, **kwargs):
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                            skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop))
+                            skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
+                            stdout_tail=job.stdout, stderr_tail=job.stderr))
+                        if job.status in ('completed', 'dry_run') and not unavailable and not stop:
+                            record['chosen_leg'] = asdict(chosen)
                         record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                             served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                            stdout_tail=job.stdout,
-                            stderr_tail=job.stderr,
+                            stdout_tail=record.get('stdout_tail', '') + job.stdout,
+                            stderr_tail=record.get('stderr_tail', '') + job.stderr,
                             events=record.get('events', []) + getattr(job, 'events', []))
                         if (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run:

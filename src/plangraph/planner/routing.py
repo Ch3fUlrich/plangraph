@@ -326,7 +326,8 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
     from plangraph.spawner.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
-    legs = tuple(legs)
+    from plangraph.spawner.resolver import OPERATOR_REMOVED_MODELS
+    legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
     for candidate in legs:
         validate_model(candidate.model)
     candidates = tuple(l for l in legs if role in l.roles)
@@ -417,7 +418,8 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
 
 def validate_model(model):
     """The resolver catalog and registered legs are the exact admission door."""
-    from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
+    from plangraph.spawner.resolver import (get_catalog_models, catalog_row_admitted,
+                                           OPERATOR_REMOVED_MODELS)
     from plangraph.mimo_policy import check_mimo_path
     from .legs import DEFAULT_LEGS
     if not isinstance(model, str) or not model:
@@ -426,7 +428,7 @@ def validate_model(model):
     rows = get_catalog_models()
     inactive = {row['id'] for row in rows if not catalog_row_admitted(row)}
     allowed = ({row['id'] for row in rows if catalog_row_admitted(row)} |
-               {leg.model for leg in DEFAULT_LEGS}) - inactive
+               {leg.model for leg in DEFAULT_LEGS}) - inactive - OPERATOR_REMOVED_MODELS
     if model not in allowed:
         raise SpawnRefused('unknown model: ' + str(model))
     return model

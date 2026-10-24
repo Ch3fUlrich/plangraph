@@ -187,13 +187,15 @@ def flush_outbox(state, command, *, run=subprocess.run):
         path.unlink(missing_ok=True)
 
 
-def install(host, destination, *, python=None, root=None, run=subprocess.run):
+def install(host, destination, *, python=None, root=None, run=subprocess.run, disabled=False):
     python = python or sys.executable
     root = Path(root or Path(__file__).resolve().parents[3]).resolve()
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
     templates = root / 'deploy/watchdog'
     if host == 'linux':
+        if any(char.isspace() for char in str(root)):
+            raise ValueError('Linux watchdog root must not contain whitespace')
         for name in ('service', 'timer'):
             text = (templates / ('watchdog.' + name)).read_text()
             text = text.replace('@PYTHON@', python).replace('@ROOT@', str(root))
@@ -204,8 +206,10 @@ def install(host, destination, *, python=None, root=None, run=subprocess.run):
         text = (templates / 'watchdog.xml').read_text()
         text = text.replace('@PYTHON@', escape(python)).replace('@ROOT@', escape(str(root)))
         task = destination / 'plangraph-stall-watchdog.xml'
-        task.write_text(text, encoding='utf-8')
+        task.write_bytes(b'\xff\xfe' + text.encode('utf-16-le'))
         run(['schtasks', '/Create', '/TN', 'Plangraph Stall Watchdog', '/XML', str(task), '/F'], check=True)
+        if disabled:
+            run(['schtasks', '/Change', '/TN', 'Plangraph Stall Watchdog', '/DISABLE'], check=True)
     else:
         raise ValueError('unsupported watchdog host')
 
@@ -215,6 +219,7 @@ def main(argv=None):
     parser.add_argument('command', choices=('tick', 'status', 'install'))
     parser.add_argument('--host', choices=('linux', 'windows'), default=sys.platform if sys.platform == 'linux' else 'windows')
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('--disabled', action='store_true', help='Create the Windows task disabled')
     args = parser.parse_args(argv)
     state = Path(os.environ.get('PLANGRAPH_SPAWN_STATE',
                  Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
@@ -224,7 +229,7 @@ def main(argv=None):
         if args.dry_run:
             print(f'Would install {args.host} stall watchdog every 2 minutes in {destination}')
             return
-        install(args.host, destination)
+        install(args.host, destination, disabled=args.disabled)
         return
     if args.command == 'status':
         path = state / 'watchdog/status.txt'

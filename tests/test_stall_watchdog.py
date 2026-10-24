@@ -96,7 +96,7 @@ def test_scheduler_installation(tmp_path, host):
     calls = []
     w.install(host, tmp_path, python='/usr/bin/python3', root=Path.cwd(),
               run=lambda args, **kw: calls.append(args))
-    content = '\n'.join(p.read_text() for p in tmp_path.iterdir())
+    content = '\n'.join(p.read_text(encoding='utf-16' if host == 'windows' else 'utf-8') for p in tmp_path.iterdir())
     assert 'plangraph.spawner.stall_watchdog' in content
     if host == 'linux':
         assert 'OnUnitActiveSec=120' in content

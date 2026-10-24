@@ -225,16 +225,34 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
 # Registered seats are the authoritative offline routing surface. Legacy rows
 # remain visible for diagnostics but must not become new offline spawn routes.
 from plangraph.planner.legs import DEFAULT_LEGS
-_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS}
+
+# OVH removed by operator, muse-spark-1.3-free gone D-1714, D-2655 G3.
+OPERATOR_REMOVED_MODELS = frozenset({
+    'omniroute/ovh-gpt-oss-120b',
+    'omniroute/or-north-mini-code-free',
+    'omniroute/or-laguna-s-2.1-free',
+    'omniroute/or-nemotron-3-super-free',
+    'opencode/muse-spark-1.3-contributor-free',
+})
+
+
+def admission_models() -> set[str]:
+    """Registered offline routes, excluding models removed by the operator."""
+    return {leg.model for leg in DEFAULT_LEGS} - OPERATOR_REMOVED_MODELS
+
+
+_fallback_legs = {leg.model: leg for leg in DEFAULT_LEGS if leg.model in admission_models()}
 for _row in DEFAULT_FALLBACK_MODELS:
     _row['active'] = _row['id'] in _fallback_legs
     if not _row['active']:
         _row['available'] = 0
-for _model, _leg in _fallback_legs.items():
+for _leg in DEFAULT_LEGS:
+    _model = _leg.model
     if not any(row['id'] == _model for row in DEFAULT_FALLBACK_MODELS):
         DEFAULT_FALLBACK_MODELS.append(dict(
             id=_model, family=_leg.family, harness=_leg.harness,
-            tier=_leg.tier, available=1, active=True,
+            tier=_leg.tier, available=int(_model in _fallback_legs),
+            active=_model in _fallback_legs,
             context_window=_leg.max_request_tokens,
             aa_intelligence=0.0, combos=[]))
 
@@ -351,7 +369,8 @@ def detect_model_family(model_id: str) -> str:
 
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
-    return row.get('available') == 1 and row.get('active') is True
+    return (row.get('id') not in OPERATOR_REMOVED_MODELS
+            and row.get('available') == 1 and row.get('active') is True)
 
 
 _served_cache = {}
@@ -424,18 +443,25 @@ def served_models(config, *, env=None, clock=time.monotonic):
 
 
 def _probe_served_models(config, *, env=None):
+    import logging
+    logger = logging.getLogger(__name__)
     env = dict(env or _probe_child_env.get() or host_probe_env())
     env['OPENCODE_CONFIG_CONTENT'] = config
     try:
-        result = subprocess.run(['opencode', 'models'], env=env, capture_output=True,
+        executable = shutil.which('opencode', path=env.get('PATH')) or 'opencode'
+        result = subprocess.run([executable, 'models'], env=env, capture_output=True,
                                 text=True, timeout=10)
         if result.returncode == 0:
             import re
             parsed = frozenset(line.strip() for line in result.stdout.splitlines()
                                if re.fullmatch(r'[^\s/]+/[^\s/]+', line.strip()))
-            return parsed or None
-    except (OSError, subprocess.SubprocessError):
-        pass
+            if parsed:
+                return parsed
+            logger.warning('host_probe_error: empty or unrecognised model listing; availability unknown')
+        else:
+            logger.warning('host_probe_error: opencode models exit %s; availability unknown', result.returncode)
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning('host_probe_error: %s; availability unknown', type(exc).__name__)
     return None
 
 
@@ -520,6 +546,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     """
     if not mimo_path_allowed(str(model.get("id") or model.get("model_id") or "")):
         return False
+    # Ranking historical catalog seats is not a new-spawn admission decision.
     if not catalog_row_admitted(model):
         return False
     status = str(model.get("status", "active")).lower()

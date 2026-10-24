@@ -216,7 +216,7 @@ class SpawnService:
             raise SpawnRefused(plan.error or 'no eligible leg')
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
-            plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg), served_model=None,
+            plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running',
             started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None,
             cwd=getattr(self.runner, 'default_cwd', os.getcwd()))
@@ -231,7 +231,6 @@ class SpawnService:
                     record['cwd'] = getattr(job, 'cwd', None) or getattr(self.runner, 'default_cwd', os.getcwd())
                     process = self.runner._processes.get(job.job_id)
                     record['pid'] = process.pid if process else None
-                    record['chosen_leg'] = asdict(chosen)
                     self._save(record)
                     task = self.runner._tasks.get(job.job_id)
                     if task:
@@ -246,10 +245,14 @@ class SpawnService:
                         (job.stderr.strip().splitlines()[0] if job.stderr.strip() else f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                        skip_reason=reason, provider_response=stop))
+                        skip_reason=reason, provider_response=stop,
+                        stdout_tail=job.stdout, stderr_tail=job.stderr))
+                    if job.status in ('completed', 'dry_run') and not unavailable and not stop:
+                        record['chosen_leg'] = asdict(chosen)
                     record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
                         served_family=job.served_family, writer_family=job.served_family or chosen.family,
-                        stdout_tail=job.stdout, stderr_tail=job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
+                        stdout_tail=record.get('stdout_tail', '') + job.stdout,
+                        stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)
                     if (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run:

@@ -19,7 +19,7 @@ def validate_model(model):
 def test_bootstrap_watchdog_default_root(tmp_path, host):
     w.install(host, tmp_path, run=lambda *a, **k: None)
     root = Path(__file__).resolve().parents[1]
-    text = ''.join(p.read_text() for p in tmp_path.iterdir())
+    text = ''.join(p.read_text(encoding='utf-16' if host == 'windows' else 'utf-8') for p in tmp_path.iterdir())
     assert str(root) in text
     assert str(root / 'src/src') not in text
     bootstrap = (root / 'deploy' / ('bootstrap.sh' if host == 'linux' else 'bootstrap.ps1')).read_text()
@@ -53,7 +53,12 @@ def test_exact_catalog_allowlist():
     from plangraph.planner.legs import DEFAULT_LEGS
     rows = get_catalog_models()
     rejected = {r['id'] for r in rows if not catalog_row_admitted(r)}
-    ids = ({r['id'] for r in rows if catalog_row_admitted(r)} | {l.model for l in DEFAULT_LEGS}) - rejected
+    from plangraph.spawner.resolver import OPERATOR_REMOVED_MODELS
+    ids = (({r['id'] for r in rows if catalog_row_admitted(r)} | {l.model for l in DEFAULT_LEGS})
+           - rejected - OPERATOR_REMOVED_MODELS)
+    for model in OPERATOR_REMOVED_MODELS:
+        with pytest.raises(SpawnRefused):
+            validate_model(model)
     for model in ids:
         assert validate_model(model) == model
     for model in rejected:
