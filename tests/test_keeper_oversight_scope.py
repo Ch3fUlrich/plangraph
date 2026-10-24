@@ -1635,12 +1635,17 @@ def test_oversight_stale_base_seq_is_conflict_and_a_denied_row(
     ("edit", lambda key: op("edit", key=key, fields={"note": "stale"})),
     ("priority", lambda key: op("priority", key=key, priority=5)),
     ("add_dep", lambda key: op("add_dep", key=key, dep="plangraph:HOST")),
+    ("edit-depends_on-list", lambda key: op("edit", key=key,
+                                             fields={"depends_on": ["plangraph:LINK"]})),
+    ("edit-depends_on-add", lambda key: op("edit", key=key,
+                                            fields={"depends_on": {"add": ["plangraph:LINK"]}})),
 ])
 def test_oversight_stale_base_seq_all_op_kinds(
         w, monkeypatch, op_kind, op_builder):
     """base_seq is checked for EVERY op key oversight can send (build-L1 MED).
 
-    Table-driven test over edit, priority, add_dep (cancel is not an oversight op).
+    Table-driven test over edit, priority, add_dep, and depends_on add/remove forms.
+    Cancel is not an oversight op, so it's not tested here.
     """
     token, principal = live(w, monkeypatch)
     batch_ref = f"batch-stale-{op_kind}"
@@ -1773,3 +1778,101 @@ def test_oversight_ddl_is_installed_at_open_fresh_and_upgraded_from_v13(
         assert _oversight_objects(again) == _OVERSIGHT_OBJECTS
         assert again.execute("PRAGMA user_version").fetchone()[0] == 13
         again.close()
+
+
+def test_oversight_triggers_persist_across_reopens_and_concurrent_open(tmp_path):
+    """build-L1 MED: triggers are create-if-absent (NO DROP on open), in one transaction.
+
+    Test that a concurrent open and a re-open keep the guards in place.
+    """
+    path = tmp_path / "triggers-persist.db"
+    # First open: creates the schema with oversight tables and triggers
+    conn1 = kdb.open_db(path, create=True)
+    triggers1 = {row[0] for row in conn1.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    assert "trg_oversight_tokens_revoke_only_update" in triggers1
+    assert "trg_oversight_tokens_append_only_delete" in triggers1
+    assert "trg_oversight_ops_append_only_update" in triggers1
+    assert "trg_oversight_ops_append_only_delete" in triggers1
+    conn1.close()
+
+    # Second open: triggers must still be there (no DROP on open)
+    conn2 = kdb.open_db(path)
+    triggers2 = {row[0] for row in conn2.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    assert triggers2 == triggers1
+    conn2.close()
+
+    # Concurrent opens: both should see the same triggers
+    conn3 = kdb.open_db(path)
+    conn4 = kdb.open_db(path)
+    triggers3 = {row[0] for row in conn3.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    triggers4 = {row[0] for row in conn4.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
+    assert triggers3 == triggers4 == triggers1
+    conn3.close()
+    conn4.close()
+
+
+def test_cli_mint_failed_write_keeps_old_token_valid(w, monkeypatch, tmp_path):
+    """build-L1 LOW: if the file write fails, the old token stays valid.
+
+    The mint is two-phase: prepare (validate + generate token), write file,
+    then commit (revoke old + insert new). If the write fails, the commit
+    never happens, so the old token remains valid and no new token is inserted.
+    """
+    from plangraph.keeper import cli
+
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    # Mint the first token
+    out1 = mint(w)
+    token1 = out1["token"]
+    assert auth.authenticate(w.conn, token1).role == "oversight"
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 1
+    # Try to mint a second token with an unwritable output path
+    cfg = tmp_path / "keeper.json"
+    cfg.write_text(json.dumps({"db": str(w.path),
+                               "snapshot": str(tmp_path / "s.json")}),
+                   encoding="utf-8")
+    os.chmod(cfg, 0o600)
+    # Use a non-existent directory to force a write failure
+    bad_path = tmp_path / "nonexistent" / "token.txt"
+    code = cli.main(["--config", str(cfg), "admin", "mint-oversight-token",
+                     OPP, "--go", GO, "--token-out", str(bad_path)])
+    assert code != 0
+    # The old token is still valid (commit never happened)
+    assert auth.authenticate(w.conn, token1).role == "oversight"
+    # No new token was inserted
+    assert w.conn.execute("SELECT COUNT(*) FROM oversight_tokens"
+                          ).fetchone()[0] == 1
+    # The old token is not revoked
+    row = w.conn.execute("SELECT revoked_at FROM oversight_tokens"
+                         " WHERE principal=?", (OPP,)).fetchone()
+    assert row["revoked_at"] is None
+
+
+# =========================================================================
+# build-L1 MED: READ_VERBS are project-scoped for oversight tokens.
+# =========================================================================
+@pytest.mark.parametrize("verb,call", [
+    ("needs_you", lambda s, p: s.needs_you(p, project="demo")),
+    ("answers", lambda s, p: s.answers(p, project="demo")),
+    ("progress", lambda s, p: s.progress(p, project="demo")),
+    ("jev_report", lambda s, p: s.jev_report(p, project="demo")),
+])
+def test_oversight_read_verbs_are_project_scoped(w, monkeypatch, verb, call):
+    """An oversight token's reads are project-scoped (only its project).
+
+    build-L1 MED: test a cross-project read is refused for every read verb
+    an oversight token may call.
+    """
+    _seed_demo(w)
+    _, principal = live(w, monkeypatch)
+    # The principal is scoped to ['plangraph'], so a read on 'demo' is refused
+    err = refusal(call, w.store, principal)
+    assert err.code == "forbidden"
+    assert "demo" in err.msg

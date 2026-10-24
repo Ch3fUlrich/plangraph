@@ -189,41 +189,6 @@ def test_v13_db_missing_owner_principal_and_retired_fence_upgrades(tmp_path):
     conn.close()
 
 
-def test_oversight_triggers_persist_across_reopens_and_concurrent_open(tmp_path):
-    """build-L1 MED: triggers are create-if-absent (NO DROP on open), in one transaction.
-
-    Test that a concurrent open and a re-open keep the guards in place.
-    """
-    path = tmp_path / "triggers-persist.db"
-    # First open: creates the schema with oversight tables and triggers
-    conn1 = kdb.open_db(path, create=True)
-    triggers1 = {row[0] for row in conn1.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
-    assert "trg_oversight_tokens_revoke_only_update" in triggers1
-    assert "trg_oversight_tokens_append_only_delete" in triggers1
-    assert "trg_oversight_ops_append_only_update" in triggers1
-    assert "trg_oversight_ops_append_only_delete" in triggers1
-    conn1.close()
-
-    # Second open: triggers must still be there (no DROP on open)
-    conn2 = kdb.open_db(path)
-    triggers2 = {row[0] for row in conn2.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
-    assert triggers2 == triggers1
-    conn2.close()
-
-    # Concurrent opens: both should see the same triggers
-    conn3 = kdb.open_db(path)
-    conn4 = kdb.open_db(path)
-    triggers3 = {row[0] for row in conn3.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
-    triggers4 = {row[0] for row in conn4.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_oversight%'")}
-    assert triggers3 == triggers4 == triggers1
-    conn3.close()
-    conn4.close()
-
-
 def items_columns(conn):
     return {row[1] for row in conn.execute("PRAGMA table_info(items)")}
 

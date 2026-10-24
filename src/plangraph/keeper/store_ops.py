@@ -135,6 +135,9 @@ class OpsMixin:
         oversight = principal.role == "oversight"
         self._oversight_fail = None
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
+        # build-L1 LOW: mark dry run early so _run's deny() skips writing
+        if oversight and dry_run:
+            self._oversight_denied_written = True
         try:
             return self._apply_ops(principal, ops, batch_ref, now,
                                    base_seq=base_seq, dry_run=dry_run)

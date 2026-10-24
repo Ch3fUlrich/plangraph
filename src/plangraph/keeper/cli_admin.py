@@ -119,7 +119,9 @@ def _cmd_mint_oversight_token(args, cfg) -> int:
     import tempfile
     conn = _open(cfg)
     try:
-        out = Store(conn).mint_oversight_token(
+        store = Store(conn)
+        # Phase 1: validate and generate token WITHOUT DB changes
+        prepared = store.prepare_oversight_token(
             args.name, go_decision=args.go, reason=args.reason)
     finally:
         conn.close()
@@ -129,11 +131,17 @@ def _cmd_mint_oversight_token(args, cfg) -> int:
     fd, tmp_path = tempfile.mkstemp(dir=dir_name, prefix=".token-", suffix=".tmp")
     try:
         try:
-            os.write(fd, (out["token"] + "\n").encode("utf-8"))
+            os.write(fd, (prepared["token"] + "\n").encode("utf-8"))
         finally:
             os.close(fd)
         os.chmod(tmp_path, 0o600)
         os.replace(tmp_path, path)
+        # Phase 2: ONLY AFTER successful file write, do the DB operations
+        conn = _open(cfg)
+        try:
+            Store(conn).commit_oversight_token(prepared)
+        finally:
+            conn.close()
         print(f"oversight token written to {path}")
         return 0
     except BaseException:

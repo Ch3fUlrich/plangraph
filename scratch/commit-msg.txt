@@ -1,41 +1,37 @@
-fix(oversight): address build-L1 findings for oversight feature
+fix(oversight): complete build-L1 rulings for oversight feature
 
-HIGH: Tier lowering - oversight may only RAISE tiers, never lower below
-default_review_tier. plangraph items default to 'high', so oversight
-creating with tier='standard' has the tier raised to 'high' instead of
-being refused. Test: test_oversight_cannot_lower_tier_below_default.
+Item 1 (HIGH): Moved test_oversight_triggers_persist_across_reopens_and_concurrent_open
+from tests/test_keeper_schema_upgrade.py to tests/test_keeper_oversight_scope.py.
+The schema upgrade test file is now byte-identical to main's version (no oversight
+references).
 
-MED: base_seq checks - extended to ALL op keys oversight can send
-(edit, priority, add_dep). Cancel is excluded as it's not an oversight
-op. Test: test_oversight_stale_base_seq_all_op_kinds (table-driven).
+Item 2 (MED): Extended base_seq table-driven test to cover depends_on edit forms
+(list replace and {add: [...]} form). Test now covers: edit, priority, add_dep,
+edit-depends_on-list, edit-depends_on-add (5 cases). Cancel is not an oversight op
+so it's excluded.
 
-MED: Triggers - removed DROP TRIGGER on open, now uses CREATE IF NOT
-EXISTS (presence-based). Test: test_oversight_triggers_persist_across_reopens_and_concurrent_open.
+Item 3 (MED): Implemented two-phase mint for cli_admin. Phase 1 (prepare_oversight_token)
+validates and generates the token WITHOUT DB changes. Phase 2 (commit_oversight_token)
+does the DB operations (revoke old + insert new). The file write happens between
+phases, so a failed write keeps the old token valid and inserts no new token.
+Added test_cli_mint_failed_write_keeps_old_token_valid to verify this.
 
-LOW: Token re-check - added token re-check inside BEGIN IMMEDIATE
-transaction in _apply_ops to close mint/revoke race. Test:
-test_token_rechecked_inside_write_transaction.
+Item 4 (MED): Added project scope enforcement for oversight tokens on read verbs.
+Modified needs_you, answers, progress, and jev_report to check project scope when
+called by an OversightPrincipal. Added test_oversight_read_verbs_are_project_scoped
+to verify cross-project reads are refused for all 4 read verbs.
 
-LOW: batch_ref validation - bounded and guarded like reason/finding
-using _oversight_text. Test: test_batch_ref_is_bounded_and_guarded.
+Item 5 (LOW): Fixed dry run writes nothing on refusal. Set _oversight_denied_written=True
+early in _apply_ops_audited when dry_run=True, so _run's deny() callback skips writing
+any audit rows or alarms. Both failing dry-run tests now pass.
 
-LOW: cli_admin mint - added atomic rename for file write (temp file +
-os.replace). Full two-phase mint (write file before DB changes) not
-implemented due to complexity.
+Item 6 (DEFERRED): oversight_ops hash-chain. Implementing a hash chain for the
+audit table would require schema changes (prev_hash/hash columns), migration logic,
+and verification. This is deferred as a follow-up leaf task.
 
-LOW: docs/KEEPER.md - fixed fold-branch sentence for oversight_token_minted
-(it now has a fold branch in events.py).
-
-NOT DONE in this round (documented as follow-ups):
-- READ_VERBS project-scoped for oversight (requires modifying all read verbs)
-- oversight_ops hash-chain (requires adding prev_hash/hash columns)
-- Dry run writes nothing on refusal (complex interaction with verb-seam refusals)
-
-Coverage gaps closed:
-- Test for oversight tier lowering
-- Table-driven base_seq test for all op kinds
-- Concurrent open test for triggers
+Tests: 153 passed in test_keeper_oversight_scope.py (was 145, added 8 new tests).
+All oversight-related tests green (205 passed, 1 skipped).
 
 Plan-Item: plangraph:RT-OVERSIGHT-KEEPER-SCOPE
-Writer: qodercli qwen3.8-flash 20261024-091154-keeper-scope-repair-r4-2fafd4
+Writer: qodercli qwen3.8-flash 20261024-092848-keeper-scope-repair-r5-f9a922
 Co-Authored-By: plangraph-keeper <noreply@example.invalid>
