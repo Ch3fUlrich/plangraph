@@ -25,7 +25,7 @@ def w(tmp_path):
     git("commit", "--allow-empty", "-m", "base")
     world.non_merge = git("rev-parse", "HEAD")
     git("checkout", "-b", "phase")
-    git("commit", "--allow-empty", "-m", "phase")
+    git("commit", "--allow-empty", "-m", "Merge phase demo:GATE")
     world.single_parent = git("rev-parse", "HEAD")
     git("checkout", "main")
     git("merge", "--no-ff", "phase", "-m", "Merge phase demo:GATE")
@@ -114,10 +114,47 @@ def test_system_rejects_unverified_without_writes(w):
     with pytest.raises(Refused) as exc:
         w.store.add_evidence_router(w.p("system"), "demo:C1", "commit+ci",
                                     {"commit": w.merge})
-    assert exc.value.code == "evidence"
+    assert exc.value.code == "evidence_unverified"
     # Refusal auditing is intentional; no lifecycle/evidence writes are allowed.
     assert w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == before
     assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
+
+
+def test_system_rechecks_replacement_gate_subject_under_lock(w, monkeypatch):
+    w.store.create_items(w.p("router"), [defn("OTHER", kind="gate"),
+                                        defn("GOAL2", ["OTHER"], kind="goal")])
+    verify = w.store._verify_evidence
+
+    def racing_verify(*args):
+        result = verify(*args)
+        w.conn.execute("UPDATE edges SET src='demo:OTHER' WHERE src='demo:GATE'")
+        w.conn.commit()
+        return result
+
+    monkeypatch.setattr(w.store, "_verify_evidence", racing_verify)
+    with pytest.raises(Refused) as exc:
+        w.store.add_evidence_router(w.p("system"), "demo:C1", "commit+ci",
+                                    {"commit": w.merge})
+    assert exc.value.code == "forbidden"
+    assert "phase merge no longer matches the card's gate" in str(exc.value)
+    assert w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
+
+
+def test_merge_subject_ignores_show_signature_config(w, monkeypatch):
+    git = w.store.ctx["git"]
+    repo = git.repo_path("demo")
+    subprocess.check_call(["git", "config", "log.showSignature", "true"], cwd=repo)
+    run = git._run
+
+    def signature_aware_run(repo, args):
+        # Model signed-commit diagnostics without depending on a local GPG key.
+        result = run(repo, args)
+        if "--no-show-signature" not in args:
+            result.stdout = "gpg: Signature made today\n" + result.stdout
+        return result
+
+    monkeypatch.setattr(git, "_run", signature_aware_run)
+    assert git.two_parent_merge_subject(repo, w.merge) == "Merge phase demo:GATE"
 
 
 @pytest.mark.parametrize("change", [

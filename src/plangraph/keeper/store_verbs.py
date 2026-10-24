@@ -50,7 +50,7 @@ class VerbsMixin:
         # Slow verification (git/gh/http) happens before the write lock.
         result = self._verify_evidence(item, kind, ref, now)
         if principal.role == "system" and not result.ok:
-            raise Refused("evidence", result.detail)
+            raise Refused("evidence_unverified", result.detail)
         with self._write():
             fresh = self._get_or_refuse(key)
             if principal.role == "system":

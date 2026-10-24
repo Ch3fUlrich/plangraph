@@ -217,7 +217,7 @@ class GitAdapter:
         if not repo or not valid_commit_ref(sha):
             return None
         try:
-            proc = self._run(repo, ["show", "-s", "--format=%P%n%s",
+            proc = self._run(repo, ["show", "--no-show-signature", "-s", "--format=%P%n%s",
                                     "--end-of-options", sha])
             lines = proc.stdout.splitlines()
             if proc.returncode == 0 and len(lines) == 2 and len(lines[0].split()) == 2:
