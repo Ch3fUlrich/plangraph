@@ -152,6 +152,8 @@ def _upgrade(conn):
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
+    from .messages_schema import SQLITE
+    conn.executescript(SQLITE)
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
 

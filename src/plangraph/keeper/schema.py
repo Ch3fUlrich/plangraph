@@ -10,13 +10,14 @@ Every UPDATE trigger tests **both** the old and the new key: a statement that
 moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
+from .messages_schema import SQLITE as MESSAGES_DDL
 
 __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
            "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).
@@ -509,5 +510,5 @@ CREATE INDEX idx_edges_dst ON edges(dst);
 CREATE INDEX idx_audit_log_key ON audit_log(key);
 """
 
-SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL
+SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL)

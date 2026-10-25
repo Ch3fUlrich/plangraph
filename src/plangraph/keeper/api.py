@@ -222,6 +222,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     def _read(self, name, extra, query, principal):
+        if name == "messages":
+            from .messages_poll import read_messages
+            return read_messages(self.server, principal, query), False
         store = self.server.store
         fmt_name = self._one(query, "fmt")
         as_text = fmt_name == "text" or (
@@ -287,6 +290,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         raise Refused("not_found", f"no read verb {name!r}")
     # --------------------------------------------------------------- writes
     def _write(self, name, body, principal, extra=""):
+        if name == "post_message":
+            return {"row": self.server.store.post_message(principal, **body)}
         store = self.server.store
         if not isinstance(body, dict):
             if name in ("create_items", "import_items") and isinstance(body, list):

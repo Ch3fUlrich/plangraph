@@ -8,6 +8,8 @@ Neither the DSN nor a filesystem path is ever printed.  See docs/keeper-postgres
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import sqlite3
 import sys
@@ -24,7 +26,7 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
           "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
-          "jev_shadow")
+          "jev_shadow", "messages")
 _BATCH = 500
 
 
@@ -86,14 +88,51 @@ def _check_columns(conn, table, cols):
 def _copy_table(src, conn, table):
     cols, order = _columns(src, table)
     _check_columns(conn, table, cols)
-    sql = f"INSERT INTO {table}({','.join(cols)}) VALUES({','.join('?' * len(cols))})"
-    cur = src.execute(f"SELECT {','.join(cols)} FROM {table} ORDER BY {','.join(order)}")
+    quoted_cols = [f'"{c}"' for c in cols]
+    quoted_order = [f'"{o}"' for o in order]
+    sql = f'INSERT INTO "{table}"({",".join(quoted_cols)}) VALUES({",".join("?" * len(cols))})'
+    cur = src.execute(f'SELECT {",".join(quoted_cols)} FROM "{table}" ORDER BY {",".join(quoted_order)}')
     while True:
         batch = cur.fetchmany(_BATCH)
         if not batch:
             return
         for row in batch:
             conn.execute(sql, tuple(row))
+
+
+def _verify_messages_chain(conn) -> list[dict]:
+    problems = []
+    try:
+        rows = conn.execute(
+            'SELECT seq, "from", "to", body, trace_id, key, run_id, attempt_n, '
+            'ack_state, ts, prev_hash, hash FROM messages ORDER BY seq'
+        ).fetchall()
+    except Exception:
+        return []
+    prev_hash = "0" * 64
+    for r in rows:
+        row = dict(r) if hasattr(r, "keys") else {
+            "seq": r[0], "from": r[1], "to": r[2], "body": r[3],
+            "trace_id": r[4], "key": r[5], "run_id": r[6], "attempt_n": r[7],
+            "ack_state": r[8], "ts": r[9], "prev_hash": r[10], "hash": r[11]
+        }
+        stored_hash = row.pop("hash")
+        stored_prev = row["prev_hash"]
+        if stored_prev != prev_hash:
+            problems.append({"seq": row["seq"], "code": "prev_hash_mismatch",
+                             "msg": f"expected prev_hash {prev_hash!r}, stored {stored_prev!r}"})
+        if isinstance(row["body"], str):
+            try:
+                row["body"] = json.loads(row["body"])
+            except Exception:
+                pass
+        payload = json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        want = hashlib.sha256((stored_prev + payload).encode()).hexdigest()
+        if stored_hash != want:
+            problems.append({"seq": row["seq"], "code": "hash_mismatch",
+                             "msg": f"stored {stored_hash!r}, recomputed {want!r}"})
+        prev_hash = stored_hash
+    return problems
 
 
 def _triggers(conn, tables, enable):
@@ -149,6 +188,8 @@ def _apply(src, tables, source_counts, source_head, cfg_db, opts):
                 raise CopyError("events chain head differs between source and target")
             if events.verify_chain(conn):
                 raise CopyError("copied events chain does not verify")
+            if "messages" in tables and _verify_messages_chain(conn):
+                raise CopyError("copied messages chain does not verify")
             _advance_identities(conn, tables)
             conn.execute("COMMIT")
         except BaseException:
@@ -190,6 +231,13 @@ def run(cfg, *, src=None, apply=False, out=None, err=None) -> int:
                     print(f"source chain: seq {p['seq']} {p['code']}", file=err)
                 raise CopyError(f"source events chain is broken ({len(problems)} problem(s)); "
                                 "nothing copied")
+            if "messages" in tables:
+                msg_problems = _verify_messages_chain(source)
+                if msg_problems:
+                    for p in msg_problems[:10]:
+                        print(f"source messages chain: seq {p['seq']} {p['code']}", file=err)
+                    raise CopyError(f"source messages chain is broken ({len(msg_problems)} problem(s)); "
+                                    "nothing copied")
             if not apply:
                 print("\n".join(_report("dry-run (target untouched)", tables, counts, head)),
                       file=out)
