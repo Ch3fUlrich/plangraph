@@ -216,6 +216,11 @@ LOW_SEVERITY_TABLE = [
     ("VERDICT: fix - `HIGH`: a; LOW: b", "fix", False),
     ("VERDICT: fix - _Medium_ (b); low: a", "fix", False),
     ("VERDICT: fix - **low** (a)", "pass", True),
+    # dash-separated blocking labels fail closed (L1-1)
+    ("VERDICT: fix - LOW: x; Medium - y", "fix", False),
+    ("VERDICT: fix - LOW: x; HIGH - y", "fix", False),
+    ("VERDICT: fix - LOW: x; **MED** \u2014 y", "fix", False),
+    ("VERDICT: fix - LOW: medication typo", "pass", True),
     (
         "VERDICT: fix - LOW: CHANGELOG.md D-2773 entry still says \"admitted in batch by design\", "
         "contradicting the updated docs/REVIEW-METHOD.md (\"admitted in any mode\"). "
