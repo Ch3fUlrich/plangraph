@@ -122,11 +122,10 @@ _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
 #: The oversight guard triggers (``OVERSIGHT_DDL``): a presence-based install
 #: never REPAIRS one, so ``_repair_oversight_triggers`` drops them on every open
 #: and the DDL below recreates the current body -- a weakened or older guard
-#: cannot survive a reopen (D-2458).
-_OVERSIGHT_TRIGGERS = ("trg_oversight_tokens_revoke_only_update",
-                       "trg_oversight_tokens_append_only_delete",
-                       "trg_oversight_ops_append_only_update",
-                       "trg_oversight_ops_append_only_delete")
+#: cannot survive a reopen (D-2458).  Derived directly from OVERSIGHT_DDL.
+_OVERSIGHT_TRIGGERS = tuple(
+    re.findall(r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", OVERSIGHT_DDL)
+)
 
 
 def _upgrade_lock_triggers(conn):
@@ -147,19 +146,43 @@ def _upgrade_lock_triggers(conn):
     conn.executescript(script)
 
 
-def _split_statements(sql: str) -> list[str]:
-    """Split a SQL script into individual statements using sqlite3.complete_statement."""
+def _first_sql_word(stmt: str) -> str:
+    """Return the first keyword of a SQL statement, skipping comments/whitespace."""
+    clean = re.sub(r"^(?:\s*--[^\n]*(?:\n|$|\r)|\s*/\*.*?\*/\s*)+", "", stmt, flags=re.S).strip()
+    m = re.match(r"^([A-Za-z]+)", clean)
+    return m.group(1).upper() if m else ""
+
+
+def _split_statements(
+    sql: str,
+    *,
+    disallow: tuple[str, ...] | frozenset[str] = ("PRAGMA", "VACUUM"),
+) -> list[str]:
+    """Split a SQL script into individual statements using sqlite3.complete_statement.
+
+    Splits on a character/semicolon basis, respecting trigger BEGIN...END bodies.
+    Statements whose leading keyword is in ``disallow`` are refused with a ValueError.
+    """
     statements = []
     buffer = ""
-    for line in sql.splitlines(keepends=True):
-        buffer += line
-        if sqlite3.complete_statement(buffer):
+    for ch in sql:
+        buffer += ch
+        if ch == ";" and sqlite3.complete_statement(buffer):
             stmt = buffer.strip()
             if stmt:
+                word = _first_sql_word(stmt)
+                if disallow and word in disallow:
+                    raise ValueError(f"disallowed statement in transaction: {word}")
                 statements.append(stmt)
             buffer = ""
-    if buffer.strip():
-        statements.append(buffer.strip())
+    trailing = buffer.strip()
+    if trailing:
+        clean = re.sub(r"^(?:\s*--[^\n]*(?:\n|$|\r)|\s*/\*.*?\*/\s*)+", "", trailing, flags=re.S).strip()
+        if clean:
+            word = _first_sql_word(trailing)
+            if disallow and word in disallow:
+                raise ValueError(f"disallowed statement in transaction: {word}")
+            statements.append(trailing)
     return statements
 
 
@@ -184,9 +207,15 @@ def _upgrade(conn):
     # between them (D-2458).
     conn.execute("BEGIN IMMEDIATE")
     try:
-        for trigger in _OVERSIGHT_TRIGGERS:
+        triggers = tuple(
+            re.findall(r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", OVERSIGHT_DDL)
+        ) or _OVERSIGHT_TRIGGERS
+        for trigger in triggers:
             conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-        for stmt in _split_statements(OVERSIGHT_DDL):
+        for stmt in _split_statements(OVERSIGHT_DDL, disallow=("PRAGMA", "VACUUM")):
+            word = _first_sql_word(stmt)
+            if word in ("PRAGMA", "VACUUM"):
+                raise ValueError(f"disallowed statement in transaction: {word}")
             conn.execute(stmt)
         conn.execute("COMMIT")
     except Exception:
