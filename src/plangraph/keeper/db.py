@@ -213,9 +213,6 @@ def _upgrade(conn):
         for trigger in triggers:
             conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
         for stmt in _split_statements(OVERSIGHT_DDL, disallow=("PRAGMA", "VACUUM")):
-            word = _first_sql_word(stmt)
-            if word in ("PRAGMA", "VACUUM"):
-                raise ValueError(f"disallowed statement in transaction: {word}")
             conn.execute(stmt)
         conn.execute("COMMIT")
     except Exception:

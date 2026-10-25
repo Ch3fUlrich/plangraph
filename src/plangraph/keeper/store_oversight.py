@@ -31,7 +31,9 @@ Every writer consults that budget before inserting, so past the cap the answer
 is ``oversight:rate_limited`` and the append-only table stops growing.
 Crossing the derived hourly caps is alarm-only; only an explicit ``pg admin
 revoke`` kills the identity (R4).  A denial opens ONE ``oversight_denied``
-alarm per principal (the key is the principal, not the op's finding id).
+alarm per principal (the key is the principal, not the op's finding id); its
+detail names the latest finding and the true count of denials since the alarm
+opened, both derived from the append-only ledger (I7), never from free text.
 """
 from __future__ import annotations
 
@@ -122,17 +124,50 @@ def _rollback_txn(conn):
         pass
 
 
+def _guard_alarm(conn, principal_name, detail, now_iso):
+    """Upsert the ONE open ``oversight_denied`` alarm with a ledger count (I7).
+
+    ``detail`` is the latest denial's own detail text; the occurrence count is
+    ``COUNT(*)`` of the principal's denied ``oversight_ops`` rows with
+    ``ts >= raised_at`` of the open alarm (``now_iso`` when this opens it),
+    read in the same transaction as the audit insert.  The count is never
+    recovered from the detail's free text: a finding like ``F-count 7`` must
+    not inflate it.  ON CONFLICT DO UPDATE keeps one open row per principal.
+    """
+    row = conn.execute(
+        "SELECT raised_at FROM projector_alarms"
+        " WHERE kind='oversight_denied' AND workflow_id='oversight-guard'"
+        " AND key=? AND cleared_at IS NULL",
+        (principal_name,)).fetchone()
+    raised_at = row[0] if row is not None else now_iso
+    count = conn.execute(
+        "SELECT COUNT(*) FROM oversight_ops WHERE principal=?"
+        " AND outcome='denied' AND ts>=?",
+        (principal_name, raised_at)).fetchone()[0]
+    detail = f"{detail} count {count}"
+    conn.execute(
+        "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
+        " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms),"
+        "'oversight_denied','oversight-guard',?,?,?)"
+        " ON CONFLICT (kind, workflow_id, key) WHERE cleared_at IS NULL"
+        " DO UPDATE SET detail=?",
+        (principal_name, detail, now_iso, detail))
+    return detail
+
+
 def audit_oversight_expired_auth(conn, principal_name, token_id, generation, now):
     """Audit an expired oversight token at authenticate; unknown tokens stay unaudited.
 
     Consults the hourly expired-token denied budget first: past the cap this raises
     ``oversight:rate_limited`` and writes nothing to the append-only table.
     """
-    from datetime import datetime, timezone
     from . import oversight_policy as policy
+    from .store_support import iso
 
-    since_iso = datetime.fromtimestamp(now - 3600, timezone.utc).isoformat()
-    now_iso = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    # One timestamp codec for the ledger (store_support.iso), so the alarm's
+    # ``ts >= raised_at`` count compares every writer's rows correctly.
+    since_iso = iso(now - 3600)
+    now_iso = iso(now)
     conn.execute("BEGIN IMMEDIATE")
     try:
         count = conn.execute(
@@ -154,16 +189,10 @@ def audit_oversight_expired_auth(conn, principal_name, token_id, generation, now
              "authenticate", None, "",
              "oversight:token_expired token has expired",
              "oversight:token_expired"))
-        detail = (f"oversight:token_expired principal={principal_name}"
-                  f" gen={generation} op=authenticate"
-                  f" finding=")
-        conn.execute(
-            "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
-            " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms),"
-            "'oversight_denied','oversight-guard',?,?,?)"
-            " ON CONFLICT (kind, workflow_id, key) WHERE cleared_at IS NULL"
-            " DO NOTHING",
-            (principal_name, detail, now_iso))
+        _guard_alarm(
+            conn, principal_name,
+            f"oversight:token_expired principal={principal_name}"
+            f" gen={generation} op=authenticate finding=", now_iso)
         _commit_txn(conn)
     except BaseException:
         _rollback_txn(conn)
@@ -538,31 +567,15 @@ class OversightMixin:
         contract promises ONE open ``projector_alarms`` row, and rotating
         finding ids must not mint unbounded open alarms (routing-00 routes one
         card).  ON CONFLICT DO UPDATE refreshes the open alarm's detail to the
-        latest finding + an occurrence count.
+        latest finding plus the count of denials since the alarm opened (I7):
+        the count comes from the ledger in this transaction (``_guard_alarm``),
+        never by parsing the detail text, and the expired-auth writer shares it.
         """
-        row = self.conn.execute(
-            "SELECT detail FROM projector_alarms"
-            " WHERE kind='oversight_denied' AND workflow_id='oversight-guard'"
-            " AND key=? AND cleared_at IS NULL",
-            (principal.name,)
-        ).fetchone()
-        count = 1
-        if row is not None:
-            raw_detail = row["detail"] if (isinstance(row, dict) or hasattr(row, "__getitem__")) else row[0]
-            m = re.search(r"\bcount\s+(\d+)", str(raw_detail or ""))
-            count = (int(m.group(1)) + 1) if m else 2
-
-        base_detail = (f"oversight:{reason} principal={principal.name}"
-                       f" gen={principal.generation} op={action}"
-                       f" finding={finding}")
-        detail_on_conflict = f"{base_detail} count {count}"
-        self.conn.execute(
-            "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
-            " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms),"
-            "'oversight_denied','oversight-guard',?,?,?)"
-            " ON CONFLICT (kind, workflow_id, key) WHERE cleared_at IS NULL"
-            " DO UPDATE SET detail=?",
-            (principal.name, base_detail, self._iso(now), detail_on_conflict))
+        _guard_alarm(self.conn, principal.name,
+                     f"oversight:{reason} principal={principal.name}"
+                     f" gen={principal.generation} op={action}"
+                     f" finding={finding}",
+                     self._iso(now))
 
     def _denial_context(self, exc, fail):
         """``(index, op, key, finding, input_reason)`` for a denied batch.

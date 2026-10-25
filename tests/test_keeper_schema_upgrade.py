@@ -343,6 +343,16 @@ def test_upgrade_oversight_triggers_atomic_transaction(tmp_path, monkeypatch):
     for stmt, in_tx in create_trigger_calls:
         assert in_tx is True, f"Statement {stmt} was executed outside of a transaction!"
 
+    # B2: one transaction all the way: no BEGIN/COMMIT between the first guard
+    # drop and the last create (the guards are absent only inside the txn).
+    first_drop = next(i for i, item in enumerate(executed_statements)
+                      if item[0].startswith("DROP TRIGGER IF EXISTS trg_oversight"))
+    last_create = max(i for i, item in enumerate(executed_statements)
+                      if item[0].upper().startswith("CREATE "))
+    between = [item[0].split(None, 1)[0].upper()
+               for item in executed_statements[first_drop + 1:last_create]]
+    assert [word for word in between if word in ("BEGIN", "COMMIT")] == []
+
 
 def test_concurrent_update_oversight_ops_blocked_during_upgrade(tmp_path, monkeypatch):
     """B2: a second connection's UPDATE oversight_ops during upgrade is refused/blocked."""

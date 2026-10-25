@@ -2537,6 +2537,114 @@ def test_oversight_guard_alarm_preserves_initial_finding_on_conflict(w, monkeypa
     assert "count 2" in alarms[0]["detail"]
 
 
+def test_guard_alarm_count_is_ledger_derived_not_parsed_from_text(w, monkeypatch):
+    """I7: a finding like ``F-count 7`` must never inflate the alarm count.
+
+    The count is ``COUNT(*)`` of denied ``oversight_ops`` rows since the open
+    alarm's ``raised_at`` (same transaction as the audit insert), never a
+    number recovered from the detail's free text.
+    """
+    _, principal = live(w, monkeypatch)
+    err1 = refusal(apply, w, principal, [op(
+        "edit", key="plangraph:OTHER", fields={"done_criteria": "no"},
+        finding="F-count 7")])
+    assert has("field_denied", err1.msg)
+    err2 = refusal(apply, w, principal, [op(
+        "edit", key="plangraph:OTHER", fields={"done_criteria": "nope"},
+        finding="F-0002")])
+    assert has("field_denied", err2.msg)
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert "F-0002" in alarms[0]["detail"]          # the LATEST finding
+    assert alarms[0]["detail"].endswith("count 2")  # 2 denials, not 8
+
+
+def test_expired_auth_alarm_carries_the_same_ledger_count(w, monkeypatch):
+    """I7: the expired-auth alarm uses DO UPDATE and the same ledger count.
+
+    Expired-auth denials and op denials share one open alarm and one append-only
+    ledger, so the first op denial after an expiry reports ``count 2``, not 1.
+    """
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    tok = mint(w)["token"]
+    w.clock.advance(4000)                          # the TTL has passed
+    err = refusal(auth.authenticate, w.conn, tok, now=w.clock())
+    assert "token_expired" in err.msg
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert alarms[0]["detail"].endswith("count 1")
+
+    principal = auth.authenticate(w.conn, mint(w)["token"], now=w.clock())
+    err = refusal(apply, w, principal, [op(
+        "edit", key="plangraph:OTHER", fields={"done_criteria": "no"},
+        finding="F-0002")])
+    assert has("field_denied", err.msg)
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert alarms[0]["detail"].endswith("count 2")
+
+
+def test_expired_denials_x3_count_three(w, monkeypatch):
+    """I7: expired x3 -> one open alarm whose detail ends ``count 3``."""
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    tok = mint(w)["token"]
+    for i in range(3):
+        refusal(auth.authenticate, w.conn, tok, now=w.clock() + 4000.0)
+        alarms = _open_guard_alarms(w)
+        assert len(alarms) == 1
+        assert alarms[0]["detail"].endswith(f"count {i + 1}")
+
+
+def test_concurrent_op_denials_one_alarm_with_the_true_count(w, monkeypatch):
+    """E4/I5: concurrent denial writers serialise on the write transaction.
+
+    Each denial writes its row and refreshes the ONE open alarm inside the same
+    transaction, so the final detail ends the true ledger count whichever
+    thread finishes last -- and a ``count``-shaped finding cannot inflate it.
+    """
+    import threading
+    from plangraph.keeper import db as kdb
+    from plangraph.keeper.store import Store
+
+    _, principal = live(w, monkeypatch)
+    n = 5
+    barrier = threading.Barrier(n)
+    errors = []
+
+    def deny():
+        conn = kdb.open_db(w.path)
+        try:
+            store = Store(conn, clock=w.clock)
+            barrier.wait()
+            try:
+                store.apply_ops(principal, [op(
+                    "edit", key="plangraph:OTHER",
+                    fields={"done_criteria": "no"}, finding="F-count 7")],
+                    batch_ref=BATCH)
+            except Refused:
+                pass
+            except Exception as exc:
+                errors.append(exc)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=deny) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(_denied_rows(w)) == n
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert alarms[0]["detail"].endswith(f"count {n}")
+
+
 def test_concurrent_expired_auth_cap_holds_under_threads(w, monkeypatch):
     """A1: concurrent expired auth denials respect the cap of 10 in one BEGIN IMMEDIATE txn."""
     import threading
