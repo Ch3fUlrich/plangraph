@@ -11,6 +11,11 @@ import sys
 import os
 
 
+
+@pytest.fixture(autouse=True)
+def _gateway_url(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
+
 @pytest.fixture(autouse=True)
 def fake_host_binaries(tmp_path, monkeypatch):
     """Keep real probes (including worker processes) off the host installation."""
@@ -241,6 +246,36 @@ def test_transport_only_fallthrough(tmp_path, provider_stop):
         assert store.leg_status(first_key)['state'] == ('limited' if provider_stop else 'ok')
         if provider_stop:
             assert service.route({'estimate_tokens': 1000}).first_leg.model != first_model
+    asyncio.run(run())
+
+
+def test_breaker_503_fails_run_without_same_leg_retry(tmp_path):
+    """D-2791: a gateway breaker 503 / circuit-open counts as a failed run.
+
+    It is never retried in a loop on the same leg and is not a provider stop
+    (only 429/402 advance the leg state); the next writer picks the card up.
+    """
+    async def run():
+        store = LegStateStore(tmp_path / 'legs.sqlite')
+        runner = SpawnerRunner()
+        async def factory(*args, **kwargs):
+            job_id = next(iter(runner.jobs))
+            runner.provider_response(job_id, runner.jobs[job_id].model_or_combo, 503,
+                'circuit open', {}, store=store, source='gateway_adapter',
+                adapter_token=runner._adapter_tokens[job_id])
+            return await asyncio.create_subprocess_exec(sys.executable, '-c',
+                'import sys; print("503 circuit open", file=sys.stderr); raise SystemExit(1)', **kwargs)
+        runner.process_factory = factory
+        service = SpawnService(runner, tmp_path, store)
+        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='task', wait_seconds=None)
+        launched = [a for a in record['attempts'] if a['status'] != 'skipped']
+        assert len(launched) == 1
+        assert len(runner.jobs) == 1
+        assert record['status'] == 'failed'
+        assert not runner.provider_responses
+        first_model = list(runner.jobs.values())[0].model_or_combo
+        first_key = first_model if '/' in first_model else 'agy/' + first_model
+        assert store.leg_status(first_key)['state'] == 'ok'
     asyncio.run(run())
 
 

@@ -497,6 +497,17 @@ reports — while `effective_gateway_base_url()` resolves the environment source
 | environment (provider-level override, wins when set) | `OMNIROUTE_BASE_URL` |
 | environment (gateway default) | `PLANGRAPH_GATEWAY_URL` |
 
+On hosts without a root config (such as Windows workst), launch the spawner CLI with `PLANGRAPH_GATEWAY_URL=http://127.0.0.1:20128/v1` to point to the local gateway.
+
+A gateway-keyed model (provider `mimo`/`omniroute`) with no base URL from any source
+now fails closed on every platform — a Linux host with neither the root overlay nor a
+URL environment variable launches no process and the run fails with
+`not_served_on_host: gateway_base_url_unresolved`, falling through to the next leg.
+
+A gateway breaker 503 / circuit-open counts as a failed run: it is never retried in a
+loop on the same leg and is not a provider stop (only 429/402 advance the leg state);
+the next writer picks the card up.
+
 `gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no
 production caller passes one today: that argument exists for callers that do pass it
 (the tests exercise it).

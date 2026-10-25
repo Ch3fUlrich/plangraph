@@ -85,6 +85,10 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
         if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I) or name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':
             monkeypatch.delenv(name)
+    # An inherited OPENCODE_CONFIG_CONTENT is a gateway endpoint source (its
+    # providers.mimo/omniroute settings.baseURL defeats the I6 fail-closed
+    # path); tests opt into config with monkeypatch.setenv, never inherit it.
+    monkeypatch.delenv('OPENCODE_CONFIG_CONTENT', raising=False)
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()
