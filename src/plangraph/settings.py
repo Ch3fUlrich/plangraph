@@ -6,7 +6,10 @@ from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
-import tomllib
+try:
+    import tomllib
+except ImportError:  # JSON policies remain usable on older Python.
+    tomllib = None
 from typing import Literal
 
 
@@ -25,6 +28,8 @@ class ReviewMethod:
     source: str = 'default'
 
     def __post_init__(self):
+        if isinstance(self.seats, dict) and set(self.seats) - {'standard', 'high'}:
+            raise SettingsError('seats: unsupported tier')
         if self.mode not in ('batch', 'per-item'):
             raise SettingsError('mode: expected batch or per-item')
         if (not isinstance(self.seats, dict) or set(self.seats) != {'standard', 'high'}
@@ -40,7 +45,7 @@ class ReviewMethod:
                 raise SettingsError(f'{name}: expected positive integer')
 
 
-def review_method(project=None, phase=None) -> ReviewMethod:
+def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
     """Resolve global, project and phase tables from PLANGRAPH_SETTINGS.
 
     Relative paths are relative to the repository root (nearest .git ancestor).
@@ -49,14 +54,18 @@ def review_method(project=None, phase=None) -> ReviewMethod:
     filename = os.environ.get('PLANGRAPH_SETTINGS')
     if not filename:
         return ReviewMethod()
-    root = next((p for p in (Path.cwd(), *Path.cwd().parents)
-                 if (p / '.git').exists()), Path.cwd())
+    base = Path(root or os.environ.get('PLANGRAPH_REPO_ROOT') or Path.cwd())
+    root = next((p for p in (base, *base.parents)
+                 if (p / '.git').exists()), base)
     path = root / filename
+    if path.suffix != '.json' and tomllib is None:
+        raise SettingsError('file: tomllib unavailable; use JSON settings')
     try:
         text = path.read_text(encoding='utf-8')
         data = json.loads(text) if path.suffix == '.json' else tomllib.loads(text)
     except (OSError, ValueError) as exc:
-        raise SettingsError(f'file: {exc}') from exc
+        location = f' line {exc.lineno} column {exc.colno}' if hasattr(exc, 'lineno') else ''
+        raise SettingsError(f'file: {type(exc).__name__}{location}') from None
     if not isinstance(data, dict):
         raise SettingsError('file: expected settings table')
     values = {}
@@ -80,26 +89,28 @@ def review_method(project=None, phase=None) -> ReviewMethod:
             values[name] = ({**values.get(name, ReviewMethod().seats), **value}
                             if name == 'seats' and isinstance(value, dict) else value)
         if override:
-            source = f'{path}:{label}'
+            source = label
         ReviewMethod(**values)
     return ReviewMethod(**values, source=source)
 
 
-def enforce_review_scope(card, role, review_scope):
+def enforce_review_scope(card, role, review_scope, *, root=None):
     """Admission guard shared by both spawner implementations."""
-    if review_scope not in (None, 'batch', 'per-fixer'):
-        raise SettingsError('review_scope: expected batch or per-fixer')
-    if role != 'review':
-        return
     card = card or {}
+    if any(value not in (None, 'batch', 'per-fixer')
+           for value in (review_scope, card.get('review_scope'))):
+        raise SettingsError('review_scope: expected batch or per-fixer')
     key = card.get('key', '')
     method = review_method(card.get('project') or key.split(':', 1)[0] or None,
-                           card.get('phase'))
-    if method.mode == 'batch' and (review_scope or card.get('review_scope')) == 'per-fixer':
+                           card.get('phase'), root=root or card.get('repo_root'))
+    if method.mode == 'batch' and (review_scope == 'per-fixer' or
+            (role == 'review' and review_scope is None and card.get('review_scope') == 'per-fixer')):
         from plangraph.routing_errors import SpawnRefused
         exc = SpawnRefused('review_method_batch_per_fixer')
         exc.reason = exc.code = 'review_method_batch_per_fixer'
         raise exc
+    if role != 'review' and review_scope is not None:
+        raise SettingsError('review_scope: only supported for review spawns')
 
 
 def main():

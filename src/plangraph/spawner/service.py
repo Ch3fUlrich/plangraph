@@ -100,7 +100,7 @@ class SpawnService:
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import review_method
-                method = review_method(card.get('project') or card.get('key', '').split(':')[0], card.get('phase'))
+                method = review_method(card.get('project') or card.get('key', '').split(':')[0], card.get('phase'), root=card.get('repo_root'))
                 groups = split_findings(card['findings'], limit=method.fixer_split_threshold)
                 if len(groups) > 1:
                     async def dispatch(group):

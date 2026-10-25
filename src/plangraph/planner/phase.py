@@ -93,7 +93,7 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
 
     from dataclasses import asdict
     from plangraph.settings import review_method
-    method = review_method(key.split(":", 1)[0], key)
+    method = review_method(key.split(":", 1)[0], key, root=repo_root)
     project = key.split(":", 1)[0]
     if now is None:
         now = datetime.now(timezone.utc)
@@ -166,7 +166,7 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
             card, key=dst, repo_root=Path(repo_root),
             running_write_sets=running, leg_max_request=leg_max)
 
-        review_fields = ({"role": "review", "review_scope":
+        review_fields = ({"role": "review", "project": project, "phase": key, "review_scope":
                           "batch" if method.mode == "batch" else "per-fixer"}
                          if card.get("role") == "review" else {})
         cards.append({

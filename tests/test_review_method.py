@@ -17,6 +17,124 @@ def test_defaults(monkeypatch):
     assert review_method().seats == {'standard': 1, 'high': 2}
 
 
+def test_root_and_safe_source(tmp_path, monkeypatch):
+    (tmp_path / 'policy.json').write_text('{"review_method":{"max_rounds":4}}')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    assert review_method(root=tmp_path).source == 'global'
+
+
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_explicit_scope_all_roles(monkeypatch, role):
+    from plangraph.settings import enforce_review_scope
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+        enforce_review_scope({}, role, 'per-fixer')
+
+
+def test_stamped_scope_validation(monkeypatch):
+    from plangraph.settings import enforce_review_scope, SettingsError
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    with pytest.raises(SettingsError, match='review_scope'):
+        enforce_review_scope({'review_scope': 'per_fixer'}, 'review', 'batch')
+
+
+def test_policy_flip_context(tmp_path, monkeypatch):
+    from plangraph.settings import enforce_review_scope
+    path = tmp_path / 'policy.json'
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    card = {'project': 'demo', 'phase': 'demo:P', 'repo_root': str(tmp_path),
+            'review_scope': 'per-fixer'}
+    path.write_text('{"phases":{"demo:P":{"review_method":{"mode":"per-item"}}}}')
+    enforce_review_scope(card, 'review', None)
+    path.write_text('{"review_method":{"mode":"batch"}}')
+    with pytest.raises(SpawnRefused):
+        enforce_review_scope(card, 'review', None)
+    card['review_scope'] = 'batch'
+    path.write_text('{"review_method":{"mode":"per-item"}}')
+    enforce_review_scope(card, 'review', None)
+
+
+def test_safe_decode(tmp_path, monkeypatch):
+    from plangraph.settings import SettingsError
+    path = tmp_path / 'policy.toml'
+    path.write_text('[secret-content')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    with pytest.raises(SettingsError) as caught:
+        review_method()
+    assert 'secret-content' not in str(caught.value)
+    assert 'TOMLDecodeError' in str(caught.value)
+
+
+def test_unsupported_tier():
+    from plangraph.settings import SettingsError
+    with pytest.raises(SettingsError, match='unsupported tier'):
+        ReviewMethod(seats={'standard': 1, 'high': 2, 'alien': 3})
+
+
+def test_json_only_without_tomllib(tmp_path, monkeypatch):
+    import plangraph.settings as settings
+    monkeypatch.setattr(settings, 'tomllib', None)
+    path = tmp_path / 'policy.toml'
+    path.write_text('')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    with pytest.raises(settings.SettingsError, match='tomllib unavailable'):
+        review_method()
+    path = tmp_path / 'policy.json'
+    path.write_text('{}')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    assert review_method().mode == 'batch'
+
+
+def test_cwd_non_git_fallback(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / 'policy.json').write_text('{"review_method":{"max_rounds":7}}')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    monkeypatch.delenv('PLANGRAPH_REPO_ROOT', raising=False)
+    assert review_method().max_rounds == 7
+
+
+def test_non_review_batch_rejected(monkeypatch):
+    from plangraph.settings import enforce_review_scope, SettingsError
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    with pytest.raises(SettingsError, match='only supported'):
+        enforce_review_scope({}, 'implement', 'batch')
+
+
+def test_documented_advisory_and_batch_boundaries():
+    from pathlib import Path
+    text = Path('docs/REVIEW-METHOD.md').read_text()
+    assert 'but advisory' in text
+    assert 'does not synthesize' in text
+    assert 'retains multiple existing review cards' in text
+    assert 'read per call' in text
+
+
+def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):
+    from plangraph.spawner.cli import main
+    from plangraph.settings import SettingsError
+    path = tmp_path / 'policy.json'
+    path.write_text('{')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    calls = []
+    monkeypatch.setattr(SpawnService, 'save_refusal', lambda *a: calls.append(a))
+    main(['--state', str(tmp_path / 'state'), 'spawn', 'task', '--card', '{"key":"demo:C"}',
+          '--role', 'review', '--review-scope', 'batch', '--dry-run'])
+    assert calls == []
+
+
+def test_layer_label_cli(tmp_path, monkeypatch):
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({'review_method': {'max_rounds': 4},
+        'projects': {'demo': {'review_method': {'mode': 'per-item'}}}}))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    result = subprocess.run([sys.executable, '-m', 'plangraph.settings', 'show',
+        '--project', 'demo'], capture_output=True, text=True, check=True,
+        env={**os.environ, 'PYTHONPATH': 'src'})
+    value = json.loads(result.stdout)
+    assert value['source'] == 'projects:demo'
+    assert str(tmp_path) not in result.stdout
+
+
 def test_precedence(tmp_path, monkeypatch):
     path = tmp_path / 'settings.json'
     path.write_text(json.dumps({'review_method': {'max_rounds': 4},

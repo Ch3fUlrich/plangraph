@@ -151,7 +151,7 @@ def main(argv=None):
             from plangraph.settings import enforce_review_scope
             try:
                 enforce_review_scope(args.card, args.role, args.review_scope)
-            except Exception as exc:
+            except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
             if not args.model and not args.leg:
