@@ -31,7 +31,7 @@ python -m plangraph.settings show --project demo --phase demo:PHASE
 ```
 
 The output is JSON. Phase plans publish top-level `review_method` and `review_scope`
-(`"batch"` in batch mode, or `"per-fixer"` in per-item mode). Review cards carry
+(`"per-fixer"` only when both the global and the phase/project layers are per-item, as spawn admits, else `"batch"`; D-2817). Review cards carry
 `review_scope` only when `role == "review"`. The orchestrator passes the plan's
 `review_scope` as `--review-scope` / `review_scope` on `role=review` spawns.
 Spawn CLI `--review-scope` (on `spawn` only) and MCP `review_scope` accept these same scope values.
@@ -39,7 +39,7 @@ A review spawn requesting `per-fixer` under batch policy raises `SpawnRefused`
 with reason/code `review_method_batch_per_fixer`, including audited overrides.
 Per-item policy allows that scope. A "per-fixer seat" is a review spawn with
 `review_scope=per-fixer`. Finding 3 (by design): a review spawn with
-no explicit scope is admitted in batch mode -- only an explicit per-fixer
+no explicit scope is admitted in any mode -- only an explicit per-fixer
 scope (argument or stamped `card["review_scope"]`) is refused.
 
 ## Enforcement boundaries
