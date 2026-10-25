@@ -4,6 +4,12 @@ from pathlib import Path
 import tempfile
 import time
 
+#: os.replace retries sleep min(0.01 * (attempt + 1), 0.2), so the attempt cap
+#: is chosen from the sleep budget, not the other way round: 25 attempts sleep
+#: 2.9 s worst case, inside the 3.0 s total I13/V6 allows a save operation to
+#: block.
+ATOMIC_WRITE_ATTEMPTS = 25
+
 
 def _is_nt():
     return os.name == 'nt'
@@ -18,12 +24,15 @@ def atomic_write_private(path, text):
             stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
-        for attempt in range(30):
+        for attempt in range(ATOMIC_WRITE_ATTEMPTS):
             try:
                 os.replace(name, path)
                 break
             except PermissionError as exc:
-                if getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == 29:
+                # winerror 5 is retried because MoveFileEx returns ACCESS_DENIED
+                # while a reader holds the target open; a real ACL error still
+                # raises after the bound.
+                if getattr(exc, 'winerror', None) not in (5, 32, 33) or attempt == ATOMIC_WRITE_ATTEMPTS - 1:
                     raise
                 time.sleep(min(0.01 * (attempt + 1), 0.2))
     finally:

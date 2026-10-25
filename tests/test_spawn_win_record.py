@@ -35,7 +35,7 @@ def test_atomic_write_retries_winerror_5(tmp_path, monkeypatch):
 
 
 def test_atomic_write_winerror_5_exhausted(tmp_path, monkeypatch):
-    """(b) winerror 5 forever: raises after 30 calls, no temp, under 5 s (patch time.sleep)."""
+    """(b) winerror 5 forever: raises after 25 calls, no temp, under 5 s (patch time.sleep)."""
     target = tmp_path / "record.json"
     calls = []
 
@@ -55,9 +55,33 @@ def test_atomic_write_winerror_5_exhausted(tmp_path, monkeypatch):
     elapsed = time.perf_counter() - start
 
     assert excinfo.value.winerror == 5
-    assert len(calls) == 30
-    assert len(slept) == 29
+    assert len(calls) == 25
+    assert len(slept) == 24
     assert elapsed < 5.0
+    assert list(tmp_path.glob(".record.json-*")) == []
+
+
+def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
+    """Worst-case retry sleeps stay inside the 3.0 s I13 budget, exact call count."""
+    target = tmp_path / "record.json"
+    calls = []
+
+    def fake_replace(src, dst):
+        calls.append((src, dst))
+        exc = PermissionError("access denied")
+        exc.winerror = 5
+        raise exc
+
+    monkeypatch.setattr(os, "replace", fake_replace)
+    slept = []
+    monkeypatch.setattr(private_io.time, "sleep", slept.append)
+
+    with pytest.raises(PermissionError):
+        private_io.atomic_write_private(target, '{"status": "budget"}')
+
+    assert len(calls) == 25
+    assert len(slept) == 24
+    assert sum(slept) <= 3.0
     assert list(tmp_path.glob(".record.json-*")) == []
 
 
