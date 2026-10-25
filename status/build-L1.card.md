@@ -5,11 +5,11 @@ Spawn: python3 ~/code/AutoOS/tools/autoos-agent.py run --isolate --client agy --
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | Item | State / next |
 |---|---|
-| #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r9 88bc89d4 pushed (2711 keeper pass, gates 0). Delta seats: Haiku FAIL (seats/scope-r9.haiku.txt: 2 MEDIUM expired-auth audit race + lockout of live principal, LOWs; guard alarm first-wins not fixed); dsfree seat running (bqitts10b). Next: ONE r10 brief with all findings = round 3 of 3 (limit, then replan) -> writer via workst (D-2686) -> delta seat -> GO-REQ naming round |
-| #183 ROUTER-LIVENESS-WATCHDOG | r2 ee2152fb pushed, CI running. qwen delta: all MED/LOW fixed; fail only on by-design HIGH + 2 cosmetic LOWs -> DECISION-REQ to routing (scope ruling, LOWs follow-up). Then MERGE-READY -> mergepath 183 |
-| #184 HARDENING (3 keys) | CI fix acf975ea pushed (Gate-Edit D-2692, 28 pass), CI running. Haiku seat via workst-L1-autoos. Then mergepath -> evidence TEST-SPEED-AFFECTED + RUN-EXIT-NOTIFY, submit 3, prune hb-keys |
-| RT-P1-EXEC-OWNERSHIP (HIGH) | D-2691 Haiku seat delegated to workst-L1-autoos (05:5xZ); then request close |
-| PG-L3-MAX-TOKENS (D-2694/2695) | claimed e1; lane/l3-max-tokens pushed; writer delegated to workst-L1-autoos; then 1 seat -> mergepath |
+| #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r9 88bc89d4: Haiku+dsfree delta FAIL. r10 = ROUND 3/3 brief scope-r10.md (group A store_oversight/auth/store, group B db.py) queued on workst-L1-autoos (lane/keeper-scope-r10a, -r10b from 88bc89d4; behind its 3-writer cap). Next: merge both into r6, keeper tests, delta seat (Haiku + non-Claude), pass -> GO-REQ round 3; fail -> replan |
+| #183 ROUTER-LIVENESS-WATCHDOG | D-2702 GO merge via mergepath on green CI of exactly ee2152fb (watch b8vi962kz). Item stays OPEN until install evidence -> GO-REQ install step; 2 LOWs -> follow-up leaf (send JSON+edge) |
+| #184 HARDENING (3 keys) | acf975ea Haiku seat fail: HIGH --within vacuous + LOW loadgroup accepted, 2 MED refuted -> r2 writer on workst (L3-REQ #3); triage sent routing. Then mergepath, evidence, submit 3 |
+| RT-P1-EXEC-OWNERSHIP (HIGH) | workst Haiku seat FAIL (exec-own.seat-haiku.out 773c8e6f): 2 REAL HIGH (fence cap 16, park skips forward table), reap partly refuted. Proposed leaf RT-P1-EXEC-OWNERSHIP-SQ12 to routing; await ruling |
+| PG-L3-MAX-TOKENS (D-2694/2695) | claimed e1; writer queued workst (C:\fleet\wt\pg-l3mt, agy); then 1 seat -> mergepath |
 | D-2691 closed 6 | KG-LINK, LESSONS-TO-ALGO, SEAT-VERDICT-QODER, WAIT-GUARD, SEAT-FAMILY-WRITER, PG-PUBLIC-READY |
 | #166 KEEPER-PG-RECONNECT | after #164 |
 | #139 KEEPER-TRAILER-MULTI | after #166 |
