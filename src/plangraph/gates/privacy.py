@@ -41,7 +41,7 @@ SENSITIVE_OK_MODELS = frozenset({("agy", "gemini-3.8-flash"), ("opencode", "mimo
 SECRET_NAME_PATTERNS = (
     "*.key", "*.pem", "*.p12", "*.pfx", "*.kdbx", "*.p8", "*.jks",
     ".env", ".env.*", "credentials*.json", "api_keys.*", "api-keys.*", "id_rsa*", "id_ed25519*",
-    "*api-key*", "*api_key*", "*apikey*", "*secret*", "*token*", "*credential*",
+    "*api-key*", "*api_key*", "*apikey*", "*secret*", "*credential*",
     "service-account*.json",
 )
 #: Directory names whose whole content counts as secret.

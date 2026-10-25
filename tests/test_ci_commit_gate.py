@@ -985,14 +985,17 @@ def test_hand_edit_ten_changed_lines_passes(repo):
 
 def test_hand_edit_eleven_changed_lines_refused(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 11})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 10 changed lines']
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 401})
+    violations = check(base, sha, cwd=repo)
+    assert any('hand-edit exceeds 400 changed lines' in v for v in violations)
+    assert any('hand-edit total over ceiling for (none)' in v for v in violations)
 
 
 def test_hand_edit_deleted_lines_count(repo):
-    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 20})
+    base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'docs/y.md': 'l\n' * 500})
     sha = _commit(repo, 'docs: rewrite\n\nHand-Edit: rewrite\n', {'docs/y.md': 'new\n'})
-    assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit exceeds 10 changed lines']
+    violations = check(base, sha, cwd=repo)
+    assert any('hand-edit exceeds 400 changed lines' in v for v in violations)
 
 
 def test_root_level_roles_file_hand_edit_refused(repo):
@@ -1032,3 +1035,130 @@ def test_autoos_run_id_flagged_or_refused(repo: Path, monkeypatch, capsys, refus
         assert code == 1 and f"{autoos}: autoos spawner run id" in out.out
     else:
         assert code == 0 and f"autoos-spawn {autoos}:" in out.err
+
+
+# ---------------------------------------------------------------------------
+# E1a gate tests (D-2835, D-2853, crit 2, invariant IE1)
+# ---------------------------------------------------------------------------
+VALID_ROUTE_DECISION = "Route-Decision: route-" + "a" * 32
+_he_counter = 0
+
+
+def _he(repo: Path, n: int, item: str | None = None, rd: bool = False,
+        path: str | None = None, extra: str = "") -> str:
+    global _he_counter
+    _he_counter += 1
+    tr = "\nHand-Edit: edit\n"
+    if item:
+        tr += f"Plan-Item: {item}\n"
+    if rd:
+        tr += f"{VALID_ROUTE_DECISION}\n"
+    tr += extra
+    p = path or f"docs/f{n}_{_he_counter}.md"
+    return _commit(repo, f"docs: edit\n{tr}", {p: "x\n" * n})
+
+
+def test_e1_hand_edits_400_lines_pass_401_refused_door_refused(repo: Path):
+    base = _head(repo)
+    s400 = _he(repo, 400, rd=True)
+    assert check(base, s400, cwd=repo) == []
+    s401 = _he(repo, 401, rd=True)
+    assert any("hand-edit exceeds 400 changed lines" in v for v in check(s400, s401, cwd=repo))
+    sdoor = _he(repo, 30, path="tools/seat_verdict.py")
+    assert any("hand-edit touches auth/door surface: tools/seat_verdict.py" in v for v in check(s401, sdoor, cwd=repo))
+
+
+def test_e1_route_decision_threshold_50_51_lines(repo: Path):
+    base = _head(repo)
+    s50 = _he(repo, 50)
+    assert check(base, s50, cwd=repo) == []
+    s51_no = _he(repo, 51)
+    assert any("without Route-Decision" in v for v in check(s50, s51_no, cwd=repo))
+    s51_bad = _he(repo, 51, extra="Route-Decision: route-short\n")
+    assert any("without Route-Decision" in v for v in check(s51_no, s51_bad, cwd=repo))
+    s51_two = _he(repo, 51, extra=f"{VALID_ROUTE_DECISION}\n{VALID_ROUTE_DECISION}\n")
+    assert any("without Route-Decision" in v for v in check(s51_bad, s51_two, cwd=repo))
+    s51_ok = _he(repo, 51, rd=True)
+    assert check(s51_two, s51_ok, cwd=repo) == []
+
+
+def test_e1_history_running_sum_route_decision(repo: Path):
+    base = _head(repo)
+    c1 = _he(repo, 40, item="demo:ITEM")
+    assert check(base, c1, cwd=repo) == []
+    c2_no = _he(repo, 20, item="demo:ITEM")
+    assert check(c1, c2_no, cwd=repo) == [f"{c2_no}: hand-edit over 50 lines for demo:ITEM without Route-Decision"]
+    _git(repo, "reset", "--hard", c1)
+    c2_ok = _he(repo, 20, item="demo:ITEM", rd=True)
+    assert check(c1, c2_ok, cwd=repo) == []
+    c3_no = _he(repo, 5, item="demo:ITEM")
+    assert check(c2_ok, c3_no, cwd=repo) == [f"{c3_no}: hand-edit over 50 lines for demo:ITEM without Route-Decision"]
+
+
+def test_e1_hand_edits_secret_paths_refused(repo: Path):
+    base = _head(repo)
+    s1 = _he(repo, 1, path="vault/x.json")
+    assert check(base, s1, cwd=repo) == [f"{s1}: hand-edit touches secret-shaped path: vault/x.json"]
+    s2 = _he(repo, 1, path="config/.env")
+    assert check(s1, s2, cwd=repo) == [f"{s2}: hand-edit touches secret-shaped path: config/.env"]
+
+
+def test_e1_canonical_and_malformed_paths(repo: Path, monkeypatch):
+    base = _head(repo)
+    f = repo / "src\\plangraph\\keeper\\x.py"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "docs: backslash door\n\nHand-Edit: backslash\n")
+    s_bs = _head(repo)
+    assert check(base, s_bs, cwd=repo) == [f"{s_bs}: hand-edit touches auth/door surface: src\\plangraph\\keeper\\x.py"]
+    s_dot = _he(repo, 1)
+    monkeypatch.setattr(ci_commit_gate, "_touched_paths", lambda sha, cwd=None: ["./src/plangraph/keeper/x.py"])
+    assert check(s_bs, s_dot, cwd=repo) == [f"{s_dot}: hand-edit touches auth/door surface: ./src/plangraph/keeper/x.py"]
+    s_dotdot = _he(repo, 1)
+    monkeypatch.setattr(ci_commit_gate, "_touched_paths", lambda sha, cwd=None: ["../x.py"])
+    assert check(s_dot, s_dotdot, cwd=repo) == [f"{s_dotdot}: hand-edit touches malformed path: ../x.py"]
+
+
+def test_e1_range_ceiling_bucket_sum(repo: Path):
+    base = _head(repo)
+    c1 = _he(repo, 210, item="demo:ITEM", rd=True)
+    c2 = _he(repo, 210, item="demo:ITEM", rd=True)
+    assert check(base, c2, cwd=repo) == [f"{c2}: hand-edit total over ceiling for demo:ITEM"]
+    _git(repo, "reset", "--hard", base)
+    c1_two = _he(repo, 210, item="demo:ITEM_A", rd=True)
+    c2_two = _he(repo, 210, item="demo:ITEM_B", rd=True)
+    assert check(base, c2_two, cwd=repo) == []
+
+
+def test_e1_check_vectors(repo: Path):
+    base = _head(repo)
+    s_bad = _commit(repo, "docs: typo\n\nhand-edit: oops\n", {"docs/oops.md": "l\n"})
+    v = check(base, s_bad, cwd=repo)
+    assert f"{s_bad}: malformed Hand-Edit trailer" in v and f"{s_bad}: missing Writer trailer" in v
+    s_w = _commit(repo, "feat: w\n\nWriter: mimo-v2.6-flash r1\nPlan-Item: demo:ITEM\n", {"src/x.py": "l\n" * 300})
+    s_h = _he(repo, 200, item="demo:ITEM", rd=True)
+    assert check(s_bad, s_h, cwd=repo) == []
+    s_body = _commit(repo, f"docs: 60 lines\n\nBody text.\nRoute-Decision: route-{'a'*32}\n\nHand-Edit: e\n", {"docs/b.md": "l\n" * 60})
+    assert any("without Route-Decision" in x for x in check(s_h, s_body, cwd=repo))
+    assert all(ci_commit_gate.canon_path(p) is None for p in ("/etc/passwd", "../outside.py", "foo/../../bar.py"))
+    assert ci_commit_gate.canon_path("./a/b/c.py") == "a/b/c.py" and ci_commit_gate.canon_path("a\\b\\c.py") == "a/b/c.py"
+    proc = subprocess.run([sys.executable, str(MODULE_PATH), "--help"], capture_output=True, text=True)
+    assert proc.returncode == 0 and "usage:" in proc.stdout
+
+
+def test_e1_drift_and_shared_fixture():
+    from plangraph.gates import doors, privacy
+    assert ci_commit_gate.AUTH_DOOR_PATHS == doors.AUTH_DOOR_PATHS
+    assert ci_commit_gate.HAND_EDIT_MAX_LINES == doors.HAND_EDIT_MAX_LINES == 400
+    assert ci_commit_gate.ROUTE_DECISION_LINES == doors.ROUTE_DECISION_LINES == 50
+    assert ci_commit_gate.SECRET_NAME_PATTERNS == doors.SECRET_NAME_PATTERNS == privacy.SECRET_NAME_PATTERNS
+    assert ci_commit_gate.SECRET_DIRS == doors.SECRET_DIRS == privacy.SECRET_DIRS
+    assert len(doors.FIXTURE_ROWS) >= 40
+    for path, exp_gate, exp_route in doors.FIXTURE_ROWS:
+        g = ci_commit_gate.gate_path_verdict(path)
+        d = doors.blocked_path(path)
+        assert g == exp_gate and d == exp_gate, f"mismatch on {path}"
+        r = "writer" if exp_gate is not None else "direct_edit"
+        assert r == exp_route, f"route mismatch on {path}"
+

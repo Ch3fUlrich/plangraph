@@ -312,7 +312,9 @@ def test_numstat_counting_and_slices():
     assert lane.size_verdict(900, 30, slice_budget=1000)[0] == "ok"
     assert lane.size_verdict(1100, 30, slice_budget=1000)[0] == "fail"
     design = (ROOT / "docs/design/PG-EFFICIENCY-GATES.md").read_text()
-    assert lane.design_slices(design) == {1: 3000, 2: 600, 3: 450}
+    assert lane.design_slices(design) == {
+        1: 3000, 2: 600, 3: 450, 4: 400, 5: 400, 6: 400, 7: 400, 8: 400, 9: 150
+    }
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 

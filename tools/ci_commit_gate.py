@@ -21,7 +21,8 @@ import fnmatch
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import posixpath
 
 #: Strict Writer trailer line: key case-sensitive, no space before the colon,
 #: one space after it, and a non-empty value.
@@ -35,6 +36,13 @@ HAND_EDIT_RE = re.compile(r'^Hand-Edit: (\S.*)$')
 
 #: Case-insensitive Hand-Edit-like line that is not the strict form above.
 MALFORMED_HAND_EDIT_RE = re.compile(r'^\s*hand-edit\s*:', re.IGNORECASE)
+
+#: Plan-Item trailer line.
+PLAN_ITEM_RE = re.compile(r'^Plan-Item: (\S.*)$')
+
+#: Route-Decision trailer line above ROUTE_DECISION_LINES.
+ROUTE_DECISION_LINES = 50
+ROUTE_DECISION_RE = re.compile(r'^Route-Decision: route-[0-9a-f]{32}$')
 
 #: A test-removal trailer, accepted case-insensitively on any line.
 TEST_REMOVAL_RE = re.compile(r'^Test-Removal:\s*D-\d+\s*$', re.IGNORECASE)
@@ -110,7 +118,17 @@ MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
 #: A Hand-Edit commit may change at most this many lines (added + deleted).
-HAND_EDIT_MAX_LINES = 10
+HAND_EDIT_MAX_LINES = 400
+
+#: Matcher for secret-shaped file names (lower-cased basename), copied from gates/privacy.py.
+SECRET_NAME_PATTERNS: tuple[str, ...] = (
+    "*.key", "*.pem", "*.p12", "*.pfx", "*.kdbx", "*.p8", "*.jks",
+    ".env", ".env.*", "credentials*.json", "api_keys.*", "api-keys.*", "id_rsa*", "id_ed25519*",
+    "*api-key*", "*api_key*", "*apikey*", "*secret*", "*credential*",
+    "service-account*.json",
+)
+#: Directory names whose whole content counts as secret, copied from gates/privacy.py.
+SECRET_DIRS: frozenset[str] = frozenset({"secrets", "secret", "vault", ".ssh", ".gnupg"})
 #: An AutoOS spawner run id (``YYYYMMDD-HHMMSS-<name>-<hex>``); the plangraph
 #: spawner writes ``run-<32 hex>``.  D-2749: no agent spawns through AutoOS.
 AUTOOS_RUN_RE = re.compile(r'(?:^|[\s-])\d{8}-\d{6}-[\w.-]*-[0-9a-f]{6}\b')
@@ -173,6 +191,55 @@ def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[t
         sha, _, message = record.partition('\n')
         commits.append((sha.strip(), message))
     return commits
+
+
+def _history_commits(head: str, cwd: str | Path | None = None) -> list[tuple[str, str]]:
+    '''Return (sha, message) reachable from head, oldest first.'''
+    out = _git_text(['log', '--no-merges', '--reverse', '-z', '--format=%H%n%B', head], cwd=cwd)
+    commits: list[tuple[str, str]] = []
+    for record in out.split('\0'):
+        if not record.strip():
+            continue
+        sha, _, message = record.partition('\n')
+        commits.append((sha.strip(), message))
+    return commits
+
+
+def canon_path(path: str | Path) -> str | None:
+    '''Canonicalise repo path: backslash -> '/', leading './' dropped, posixpath.normpath.
+
+    Returns None for absolute paths or any '..' segment (counts as malformed/blocked).
+    '''
+    p = str(path).replace('\\', '/')
+    while p.startswith('./'):
+        p = p[2:]
+    norm = posixpath.normpath(p)
+    if norm.startswith('/') or posixpath.isabs(norm) or any(seg == '..' for seg in norm.split('/')):
+        return None
+    return norm
+
+
+def _secret_path(path: str | Path) -> bool:
+    '''True when path (any separator) names a secret-shaped file or sits in a secret dir.'''
+    parts = [p for p in PurePosixPath(str(path).replace('\\', '/').lower()).parts if p not in ('/', '.')]
+    if not parts:
+        return False
+    if any(p.rstrip('/') in SECRET_DIRS for p in parts):
+        return True
+    name = parts[-1]
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in SECRET_NAME_PATTERNS)
+
+
+def gate_path_verdict(path: str | Path) -> str | None:
+    '''Return 'malformed', 'door', 'secret', or None.'''
+    canon = canon_path(path)
+    if canon is None:
+        return 'malformed'
+    if any(fnmatch.fnmatchcase(canon, pattern) for pattern in AUTH_DOOR_PATHS):
+        return 'door'
+    if _secret_path(canon):
+        return 'secret'
+    return None
 
 
 def _trailer_block_lines(message: str) -> list[str]:
@@ -388,6 +455,42 @@ def check(
     violations: list[str] = []
     if open_heads is not None:
         violations.extend(_open_pr_merges(base, head, open_heads, cwd=cwd))
+
+    history = _history_commits(head, cwd=cwd)
+    history_running_sums: dict[str, int] = {}
+    exceeded_50: dict[str, bool] = {}
+    rd_violations: dict[str, str] = {}
+
+    for h_sha, h_message in history:
+        if h_sha.lower() in exempt_set:
+            continue
+        h_block = _trailer_block_lines(h_message)
+        if not _trailer_values(h_block, HAND_EDIT_RE):
+            continue
+        h_items = _trailer_values(h_block, PLAN_ITEM_RE)
+        h_item = h_items[0] if h_items else '(none)'
+        h_changed = _changed_lines(h_sha, cwd=cwd) or 0
+        history_running_sums[h_item] = history_running_sums.get(h_item, 0) + h_changed
+        if history_running_sums[h_item] > ROUTE_DECISION_LINES:
+            exceeded_50[h_item] = True
+
+        rd_trailers = [
+            line for line in h_block
+            if line.split(':', 1)[0].strip().lower() == 'route-decision'
+        ]
+        if exceeded_50.get(h_item):
+            if len(rd_trailers) != 1 or not ROUTE_DECISION_RE.match(rd_trailers[0]):
+                rd_violations[h_sha] = (
+                    f'hand-edit over {ROUTE_DECISION_LINES} lines for {h_item} without Route-Decision'
+                )
+        elif len(rd_trailers) > 1:
+            rd_violations[h_sha] = (
+                f'hand-edit over {ROUTE_DECISION_LINES} lines for {h_item} without Route-Decision'
+            )
+
+    range_bucket_lines: dict[str, int] = {}
+    range_bucket_shas: dict[str, list[str]] = {}
+
     for sha, message in _iter_commits(base, head, cwd=cwd):
         if sha.lower() in exempt_set:
             continue
@@ -425,14 +528,33 @@ def check(
         touched = _touched_paths(sha, cwd=cwd)
         if has_hand_edit:
             for path in touched:
-                if any(fnmatch.fnmatchcase(path, pattern) for pattern in AUTH_DOOR_PATHS):
+                verdict = gate_path_verdict(path)
+                if verdict == 'malformed':
+                    violations.append(f'{sha}: hand-edit touches malformed path: {path}')
+                elif verdict == 'door':
                     violations.append(f'{sha}: hand-edit touches auth/door surface: {path}')
+                elif verdict == 'secret':
+                    violations.append(f'{sha}: hand-edit touches secret-shaped path: {path}')
+
             changed = _changed_lines(sha, cwd=cwd)
             if changed is None or changed > HAND_EDIT_MAX_LINES:
                 violations.append(f'{sha}: hand-edit exceeds {HAND_EDIT_MAX_LINES} changed lines')
 
+            items = _trailer_values(block_lines, PLAN_ITEM_RE)
+            item = items[0] if items else '(none)'
+            lines_count = changed or 0
+            range_bucket_lines[item] = range_bucket_lines.get(item, 0) + lines_count
+            range_bucket_shas.setdefault(item, []).append(sha)
+
+            if sha in rd_violations:
+                violations.append(f'{sha}: {rd_violations[sha]}')
+
         if (
-            any(fnmatch.fnmatchcase(path, pattern) for path in touched for pattern in GATE_PATHS)
+            any(
+                fnmatch.fnmatchcase(canon_path(path) or path, pattern)
+                for path in touched
+                for pattern in GATE_PATHS
+            )
             and not _has_trailer(block_lines, GATE_EDIT_RE)
         ):
             violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
@@ -441,6 +563,11 @@ def check(
             sha, base, head, cwd=cwd, paths=touched
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
+
+    for item, total in range_bucket_lines.items():
+        if total > HAND_EDIT_MAX_LINES:
+            tipping_sha = range_bucket_shas[item][0]
+            violations.append(f'{tipping_sha}: hand-edit total over ceiling for {item}')
 
     return violations
 
