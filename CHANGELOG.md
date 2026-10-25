@@ -4,6 +4,7 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- **RT-OVERSIGHT-KEEPER-SCOPE:** add scoped, expiring oversight tokens, local GO-gated minting, fail-closed plan-refinement policy, append-only applied/denied audit and hourly budgets. SQLite v14 and PostgreSQL Migration 8 add oversight tables only; preserve main's JEV schema, all five exec ownership columns, shipped migrations and batch precondition/dry-run/dependency forms.
 - Exclude proven CHANGELOG.md-only Hand-Edit commits from keeper writer families; path inspection failures refuse writer resolution.
 
 - **KEEPER-SEAT-FAMILY-WRITER:** isolate reviewer families from verified current-epoch commit writers, then writer_model, retaining fail-closed legacy claimant/delegate fallback.

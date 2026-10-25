@@ -86,6 +86,51 @@ def _active_edit_only(fields):
             and not set(fields) - _ACTIVE_EDITABLE)
 
 
+def creation_tier(raw, definition, principal):
+    """The tier a create stores for *principal* (D-2458: raise-only, never a clamp).
+
+    A tier below the project default needs the router role; an ``oversight``
+    create naming one is REFUSED ``oversight:tier_below_default`` -- the
+    raise-only grant is a refusal, never a silent raise to the default (that
+    clamp produced a high-tier item from an allowed ``standard`` create and hid
+    the refusal the item contract asks for).  The one oversight exception is the
+    R1 ``none`` choice for a ``question``, which the policy grants explicitly.
+    """
+    explicit = raw.get("review_tier") if isinstance(raw, dict) else None
+    default = default_review_tier(definition["project"], definition["id"],
+                                  definition.get("title"), definition.get("track"))
+    if explicit is not None:
+        tier = validated_review_tier(explicit)
+        # Oversight may only RAISE tiers, never lower below default
+        # But oversight can set tier='none' for questions (per policy)
+        allowed_lowering = principal.role == "router"
+        oversight_can_set_none = (principal.role == "oversight"
+                                 and tier == "none"
+                                 and definition.get("kind") == "question")
+        if tier_needs_router(tier) and not (allowed_lowering or oversight_can_set_none):
+            raise Refused("forbidden",
+                          "only the router may set review_tier='none'")
+        # Check if explicit tier is lower than default
+        # Order: none < standard < high (none already handled above)
+        tier_order = {"standard": 1, "high": 2}
+        if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
+            if not (allowed_lowering or oversight_can_set_none):
+                if principal.role == "oversight":
+                    # Raise-only grant: a below-default tier is refused, never
+                    # silently stored as the default.
+                    raise Refused(
+                        "forbidden",
+                        f"oversight:tier_below_default review_tier={tier!r} is"
+                        f" below the {default!r} default of"
+                        f" {definition['project']!r}; oversight may only create"
+                        " at or above the project default")
+                raise Refused(
+                    "forbidden",
+                    "only the router may lower review_tier below its default")
+        return validated_decision_tier(tier, definition["evidence_kinds"])
+    return default
+
+
 class CreateMixin:
     """Create, import and edit item definitions."""
 
@@ -123,12 +168,10 @@ class CreateMixin:
             # ``under`` is a create-only attachment; a legacy import may not
             # smuggle one in (checked before _normalise resolves it).
             raise Refused("validation", "import_items does not accept 'under'")
-        defs = [self._normalise(raw) for raw in items]
+        defs = [self._normalise_create(raw, principal) for raw in items]
         for raw in items:
             if isinstance(raw, dict):
                 validate_family(raw.get("owner_family"))
-        for raw, definition in zip(items, defs):
-            definition["review_tier"] = self._tier_for(raw, definition, principal)
         for definition in defs:
             self._may_manage(principal, definition["project"])
         if principal.role != "router":
@@ -241,30 +284,18 @@ class CreateMixin:
         self._assert_unlocked(gate)
         return gate
 
+    def _normalise_create(self, raw, principal):
+        definition = self._normalise(raw)
+        definition["review_tier"] = self._tier_for(raw, definition, principal)
+        return definition
+
     def _tier_for(self, raw, definition, principal):
         """The tier to store: an explicit (validated) value, else the default.
 
         An explicit tier LOWER than the computed default requires the router role.
         Raising or keeping the same tier is allowed for router and L1.
         """
-        explicit = raw.get("review_tier") if isinstance(raw, dict) else None
-        default = default_review_tier(definition["project"], definition["id"],
-                                      definition.get("title"), definition.get("track"))
-        if explicit is not None:
-            tier = validated_review_tier(explicit)
-            if tier_needs_router(tier) and principal.role != "router":
-                raise Refused("forbidden",
-                              "only the router may set review_tier='none'")
-            # Check if explicit tier is lower than default
-            # Order: none < standard < high (none already handled above)
-            tier_order = {"standard": 1, "high": 2}
-            if tier != default and tier_order.get(tier, 0) < tier_order.get(default, 0):
-                if principal.role != "router":
-                    raise Refused("forbidden",
-                                  f"explicit review_tier '{tier}' is lower than "
-                                  f"default '{default}'; only the router may lower the tier")
-            return validated_decision_tier(tier, definition["evidence_kinds"])
-        return default
+        return creation_tier(raw, definition, principal)
 
     def _insert_item(self, principal, definition, now):
         state = definition["state"]
@@ -341,7 +372,7 @@ class CreateMixin:
                  if name != "priority"} if has_priority else fields)
         if has_priority:
             # Same order as ``_priority``: role, value, then the item lookup.
-            self._require_role(principal, "router")
+            self._require_role(principal, "router", "oversight")
             self._checked_priority(prio)
             if not rest:
                 with self._write():
@@ -645,7 +676,7 @@ class CreateMixin:
                          lambda now: self._priority(principal, key, n, now))
 
     def _priority(self, principal, key, n, now):
-        self._require_role(principal, "router")
+        self._require_role(principal, "router", "oversight")
         self._checked_priority(n)
         with self._write():
             self._apply_priority(principal, key, n, now)
@@ -670,3 +701,15 @@ class CreateMixin:
             (int(n), self._iso(now), key, item["state"], item["epoch"]))
         self._row_guard(cursor, key, item["state"], item["epoch"])
         self._append(principal, key, "priority_set", {"priority": int(n)}, now)
+
+
+def oversight_definition(raw):
+    """Pure default for policy callers; store supplies its alias-aware normalizer."""
+    from types import SimpleNamespace
+    from .store_input import InputMixin
+
+    class Normalizer(InputMixin, CreateMixin):
+        def resolve_key(self, key):
+            return key
+
+    return Normalizer()._normalise_create(raw, SimpleNamespace(role="oversight"))

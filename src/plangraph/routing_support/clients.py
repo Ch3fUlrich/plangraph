@@ -285,19 +285,11 @@ def build_opencode_command(
     headers: Mapping[str, str] | None = None,
     extra_flags: Sequence[str] = (),
 ) -> list[str]:
-    """Build opencode command for execution via OmniRoute ACP/Gateway.
-
-    D-2749: without a pinned serve port the run is ``--standalone`` (a private
-    server with the child's own env and config overlay).  The background
-    service keeps the config it started with, so a provider it lacks (mimo's
-    baseURL) failed every run: "Route.model(openai-compatible-chat) requires an
-    endpoint baseURL".
-    """
-    cmd = ["opencode", "run", "--model", model_or_combo]
+    """Build opencode command for execution via OmniRoute ACP/Gateway."""
+    # --standalone: the shared background service ignores the child's config overlay
+    cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
-    else:
-        cmd.insert(2, "--standalone")
     if extra_flags:
         cmd.extend(extra_flags)
     cmd.append(prompt)
@@ -349,7 +341,7 @@ def build_standalone_fallback_command(
         return cmd
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.
-    cmd = ["opencode", "run", "--standalone"]   # D-2749, see build_opencode_command
+    cmd = ["opencode", "run", "--standalone"]
     if model:
         cmd.extend(["--model", model])
     cmd.append(prompt)

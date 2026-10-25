@@ -1,5 +1,6 @@
 """A schema-v9 SQLite keeper database (no design-3 tables) upgrades when it is opened."""
 import os
+import re
 import sqlite3
 
 import pytest
@@ -295,3 +296,169 @@ def test_open_without_create_still_refuses_a_non_keeper_file(tmp_path):
     sqlite3.connect(str(path)).close()
     with pytest.raises(RuntimeError):
         kdb.open_db(path)
+
+
+def test_upgrade_oversight_triggers_atomic_transaction(tmp_path, monkeypatch):
+    """db.py Finding 3: guard drop loop and trigger create run in one BEGIN IMMEDIATE transaction."""
+    path = tmp_path / "upgrade_atomic.db"
+    conn = kdb.open_db(path, create=True)
+    conn.close()
+
+    executed_statements = []
+    real_connect = sqlite3.connect
+
+    class TrackingConnection(sqlite3.Connection):
+        def execute(self, sql, *a, **kw):
+            executed_statements.append((sql.strip(), self.in_transaction))
+            return super().execute(sql, *a, **kw)
+
+    def wrapped_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", wrapped_connect)
+    conn = kdb.open_db(path, create=False)
+    conn.close()
+
+    drop_calls = [item for item in executed_statements if item[0].startswith("DROP TRIGGER IF EXISTS trg_oversight")]
+    expected_trigger_count = len(re.findall(r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", schema.OVERSIGHT_DDL))
+    assert len(drop_calls) == expected_trigger_count
+    for stmt, in_tx in drop_calls:
+        assert in_tx is True, f"Statement {stmt} was executed outside of a transaction!"
+
+    create_calls = [item for item in executed_statements if item[0].upper().startswith("CREATE ")]
+    expected_create_stmts = [
+        s for s in kdb._split_statements(schema.OVERSIGHT_DDL)
+        if s.upper().startswith("CREATE ")
+    ]
+    assert len(create_calls) == len(expected_create_stmts)
+    for stmt, in_tx in create_calls:
+        assert in_tx is True, f"Statement {stmt} was executed outside of a transaction!"
+
+    create_trigger_calls = [
+        item for item in executed_statements
+        if re.match(r"^CREATE\s+TRIGGER", item[0], re.IGNORECASE)
+    ]
+    assert len(create_trigger_calls) == expected_trigger_count
+    for stmt, in_tx in create_trigger_calls:
+        assert in_tx is True, f"Statement {stmt} was executed outside of a transaction!"
+
+    # B2: one transaction all the way: no BEGIN/COMMIT between the first guard
+    # drop and the last create (the guards are absent only inside the txn).
+    first_drop = next(i for i, item in enumerate(executed_statements)
+                      if item[0].startswith("DROP TRIGGER IF EXISTS trg_oversight"))
+    last_create = max(i for i, item in enumerate(executed_statements)
+                      if item[0].upper().startswith("CREATE "))
+    between = [item[0].split(None, 1)[0].upper()
+               for item in executed_statements[first_drop + 1:last_create]]
+    assert [word for word in between if word in ("BEGIN", "COMMIT")] == []
+
+
+def test_concurrent_update_oversight_ops_blocked_during_upgrade(tmp_path, monkeypatch):
+    """B2: a second connection's UPDATE oversight_ops during upgrade is refused/blocked."""
+    path = tmp_path / "concurrent_upgrade.db"
+    conn = kdb.open_db(path, create=True)
+    conn.execute(
+        "INSERT INTO oversight_ops (ts, token_id, principal, generation, batch_ref, op_index, op, outcome) "
+        "VALUES ('2026-01-01T00:00:00Z', 1, 'p1', 1, 'b1', 0, 'create', 'applied')"
+    )
+    conn.close()
+
+    second_conn_attempted = False
+    second_conn_error = None
+    real_connect = sqlite3.connect
+
+    class InterceptConnection(sqlite3.Connection):
+        def execute(self, sql, *a, **kw):
+            nonlocal second_conn_attempted, second_conn_error
+            if sql.strip().startswith("DROP TRIGGER IF EXISTS trg_oversight"):
+                assert self.in_transaction is True
+                if not second_conn_attempted:
+                    second_conn_attempted = True
+                    conn2 = real_connect(str(path), timeout=0.01)
+                    try:
+                        conn2.execute("UPDATE oversight_ops SET outcome = 'denied' WHERE id = 1")
+                    except sqlite3.OperationalError as exc:
+                        second_conn_error = exc
+                    finally:
+                        conn2.close()
+            return super().execute(sql, *a, **kw)
+
+    def wrapped_connect(*args, **kwargs):
+        kwargs["factory"] = InterceptConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", wrapped_connect)
+    conn = kdb.open_db(path, create=False)
+    conn.close()
+
+    assert second_conn_attempted is True
+    assert second_conn_error is not None
+    assert "locked" in str(second_conn_error).lower() or "busy" in str(second_conn_error).lower()
+
+    conn_after = sqlite3.connect(str(path))
+    with pytest.raises(sqlite3.IntegrityError, match="oversight_ops is append-only"):
+        conn_after.execute("UPDATE oversight_ops SET outcome = 'denied' WHERE id = 1")
+    conn_after.close()
+
+
+def test_split_statements_two_statements_on_one_line():
+    """B1: two statements on one line split into distinct executable statements."""
+    sql = "CREATE TABLE t1 (a INT); CREATE TABLE t2 (b TEXT);"
+    stmts = kdb._split_statements(sql)
+    assert len(stmts) == 2
+    assert stmts == ["CREATE TABLE t1 (a INT);", "CREATE TABLE t2 (b TEXT);"]
+    conn = sqlite3.connect(":memory:")
+    for stmt in stmts:
+        conn.execute(stmt)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"t1", "t2"} <= tables
+    conn.close()
+
+
+def test_split_statements_trigger_body_with_inner_semicolons():
+    """B1: trigger body with inner semicolons (BEGIN...END) is preserved as one statement."""
+    sql = """
+    CREATE TABLE src (id INT);
+    CREATE TABLE dst1 (id INT);
+    CREATE TABLE dst2 (id INT);
+    CREATE TRIGGER trg_multi AFTER INSERT ON src
+    BEGIN
+        INSERT INTO dst1 VALUES (NEW.id);
+        INSERT INTO dst2 VALUES (NEW.id);
+    END;
+    INSERT INTO src VALUES (42);
+    """
+    stmts = kdb._split_statements(sql)
+    assert len(stmts) == 5
+    conn = sqlite3.connect(":memory:")
+    for stmt in stmts:
+        conn.execute(stmt)
+    assert conn.execute("SELECT COUNT(*) FROM dst1").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM dst2").fetchone()[0] == 1
+    conn.close()
+
+
+def test_split_statements_refuses_pragma_and_vacuum_in_transaction(tmp_path, monkeypatch):
+    """B1: refuse PRAGMA/VACUUM inside the transaction with a clear error."""
+    with pytest.raises(ValueError, match="disallowed statement in transaction: PRAGMA"):
+        kdb._split_statements("PRAGMA foreign_keys = OFF;")
+
+    with pytest.raises(ValueError, match="disallowed statement in transaction: VACUUM"):
+        kdb._split_statements("VACUUM;")
+
+    with pytest.raises(ValueError, match="disallowed statement in transaction: PRAGMA"):
+        kdb._split_statements("-- leading comment\n  PRAGMA journal_mode = WAL;")
+
+    path = tmp_path / "pragma_upgrade.db"
+    kdb.open_db(path, create=True).close()
+
+    monkeypatch.setattr(kdb, "OVERSIGHT_DDL", "PRAGMA user_version = 99;")
+    with pytest.raises(ValueError, match="disallowed statement in transaction: PRAGMA"):
+        kdb.open_db(path, create=False)
+
+    monkeypatch.setattr(kdb, "OVERSIGHT_DDL", "VACUUM;")
+    with pytest.raises(ValueError, match="disallowed statement in transaction: VACUUM"):
+        kdb.open_db(path, create=False)
+
+

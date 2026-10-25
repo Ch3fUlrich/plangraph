@@ -8,10 +8,12 @@ run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not 
 ## Modules
 | file | content |
 |---|---|
-| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` |
+| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` = 13 (main's pinned code-level version), `OVERSIGHT_SCHEMA_VERSION` = 14 (v14 = the oversight `OVERSIGHT_DDL` appended after main's `JEV_DDL`, installed by `db._upgrade`: tables/indexes presence-based, the four oversight **guard triggers dropped and re-created on every open** so a weakened body cannot survive — SQLite's open path; Postgres installs the same guards once in Migration 8, GAP: no per-open repair there, D-2458); main's #140 exec ownership columns (`items.exec_workflow_id/exec_run_id/exec_attempt/exec_principal/exec_retired_runs`, also `db._upgrade`) stay in the `items` DDL at main's v13 shape, PG Migration 7 |
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
 | `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
-| `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`. |
+| `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token, *, now=None) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`, `spawner`, `oversight`. `add_oversight_principal(conn, name, projects)` provisions the revocable row (no token); a `pgo1_` token authenticates as `OversightPrincipal` **and is refused there once `expires_at` has passed** (the TTL is checked at authentication, judged by `now` or by wall time (`time.time()`); dispatch resolves the principals table first, so a prefixless token whose bytes start `pgo1_` still resolves as itself, and `add_principal` re-rolls any draw that would). `add_principal` refuses `role="oversight"`. |
+| `store_oversight.py` | `OversightMixin`: local-only `mint_oversight_token(name, go_decision=…, reason=…)` (TTL 3600 s, generation rotation, sha256 only; `prepare_oversight_token`/`commit_oversight_token` re-validate the live env, the GO decision row, the TTL bound and the prepare's own digest at commit), the per-use token re-check, the derived hourly budgets (**consulted by every writer before it inserts**), and the `oversight_ops` audit rows + one open `oversight-guard` alarm per principal. |
+| `oversight_policy.py` | pure policy: `check_action(verb)` and `check_batch(items_by_key, ops, projects) -> [Verdict]` (the single grant, project-scoped, used by both fail-closed seams; malformed op data answers with a fail-closed `malformed` verdict, never an exception). |
 | `store.py` | the verbs (below) as methods of `Store(conn, clock=time.time, verifiers=…, ctx=…, batch_roots=…)`, mixed in from `store_create`/`store_verbs`/`store_review`/`store_waiver`/`store_close`/`store_read`/`store_reap`/`store_support`; every verb takes `(principal, …)` |
 | `store_close.py` | `CloseMixin`: the router-only `close_on_decision` verb for tier-`none` items (X7b, "Legacy and decision closes") |
 | `evidence.py` | pluggable verifiers (below) |
@@ -39,7 +41,74 @@ event is otherwise skipped, so the cache cannot drift and an old rebuild cannot 
 problem `{"key": key-or-None, "code": "unknown_event_type", "field": "type", "expected": None, "got": kind, "seq": seq}`; `pg admin
 verify` prints it as `KEY unknown_event_type type=… seq=…` (`-` for a keeper-level, keyless event). Types in `EVENT_TYPES` with no fold
 branch — `review_verdict`, `token_minted`, `outage_recorded` — are known no-ops (replayed by `token_fold`/the store) and are **never**
-reported as unknown.
+reported as unknown. `oversight_token_minted` is **keyless**, so `fold` returns before its
+branch: replay does **not** rebuild `oversight_tokens` (GAP: that ledger is revoke-only
+table state, never an event-sourced cache — read it from the table, not from the chain).
+
+## Oversight principal (RT-OVERSIGHT-KEEPER-SCOPE)
+
+An `oversight` principal is a short-lived, scoped identity for a human/agent that
+may only *refine* the plan, never restructure it. It is provisioned with the local
+`auth.add_oversight_principal(conn, name, projects)` (non-empty `projects`; empty
+means nothing, R5) and its token is minted only by the local admin CLI:
+
+    pg admin mint-oversight-token NAME --go D-NNN [--reason TEXT] --token-out FILE
+
+Minting requires `PG_OVERSIGHT_LIVE=1` on the host **and** a `decisions` row
+`D-NNN` with `kind='operator'` carrying the whole `oversight-live` scope in
+`waives` (R2: no HTTP/MCP verb; default deployment has no live token). There is
+no extension: the token expires after 3600 s; minting again revokes every live
+token of the principal and starts generation N+1. The plaintext is returned once,
+written 0600 to `--token-out`, and never stored, logged or printed.
+
+The verb seam (`Store._run`) lets an oversight principal call reads and exactly
+one write verb, `apply_ops`; every other write verb is `403
+oversight:verb_denied`. Inside `apply_ops` (batch_ref is required) the pure
+policy allows only:
+
+* `create` a `lane`/`question` with explicit `review_tier` (`standard`, or
+  `none` only for `question`), non-empty `done_criteria`, and the closed
+  allowlist of item fields (no `under`, no lifecycle fields). The tier is
+  **raise-only**: an explicit tier *below* the project's `default_review_tier`
+  is refused `403 oversight:tier_below_default` — it is never silently stored
+  as the default — while a tier at or above the default is honoured exactly as
+  asked;
+* `edit` `note`/`description` and **add** `depends_on` edges on an OPEN,
+  non-high, non-gate/goal/decision/operator_task item;
+* `priority` on such an item;
+* `add_dep` on such an item to an existing non-cancelled dep (a DONE target is
+  legal; a cancelled one is `oversight:dep_cancelled`).
+
+R5 bounds **every** one of those ops to the principal's `projects`: the item a
+create/edit/priority/add_dep names, the item a create would insert, and every
+dependency target (create `depends_on`, an edit's added deps, `add_dep`'s dep)
+must be inside the grant; anything else is `403 oversight:project_denied` and
+nothing is written. The same `projects` value is passed to
+`oversight_policy.check_batch` at both fail-closed seams (pre-lock and in-lock).
+
+Dependency removal (including add+drop in one list), cross-project items or
+dependencies, high/decision/operator_task targets, tier edits, `done_criteria`
+edits, `under`, unknown or malformed ops/fields and cycles fail closed —
+malformed op data (a list where a name belongs, an unhashable `kind`) answers
+with a fail-closed policy verdict and a refusal, never an exception. Each
+attempt writes one `oversight_ops` row (applied inside the batch transaction,
+denied after its rollback — a **denied `dry_run`** writes no *applied* row but
+does record its denial) and a denial also raises one open `projector_alarms`
+row (`kind='oversight_denied'`, `workflow_id='oversight-guard'`, keyed by the
+**principal**: one open row per principal however the op's `finding` ids
+rotate — the initial finding is preserved in detail on conflict). A refusal at the
+verb seam **after** the token row was resolved — a denied verb/unknown verb, or
+a revoked/expired/rotated/scope-drifted token — is audited the same way, naming
+the attempted verb and key with `finding_id=''` (no op carried a finding), and
+counts toward the denied budget. When an active oversight token has expired at
+`authenticate`, its denial is audited and counted toward the hourly budget before
+refusing; only requests where no principal is resolved at all (unknown token hash,
+revoked-at-auth hash, inactive principal row, role drift) remain unaudited in
+`oversight_ops`; they still write the `audit_log` authentication row. Applied/denied per-hour caps are derived
+from `oversight_ops` and **every writer consults them before it inserts**, so a
+breach is `403 oversight:rate_limited` — its denied row (when the cap still
+allows one) carries a human-readable reason — and alarm-only: only an explicit
+`pg admin revoke NAME` kills the identity (R4).
 
 ## Locking (prevention)
 Triggers key off `EXISTS (SELECT 1 FROM events WHERE key=… AND type IN ('review_passed','closed_on_decision'))` (never the cache) — the

@@ -1,19 +1,30 @@
-"""B1: the router-only ``apply_ops`` verb for :class:`...store.Store`.
+"""B1: the ``apply_ops`` verb for :class:`...store.Store`.
 
 ``apply_ops(principal, ops, batch_ref=None, base_seq=None, dry_run=False)``
 applies a list of BATCH.md ops (create, edit, legacy_state, add_evidence,
-close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep)
-in ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  Every op runs the
-very same inner function as its single verb (so the same auth/state checks),
-except that the whole-graph validation is deferred: the single verbs'
-``_validate_change`` calls are recorded while a batch is open, and the
-validation runs ONCE over the final graph against the graph as it was when
-the lock was taken.  Later ops therefore see the effects of earlier ones
-(create a leaf, then link it).
+close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep) in
+ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  The router owns the verb;
+an ``oversight`` principal may use it for its narrow grant only (see
+:mod:`.oversight_policy`), with ``batch_ref`` required.  ``base_seq`` is an
+optimistic precondition: a ``conflict`` when any touched key has events newer
+than it, checked under the write lock.  ``dry_run`` performs every check and op
+and then rolls the transaction back, so a dry run changes no state (an
+oversight dry run writes no applied audit rows either; a refusal still records
+its denial).  Every op runs the very same
+inner function as its single verb (so the same auth/state checks), except that
+the whole-graph validation is deferred: the single verbs' ``_validate_change``
+calls are recorded while a batch is open, and the validation runs ONCE over the
+final graph against the graph as it was when the lock was taken.  Later ops
+therefore see the effects of earlier ones (create a leaf, then link it).
 
 Any refusal, validation problem or error rolls back the items, edges, events
 and evidence of the whole batch; the refusal names the op:
 ``op <n> <op> <key>: <code> <message>`` (``n`` is 1-based, like ``apply_batch.py``).
+
+An oversight refusal is recorded whether the batch was real or a ``dry_run``:
+the dry run changes no graph state and writes no *applied* row, but a denied
+attempt still leaves its denied ``oversight_ops`` row and its alarm (the done
+criterion "a denied attempt raises an alert row" holds for a probe too).
 
 Slow I/O runs before the lock: evidence for a ``claimed``/``in_review`` item
 that no earlier op of the batch moves is verified pre-lock, and the in-lock op
@@ -31,6 +42,7 @@ import logging
 from .. import views
 from . import events
 from . import db_errors
+from . import oversight_policy
 from .errors import Refused
 from .store_create import _MAX_DEPS
 
@@ -105,35 +117,76 @@ def _fail(index, op, exc):
 
 
 class OpsMixin:
-    """The router-only ``apply_ops`` verb."""
+    """The ``apply_ops`` verb (router; a narrow ``oversight`` grant too)."""
 
-    def apply_ops(self, principal, ops, batch_ref=None, base_seq=None, dry_run=False):
+    def apply_ops(self, principal, ops, batch_ref=None, base_seq=None,
+                  dry_run=False):
         return self._run(principal, "apply_ops", None,
-                         lambda now: self._apply_ops(principal, ops,
-                                                     batch_ref, now,
-                                                     base_seq=base_seq,
-                                                     dry_run=dry_run))
+                         lambda now: self._apply_ops_audited(
+                             principal, ops, batch_ref, now,
+                             base_seq=base_seq, dry_run=dry_run))
+
+    def _apply_ops_audited(self, principal, ops, batch_ref, now, base_seq=None,
+                           dry_run=False):
+        """Run one batch; an oversight refusal is recorded after the rollback.
+
+        ``_run`` records every oversight refusal at the VERB seam, so this path
+        marks the denial it already wrote with ``_oversight_denied_written``:
+        the batch row carries the op/finding context, the seam row would not.
+
+        A dry run writes no APPLIED row (its ops roll back with the batch), but
+        a refusal still records its denial exactly like a real call: the denied
+        ``oversight_ops`` row and the ``oversight-guard`` alarm are written
+        after the rollback, so a denied probe is never invisible.
+        """
+        oversight = principal.role == "oversight"
+        self._oversight_fail = None
+        self._oversight_ops = list(ops) if isinstance(ops, list) else []
+        try:
+            return self._apply_ops(principal, ops, batch_ref, now,
+                                   base_seq=base_seq, dry_run=dry_run)
+        except Refused as exc:
+            if oversight:
+                # May raise ``oversight:rate_limited`` instead: once the denied
+                # cap is reached the refusal is reported, not recorded again.
+                self._record_oversight_denied(principal, batch_ref, exc, now)
+                self._oversight_denied_written = True
+            raise
 
     # ----------------------------------------------------------- planning
-    def _plan_ops(self, ops, batch_ref):
+    def _plan_ops(self, ops, batch_ref, principal=None):
         if not isinstance(ops, list) or not ops:
             raise Refused("validation", "ops must be a non-empty list")
         if len(ops) > MAX_OPS:
             raise Refused("validation", f"batch exceeds {MAX_OPS} ops")
         for index, op in enumerate(ops):
             try:
-                self._check_op_shape(op, batch_ref)
+                self._check_op_shape(op, batch_ref, principal)
             except Refused as exc:
                 raise _fail(index, op, exc) from None
 
     @staticmethod
-    def _check_op_shape(op, batch_ref):
+    def _check_op_shape(op, batch_ref, principal=None):
+        oversight = getattr(principal, "role", None) == "oversight"
         if not isinstance(op, dict):
             raise Refused("validation", "op must be a mapping")
         name = op.get("op")
+        if not isinstance(name, str):
+            # Malformed name (a list/dict/number): refuse as validation here so
+            # no membership test below raises TypeError at the caller.
+            raise Refused("validation", "op name must be text")
+        if oversight and name == "remove_dep":
+            # Shape-check it normally; the policy refuses it with dep_removal.
+            pass
+        elif oversight and name not in oversight_policy.OVERSIGHT_OPS:
+            raise Refused("forbidden",
+                          f"oversight:op_denied op {name!r} is not granted")
         if name not in _OPS:
             raise Refused("validation", f"unknown op {name!r}")
-        extra = set(op) - _OPS[name]
+        allowed = _OPS[name]
+        if oversight:
+            allowed = allowed | {"reason", "finding"}
+        extra = set(op) - allowed
         if extra:
             raise Refused("validation", f"unexpected fields {sorted(extra)}")
         if name == "create":
@@ -309,11 +362,18 @@ class OpsMixin:
         return {"key": item["key"], "warnings": warnings}
 
     def _check_base_seq(self, ops, base_seq):
-        """Refuse with conflict if any key touched by edit/cancel has events newer than base_seq."""
+        """Refuse with conflict if any key touched by an op has events newer than base_seq.
+
+        Checks all op kinds that oversight can send: edit, cancel, priority, add_dep.
+        Create ops are excluded (they reference new keys with no prior events).
+        """
         check_keys = []
         seen = set()
         for op in ops:
-            if op.get("op") in ("edit", "cancel"):
+            op_name = op.get("op")
+            # Check all ops that oversight can send (edit, cancel, priority, add_dep)
+            # Create is excluded as it references new keys
+            if op_name in ("edit", "cancel", "priority", "add_dep"):
                 k = op.get("key")
                 if k and k not in seen:
                     seen.add(k)
@@ -332,17 +392,40 @@ class OpsMixin:
             raise Refused("conflict",
                           f"base_seq {base_seq}: changed after base_seq: {stale_str}")
 
-    def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None, dry_run=False):
-        self._require_role(principal, "router")
+    def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None,
+                   dry_run=False):
+        oversight = principal.role == "oversight"
+        if oversight:
+            if not isinstance(batch_ref, str) or not batch_ref.strip():
+                raise Refused("validation",
+                              "oversight:batch_ref_required batch_ref is required")
+            # build-L1 LOW: batch_ref bounded + guarded like reason/finding
+            from .store_oversight import OversightMixin, _REASON_CAP
+            batch_ref = OversightMixin._oversight_text("batch_ref", batch_ref, _REASON_CAP)
+        self._require_role(principal, "router", "oversight")
         if base_seq is not None:
-            if isinstance(base_seq, bool) or not isinstance(base_seq, int) or base_seq < 0:
-                raise Refused("validation", "base_seq must be a non-negative integer")
+            if isinstance(base_seq, bool) or not isinstance(base_seq, int) \
+                    or base_seq < 0:
+                raise Refused("validation",
+                              "base_seq must be a non-negative integer")
         if dry_run is not None and not isinstance(dry_run, bool):
             raise Refused("validation", "dry_run must be a boolean")
         dry_run = bool(dry_run)
-        self._plan_ops(ops, batch_ref)
+        self._plan_ops(ops, batch_ref, principal)
+        metas = [{} for _ in ops]
+        if oversight:
+            kept = []
+            for index, op in enumerate(ops):
+                metas[index] = self._oversight_meta(op, index)
+                kept.append({name: value for name, value in op.items()
+                             if name not in ("reason", "finding")})
+            ops = kept
+        self._oversight_meta_list = metas
         ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
                for op in ops]
+        if oversight:
+            self._oversight_budget(principal, now)
+            self._oversight_gate(principal, ops)
         batch = OpBatch()
         self._prelock(ops, batch_ref, batch, now)
         results = []
@@ -351,16 +434,31 @@ class OpsMixin:
         try:
             if base_seq is not None:
                 self._check_base_seq(ops, base_seq)
+            # Re-check token inside the write transaction to close mint/revoke race
+            # (build-L1 LOW: token check inside BEGIN IMMEDIATE)
+            if oversight:
+                self._check_oversight_principal(principal, "apply_ops", None, now)
             before = self._all_items()
+            if oversight:
+                self._oversight_gate(principal, ops, before)
             for index, op in enumerate(ops):
                 batch.current = index
+                before_seq = self.conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
                 results.append(self._guarded_op(principal, index, op,
                                                 batch_ref, now))
+                # A dry run's rows would roll back with the batch; skipping
+                # them makes "no applied audit row, no applied budget" explicit.
+                if oversight and not dry_run:
+                    self._record_oversight_applied(
+                        principal, batch_ref, index, op, metas[index],
+                        before_seq, now)
             self._batch = None
             self._final_validation(before, ops, batch)
             if dry_run:
                 self.conn.execute("ROLLBACK")
-                return {"applied": len(results), "results": results, "dry_run": True}
+                return {"applied": len(results), "results": results,
+                        "dry_run": True}
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:
@@ -370,10 +468,37 @@ class OpsMixin:
             self._batch = None
         return {"applied": len(results), "results": results}
 
+    def _oversight_gate(self, principal, ops, items=None):
+        """The one policy check, run pre-lock and again in-lock."""
+        graph = self._all_items() if items is None else items
+        items_by_key = {item["key"]: item for item in graph}
+        for verdict in oversight_policy.check_batch(
+                items_by_key, ops, principal.projects,
+                normalize_create=lambda raw: self._normalise_create(raw, principal)):
+            self._oversight_fail = {
+                "index": verdict.index, "op": ops[verdict.index],
+                "key": None if verdict.key == "-" else verdict.key,
+                "reason": verdict.reason,
+                "finding": self._oversight_meta_list[verdict.index].get(
+                    "finding", ""),
+                "input_reason": self._oversight_meta_list[verdict.index].get(
+                    "reason", "")}
+            raise _fail(verdict.index, ops[verdict.index],
+                        Refused(verdict.code, verdict.message))
+
     def _guarded_op(self, principal, index, op, batch_ref, now):
         try:
             return self._run_op(principal, op, batch_ref, now)
         except Refused as exc:
+            if principal.role == "oversight":
+                self._oversight_fail = {
+                    "index": index, "op": op,
+                    "key": None,
+                    "reason": self._reason_from_msg(exc.msg),
+                    "finding": self._oversight_meta_list[index].get(
+                        "finding", ""),
+                    "input_reason": self._oversight_meta_list[index].get(
+                        "reason", "")}
             raise _fail(index, op, exc) from None
         except db_errors.INTEGRITY as exc:
             raise _fail(index, op, Refused(
@@ -392,7 +517,10 @@ class OpsMixin:
                                   allow_new=batch.allow_new)
             self._refuse_strict_allow_new(before, batch)
         except Refused as exc:
-            owner = next((i for i, keys in sorted(batch.touched.items())
+            # For cycles, attribute the final contributing op, not the first
+            # item mentioned by the whole-graph diagnostic.
+            owner = next((i for i, keys in sorted(batch.touched.items(),
+                                                  reverse=exc.code == "cycle")
                           if any(k in exc.msg for k in keys)), None)
             if owner is None:
                 raise Refused(exc.code, f"op - validate: {exc.code} "

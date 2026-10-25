@@ -19,7 +19,7 @@ from pathlib import Path
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema import (ALIASES_DDL, DESIGN3_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
-                     OUTBOX_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
+                     OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
 
@@ -119,6 +119,14 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
 
+#: The oversight guard triggers (``OVERSIGHT_DDL``): a presence-based install
+#: never REPAIRS one, so ``_repair_oversight_triggers`` drops them on every open
+#: and the DDL below recreates the current body -- a weakened or older guard
+#: cannot survive a reopen (D-2458).  Derived directly from OVERSIGHT_DDL.
+_OVERSIGHT_TRIGGERS = tuple(
+    re.findall(r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", OVERSIGHT_DDL)
+)
+
 
 def _upgrade_lock_triggers(conn):
     """MK-ANSWER: re-create the key-lock triggers if they predate ``answered``.
@@ -138,6 +146,46 @@ def _upgrade_lock_triggers(conn):
     conn.executescript(script)
 
 
+def _first_sql_word(stmt: str) -> str:
+    """Return the first keyword of a SQL statement, skipping comments/whitespace."""
+    clean = re.sub(r"^(?:\s*--[^\n]*(?:\n|$|\r)|\s*/\*.*?\*/\s*)+", "", stmt, flags=re.S).strip()
+    m = re.match(r"^([A-Za-z]+)", clean)
+    return m.group(1).upper() if m else ""
+
+
+def _split_statements(
+    sql: str,
+    *,
+    disallow: tuple[str, ...] | frozenset[str] = ("PRAGMA", "VACUUM"),
+) -> list[str]:
+    """Split a SQL script into individual statements using sqlite3.complete_statement.
+
+    Splits on a character/semicolon basis, respecting trigger BEGIN...END bodies.
+    Statements whose leading keyword is in ``disallow`` are refused with a ValueError.
+    """
+    statements = []
+    buffer = ""
+    for ch in sql:
+        buffer += ch
+        if ch == ";" and sqlite3.complete_statement(buffer):
+            stmt = buffer.strip()
+            if stmt:
+                word = _first_sql_word(stmt)
+                if disallow and word in disallow:
+                    raise ValueError(f"disallowed statement in transaction: {word}")
+                statements.append(stmt)
+            buffer = ""
+    trailing = buffer.strip()
+    if trailing:
+        clean = re.sub(r"^(?:\s*--[^\n]*(?:\n|$|\r)|\s*/\*.*?\*/\s*)+", "", trailing, flags=re.S).strip()
+        if clean:
+            word = _first_sql_word(trailing)
+            if disallow and word in disallow:
+                raise ValueError(f"disallowed statement in transaction: {word}")
+            statements.append(trailing)
+    return statements
+
+
 def _upgrade(conn):
     """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
@@ -152,6 +200,24 @@ def _upgrade(conn):
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
+    # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
+    # for the TABLES, and a REPAIR for the guard triggers: ``CREATE TRIGGER IF
+    # NOT EXISTS`` would keep a weakened or outdated body. Drop + create run in
+    # one BEGIN IMMEDIATE transaction (no executescript) so guards are never absent
+    # between them (D-2458).
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        triggers = tuple(
+            re.findall(r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", OVERSIGHT_DDL)
+        ) or _OVERSIGHT_TRIGGERS
+        for trigger in triggers:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        for stmt in _split_statements(OVERSIGHT_DDL, disallow=("PRAGMA", "VACUUM")):
+            conn.execute(stmt)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
 
