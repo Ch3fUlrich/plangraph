@@ -427,8 +427,8 @@ class SpawnerRunner:
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.liveness:
-                from .liveness import LIVENESS_TO_EXIT_CLASS
-                job.exit_class = LIVENESS_TO_EXIT_CLASS.get(job.liveness)
+                from .liveness import exit_class_for_liveness
+                job.exit_class = exit_class_for_liveness(job.liveness)
                 job.status = "failed"
             elif job.exit_class == "cancelled" or job.status == "cancelled":
                 job.exit_class = "cancelled"
@@ -445,8 +445,8 @@ class SpawnerRunner:
             if job_id in self.jobs:
                 job = self.jobs[job_id]
                 if job.liveness:
-                    from .liveness import LIVENESS_TO_EXIT_CLASS
-                    job.exit_class = LIVENESS_TO_EXIT_CLASS.get(job.liveness)
+                    from .liveness import exit_class_for_liveness
+                    job.exit_class = exit_class_for_liveness(job.liveness)
                     job.status = "failed"
                 else:
                     job.status = "cancelled"
@@ -517,9 +517,14 @@ class SpawnerRunner:
         job = self.jobs[job_id]
 
         if liveness is not None:
+            # haiku-C8/qwen-C4: refuse unknown liveness BEFORE touching the job —
+            # exit_class_for_liveness's silent None put exit_class outside I13.
+            from .liveness import LIVENESS_VALUES, exit_class_for_liveness
+            if liveness not in LIVENESS_VALUES:
+                from plangraph.routing_errors import ParameterRefused
+                raise ParameterRefused(f'unknown liveness {liveness!r}')
             job.liveness = liveness
-            from .liveness import LIVENESS_TO_EXIT_CLASS
-            job.exit_class = LIVENESS_TO_EXIT_CLASS.get(liveness)
+            job.exit_class = exit_class_for_liveness(liveness)
         else:
             job.exit_class = "cancelled"
 
