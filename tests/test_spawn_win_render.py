@@ -211,18 +211,29 @@ def test_add_host_keys_receives_needs_gateway_for_mimo_without_root(tmp_path, mo
 
 
 def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
-    """(i) Router D-2801 (a): parent AUTOOS_OMNIROUTE_KEY reaches child env without leaking."""
+    """(i) Router D-2801 (a): parent AUTOOS_OMNIROUTE_KEY reaches child env without leaking.
+
+    The child prints the sentinel to stdout and stderr so redact_env_values is
+    proven to scrub it from the recorded tails, not merely absent by luck.
+    """
     sentinel = "SENTINEL-PARENT-ENV-KEY-999"
     monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
 
+    from plangraph.spawner import resolver
+
+    async def no_skip(row, *, env=None):
+        return None
+
+    monkeypatch.setattr(resolver, "host_skip_reason_async", no_skip)
     captured_env = {}
 
     async def fake_factory(exe, *args, **kwargs):
         captured_env.update(kwargs.get("env") or {})
         proc = AsyncMock()
-        proc.communicate = AsyncMock(return_value=(b"ok", b""))
+        proc.communicate = AsyncMock(return_value=(
+            ("out " + sentinel).encode(), ("err " + sentinel).encode()))
         proc.returncode = 0
         proc.pid = 999
         return proc
@@ -243,8 +254,14 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
         assert sentinel not in captured_env.get("OPENCODE_CONFIG_CONTENT", "")
         assert sentinel not in " ".join(job.command)
         assert sentinel not in json.dumps(record)
-        assert sentinel not in record.get("stdout_tail", "")
-        assert sentinel not in record.get("stderr_tail", "")
+        # The tail keys exist and the sentinel was printed, then scrubbed.
+        assert "stdout_tail" in record and "stderr_tail" in record
+        assert "[autoos:redacted]" in record["stdout_tail"]
+        assert "[autoos:redacted]" in record["stderr_tail"]
+        assert sentinel not in record["stdout_tail"]
+        assert sentinel not in record["stderr_tail"]
+        assert sentinel not in job.stdout
+        assert sentinel not in job.stderr
         record_file = service._path(record["run_id"])
         if record_file.exists():
             assert sentinel not in record_file.read_text()
