@@ -39,6 +39,14 @@ class OutboxMixin:
     """``replay`` for run tokens and ``record_outage`` for the daemon."""
 
     def replay(self, principal, entries):
+        # qwen-R1 class sweep: the run-token gate sits inside the audited
+        # ``Store._run`` seam like every other verb's role gate, so a wrong
+        # principal is refused 403 WITH its audit_log row (a gate here would
+        # answer before the seam and audit nothing).
+        return self._run(principal, "replay", None,
+                         lambda now: self._replay(principal, entries, now))
+
+    def _replay(self, principal, entries, now):
         if not isinstance(principal, auth.RunPrincipal):
             raise Refused("forbidden", "only a run token may replay an outbox")
         if not isinstance(entries, list) or not entries or len(entries) > MAX_ENTRIES:

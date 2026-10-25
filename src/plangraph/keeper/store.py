@@ -58,6 +58,31 @@ DEFAULT_LEASE_S = 7200
 REVIEW_OVERDUE_S = 4 * 3600
 LEASE_WARN_S = 15 * 60
 
+#: PG-EFFICIENCY-GATES fix round 2 (qwen-R1/R2): the roles each routed verb
+#: admits, keyed by the ``_run`` action.  This table is the single role
+#: authority -- ``Store._run`` consults it right after principal resolution and
+#: refuses (audited, 403) BEFORE any body work, so a wrong-role request is
+#: always refused inside the seam ("every refusal is audited") and a route
+#: handler never carries a role list that could drift from the store's.
+#: Keyed by action so the verb's own ``_run`` call -- route handler or direct
+#: caller alike -- is gated identically.
+ROLE_GATE = {
+    "close_on_decision": ("router",),
+    "set_legacy_state": ("router",),
+    "set_kind": ("router",),
+    "apply_ops": ("router", "oversight"),
+    "rehome": ("router",),
+    "record_run": ("spawner",),
+    "answer": ("router",),
+    "mint_run_token": ("router", "l1"),
+    "requeue": ("router",),
+    "log_item": ("router", "l1"),
+    "rule_set": ("router",),
+    "phase_plan": ("router", "system"),
+    "phase_finish": ("router", "system"),
+    "worker_claim": ("worker", "system"),
+}
+
 _LEASE_MIN, _LEASE_MAX = 60, 86400
 
 # Exceptions raised by a verb that mean the request was malformed, not that the
@@ -182,7 +207,14 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             raise Refused("forbidden", "principal changed since authentication")
 
     def _run(self, principal, action, key, fn):
-        """Authorise/execute *fn*; audit success and every refusal."""
+        """Authorise/execute *fn*; audit success and every refusal.
+
+        PG-EFFICIENCY-GATES fix round 2 (qwen-R1): the ``ROLE_GATE`` role check
+        runs here -- after principal resolution, before ``fn`` -- so a wrong
+        role is refused (and audited) before any body work, never by a guard
+        outside this seam (a guard outside ``_run`` writes no audit row and
+        skips the revocation re-read and the oversight denial record).
+        """
         now = self.now()
         # M2: ``_apply_ops_audited`` records a batch refusal (with its op
         # context); every other oversight refusal is recorded at this seam.
@@ -196,7 +228,14 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
 
         try:
             if isinstance(principal, auth.RunPrincipal):
-                self._check_run_principal(principal, action, key, now)
+                # M2B-OUTBOX: ``replay`` is the outbox door, not a run verb
+                # body -- every entry re-runs its own verb's full per-use
+                # check (``_check_run_principal`` included), so a stale or
+                # revoked token answers ``forbidden`` per entry instead of
+                # having its whole queue refused.  The door's own gate is the
+                # token class (``OutboxMixin._replay``).
+                if action != "replay":
+                    self._check_run_principal(principal, action, key, now)
             elif isinstance(principal, auth.OversightPrincipal):
                 self._check_principal(principal)
                 self._check_oversight_principal(principal, action, key, now)
@@ -204,6 +243,9 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                 oversight_policy.check_action(action)
             else:
                 self._check_principal(principal)
+            roles = ROLE_GATE.get(action)
+            if roles:
+                self._require_role(principal, *roles)
             result = fn(now)
         except Refused as exc:
             self._audit(principal, action, key, False, exc.code, exc.msg, now)

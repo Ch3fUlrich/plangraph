@@ -538,16 +538,18 @@ class CardsMixin:
 
     def requeue(self, principal, key, reason=""):
         """Router-only revival of a parked card, retiring its previous run."""
-        def apply(now):
-            self._require_role(principal, "router")
-            def guard(item):
-                if item["state"] != "parked":
-                    raise Refused("bad_state", "requeue requires a parked card")
-            return self._apply_state(principal, key, "open",
-                                     _text("reason", reason or "", cap=500, key=key),
-                                     now, lambda project: self._may_write_for(principal, project),
-                                     guard=guard, hand_back=True)
-        return self._run(principal, "requeue", key, apply)
+        return self._run(principal, "requeue", key,
+                         lambda now: self._requeue(principal, key, reason,
+                                                   now))
+
+    def _requeue(self, principal, key, reason, now):
+        def guard(item):
+            if item["state"] != "parked":
+                raise Refused("bad_state", "requeue requires a parked card")
+        return self._apply_state(principal, key, "open",
+                                 _text("reason", reason or "", cap=500, key=key),
+                                 now, lambda project: self._may_write_for(principal, project),
+                                 guard=guard, hand_back=True)
 
     def _exec_clear(self, conn, key, principal, now):
         """Free the exec owner inside the caller's keeper transaction.
