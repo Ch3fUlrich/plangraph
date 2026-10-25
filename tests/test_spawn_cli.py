@@ -11,6 +11,11 @@ import sys
 import os
 
 
+
+@pytest.fixture(autouse=True)
+def _gateway_url(monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')  # hermetic: I6 refuses a gateway leg with no base URL
+
 @pytest.fixture(autouse=True)
 def fake_host_binaries(tmp_path, monkeypatch):
     """Keep real probes (including worker processes) off the host installation."""
