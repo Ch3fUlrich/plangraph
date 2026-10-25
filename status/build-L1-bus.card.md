@@ -1,5 +1,6 @@
 # build-L1-bus card · gen-2 · 2026-10-25 · NO cron · parent routing (D-2534)
 D-2694 (10-25): L3 writer+seat max_tokens=128000 default, clamp only to leg ceiling; finish=length+empty -> retry at ceiling, never skip. Put in every brief.
+D-2706 (10-25): spawn floor MemAvailable 2000 MB (replaces D-2686 4000); max 4 concurrent writers on coding.vm, rest workst; L1 restart = clear context; 1 compaction = recycle.
 Owner build-L1-bus; claims via build-L1.token (D-2536). hb loop: ops/hb.sh over ops/hb-keys.txt (3x8min, restart on exit).
 Control branch build-L1-bus (local control.git only). Phase branch phase/rt-p1-bus (origin) base main 0d3a3898, head 12a182f9. CI only PR->main: lanes run via `gh workflow run tests.yml --ref <lane>`.
 Review rule D-2534: lanes -> PR into phase branch, green CI, no per-task seats; then ONE HIGH review of phase diff vs main
