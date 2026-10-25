@@ -70,7 +70,12 @@ def test_router_requeue(tmp_path):
         w.close()
 
 
-def test_owner_changes_are_chained_and_retirement_is_bounded(tmp_path):
+def test_owner_changes_are_chained_and_the_fence_never_forgets(tmp_path):
+    # Supersedes sq6's test_owner_changes_are_chained_and_retirement_is_bounded
+    # (RT-P1 sq12 fix 1): the old pin asserted the retired[-16:] cap and
+    # retired[0]=="run-2".  That bound was the bug -- it evicted still-live
+    # identities after 17 clears.  The fence never forgets; the chaining and
+    # audit assertions are kept unchanged (strictly stronger semantics).
     import json
     from plangraph.keeper import events
 
@@ -88,8 +93,8 @@ def test_owner_changes_are_chained_and_retirement_is_bounded(tmp_path):
         row = w.conn.execute("SELECT exec_retired_runs FROM items WHERE key=?",
                              (key,)).fetchone()
         retired = json.loads(row[0])
-        assert len(retired) == 16
-        assert retired[0]["run_id"] == "run-2"
+        assert len(retired) == 18
+        assert retired[0]["run_id"] == "run-0"
         assert all(entry["attempt"] == 2 for entry in retired)
         count = w.conn.execute("SELECT COUNT(*) FROM events WHERE type=?",
                                ("exec_owner_changed",)).fetchone()[0]

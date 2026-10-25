@@ -560,6 +560,11 @@ class CardsMixin:
         (reap, release, both review changes, reopen, withdraw and the explicit
         ``set_state`` hand-back) goes through here, so the fence is written for
         all of them at once.
+
+        RT-P1 sq12 fix 1: the fence NEVER FORGETS -- every retired run stays
+        in ``exec_retired_runs`` with no cap, so a run retired arbitrarily
+        many clears ago is still refused.  (The earlier ``retired[-16:]``
+        bound evicted still-live identities after 17 clears.)
         """
         row = conn.execute(
             "SELECT exec_workflow_id, exec_run_id, exec_attempt, exec_retired_runs"
@@ -584,9 +589,9 @@ class CardsMixin:
                             "attempt": row["exec_attempt"]})
         conn.execute("UPDATE items SET exec_workflow_id=NULL, exec_run_id=NULL,"
                      " exec_attempt=NULL, exec_principal=NULL, exec_retired_runs=? WHERE key=?",
-                     (_dump(retired[-16:]), key))
+                     (_dump(retired), key))
         self._append(principal, key, "exec_owner_changed",
-                     {"action": "clear", "retired": retired[-16:]}, now)
+                     {"action": "clear", "retired": retired}, now)
 
     def _exec_record(self, conn, item_id, wf, run, attempt, principal=None, now=None):
         """Record the exec owner of *item_id*: the first owner of an unowned card.
