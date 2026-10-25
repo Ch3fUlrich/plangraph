@@ -416,6 +416,29 @@ async fn attempt_outcomes(handle: &Handle) -> Vec<(String, String)> {
     out
 }
 
+/// How many times the workflow *scheduled* activities named `name`: one
+/// `ActivityTaskScheduled` event per workflow command, so an activity Temporal
+/// retried server-side counts once -- which is exactly what separates D1
+/// retries from workflow-level re-observe loops.
+async fn scheduled_activities(handle: &Handle, name: &str) -> usize {
+    let bytes = handle
+        .fetch_history(WorkflowFetchHistoryOptions::default())
+        .to_json()
+        .await
+        .expect("fetch history json");
+    let value: serde_json::Value = serde_json::from_slice(&bytes).expect("history is json");
+    value["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter(|ev| {
+            ev["attributes"]["ActivityTaskScheduledEventAttributes"]["activity_type"]["name"]
+                .as_str()
+                == Some(name)
+        })
+        .count()
+}
+
 /// Standard base64 (padding optional); enough to read history payloads
 /// without a crate. Invalid characters are skipped.
 fn b64_decode(s: &str) -> Vec<u8> {
@@ -2612,6 +2635,60 @@ async fn cap_park_on_waiting_card_lands_after_one_failed_observe() {
             1,
             "park must land within bounded retries"
         );
+
+        env.stop();
+    })
+    .await;
+}
+
+/// D1b / I3a: a transient observe read failure is retried by the activity's
+/// retry policy inside one scheduled `observe`, not degraded to the live-set
+/// fallback: two `Err(500)` reads then the state, and the park carries the
+/// observed state ["waiting"].
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transient_observe_failure_is_retried_not_degraded() {
+    in_local(async {
+        let Some(env) = env_or_skip("retried-observe", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-retried-observe";
+        // Card is waiting; the first two reads fail transiently (D1a Err(500)).
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_card_state_fail_times(2);
+
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-retried-observe-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("retried_observe", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        // I3a: one scheduled observe activity: the retries are server-side
+        // attempts, so the workflow issued a single command and replay is safe.
+        assert_eq!(
+            scheduled_activities(&handle, "observe").await,
+            1,
+            "a transient read failure must be retried by the activity, not degraded"
+        );
+        // I3a: two failed reads, then the successful observation.
+        assert_eq!(
+            env.keeper.card_state_calls().len(),
+            3,
+            "two transient failures then the observed state"
+        );
+        // I3a: the park carries the observed state, never the live-set fallback.
+        let execs = env.keeper.execs();
+        let park_exec = execs
+            .iter()
+            .find(|e| e.expected_state.is_some())
+            .expect("park must carry expected_state");
+        assert_eq!(
+            park_exec.expected_state,
+            Some(vec!["waiting".to_string()]),
+            "the retried read must land the observation, not degrade"
+        );
+        assert_eq!(env.keeper.parked().len(), 1, "the park must land");
 
         env.stop();
     })

@@ -1401,9 +1401,9 @@ fn janitor_options(cfg: &Config) -> ActivityOptions {
 
 /// The observation the `park` that follows gets (EXEC-OBSERVED-STATE, G3-1):
 /// `None` when the history predates the marker (an in-flight run replays the
-/// way it always did) or when the keeper could not be read -- the caller then
-/// parks on its live-set fallback. A cancelled read ends the workflow the way
-/// every other activity call here does.
+/// way it always did) or when the observe retries ran out (D1b: the cause is
+/// logged) -- the caller then parks on its live-set fallback. A cancelled read
+/// ends the workflow the way every other activity call here does.
 async fn observe_card(
     ctx: &WorkflowContext<Card>,
     cfg: &Config,
@@ -1422,7 +1422,12 @@ async fn observe_card(
     {
         Ok(observed) => Ok(observed),
         Err(e) if e.as_cancelled().is_some() => Err(e.into()),
-        Err(_) => Ok(None),
+        // D1b: the activity's own retries are exhausted. Degrade to the
+        // live-set fallback as before -- but the cause stays visible.
+        Err(e) => {
+            eprintln!("observe retries exhausted, parking on fallback: {e}");
+            Ok(None)
+        }
     }
 }
 

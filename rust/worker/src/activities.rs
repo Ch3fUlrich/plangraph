@@ -495,13 +495,16 @@ pub(crate) fn expected_state_of(input: &str) -> Option<Vec<String>> {
 
 /// The `observe` read the park decision gets: `Keeper::card_state` (a blocking
 /// ureq call) off the tokio worker threads in `spawn_blocking`, waiting at most
-/// [`OBSERVE_READ_TIMEOUT`] for it (G3-4). `None` -- timeout, a panicking
-/// blocking task, a keeper that answered nothing -- means "observed nothing",
-/// so the workflow parks on its live-set fallback. A keeper read failure
-/// (D1a's `Err`) is mapped to `None` here for now -- behaviour unchanged --
-/// until a later slice turns it into the retryable activity failure D1 asks
-/// for.
-pub(crate) async fn observe_read(keeper: Arc<dyn Keeper>, card: String) -> Option<String> {
+/// [`OBSERVE_READ_TIMEOUT`] for it (G3-4). `Ok(None)` -- a keeper that holds
+/// no state -- means "observed nothing", so the workflow parks on its live-set
+/// fallback. `Err` (D1b) is a transient read failure -- a timeout, a panicking
+/// blocking task, D1a's keeper `Err` -- which the activity turns into a
+/// retryable failure so Temporal re-runs the read inside one scheduled
+/// activity before anyone degrades.
+pub(crate) async fn observe_read(
+    keeper: Arc<dyn Keeper>,
+    card: String,
+) -> Result<Option<String>, ActivityError> {
     observe_read_within(keeper, card, OBSERVE_READ_TIMEOUT).await
 }
 
@@ -510,14 +513,15 @@ async fn observe_read_within(
     keeper: Arc<dyn Keeper>,
     card: String,
     limit: Duration,
-) -> Option<String> {
+) -> Result<Option<String>, ActivityError> {
     let read = tokio::task::spawn_blocking(move || keeper.card_state(&card));
     match tokio::time::timeout(limit, read).await {
-        // D1a: the keeper's `Err` degrades to "observed nothing" here for now.
-        Ok(read) => read.ok().and_then(|res| res.ok()).flatten(),
-        // Timed out: observed nothing. The blocking task is detached (it can
-        // only finish or sit on its own socket timeout); the activity returns.
-        Err(_) => None,
+        Ok(read) => read
+            .map_err(join_error)
+            .and_then(|res| res.map_err(activity_error)),
+        // Timed out: a transient failure to retry. The blocking task is
+        // detached (it can only finish or sit on its own socket timeout).
+        Err(_) => Err(activity_error("observe read timed out")),
     }
 }
 
@@ -1387,10 +1391,14 @@ impl CardActivities {
     /// decision time.
     ///
     /// The only keeper *read* left in the worker. It runs off the tokio worker
-    /// threads in `spawn_blocking` behind an explicit 5 s timeout (G3-4), and
-    /// `None` -- an unreachable keeper, a slow one, an unreadable or oversized
-    /// body (G3-5) -- means "observed nothing": the workflow parks on its
-    /// live-set fallback exactly as a run that could not read always did.
+    /// threads in `spawn_blocking` behind an explicit 5 s timeout (G3-4). A
+    /// read failure -- an unreachable keeper, a slow one, an unreadable or
+    /// oversized body (G3-5) -- is a *retryable* activity failure (D1b): the
+    /// activity retry policy (5 attempts, 2 s initial) re-runs the read inside
+    /// this one scheduled activity -- no new workflow commands, so replay is
+    /// safe -- and only when those run out does the workflow degrade to its
+    /// live-set fallback, logging the cause. `Ok(None)` -- the keeper holds no
+    /// state -- is "observed nothing", as a run that could not read always was.
     // A short wire name, pinned by `gate_activity_name_and_payload_shapes_are_stable`
     // beside `attempt`; without the override the macro would emit
     // "CardActivities::observe" like `gate`/`probe`/`merge`.
@@ -1400,7 +1408,7 @@ impl CardActivities {
         _ctx: ActivityContext,
         card: String,
     ) -> Result<Option<String>, ActivityError> {
-        Ok(observe_read(self.deps.keeper.clone(), card).await)
+        observe_read(self.deps.keeper.clone(), card).await
     }
 
     /// Park a card: the keeper wants a human to look at the packet.
@@ -1788,7 +1796,8 @@ mod tests {
     }
 
     /// G3-4: the one keeper read left waits a bounded time off the runtime
-    /// threads, and a stalled keeper is "observed nothing".
+    /// threads, and a stalled keeper is a transient failure to retry (D1b),
+    /// never a silent absence.
     #[tokio::test]
     async fn observe_read_is_bounded_by_the_five_second_cap() {
         assert!(
@@ -1800,17 +1809,18 @@ mod tests {
         stub.set_card_state_delay(Some(Duration::from_millis(500)));
         let read: Arc<dyn Keeper> = stub.clone();
         let started = Instant::now();
-        assert_eq!(
-            observe_read_within(read, "c-1".into(), Duration::from_millis(25)).await,
-            None,
-            "a stalled read answers nothing"
+        assert!(
+            observe_read_within(read, "c-1".into(), Duration::from_millis(25))
+                .await
+                .is_err(),
+            "a stalled read is a transient failure to retry"
         );
         assert!(started.elapsed() < Duration::from_secs(5));
         // An unstalled read hands the observation over.
         stub.set_card_state_delay(None);
         assert_eq!(
-            observe_read(stub.clone(), "c-1".into()).await,
-            Some("waiting".to_string())
+            observe_read(stub.clone(), "c-1".into()).await.ok(),
+            Some(Some("waiting".to_string()))
         );
         assert_eq!(
             stub.card_state_calls(),
