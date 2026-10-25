@@ -310,7 +310,7 @@ def test_numstat_counting_and_slices():
     assert lane.size_verdict(900, 30, slice_budget=1000)[0] == "ok"
     assert lane.size_verdict(1100, 30, slice_budget=1000)[0] == "fail"
     design = (ROOT / "docs/design/PG-EFFICIENCY-GATES.md").read_text()
-    assert lane.design_slices(design) == {1: 3000, 2: 600}
+    assert lane.design_slices(design) == {1: 3000, 2: 600, 3: 450}
     assert lane.parse_slice_trailer("docs/design/PG-EFFICIENCY-GATES.md#1") == (
         "docs/design/PG-EFFICIENCY-GATES.md", 1)
 
@@ -623,23 +623,3 @@ def test_client_binary_by_absolute_path(tmp_path, monkeypatch):
     env[clients.CLIENT_BINS_ENV] = str(tmp_path / "bins.json")
     assert clients.client_binary("opencode", env) == str(exe)
 
-
-def test_host_keys_from_autoos_sources(tmp_path):
-    # D-2758 (6): the spawner hands the child the host keys the AutoOS path used.
-    from plangraph.routing_support import host_keys
-    (tmp_path / "tools").mkdir()
-    (tmp_path / "configuration").mkdir()
-    (tmp_path / "configuration" / "api-keys.yml").write_text("zen: z\n")
-    (tmp_path / "tools" / "autoos_gateway_key.py").write_text(
-        "def resolve_client_key(env, path):\n    return 'gw-' + path.name\n")
-    (tmp_path / "tools" / "keys_file.py").write_text(
-        "def read_keys(path):\n    return {'zen': 'zen-' + path.name}\n")
-    env = {"AUTOOS_ROOT": str(tmp_path)}
-    host_keys.add_host_keys(env, "mimo/mimo-v2.6-pro", needs_gateway=True)
-    assert env["AUTOOS_OMNIROUTE_KEY"] == "gw-api-keys.yml" and "OPENCODE_API_KEY" not in env
-    env = {"AUTOOS_ROOT": str(tmp_path), "AUTOOS_OMNIROUTE_KEY": "mine"}
-    host_keys.add_host_keys(env, "opencode/glm-5.3-flash-free", needs_gateway=True)
-    assert env["AUTOOS_OMNIROUTE_KEY"] == "mine" and env["OPENCODE_API_KEY"] == "zen-api-keys.yml"
-    env = {"AUTOOS_ROOT": str(tmp_path / "none")}
-    host_keys.add_host_keys(env, "opencode/glm-5.3-flash-free", needs_gateway=True)
-    assert env == {"AUTOOS_ROOT": str(tmp_path / "none")}

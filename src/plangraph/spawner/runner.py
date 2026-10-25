@@ -263,10 +263,6 @@ class SpawnerRunner:
         if cmd[0] == 'opencode':
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
-            # D-2758 (6): the host keys the AutoOS path used (gateway, Zen); tails are redacted below.
-            from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
-            add_host_keys(child_env, model_or_combo,
-                          needs_gateway=GATEWAY_KEY_ENV in child_env.get('OPENCODE_CONFIG_CONTENT', ''))
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         self._child_envs[job_id] = child_env
