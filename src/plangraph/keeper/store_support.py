@@ -277,7 +277,8 @@ class SupportMixin:
         if unverified:
             raise Refused("evidence_unverified", f"unverified evidence: {unverified}")
 
-    def _reviewer_family_ok(self, principal, item, ctx=None, *, coverage_seat=False):
+    def _reviewer_family_ok(self, principal, item, ctx=None, *,
+                            change_request=False):
         """Refuse reviewers matching any authoritative writer family.
 
         A legacy import claims by an ``owner`` string that need not be a
@@ -287,6 +288,12 @@ class SupportMixin:
 
         Current verified commit writers take precedence over writer_model and
         the legacy claimant/delegate fallback. Resolver failures never fall back.
+
+        ``change_request`` is the ONLY exemption, and it is the same on every
+        tier: a reviewer who shares a family with a writer may push an item
+        back to ``claimed`` (a ``verdict(ok=False)``), but may never record an
+        ACCEPT seat -- first or later, standard or high, commit writers or the
+        writer_model/claimant/delegate fallback.
         """
         from . import auth
         reviewer_family = auth.norm_family(principal.family)
@@ -301,8 +308,6 @@ class SupportMixin:
             if ctx is None:
                 ctx = self.ctx
             peers.extend(writer_families(self, item, ctx))
-            if not peers:
-                raise Refused("writer_unknown", "commit evidence has no resolved writers")
         elif item.get("writer_model"):
             from ..review.family import model_family
             family = model_family(item["writer_model"])
@@ -326,10 +331,10 @@ class SupportMixin:
             if delegate_family is None:
                 raise Refused("family_unknown", "delegate family unknown")
             peers.append(delegate_family)
-        # Verdict seats use the closing coverage gate for commit writers. This
-        # preserves change requests and non-closing HIGH seats, while direct
-        # callers retain the strict writer-family isolation check.
-        if reviewer_family in peers and not (has_commits and coverage_seat):
+        # Every ACCEPT seat carries the strict check; only a change request
+        # (``ok=False``) may come from a writer's own family, so a reviewer
+        # whose family is a peer can never push an item towards ``done``.
+        if reviewer_family in peers and not change_request:
             raise Refused("same_family", f"reviewer shares item family {reviewer_family}")
 
     def _reverify_all(self, item, now):

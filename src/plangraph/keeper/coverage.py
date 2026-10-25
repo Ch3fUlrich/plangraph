@@ -15,7 +15,10 @@ closed on any writer it cannot resolve: a commit with no ``Writer`` or
 ``Hand-Edit`` trailer, an unknown model id, or a git error raises
 ``Refused('writer_unknown', ...)`` so a closing verdict never rests on a
 guess.  ``Hand-Edit`` with no ``Writer`` counts as ``anthropic``: a hand edit
-is Claude/operator work, not a model writer.
+is Claude/operator work, not a model writer.  A hand edit the adapter proves
+to be a changelog-only edit is exempt from that count; that proof
+(``changelog_only_edit``) is the single source of truth for the exemption, and
+an adapter without it counts the hand.
 """
 from __future__ import annotations
 
@@ -95,15 +98,14 @@ def writer_families(store, item, ctx):
             elif trailer.get("Hand-Edit"):
                 try:
                     leaf = trailer.get("_writer_commit", commit)
-                    changed_paths = getattr(git, "changed_paths", None)
-                    paths = changed_paths(repo, leaf) if changed_paths else []
+                    # ONE source of truth: the adapter's own changelog proof
+                    # decides the exemption.  An adapter without it cannot
+                    # prove a changelog-only edit, so the hand counts.
                     exempt = getattr(git, "changelog_only_edit", None)
-                    # Old adapters cannot prove status or non-merge identity.
-                    # Missing capability counts the hand, rather than wedging it.
-                    is_exempt = (paths and set(paths) == {"CHANGELOG.md"}
-                                 and exempt is not None and exempt(repo, leaf))
+                    is_exempt = bool(exempt(repo, leaf)) if exempt is not None else False
                 except Exception as exc:  # noqa: BLE001 - fail closed
-                    raise Refused("writer_unknown", "cannot read hand-edit paths") from exc
+                    raise Refused("writer_unknown",
+                                  "cannot read the changelog-only proof") from exc
                 if is_exempt:
                     continue
                 family = "anthropic"

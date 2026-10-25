@@ -3,10 +3,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from test_keeper_seat_coverage import (
-    w, seed, writer, SHA_A, SHA_B, MERGE_SHA, FakeGit, make_ctx,
-    to_review_with_commits, to_review_merge, merge_git, _cov,
+from evidence_fakes import FakeGit, make_ctx
+from keeper_seat_helpers import (
+    MERGE_SHA,
+    SHA_A,
+    SHA_B,
+    _cov,
+    merge_git,
+    to_review_merge,
+    to_review_with_commits,
+    verdict_events,
+    w,  # noqa: F401 - the review world fixture
+    writer,
 )
+from keeper_util import seed, to_in_review
+from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_git import GitAdapter
 
@@ -57,11 +68,12 @@ def test_hand_edit_leaf_paths_and_openai_writer_are_both_resolved(w):
     seen = []
     class LeafGit(FakeGit):
         def changed_paths(self, repo, sha):
-            seen.append(sha)
+            seen.append(("paths", sha))         # never consulted now
             return ["CHANGELOG.md"]
 
         def changelog_only_edit(self, repo, sha):
-            assert sha == SHA_A
+            seen.append(("proof", sha))         # the ONE source of truth
+            assert sha == SHA_A                 # proven on the LEAF, not the merge
             return True
 
     git = LeafGit(branch_trailers_by_sha={MERGE_SHA: [
@@ -69,7 +81,7 @@ def test_hand_edit_leaf_paths_and_openai_writer_are_both_resolved(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_merge(w, key, git)
     assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == ["openai"]
-    assert seen == [SHA_A]
+    assert seen == [("proof", SHA_A)]
 
 
 @pytest.mark.parametrize("parents,status,want", [(1, "M", True), (1, "A", True), (1, "D", False), (2, "M", False)])
@@ -112,3 +124,135 @@ def test_coverage_counts_hand_edit_merge_or_deleted_changelog(w, monkeypatch, me
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: {}}, git=git)
     assert _cov().writer_families(w.store, w.store._item(key), w.store.ctx) == ["anthropic"]
+
+
+# --------------------------------------------------------------------------
+# D-2458 HIGH: an ACCEPT seat never comes from a commit-writer family
+# --------------------------------------------------------------------------
+
+def test_first_high_accept_seat_from_a_commit_writer_family_is_refused(w):
+    """The HIGH first seat runs no coverage check, so the family gate must.
+
+    ``claimed_by=l1main``, current-epoch verified ``commit+ci`` evidence whose
+    ``Writer:`` trailer is a Claude model, ``verdict(rAnthropic1, ok=True)``:
+    the verdict is refused and no seat is consumed.
+    """
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
+                  review_tier="high")
+    to_review_with_commits(w, key, {SHA_A: writer("claude-sonnet-4-5 run1")},
+                           who="l1main")
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rAnthropic1"), key, True, "first")
+    assert exc.value.code == "same_family"
+    item = w.store._item(key)
+    assert item["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+
+def test_later_high_accept_seat_from_a_commit_writer_family_is_refused(w):
+    """Same rule for a LATER seat: the exemption never covers ``ok=True``."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",),
+                  review_tier="high")
+    to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})  # xiaomi
+    first = w.store.verdict(w.p("rAlibaba"), key, True, "one")
+    assert first["state"] == "in_review"
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rXiaomi"), key, True, "two")
+    assert exc.value.code == "same_family"
+    item = w.store._item(key)
+    assert item["state"] == "in_review"
+    assert len(verdict_events(w, key)) == 1
+
+
+def test_change_request_still_passes_the_commit_tier_family_gate(w):
+    """``ok=False`` is the ONLY thing the commit-tier exemption covers."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer("claude-sonnet-4-5 run1")})
+    result = w.store.verdict(w.p("rAnthropic1"), key, False, "needs work")
+    assert result["state"] == "claimed"
+    assert w.store._item(key)["state"] == "claimed"
+
+
+def test_direct_call_and_verdict_agree_on_an_accept_seat(w):
+    """Pattern sweep: no flag lets the verdict path diverge from a direct
+    ``_reviewer_family_ok`` call for an ACCEPT seat (the defect was a caller
+    flag that silenced the gate only on one of the two paths)."""
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer("claude-sonnet-4-5 run1")})
+    with pytest.raises(Refused) as direct:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), w.store._item(key))
+    assert direct.value.code == "same_family"
+    with pytest.raises(Refused) as via_verdict:
+        w.store.verdict(w.p("rAnthropic1"), key, True, "accept")
+    assert via_verdict.value.code == "same_family"
+    assert w.store._item(key)["state"] == "in_review"
+    assert verdict_events(w, key) == []
+
+
+# --------------------------------------------------------------------------
+# D-2458 MEDIUM: the change-request allowance is not a commit-tier privilege
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("owner_family,delegate,writer_model,reviewer", [
+    (None, None, "claude-haiku", "rAnthropic1"),   # writer_model tier
+    ("anthropic", None, None, "rAnthropic1"),      # legacy claimant tier
+    ("meta", "workerMeta", None, "rMeta"),         # delegate tier
+])
+def test_change_request_is_allowed_on_every_family_tier(
+        w, owner_family, delegate, writer_model, reviewer):
+    """The writer's own family may push the item back, on every tier ..."""
+    token = auth.add_principal(w.conn, "rMeta", "reviewer", ["demo"],
+                               family="meta")
+    w.principals["rMeta"] = auth.authenticate(w.conn, token)
+    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    to_in_review(w, key, who="claimant")
+    w.conn.execute(
+        "UPDATE items SET claimed_by='legacy-owner', owner_family=?,"
+        " writer_model=?, delegate=? WHERE key=?",
+        (owner_family, writer_model, delegate, key))
+
+    # ... while an ACCEPT seat from that same family stays refused.
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p(reviewer), key, True, "accept")
+    assert exc.value.code == "same_family"
+    assert w.store._item(key)["state"] == "in_review"
+
+    result = w.store.verdict(w.p(reviewer), key, False, "needs work")
+    assert result["state"] == "claimed"
+    assert w.store._item(key)["state"] == "claimed"
+
+
+# --------------------------------------------------------------------------
+# D-2458 LOW: one source of truth for the CHANGELOG exemption
+# --------------------------------------------------------------------------
+
+def test_changelog_proof_alone_decides_the_hand_edit_exemption(w):
+    """The adapter's own proof decides, whatever ``changed_paths`` says."""
+    class ProofGit(FakeGit):
+        def changed_paths(self, repo, sha):
+            return ["src/example.py"]      # contradicting, and ignored
+
+        def changelog_only_edit(self, repo, sha):
+            return True
+
+    git = ProofGit(trailers_by_sha={SHA_A: {"Hand-Edit": "D-2458"},
+                                    SHA_B: writer("gpt-5 run1")})
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: {}, SHA_B: {}}, git=git)
+    assert _cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx) == ["openai"]
+    assert w.store.verdict(
+        w.p("rAnthropic1"), key, True, "changelog")["state"] == "done"
+
+
+def test_hand_edit_without_the_adapter_proof_counts_anthropic(w):
+    """An adapter that cannot prove a changelog-only edit counts the hand."""
+    class PathsGit(FakeGit):
+        def changed_paths(self, repo, sha):
+            return ["CHANGELOG.md"]        # not a proof; not consulted
+
+    git = PathsGit(trailers_by_sha={SHA_A: {"Hand-Edit": "D-2458"}})
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: {}}, git=git)
+    assert _cov().writer_families(
+        w.store, w.store._item(key), w.store.ctx) == ["anthropic"]
