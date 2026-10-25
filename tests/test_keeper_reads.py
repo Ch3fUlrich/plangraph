@@ -58,8 +58,12 @@ def test_percent(w):
 
 def test_whoami(w):
     who = w.store.whoami(w.p("l1main"))
+    # the exact wire contract: ``features`` advertises what apply_batch --preview
+    # may rely on (PG-EFFICIENCY-GATES item 14, D-1498/D-2760) -- adding a
+    # feature is a contract change and must fail here first
     assert who == {"name": "l1main", "role": "l1", "projects": ["demo"],
-                   "family": "teama"}
+                   "family": "teama",
+                   "features": ["apply_ops.dry_run", "apply_ops.strict_body"]}
 
 
 def test_snapshot_head_and_fields(w):
