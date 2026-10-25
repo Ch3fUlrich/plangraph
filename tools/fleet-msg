@@ -1,9 +1,13 @@
 #!/bin/sh
 # fleet-msg: thin POSIX shim for the Python bus client; forwards every argument.
+#
+# Isolation: the interpreter runs with -P, so an untrusted working directory
+# (a stray ./plangraph package) can never shadow the real client on sys.path.
+# The checkout's src is pinned first through PYTHONPATH, set by this shim.
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PYTHONPATH="$dir/../src${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONPATH
 if command -v python3 >/dev/null 2>&1; then
-  exec python3 -m plangraph.fleet_bus.client "$@"
+  exec python3 -P -m plangraph.fleet_bus.client "$@"
 fi
-exec python -m plangraph.fleet_bus.client "$@"
+exec python -P -m plangraph.fleet_bus.client "$@"
