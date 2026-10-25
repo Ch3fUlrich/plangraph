@@ -1,13 +1,12 @@
 # build-L1-bus card · gen-2 · 2026-10-25 09:xxZ · NO cron · parent routing (successor pending, router at cap)
 Owner build-L1-bus; claims via build-L1.token (sh ops/pg.sh). hb loop: ops/hb.sh 12 over ops/hb-keys.txt, background, restart on exit.
-Phase branch phase/rt-p1-bus (origin) head a401b3a9, base main 4608fd3f (main now further). Merge worktree build-L1-bus-phase (detached). Lanes: PR --base phase + gh pr merge --merge --match-head-commit; CI `gh workflow run tests.yml --ref <lane>` (check the push really landed: git ls-remote).
+Phase branch phase/rt-p1-bus (origin) head ea21b539, base main 4608fd3f (main now further). Merge worktree build-L1-bus-phase (detached). Lanes: PR --base phase + gh pr merge --merge --match-head-commit; CI `gh workflow run tests.yml --ref <lane>` (check the push really landed: git ls-remote).
 Rules: D-2534/2539/2540/2643 phase batch: 1 review of phase vs main (r1 done), ONE fix round of file-group writers, re-review = 1 seat on delta + touched files, <=3 rounds, then phase PR -> GO-REQ routing. Writers D-2683/2684: agy gemini > mimo-pro > openrouter/free + opencode free > mimo-flash; never Claude. Seats != all writer families (xiaomi, openai, google) -> qwen (+Haiku). D-2694 max_tokens 128000, finish=length empty -> retry at ceiling. D-2706 spawn floor 2000 MB, <=4 writers coding.vm. D-2712 L2 briefs need stop-on-denial rule. Hand-Edit own commit+trailer (D-2240).
 Schema fence (build-L1 #164): #164 claims SQLite v14 + PG Migration(8) oversight = collides with bus v14/v15 + PG 8. First to main keeps numbers, second renumbers at its main merge. build-L1 pings on #164 GO.
 | Item | State / next |
 |---|---|
-| FIX r1 G1 keeper | MERGED #186 (c9d4bc38, CI 40168236971 incl PG) |
-| FIX r1 G3 exec+wake | MERGED #189 (5feefbf5 + Hand-Edit fmt, CI 40170369570) |
-| FIX r1 G2 client | 04372c20 (pfg2c agy, contains phase a401b3a9) CI 40182283003 RED: scrub test_fleet_msg.py:454 cred-shape + :600/602 ipv4 (+ test_split_make_public); told workst 10:xxZ |
+| FIX r1 G1/G3/G2 | MERGED #186 c9d4bc38, #189 5feefbf5, #199 3ceaf974 (CI 40182839456; Hand-Edit scrub). Phase head ea21b539 (tree == CI head) |
+| DELTA r2 | qwen seat running on build-L1-bus-seats/phase-r2-ea21b539 (PROMPT 546 KB, files>60KB diff-only; builder $CLAUDE_JOB_DIR/tmp/mkdelta.sh) |
 | BUS-REGISTRY-PERSIST (HIGH p8) | MERGED phase #193 (9b2eb4db; writer mimo-pro run ...062933-...a2456f; Hand-Edit PRAGMA test; CI 40174828383). Gap: docs/FLEET-BUS.md paragraph -> delta finding. Claim refused till DISCOVERY done |
 | BUS-PEER-DISCOVERY-ADOPT (HIGH p8) | AutoOS MERGED main 2629d740 (D-2730). routing 46b7d6a1 HELD till phase on main + keeper deploy (routing sets env + merges). NO ff live AutoOS checkouts till /v1/hosts deployed. Evidence: l2-cards/discovery-adopt/evidence.md (post after claim allowed) |
 | RT-P1-BUS-KEEPER / DISCOVERY / WAKE / EXEC-OBSERVED-STATE / ANY-AGENT-CLI W2a+W2b | IN PHASE, await delta review + phase PR |
