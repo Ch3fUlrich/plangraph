@@ -737,6 +737,10 @@ def spawn_service(*args, **kwargs):
                             served_family=job.served_family, served_witness_reason=job.served_witness_reason,
                             writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                             events=record.get('events', []) + getattr(job, 'events', []))
+                        # Per-attempt classification (haiku-C4/qwen-C3): the last
+                        # attempt wins, plain failures get check_fail (I13).
+                        from .liveness import classify_attempt
+                        record['liveness'], record['exit_class'] = classify_attempt(job.status, job.liveness)
                         if (not stop and not unavailable) or no_fallthrough or dry_run:
                             if not dry_run:
                                 await self._continue_writer(record, job.stdout)
