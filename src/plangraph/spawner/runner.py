@@ -266,15 +266,17 @@ class SpawnerRunner:
             child_env = overlay_env(child_env)
             from plangraph.routing_support.opencode_render import render_gateway_providers
             render_reason = render_gateway_providers(child_env, model_or_combo)
-            # Overlay only copies an env name through when the parent already
-            # holds it; hand the child the host keys from the AutoOS keys file
-            # so mimo and opencode/*-free runs can authenticate (D-2759).
-            from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
-            add_host_keys(child_env, model_or_combo,
-                needs_gateway=GATEWAY_KEY_ENV in child_env.get('OPENCODE_CONFIG_CONTENT', ''))
+            if render_reason is None:
+                # Overlay only copies an env name through when the parent already
+                # holds it; hand the child the host keys from the AutoOS keys file
+                # so mimo and opencode/*-free runs can authenticate (D-2759).
+                from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
+                add_host_keys(child_env, model_or_combo,
+                    needs_gateway=GATEWAY_KEY_ENV in child_env.get('OPENCODE_CONFIG_CONTENT', ''))
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
-        self._child_envs[job_id] = child_env
+        if render_reason is None:
+            self._child_envs[job_id] = child_env
 
         try:
             if dry_run:

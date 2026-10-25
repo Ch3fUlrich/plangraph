@@ -291,3 +291,22 @@ def test_redact_env_values_null_env_provider_still_redacts():
         }}),
     }
     assert "sentinel-value-1234" not in redact_env_values("x sentinel-value-1234 y", env)
+
+
+def test_add_host_keys_not_called_on_refusal(tmp_path, monkeypatch):
+    """F3: a refused launch never reads host keys and never parks the child env."""
+    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
+    calls = []
+    monkeypatch.setattr(host_keys, "add_host_keys", lambda *a, **k: calls.append(k))
+    factory = AsyncMock()
+    runner = SpawnerRunner(process_factory=factory)
+
+    async def run():
+        job = await runner.spawn(prompt="test", model_or_combo="mimo/mimo-v2.6-pro")
+        assert job.status == "failed"
+        assert "not_served_on_host" in job.stderr
+        assert calls == []
+        assert factory.call_count == 0
+        assert runner._child_envs == {}
+
+    asyncio.run(run())
