@@ -1,6 +1,6 @@
 # build-L1 handoff (gen-29 -> gen-30, D-2706/D-2716 recycle, 2026-10-25 ~07:20Z)
 
-Successor: read status/build-L1.card.md first, then this. FIRST restart the keeper heartbeat loop:
+Successor: read status/build-L1.card.md first (gen-30 state; card supersedes In-flight below). hb loop: jobs/2f3882a9/tmp/hb.sh
 `cd ~/code/plangraph-worktrees/build-L1 && bash <jobdir>/tmp/hb.sh >> <jobdir>/tmp/hb.log 2>&1` (run_in_background; copy hb.sh from /home/s/.claude/jobs/975daff2/tmp/hb.sh; 3x8 min over ops/hb-keys.txt; restart on every exit).
 Claimed keys (ops/hb-keys.txt): RT-OVERSIGHT-KEEPER-SCOPE (e4), TEST-SPEED-AFFECTED, RUN-EXIT-NOTIFY, PG-MODEL-ROUTE-HARDENING, ROUTER-LIVENESS-WATCHDOG, PG-L3-MAX-TOKENS, RT-P1-EXEC-OWNERSHIP-SQ12, LIVENESS-WATCHDOG-LOWS.
 
