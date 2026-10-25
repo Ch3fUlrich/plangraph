@@ -11,7 +11,7 @@ Spawn (D-2749/D-2795): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> 
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | item | state / next |
 |---|---|
-| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216 MERGED 7a101ae2 (GO D-2863; Haiku MED refuted $J/seat-s1b-haiku/refutation-L1.txt) -> finish216 CI+evidence; workst+server told. S2 agy writer queued (swps2, wt spawn-win-parity-s2, brief $J/brief-swp-s2.md). S3 #213 fix r1 running (run-f2cc0438, stallwatch). LOWs from #216 (fixture vs 2 refusal tests, substring pins) noted, not in S2 files |
+| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #216 MERGED 7a101ae2 (D-2863). S1 fix #217 (D-2864, my Hand-Edit 6ecf1058, admission renders like launch; workst blocked until merged): seats qwen+mimo-pro + full suite running ($J/seats1fix.sh) -> GO-REQ -> merge -> tell workst+server. S2 done (run-32b29199, head d8a7aa56, RUNID filled, 388 lines, 260 passed): after #217 merges -> merge main once, push, PR, seats Haiku+qwen. S3 #213 fix r1 run-f2cc0438 still running (re-wait 45 min) |
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); queue when budget frees; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
