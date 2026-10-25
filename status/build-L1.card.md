@@ -1,4 +1,4 @@
-# build-L1 card · gen-34 · 2026-10-25 (D-2830 relaunch) · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh (restart on exit)
+# build-L1 card · gen-35 · 2026-10-25 20:22Z (D-2858 relaunch) · NO cron · hb loop = jobs/0bbdff0b/tmp/hb.sh (restart on exit)
 D-2739 (operator): one task loops (no follow-up items), design first for HIGH/>400 lines, slices <=400, 2 text seats, MED in body=changes, fixer>=writer never flash, round>3 -> Opus replan, merge main once before final review.
 D-2749: AutoOS spawner retired; all runs via plangraph spawner; missing feature -> BLOCKED to routing, no fallback.
 D-2744: no deepseek leg (writer or seat, incl opencode free deepseek); mimo-pro, mimo-flash seats only.
@@ -11,7 +11,7 @@ Spawn (D-2749/D-2795): jobs/0bbdff0b/tmp/gspawn2.sh <wt> <brief> <tag> <reason> 
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | item | state / next |
 |---|---|
-| SPAWN-WIN-PARITY (HIGH, claimed) | S1 #210 head 7b8b3e33: fix r1b done, qwen delta seat running, 2nd seat BLOCKED (Haiku same_family via F1 hand-edit; glm free limit). S3 #213 fix r1 running (swps3f1). S2 after S1 merges |
+| SPAWN-WIN-PARITY (HIGH, claimed) | S1: #210 CLOSED -> #216 lane/spawn-win-parity-b head f17b1568 (no Claude lines, r1d run-bde3f466, 325 passed, gate rc0); seats Haiku+qwen running ($J/seats1b.sh, log seats1b.log) -> GO-REQ per sha. S3 #213 fix r1 requeued (swps3f1). S2 after S1 merges |
 | KEEPER-PG-RECONNECT (HIGH) | S1 #206 MERGED 8d0104dd, evidence commit+ci attached (main CI 40216891777). S2 wt ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 @8d0104dd, brief $J/brief-pgr-s2.md (agy); queue when budget frees; 2 seats + judge GO; live redeploy = own GO |
 | REVIEW-METHOD-SETTING #209 | MERGED da92ca78 (D-2824). in_review until #211 merges -> post seat-rms-f2b-haiku unchanged |
 | CI-SELECT-DEPLOY-REFS #208 | MERGED. D-2835: no more seats/decisions; closes when ORCH-EFFICIENCY-ENFORCE pt5 posts refuted seats (r1 cisel4 + refutation-D-2833.txt) |
@@ -25,4 +25,4 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 Seats: seatpost.py/qwenprompt.py/haikuseat.sh interim OK (D-2789): count toward cap, never edit review.txt/prompt.txt, keep seat dirs; post via post.sh (verdict.judge -> tools/seat_verdict.py reviewer-<family> token).
 Traps: zsh -> bash -c; mergepath needs claim; never dump environ; Hand-Edit <=10 lines (gate); define new lane = JSON to router (D-2230).
 | REVIEW-VERDICT-PARSE (std, claimed) | PR #212 head 0777d452, qwen delta pass; finish212.sh: CI -> merge -> evidence -> submit -> post |
-| ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, D-2835/D-2840, criteria 1-10) | owner build-L1; slices after build-L1-efficiency design has its seat. R1: direct edits by cost calc (status/direct-edit-cost-model.md, operator 10-25: 10 was an example); interim cap 10->50 = PR #215 30679bb7 (D-2853/2856), seats running, never AUTH_DOOR_PATHS. R3 interim: $J/stallwatch.sh (writes + opencode log, 45 min D-2845). #214 test-state MERGED 7bbd11a6 (GO D-2848, CI 40226302558, evidence ok) |
+| ORCH-EFFICIENCY-ENFORCE (HIGH prio 10, claimed epoch 3) | #215 hecap50 30679bb7: CI 40229693906 green, qwen pass, Haiku pass/LOW-only (parser gap: no-tools Haiku standing answer); GO-REQ sent 21:3xZ -> on GO merge + full-sha evidence. Keeper seats post at submit (Haiku same_family via fe7c4926 -> need glm). #214 MERGED 7bbd11a6 |
