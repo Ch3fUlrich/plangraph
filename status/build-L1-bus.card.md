@@ -1,4 +1,4 @@
-# build-L1-bus card · gen-2 · 2026-10-25 16:1xZ · NO cron · parent routing
+# build-L1-bus card · gen-2 · 2026-10-25 16:5xZ · HANDOFF D-2811 written · NO cron · parent routing
 Owner build-L1-bus; claims via build-L1.token (sh ops/pg.sh). hb loop: ops/hb.sh 12 over ops/hb-keys.txt, background, restart on exit.
 Phase branch phase/rt-p1-bus (origin) head ea21b539, base main 4608fd3f (main now further). Merge worktree build-L1-bus-phase (detached). Lanes: PR --base phase + gh pr merge --merge --match-head-commit; CI `gh workflow run tests.yml --ref <lane>` (check the push really landed: git ls-remote).
 Rules: D-2534/2539/2540/2643 phase batch: 1 review of phase vs main (r1 done), ONE fix round of file-group writers, re-review = 1 seat on delta + touched files, <=3 rounds, then phase PR -> GO-REQ routing. Writers D-2683/2684: agy gemini > mimo-pro > openrouter/free + opencode free > mimo-flash; never Claude. Seats != all writer families (xiaomi, openai, google) -> qwen (+Haiku). D-2694 max_tokens 128000, finish=length empty -> retry at ceiling. D-2706 spawn floor 2000 MB, <=4 writers coding.vm. D-2712 L2 briefs need stop-on-denial rule. Hand-Edit own commit+trailer (D-2240).
@@ -11,7 +11,7 @@ D-2802 (routing 16:0xZ): r2 writers move to ME on coding.vm, serial R2a then R2b
 | Item | State / next |
 |---|---|
 | FIX r1 G1/G3/G2 | MERGED #186 c9d4bc38, #189 5feefbf5, #199 3ceaf974 (CI 40182839456; Hand-Edit scrub). Phase head ea21b539 (tree == CI head) |
-| DELTA r2 | qwen A PASS, B FIX (build-L1-bus-seats/phase-r2-ea21b539{A,B}). R2a brief l2-cards/phase-fix-r2/r2a-brief.md; worktree bus-fix-r2a (lane/phase-fix-r2a @ea21b539); RUN run-cc3989f780c94dde979883b3b35a46b4 mimo-pro (started 16:1xZ). Next R2b (wake+docs I5-I9). Truncated: 20261025-103823-pfr2-3185c3 |
+| DELTA r2 | qwen A PASS, B FIX (build-L1-bus-seats/phase-r2-ea21b539{A,B}). R2a brief l2-cards/phase-fix-r2/r2a-brief.md; worktree bus-fix-r2a (lane/phase-fix-r2a @ea21b539); mimo-pro run-cc3989f7 FAILED 0 commits (opencode tool-call delta error); NOW agy gemini run-d41eddf49ff04fe18fcd93ed3ed75073 (--leg agy-gemini-3.8-flash). Next R2b (wake+docs I5-I9). Truncated: 20261025-103823-pfr2-3185c3 |
 | BUS-REGISTRY-PERSIST (HIGH p8) | MERGED phase #193 (9b2eb4db; writer mimo-pro run ...062933-...a2456f; Hand-Edit PRAGMA test; CI 40174828383). Gap: docs/FLEET-BUS.md paragraph -> delta finding. Claim refused till DISCOVERY done |
 | BUS-PEER-DISCOVERY-ADOPT (HIGH p8) | AutoOS MERGED main 2629d740 (D-2730). routing 46b7d6a1 HELD till phase on main + keeper deploy (routing sets env + merges). NO ff live AutoOS checkouts till /v1/hosts deployed. Evidence: l2-cards/discovery-adopt/evidence.md (post after claim allowed) |
 | RT-P1-BUS-KEEPER / DISCOVERY / WAKE / EXEC-OBSERVED-STATE / ANY-AGENT-CLI W2a+W2b | IN PHASE, await delta review + phase PR |
