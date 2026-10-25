@@ -163,9 +163,9 @@ def test_mutated_config_on_cancelled_job(tmp_path):
         def __init__(self, cwd):
             super().__init__()
             self.cwd = cwd
+            subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=self.cwd, check=True, capture_output=True)
 
         async def communicate(self):
-            subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=self.cwd, check=True, capture_output=True)
             await asyncio.Event().wait()
 
     async def killer(pid):

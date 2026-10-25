@@ -9,14 +9,17 @@ Features:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
-import os
-import re
-import time
-import uuid
 import logging
 import math
+import os
+import re
+import subprocess
+import time
+import uuid
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from plangraph.spawner.clients import (
@@ -135,6 +138,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._git_guards = {}
 
     def served_witness(self, job_id, model, *, adapter_token):
         """Record transport telemetry authenticated by an in-process adapter.
@@ -326,6 +330,10 @@ class SpawnerRunner:
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
             self._adapter_tokens[job_id] = object()
+            if role in ("implement", "fix"):
+                guard = self._init_git_config_guard(work_dir)
+                if guard is not None:
+                    self._git_guards[job_id] = guard
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -362,6 +370,7 @@ class SpawnerRunner:
             # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
                 self._child_envs.pop(job_id, None)
+                self._git_guards.pop(job_id, None)
 
     async def _monitor_process(
         self,
@@ -425,7 +434,8 @@ class SpawnerRunner:
             job.served_family = job.served_family or 'unwitnessed'
         except asyncio.CancelledError:
             if job_id in self.jobs:
-                self.jobs[job_id].status = "cancelled"
+                if self.jobs[job_id].status != "failed":
+                    self.jobs[job_id].status = "cancelled"
                 self.jobs[job_id].end_time = time.time()
                 self.jobs[job_id].exit_code = 1
         except Exception as exc:
@@ -436,10 +446,63 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            self._check_git_config_guard(job_id)
+            self._git_guards.pop(job_id, None)
             self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+
+    @staticmethod
+    def _init_git_config_guard(work_dir: str | Path | None) -> tuple[Path, bytes, str] | None:
+        if not work_dir:
+            return None
+        try:
+            proc = subprocess.run(
+                ["git", "-C", str(work_dir), "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode != 0:
+                return None
+            raw_common = proc.stdout.strip()
+            if not raw_common:
+                return None
+            common_dir = (Path(work_dir) / raw_common).resolve()
+            config_path = common_dir / "config"
+            if not config_path.is_file():
+                return None
+            orig_bytes = config_path.read_bytes()
+            orig_hash = hashlib.sha256(orig_bytes).hexdigest()
+            return (config_path, orig_bytes, orig_hash)
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def _check_git_config_guard(self, job_id: str) -> None:
+        guard = self._git_guards.get(job_id)
+        if not guard:
+            return
+        config_path, orig_bytes, orig_hash = guard
+        try:
+            curr_bytes = config_path.read_bytes() if config_path.is_file() else None
+        except OSError:
+            curr_bytes = None
+        curr_hash = hashlib.sha256(curr_bytes).hexdigest() if curr_bytes is not None else None
+        if curr_hash != orig_hash:
+            try:
+                if orig_bytes is not None:
+                    config_path.write_bytes(orig_bytes)
+                else:
+                    config_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            if job_id in self.jobs:
+                job = self.jobs[job_id]
+                job.events.append({"event": "git_config_mutated"})
+                job.status = "failed"
+                if not job.exit_code or job.exit_code == 0:
+                    job.exit_code = 1
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
@@ -504,7 +567,8 @@ class SpawnerRunner:
         job.status = "cancelled"
         self._nonces.pop(job_id, None)
         job.end_time = time.time()
-        return {"job_id": job_id, "status": "cancelled"}
+        self._check_git_config_guard(job_id)
+        return {"job_id": job_id, "status": job.status}
 
 
 async def kill_process_tree(pid, *, platform=None, command_factory=None):
