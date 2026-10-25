@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS messages (
     ack_state TEXT NOT NULL CHECK (ack_state IN ('pending','delivered','failed')),
     ts BIGINT NOT NULL,
     prev_hash TEXT NOT NULL,
-    hash TEXT NOT NULL
+    hash TEXT NOT NULL,
+    posted_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_trace_id ON messages(trace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_key_ts ON messages(key,ts);
@@ -58,7 +59,8 @@ CREATE TABLE messages (
     ack_state TEXT COLLATE "C" NOT NULL CHECK (ack_state IN ('pending','delivered','failed')),
     ts BIGINT NOT NULL,
     prev_hash TEXT COLLATE "C" NOT NULL,
-    hash TEXT COLLATE "C" NOT NULL
+    hash TEXT COLLATE "C" NOT NULL,
+    posted_by TEXT COLLATE "C"
 );
 CREATE INDEX idx_messages_trace_id ON messages(trace_id);
 CREATE INDEX idx_messages_key_ts ON messages(key,ts);

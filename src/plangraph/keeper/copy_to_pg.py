@@ -105,16 +105,19 @@ def _verify_messages_chain(conn) -> list[dict]:
     try:
         rows = conn.execute(
             'SELECT seq, "from", "to", body, trace_id, key, run_id, attempt_n, '
-            'ack_state, ts, prev_hash, hash FROM messages ORDER BY seq'
+            'ack_state, ts, prev_hash, hash, posted_by FROM messages ORDER BY seq'
         ).fetchall()
-    except Exception:
+    except db_errors.NO_TABLE as exc:
+        if isinstance(exc, sqlite3.OperationalError) and "no such table" not in str(exc).lower():
+            raise
         return []
     prev_hash = "0" * 64
     for r in rows:
         row = dict(r) if hasattr(r, "keys") else {
             "seq": r[0], "from": r[1], "to": r[2], "body": r[3],
             "trace_id": r[4], "key": r[5], "run_id": r[6], "attempt_n": r[7],
-            "ack_state": r[8], "ts": r[9], "prev_hash": r[10], "hash": r[11]
+            "ack_state": r[8], "ts": r[9], "prev_hash": r[10], "hash": r[11],
+            "posted_by": r[12],
         }
         stored_hash = row.pop("hash")
         stored_prev = row["prev_hash"]

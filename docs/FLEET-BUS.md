@@ -168,6 +168,7 @@ Adapters also publish `retry_after_s` as a Retry-After header.
 The keeper messages write API accepts an optional signing and idempotency envelope on `POST /v1/post_message`:
 
 - POST `post_message` takes an optional `envelope` = `{host, sig, nonce, ts, msg_id}`.
+- A signed envelope requires `body == {"text": <str>}` and verifies HMAC against that string. Any other body shape with an envelope is refused as validation error (`validation`).
 - `sig`, `nonce`, and `ts` follow the EXISTING fleet-bus v2 contract and are checked through `fleet_bus.discovery.Registry.validate_post(host_name, body, signature, now, state)` (per-host key file; REUSE it, no second HMAC implementation).
 - `msg_id` is client-generated (uuid4 hex), the idempotency key.
 - A signed envelope is verified: bad sig, unknown host, or stale ts -> refused with the contract error code (`bad_signature`, `unknown_kid`, `skew`).
@@ -175,4 +176,5 @@ The keeper messages write API accepts an optional signing and idempotency envelo
 - A `msg_id` unique index (`idx_message_envelopes_msg_id` on `message_envelopes`): a retry with the same `msg_id` AND same content returns the existing row (idempotent receipt); the same `msg_id` with different content -> refused (`conflict`).
 - `from` must equal the Bearer principal or the signed host (spoof refused).
 - Unsigned posts by an authenticated principal still work (back-compat; existing tests stay green).
+- When using the PostgreSQL keeper backend, `PG_DSN` must connect directly to PostgreSQL, never through a transaction pooler (such as PgBouncer in transaction pooling mode), because long-poll waiters hold dedicated listener connections using session-level `LISTEN` / `UNLISTEN` semantics.
 
