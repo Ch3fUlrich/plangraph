@@ -51,11 +51,20 @@ The guard reading the policy file twice (potential TOCTOU) and per-call re-read 
 policy changes take effect dynamically without daemon restarts.
 Policy layers are never selected by the card (R2): the card's `project`/`phase`/
 `key` are caller-chosen, and spoofing them cannot reach a per-item override.
-Per-item layers come only from a trusted keeper `item` (the keeper item's `key`
+Per-item layers come from a trusted keeper `item` (the keeper item's `key`
 plus optional `phase`/`track`, supplied by keeper/planner code that read it from
 the store) passed as `item=` to `enforce_review_scope`, `admit_review_scope`,
-`fixer_threshold` and `admit_fixer_threshold`; with no `item`, only the global
-layer applies.
+`fixer_threshold` and `admit_fixer_threshold`; those layers may loosen or tighten.
+
+Card layers only tighten (R3, D-2784). Spawner callers hold no keeper item, so
+they also evaluate the layers the card's `project`/`phase` select, but those
+layers can never loosen the trusted result: a per-fixer review scope is refused
+when the trusted layers (global, plus `item` layers if given) OR the
+card-selected layers resolve to `batch`, and the fixer threshold is
+`min(trusted, card-selected)`. Spoofing card fields therefore cannot admit a
+per-fixer seat or raise the threshold, while a phase/project policy that
+tightens to `batch` or lowers the threshold is honoured on every spawn path
+(CLI, MCP, runner, `SpawnService`, `plan_spawn`).
 
 The settings root is never taken from the card (R1): `card["repo_root"]` is
 ignored everywhere. Root resolution is an explicit `root=` argument passed by
