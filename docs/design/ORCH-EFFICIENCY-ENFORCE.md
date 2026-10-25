@@ -47,7 +47,7 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 
 Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
-4a (written, `a43a7ff8`) -> E1 -> E2 (4b) -> E7 -> E9 -> E3 -> 4a2 -> 4a3 -> E4a -> E4b -> 4c (scope and OOM) -> E5 -> E6 -> E8 -> E10 -> phase review.
+4a (written, `a43a7ff8`) -> E1 -> E2 (4b), with E5 in parallel (D-2844: no dependency, no cost) -> E7 -> E9 -> E3 -> 4a2 -> 4a3 -> E4a -> E4b -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. The operator may reorder the rest (Q-INV-1, routing report 2026-10-25-throughput-cost-investigation §6); until then this order holds (D-2844).
 
 - E7 and E9 follow E2 because they share the run-liveness code (the supervisor that polls the run also heartbeats the claim and writes the completion), D-2840.
 
@@ -164,7 +164,7 @@ E4b tests:
 
 | piece | where | behaviour |
 |---|---|---|
-| one verdict extractor | `gates/findings.parse_seat_verdict` is the single extractor. `tools/seat_verdict.parse_verdict` calls it and maps the result to its `(ok, idx)` shape and exit codes (seat_verdict already imports `src`, seat r1 E12) | the line and word rules are unified: colon optional, and the fix words are the union of both sets (`fix`, `halt`, `change(s)`, `changes_requested`, `reject(ed)`, `fail(ed)`, `blocked`). A shared fixture table covers the seat's reproduced mismatches: `VERDICT fix - LOW only:`, `VERDICT: failed - LOW only:`, `VERDICT: changes_requested` |
+| one verdict extractor | `gates/findings.parse_seat_verdict` is the single extractor. `tools/seat_verdict.parse_verdict` calls it and maps the result to its `(ok, idx)` shape and exit codes (seat_verdict already imports `src`, seat r1 E12) | the line and word rules are unified: colon optional, and the fix words are the union of both sets plus the review-API words (`fix`, `halt`, `change(s)`, `changes_requested`, `request_changes`/`REQUEST_CHANGES`, `reject(ed)`, `fail(ed)`, `blocked`); pass words add `accept(ed)`/`ACCEPT` and `approve(d)` (D-2844). A shared fixture table covers the seat's reproduced mismatches: `VERDICT fix - LOW only:`, `VERDICT: failed - LOW only:`, `VERDICT: changes_requested`, plus `VERDICT REQUEST_CHANGES`, `VERDICT: ACCEPT`, `Verdict accept` (colon-less) |
 | LOW-only variants | `findings.low_only(verdict_line, body)` | the VERDICT line has a fix word followed, on the same line, by `LOW only` / `LOWs only` / `only LOW(s)` (case-insensitive, any punctuation between, e.g. "fix - LOW only:"). It counts as pass-with-lows only when the body has no line carrying a HIGH or MED severity token, by a strict scan that ignores `_CLOSED` (a line such as "MED: the FIXED-flag check ..." blocks the grant, seat r1 E3). Otherwise it is changes (0.2c). `seat_verdict` posts `ok=true`, reason prefix `pass-with-lows` and the LOW lines |
 | refutation held by the keeper | keeper `log_item` gains kind `refute`, router principal only (`store_fixlog.py`; the other kinds stay router/l1) with body `{decision: "D-<n>", seat: <run id or seat dir>, lines: [{id, path, line, reason}]}`. `tools/seat_verdict.py --refutations-from-keeper` reads the item's `refute` log entries through the keeper API | binding to the router's keeper principal replaces the markdown decisions-log check (seat r1 E1: an L1 could write its own log file). A refutation counts only when ALL hold: the entry's principal is the router (a keeper fact, not a file); it names this seat's run id or seat dir; it covers every id that the strict scan (above) finds as HIGH/MED in the seat body; each `path` exists at `--head` (`git cat-file -e`) and `line` is within that file. Then `ok=true`, reason `pass-with-lows: refuted per D-<n> (keeper log <event id>): <ids>`. A missing keeper, no entry, or any failed check -> exit 2 (refused), nothing posted. D-2839's `Refutes: <project:ID>` token moves into the router's keeper entry as `decision` + `seat` |
 | round gate | `findings.apply_refutations(outputs, refutations)`, used by `first_review` and `seat_outcome`; `tools/lane_gates.py seats --refutations-from-keeper` | the same refutation rule turns a refuted seat into pass-with-lows in the round gate too (seat r1 E2), so `first_review` and `seat_verdict` agree by construction |
@@ -253,6 +253,7 @@ E8 tests:
 | piece | where | behaviour |
 |---|---|---|
 | tokens per run | 4a's `result.json` gains `tokens: {input, output, source}` | `source=harness` when the client reports usage (opencode `--format json` step events, qodercli/agy usage lines: open fact F4, verified per harness against one real run each before its parser is enabled), else `{estimate: estimate_tokens, source: "estimate"}` |
+| test records excluded | `tools/metrics.py` | records with `status=dry_run`, a mock/fake gateway leg, or no `exit_code` never count (D-2844: 149 of 233 records in the production state dir are test records); the routing side runs its own metric from 2026-10-25 and E10 replaces it later |
 | tokens per merged change | `tools/metrics.py tokens --since <iso> --repo <path>` | for each merged commit on main since `--since`, take every `Writer:` trailer run id (`run-<32hex>`, ci_commit_gate format), sum the tokens of those runs and of the seat runs whose card key is the same item (the run records give the key); merged change = merge commit; reports per item and the total, with the share of `estimate` sources shown |
 | claim-to-merge | `tools/metrics.py cycle --since <iso>` | per item: first `claimed` event -> the merge of its last PR (keeper event log + `Plan-Item:` trailers), median and p90 |
 | digest | `tools/metrics.py digest` prints both tables in the router digest format (markdown, at most 30 lines) | the router pastes or pipes it into its digest; wiring it into the routing digest job is a router follow-up |
@@ -293,6 +294,12 @@ E10 tests:
 | `VERDICT: fix - LOW only` + "MED: the FIXED-flag ..." | hidden MED | changes |
 | `est_lines: true` | bool as int | writer |
 | door path only in `write_set` | hidden scope | writer |
+
+## Not covered (D-2844, routing report §6)
+
+- Wake policy: 80-90 % of orchestrator turns are wakes by peer messages or background tasks, each re-reading 150-190k of context. No slice here changes what wakes an L1. E7's inbox makes a single `watch` possible, but moving the standard-tier loop into code is the E2E/phase-runner path (operator question Q-INV-1).
+- Base chain: E5 (keeper `refute` kind), E6 (keeper rule items, #203 slice 2) and E9 (keeper `heartbeat` on the live keeper) need #203 merged and a live keeper deployed from current main. They do not work against the live keeper, which is 828 commits behind.
+- Capacity: E4 rations slots and adds none. Restoring the workstation, cutting per-run MCP servers and fixing fallback legs (D-2822) are outside this item.
 
 ## Open facts
 
