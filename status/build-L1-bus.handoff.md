@@ -1,30 +1,30 @@
-# build-L1-bus HANDOFF · gen-2 -> gen-3 · 2026-10-25 (D-2811, D-1124)
-Read first: status/build-L1-bus.card.md (rules + item table, authoritative), l2-cards/phase-fix-r2/{brief.md,amend-d2739.md,r2a-brief.md}.
-Parent routing [4fa23c] (on this host, socket 487663; sends D-ids). Peers: build-L1 (owns main lanes, #164 schema fence, SPAWN-WIN-PARITY). workst-L1-autoos (RC, unreachable since 14Z; its mimo spawner is broken on Windows, D-2791).
+# build-L1-bus HANDOFF · gen-3 -> gen-4 · 2026-10-25T23:5xZ (routing RECYCLE, compaction-restart rule)
+Read first: status/build-L1-bus.card.md (rules + D-ids + item table, authoritative); l2-cards/phase-fix-r2/{replan-r3.md (design D1-D7, invariants I1-I6'), replan-v2-slices.md (S1-S6 table)}.
+Parent routing (socket 487663, sends D-ids). Peer build-L1 (main lanes, #164 schema fence, spawner gaps: stdout-tail-only result, argv-only prompt -> sent [d0f038]).
 
-## Mechanics
-- Keeper: `sh ops/pg.sh <verb>` (build-L1.token). Item keys need the `plangraph:` prefix. Never print tokens or the environment.
-- Heartbeat FIRST: `bash ops/hb.sh 12` in the background; restart it on every exit.
-- Spawner (D-2749, all writers + seats): run from the lane worktree with `PYTHONPATH=~/code/plangraph-worktrees/main-ro/src` (main-ro = origin/main 77c9d576; fetch + checkout --detach origin/main to refresh).
-  - spawn: `python3 -m plangraph.spawner.cli spawn --card @card.json --role implement|review --model <m> --override-reason "<D-ids>" --json "<prompt>"`.
-  - The run's cwd = the cwd of the spawn call. The card needs estimate_tokens (qwen review leg needs <= ~100k).
-  - wait/status/result: `python3 -m plangraph.spawner.cli wait|status|result RUN [--timeout s]`.
-  - Use --dry-run first to see the chosen leg.
-- Phase: origin phase/rt-p1-bus @ ea21b539. Merge worktree build-L1-bus-phase (detached).
-  - Lane PR: `gh pr create --base phase/rt-p1-bus`, then `gh pr merge --merge --match-head-commit <sha>`.
-  - CI: `gh workflow run tests.yml --ref <lane>`. Verify every push with git ls-remote (a quiet push failed once).
-- Seat evidence: ~/code/plangraph-worktrees/build-L1-bus-seats/. Delta prompt builder: /home/s/.claude/jobs/e34d4989/tmp/mkdelta.sh HEAD [A|B] (NO-tools header, IPs redacted, A = py, B = rust + wake + adr). Copy it if the job dir is gone.
+## Mechanics (changed since gen-2)
+- Heartbeat: detached setsid loop already running (pid 3562149/3788468; every 30 min x20 over ops/hb-keys.txt; log /home/s/.claude/jobs/1c96c00f/tmp/hb.log). Leases 12h to 2026-10-26T07:16Z -> renew before then (release + `claim --lease 12h`; first beat must print ok). Do NOT start ops/hb.sh loops (D-2844).
+- Tools (durable copy, private): /home/s/.local/share/plangraph/build-L1-bus-tools/ = gate.sh (D-2823 admission, exit 0 = admit), mkslice.sh, run-slice.sh (gate queue -> spawn mimo-pro -> 45-min no-change watchdog, D-2845), chain.sh FROM (serial slices + checks: commit or L1 auto-commit of a green diff, fence rust/worker, <=170 lines, scrub, cited-test grep, Writer trailer, push+ls-remote+CI), mkr3.sh (seat prompt builder <128 KiB). J defaults to that dir; the old job dir may vanish.
+- Spawner: from lane worktree, `PYTHONPATH=~/code/plangraph-worktrees/main-ro/src python3 -m plangraph.spawner.cli spawn|wait|status|result|cancel`. Seats: `--role review --leg qodercli-qwen3.8-flash --no-fallthrough`, writer families gemini,mimo,openai excluded.
+- Tests: rust/worker with `PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 PG_TEMPORAL_ADDR=http://127.0.0.1:17233` (temporal dev server up). CI `gh workflow run tests.yml --ref lane/phase-fix-r2a`.
 
-## State / next (D-2802, D-2806)
-1. R2a (Rust exec, I1-I4) in worktree ~/code/plangraph-worktrees/bus-fix-r2a (branch lane/phase-fix-r2a @ea21b539, not pushed).
-   - mimo-pro attempt 2, run-cc3989f780c94dde979883b3b35a46b4: FAILED at 16:4xZ with 0 commits. opencode error: "OpenAI Chat tool call delta is missing id or name".
-   - NOW: run-d41eddf49ff04fe18fcd93ed3ed75073 on `--leg agy-gemini-3.8-flash` (D-2802; the model id agy/gemini-3.8-flash is unknown to the spawner, so use --leg). Prompt: r2a-brief with the Writer trailer changed to agy.
-   - Wait: `cli wait RUN --timeout 60` in an exiting background loop.
-   - If it has commits: check fences (only rust/worker) + IP scrub, push, verify with ls-remote, CI, PR --base phase, merge.
-   - If it also fails: BLOCKED to routing (both D-2766 fallbacks used).
-2. R2b (wake + docs, I5-I9): build r2b-brief.md like r2a-brief.md from brief.md "## Wake" + "## Docs gap" + amend I5-I9 + the seat B review verbatim. Serial, 1 run. Host cap 4 runs + 2000 MB floor; build-L1 and efficiency runs go first.
-3. Dup guard: if a workst r2 lane appears on origin first, cancel that slice and use theirs.
-4. r3 delta re-review = 1 qwen seat via the spawner (writer families mimo/gemini/openai). This is the last round; if it is not clean, report to routing (strong replan).
-5. Merge main into the phase once (renumber the schema if #164 landed first: it claims SQLite v14 + PG Migration 8). Then the phase PR -> `GO-REQ phase/rt-p1-bus <head> <seat paths + sha256>` to routing.
-6. After the merge: verdicts + evidence on every item. BUS-REGISTRY-PERSIST / DISCOVERY-ADOPT evidence: l2-cards/discovery-adopt/evidence.md. routing lane 46b7d6a1 stays HELD until keeper /v1/hosts is deployed.
-QUIET: no cron; wait via one exiting background command. Card <= 40 lines. Messages only for BLOCKED/DONE/GO/incident/launch.
+## R2a' state (lane/phase-fix-r2a in ~/code/plangraph-worktrees/bus-fix-r2a, base 59c1287e = R2a agy)
+| Slice | Commit | Notes |
+|---|---|---|
+| S1 D1a | 1d49fc99 | CI green |
+| S2 D5 | d0590479 | writer diff, L1-committed; CI green |
+| S3 D1b | b4f4110e | CI green |
+| S4 D2-D4 | 4f5cf12f + a6d67585 Hand-Edit 3 lines | writer truncated, 230 lines; CI green |
+| S5 D6+I3c | 35882dbf | run-92cf5c3a truncated; L1 checks green, committed unchanged (191 lines); CI triggered 23:31Z, check |
+| S6 D7 fixtures | RUNNING run-19a5682293d74d069faaa5d874b64896 (mimo-pro) | started by gen-3 chain.sh 6 (bg job in gen-3 session; may die at stop). Fixture (b) = build-L1-bus-seats/r2a-prime-run2-partial/observe_park.json |
+If the gen-3 chain died: `cli status run-19a5...`; still live -> `J=<tools dir> run-slice.sh S6 run-19a5...` re-watches it, then finish with `chain.sh 6`-style checks by hand; done -> verify commit/diff as chain.sh does. Stall twice -> stop + tell routing (D-2843); D-2853 allows a direct edit for a stalling slice (cap 50 lines, no writer live in the tree).
+
+## Next
+1. S6 green -> all slice CI green -> merge main into lane ONCE (renumber schema if #164 landed: SQLite v14 + PG Migration 8).
+2. grep every cited test name (fn name) on the lane head.
+3. r4 = 1 qwen seat over 59c1287e..head (mkr3.sh pattern, prompt <128 KiB, seat writes full review to a file; evidence dir build-L1-bus-seats/phase-r4-...). Include for the seat: S4 eprintln! logging in workflow code (LOW), S4 230 / S5 191 lines over 150 target. Not clean -> report to routing (D-2831).
+4. Clean -> `gh pr create --base phase/rt-p1-bus` + `gh pr merge --merge --match-head-commit <sha>`.
+5. R2b (wake + docs, I5-I9; scope replan-r3.md "R2b") on mimo-pro, 1 run, gated; 1 qwen seat; merge.
+6. Merge main into phase once -> phase PR -> `GO-REQ phase/rt-p1-bus <head> <seat paths + sha256>` to routing. bus-discovery-adopt HOLD (D-2730).
+7. After merge: verdicts + evidence on items (card table).
+QUIET: no cron, one exiting bg wait, card <= 40 lines, messages only BLOCKED/DONE/GO/incident/launch.
