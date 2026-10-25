@@ -201,6 +201,7 @@ def test_affected_tests_cli_within_empty_intersection(tmp_path, capsys, monkeypa
         "src/pkg/__init__.py": "",
         "src/pkg/core.py": "VALUE = 1",
         "tests/test_split_make_public.py": "from pkg.core import VALUE",
+        "tests/test_keeper_pg_unit.py": "import os",
     }
     for name, text in files.items():
         path = tmp_path / name
@@ -221,6 +222,102 @@ def test_affected_tests_cli_within_empty_intersection(tmp_path, capsys, monkeypa
     assert rc == 0
     captured = capsys.readouterr()
     assert "no pg-affected tests" in captured.out
+
+
+def test_cli_unknown_within_path_refuses(tmp_path, capsys, monkeypatch):
+    """A stale or typo --within entry must never pass vacuously."""
+    sel = selector()
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "tests/test_api.py": "from pkg import core",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "affected_tests.py",
+            "--base", "HEAD",
+            "--changed", "src/pkg/core.py",
+            "--within", "tests/test_nope.py",
+            "--run",
+        ],
+    )
+    rc = sel.main(root=tmp_path)
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "unknown --within path: tests/test_nope.py" in captured.err
+    assert captured.out == ""
+
+
+def test_cli_existing_within_file_and_dir_accepted(tmp_path, capsys, monkeypatch):
+    sel = selector()
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "tests/contract/test_inbox.py": "from pkg.core import VALUE",
+        "tests/test_api.py": "from pkg.core import VALUE",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "affected_tests.py",
+            "--base", "HEAD",
+            "--changed", "src/pkg/core.py",
+            "--within", "tests/contract", "tests/test_api.py",
+        ],
+    )
+    rc = sel.main(root=tmp_path)
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "unknown --within path" not in captured.err
+
+
+def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
+    """The --run pytest argv must carry --dist loadgroup like the pg run."""
+    import types
+
+    sel = selector()
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "tests/test_api.py": "from pkg import core",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    argv = {}
+
+    def fake_run(cmd, cwd=None):
+        argv["cmd"] = list(cmd)
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(sel, "subprocess", types.SimpleNamespace(run=fake_run))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "affected_tests.py",
+            "--base", "HEAD",
+            "--changed", "src/pkg/core.py",
+            "--run",
+        ],
+    )
+    rc = sel.main(root=tmp_path)
+    assert rc == 0
+    cmd = argv["cmd"]
+    assert "--dist" in cmd
+    assert cmd[cmd.index("--dist") + 1] == "loadgroup"
 
 
 def test_ci_pr_uses_affected_and_nightly_keeps_full():

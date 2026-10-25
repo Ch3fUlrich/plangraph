@@ -168,6 +168,12 @@ def main(root=None):
         root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parents[1]
     else:
         root = Path(root).resolve()
+    if args.within is not None:
+        # A stale or typo --within entry must never pass vacuously.
+        for w in args.within:
+            if not (root / w).exists():
+                print(f"unknown --within path: {w}", file=sys.stderr)
+                return 2
     plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base), within=args.within)
     print(json.dumps(plan), flush=True)
     if args.within is not None and not plan["tests"]:
@@ -175,7 +181,8 @@ def main(root=None):
         return 0
     if args.run and plan["tests"]:
         start = time.monotonic()
-        result = subprocess.run([sys.executable, "-m", "pytest", "-n", args.workers, *plan["tests"]], cwd=root)
+        result = subprocess.run([sys.executable, "-m", "pytest", "-n", args.workers,
+                                 "--dist", "loadgroup", *plan["tests"]], cwd=root)
         print(f"affected wall seconds: {time.monotonic() - start:.3f}")
         return result.returncode
     return 0
