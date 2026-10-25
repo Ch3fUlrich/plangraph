@@ -73,6 +73,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def _request(self, method):
         """Start of every request: at most one fail line and one status line (I1, V4)."""
         self._logged = False                    # the one-line rule is per request
+        self._sent = False                      # and so is "answered" (keep-alive)
         try:
             self._handle(method)
         except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
@@ -228,8 +229,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
 
     def _empty(self, status):
         """No body, no Content-Length/Content-Type (HTTP 204 must not carry one)."""
-        self._sent = True
         self.send_response(status)
+        self._sent = True                     # only a written status line counts (I1)
         self.end_headers()
 
     def _inbox(self):
@@ -238,10 +239,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
                    inbox.routes.PAGE_HEADERS)
 
     def _send(self, status, body, ctype, headers=()):
-        self._sent = True                     # a status line is going out (I1)
         if status == 413:
             self.close_connection = True
         self.send_response(status)
+        self._sent = True                     # only a written status line counts (I1)
         self.send_header("Content-Type", ctype)
         for name, value in headers:
             self.send_header(name, value)

@@ -190,7 +190,7 @@ class PgConnection:
         self._raw = raw
         self.schema = schema
         self._open = True
-        self._lost = False            # KEEPER-PG-RECONNECT: sticky until the request boundary
+        self._lost = False            # KEEPER-PG-RECONNECT: lost is permanent for this connection (S1); S2 exits, S3 reconnects
 
     # -- sqlite3.Connection surface used by the store
     def execute(self, sql, params=()):
@@ -252,7 +252,7 @@ class PgConnection:
 
     @property
     def lost(self) -> bool:
-        """True once the session was lost (sticky; no reconnect in S1)."""
+        """True once the session was lost (permanent for this connection; no reconnect in S1)."""
         return self._lost
 
     def commit(self):

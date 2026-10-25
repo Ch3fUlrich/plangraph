@@ -8,12 +8,14 @@ server (``PG_DSN``, provided by the CI pytest-postgres job) and import psycopg
 only inside the test body.  Kills always target one backend by pid: CI runs
 this suite with ``-n auto``.
 """
+import http.client
 import os
+import time
 
 import pytest
 
 from door_util import Doors
-from keeper_util import World
+from keeper_util import World, seed
 from plangraph.keeper import api, db_pg
 from plangraph.keeper.errors import ConnectionLost
 
@@ -92,6 +94,79 @@ class ConnProxy:
 
     def __getattr__(self, name):
         return getattr(self._wrapped, name)
+
+
+def _qmark(sql):
+    """Undo ``db_pg.translate`` for the delegate (this path has no literal %)."""
+    return sql.replace("%%", "\x00").replace("%s", "?").replace("\x00", "%")
+
+
+class BridgeCur:
+    """Cursor half of :class:`BridgeRaw`: runs on the delegate, raw rows back."""
+
+    def __init__(self, delegate):
+        self._delegate = delegate
+        self._rows, self.rowcount = [], 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        cur = self._delegate.execute(_qmark(sql), params or ())
+        self._rows = list(cur.fetchall())
+        self.rowcount = getattr(cur, "rowcount", 0)
+        return self
+
+    @property
+    def description(self):
+        if not self._rows:                      # empty SELECT reads as no result
+            return None
+        return [type("Col", (), {"name": name})() for name in self._rows[0].keys()]
+
+    def fetchall(self):
+        return self._rows
+
+
+class BridgeRaw:
+    """A psycopg-shaped raw that serves every statement from *delegate* ...
+
+    ... except COMMIT, where the session breaks (``broken`` plus a driver
+    error) so ``PgConnection`` classifies the loss as ``phase="commit"`` while
+    every read and write around it ran for real.
+    """
+
+    def __init__(self, delegate):
+        self._delegate = delegate
+        self.broken = False
+        self.closed = False
+
+    def execute(self, sql, params=None):
+        control = db_pg.translate_control(sql)
+        if control == "commit":
+            self.broken = True                  # the session dies at the COMMIT ...
+            raise FakeDbError("connection lost")  # ... so the outcome is unknown
+        if control == "begin":
+            self._delegate.execute("BEGIN IMMEDIATE", ())
+            return
+        if control is not None:
+            self._delegate.execute(sql, ())
+            return
+        if "pg_advisory" in sql:                # pg-only lock; BEGIN IMMEDIATE locks
+            return
+        self._delegate.execute(_qmark(sql), params or ())
+
+    def cursor(self):
+        return BridgeCur(self._delegate)
+
+    def close(self):
+        self.closed = True
+        self._delegate.close()
+
+    def fileno(self):
+        return -1
 
 
 # -------------------------------------------------------------- unit (fake raw)
@@ -292,6 +367,78 @@ def test_s1_lost_before_commit_unavailable_commit_loss_unknown(tmp_path):
               "msg": "keeper database lost at commit; outcome unknown"})
 
 
+# ------------------------------------------- keep-alive + status-line contract
+def test_s1_keepalive_second_escape_still_gets_one_500(tmp_path, monkeypatch):
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    sent, calls = [], []
+    real_send, real_handle = (api.KeeperHandler.send_response,
+                              api.KeeperHandler._handle)
+
+    def count_status(self, code, *args, **kwargs):
+        sent.append(code)                           # one entry per status line
+        return real_send(self, code, *args, **kwargs)
+
+    def first_ok_then_boom(self, method):           # noqa: ARG001
+        calls.append(method)
+        if len(calls) > 1:
+            raise RuntimeError("second request escapes")
+        return real_handle(self, method)
+
+    conn = http.client.HTTPConnection(              # timeout: red must not hang
+        "127.0.0.1", doors.server.server_address[1], timeout=5)
+    try:
+        monkeypatch.setattr(api.KeeperHandler, "send_response", count_status)
+        monkeypatch.setattr(api.KeeperHandler, "_handle", first_ok_then_boom)
+        authz = {"Authorization": f"Bearer {w.tok('reader')}"}
+        conn.request("GET", "/v1/whoami", headers=authz)
+        first = conn.getresponse()
+        first.read()
+        conn.request("GET", "/v1/whoami", headers=authz)
+        second = conn.getresponse()
+        body = second.read()
+    finally:
+        conn.close()
+        doors.close()
+        w.close()
+    assert (first.status, second.status) == (200, 500)
+    assert sent == [200, 500]          # I1 keep-alive: one 500 for the escape
+    assert b"internal server error" in body
+
+
+def test_s1_sent_set_only_after_status_line():
+    """A failing ``send_response`` must not mark the request as answered."""
+    h = api.KeeperHandler.__new__(api.KeeperHandler)
+
+    def boom(status):
+        raise OSError("send_response failed")
+
+    h.send_response = boom
+    with pytest.raises(OSError):
+        h._send(200, b"{}", "application/json")
+    assert getattr(h, "_sent", False) is False
+    with pytest.raises(OSError):
+        h._empty(204)
+    assert getattr(h, "_sent", False) is False
+
+
+def test_s1_commit_break_is_503_outcome_unknown(tmp_path):
+    """Fake raw broken only at COMMIT: the write answers 503 outcome unknown."""
+    w = World(tmp_path)
+    keys = seed(w, [("A", ())])
+    w.store.conn = db_pg.PgConnection(BridgeRaw(w.conn), "k_x")
+    doors = Doors(w, tmp_path)
+    try:
+        status, body = doors.http("router", "POST", "/v1/set_priority",
+                                  {"key": keys[0], "n": 5})
+    finally:
+        doors.close()
+        w.close()
+    assert status == 503
+    assert body == {"error": "unavailable",
+                    "msg": "keeper database lost at commit; outcome unknown"}
+
+
 # ------------------------------------------------------- live Postgres (CI job)
 def _admin(psycopg):
     """A separate admin session: kills are addressed by pid, never all backends."""
@@ -304,6 +451,23 @@ def _audit_count(admin, schema):
     return admin.execute("SELECT count(*) FROM audit_log").fetchone()[0]
 
 
+def _wait_gone(admin, pid):
+    """Poll ``pg_stat_activity`` (own admin session) until backend *pid* is gone.
+
+    ``pg_terminate_backend`` answers before the backend has necessarily
+    vanished; without this wait the next statement can race the kill and the
+    test flakes.  50 ms steps, 5 s cap.
+    """
+    end = time.monotonic() + 5.0
+    while time.monotonic() < end:
+        row = admin.execute("SELECT count(*) FROM pg_stat_activity WHERE pid = %s",
+                            (pid,)).fetchone()
+        if row[0] == 0:
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"backend {pid} still in pg_stat_activity after 5s")
+
+
 @needs_pg
 def test_s1_pg_kill_next_call_is_503_not_disconnect(tmp_path):
     psycopg = pytest.importorskip("psycopg")
@@ -314,6 +478,7 @@ def test_s1_pg_kill_next_call_is_503_not_disconnect(tmp_path):
         admin = _admin(psycopg)
         try:
             admin.execute("SELECT pg_terminate_backend(%s)", (pid,))
+            _wait_gone(admin, pid)                  # the kill must really have landed
         finally:
             admin.close()
         status, body = doors.http("reader", "GET", "/v1/whoami")
@@ -334,11 +499,12 @@ def test_s1_mid_txn_kill_commits_nothing(tmp_path):
     admin = _admin(psycopg)
     try:
         before = _audit_count(admin, conn.schema)
+        pid = conn._raw.info.backend_pid
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(insert, ("2026-01-01T00:00:00Z", "tester", None,
                               "s1", None, 0, None, None))
-        admin.execute("SELECT pg_terminate_backend(%s)",
-                      (conn._raw.info.backend_pid,))
+        admin.execute("SELECT pg_terminate_backend(%s)", (pid,))
+        _wait_gone(admin, pid)                      # the kill must really have landed
         with pytest.raises(ConnectionLost):
             conn.execute(insert, ("2026-01-01T00:00:01Z", "tester", None,
                                   "s1b", None, 0, None, None))
