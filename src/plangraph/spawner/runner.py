@@ -333,6 +333,7 @@ class SpawnerRunner:
                 job.exit_code = 1
                 job.stderr = render_reason
                 job.end_time = time.time()
+                job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
             from .resolver import host_skip_reason_async
