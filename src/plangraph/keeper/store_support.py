@@ -277,27 +277,34 @@ class SupportMixin:
         if unverified:
             raise Refused("evidence_unverified", f"unverified evidence: {unverified}")
 
-    def _reviewer_family_ok(self, principal, item):
-        """Refuse unless the reviewer's family differs from both peers.
+    def _reviewer_family_ok(self, principal, item, ctx):
+        """Refuse reviewers matching any authoritative writer family.
 
         A legacy import claims by an ``owner`` string that need not be a
         principal; its ``owner_family`` (set by the router at import time) then
         stands in for the claimant's family.  Either peer with an unknown family
         fails closed, as does a reviewer with none.
 
-        System claims have no model family: their verified evidence writers
-        supply the peer families instead, using the seat-coverage resolver.
+        Current verified commit writers take precedence over writer_model and
+        the legacy claimant/delegate fallback. Resolver failures never fall back.
         """
         from . import auth
         reviewer_family = auth.norm_family(principal.family)
         if reviewer_family is None:
             raise Refused("family_unknown", "reviewer has no family")
         peers = []
-        if item["claimed_by"] == "system":
+        has_commits = any(e["epoch"] == item["epoch"] and e["verified"]
+                          and e["kind"] == "commit+ci"
+                          for e in self._evidence(item["key"]))
+        if has_commits:
             from .coverage import writer_families
-            peers.extend(writer_families(self, item, self._ctx(item, self.clock())))
-            if not peers:
-                raise Refused("writer_unknown", "system claim has no verified commit writers")
+            peers.extend(writer_families(self, item, ctx))
+        elif item.get("writer_model"):
+            from ..review.family import model_family
+            family = model_family(item["writer_model"])
+            if family is None:
+                raise Refused("family_unknown", "writer model family unknown")
+            peers.append(family)
         else:
             claimer = auth.get_principal(self.conn, item["claimed_by"])
             claimant_family = (claimer.family if claimer is not None
@@ -306,7 +313,7 @@ class SupportMixin:
             if claimant_family is None:
                 raise Refused("family_unknown", "claimant family unknown")
             peers.append(claimant_family)
-        if item["delegate"]:
+        if not has_commits and not item.get("writer_model") and item["delegate"]:
             delegate = auth.get_principal(self.conn, item["delegate"])
             delegate_family = (auth.norm_family(delegate.family)
                                if delegate is not None else None)
@@ -314,7 +321,7 @@ class SupportMixin:
                 raise Refused("family_unknown", "delegate family unknown")
             peers.append(delegate_family)
         if reviewer_family in peers:
-            raise Refused("same_family", "reviewer shares a family with the item")
+            raise Refused("same_family", f"reviewer shares item family {reviewer_family}")
 
     def _reverify_all(self, item, now):
         """Re-run the verifiers for the current epoch's *verified* evidence.

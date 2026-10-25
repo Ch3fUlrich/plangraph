@@ -91,7 +91,59 @@ def to_review_with_commits(w, key, trailers_by_sha, *, git=None):
 def verdict_events(w, key):
     return w.conn.execute(
         "SELECT payload FROM events WHERE key=? AND type='review_verdict'"
-        " ORDER BY seq", (key,)).fetchall()
+         " ORDER BY seq", (key,)).fetchall()
+
+
+@pytest.mark.parametrize("model,code", [
+    ("mimo-v2", None), ("claude-haiku", "same_family"),
+    ("unknown-model", "writer_unknown"),
+])
+def test_anthropic_claimant_uses_evidence_writer(w, model, code):
+    token = auth.add_principal(w.conn, "anthropicL1", "l1", ["demo"], family="anthropic")
+    w.principals["claimant"] = auth.authenticate(w.conn, token)
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer(model + " run1")})
+    if code:
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(w.p("rAnthropic1"), key, True)
+        assert exc.value.code == code
+    else:
+        assert w.store.verdict(w.p("rAnthropic1"), key, True)["state"] == "done"
+
+
+@pytest.mark.parametrize("writer_model,expected", [(None, "same_family"),
+                                                   ("mimo-v2", None),
+                                                   ("unknown-model", "family_unknown")])
+def test_no_commit_writer_model_then_legacy_fallback(w, writer_model, expected):
+    item = {"key": "demo:A", "project": "demo", "epoch": 1,
+            "claimed_by": "legacy-owner", "owner_family": "anthropic",
+            "delegate": None, "writer_model": writer_model}
+    if expected:
+        with pytest.raises(Refused) as exc:
+            w.store._reviewer_family_ok(w.p("rAnthropic1"), item, w.store.ctx)
+        assert exc.value.code == expected
+    else:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), item, w.store.ctx)
+
+
+def test_old_and_unverified_evidence_cannot_spoof_writer(w):
+    item = {"key": "demo:A", "project": "demo", "epoch": 2,
+            "claimed_by": "legacy-owner", "owner_family": "anthropic", "delegate": None}
+    w.store._evidence = lambda key: [
+        {"epoch": epoch, "verified": verified, "kind": "commit+ci",
+         "ref": {"commit": SHA_A}} for epoch, verified in [(1, True), (2, False)]]
+    with pytest.raises(Refused) as exc:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), item, make_ctx(git=FakeGit()))
+    assert exc.value.code == "same_family"
+
+
+def test_delegate_cannot_override_verified_writer(w):
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, {SHA_A: writer("claude-haiku run1")})
+    item = dict(w.store._item(key), delegate="workerMeta")
+    with pytest.raises(Refused) as exc:
+        w.store._reviewer_family_ok(w.p("rAnthropic1"), item, w.store.ctx)
+    assert exc.value.code == "same_family"
 
 
 # --------------------------------------------------------------------------
@@ -116,7 +168,7 @@ def test_high_mixed_writers_close_only_when_every_family_is_covered(w):
     round_no = w.store._item(refused)["round"]
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    assert exc.value.code == "coverage"
+    assert exc.value.code == "same_family"
     assert "xiaomi" in exc.value.msg
     item = w.store._item(refused)
     assert item["state"] == "in_review"
@@ -203,7 +255,7 @@ def test_standard_mixed_writers_need_every_family_covered(w, seat, done, blamed)
         return
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p(seat), key, True, "not covered")
-    assert exc.value.code == "coverage"
+    assert exc.value.code == "same_family"
     assert blamed in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
     assert verdict_events(w, key) == []
@@ -282,9 +334,12 @@ def test_changes_requested_with_uncovered_writer_is_not_refused_for_coverage(w):
     (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
     to_review_with_commits(w, key, {SHA_A: writer("mimo-v2 run1")})
 
-    # The reviewer's own family is the uncovered writer family, but ok=False
-    # still just returns the item to claimed.
-    result = w.store.verdict(w.p("rXiaomi"), key, False, "needs work")
+    # Family isolation applies to change requests too; another family may act.
+    with pytest.raises(Refused) as exc:
+        w.store.verdict(w.p("rXiaomi"), key, False, "needs work")
+    assert exc.value.code == "same_family"
+    assert w.store._item(key)["state"] == "in_review"
+    result = w.store.verdict(w.p("rGoogle"), key, False, "needs work")
     assert result["state"] == "claimed"
     assert w.store._item(key)["state"] == "claimed"
     assert verdict_events(w, key) == []
@@ -306,7 +361,7 @@ def test_first_high_verdict_is_not_checked_and_refusal_is_atomic(w):
 
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), key, True, "second")
-    assert exc.value.code == "coverage"
+    assert exc.value.code == "same_family"
     item = w.store._item(key)
     assert item["state"] == "in_review"
     assert item["round"] == round_no
@@ -416,7 +471,7 @@ def test_merge_evidence_takes_the_writers_from_the_branch_commits(w):
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    assert exc.value.code == "coverage"
+    assert exc.value.code == "same_family"
     assert "xiaomi" in exc.value.msg
     assert w.store._item(refused)["state"] == "in_review"
     assert len(verdict_events(w, refused)) == 1
@@ -450,7 +505,7 @@ def test_hand_edit_branch_commit_counts_as_anthropic(w):
     # Claude's own hand may not cover itself on a standard item...
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rAnthropic1"), key, True, "hand edit")
-    assert exc.value.code == "coverage"
+    assert exc.value.code == "same_family"
     assert "anthropic" in exc.value.msg
     assert w.store._item(key)["state"] == "in_review"
     assert verdict_events(w, key) == []
@@ -483,8 +538,7 @@ def test_phase_merge_uses_the_flattened_leaf_trailers(w):
     assert w.store.verdict(w.p("rAlibaba"), refused, True, "one")["state"] == "in_review"
     with pytest.raises(Refused) as exc:
         w.store.verdict(w.p("rXiaomi"), refused, True, "two")
-    assert exc.value.code == "coverage"
+    assert exc.value.code == "same_family"
     assert "xiaomi" in exc.value.msg
     assert w.store._item(refused)["state"] == "in_review"
     assert len(verdict_events(w, refused)) == 1
-
