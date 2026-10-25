@@ -1237,8 +1237,7 @@ mod tests {
                 if status != 204 {
                     response.push_str(&format!("Content-Length: {}\r\n", body.len()));
                 }
-                response
-                    .push_str("Content-Type: application/json\r\nConnection: close\r\n\r\n");
+                response.push_str("Content-Type: application/json\r\nConnection: close\r\n\r\n");
                 response.push_str(&body);
                 stream
                     .write_all(response.as_bytes())

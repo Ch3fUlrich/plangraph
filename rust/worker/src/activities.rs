@@ -1632,17 +1632,18 @@ mod tests {
         // time; the park must present it without asking the keeper again.
         keeper.set_card_state(Some("waiting"));
         keeper
-            .park(
-                &g3_packet(),
-                &g3_exec(expected_state_of(&input)),
-            )
+            .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
             .expect("park with its recorded observation lands");
         assert!(
             keeper.card_state_calls().is_empty(),
             "G3-1: the park path re-read the keeper"
         );
         assert_eq!(
-            keeper.execs().last().expect("park was called").expected_state,
+            keeper
+                .execs()
+                .last()
+                .expect("park was called")
+                .expected_state,
             Some(vec!["waiting".to_string()])
         );
         // No observation recorded: the workflow's live-set fallback stands.
@@ -1675,8 +1676,7 @@ mod tests {
             "G3-1: a retry must not re-read to repair its expectation"
         );
         // The same park with the observation that still holds lands.
-        keeper
-            .set_card_state(Some("running"));
+        keeper.set_card_state(Some("running"));
         keeper
             .park(&g3_packet(), &g3_exec(expected_state_of(&input)))
             .expect("fresh observation lands");
@@ -1733,7 +1733,11 @@ mod tests {
             .ask_question(&input.card, &input.question, &exec)
             .expect("ask lands");
         assert_eq!(
-            keeper.execs().last().expect("ask was called").expected_state,
+            keeper
+                .execs()
+                .last()
+                .expect("ask was called")
+                .expected_state,
             Some(g3_live())
         );
         assert!(keeper.card_state_calls().is_empty());
@@ -1764,7 +1768,10 @@ mod tests {
             observe_read(stub.clone(), "c-1".into()).await,
             Some("waiting".to_string())
         );
-        assert_eq!(stub.card_state_calls(), vec!["c-1".to_string(), "c-1".to_string()]);
+        assert_eq!(
+            stub.card_state_calls(),
+            vec!["c-1".to_string(), "c-1".to_string()]
+        );
     }
 
     #[test]
