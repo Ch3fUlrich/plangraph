@@ -130,18 +130,124 @@ def test_ignored_non_python_src_asset_is_skipped(tmp_path):
     assert selector().select_tests(tmp_path, ["src/pkg/generated/gen.sql"])["tests"] == []
 
 
+def test_select_tests_within_filters_matching_tests(tmp_path):
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "src/pkg/api.py": "from .core import VALUE",
+        "tests/test_api.py": "from pkg import api",
+        "tests/test_other.py": "from pkg import core",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    # Both test_api and test_other are affected by core.py, but within restricts to test_api
+    plan = selector().select_tests(tmp_path, ["src/pkg/core.py"], within=["tests/test_api.py"])
+    assert plan["tests"] == ["tests/test_api.py"]
+
+
+def test_select_tests_within_directory(tmp_path):
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "tests/contract/test_inbox.py": "from pkg.core import VALUE",
+        "tests/test_other.py": "from pkg.core import VALUE",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    plan = selector().select_tests(tmp_path, ["src/pkg/core.py"], within=["tests/contract"])
+    assert plan["tests"] == ["tests/contract/test_inbox.py"]
+
+
+def test_select_tests_within_empty_intersection(tmp_path):
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "tests/test_split_make_public.py": "from pkg.core import VALUE",
+        "tests/test_keeper_pg_unit.py": "import os",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    # core.py only affects test_split_make_public.py, within only has test_keeper_pg_unit.py
+    plan = selector().select_tests(tmp_path, ["src/pkg/core.py"], within=["tests/test_keeper_pg_unit.py"])
+    assert plan["tests"] == []
+
+
+def test_select_tests_within_with_fallback(tmp_path):
+    files = {
+        "src/pkg/__init__.py": "",
+        "tests/conftest.py": "",
+        "tests/contract/test_inbox.py": "",
+        "tests/test_keeper_pg_unit.py": "",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    # conftest.py triggers fallback to full suite ["tests"], within restricts it to given paths
+    plan = selector().select_tests(tmp_path, ["tests/conftest.py"],
+                                  within=["tests/contract", "tests/test_keeper_pg_unit.py"])
+    assert plan["tests"] == ["tests/contract", "tests/test_keeper_pg_unit.py"]
+
+
+def test_affected_tests_cli_within_empty_intersection(tmp_path, capsys, monkeypatch):
+    sel = selector()
+    files = {
+        "src/pkg/__init__.py": "",
+        "src/pkg/core.py": "VALUE = 1",
+        "tests/test_split_make_public.py": "from pkg.core import VALUE",
+    }
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "affected_tests.py",
+            "--base", "HEAD",
+            "--changed", "src/pkg/core.py",
+            "--within", "tests/test_keeper_pg_unit.py",
+            "--run",
+        ],
+    )
+    rc = sel.main(root=tmp_path)
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "no pg-affected tests" in captured.out
+
+
 def test_ci_pr_uses_affected_and_nightly_keeps_full():
     import yaml
 
     workflow = yaml.safe_load((Path(__file__).resolve().parents[1]
                               / ".github/workflows/tests.yml").read_text())
-    for job in ("pytest", "pytest-postgres"):
-        steps = workflow["jobs"][job]["steps"]
-        checkout = next(s for s in steps if s.get("uses") == "actions/checkout@v4")
-        assert checkout["with"]["fetch-depth"] == 0
-        command = next(s["run"] for s in steps if s.get("name", "").startswith("pytest"))
-        assert 'pull_request' in command
-        assert 'tools/affected_tests.py --base "$BASE_SHA" --run -n auto' in command
-        assert 'python -m pytest -q -n auto' in command
+    # pytest job runs all affected tests
+    pytest_steps = workflow["jobs"]["pytest"]["steps"]
+    pytest_checkout = next(s for s in pytest_steps if s.get("uses") == "actions/checkout@v4")
+    assert pytest_checkout["with"]["fetch-depth"] == 0
+    pytest_cmd = next(s["run"] for s in pytest_steps if s.get("name", "").startswith("pytest"))
+    assert 'pull_request' in pytest_cmd
+    assert 'tools/affected_tests.py --base "$BASE_SHA" --run -n auto' in pytest_cmd
+    assert 'python -m pytest -q -n auto' in pytest_cmd
+
+    # pytest-postgres job restricts affected tests via --within
+    pg_steps = workflow["jobs"]["pytest-postgres"]["steps"]
+    pg_checkout = next(s for s in pg_steps if s.get("uses") == "actions/checkout@v4")
+    assert pg_checkout["with"]["fetch-depth"] == 0
+    pg_cmd = next(s["run"] for s in pg_steps if s.get("name", "").startswith("pytest"))
+    assert 'pull_request' in pg_cmd
+    assert '--within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py $FILES' in pg_cmd
+    assert 'tools/affected_tests.py --base "$BASE_SHA"' in pg_cmd
+    # on push to main, full PG set is unchanged
+    assert 'tests/test_projector_ddl.py $FILES' in pg_cmd
+    assert 'python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py' in pg_cmd
+
     # PyYAML's YAML 1.1 loader treats the GitHub key `on` as boolean True.
     assert workflow.get("on", workflow.get(True))["schedule"]

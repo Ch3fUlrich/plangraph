@@ -42,7 +42,23 @@ def revision_asset(root, path, cache=None):
     return probe.returncode != 0
 
 
-def select_tests(root, changed):
+def filter_within(selected_tests, within):
+    if within is None:
+        return selected_tests
+    within_norm = [Path(w).as_posix() for w in within]
+    if "tests" in selected_tests:
+        return sorted(set(within_norm))
+    matched = []
+    for t in selected_tests:
+        t_norm = Path(t).as_posix()
+        for w in within_norm:
+            if t_norm == w or t_norm.startswith(w.rstrip("/") + "/"):
+                matched.append(t)
+                break
+    return sorted(set(matched))
+
+
+def select_tests(root, changed, within=None):
     root = Path(root)
     paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
     modules = {}
@@ -83,13 +99,13 @@ def select_tests(root, changed):
                     if dep:
                         reverse.setdefault(dep, set()).add(rel)
     except (SyntaxError, UnicodeError, OSError) as exc:
-        return {"tests": ["tests"], "reason": "graph unreadable: " + str(exc)}
+        return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
     selected = set()
     asset_cache = {}
     for raw in changed:
         path = Path(raw).as_posix()
         def fallback(reason):
-            return {"tests": ["tests"], "reason": reason + ": " + path}
+            return {"tests": filter_within(["tests"], within), "reason": reason + ": " + path}
         p = Path(path)
         # Runtime/build/status artifacts do not affect Python tests. Keep
         # explicit suite configuration conservative, even outside source roots.
@@ -129,7 +145,7 @@ def select_tests(root, changed):
         if not hits:
             return fallback("no mapped tests")
         selected.update(hits)
-    return {"tests": sorted(selected), "reason": "reverse imports and explicit file references"}
+    return {"tests": filter_within(sorted(selected), within), "reason": "reverse imports and explicit file references"}
 
 
 def changed_files(root, base):
@@ -139,16 +155,24 @@ def changed_files(root, base):
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
-def main():
+def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
+    parser.add_argument("--within", nargs="+", action="extend", help="restrict selection to given paths")
+    parser.add_argument("--root", default=None, help="repository root")
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1]
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base))
+    if root is None:
+        root = Path(args.root).resolve() if args.root else Path(__file__).resolve().parents[1]
+    else:
+        root = Path(root).resolve()
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base), within=args.within)
     print(json.dumps(plan), flush=True)
+    if args.within is not None and not plan["tests"]:
+        print("no pg-affected tests")
+        return 0
     if args.run and plan["tests"]:
         start = time.monotonic()
         result = subprocess.run([sys.executable, "-m", "pytest", "-n", args.workers, *plan["tests"]], cwd=root)
