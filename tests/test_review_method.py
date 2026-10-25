@@ -220,12 +220,6 @@ def test_cli_settings_errors_audited_as_review_method_invalid(tmp_path, monkeypa
     assert '{' not in str(exc)
 
 
-def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):
-    """Backwards compatibility alias for gate."""
-    test_cli_settings_errors_audited_as_review_method_invalid(tmp_path, monkeypatch)
-
-
-
 def test_finding_1_spawner_paths_convert_settings_errors(tmp_path, monkeypatch):
     """service._spawn, spawn fixer dispatch, and runner non-delegating path convert SettingsError."""
     import plangraph.spawner.runner as runner_mod
@@ -704,6 +698,7 @@ def test_finding_4_no_path_or_layer_in_error_and_control_char_sanitization(tmp_p
     with pytest.raises(SettingsError) as exc_missing:
         review_method()
     assert '/' not in str(exc_missing.value)
+    assert '\\' not in str(exc_missing.value)
     assert 'subdir' not in str(exc_missing.value)
     assert str(exc_missing.value) == 'file: FileNotFoundError'
 
@@ -715,6 +710,7 @@ def test_finding_4_no_path_or_layer_in_error_and_control_char_sanitization(tmp_p
         review_method(project='demo_proj')
     assert 'projects:demo_proj' not in str(exc_layer.value)
     assert '/' not in str(exc_layer.value)
+    assert '\\' not in str(exc_layer.value)
 
     bad_override_path = tmp_path / 'bad_override.json'
     bad_override_path.write_text(json.dumps({'projects': {'demo_proj': {'review_method': 'not-a-dict'}}}))
@@ -723,6 +719,7 @@ def test_finding_4_no_path_or_layer_in_error_and_control_char_sanitization(tmp_p
         review_method(project='demo_proj')
     assert 'projects:demo_proj' not in str(exc_override.value)
     assert '/' not in str(exc_override.value)
+    assert '\\' not in str(exc_override.value)
 
     # 3. Source/label sanitization replaces ALL control chars (\n, \t, \0) and path separators
     phase_key = "demo:PH/1\\2\n3\t4\x00"
@@ -742,34 +739,85 @@ def test_finding_4_no_path_or_layer_in_error_and_control_char_sanitization(tmp_p
     assert '/' not in method.source
     assert '\\' not in method.source
 
-
-def test_finding_5_advisory_and_batch_boundaries_assertions_restored():
-    import inspect
-    source = inspect.getsource(test_documented_advisory_and_batch_boundaries)
-    assert "assert 'TOCTOU' in text" in source or 'assert "TOCTOU" in text' in source
-    assert "assert 'spoof' in text" in source or 'assert "spoof" in text' in source
-    assert "assert 'per-fixer seat' in text" in source or 'assert "per-fixer seat" in text' in source
-
-
-def test_finding_6_cli_settings_errors_test_renamed_to_match_body():
-    import sys
-    mod = sys.modules[__name__]
-    assert hasattr(mod, 'test_cli_settings_errors_audited_as_review_method_invalid')
-    import inspect
-    source = inspect.getsource(mod.test_cli_settings_errors_audited_as_review_method_invalid)
-    assert 'save_refusal' in source
-    assert 'review_method_invalid' in source
-    assert 'len(calls) == 1' in source
+    # 4. Unknown-field-name interpolation path: the interpolated field name is
+    # sanitized even when it carries control chars and path separators.
+    field_name = 'bad\x00\x7f\x80\u2028\u202a\u2066\u200e/na\\me'
+    unknown_path = tmp_path / 'unknown_field.json'
+    unknown_path.write_text(json.dumps({'review_method': {field_name: 1}}))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(unknown_path))
+    with pytest.raises(SettingsError) as exc_unknown:
+        review_method()
+    message = str(exc_unknown.value)
+    assert message == 'bad________na_me: unknown review_method setting'
+    assert 'unknown review_method setting' in message
+    assert not any(c in message for c in '/\\\x00\x7f\x80\u2028\u202a\u2066\u200e')
 
 
+# LOW 1: C1 controls, U+2028/U+2029 and bidi controls must be sanitized in
+# labels and rejected in ReviewMethod sources. One case per character class.
+EXTENDED_CONTROL_CHARS = [
+    ('c1_lo', '\x80'),
+    ('c1_nel', '\x85'),
+    ('c1_hi', '\x9f'),
+    ('line_sep', '\u2028'),
+    ('para_sep', '\u2029'),
+    ('bidi_lre', '\u202a'),
+    ('bidi_rle', '\u202b'),
+    ('bidi_rlo', '\u202e'),
+    ('bidi_lri', '\u2066'),
+    ('bidi_rli', '\u2067'),
+    ('bidi_fsi', '\u2068'),
+    ('bidi_pdi', '\u2069'),
+    ('lrm', '\u200e'),
+    ('rlm', '\u200f'),
+]
 
 
+@pytest.mark.parametrize('label,char', EXTENDED_CONTROL_CHARS,
+                         ids=[case[0] for case in EXTENDED_CONTROL_CHARS])
+def test_sanitize_label_replaces_extended_control_classes(tmp_path, monkeypatch, label, char):
+    """LOW 1: each class char becomes '_' in the review_method source label."""
+    phase_key = f'demo:P{char}X'
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({'phases': {phase_key: {'review_method': {'max_rounds': 8}}}}))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    method = review_method(phase=phase_key)
+    assert method.max_rounds == 8
+    assert method.source == 'phases:demo:P_X'
+    assert char not in method.source
 
 
+@pytest.mark.parametrize('label,char', EXTENDED_CONTROL_CHARS,
+                         ids=[case[0] for case in EXTENDED_CONTROL_CHARS])
+def test_source_rejects_extended_control_classes(label, char):
+    """LOW 1: ReviewMethod(source=...) rejects the same character classes."""
+    from plangraph.settings import ReviewMethod, SettingsError
+    with pytest.raises(SettingsError, match='control characters not allowed'):
+        ReviewMethod(source=f'global{char}x')
 
 
+def test_plan_phase_empty_settings_error_keeps_colon_prefix(tmp_path, monkeypatch):
+    """LOW 2: SettingsError() with no detail still emits 'review_method_invalid:'."""
+    import plangraph.settings as settings_mod
+    from keeper_util import World, defn
+    from plangraph.planner.phase import plan_phase
+    from plangraph.keeper.errors import Refused
 
+    def raise_empty(*args, **kwargs):
+        raise settings_mod.SettingsError()
 
-
-
-
+    monkeypatch.setattr(settings_mod, 'review_method', raise_empty)
+    world = World(tmp_path / 'keeper')
+    try:
+        world.store.create_items(world.p('router'), [
+            defn('P', kind='gate'),
+            defn('GOAL', ['P'], kind='goal'),
+        ])
+        with pytest.raises(Refused) as exc:
+            plan_phase(world.store, world.p('router'), 'demo:P', repo_root=tmp_path)
+        assert exc.value.code == 'validation'
+        assert exc.value.msg == 'review_method_invalid:'
+        assert exc.value.msg.startswith('review_method_invalid:')
+        assert 'review_method_invalid:' in str(exc.value)
+    finally:
+        world.close()
