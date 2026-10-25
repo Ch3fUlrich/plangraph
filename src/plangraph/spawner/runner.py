@@ -632,6 +632,7 @@ def spawn_service(*args, **kwargs):
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None):
+            from .private_io import SAVE_READ_ATTEMPTS
             # Let the base service handle audited overrides, which never fall through.
             if model is not None or leg is not None or not card:
                 return await super()._spawn(
@@ -668,7 +669,7 @@ def spawn_service(*args, **kwargs):
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
-                return self.result(run_id)
+                return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
             async def execute():
                 tried = set()
@@ -760,6 +761,6 @@ def spawn_service(*args, **kwargs):
                     await asyncio.wait_for(asyncio.shield(task), wait_seconds)
                 except asyncio.TimeoutError:
                     pass
-            return self.result(run_id)
+            return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
 
     return DispatchService(*args, **kwargs)

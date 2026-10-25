@@ -1,4 +1,5 @@
 """Tests for Windows-safe record write and read (SPAWN-WIN-PARITY S3)."""
+import asyncio
 import os
 from pathlib import Path
 import time
@@ -62,7 +63,12 @@ def test_atomic_write_winerror_5_exhausted(tmp_path, monkeypatch):
 
 
 def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
-    """Worst-case retry sleeps stay inside the 3.0 s I13 budget, exact call count."""
+    """Worst-case retry sleeps stay inside the 3.0 s I13 budget, exact call count.
+
+    Covers the write alone and a save operation whose record read shares the
+    synchronous stretch with the write (SpawnService.cancel): two read sleeps
+    plus 24 write sleeps must still sum to at most 3.0 s.
+    """
     target = tmp_path / "record.json"
     calls = []
 
@@ -83,6 +89,83 @@ def test_atomic_write_retry_sleep_budget(tmp_path, monkeypatch):
     assert len(slept) == 24
     assert sum(slept) <= 3.0
     assert list(tmp_path.glob(".record.json-*")) == []
+
+    # Combined save-path budget: one record read plus one record write in the
+    # same synchronous stretch, both retrying winerror 5 to exhaustion.
+    run_id = "run-budget1"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "record.json").write_text(
+        '{"run_id": "run-budget1", "status": "completed"}', encoding="utf-8")
+
+    reads = []
+    real_read_text = Path.read_text
+
+    def fake_read_text(self, *args, **kwargs):
+        if self.name == "record.json":
+            reads.append(1)
+            if len(reads) < 3:
+                exc = PermissionError("sharing violation")
+                exc.winerror = 5
+                raise exc
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    calls.clear()
+    slept.clear()
+
+    with pytest.raises(PermissionError):
+        asyncio.run(SpawnService(state=tmp_path).cancel(run_id))
+
+    assert len(reads) == 3
+    assert len(calls) == 25
+    assert len(slept) == 26
+    assert sum(slept) <= 3.0
+
+
+def test_save_path_read_attempts_lowered(tmp_path, monkeypatch):
+    """A save path's record read gives up after the lowered read budget.
+
+    The read keeps raising winerror 5 while a successful read is available at
+    call 5; the save path must stop at SAVE_READ_ATTEMPTS attempts and never
+    let its write add retries on top.
+    """
+    run_id = "run-budget2"
+    run_dir = tmp_path / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "record.json").write_text(
+        '{"run_id": "run-budget2", "status": "completed"}', encoding="utf-8")
+
+    reads = []
+    real_read_text = Path.read_text
+
+    def fake_read_text(self, *args, **kwargs):
+        if self.name == "record.json":
+            reads.append(1)
+            if len(reads) < 5:
+                exc = PermissionError("sharing violation")
+                exc.winerror = 5
+                raise exc
+        return real_read_text(self, *args, **kwargs)
+
+    writes = []
+    real_replace = os.replace
+
+    def fake_replace(src, dst):
+        writes.append((src, dst))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    monkeypatch.setattr(os, "replace", fake_replace)
+    slept = []
+    monkeypatch.setattr(private_io.time, "sleep", slept.append)
+
+    with pytest.raises(PermissionError):
+        asyncio.run(SpawnService(state=tmp_path).cancel(run_id))
+
+    assert len(reads) == 3
+    assert writes == []
+    assert sum(slept) <= 3.0
 
 
 def test_atomic_write_permission_error_no_winerror(tmp_path, monkeypatch):

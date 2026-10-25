@@ -7,8 +7,11 @@ import time
 #: os.replace retries sleep min(0.01 * (attempt + 1), 0.2), so the attempt cap
 #: is chosen from the sleep budget, not the other way round: 25 attempts sleep
 #: 2.9 s worst case, inside the 3.0 s total I13/V6 allows a save operation to
-#: block.
+#: block. A read sharing that synchronous stretch gets SAVE_READ_ATTEMPTS
+#: attempts at 0.05 s sleeps (0.1 s worst case), so read plus write sum to
+#: 3.0 s in either order.
 ATOMIC_WRITE_ATTEMPTS = 25
+SAVE_READ_ATTEMPTS = 3
 
 
 def atomic_write_private(path, text):
