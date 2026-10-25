@@ -162,3 +162,17 @@ Adapters also publish `retry_after_s` as a Retry-After header.
 | `too_large` | 413 |
 | `rate_limited` | 429 |
 | `replay_window_full` | 503 |
+
+## keeper message envelope
+
+The keeper messages write API accepts an optional signing and idempotency envelope on `POST /v1/post_message`:
+
+- POST `post_message` takes an optional `envelope` = `{host, sig, nonce, ts, msg_id}`.
+- `sig`, `nonce`, and `ts` follow the EXISTING fleet-bus v2 contract and are checked through `fleet_bus.discovery.Registry.validate_post(host_name, body, signature, now, state)` (per-host key file; REUSE it, no second HMAC implementation).
+- `msg_id` is client-generated (uuid4 hex), the idempotency key.
+- A signed envelope is verified: bad sig, unknown host, or stale ts -> refused with the contract error code (`bad_signature`, `unknown_kid`, `skew`).
+- A nonce table (`message_nonces`, SQLite + PG, append-only, like the messages table triggers) refuses a replay (`replayed_nonce`).
+- A `msg_id` unique index (`idx_message_envelopes_msg_id` on `message_envelopes`): a retry with the same `msg_id` AND same content returns the existing row (idempotent receipt); the same `msg_id` with different content -> refused (`conflict`).
+- `from` must equal the Bearer principal or the signed host (spoof refused).
+- Unsigned posts by an authenticated principal still work (back-compat; existing tests stay green).
+

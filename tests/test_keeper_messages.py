@@ -75,11 +75,14 @@ def test_messages_table_declared_in_both_ddls():
     import re
     assert "messages" in schema.SCHEMA
     assert "messages" in schema_pg.MIGRATIONS[-1].sql
-    cols = re.findall(r'^    "?(\w+)"? \w+', schema.MESSAGES_DDL, re.M)
+    m_body = re.search(r"CREATE TABLE (?:IF NOT EXISTS )?messages \(\n(.*?)\n\);", schema.MESSAGES_DDL, re.S)
+    cols = re.findall(r'^    "?(\w+)"? \w+', m_body.group(1), re.M)
     assert list(cols) == [
         "seq", "from", "to", "body", "trace_id", "key", "run_id",
         "attempt_n", "ack_state", "ts", "prev_hash", "hash",
     ]
+    assert "message_nonces" in schema.SCHEMA
+    assert "message_envelopes" in schema.SCHEMA
 
 
 def test_messages_indexes_and_ack_trigger_declared():
