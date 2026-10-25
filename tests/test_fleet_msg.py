@@ -451,7 +451,7 @@ def test_spool_refuses_non_uuid4_hex_ids(tmp_path, bad):
 def test_spool_remove_refuses_traversal_quietly(tmp_path):
     spool = Spool(tmp_path / "spool")
     spool.add(_entry("a" * 32))
-    spool.remove("../../etc/passwd")           # never raises, never escapes
+    spool.remove("../../outside/escape-target")           # never raises, never escapes
     assert [e["msg_id"] for e in spool.entries()] == ["a" * 32]
 
 
@@ -597,9 +597,9 @@ def test_probe_timeout_is_bounded():
 
 
 def test_prober_answers_unreachable_peers_within_budget():
-    prober = _Prober(_cfg(), {"http://10.255.255.1:8765": {}})
+    prober = _Prober(_cfg(), {"http://192.0.2.1:8765": {}})
     started = time.monotonic()
-    healthy = prober("http://10.255.255.1:8765")
+    healthy = prober("http://192.0.2.1:8765")
     elapsed = time.monotonic() - started
     assert healthy is False
     assert elapsed < 4.0, f"probe blocked for {elapsed:.1f}s"
