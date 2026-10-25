@@ -291,7 +291,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
     # --------------------------------------------------------------- writes
     def _write(self, name, body, principal, extra=""):
         if name == "post_message":
-            return {"row": self.server.store.post_message(principal, **body)}
+            _STATUS.setdefault("bad_signature", 401)
+            _STATUS.setdefault("unknown_kid", 401)
+            _STATUS.setdefault("skew", 401)
+            _STATUS.setdefault("replayed_nonce", 401)
+            _STATUS.setdefault("replay_window_full", 503)
+            _STATUS.setdefault("rate_limited", 429)
+            registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
+            return {"row": self.server.store.post_message(principal, registry=registry, **body)}
         store = self.server.store
         if not isinstance(body, dict):
             if name in ("create_items", "import_items") and isinstance(body, list):

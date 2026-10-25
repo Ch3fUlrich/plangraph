@@ -106,15 +106,61 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
-def test_schema_version_is_fourteen():
-    assert schema.SCHEMA_VERSION == 14
+def test_schema_version_is_fifteen():
+    assert schema.SCHEMA_VERSION == 15
+
+
+def test_v14_db_upgrades_to_v15_creates_envelope_tables_and_keeps_chain(tmp_path):
+    """A schema-v14 database (no message_nonces/message_envelopes) upgrades to v15:
+    rows and hash chain kept, new tables created with append-only triggers."""
+    path = tmp_path / "v14.db"
+    conn = kdb.open_db(path, create=True, backend="sqlite")
+    token = auth.add_principal(conn, "router", "router", [])
+    store = Store(conn, clock=Clock())
+    store.create_items(auth.authenticate(conn, token),
+                       [defn("A", [], kind="lane"), defn("GOAL", ["A"], kind="goal")])
+    store.post_message(auth.authenticate(conn, token), **{
+        "from": "relay", "to": "keeper", "body": {"upgrade": "v15"}
+    })
+    before_item = dict(store._item("demo:A"))
+    before_msgs = store.messages(auth.authenticate(conn, token), key="")
+    chain = keeper_events.read_events(conn)
+    conn.close()
+
+    raw = sqlite3.connect(str(path), isolation_level=None)
+    for trg in ("trg_message_nonces_no_update", "trg_message_nonces_no_delete",
+                "trg_message_envelopes_no_update", "trg_message_envelopes_no_delete"):
+        raw.execute(f"DROP TRIGGER IF EXISTS {trg}")
+    raw.execute("DROP TABLE IF EXISTS message_nonces")
+    raw.execute("DROP TABLE IF EXISTS message_envelopes")
+    raw.execute("PRAGMA user_version=14")
+    assert "message_nonces" not in tables(raw)
+    assert "message_envelopes" not in tables(raw)
+    assert "messages" in tables(raw)
+    raw.close()
+
+    conn = kdb.open_db(path, backend="sqlite")
+    assert schema.SCHEMA_VERSION == 15
+    assert "message_nonces" in tables(conn)
+    assert "message_envelopes" in tables(conn)
+    triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
+    assert {"trg_message_nonces_no_update", "trg_message_nonces_no_delete",
+            "trg_message_envelopes_no_update", "trg_message_envelopes_no_delete"} <= triggers
+    row = dict(Store(conn, clock=Clock())._item("demo:A"))
+    assert row == before_item
+    after_msgs = Store(conn, clock=Clock()).messages(auth.authenticate(conn, token), key="")
+    assert [m["hash"] for m in after_msgs] == [m["hash"] for m in before_msgs]
+    assert keeper_events.read_events(conn) == chain
+    assert keeper_events.verify_chain(conn) == []
+    assert keeper_events.verify_integrity(conn) == []
+    conn.close()
 
 
 def test_v13_db_upgrades_to_v14_creates_messages_and_keeps_chain(tmp_path):
     """A schema-v13 database (no messages table) upgrades to v14 when opened:
     rows and hash chain kept, messages table created with append-only triggers."""
     path = tmp_path / "v13.db"
-    conn = kdb.open_db(path, create=True)
+    conn = kdb.open_db(path, create=True, backend="sqlite")
     token = auth.add_principal(conn, "router", "router", [])
     store = Store(conn, clock=Clock())
     store.create_items(auth.authenticate(conn, token),
@@ -133,8 +179,8 @@ def test_v13_db_upgrades_to_v14_creates_messages_and_keeps_chain(tmp_path):
     assert "messages" not in tables(raw)
     raw.close()
 
-    conn = kdb.open_db(path)
-    assert schema.SCHEMA_VERSION == 14
+    conn = kdb.open_db(path, backend="sqlite")
+    assert schema.SCHEMA_VERSION == 15
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -144,12 +190,12 @@ def test_v13_db_upgrades_to_v14_creates_messages_and_keeps_chain(tmp_path):
     assert keeper_events.verify_chain(conn) == []
     assert keeper_events.verify_integrity(conn) == []
     conn.close()
-    kdb.open_db(path).close()
+    kdb.open_db(path, backend="sqlite").close()
 
 
 def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     path = tmp_path / "v12.db"
-    conn = kdb.open_db(path, create=True)
+    conn = kdb.open_db(path, create=True, backend="sqlite")
     token = auth.add_principal(conn, "router", "router", [])
     store = Store(conn, clock=Clock())
     store.create_items(auth.authenticate(conn, token),
@@ -167,10 +213,10 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     assert not {"exec_workflow_id", "exec_run_id", "exec_attempt"} & {
         row[1] for row in raw.execute("PRAGMA table_info(items)")}
     raw.close()
-    conn = kdb.open_db(path)
+    conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 14
+    assert schema.SCHEMA_VERSION == 15
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None

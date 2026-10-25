@@ -17,7 +17,7 @@ __all__ = ["SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL", "TABLES", "TRIGGERS",
            "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 #: Every valid ``items.state``.  ``needs_input``, ``waiting``, ``failed``, ``parked``,
 #: ``running`` and ``ready`` are the design-3 additions (set through ``set_state``).

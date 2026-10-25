@@ -26,7 +26,7 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "outbox_seen", "audit_log", "audit_findings",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
           "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
-          "jev_shadow", "messages")
+          "jev_shadow", "messages", "message_nonces", "message_envelopes")
 _BATCH = 500
 
 
