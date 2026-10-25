@@ -2384,7 +2384,8 @@ def test_rotating_finding_ids_keep_one_open_alarm(w, monkeypatch):
     assert len(alarms) == 1, [dict(a) for a in alarms]
     assert alarms[0]["key"] == OPP
     assert "oversight:" in alarms[0]["detail"]
-    assert "F-0000" in alarms[0]["detail"]      # a real finding is still named
+    assert "F-0009" in alarms[0]["detail"]      # latest finding is named on conflict
+    assert "count 10" in alarms[0]["detail"]
 
 
 def test_principal_token_never_dispatches_to_the_oversight_lookup(w, monkeypatch):
@@ -2505,7 +2506,7 @@ def test_concurrent_commit_oversight_token_two_threads(w, monkeypatch):
 
 
 def test_oversight_guard_alarm_preserves_initial_finding_on_conflict(w, monkeypatch):
-    """store_oversight.py Finding 5: ON CONFLICT DO NOTHING preserves initial finding."""
+    """store_oversight.py Finding 5: on conflict UPDATE open alarm detail to latest finding + count."""
     _, principal = live(w, monkeypatch)
     err1 = refusal(apply, w, principal, [op(
         "edit", key="plangraph:OTHER", fields={"done_criteria": "no 0"},
@@ -2518,5 +2519,154 @@ def test_oversight_guard_alarm_preserves_initial_finding_on_conflict(w, monkeypa
 
     alarms = _open_guard_alarms(w)
     assert len(alarms) == 1
-    assert "F-0000" in alarms[0]["detail"]
+    assert "F-0001" in alarms[0]["detail"]
+    assert "count 2" in alarms[0]["detail"]
+
+
+def test_concurrent_expired_auth_cap_holds_under_threads(w, monkeypatch):
+    """A1: concurrent expired auth denials respect the cap of 10 in one BEGIN IMMEDIATE txn."""
+    import threading
+    from plangraph.keeper import db as kdb
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    out = mint(w)
+    tok = out["token"]
+    past = w.clock() + 4000.0
+
+    for _ in range(9):
+        with pytest.raises(Refused) as exc:
+            auth.authenticate(w.conn, tok, now=past)
+        assert "token_expired" in exc.value.msg
+
+    barrier = threading.Barrier(5)
+    def attempt_auth():
+        conn = kdb.open_db(w.path)
+        try:
+            barrier.wait()
+            try:
+                auth.authenticate(conn, tok, now=past)
+            except Refused:
+                pass
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=attempt_auth) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    conn2 = kdb.open_db(w.path)
+    try:
+        count = conn2.execute(
+            "SELECT COUNT(*) FROM oversight_ops WHERE principal=? AND code='oversight:token_expired'",
+            (OPP,)
+        ).fetchone()[0]
+        assert count == 10
+    finally:
+        conn2.close()
+
+
+def test_expired_token_replay_does_not_spend_live_op_denied_budget(w, monkeypatch):
+    """A2: 10+ expired replays do not lock principal out of applying valid ops."""
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    out1 = mint(w)
+    tok1 = out1["token"]
+    past = w.clock() + 4000.0
+
+    for i in range(12):
+        with pytest.raises(Refused) as exc:
+            auth.authenticate(w.conn, tok1, now=past)
+        if i < 10:
+            assert "token_expired" in exc.value.msg
+        else:
+            assert "rate_limited" in exc.value.msg
+
+    out2 = mint(w)
+    tok2 = out2["token"]
+    p_valid = auth.authenticate(w.conn, tok2, now=w.clock())
+
+    res = apply(w, p_valid, [op("edit", key="plangraph:OTHER",
+                                fields={"note": "valid op after replays"})])
+    assert res is not None
+
+
+def test_audit_expired_auth_alarm_failure_rolls_back_ops_row(w, monkeypatch):
+    """A3: alarm insert failure rolls back oversight_ops insert in audit_oversight_expired_auth."""
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    out = mint(w)
+    tok = out["token"]
+    past = w.clock() + 4000.0
+
+    class FailingConn:
+        def __init__(self, real):
+            self._real = real
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+        def execute(self, sql, *args):
+            if "projector_alarms" in str(sql) and "INSERT" in str(sql):
+                raise RuntimeError("forced alarm insert failure")
+            return self._real.execute(sql, *args)
+
+    proxy = FailingConn(w.conn)
+    with pytest.raises(RuntimeError, match="forced alarm insert failure"):
+        auth.authenticate(proxy, tok, now=past)
+
+    count = w.conn.execute(
+        "SELECT COUNT(*) FROM oversight_ops WHERE principal=?", (OPP,)
+    ).fetchone()[0]
+    assert count == 0
+
+
+def test_auth_set_clock_removed():
+    """A6: set_clock is removed from auth and its export list."""
+    assert not hasattr(auth, "set_clock")
+    assert "set_clock" not in auth.__all__
+
+
+def test_oversight_ops_key_none_and_batch_ref_empty_satisfy_not_null(w):
+    """A8: key=None and batch_ref='' satisfy oversight_ops NOT NULL on SQLite and PG."""
+    now = w.store._iso(w.clock())
+    w.conn.execute(
+        "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
+        "batch_ref,op_index,op,key,finding_id,reason,outcome,code,event_seq)"
+        " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_ops),"
+        "?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
+        (now, 1, "test_p", 1, "", 1, "authenticate", None, "", "reason", "code"))
+    row = w.conn.execute("SELECT batch_ref, key FROM oversight_ops WHERE principal='test_p'").fetchone()
+    assert row["batch_ref"] == ""
+    assert row["key"] is None
+
+    pg_dsn = os.environ.get("PG_DSN")
+    if pg_dsn:
+        import uuid
+        import psycopg
+        from plangraph.keeper import db as kdb
+        schema_name = f"test_ovs_{uuid.uuid4().hex[:8]}"
+        try:
+            pg_conn = kdb.open_db("test", create=True, backend="postgres", dsn=pg_dsn, schema=schema_name)
+            try:
+                pg_conn.execute(
+                    "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
+                    "batch_ref,op_index,op,key,finding_id,reason,outcome,code,event_seq)"
+                    " VALUES(999999,?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
+                    (now, 1, "test_p", 1, "", 1, "authenticate", None, "", "reason", "code"))
+                prow = pg_conn.execute("SELECT batch_ref, key FROM oversight_ops WHERE id=999999").fetchone()
+                assert prow["batch_ref"] == ""
+                assert prow["key"] is None
+            finally:
+                pg_conn.close()
+        finally:
+            try:
+                raw = psycopg.connect(pg_dsn, autocommit=True)
+                raw.execute(f"DROP SCHEMA IF EXISTS {schema_name} CASCADE")
+                raw.close()
+            except Exception:
+                pass
+
 
