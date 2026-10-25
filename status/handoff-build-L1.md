@@ -1,32 +1,55 @@
-# build-L1 handoff 2026-10-25 ~17:40Z (gen-33 -> gen-34, D-2827)
+# build-L1 handoff 2026-10-25 ~20:00Z (gen-34 -> gen-35, routing RECYCLE after 1 compaction)
 
-Read first: status/build-L1.card.md (current). J = /home/s/.claude/jobs/0bbdff0b/tmp (all scripts, briefs, seat dirs). Notes: status/notes-build-L1.md.
-Restart the hb loop first: `cd ~/code/plangraph-worktrees/build-L1 && bash $J/hb.sh 3 >> $J/hb.log 2>&1` (background; restart on every exit). Keys: ops/hb-keys.txt (SQ12, KEEPER-PG-RECONNECT, SPAWN-WIN-PARITY, REVIEW-VERDICT-PARSE).
-Spawn ONLY via $J/gspawn2.sh <wt> <brief> <tag> <reason> <leg> (legs: mimo-v2.6-pro, agy-gemini-3.8-flash). Gate D-2823 in the same command: `pgrep -fc '^(\S*/)?opencode run |^node \S*/qodercli |^\S*/agy .* -p '` < 4 AND MemAvailable >= 2000. Budget: max 2 of my runs, seats included (D-2800). All J scripts already use the D-2823 pattern.
-Writer trailer: brief says literal RUNID; fill with filter-branch over ONLY the writer commits (`<base>..HEAD` BEFORE merging main; a range that includes a main merge rewrites main's commits, which I hit once on #211), then merge origin/main once.
+Read first: status/build-L1.card.md. J = /home/s/.claude/jobs/0bbdff0b/tmp (scripts, briefs, seat dirs). Notes: status/notes-build-L1.md. Cost model: status/direct-edit-cost-model.md.
+FIRST:
+- The hb loop runs detached (setsid hb.sh 90, about 12 h, log $J/hb.log). Check `tail -3 $J/hb.log`; restart only if stale >10 min.
+- Keys: ops/hb-keys.txt (SQ12, KEEPER-PG-RECONNECT, SPAWN-WIN-PARITY, ORCH-EFFICIENCY-ENFORCE).
+- Live state: `PYTHONPATH=~/code/plangraph-worktrees/spawner-host-keys/src python3 -m plangraph.spawner.cli ps`, then `gh pr list -R Ch3fUlrich/plangraph`.
 
-## In flight
-- #210 SPAWN-WIN-PARITY S1 (HIGH, claimed): fix r1 run-ae0dcb3ccdb74c30b9b8fa28f071272d (mimo-v2.6-pro, brief $J/brief-swp-s1-fix1.md, log $J/swp-s1f1.log; wait output $J/w-swp-s1f1.wait). Wt ~/code/plangraph-worktrees/spawn-win-parity, head before fix 0d3a7d99.
-  - CI 40212967356 red = 8 tests lacking a gateway URL in hermetic tests (I6 refusal); prod verified OK on coding.vm (root overlay has the mimo baseURL). Haiku 5 MED + LOWs, qwen pass. Routing D-2824: hermetic fixtures, never weaken I6.
-  - On done: verify the per-finding list, RUNID fill (filter-branch 0d3a7d99..HEAD), push, CI; delta seats qwen + Haiku (NOT xiaomi: the fixer is xiaomi; D-2511), material = delta diff + $J/swp-s1.vec; then GO-REQ per sha. S2/S3 briefs are in briefs/lanes-d2657/spawn-win-parity-design.md.
-- #211 REVIEW-VERDICT-PARSE (std, prio 2, claimed, D-2825): head 447ec5b5 (writer agy run-3b39dfd5, main da92ca78 merged, pushed). qwen seat $J/seat-rvp-qwen: no VERDICT line, but confirmed a false pass on markdown-bold labels (`**MED**:`).
-  - Fix r1 queued/running: tag rvpf1, mimo-v2.6-pro, brief $J/brief-rvp-fix1.md, log $J/rvpf1.log, run id in $J/w-rvpf1.json. On done: RUNID fill over 447ec5b5..HEAD, push, CI, ONE qwen delta seat (writer fams now google + xiaomi: seat must be neither) via a copy of $J/seatrvp.sh with the delta diff.
-  - PASS -> post via `bash $J/post.sh $J/seat-rvp-qwen plangraph:REVIEW-VERDICT-PARSE google` -> CI green -> mergepath 211 (std self-approve on seats, D-1442).
-  - After merge (D-2825): post the existing Haiku LOW-only verdicts UNCHANGED with the new parser: `post.sh $J/seat-rms-f2b-haiku plangraph:REVIEW-METHOD-SETTING "xiaomi --writer-family google --writer-family openai"` and `post.sh $J/seat-cisel3-haiku plangraph:CI-SELECT-DEPLOY-REFS <writer fams of #208>`. Do NOT re-run seats. Note: post.sh uses R=spawner-omniroute-key checkout; point it at a main checkout containing #211 first.
-    - CAUTION: seat-cisel3-haiku's verdict is "fix - MED" (refuted by routing D-2824), not LOW-only; the parser will keep it FAIL. Ask routing how to close CI-SELECT-DEPLOY-REFS (an earlier LOW-only Haiku seat on 8723236e may be the one to post).
-- #206 KEEPER-PG-RECONNECT S1: MERGED 8d0104dd (D-2826; merged head 959489f8, CHANGELOG-only conflict; PR CI 40216508941, main CI 40216891777 green). Code only: NO live keeper redeploy (separate GO). Evidence not attached (item state: check `ops/pg.sh show plangraph:KEEPER-PG-RECONNECT`; attach commit+ci 8d0104dd if claimed).
-  - Next: S2 brief ready $J/brief-pgr-s2.md (agy; S1 LOWs folded in). New wt from main after #206 merge: `git worktree add -b lane/keeper-pg-reconnect-s2 ~/code/plangraph-worktrees/keeper-pg-reconnect-s2 origin/main`. HIGH: 2 seats non-writer families + judge GO.
+Spawning:
+- Spawn ONLY via `$J/gspawn2.sh <wt> <brief> <tag> <reason> <leg>` (legs mimo-v2.6-pro, agy-gemini-3.8-flash). The host gate is inside it.
+- Budget: 3 of my runs (D-2840).
+- Stall watch: `$J/stallwatch.sh <tag>` cancels after 45 min with no worktree write and no opencode.log activity (D-2845).
 
-## Merged gen-33
-#208 CI-SELECT-DEPLOY-REFS f413f175 (D-2824; stays in_review until its verdict posts). #209 REVIEW-METHOD-SETTING fix-forward da92ca78 (stays in_review, same). #206 KEEPER-PG-RECONNECT S1 8d0104dd.
+Rules new this gen:
+- D-2835 + operator: the orchestrator makes fully specified changes itself, as a Hand-Edit commit. The gate cap is 10 lines today; it goes to 50 with hecap50 (D-2853) and to 400 plus a `Route-Decision:` trailer with the OEE slice. It never touches AUTH_DOOR_PATHS (keeper/*, auth, seat_verdict, pg.sh, ci_commit_gate, .github). Check the gate's REAL exit code.
+- D-2853: OEE criteria 1-2 = the cost+L*time model.
+- Evidence needs the FULL 40-char sha. `git rev-parse` it; never type one.
+- Writer trailer: the brief says the literal RUNID. Fill it with filter-branch over ONLY the writer commits, before merging main.
+- Post seats from a main checkout: `$J/postm.sh` uses ~/code/plangraph-worktrees/post-main (detached main 7bbd11a6; `git -C .. checkout --detach origin/main` first).
 
-## Queue after these (D-2815 order)
-spawn-iso #200/#201 re-spawn (mimo-pro, wt spawn-iso-w @4e331984, brief in briefs/lanes-d2657/iso.md / fix-iso.md) > PG-TEST-SHM-LEAK (std, ~30 lines conftest) > SPAWN-PACKET-SCRUB (HIGH, strong design first, 2 non-Claude seats + judge) > SPAWN-OPENROUTER-FREE-ENDPOINTS > SPAWN-HAIKU-LEG. SQ12 is on workst (claim held by me).
-- D-2799 4c argv: OK sent with 5 conditions, accepted by build-L1-efficiency; slice 4 on hold for routing. D-2820/D-2822: tool-call-delta failure = provider_protocol in slice 4a2.
+## In flight (owner build-L1 unless stated)
+1. **#210 SPAWN-WIN-PARITY S1 (HIGH).**
+   - Fix r1b run-eb06bed7 (mimo-pro, tag swp-s1f1c, brief $J/brief-swp-s1-fix1c.md F2-F6+LOWs, log $J/swp-s1f1c.log), worktree spawn-win-parity.
+   - The local F1 hand-edit f5f2f027 is NOT pushed.
+   - On done: check each finding, RUNID-fill over f5f2f027..HEAD, push, CI, delta seats qwen + Haiku (fixer xiaomi, writer google), GO-REQ per sha. Then spawn S2 (design §4 "### S2 brief"; prompt via stdin/file).
+2. **hecap50 (OEE interim, D-2853).** Spawn right after the S1 fix:
+   `bash $J/gspawn2.sh ~/code/plangraph-worktrees/hand-edit-cap-50 $J/brief-hecap50.md hecap50 "D-2853 interim hand-edit cap 10->50" mimo-v2.6-pro`
+   - HIGH: 2 seats from different families including a non-Claude one, then GO-REQ with sha + CI run.
+3. **#213 S3.**
+   - Haiku seat: fix, 2 MED.
+   - qwen seat queued ($J/seatswps3.sh, bg).
+   - Then ONE mimo-pro fix round: $J/brief-swp-s3-fix1.md. Replace the QWEN_FINDINGS line with qwen's findings verbatim; Test-Removal D-2851 is already in it. Design §3 line 92 is already updated.
+   - Then delta seats qwen + Haiku and judge GO.
+4. **rvpc** (parser widening: REQUEST_CHANGES / ACCEPT / approved / "|" cell): queued, worktree review-verdict-parse-c, brief $J/brief-rvp-c.md.
+   - REVIEW-VERDICT-PARSE is DONE, so ask routing which item owns it before the PR.
+5. **KEEPER-PG-RECONNECT S2:** worktree keeper-pg-reconnect-s2 is ready; brief $J/brief-pgr-s2.md (agy). Spawn after the OEE slices (D-2835 order). A live keeper redeploy needs its own GO.
+6. **ORCH-EFFICIENCY-ENFORCE (prio 10, claimed epoch 2).** #214 merged 7bbd11a6, evidence ok. E-slices follow build-L1-efficiency's design (D-2837); spec d97b5fb3 forwarded.
 
-## Gaps/lessons (sent or to send to routing LESSONS)
-- post.sh/seat_verdict LOW-only = FAIL -> fixed by #211.
-- mergepath.sh exits 4 on any non-empty cc (CHANGELOG conflicts are the norm with parallel lanes); resolve by hand in merge-<PR> worktree keeping both lines, then finish manually (push merged head, CI, PUT merge with sha).
-- zsh: never write `"$M:refs/..."` (zsh `:r` modifier eats it) - use ${M} or a bash script file.
-- mergepath evidence step fails on in_review items (bad_state); harmless.
-- PR CI re-run after a main fix: close+reopen the PR (a plain rerun reuses the old merge ref).
+## Router-stall lines (owner / next step)
+- **#210 idle 3.1h** -> build-L1: fix r1b running now (item 1); S2 follows its merge.
+- **#200/#201 idle 8.2h** (SPAWN-ISOLATION-INPLACE / SPAWN-ORPHAN-REAP) -> build-L1: queued after KEEPER-PG-RECONNECT S2. Re-spawn mimo-pro in worktree spawn-iso-w (briefs/lanes-d2657/iso.md, fix-iso.md).
+- **REVIEW-METHOD-SETTING in_review 13.1h** -> BLOCKED on a seat family.
+  - Posting the Haiku LOW-only seat (parser now PASS) gets keeper 409 `same_family`, because build-L1's Claude Hand-Edits (D-2798, D-2817) make anthropic a writer family.
+  - Writer families: google, xiaomi, openai, anthropic. alibaba (qwen) has already posted.
+  - Next: ONE delta seat from a new family (opencode free glm-5.3-flash-free) or a router ruling. Sent to routing.
+- **RT-P1-EXEC-OWNERSHIP in_review 39.6h** -> waits on its fix item SQ12 (D-2703, 4 findings).
+  - SQ12 branch lane/exec-own-sq12 f308086f = WIP from a truncated mimo writer (45+/9-, finding 1 only).
+  - Next: a mimo-pro continuation writer on coding.vm (keeper/* = AUTH_DOOR, writer only) for findings 2-4, then 2 seats and GO.
+  - No cancel proposed.
+- **CI-SELECT-DEPLOY-REFS** -> no action; closes via E5 (refuted-seat posting).
+
+## Gaps for routing / LESSONS
+- **Direct edits vs seat families:** each Claude Hand-Edit adds anthropic to the item's writer families, so a Haiku seat is then refused (same_family). With direct edits now preferred, Haiku stops being a usable seat. The seat algorithm needs a rule, for example counting Hand-Edits of <= N lines as non-authoring or always requiring 2 non-Claude seats.
+- **ci_commit_gate cannot be edited by the orchestrator** (AUTH_DOOR + no Claude Writer). That is correct, but every gate tweak costs a writer run.
+- **Run records have no token counts:** the cost model can't be measured until they do (OEE pt 10).
