@@ -13,8 +13,12 @@ KEY = "k-%s-secret" % ("x" * 24)
 KEY_ENV = "PLANGRAPH_REVIEW_KEY"
 
 
-def make_server(capture, *, status=200, payload=None, headers=None, echo_key=False):
-    """Serve one canned JSON reply on 127.0.0.1, recording the request."""
+def make_server(capture, *, status=200, payload=None, payloads=None,
+                headers=None, echo_key=False):
+    """Serve canned JSON replies on 127.0.0.1, recording every request.
+
+    ``payloads`` serves one reply per request (the last one repeats).
+    """
     headers = headers or {}
 
     class H(BaseHTTPRequestHandler):
@@ -27,8 +31,12 @@ def make_server(capture, *, status=200, payload=None, headers=None, echo_key=Fal
                 body = {}
             capture["path"] = self.path
             capture["body"] = body
+            capture.setdefault("bodies", []).append(body)
+            capture["count"] = capture.get("count", 0) + 1
             capture["headers"] = {k.lower(): v for k, v in self.headers.items()}
-            if echo_key:
+            if payloads is not None:
+                reply = dict(payloads[min(capture["count"] - 1, len(payloads) - 1)])
+            elif echo_key:
                 token = self.headers.get("Authorization", "").replace("Bearer ", "")
                 reply = dict(payload or {})
                 reply["choices"] = [{
@@ -151,6 +159,92 @@ def test_length_empty_no_raise(monkeypatch):
     assert res.text == "" and res.finish_reason == "length"
 
 
+def test_default_max_tokens_128000_unknown_model(monkeypatch):
+    """DEFAULT_MAX_TOKENS is 128000; an unknown model sends 128000."""
+    assert g.DEFAULT_MAX_TOKENS == 128000
+    cap = {}
+    server = make_server(cap)
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        res = g.call("not-in-catalog", "p", url=base_of(server))
+    finally:
+        server.shutdown(); server.server_close()
+    assert res.status == 200
+    assert cap["body"]["max_tokens"] == 128000
+
+
+def test_clamps_max_tokens_to_catalog_ceiling(monkeypatch):
+    """Known catalog model clamps max_tokens to its max_output_tokens."""
+    cap = {}
+    server = make_server(cap)
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        g.call("gemini/gemini-4-argon-high", "p", url=base_of(server))
+        assert cap["body"]["max_tokens"] == 65536
+        g.call("gemini/gemini-4-argon-high", "p", url=base_of(server),
+               max_tokens=200000)
+        assert cap["body"]["max_tokens"] == 65536
+    finally:
+        server.shutdown(); server.server_close()
+
+
+def test_length_empty_retries_once_then_truncated_empty(monkeypatch, tmp_path):
+    """length+empty retries once at the ceiling, then is truncated_empty."""
+    cap = {}
+    payload = {"model": "s", "choices": [
+        {"message": {"content": ""}, "finish_reason": "length"}]}
+    server = make_server(cap, payload=payload)
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        res = g.call("m", "p", url=base_of(server), max_tokens=4000)
+        g.write_seat_dir(tmp_path, res)
+    finally:
+        server.shutdown(); server.server_close()
+    assert cap["count"] == 2
+    assert [b["max_tokens"] for b in cap["bodies"]] == [4000, 128000]
+    assert res.text == "" and res.finish_reason == "length"
+    assert res.truncated_empty is True
+    assert [a["attempt"] for a in res.attempts] == [1, 2]
+    doc = json.loads((tmp_path / "evidence.json").read_text())
+    assert doc["truncated_empty"] is True
+    assert [a["attempt"] for a in doc["attempts"]] == [1, 2]
+
+
+def test_length_empty_retry_recovers_with_text(monkeypatch):
+    """A retry that returns text is the result, not truncated_empty."""
+    cap = {}
+    empty = {"model": "s", "choices": [
+        {"message": {"content": ""}, "finish_reason": "length"}]}
+    late = {"model": "s", "choices": [
+        {"message": {"content": "late answer"}, "finish_reason": "stop"}]}
+    server = make_server(cap, payloads=[empty, late])
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        res = g.call("m", "p", url=base_of(server))
+    finally:
+        server.shutdown(); server.server_close()
+    assert cap["count"] == 2
+    assert res.text == "late answer" and res.truncated_empty is False
+    assert len(res.attempts) == 2
+
+
+def test_length_with_text_is_not_retried(monkeypatch):
+    """finish_reason length WITH text is final: one attempt, no retry."""
+    cap = {}
+    payload = {"model": "s", "choices": [
+        {"message": {"content": "partial"}, "finish_reason": "length"}]}
+    server = make_server(cap, payload=payload)
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        res = g.call("m", "p", url=base_of(server))
+    finally:
+        server.shutdown(); server.server_close()
+    assert cap["count"] == 1
+    assert res.text == "partial" and res.finish_reason == "length"
+    assert res.truncated_empty is False
+    assert len(res.attempts) == 1
+
+
 def test_list_parts_content(monkeypatch):
     """List-of-parts content joins text parts only."""
     cap = {}
@@ -237,6 +331,7 @@ def test_evidence_keys_exact_and_extra(monkeypatch, tmp_path):
         "requested_model", "served_model", "status", "finish_reason",
         "correlation_id", "response_header_names", "session_tag",
         "run_id", "prompt_sha256", "tokens", "started", "finished",
+        "attempts", "truncated_empty",
     }
     g.write_seat_dir(tmp_path, res, extra={"k": "v"})
     doc = json.loads((tmp_path / "evidence.json").read_text())

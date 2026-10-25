@@ -13,11 +13,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..spawner.catalog_seed import SEED_MODELS
+
 __all__ = ["DEFAULT_MAX_TOKENS", "GATEWAY_ENV_VAR",
            "MissingKey", "MissingGatewayURL", "CallResult", "request_body",
-           "request_headers", "gateway_base_url", "call", "write_seat_dir"]
+           "request_headers", "gateway_base_url", "model_ceiling",
+           "clamp_max_tokens", "call", "write_seat_dir"]
 
-DEFAULT_MAX_TOKENS = 16000
+DEFAULT_MAX_TOKENS = 128000
 GATEWAY_ENV_VAR = "PLANGRAPH_REVIEW_URL"
 SESSION_HEADER = "x-review-session-id"
 MAX_ERROR_SNIPPET = 200
@@ -69,6 +72,20 @@ def mint_run_id(slug: str) -> str:
 def mask_key(text: str, key: str) -> str:
     """Redact key occurrences before storing or writing."""
     return text.replace(key, "[redacted]") if key and text else text
+
+
+def model_ceiling(model: str) -> int:
+    """Catalog max_output_tokens for a known model id; else DEFAULT_MAX_TOKENS."""
+    for entry in SEED_MODELS:
+        if entry.get("model_id") == model:
+            value = entry.get("max_output_tokens")
+            return value if isinstance(value, int) and value > 0 else DEFAULT_MAX_TOKENS
+    return DEFAULT_MAX_TOKENS
+
+
+def clamp_max_tokens(model: str, max_tokens: int) -> int:
+    """min(requested, model ceiling); unknown models cap at DEFAULT_MAX_TOKENS."""
+    return min(int(max_tokens), model_ceiling(model))
 
 
 def request_body(model: str, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -142,6 +159,8 @@ class CallResult:
     error: str | None = None
     session_tag: str = ""
     run_id: str = ""
+    truncated_empty: bool = False
+    attempts: list[dict] = field(default_factory=list)
 
     def to_evidence(self) -> dict:
         """Evidence fields (caller adds verdict/test-gaming)."""
@@ -151,7 +170,9 @@ class CallResult:
                 "response_header_names": list(self.response_header_names),
                 "session_tag": self.session_tag, "run_id": self.run_id,
                 "prompt_sha256": self.prompt_sha256, "tokens": dict(self.tokens),
-                "started": self.started, "finished": self.finished}
+                "started": self.started, "finished": self.finished,
+                "truncated_empty": self.truncated_empty,
+                "attempts": [dict(a) for a in self.attempts]}
 
 
 def _blank(model: str, digest: str, tag: str, run_id: str, started: str,
@@ -165,22 +186,18 @@ def _blank(model: str, digest: str, tag: str, run_id: str, started: str,
                       error=error, session_tag=tag, run_id=run_id)
 
 
-def call(model: str, prompt: str, *, url: str | None = None,
-         key_env: str = "PLANGRAPH_REVIEW_KEY", max_tokens: int = DEFAULT_MAX_TOKENS,
-         timeout: int = 1200, title: str | None = None, env: Any | None = None,
-         ) -> CallResult:
+def _attempt_record(n: int, sent: int, result: CallResult) -> dict:
+    """Compact record of one wire attempt (key never stored)."""
+    return {"attempt": n, "max_tokens": sent, "status": result.status,
+            "finish_reason": result.finish_reason, "served_model": result.served_model,
+            "correlation_id": result.correlation_id,
+            "text_empty": not (result.text or "").strip(),
+            "started": result.started, "finished": result.finished}
+
+
+def _post(model: str, prompt: str, base: str, key: str, tag: str, run_id: str,
+          digest: str, max_tokens: int, timeout: int) -> CallResult:
     """POST one tool-less completion; HTTP/network errors become values."""
-    source = env if env is not None else os.environ
-    key = (source.get(key_env) or "").strip() if source is not None else ""
-    if not key:
-        raise MissingKey("missing review key: set %s" % key_env)
-    base_url = url or (source.get(GATEWAY_ENV_VAR) or "").strip()
-    if not base_url:
-        raise MissingGatewayURL("missing review gateway URL: set %s" % GATEWAY_ENV_VAR)
-    base = gateway_base_url(base_url)
-    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
-    tag = session_tag(title, digest)
-    run_id = mint_run_id(slugify(title or "review"))
     started = utc_now()
     req = urllib.request.Request(base.rstrip("/") + "/chat/completions",
                                  data=json.dumps(request_body(model, prompt, max_tokens)
@@ -219,6 +236,43 @@ def call(model: str, prompt: str, *, url: str | None = None,
                       response_header_names=names, tokens=dict(usage or {}),
                       prompt_sha256=digest, started=started, finished=finished,
                       error=None, session_tag=tag, run_id=run_id)
+
+
+def call(model: str, prompt: str, *, url: str | None = None,
+         key_env: str = "PLANGRAPH_REVIEW_KEY", max_tokens: int = DEFAULT_MAX_TOKENS,
+         timeout: int = 1200, title: str | None = None, env: Any | None = None,
+         ) -> CallResult:
+    """POST one tool-less completion; HTTP/network errors become values.
+
+    ``max_tokens`` is clamped to the model's catalog ``max_output_tokens``
+    (a DEFAULT_MAX_TOKENS ceiling for an unknown model). A reply with
+    ``finish_reason == "length"`` and empty text retries ONCE at that ceiling;
+    if the retry is still empty the result is marked ``truncated_empty`` (never
+    ok, never skipped). Every attempt is recorded in ``CallResult.attempts``.
+    """
+    source = env if env is not None else os.environ
+    key = (source.get(key_env) or "").strip() if source is not None else ""
+    if not key:
+        raise MissingKey("missing review key: set %s" % key_env)
+    base_url = url or (source.get(GATEWAY_ENV_VAR) or "").strip()
+    if not base_url:
+        raise MissingGatewayURL("missing review gateway URL: set %s" % GATEWAY_ENV_VAR)
+    base = gateway_base_url(base_url)
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+    tag = session_tag(title, digest)
+    run_id = mint_run_id(slugify(title or "review"))
+    ceiling = model_ceiling(model)
+    attempts: list[dict] = []
+    sent = clamp_max_tokens(model, max_tokens)
+    result = _post(model, prompt, base, key, tag, run_id, digest, sent, timeout)
+    attempts.append(_attempt_record(1, sent, result))
+    if result.finish_reason == "length" and not (result.text or "").strip():
+        result = _post(model, prompt, base, key, tag, run_id, digest, ceiling, timeout)
+        attempts.append(_attempt_record(2, ceiling, result))
+        if not (result.text or "").strip():
+            result.truncated_empty = True
+    result.attempts = attempts
+    return result
 
 
 def write_seat_dir(out_dir: Path, result: CallResult, extra: dict | None = None) -> None:
