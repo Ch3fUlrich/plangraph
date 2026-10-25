@@ -128,6 +128,7 @@ def jev_write(store, principal, name, body):
 # Router-only verbs: ``(store, principal, body, need) -> result``.  ``need`` is
 # the handler's required-field reader.
 def _close_on_decision(store, principal, body, need):
+    store._require_role(principal, "router")   # role first (403)
     return store.close_on_decision(principal, need(body, "key"),
                                    need(body, "batch_ref"))
 
@@ -142,15 +143,17 @@ def _reopen(store, principal, body, need):
 
 
 def _set_legacy_state(store, principal, body, need):
+    store._require_role(principal, "router")   # role first (403)
     return store.set_legacy_state(principal, need(body, "key"),
                                   need(body, "state"), body.get("note", ""))
 
 
 def _set_kind(store, principal, body, need):
+    store._require_role(principal, "router")   # role first (403)
     extra = set(body) - {"key", "kind"}
-    if extra and getattr(principal, "role", None) == "router":   # a non-router gets 403 first
+    if extra:
         raise Refused("validation", f"unexpected fields {sorted(extra)}")
-    return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
+    return store.set_kind(principal, need(body, "key"), body.get("kind"))
 
 
 #: D-1498/D-2760: an unknown body key is refused, never ignored (an old keeper
@@ -159,6 +162,10 @@ APPLY_OPS_FIELDS = frozenset({"ops", "batch_ref", "base_seq", "dry_run"})
 
 
 def _apply_ops(store, principal, body, need):
+    # Role first (403): the strict-body refusal below is for callers the verb
+    # admits (router/oversight, as in store_ops._apply_ops) -- a role refusal
+    # must never be masked by body validation.
+    store._require_role(principal, "router", "oversight")
     extra = set(body) - APPLY_OPS_FIELDS
     if extra:
         raise Refused("validation", f"unexpected fields {sorted(extra)}")
@@ -172,22 +179,27 @@ def _migrate_descriptions(store, principal, body, need):
 
 
 def _rehome(store, principal, body, need):
-    # the store checks the role first, then new_project (so a non-router gets 403)
+    # role first (403): then the store checks new_project
+    store._require_role(principal, "router")
     return store.rehome(principal, need(body, "key"), body.get("new_project"),
                         body.get("host"))
 
 
 def _record_run(store, principal, body, need):
+    store._require_role(principal, "spawner")   # role first (403)
     return store.record_run(principal, need(body, "key"), body.get("run"))
 
 
 def _answer(store, principal, body, need):
+    store._require_role(principal, "router")   # role first (403)
     return store.answer(principal, need(body, "key"), body.get("text"),
                         body.get("decision_id"))
 
 
 def _mint_run_token(store, principal, body, need):
-    # router or an l1 of the item's project: the store decides which
+    # router or an l1 of the item's project: the store decides which.
+    # Role first (403); the store's project check follows the body reads.
+    store._require_role(principal, "router", "l1")
     return store.mint_run_token(principal, need(body, "key"),
                                 need(body, "role"), need(body, "run_id"))
 
@@ -252,14 +264,28 @@ def _worker_claim(store, principal, body, need):
     )
 
 
+def _requeue(store, principal, body, need):
+    store._require_role(principal, "router")   # role first (403)
+    return store.requeue(principal, need(body, "key"), body.get("reason", ""))
+
+
+def _log_item(store, principal, body, need):
+    store._require_role(principal, "router", "l1")   # role first (403)
+    return store.log_item(principal, need(body, "key"), body.get("entry"))
+
+
+def _rule_set(store, principal, body, need):
+    store._require_role(principal, "router")   # role first (403)
+    return store.rule_set(principal, need(body, "rules"))
+
+
 ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "replay": _replay,
                 "close_on_decision": _close_on_decision,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,
                 "set_kind": _set_kind,
-                "requeue": lambda store, principal, body, need: store.requeue(
-                    principal, need(body, "key"), body.get("reason", "")),
+                "requeue": _requeue,
                 "answer": _answer,
                 "rehome": _rehome,
                 "migrate_descriptions": _migrate_descriptions,
@@ -276,8 +302,6 @@ ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "phase_finish": _phase_finish,
                       "worker_claim": _worker_claim,
                       # PG-EFFICIENCY-GATES: router or the project L1 (store checks)
-                      "log_item": lambda store, principal, body, need: store.log_item(
-                          principal, need(body, "key"), body.get("entry")),
+                      "log_item": _log_item,
                       # PG-EFFICIENCY-GATES slice 2 (D-2746): router only (store checks)
-                      "rule_set": lambda store, principal, body, need: store.rule_set(
-                          principal, need(body, "rules"))}
+                      "rule_set": _rule_set}

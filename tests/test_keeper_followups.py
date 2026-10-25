@@ -217,7 +217,8 @@ import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 from plangraph.keeper import importer  # noqa: E402
-from plangraph.keeper.api_routes import ROUTER_VERBS, WRITE_VERBS  # noqa: E402
+from plangraph.keeper.api_routes import (ROLE_CHECKED_VERBS,  # noqa: E402
+                                         ROUTER_VERBS, WRITE_VERBS)
 from plangraph.keeper.store_create import KNOWN_ITEM_FIELDS  # noqa: E402
 
 DOCS = Path(__file__).resolve().parents[1] / "docs"
@@ -252,13 +253,23 @@ def test_allow_new_does_not_cover_items_other_ops_create(w):
 
 
 # mint_run_token is router-or-l1 (own project), covered in test_keeper_run_tokens*
+ROUTED_BODIES = [
+    # schema-messy: every field some routed verb reads, so only a strict-body
+    # (unexpected fields) check can stand between the caller and the verb
+    {"key": "demo:A", "batch_ref": "x", "state": "claimed", "ops": []},
+    # missing every required field: the role refusal must come first here too,
+    # never the route's required-field validation
+    {},
+]
+
+
+@pytest.mark.parametrize("body", ROUTED_BODIES)
 @pytest.mark.parametrize("verb", sorted(set(ROUTER_VERBS) - {"mint_run_token"}))
-def test_router_verbs_are_routed_writes(world, srv, verb):
+def test_router_verbs_are_routed_writes(world, srv, verb, body):
     assert verb in WRITE_VERBS
     import json
     import urllib.error
     import urllib.request
-    body = {"key": "demo:A", "batch_ref": "x", "state": "claimed", "ops": []}
     request = urllib.request.Request(
         f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(),
         method="POST", headers={"Authorization": f"Bearer {world.tokens['l1main']}",
@@ -266,6 +277,26 @@ def test_router_verbs_are_routed_writes(world, srv, verb):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(request, timeout=10)
     assert exc.value.code == 403   # routed to the verb, which refuses non-routers
+
+
+@pytest.mark.parametrize("body", ROUTED_BODIES)
+@pytest.mark.parametrize("verb", sorted(ROLE_CHECKED_VERBS))
+def test_role_checked_verbs_refuse_a_reader_before_the_body(world, srv, verb, body):
+    # the store names the roles these verbs admit (router, l1, system, spawner,
+    # worker); a reader is admitted by none of them, so the role refusal must
+    # precede any body-shape or required-field validation -- the same contract
+    # as the router verbs above (a bad body from the wrong role is 403, not 400)
+    assert verb in WRITE_VERBS
+    import json
+    import urllib.error
+    import urllib.request
+    request = urllib.request.Request(
+        f"{srv.base_url}/v1/{verb}", data=json.dumps(body).encode(),
+        method="POST", headers={"Authorization": f"Bearer {world.tokens['reader']}",
+                                "Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(request, timeout=10)
+    assert exc.value.code == 403   # routed to the verb, which refuses the role
 
 
 def test_known_item_fields_cover_every_items_column(w):
