@@ -251,10 +251,21 @@ fn with_exec(mut body: serde_json::Value, exec: &ExecId) -> serde_json::Value {
 pub struct HttpKeeper {
     base: String,
     agent: ureq::Agent,
-    /// Dedicated agent for card_state with strict connect and read deadlines.
-    card_state_agent: ureq::Agent,
+    /// Dedicated agent for reads (D5: used only by `card_state`) with strict
+    /// connect and read deadlines, so a hung keeper cannot hang a workflow.
+    read_agent: ureq::Agent,
     /// Bearer token the keeper requires on every verb; `None` sends none.
     token: Option<String>,
+}
+
+/// The deadline-bounded agent for reads. One home for its construction (D5):
+/// `new()` and [`HttpKeeper::with_read_deadlines`] must differ only in the
+/// deadlines they pass.
+fn read_agent(connect: Duration, read: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(connect)
+        .timeout_read(read)
+        .build()
 }
 
 impl HttpKeeper {
@@ -287,16 +298,19 @@ impl HttpKeeper {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(10))
             .build();
-        let card_state_agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(2))
-            .timeout_read(Duration::from_secs(5))
-            .build();
         HttpKeeper {
             base,
             agent,
-            card_state_agent,
+            read_agent: read_agent(Duration::from_secs(2), Duration::from_secs(5)),
             token: None,
         }
+    }
+
+    /// Override the read agent's connect/read deadlines (D5). `new()` keeps
+    /// the 2 s connect / 5 s read defaults.
+    pub fn with_read_deadlines(mut self, connect: Duration, read: Duration) -> Self {
+        self.read_agent = read_agent(connect, read);
+        self
     }
 
     /// Send `Authorization: Bearer <token>` on every request. An empty token
@@ -316,9 +330,9 @@ impl HttpKeeper {
     }
 
     /// A GET request to `url`, carrying the bearer token when one is set.
-    /// Uses `card_state_agent` with connect and read deadlines.
+    /// Uses `read_agent` with connect and read deadlines.
     fn get(&self, url: &str) -> ureq::Request {
-        let req = self.card_state_agent.get(url);
+        let req = self.read_agent.get(url);
         match &self.token {
             Some(t) => req.set("Authorization", &format!("Bearer {t}")),
             None => req,
@@ -1022,6 +1036,33 @@ mod tests {
 
         let (base, server) = serve_once(200, "OK", r#"{"key":"c-1"}"#);
         assert_eq!(HttpKeeper::new(&base).card_state("c-1"), Ok(None));
+        server.join().expect("server thread");
+    }
+
+    /// I5' / D5: the card_state read deadline is real. A server that accepts
+    /// and never answers is a hung read, not a slow one: at a 200 ms read
+    /// deadline the call returns Err within 1 s instead of blocking until the
+    /// peer happens to close. The server keeps the socket open past the
+    /// assertion window, so only the deadline can end the call.
+    #[test]
+    fn http_card_state_read_deadline_is_enforced() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("read local addr");
+        // Accept the request, then never write a byte back.
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().expect("accept one request");
+            std::thread::sleep(Duration::from_millis(2_500));
+        });
+        let keeper = HttpKeeper::new(&format!("http://{addr}"))
+            .with_read_deadlines(Duration::from_secs(2), Duration::from_millis(200));
+        let started = std::time::Instant::now();
+        let got = keeper.card_state("c-1");
+        let elapsed = started.elapsed();
+        assert!(got.is_err(), "a silent server must not read as Ok: {got:?}");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "read deadline ignored: {elapsed:?}"
+        );
         server.join().expect("server thread");
     }
 
