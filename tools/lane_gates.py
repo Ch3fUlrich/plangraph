@@ -98,18 +98,13 @@ def seats(paths):
     for path in paths:
         try:
             p = Path(path)
-            file_path = p / "stdout.log" if p.is_dir() else p
-            res_file = (p if p.is_dir() else p.parent) / "result.json"
-            stem = p.name if p.is_dir() else p.stem
-            raw = file_path.read_text("utf-8", "replace")
-            if res_file.is_file():
-                try:
-                    meta = json.loads(res_file.read_text("utf-8"))
-                except Exception:
-                    meta = None
+            fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
+            raw = fp.read_text("utf-8", "replace")
+            if res.is_file():
+                try: meta = json.loads(res.read_text("utf-8"))
+                except Exception: meta = None
                 outputs[stem] = (raw, meta if isinstance(meta, dict) else None)
-            else:
-                outputs[stem] = raw
+            else: outputs[stem] = raw
         except OSError as exc:
             print(f"lane-gates: seats: cannot read {path}: {type(exc).__name__}", file=sys.stderr)
             return 2

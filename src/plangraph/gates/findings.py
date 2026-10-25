@@ -140,12 +140,9 @@ def blocking(findings):
 
 def failure_reason(text, status=None, is_error=False, exit_class=None, liveness=None, output_cut=False):
     """Why a seat reply carries no verdict (re-run it), or ``None``."""
-    if liveness:
-        return f"run liveness {liveness}"
-    if exit_class == "cancelled":
-        return "run cancelled"
-    if output_cut:
-        return "output cut"
+    if liveness: return f"run liveness {liveness}"
+    if exit_class == "cancelled": return "run cancelled"
+    if output_cut: return "output cut"
     if status is not None and status not in ("completed", "succeeded", "ok", "stop", "end_turn"):
         return f"seat run {status}"
     if is_error:
@@ -197,10 +194,8 @@ def first_review(outputs, need=FIRST_REVIEW_SEATS):
     reasons, outcomes = [], []
     for seat, item in outputs.items():
         if isinstance(item, tuple) and len(item) == 2 and isinstance(item[1], dict):
-            r = item[1]
-            outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat,
-                                              exit_class=r.get("exit_class"), liveness=r.get("liveness"),
-                                              output_cut=bool(r.get("output_cut", False)))
+            r = item[1]; outcome, reason, _ = seat_outcome(item[0], status=r.get("status"), seat=seat,
+                exit_class=r.get("exit_class"), liveness=r.get("liveness"), output_cut=bool(r.get("output_cut", False)))
         elif isinstance(item, tuple):
             outcome, reason = None, "unreadable result.json"
         else:
@@ -218,10 +213,8 @@ def findings_from_files(paths, card=None, seat_classes=None):
     for path in paths:
         p = Path(path)
         fp, res, stem = (p / "stdout.log", p / "result.json", p.name) if p.is_dir() else (p, p.parent / "result.json", p.stem)
-        try:
-            meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
-        except (OSError, ValueError):
-            meta = None
+        try: meta = json.loads(res.read_text("utf-8")) if res.is_file() else classes.get(stem)
+        except (OSError, ValueError): meta = None
         if not isinstance(meta, dict) and (meta is not None or res.is_file()):
             continue  # I16: unreadable or non-dict result.json refuses the seat
         if meta and (meta.get("liveness") or meta.get("exit_class") == "cancelled" or meta.get("output_cut") or meta.get("status") not in (None, "completed")):
