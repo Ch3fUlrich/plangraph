@@ -1,7 +1,7 @@
 # build-L1 card · gen-28 · 2026-10-24 10:5xZ · NO cron · hb loop = jobs/6931599d/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
 D-2534 PHASE-BATCH: new phase work = all tasks merged onto phase/<key> (green CI, no per-task seats), ONE review round over phase diff (HIGH=2 families), one fixer brief, <=3 rounds, one phase PR + GO-REQ; in-flight seated items keep seats. Cheapest capable models.
 D-2643 BATCH REVIEW (supersedes per-W seats): writers in parallel by file group, gate = affected tests + CI only; ONE review over the whole collected delta at the end. D-2626 affected tests only, full suite at main merge; >10 findings split by file. D-2539/2540 seat families still apply to the final review.
-INCIDENT 03:52Z: cx quota exhausted all codex accounts (reset ~134h); writers -> mimo (D-2665); routing+L2s told. Lesson: hung cx writer silent 2.5h, needs quota detect.
+INCIDENT 03:52Z cx quota ~134h. Writers D-2684: gemini > mimo-pro > OR free/opencode free > mimo-flash. #177 PG-PUBLIC MERGED ec69660a in_review (cut = OS-PG-PUBLIC-CUT). AutoOS ff d386df2e (D-2673). ROUTER-LIVENESS generic in plangraph lane/liveness-watchdog (D-2682); watchdog principal prepared briefs/lanes-d2657/watchdog-principal.md, role leaf asked. Hardening 7f1acb54 pushed, 7001 pass, seats running.
 Handoff = status/build-L1.handoff.md (gen-27 -> gen-28). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
 Writers (D-2569): cx/gpt-6.1-sol on workst (inline briefs); cx 429/cooldown -> agy/gemini-3.8-flash > mimo/mimo-v2.6-flash; probe first, record skips; gemini writer = no google seat (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats ONLY via spawner AutoOS main>=5ce05dd9 (workst C:\fleet\wt\ao-lessons-b1\tools\autoos-agent.py), never C:\fleet\clones\AutoOS or bare opencode run (D-2552). qodercli Efficient = qwen (D-1714). deepseek-direct 402 on workst.
@@ -10,7 +10,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | Item | Owner | State / next |
 |---|---|---|
 | KG-LINK-REPAIR | L1 | #178 MERGED 4608fd3f, in_review |
-| KEEPER-SEAT-FAMILY-WRITER (HIGH) | L1 mimo | r2 763c1f57 pushed; qwen delta HIGH (accept seat by writer family) -> r3 (cx hung on quota) respawned mimo; seats exclude openai+xiaomi |
+| KEEPER-SEAT-FAMILY-WRITER | L1 | #182 MERGED 3857ed0b (D-2672), in_review |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
 | RT-P1-PHASE-RUNNER (HIGH) | DONE | #163 a6587b14 + #167 S4 09f67846 (GO D-2571), keeper done 2/2 (alibaba+google seats/phase-runner-s4). L2 stopped. Follow-up PHASE-HOLDER-EXEC-GATE-ONCE p3 (gates HARDEN) |
 | PG-PUBLIC-READY #162 (HIGH) | L1 | MERGED 5bb75e5f (D-2577), main CI green, commit+ci attached; NOT submitted: D-2579 rewrite AFTER PH-MODEL-ROUTE, one announced window + private bundle of old history, then submit + qwen(r8)/gemini(r9,r10) verdicts |
