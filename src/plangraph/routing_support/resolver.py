@@ -521,6 +521,11 @@ async def plan_for_launch_async(plan, *, dry_run=False, probe=None, env=None):
     return await asyncio.to_thread(plan_for_launch, plan, dry_run=dry_run, probe=probe, env=env)
 
 
+def admitted_by_render(model):
+    """A spawner-rendered mimo provider model, admitted without the keyless listing (gateway 401; D-2868/D-2869)."""
+    return str(model or '').split('#', 1)[0] in ACCEPTED_MIMO_IDS
+
+
 def host_skip_reason(row, *, probe=None, env=None):
     harness = row.get('harness')
     if harness in ('agy', 'qodercli'):
@@ -545,8 +550,7 @@ def host_skip_reason(row, *, probe=None, env=None):
         entry = cfg.get('providers', {}).get(provider, {}).get('models', {}).get(name, {})
         if isinstance(entry, dict) and (entry.get('combo') or entry.get('alias')):
             return None
-        # The rendered mimo gateway provider is served by the gateway; the keyless probe gets 401 (D-2868).
-        if provider == 'mimo' and model.split('#', 1)[0] in ACCEPTED_MIMO_IDS:
+        if admitted_by_render(model):
             return None
     except (ValueError, AttributeError, TypeError):
         pass

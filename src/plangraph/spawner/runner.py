@@ -344,6 +344,9 @@ class SpawnerRunner:
                 job.stderr = unavailable
                 job.end_time = time.time()
                 return job
+            from .resolver import admitted_by_render
+            if admitted_by_render(model_or_combo):  # trace a later launch failure to D-2869
+                job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
             resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
