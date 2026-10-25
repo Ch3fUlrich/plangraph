@@ -48,10 +48,11 @@ FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
 _LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
 # [*_`]* before/after the word: markdown-bold labels like **MED**: or
 # _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
+# A blocking word before a dash ("HIGH - y") counts too: the relaxation fails closed.
 _BLOCKING_LABEL = re.compile(
-    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*[:(]", re.I)
+    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*(?:[:(]|[-–—]\s)", re.I)
 _LOW_LABEL = re.compile(
-    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*\s*[:(]", re.I)
+    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 # first word, ended by end/space/punctuation and NOT followed by "|" or "/"
 # (that would be an echoed "pass | fix | halt" template, not a decision)
