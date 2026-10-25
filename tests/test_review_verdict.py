@@ -210,6 +210,12 @@ LOW_SEVERITY_TABLE = [
     ("VERDICT: pass", "pass", False),
     ("VERDICT: fix - LOW: x\nVERDICT: fix - MED: y", "fix", False),
     ("VERDICT: pass | fix - LOW", None, False),
+    # markdown-bold/emphasised/code severity labels (F1)
+    ("VERDICT: fix - LOW: a; **MED**: b", "fix", False),
+    ("VERDICT: fix - **LOW**: a", "pass", True),
+    ("VERDICT: fix - `HIGH`: a; LOW: b", "fix", False),
+    ("VERDICT: fix - _Medium_ (b); low: a", "fix", False),
+    ("VERDICT: fix - **low** (a)", "pass", True),
     (
         "VERDICT: fix - LOW: CHANGELOG.md D-2773 entry still says \"admitted in batch by design\", "
         "contradicting the updated docs/REVIEW-METHOD.md (\"admitted in any mode\"). "
