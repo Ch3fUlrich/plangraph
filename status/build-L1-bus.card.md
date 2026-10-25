@@ -15,7 +15,7 @@ UNPARKED D-2657 ~23:2xZ. Phase @66d3cad6 (main 748fe7f3 + EOS + DISCOVERY + KEEP
 | BUS-WAKE-STOPGAP-2 | claimed; D-2539 hold, close superseded when BUS-WAKE lands |
 | RT-P1-BUS-RUST (p6) | deps CI-WORKST-RUNNER(in_review), OCGO-BUS-INBOUND(open) |
 | RT-P1-BUS-DISCOVERY (p6) | IN PHASE: #168 merged 5c741554 (head e6bd35f1, CI 40141473514 green, writer cx) |
-| BUS-ANY-AGENT-CLI (HIGH p10) | W2 writer brief sent 00:0xZ lane/bus-any-agent-cli; claim refused same; prod round trip after W1+W2, relay :58690 UP (unsupervised; workst GO-REQ for supervised restart, FLEET-BUS-RELAY-RESTORE claimed by workst) |
+| BUS-ANY-AGENT-CLI (HIGH p10) | split 02:3xZ: W2a lane/bus-msg-envelope (keeper sig/nonce/msg_id, schema v15) || W2b lane/bus-any-agent-cli (client, spool, shims, MCP, WakeHook); W2a merges first. Relay :58690 up (unsupervised). Then prod round trip |
 | D-2666 routerctl relay '!' | DONE routing#2 merged fc917840; qwen pass (seats routing2-5886eb8c); DONE sent routing (local routing session gone 01:xxZ, queued to RC routing) |
 | EXEC-PHASE-LEASE (p8) | dep #140 RT-P1-EXEC-OWNERSHIP in_review (verdict pending) |
 07:55Z workst-L1-autoos writing DIRECT (no L2): lane/rt-p1-bus-keeper + lane/exec-observed-state (cx 429 -> mimo/mimo-v2.6-flash, runs 20261024-075304-rt-p1-bus-keeper-a514ed, 20261024-075350-exec-observed-state-86cb4f). Writer families so far: xiaomi (+openai if cx later) -> phase seats Haiku + qwen. Queue: QC A-E in free slots; after KEEPER merge WAKE || DISCOVERY -> ANY-AGENT-CLI. Workst opencode mass-kill 07:20Z (routing informed).
