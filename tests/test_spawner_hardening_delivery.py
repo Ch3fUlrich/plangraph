@@ -37,10 +37,11 @@ def test_signed_numeric_env_values_are_not_secrets():
 
 
 def test_keeper_sink_requires_explicit_identity():
-    from plangraph.spawner.notify import KeeperSink
+    from plangraph.spawner.notify import KeeperSink, KeeperNotConfigured
     try:
         KeeperSink(url='', token_file='').deliver('keeper', {})
     except ValueError as exc:
+        assert isinstance(exc, KeeperNotConfigured)
         assert 'PG_URL' in str(exc) and 'PG_TOKEN_FILE' in str(exc)
     else:
         raise AssertionError('missing keeper identity accepted')
@@ -148,3 +149,93 @@ def test_keeper_redirect_is_never_an_acknowledgement(tmp_path, monkeypatch):
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, caplog):
+    """Three terminal records without keeper token log exactly one warning without traceback."""
+    import logging
+    import time
+    import urllib.request
+    from plangraph.spawner import runner
+    from plangraph.spawner.runner import SpawnerRunner, spawn_service
+    from plangraph.spawner import stall_watchdog as w
+
+    monkeypatch.delenv('PG_URL', raising=False)
+    monkeypatch.delenv('PG_TOKEN_FILE', raising=False)
+    monkeypatch.setattr(runner, '_keeper_unconfigured_warned', False)
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
+    caplog.set_level(logging.WARNING)
+
+    service = spawn_service(runner=SpawnerRunner(), state=tmp_path)
+    run_ids = ['run-t1', 'run-t2', 'run-t3']
+    for run_id in run_ids:
+        rec = dict(run_id=run_id, status='completed', exit_code=0,
+                   role='implement', attempts=[], started=time.time(),
+                   ended=time.time(), stdout_tail='', stderr_tail='',
+                   item='plangraph:STALL-WD-DELIVERY-QUIET')
+        service._save(rec)
+
+    # a. three terminal records, KeeperSink without token -> exactly one warning record logged (caplog),
+    #    no record with exc_info, no keeper.delivered marker.
+    warnings = [r for r in caplog.records if r.levelname == 'WARNING']
+    assert len(warnings) == 1
+    assert 'completion delivery skipped: keeper not configured (queued)' in warnings[0].message
+    assert not any(r.exc_info for r in caplog.records)
+    for run_id in run_ids:
+        run_dir = tmp_path / 'runs' / run_id
+        assert (run_dir / 'parent.delivered').exists()
+        assert not (run_dir / 'keeper.delivered').exists()
+
+    # Retry or watchdog tick re-checks pending records without logging new warnings or tracebacks
+    monkeypatch.setattr(w, 'read_claims', lambda: [])
+    monkeypatch.setattr(w, 'read_activity', lambda state, s: None)
+    w.main(['tick'])
+    warnings = [r for r in caplog.records if r.levelname == 'WARNING']
+    assert len(warnings) == 1
+    assert not any(r.exc_info for r in caplog.records)
+    for run_id in run_ids:
+        assert not (tmp_path / 'runs' / run_id / 'keeper.delivered').exists()
+
+    # b. after setting a token file + url with a fake/stub delivery (monkeypatch the HTTP call the sink makes)
+    #    the next _save/tick delivers and writes the marker.
+    token_file = tmp_path / 'token'
+    token_file.write_text('test-token', encoding='utf-8')
+    monkeypatch.setenv('PG_URL', 'http://127.0.0.1:9090')
+    monkeypatch.setenv('PG_TOKEN_FILE', str(token_file))
+
+    delivered = []
+    class StubResponse:
+        status = 200
+        def read(self):
+            return b'{}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def stub_open(self, request, *args, **kwargs):
+        delivered.append(request)
+        return StubResponse()
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, 'open', stub_open)
+
+    # Next watchdog tick delivers completions and writes keeper.delivered
+    w.main(['tick'])
+
+    for run_id in run_ids:
+        assert (tmp_path / 'runs' / run_id / 'keeper.delivered').read_text() == 'delivered\n'
+    assert len(delivered) == 3
+
+    # Subsequent tick does not re-deliver
+    w.main(['tick'])
+    assert len(delivered) == 3
+
+    # Direct _save also delivers immediately when configured
+    rec4 = dict(run_id='run-t4', status='completed', exit_code=0,
+                role='implement', attempts=[], started=time.time(),
+                ended=time.time(), stdout_tail='', stderr_tail='',
+                item='plangraph:STALL-WD-DELIVERY-QUIET')
+    spawn_service(runner=SpawnerRunner(), state=tmp_path)._save(rec4)
+    assert (tmp_path / 'runs' / 'run-t4' / 'keeper.delivered').read_text() == 'delivered\n'
+    assert len(delivered) == 4
+

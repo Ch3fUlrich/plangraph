@@ -30,6 +30,8 @@ from plangraph.spawner.mimo_policy import check_mimo_path
 _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
 
+_keeper_unconfigured_warned = False
+
 
 from .env_redact import unavailable_reason
 
@@ -531,7 +533,7 @@ def spawn_service(*args, **kwargs):
             self.keeper_sink = keeper_sink or KeeperSink()
 
         def _save(self, record, *, retry=False):
-            from .notify import completion_event, CommandSink
+            from .notify import completion_event, CommandSink, KeeperNotConfigured
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 for stream in ('stdout', 'stderr'):
@@ -560,6 +562,11 @@ def spawn_service(*args, **kwargs):
                         sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'delivered\n')
+                    except KeeperNotConfigured:
+                        global _keeper_unconfigured_warned
+                        if not _keeper_unconfigured_warned:
+                            _keeper_unconfigured_warned = True
+                            logging.getLogger(__name__).warning('completion delivery skipped: keeper not configured (queued)')
                     except Exception:
                         logging.getLogger(__name__).exception('completion delivery failed: %s', recipient)
                 command = os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD')

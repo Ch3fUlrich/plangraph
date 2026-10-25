@@ -80,6 +80,10 @@ class CommandSink:
                        text=True, check=True, timeout=10, stdout=subprocess.DEVNULL)
 
 
+class KeeperNotConfigured(ValueError):
+    """Raised when live keeper delivery is unconfigured."""
+
+
 class KeeperSink:
     """Deliver through the keeper's idempotent run_recorded item-event API.
 
@@ -92,7 +96,7 @@ class KeeperSink:
 
     def deliver(self, recipient, event):
         if not self.url or not self.token_file:
-            raise ValueError('live keeper delivery requires PG_URL and PG_TOKEN_FILE (spawner identity)')
+            raise KeeperNotConfigured('live keeper delivery requires PG_URL and PG_TOKEN_FILE (spawner identity)')
         if not event.get('item'):
             raise ValueError('live keeper delivery requires PLANGRAPH_SPAWN_ITEM or record item')
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
