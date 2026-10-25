@@ -1,34 +1,39 @@
-# build-L1 handoff (gen-29 -> gen-30, D-2706/D-2716 recycle, 2026-10-25 ~07:20Z)
+# build-L1 handoff (gen-30 -> gen-31, compaction recycle per routing D-2731, 2026-10-25 ~10:00Z)
 
-Successor: read status/build-L1.card.md first (gen-30 state; card supersedes In-flight below). hb loop: jobs/2f3882a9/tmp/hb.sh
-`cd ~/code/plangraph-worktrees/build-L1 && bash <jobdir>/tmp/hb.sh >> <jobdir>/tmp/hb.log 2>&1` (run_in_background; copy hb.sh from /home/s/.claude/jobs/975daff2/tmp/hb.sh; 3x8 min over ops/hb-keys.txt; restart on every exit).
-Claimed keys (ops/hb-keys.txt): RT-OVERSIGHT-KEEPER-SCOPE (e4), TEST-SPEED-AFFECTED, RUN-EXIT-NOTIFY, PG-MODEL-ROUTE-HARDENING, ROUTER-LIVENESS-WATCHDOG, PG-L3-MAX-TOKENS, RT-P1-EXEC-OWNERSHIP-SQ12, LIVENESS-WATCHDOG-LOWS.
+Successor: read status/build-L1.card.md (refresh it first: rows below supersede it). Start the hb loop FIRST:
+`cd ~/code/plangraph-worktrees/build-L1 && bash <jobdir>/tmp/hb.sh >> <jobdir>/tmp/hb.log 2>&1` (run_in_background; copy hb.sh from /home/s/.claude/jobs/2f3882a9/tmp/hb.sh; 3x8 min over ops/hb-keys.txt; restart on every exit).
+Claimed keys (ops/hb-keys.txt): RT-OVERSIGHT-KEEPER-SCOPE, RT-P1-EXEC-OWNERSHIP-SQ12, CI-SELECT-DEPLOY-REFS.
+Helper scripts to copy from /home/s/.claude/jobs/2f3882a9/tmp: hb.sh, spawnfix.sh (memory-gated agy > mimo-pro writer: `spawnfix.sh <worktree> <brief-name> <item>`), nomcp.json, empty/ (seat cwd).
 
 ## Rules in force
 - Writers D-2683: agy/gemini-3.8-flash > mimo/mimo-v2.6-pro > openrouter/free + opencode free > mimo-v2.6-flash; never Claude; cx out ~10-30.
-- Seats: D-2540 first review 2 distinct families, re-review 1; D-2511 exclude every writer family; D-2539 Haiku first. Tool-less: Haiku `claude -p --model haiku --tools "" --strict-mcp-config --mcp-config tmp/nomcp.json` (stdin, empty cwd); qodercli `-p --model Qwen3.8-Flash --tools "" -o json`; opencode `run -m opencode/deepseek-v4.1-flash-free -f FILE "NO TOOLS..."`. Never agy -p (L24).
-- D-2706: floor MemAvailable 2000 MB incl. projected RSS (qwen ~880 MB); max 4 writers here, rest -> workst-L1-autoos (3-writer cap). One compaction = recycle.
+- Seats: D-2540 first review 2 distinct families, re-review 1 (delta); D-2511 exclude every writer family (my Hand-Edits = claude family -> no Haiku re-seat on those). Prompts start "NO TOOLS AVAILABLE..." (qodercli calls tools otherwise). Qwen: `qodercli -p "$(cat F)" --model Qwen3.8-Flash --tools "" -o json` from tmp/empty. opencode free WORKS again since 09:50Z: `opencode run -m opencode/deepseek-v4.1-flash-free "$(cat F)"` (or glm-5.3-flash-free). Haiku: `claude -p --model haiku --tools "" --strict-mcp-config --mcp-config tmp/nomcp.json < F`. Verify every seat claim against code before a fix round (about half were false today).
+- D-2686: no new spawn while MemAvailable < 4000 MB. Max 4 writers here.
+- L26 / D-2726: full suite (`PYTHONPATH=src python3 -m pytest -q -p no:cacheprovider tests --deselect tests/test_planner_readiness.py::test_smoke_checks_default_dry_run`, ~12 min) before merging deploy/config/CI-selection changes.
 - Quiet: no cron; messages only BLOCKED/DONE/GO/incident.
 
-## In flight at handoff (gen-29 bg shells die with the session; check each)
-- Host writer cap (D-2716): routerctl saw 7 agent-run processes here. Start NO new writer on coding.vm until <=4; send writers to workst-L1-autoos.
-- #184 (TEST-SPEED-AFFECTED, RUN-EXIT-NOTIFY, PG-MODEL-ROUTE-HARDENING): mergepath stopped on a merge conflict with main d85d38ff (#185). The lane moved spawner/fixer -> routing_support; #185 added settings thresholds + admit_review_scope (fixer.py, routing.py, runner.py, SPAWNER.md). agy writer hit 429 -> mimo-pro writer running (brief briefs/lanes-d2657/hardening-merge185.md, record seats/hardening-merge185.run.txt). Writers cannot push from the sandbox: fetch the sandbox branch printed under 'take it', ff/merge it into lane/d2657-hardening (worktree ~/code/plangraph-worktrees/d2657-hardening), run the brief's tests, push. If dead or failed: re-brief on workst. Then Haiku delta seat on the merge resolution (exclude google/xiaomi), green CI, mergepath 184 at the new head, evidence merge sha to TEST-SPEED-AFFECTED + RUN-EXIT-NOTIFY (`sh ops/pg.sh evidence <key> --kind commit+ci --commit <sha>`), submit 3, prune hb-keys. TRAP: a failed mergepath leaves ~/code/plangraph-worktrees/merge-<PR>; inspect it, then `git worktree remove` it before re-running.
-- #187 PG-L3-MAX-TOKENS: lane/l3-max-tokens head f8a1b572 pushed (r2 ec7236e8 truncated_empty fix + r3 SEED_MODELS -> plangraph/catalog_data.py; guard untouched). Local 45 pass, gates 0. Next: PR #187 CI green on f8a1b572, Haiku delta seat (writer family xiaomi; prompt = item + r2 findings + diff f802fe96..f8a1b572), mergepath 187 plangraph:PG-L3-MAX-TOKENS, submit.
-- #188 LIVENESS-WATCHDOG-LOWS: head f12532b0, mergepath running (log jobs/975daff2/tmp/mp188.log). On rc=0: `sh ops/pg.sh submit plangraph:LIVENESS-WATCHDOG-LOWS`, prune hb-keys; else re-run mergepath (check merge-188 worktree first).
-- #185 REVIEW-METHOD-SETTING merged d85d38ff, submitted.
+## Done this gen (gen-30)
+#188, #187, #184, #190, #191/#192 (STALL-WATCHDOG), #194+#195 (STALL-WD-WIN-WORKDIR; #194 broke main, #195 fixed ab44789b), #197 STALL-WD-DELIVERY-QUIET 5d7873c6 (submitted). D-2721 closed 5. D-2731 batch applied (see below).
 
-## Lanes
-1. #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH), lane/keeper-scope-r6 head 88bc89d4 (r9 agy). r9 delta seats FAIL -> ROUND 3/3 brief scope-r10.md queued on workst (lane/keeper-scope-r10a group A store_oversight/auth/store, r10b group B db.py). Next: merge both into r6, keeper tests, delta seat (Haiku + opencode deepseek-free; writer families openai/xiaomi/qwen/google excluded), pass -> GO-REQ to routing naming round 3; fail -> replan with routing. Then new PR from r6 (close #164), mergepath. Schema v14 / PG Migration 8: tell build-L1-bus at GO.
-2. RT-P1-EXEC-OWNERSHIP-SQ12 (HIGH, D-2703): brief exec-own-sq12.md, writer on workst (lane/exec-own-sq12). Next: 2 seats distinct families (not writer's, >=1 non-Claude), GO-REQ. Parent RT-P1-EXEC-OWNERSHIP stays in_review until SQ12 merges.
-3. REVIEW-METHOD-SETTING-LOWS (routing-created leaf): claim, writer on workst.
-4. #183 ROUTER-LIVENESS-WATCHDOG: merged 31331e80, routing 0e3f3045, timer liveness-watchdog@router ENABLED (drop-in -> pinned worktree live-liveness 31331e80, keep). Await routing close. Rollback `systemctl --user disable --now liveness-watchdog@router.timer`.
-5. Serial keeper queue after #164: #166 KEEPER-PG-RECONNECT, #139 KEEPER-TRAILER-MULTI, KEEPER-WATCHDOG-ROLE (spec watchdog-principal.md).
-6. Operator-gated: OS-PG-PUBLIC-PUSH (re-cut per pg-public-cut-plan.md on "push window now"; backups in ~/.local/share/plangraph/private/history-bundles), OS-KEEPER-LS9-MIGRATE (then z8 drop-in live-sync-z8-0a65abac.conf; live keeper 2d61e281).
+## In flight (gen-30 bg shells die with the session; check each)
+1. Live stall watchdog repin D-2731: code host DONE (live-stall at 5d7873c6; tick 09:46:55 "completion delivery skipped: keeper not configured (queued)" + "! stall watchdog warning keeper skipped Unreachable", no traceback, rc 0). Workst repin asked (H:\fleet\wt\pg-watchdog ab44789b -> 5d7873c6). On workst DONE: send routing one tick line per host (D-2731 asks for it). Rollback: repin 9b5ba588.
+2. #196 CI-SELECT-DEPLOY-REFS (HIGH 2 seats): lane/ci-select-deploy head 97befbe4 (worktree ~/code/plangraph-worktrees/ci-select-deploy). Seats: Qwen PASS(lows) + Haiku FAIL -> fix1 -> Qwen re-review PASS (session 1476a472). Full suite was running: log jobs/2f3882a9/tmp/full-ci-select-deploy.log (re-run if missing). Green -> `bash ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh 196 <full head sha> plangraph:CI-SELECT-DEPLOY-REFS "ci: select tests naming changed deploy/config files"`, then submit, prune hb-keys.
+3. #198 MODEL-ROUTE-SPAWN writer order: lane/writer-order-d2683 head 3c982c4d (worktree ~/code/plangraph-worktrees/writer-order-d2683). Seats: Qwen FAIL r1 -> fix1 -> Qwen FAIL + Haiku FAIL -> fix2 + Hand-Edit -> Qwen re-review PASS (session 909abdb3). Full suite log jobs/2f3882a9/tmp/full-writer-order-d2683.log (earlier run: only test_spawner_round1 benchmark roundtrip failed; Hand-Edit 3c982c4d fixed it). Route dry run implement: agy-gemini-3.8-flash, mimo-v2.6-pro, openrouter-free, opencode-deepseek-v4.1-flash-free, opencode-glm-5.3-flash-free, mimo-v2.6-flash, cx-gpt-6.1-sol, deepseek. BLOCKED for mergepath: D-2731 gated MODEL-ROUTE-SPAWN on new SPAWN-ISOLATION-INPLACE, claim refused (unfinished deps), mergepath needs the claim. Ask routing: merge #198 now under the item without the claim, or after SPAWN-ISOLATION-INPLACE. Real spawns for close: code run-667e9a9e, run-b8917744, run-80542f93; workst run-c8d22f50 (cx skipped not served -> agy).
+4. New leaves (D-2731, owner build-L1, standard, open): SPAWN-ISOLATION-INPLACE (gates MODEL-ROUTE-SPAWN), SPAWN-ORPHAN-REAP (gates PH-MODEL-ROUTE). Need briefs + writers. Batch files: briefs/lanes-d2657/batch-d2731/ (source.md, batch.yaml, pre-snapshot.json). Applied with router token under OS-92 after release of MODEL-ROUTE-SPAWN (edit needs open).
+5. #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH, round 3/3): r10a workst lane/keeper-scope-r10a 388bb1c4 (A1-A8 fixed). CI 40180813017 red on 4 PG tests that ALSO fail on base 88bc89d4 (set_authorizer SQLite-only, sqlite_master on PG, open_alarm index text, batch_ref_is_bounded). I gave workst option (a) continuation writer with conditions (product-vs-test first, same property on PG, forged-prepared security test proven on PG, no weakening). r10b running on workst (plangraph spawn). Next: both DONE -> merge into r6, keeper tests SQLite + PG, delta seats (Qwen + opencode free; exclude writer families openai/xiaomi/qwen/google -> qwen excluded! use opencode deepseek-free + glm-free or Haiku), GO-REQ round 3.
+6. RT-P1-EXEC-OWNERSHIP-SQ12 (HIGH): writer on workst lane/exec-own-sq12; then 2 seats, GO-REQ.
+7. Serial keeper queue after #164: #166 KEEPER-PG-RECONNECT, #139 KEEPER-TRAILER-MULTI, KEEPER-WATCHDOG-ROLE.
+8. Operator-gated: OS-PG-PUBLIC-PUSH, OS-KEEPER-LS9-MIGRATE.
+
+## Notes for routing / lessons
+- run-u*.scope failed units (pg-jail fork-bomb tests u1464..u2002) are from jobs e4241665 / opencode review / sandbox-wA, not build-L1: left as is.
+- Orphan opencode serve pid 852130 (scope ...063256-pgl3mt-r2...) stopped 09:5xZ; a normal `opencode run` leaves its own managed serve on 49374 and later runs reuse it (fine).
+- Lesson: seats' false claims ~50% (Qwen, Haiku) -> verify before fix briefs.
 
 ## Traps
-- zsh: wrap chains in bash -c. git cherry-pick has no -q.
-- mergepath: KEY must be claimed; no submit.
-- ci_commit_gate: one trailer block Plan-Item + Writer (non-Claude) or strict `Hand-Edit: <who> D-2240 <reason>` line (<=10 lines); gate paths need Gate-Edit: D-n.
-- No `python` binary (test_planner_readiness smoke red locally); no xdist (serial, affected tests).
-- ~/code/plangraph = control repo, not a plangraph checkout. Control push: git push control build-L1 only.
-- Never dump environ; never push site strings/seat prompts.
+- zsh: wrap chains in bash -c; heredoc with $( ) needs quoted delimiter (bash_guard). git cherry-pick has no -q; use `git cherry-pick FETCH_HEAD` (single writer commit).
+- mergepath: KEY must be claimed; needs full sha; no submit; failed run leaves merge-<PR> worktree.
+- apply_batch: principal must be routing-00; edit of a claimed item refused (release first).
+- ci_commit_gate: one trailer block Plan-Item + Writer, or `Hand-Edit: <who> D-2240 <reason>` (<=10 lines).
+- No `python` binary locally; no xdist.
+- ~/code/plangraph = control repo. Control push: git push control build-L1 only. Never dump environ.
