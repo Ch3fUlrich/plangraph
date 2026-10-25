@@ -167,13 +167,15 @@ pub trait Keeper: Send + Sync {
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError>;
     /// The card's state as the keeper holds it right now: the observation a
     /// park CAS presents (EXEC-OBSERVED-STATE), read by the workflow's `observe`
-    /// activity at decision time and carried in the `park` input. Best effort by
-    /// design -- `None` means "observed nothing" (an unreachable keeper, an
-    /// older keeper, an unreadable or oversized body (G3-5), a read past its
-    /// 5 s timeout (G3-4)), and the caller then falls back to
-    /// [`WORKER_LIVE_STATES`] instead of failing the call. Blocking (ureq): call
-    /// it from `spawn_blocking`, never on a tokio worker thread (G3-4).
-    fn card_state(&self, card: &str) -> Option<String>;
+    /// activity at decision time and carried in the `park` input. `Ok(None)`
+    /// means "observed nothing" (an older keeper, a body with no state) and the
+    /// caller then falls back to [`WORKER_LIVE_STATES`] instead of failing the
+    /// call. A read failure is visible (D1a) as `Err` -- HTTP non-2xx
+    /// [`KeeperError::Status`], transport [`KeeperError::Http`], an oversized
+    /// or undecodable body [`KeeperError::Decode`] (G3-5) -- so a later slice
+    /// can retry it server-side before any degrade. Blocking (ureq): call it
+    /// from `spawn_blocking`, never on a tokio worker thread (G3-4).
+    fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError>;
     /// Claim one named card for the phase runner; `None` means the keeper has nothing for it (not ready / taken).
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError>;
     /// Read-only plan of phase `key`; the keeper never writes for it.
@@ -358,33 +360,41 @@ impl HttpKeeper {
 
 /// Largest `GET /v1/show` body the worker buffers for a card-state observation
 /// (G3-5): the show JSON is a few hundred bytes, so anything past this cap is
-/// answered `None` ("observed nothing") instead of being read whole.
+/// refused as [`KeeperError::Decode`] (D1a) instead of being read whole.
 const CARD_STATE_MAX_BODY: u64 = 64 * 1024;
 
 impl Keeper for HttpKeeper {
-    fn card_state(&self, card: &str) -> Option<String> {
-        // `fmt=json`: `show` defaults to its text form. Anything this read
-        // cannot answer is "observed nothing" -- the live-set fallback stands.
+    /// D1a: a read failure is visible as an error -- non-2xx [`KeeperError::Status`],
+    /// transport [`KeeperError::Http`], an oversized or undecodable body
+    /// [`KeeperError::Decode`] -- so it can be retried before any degrade.
+    fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError> {
+        // `fmt=json`: `show` defaults to its text form. Only a 2xx that carries
+        // a state is an observation (`Ok(None)` is absence, not failure).
         let path = format!("/v1/show?key={}&fmt=json", encode_segment(card));
         let resp = match self.get(&self.url(&path)).call() {
-            Ok(resp) if resp.status() == 200 => resp,
-            Ok(_) | Err(_) => return None,
+            Ok(resp) if (200..300).contains(&resp.status()) => resp,
+            Ok(resp) => return Err(KeeperError::Status(resp.status())),
+            Err(ureq::Error::Status(code, _)) => return Err(KeeperError::Status(code)),
+            Err(e) => return Err(KeeperError::Http(e.to_string())),
         };
         // G3-5: buffer at most CARD_STATE_MAX_BODY + 1 bytes; a larger body is
-        // refused as unreadable instead of being buffered whole.
+        // refused as undecodable (D1a) instead of being buffered whole.
         let mut buf = Vec::new();
         resp.into_reader()
             .take(CARD_STATE_MAX_BODY + 1)
             .read_to_end(&mut buf)
-            .ok()?;
+            .map_err(|e| KeeperError::Http(e.to_string()))?;
         if buf.len() as u64 > CARD_STATE_MAX_BODY {
-            return None;
+            return Err(KeeperError::Decode(format!(
+                "show body exceeds {CARD_STATE_MAX_BODY} bytes"
+            )));
         }
-        let value: serde_json::Value = serde_json::from_slice(&buf).ok()?;
-        value
+        let value: serde_json::Value =
+            serde_json::from_slice(&buf).map_err(|e| KeeperError::Decode(e.to_string()))?;
+        Ok(value
             .get("state")
             .and_then(|s| s.as_str())
-            .map(str::to_owned)
+            .map(str::to_owned))
     }
 
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
@@ -557,7 +567,8 @@ struct StubState {
     card_state_calls: Vec<String>,
     /// Make `card_state` hang that long first (G3-4: a stalled read).
     card_state_delay: Option<Duration>,
-    /// Number of card_state calls that should return None (simulating transient read failure).
+    /// Number of card_state calls that should fail with `Status(500)`
+    /// (simulating transient read failure).
     card_state_fail_times: usize,
     /// When set, `park` panics with this message.
     park_panic: Option<String>,
@@ -569,7 +580,7 @@ impl StubKeeper {
         self.lock().park_panic = msg.map(str::to_owned);
     }
 
-    /// Number of card_state calls that should return None.
+    /// Number of card_state calls that should fail with `Status(500)`.
     pub fn set_card_state_fail_times(&self, times: usize) {
         self.lock().card_state_fail_times = times;
     }
@@ -710,7 +721,7 @@ impl StubKeeper {
 }
 
 impl Keeper for StubKeeper {
-    fn card_state(&self, card: &str) -> Option<String> {
+    fn card_state(&self, card: &str) -> Result<Option<String>, KeeperError> {
         let (delay, fail) = {
             let mut state = self.lock();
             state.card_state_calls.push(card.to_string());
@@ -726,9 +737,11 @@ impl Keeper for StubKeeper {
             std::thread::sleep(delay);
         }
         if fail {
-            return None;
+            // D1a: a transient read failure is visible as an error, not an
+            // absence, so it can be retried before any degrade.
+            return Err(KeeperError::Status(500));
         }
-        self.lock().card_state.clone()
+        Ok(self.lock().card_state.clone())
     }
 
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
@@ -949,7 +962,7 @@ mod tests {
     fn http_card_state_reads_the_show_json() {
         let (base, server) = serve_once(200, "OK", r#"{"key":"c-1","state":"waiting"}"#);
         let keeper = HttpKeeper::new(&base).with_token(" s3cret ");
-        assert_eq!(keeper.card_state("c-1").as_deref(), Some("waiting"));
+        assert_eq!(keeper.card_state("c-1"), Ok(Some("waiting".to_string())));
         let captured = server.join().expect("server thread");
         assert_eq!(captured.method, "GET");
         assert_eq!(captured.path, "/v1/show?key=c-1&fmt=json");
@@ -963,27 +976,52 @@ mod tests {
         );
     }
 
-    /// A keeper that cannot be read is "observed nothing": the call still goes
-    /// out, with the live-set fallback it already carried.
+    /// D1a: a read failure is visible as an error, not flattened to "observed
+    /// nothing" -- non-2xx -> `Status`, an oversized or undecodable body ->
+    /// `Decode` -- and only a 2xx that carries a state is an observation. The
+    /// causes stay distinct so a later slice can retry the transient ones
+    /// server-side before the workflow degrades to its fallback.
     #[test]
-    fn http_card_state_that_cannot_be_read_is_no_observation() {
-        let (base, server) = serve_once(404, "Not Found", r#"{"error":"not_found"}"#);
-        assert_eq!(HttpKeeper::new(&base).card_state("c-1"), None);
+    fn http_card_state_reports_failures_as_errors() {
+        // non-2xx -> Status.
+        let (base, server) = serve_once(500, "Internal Server Error", r#"{"error":"boom"}"#);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert_eq!(got, Err(KeeperError::Status(500)));
         server.join().expect("server thread");
 
-        let (base, server) = serve_once(200, "OK", r#"{"key":"c-1"}"#);
-        assert_eq!(HttpKeeper::new(&base).card_state("c-1"), None);
-        server.join().expect("server thread");
-    }
-
-    /// G3-5: a show body past the cap is answered "observed nothing" instead
-    /// of being buffered whole.
-    #[test]
-    fn http_card_state_oversized_body_is_no_observation() {
+        // Oversized body -> Decode.
         let pad = "x".repeat(super::CARD_STATE_MAX_BODY as usize + 1);
         let body = format!(r#"{{"key":"c-1","state":"waiting","pad":"{pad}"}}"#);
         let (base, server) = serve_once(200, "OK", &body);
-        assert_eq!(HttpKeeper::new(&base).card_state("c-1"), None);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert!(matches!(got, Err(KeeperError::Decode(_))));
+        server.join().expect("server thread");
+
+        // Undecodable body -> Decode.
+        let (base, server) = serve_once(200, "OK", "not json");
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert!(matches!(got, Err(KeeperError::Decode(_))));
+        server.join().expect("server thread");
+
+        // 200 with a state -> Ok(Some).
+        let (base, server) = serve_once(200, "OK", r#"{"key":"c-1","state":"waiting"}"#);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert_eq!(got, Ok(Some("waiting".to_string())));
+        server.join().expect("server thread");
+    }
+
+    /// D1a: absence and failure are distinct answers. A 2xx body with no state
+    /// is "observed nothing" -- the call still goes out, with the live-set
+    /// fallback it already carried -- while a non-2xx is an error.
+    #[test]
+    fn http_card_state_absence_differs_from_failure() {
+        let (base, server) = serve_once(404, "Not Found", r#"{"error":"not_found"}"#);
+        let got = HttpKeeper::new(&base).card_state("c-1");
+        assert_eq!(got, Err(KeeperError::Status(404)));
+        server.join().expect("server thread");
+
+        let (base, server) = serve_once(200, "OK", r#"{"key":"c-1"}"#);
+        assert_eq!(HttpKeeper::new(&base).card_state("c-1"), Ok(None));
         server.join().expect("server thread");
     }
 
@@ -1000,8 +1038,9 @@ mod tests {
             }
         });
         let keeper = HttpKeeper::new(&base);
-        // Reading the card now fails: no observation could be made this way...
-        assert_eq!(keeper.card_state("c-1"), None);
+        // Reading the card now fails, visibly (D1a): no observation could be
+        // made this way...
+        assert_eq!(keeper.card_state("c-1"), Err(KeeperError::Status(500)));
         // ...but the park carries the observation the workflow recorded, and
         // the park path never retries the read.
         let exec = ExecId {
@@ -1058,17 +1097,19 @@ mod tests {
     }
 
     /// The stub observes nothing until a test says otherwise, so every stub
-    /// driven park and ask keeps the fallback the workflow handed over.
+    /// driven park and ask keeps the fallback the workflow handed over. A
+    /// scripted transient failure (D1a) is a `Status(500)` error, not an
+    /// absence.
     #[test]
     fn stub_card_state_starts_absent_and_records_the_reads() {
         let keeper = StubKeeper::default();
-        assert_eq!(keeper.card_state("c-1"), None);
+        assert_eq!(keeper.card_state("c-1"), Ok(None));
         keeper.set_card_state(Some("waiting"));
-        assert_eq!(keeper.card_state("c-2").as_deref(), Some("waiting"));
-        assert_eq!(
-            keeper.card_state_calls(),
-            vec!["c-1".to_string(), "c-2".to_string()]
-        );
+        assert_eq!(keeper.card_state("c-2"), Ok(Some("waiting".to_string())));
+        keeper.set_card_state_fail_times(1);
+        assert_eq!(keeper.card_state("c-3"), Err(KeeperError::Status(500)));
+        assert_eq!(keeper.card_state("c-4"), Ok(Some("waiting".to_string())));
+        assert_eq!(keeper.card_state_calls().join(","), "c-1,c-2,c-3,c-4");
     }
 
     #[test]

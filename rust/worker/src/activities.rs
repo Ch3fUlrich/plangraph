@@ -497,7 +497,10 @@ pub(crate) fn expected_state_of(input: &str) -> Option<Vec<String>> {
 /// ureq call) off the tokio worker threads in `spawn_blocking`, waiting at most
 /// [`OBSERVE_READ_TIMEOUT`] for it (G3-4). `None` -- timeout, a panicking
 /// blocking task, a keeper that answered nothing -- means "observed nothing",
-/// so the workflow parks on its live-set fallback.
+/// so the workflow parks on its live-set fallback. A keeper read failure
+/// (D1a's `Err`) is mapped to `None` here for now -- behaviour unchanged --
+/// until a later slice turns it into the retryable activity failure D1 asks
+/// for.
 pub(crate) async fn observe_read(keeper: Arc<dyn Keeper>, card: String) -> Option<String> {
     observe_read_within(keeper, card, OBSERVE_READ_TIMEOUT).await
 }
@@ -510,7 +513,8 @@ async fn observe_read_within(
 ) -> Option<String> {
     let read = tokio::task::spawn_blocking(move || keeper.card_state(&card));
     match tokio::time::timeout(limit, read).await {
-        Ok(read) => read.ok().flatten(),
+        // D1a: the keeper's `Err` degrades to "observed nothing" here for now.
+        Ok(read) => read.ok().and_then(|res| res.ok()).flatten(),
         // Timed out: observed nothing. The blocking task is detached (it can
         // only finish or sit on its own socket timeout); the activity returns.
         Err(_) => None,
