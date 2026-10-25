@@ -44,10 +44,11 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | 9 | E9 claim heartbeat from the run supervisor (crit 9) | 250 |
 | 10 | E10 tokens per merged change + claim-to-merge metrics (crit 10) | 300 |
 | 11 | E4b writer/seat slots, queue-first admission, cross-project order (crit 4, part 2) | 300 |
+| 12 | E11 wake budget: `watch --block --batch` with decision-only wake classes and one digest | 250 |
 
 Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
-4a (written, `a43a7ff8`) -> E1 -> E2 (4b), with E5 in parallel (D-2844: no dependency, no cost) -> E7 -> E9 -> E3 -> 4a2 -> 4a3 -> E4a -> E4b -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. The operator may reorder the rest (Q-INV-1, routing report 2026-10-25-throughput-cost-investigation §6); until then this order holds (D-2844).
+4a (written, `a43a7ff8`) -> E1 -> E2 (4b), with E5 in parallel (D-2844: no dependency, no cost) -> E7 -> E9 -> E11 -> E3 -> 4a2 -> 4a3 -> E4a -> E4b -> 4c (scope and OOM) -> E6 -> E8 -> E10 -> phase review. The operator may reorder the rest (Q-INV-1, routing report 2026-10-25-throughput-cost-investigation §6); until then this order holds (D-2844).
 
 - E7 and E9 follow E2 because they share the run-liveness code (the supervisor that polls the run also heartbeats the claim and writes the completion), D-2840.
 
@@ -295,11 +296,46 @@ E10 tests:
 | `est_lines: true` | bool as int | writer |
 | door path only in `write_set` | hidden scope | writer |
 
-## Not covered (D-2844, routing report §6)
+## Follow-on work for what the slices above do not fix (D-2844, routing report §6; operator asked to work these, 2026-10-25)
 
-- Wake policy: 80-90 % of orchestrator turns are wakes by peer messages or background tasks, each re-reading 150-190k of context. No slice here changes what wakes an L1. E7's inbox makes a single `watch` possible, but moving the standard-tier loop into code is the E2E/phase-runner path (operator question Q-INV-1).
-- Base chain: E5 (keeper `refute` kind), E6 (keeper rule items, #203 slice 2) and E9 (keeper `heartbeat` on the live keeper) need #203 merged and a live keeper deployed from current main. They do not work against the live keeper, which is 828 commits behind.
-- Capacity: E4 rations slots and adds none. Restoring the workstation, cutting per-run MCP servers and fixing fallback legs (D-2822) are outside this item.
+### E11 wake budget (wake policy, slice 12)
+
+80-90 % of orchestrator turns are wakes. Each one re-reads 150-190k of context, and most carry nothing to decide: a seat finished, CI went green, a writer finished while its seat is still pending. Today each background `spawn --wait` or poll loop of an L1 ends in its own wake.
+
+| piece | where | behaviour |
+|---|---|---|
+| batch wait | `cli.py watch --owner X --block --batch <run>[,<run>...] [--wake-on <classes>] [--max-wait-min N]` (on E7's inbox) | blocks without waking anyone until (a) an event of a wake class arrives, or (b) every run of the batch has an event, or (c) `--max-wait-min` (default 120) passes. It then prints ONE digest: one line per event, at most 40 lines, plus `pending: <runs>`. Default wake classes are the ones that need a decision: `FAILED`, `CLAIM_LOST`, `REFUSED`, and a seat completion whose parsed verdict is changes with a HIGH. A plain `DONE` or a seat PASS never wakes on its own. The L1 starts one background `watch --block` per batch instead of one wait per run |
+| digest parsing | same, using `gates.findings` for seat runs (4a `result.json` + stdout.log) | each seat line shows `PASS` / `changes (H/M/L counts)` / `no verdict (reason)`, so the woken L1 acts without opening the files |
+| router side | not in plangraph | peer messages that need no action (acks, FYIs) are the router's part; recorded as a routing follow-up |
+
+E11 tests:
+- a batch of 3 runs with only DONE events -> one wake when the last arrives;
+- a FAILED event mid-batch -> an immediate wake, with the others listed as pending;
+- a seat changes with a HIGH -> wakes, a seat PASS does not;
+- the max-wait expiry;
+- the digest cap.
+
+E11 depends on E7. Order: right after E9. Budget 250.
+
+Moving the whole standard-tier loop (writer -> CI -> seat -> fix -> merge) into code is the E2E/phase-runner path. That is operator question Q-INV-1, not this item.
+
+### Base chain (no code; L1 + router steps)
+
+E5 (keeper `refute`), E6 (keeper rule items) and E9 (live `heartbeat`) need #203 merged and the live keeper redeployed from main. Today's live keeper is 828 commits behind. The steps:
+1. #203 green: the 5 old failures are with the D-2832 fixer.
+2. #203 seats and phase review.
+3. Merge with a router GO.
+4. Keeper redeploy from main with a router deploy GO, as a recreate (live-tree merge safety rule).
+
+The L1 asks routing for the GO D-ids at steps 3 and 4. Until step 4, E5/E6/E9 are built and tested hermetically but marked `needs live keeper >= <sha>` in their PRs.
+
+### Capacity
+
+| step | what | owner |
+|---|---|---|
+| MCP off for writer/seat runs (D-2846) | PG-EFFICIENCY-GATES slice `#9` 4a-mcp: `overlay_env(base_env, mcp_off=())` adds `{"mcp": {name: {"enabled": false}}}` for every MCP server name in the effective config (`~/.config/opencode/opencode.json` and `config.json` `mcp` keys, the AutoOS root overlay `mcp.servers`, plus the fixed five: context7, graphify, omnigraph, playwright, serena); the runner passes it for writer and seat roles (`spawn_limits.mcp_off`, default true). Measured 2026-10-25 on coding.vm: each `opencode run` tree carries ~680 MB RSS of these five servers (serena 118 MB, graphify 85, context7 155, omnigraph 139, playwright 182, incl. npm/uv wrappers), so 4 runs free about 2.7 GB; host-wide, 183 MCP processes held 9.4 GB | build-L1-efficiency, right after the 4a fix round |
+| fallback legs (D-2822: a failed first leg ends the run) | PG-EFFICIENCY-GATES 4a2 fall-through | in the order above |
+| restore the workstation as a run host | host operation: needs the operator (host changes are outside the router delegation) | operator, on return |
 
 ## Open facts
 

@@ -60,6 +60,7 @@ Goal: the §0 rules that broke in practice become code, so no L1 has to remember
 | 6 | slice 4c scope launcher, OOM/memguard class, host admission (D-2814, build-L1 conditions 1-5) | 400 |
 | 7 | slice 4a2 fall-through/terminal, wall cap with shared clock and continuation deadline (D-2814, D103; est. 140 code + 160 tests) | 400 |
 | 8 | slice 4a3 detectors: truncation, provider_protocol, detector order, LegStateStore size limit, spawning principal (D-2814, D103 split again; est. 150 code + 180 tests) | 400 |
+| 9 | slice 4a-mcp: MCP servers off for writer/seat opencode runs via overlay_env (D-2846; spec in ORCH-EFFICIENCY-ENFORCE "Capacity") | 150 |
 
 ## Slice 2: decisions in the keeper (operator D-2746 (10))
 
