@@ -831,7 +831,9 @@ def test_attempt_classification_reset_and_plain_failures(tmp_path, monkeypatch):
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner.runner import SpawnerRunner, spawn_service
     from plangraph.spawner.service import SpawnService
-    monkeypatch.setattr("plangraph.spawner.resolver.plan_for_launch_async", lambda plan, dry_run=False: plan)
+    async def passthrough(plan, dry_run=False):  # plan_for_launch_async is awaited (runner.py)
+        return plan
+    monkeypatch.setattr("plangraph.spawner.resolver.plan_for_launch_async", passthrough)
 
     def leg(i):
         return Leg(f"leg{i}", "paid", "opencode", f"model{i}", "fam", (), 200000, True, roles=("implement",))
