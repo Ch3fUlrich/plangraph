@@ -7,7 +7,7 @@ Schema fence (build-L1 #164): #164 claims SQLite v14 + PG Migration(8) oversight
 |---|---|
 | FIX r1 G1 keeper | MERGED #186 (c9d4bc38, CI 40168236971 incl PG) |
 | FIX r1 G3 exec+wake | MERGED #189 (5feefbf5 + Hand-Edit fmt, CI 40170369570) |
-| FIX r1 G2 client | NOT ready: pfg2r2 1f26acb pre-G1 -> 12 fails vs G1-1 text rule; continuation pfg2c on workst (told: merge phase a401b3a9, --json -> text or drop, V6-6/V6-8 per brief, fleet-msg LF + .gitattributes) |
+| FIX r1 G2 client | 04372c20 (pfg2c agy, contains phase a401b3a9) CI 40182283003 RED: scrub test_fleet_msg.py:454 cred-shape + :600/602 ipv4 (+ test_split_make_public); told workst 10:xxZ |
 | BUS-REGISTRY-PERSIST (HIGH p8) | MERGED phase #193 (9b2eb4db; writer mimo-pro run ...062933-...a2456f; Hand-Edit PRAGMA test; CI 40174828383). Gap: docs/FLEET-BUS.md paragraph -> delta finding. Claim refused till DISCOVERY done |
 | BUS-PEER-DISCOVERY-ADOPT (HIGH p8) | AutoOS MERGED main 2629d740 (D-2730). routing 46b7d6a1 HELD till phase on main + keeper deploy (routing sets env + merges). NO ff live AutoOS checkouts till /v1/hosts deployed. Evidence: l2-cards/discovery-adopt/evidence.md (post after claim allowed) |
 | RT-P1-BUS-KEEPER / DISCOVERY / WAKE / EXEC-OBSERVED-STATE / ANY-AGENT-CLI W2a+W2b | IN PHASE, await delta review + phase PR |
