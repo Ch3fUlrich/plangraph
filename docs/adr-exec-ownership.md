@@ -14,10 +14,10 @@ owner. `new_run=True` is refused as validation, never silently ignored.
 
 Owner recording, attempt advances and clears append `exec_owner_changed` events
 inside their write transaction, so the hash chain attests these changes on both
-backends. The retired-run fence retains only the last 16 run identities, keeping
-the maximum attempt for each retained identity. Older evicted identities are no
-longer fenced; this bounds per-card storage rather than promising eternal replay
-protection.
+backends. The retired-run fence retains every run identity ever retired for the
+card (no cap), keeping the maximum attempt for each identity, so a run retired
+arbitrarily long ago is still refused `exec_stale`. (An earlier 16-identity
+bound evicted still-live identities after 17 clears; RT-P1 sq12 removed it.)
 
 ## Context
 

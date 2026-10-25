@@ -287,3 +287,29 @@ def test_claim_reopen_uses_owner_clear_helper(w, monkeypatch, door):
                      now=w.store._parse_iso(lease).timestamp() + 1)
     assert calls == [(w.conn, key)]
     assert owner(w, key) == (None, None, None)
+
+
+# ------------------------------------------------- the fence never forgets
+def test_retired_fence_remembers_every_run_after_twenty_clears(w):
+    """RT-P1 sq12 fix 1: the retired-run fence has no bound (V1-1/V5-1).
+
+    ``_exec_clear`` used to keep only ``retired[-16:]``, so after 17 clears a
+    run retired earliest was accepted again and could reacquire the card as a
+    first writer.  20 clear cycles later the FIRST retired run must still be
+    refused -- through ``_exec_check`` and end to end through a worker park.
+    Portable: runs on the default backend (``World`` follows
+    ``PG_KEEPER_BACKEND``), so the same test covers SQLite and Postgres.
+    """
+    key, = seed(w, [("A", [])])
+    w.store.claim(w.p("workerA"), key)
+    for n in range(20):
+        with w.store._write():
+            w.store._exec_check(w.conn, key, "wf", f"run-{n}", 1,
+                                w.p("workerA"), now=w.clock())
+            w.store._exec_clear(w.conn, key, w.p("router"), w.clock())
+    assert len(retired_runs(w, key)) == 20        # the fence keeps every run
+    with w.store._write():
+        refused("exec_stale", w.store._exec_check, w.conn, key, "wf", "run-0",
+                1, w.p("workerA"))
+    refused("exec_stale", w.store.worker_park, w.p("workerA"),
+            park(key, workflow_id="wf", run_id="run-0", attempt=2))
