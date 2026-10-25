@@ -65,7 +65,10 @@ def writer_families(store, item, ctx):
     git = getattr(ctx, "git", None)
     if git is None:
         raise Refused("writer_unknown", "no git adapter for commit evidence")
-    repo = git.repo_path(item["project"])
+    try:
+        repo = git.repo_path(item["project"])
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        raise Refused("writer_unknown", "cannot resolve project repository") from exc
     if not repo:
         raise Refused("writer_unknown",
                       f"no repo registered for project {item['project']!r}")
@@ -90,6 +93,12 @@ def writer_families(store, item, ctx):
                     raise Refused("writer_unknown",
                                   f"unknown writer model {model!r}")
             elif trailer.get("Hand-Edit"):
+                try:
+                    paths = git.changed_paths(repo, trailer.get("_writer_commit", commit))
+                except Exception as exc:  # noqa: BLE001 - fail closed
+                    raise Refused("writer_unknown", "cannot read hand-edit paths") from exc
+                if paths and set(paths) == {"CHANGELOG.md"}:
+                    continue
                 family = "anthropic"
             else:
                 raise Refused(

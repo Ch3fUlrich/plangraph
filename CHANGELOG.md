@@ -4,6 +4,8 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- Exclude proven CHANGELOG.md-only Hand-Edit commits from keeper writer families; path inspection failures refuse writer resolution.
+
 - **KEEPER-SEAT-FAMILY-WRITER:** isolate reviewer families from verified current-epoch commit writers, then writer_model, retaining fail-closed legacy claimant/delegate fallback.
 
 - Install gitleaks 8.30.1 in the CI pytest job from the pinned GitHub release (tarball plus checksums file fetched with `curl -fsSL`, the asset's own line grepped out of the downloaded checksums file and checked with `sha256sum -c`, fail-closed on mismatch or missing line), extract the single binary to `~/.local/bin`, and require `gitleaks version` to print `8.30.1` before pytest runs.

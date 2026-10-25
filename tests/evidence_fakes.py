@@ -99,6 +99,9 @@ class FakeGit:
             return [dict(d) for d in self.branch_trailers_by_sha[sha]]
         return [self.trailers(repo, sha)]
 
+    def changed_paths(self, repo, sha):
+        return ["src/example.py"]
+
     def commit_times(self, repo, sha):
         if self.commit_time_error:
             raise self.commit_time_error

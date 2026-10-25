@@ -146,6 +146,49 @@ def test_delegate_cannot_override_verified_writer(w):
     assert exc.value.code == "same_family"
 
 
+@pytest.mark.parametrize("paths,code", [(["CHANGELOG.md"], None),
+    (["src/example.py"], "same_family"), (None, "writer_unknown")])
+def test_hand_edit_paths_determine_writer_exemption(w, paths, code):
+    class PathsGit(FakeGit):
+        def changed_paths(self, repo, sha):
+            if paths is None:
+                raise RuntimeError("git failed")
+            return paths
+    trailers = {SHA_A: {"Hand-Edit": "D-2626"}, SHA_B: writer("gpt-5 run1")}
+    (key,) = seed(w, [("A", [])], evidence_kinds=("commit+ci",))
+    to_review_with_commits(w, key, trailers, git=PathsGit(trailers_by_sha=trailers))
+    if code:
+        with pytest.raises(Refused) as exc:
+            w.store.verdict(w.p("rAnthropic1"), key, True)
+        assert exc.value.code == code
+    else:
+        assert w.store.verdict(w.p("rAnthropic1"), key, True)["state"] == "done"
+
+
+def test_git_changed_paths_is_nul_delimited_and_fails_closed(monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.keeper.evidence_git import GitAdapter
+    git = GitAdapter()
+    def run(repo, args):
+        assert "--no-renames" in args and "-z" in args
+        assert args[-2:] == ["--end-of-options", SHA_A]
+        return SimpleNamespace(returncode=0, stdout="CHANGELOG.md\0src/a\nb.py\0")
+    monkeypatch.setattr(git, "_run", run)
+    assert git.changed_paths("repo", SHA_A) == ["CHANGELOG.md", "src/a\nb.py"]
+    monkeypatch.setattr(git, "_run", lambda *a: SimpleNamespace(returncode=1))
+    with pytest.raises(RuntimeError):
+        git.changed_paths("repo", SHA_A)
+    with pytest.raises(ValueError):
+        git.changed_paths("repo", "--bad")
+
+
+def test_hand_edit_leaf_identity_is_not_merge_identity(monkeypatch):
+    from plangraph.keeper.evidence_git import GitAdapter
+    git = GitAdapter()
+    monkeypatch.setattr(git, "trailers", lambda *a: {"Hand-Edit": "D-2626"})
+    assert git._writer_trailer("repo", SHA_A)["_writer_commit"] == SHA_A
+
+
 # --------------------------------------------------------------------------
 # 1. mixed-writer HIGH item: every writer family must be covered
 # --------------------------------------------------------------------------
