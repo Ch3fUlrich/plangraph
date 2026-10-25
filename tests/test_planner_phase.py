@@ -100,6 +100,15 @@ def test_loosened_phase_under_batch_global_stamps_batch_and_spawns(w, repo, monk
     enforce_review_scope({"phase": "demo:PH-X", "review_scope": plan["review_scope"]}, "review", None, root=repo)
 
 
+def test_per_item_global_and_phase_stamps_per_fixer_and_spawns(w, repo, monkeypatch):
+    (repo / "p.json").write_text('{"review_method": {"mode": "per-item"}}')
+    monkeypatch.setenv("PLANGRAPH_SETTINGS", "p.json")
+    make_phase(w)
+    plan = phase.plan_phase(w.store, w.p("router"), "demo:PH-X", repo_root=repo)
+    assert plan["review_scope"] == "per-fixer"  # D-2817: spawn admits it here
+    enforce_review_scope({"phase": "demo:PH-X", "review_scope": plan["review_scope"]}, "review", None, root=repo)
+
+
 def test_needs_input_and_ready_cards_are_planned(w, repo):
     make_phase(w)
     w.store.put_card(w.p("router"), "demo:C1", card(write_set=["src/a.py"]))
