@@ -26,6 +26,7 @@ from plangraph.spawner.clients import (
 )
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import check_mimo_path
+from plangraph.planner.legs import DEFAULT_LEGS
 
 _SELECTED_MODEL_RE = re.compile(r"(?i)X-OmniRoute-Selected-Model:\s*([^\r\n]+)")
 _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)")
@@ -270,7 +271,7 @@ class SpawnerRunner:
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
-                if "/" not in model_or_combo:
+                if "/" not in model_or_combo and not any(l.model == model_or_combo for l in DEFAULT_LEGS):
                     from plangraph.spawner.resolver import get_catalog_models, catalog_row_admitted
                     combo_legs = [
                         m for m in get_catalog_models()
