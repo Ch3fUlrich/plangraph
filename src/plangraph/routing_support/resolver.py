@@ -528,6 +528,11 @@ def host_skip_reason(row, *, probe=None, env=None):
     from .opencode_overlay import OVERLAY_UNKNOWN
     if child.get(OVERLAY_UNKNOWN):
         return None
+    # Probe the config the launch will use: S1 renders the gateway providers per run.
+    from .opencode_render import render_gateway_providers
+    render_reason = render_gateway_providers(child, model)
+    if render_reason:
+        return render_reason
     try:
         cfg = json.loads(child.get('OPENCODE_CONFIG_CONTENT', '{}'))
         provider, name = model.split('/', 1)

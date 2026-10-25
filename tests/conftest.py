@@ -89,6 +89,9 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     # providers.mimo/omniroute settings.baseURL defeats the I6 fail-closed
     # path); tests opt into config with monkeypatch.setenv, never inherit it.
     monkeypatch.delenv('OPENCODE_CONFIG_CONTENT', raising=False)
+    # Admission renders gateway providers like launch (I6): a dead-port URL keeps
+    # gateway legs admissible; no-URL tests delenv it themselves.
+    monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', 'http://127.0.0.1:9/v1')
     from plangraph.spawner import resolver
     probe = resolver.served_models
     probe.cache_clear()

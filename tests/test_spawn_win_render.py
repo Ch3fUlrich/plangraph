@@ -374,6 +374,7 @@ def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(resolver, "host_skip_reason_async", no_skip)
+    monkeypatch.setattr(resolver, "host_skip_reason", lambda row, **kw: None)  # launch path, not admission
     mimo_leg = next(l for l in DEFAULT_LEGS if l.model == "mimo/mimo-v2.6-flash")
     agy_leg = next(l for l in DEFAULT_LEGS if l.model == "gemini-3.8-flash")
     plan = SpawnPlan(legs=(mimo_leg, agy_leg), skipped=(), p_source="test",
