@@ -91,3 +91,16 @@ Goal: no hand-kept leg order. Any model may run (Claude included); the pick is c
 Invariants: I10 a banned or privacy-refused model is never in a plan, whatever its score; I11 the plan lists every served model with its reason (picked, skipped + why); I12 same catalog + benchmark + card -> same plan (deterministic).
 
 Size: ~450 lines incl. tests (hermetic: catalog from a fixture, never the live gateway in CI). Depends on the D-2758 (6) key path (6100115c, held for operator OK); without it the catalog falls back to the configured legs and records `catalog: offline`.
+
+## Slice 4: run liveness (router D-2771 evidence, build-L1 2026-10-25)
+
+Evidence: mimo-v2.6-pro writers on workst ran ~3 h and ended "Response still truncated after two output token limit continuations" with near-empty WIP (20261025-070241-exec-sq12-70c4dc WIP f308086f 45 lines; 20261025-103823-pfr2-3185c3; 20261025-042244-pfg2-b26b60); plangraph run-51bc2b81 mimo-pro 39 min, 0 commits, 0.6% CPU (stall, cancelled by hand); code host qodercli seats OOM-killed (kernel, pid 2192098 13:04:23) while memguard saw "no agent run to stop".
+
+| gap | where | behaviour |
+|---|---|---|
+| truncation loop | `gates/findings.py` failure classes + spawner result | "still truncated after ... continuations" / output-limit text = failed run (`exit_class=truncated`), never a writer result; next leg per plan, leg marked `limited` for that card size |
+| stall | `spawner/runner.py` watchdog (extends `stall_watchdog.py`) | no new commit / file write in the cwd and CPU < 2% for 15 min -> cancel, `exit_class=stalled`, fall through to the next leg; WIP kept on the run branch |
+| wall cap | settings, per role | writer 90 min, seat 45 min default; over cap -> cancel, same fall-through |
+| memory | `spawner/runner.py` launch | child starts in a `systemd-run --user --scope` unit named `autoos-worker-pg-<run>` so memguard stops it before the kernel OOM picks a session; exit -9 with a kernel OOM line -> `exit_class=oom`, retried once on the next host per D-2472 (workst) |
+
+Invariants: I13 a truncated, stalled, capped or OOM run never counts as a writer result or a seat verdict; I14 every cancel records its exit_class and the fall-through leg.
