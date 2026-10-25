@@ -789,6 +789,12 @@ def test_output_on_disk_under_and_over_2mb(tmp_path):
     serv.runner.jobs.clear()
     serv._save(serv.result("run-c"))  # job gone: the log is never rewritten from the 4 KB tail
     assert (tmp_path / "runs" / "run-c" / "stdout.log").read_text() == cut_log
+    from plangraph.spawner.runner import spawn_service
+    dsp = spawn_service(state=tmp_path / "dsp")
+    dsp.runner.jobs["j9"] = SimpleNamespace(stdout="ATTEMPT-TWO", stderr="e2")
+    dsp._save(dict(run_id="run-d", status="completed", exit_code=0, job_id="j9",
+                   stdout_tail="ATTEMPT-ONE", stderr_tail="e1"))
+    assert (tmp_path / "dsp" / "runs" / "run-d" / "stdout.log").read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # qwen-C5: DispatchService._save must not clobber the tail from the live job
 
 
 def test_cancel_with_class_racing_minus_9():
