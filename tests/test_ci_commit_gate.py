@@ -1013,3 +1013,22 @@ def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
     sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_autoos_run_id_flagged_or_refused(repo: Path, monkeypatch, capsys, refuse):
+    # D-2749: AutoOS run ids are flagged; --refuse-autoos fails them; plangraph run ids pass.
+    base = _head(repo)
+    autoos = _commit(repo, "feat: a\n\nWriter: gemini-3.8-flash 20261025-092523-stall-quiet-fix1-bcc9ea")
+    head = _commit(repo, "feat: b\n\nWriter: mimo/mimo-v2.6-pro run-" + "0123456789abcdef" * 2)
+    assert ci_commit_gate.autoos_spawn_commits(base, head, cwd=repo) == [
+        (autoos, "gemini-3.8-flash 20261025-092523-stall-quiet-fix1-bcc9ea")]
+    monkeypatch.chdir(repo)
+    argv = ["check", "--base", base, "--head", head, "--exempt", str(repo / "none.txt")]
+    (repo / "none.txt").write_text("", encoding="utf-8")
+    code = main(argv + (["--refuse-autoos"] if refuse else []))
+    out = capsys.readouterr()
+    if refuse:
+        assert code == 1 and f"{autoos}: autoos spawner run id" in out.out
+    else:
+        assert code == 0 and f"autoos-spawn {autoos}:" in out.err

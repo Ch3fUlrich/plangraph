@@ -113,7 +113,7 @@ for _tool in TOOLS_METADATA:
             'writer_families': {'type': 'array', 'items': {'type': 'string'}},
             'review_scope': {'type': 'string', 'enum': ['per-fixer', 'batch']},
             'review_of': {'type': 'string'}, 'no_fallthrough': {'type': 'boolean'}})
-        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review']
+        _tool['inputSchema']['properties']['role']['enum'] = ['implement', 'review', 'design']
         _tool['inputSchema']['properties']['model_or_combo']['description'] = 'Exceptional audited override only; requires override_reason'
 for _verb in ('route', 'ps', 'result'):
     TOOLS_METADATA.append({'name': 'plangraph_agent_' + _verb,

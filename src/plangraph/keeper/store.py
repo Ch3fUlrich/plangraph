@@ -34,6 +34,7 @@ from .store_needs import NeedsMixin
 from .store_outbox import OutboxMixin
 from .store_withdraw import WithdrawMixin
 from .store_fixlog import FixLogMixin
+from .store_rules import RuleMixin
 from .store_reopen import ReopenMixin
 from .store_kind import KindMixin
 from .store_changelog import ChangelogMixin
@@ -73,7 +74,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
-            WorkerMixin, JevMixin, FixLogMixin):
+            WorkerMixin, JevMixin, FixLogMixin, RuleMixin):
     """State machine, locking and audit over one keeper connection."""
 
     def __init__(self, conn, clock=None, verifiers=None, ctx=None,

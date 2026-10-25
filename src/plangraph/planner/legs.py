@@ -21,7 +21,7 @@ from pathlib import Path
 from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
-__all__ = ["TIERS", "HARNESSES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "load_legs", "with_measured"]
+__all__ = ["TIERS", "HARNESSES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "DESIGN_ORDER", "load_legs", "with_measured"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
@@ -98,11 +98,11 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",)),
-    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement", "design")),
+    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review", "design")),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review")),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
-        "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement",)),
+        "mimo", ("128k", "256k", "1m"), 200000, False, roles=("implement", "design")),
     _legacy["agy-sonnet-5.5"],
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
 )
@@ -116,6 +116,14 @@ WRITER_ORDER: tuple[str, ...] = (
     "opencode-glm-5.3-flash-free",
     "mimo-v2.6-flash",
     "cx-gpt-6.1-sol",
+)
+
+# D-2754: design / research / replan runs (D-2739) take the strongest non-Claude
+# leg first; no Claude leg (D-2046 strict authorship).
+DESIGN_ORDER: tuple[str, ...] = (
+    "mimo-v2.6-pro",
+    "cx-gpt-6.1-sol",
+    "agy-gemini-3.8-flash",
 )
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
@@ -158,9 +166,9 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     windows = raw.get("windows")
     roles = raw.get("roles", ("orchestrate",))
     if (not isinstance(roles, (list, tuple)) or not roles
-            or any(not isinstance(r, str) or r not in ("implement", "review", "orchestrate") for r in roles)
+            or any(not isinstance(r, str) or r not in ("implement", "review", "design", "orchestrate") for r in roles)
             or len(set(roles)) != len(roles)):
-        problems.append(f"{where}.roles: must be a non-empty subset of implement|review|orchestrate")
+        problems.append(f"{where}.roles: must be a non-empty subset of implement|review|design|orchestrate")
     if "windows" in raw:
         if (not isinstance(windows, (list, tuple)) or not windows
                 or any(not isinstance(w, str) or w not in WINDOW_CLASSES

@@ -78,6 +78,10 @@ TOOLS = (
           "a fix on an in_review item hands it back to its claimant. entry: {kind, note, findings[], seat_runs[], "
           "ref, author_model, reviewed_by, invariants, slices[{n,scope,max_lines}]}.",
           {"key": {"type": "string"}, "entry": {"type": "object"}}, ("key", "entry")),
+    _tool("rule_set", "Router (D-2746): write standing rules as decisions:<ID> items (in_force=done, retired="
+          "cancelled) with depends_on edges between rules. rules: [{id, title, description, source, note, "
+          "depends_on[], state}]; DECISIONS.md is rendered from them (tools/decisions_view.py).",
+          {"rules": {"type": "array", "items": {"type": "object"}}}, ("rules",)),
     _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"},
            "reason": {"type": "string"}}, ("key", "decision_id", "reason")),
@@ -160,6 +164,7 @@ _ROUTES = {
     "create": ("POST", "create_items"), "edit": ("POST", "edit_definition"),
     "record_run": ("POST", "record_run"),
     "log_item": ("POST", "log_item"),
+    "rule_set": ("POST", "rule_set"),
     "mint_run_token": ("POST", "mint_run_token"),
 }
 

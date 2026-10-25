@@ -422,3 +422,95 @@ def test_no_bare_python_invocation():
             continue
         hits += [f"{name}: {m.group(0).strip()}" for m in bare.finditer(text)]
     assert hits == []
+
+
+@pytest.mark.parametrize("role", ["implement", "review"])
+def test_sensitive_card_never_reaches_training_leg(role):
+    # D-2749 gap 3: privacy=sensitive keeps the card off legs that train on its data.
+    from plangraph.planner import routing
+    from plangraph.planner.legs import DEFAULT_LEGS
+    trains = {leg.id for leg in DEFAULT_LEGS if leg.trains_on_data}
+    open_plan = routing.plan_spawn({"estimate_tokens": 20000}, role=role)
+    plan = routing.plan_spawn({"estimate_tokens": 20000, "privacy": "sensitive"}, role=role)
+    assert plan.legs and not trains.intersection(leg.id for leg in plan.legs)
+    assert trains.intersection(leg.id for leg in open_plan.legs)
+    with pytest.raises(ValueError):
+        routing.plan_spawn({"estimate_tokens": 20000, "privacy": "secret"}, role=role)
+
+
+def test_opencode_command_runs_standalone():
+    # D-2749: without --standalone `opencode run` attaches to the background
+    # service, whose config has no mimo baseURL.
+    from plangraph.routing_support.clients import build_opencode_command
+    assert build_opencode_command("task", "mimo/mimo-v2.6-pro")[:3] == ["opencode", "run", "--standalone"]
+
+
+DECISIONS_TEXT = """# DECISIONS
+
+Preamble line.
+
+## 0. Pipeline
+0.2a **Plan gate.** first, D-1. `[keep]`
+0.2b **Slice.** after 0.2a, Opus 5.5 only (D-2, D-3). `[gate:x.py]`
+
+## 1. Other
+1.1 **Cite.** see 0.2b. `[gate-todo]`
+"""
+
+
+def _decision_rows(w):
+    from importlib import util
+    spec = util.spec_from_file_location("dview", Path(__file__).resolve().parents[1] / "tools" / "decisions_view.py")
+    mod = util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.export_items(w.store.snapshot(w.p("reader")))["items"]
+
+
+def test_decisions_import_round_trip_and_tree(w):
+    # D-2746 (10): rules live in the keeper; DECISIONS.md is their render.
+    from plangraph.decisions_view import parse, render, to_rules, tree
+    rules = to_rules(parse(DECISIONS_TEXT))
+    assert render(rules) == DECISIONS_TEXT
+    by_id = {r["id"]: r for r in rules}
+    assert by_id["RULE-0-2B"]["depends_on"] == ["RULE-0-2A"]   # "Opus 5.5" is no rule ref
+    assert by_id["RULE-1-1"]["depends_on"] == ["RULE-0-2B"]
+    assert by_id["RULE-0-2B"]["note"] == "tag=gate:x.py; d=D-2,D-3"
+    out = w.store.rule_set(w.p("router"), rules)
+    assert (len(out["created"]), out["updated"]) == (6, [])
+    rows = _decision_rows(w)
+    assert render(rows) == DECISIONS_TEXT
+    assert tree(rows, "RULE-1-1") == ["RULE-1-1", "RULE-0-2B", "RULE-0-2A"]
+    # retire a rule: it drops out of the view; the event log still folds.
+    out = w.store.rule_set(w.p("router"), [dict(by_id["RULE-1-1"], state="retired")])
+    assert out == {"created": [], "updated": ["decisions:RULE-1-1"]}
+    assert "1.1 " not in render(_decision_rows(w))
+    with pytest.raises(Refused, match="retired"):
+        w.store.rule_set(w.p("router"), [by_id["RULE-1-1"]])
+    assert verify_integrity(w.conn) == []
+
+
+@pytest.mark.parametrize("bad, code", [
+    ([{"id": "RULE-1-1", "description": "x", "depends_on": ["RULE-9-9"]}], "unknown"),
+    ([{"id": "RULE-1-1", "description": "x", "depends_on": ["RULE-1-2"]},
+      {"id": "RULE-1-2", "description": "y", "depends_on": ["RULE-1-1"]}], "cycle"),
+    ([{"id": "nope", "description": "x"}], "id"),
+    ([], "rules"),
+])
+def test_rule_set_refusals(w, bad, code):
+    with pytest.raises(Refused) as err:
+        w.store.rule_set(w.p("router"), bad)
+    assert code in str(err.value).lower()
+
+
+def test_rule_set_router_only(w):
+    with pytest.raises(Refused):
+        w.store.rule_set(w.p("l1main"), [{"id": "RULE-1-1", "description": "x"}])
+
+
+def test_design_role_takes_strongest_non_claude_leg():
+    # D-2754: designs / replans run through the spawner, strongest non-Claude leg first.
+    from plangraph.planner import routing
+    from plangraph.planner.legs import DESIGN_ORDER
+    plan = routing.plan_spawn({"estimate_tokens": 20000}, role="design")
+    assert tuple(leg.id for leg in plan.legs) == DESIGN_ORDER
+    assert not any(leg.claude_family for leg in plan.legs)
