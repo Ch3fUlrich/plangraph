@@ -147,7 +147,7 @@ ops:
 ## 5. Phases in detail
 
 **Planning phase (Layer 2, high effort).**
-1. Pose the questions; spawn 3-10 research agents (default 3-5; max 10 by R-orch-30), varying
+1. Pose the questions; spawn 3-10 research agents by card via plangraph-spawn (default 3-5; max 10 by R-orch-30), varying
    model family and prompt angle so findings diverge. Each returns a schema'd report, not a
    transcript.
 2. Merge into one plan with phases, tasks, edges and risks.
@@ -164,9 +164,9 @@ ops:
 **Work phase (Layer 2, high effort).**
 1. Optional: 1-2 detail researchers for facts the plan lacks.
 2. Refine task contracts against section 3; keep each card in sync with its contract.
-3. Spawn implementers: independent tasks in parallel, dependent ones in order.
-4. Spawn 1-3 reviewers per task or batch, very cheap models, **a different family from the
-   implementer**.
+3. Spawn implementers by card via plangraph-spawn (`python3 tools/plangraph-spawn.py spawn --card @card.json --role implement ...`): independent tasks in parallel, dependent ones in order.
+4. Spawn 1-3 reviewers per task or batch by card via plangraph-spawn (`--role review --review-of RUN_ID`),
+   very cheap models, **a different family from the implementer**.
 5. Any failure creates a fix-task (section 8). The phase ends when every task is done and
    reviewed; the phase agent sends a digest upward (section 9).
 
