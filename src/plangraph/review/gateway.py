@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..spawner.catalog_seed import SEED_MODELS
+from plangraph.catalog_data import SEED_MODELS
 
 __all__ = ["DEFAULT_MAX_TOKENS", "GATEWAY_ENV_VAR",
            "MissingKey", "MissingGatewayURL", "CallResult", "request_body",
