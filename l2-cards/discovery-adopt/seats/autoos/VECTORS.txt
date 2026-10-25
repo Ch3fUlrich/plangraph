@@ -1,0 +1,10 @@
+Review AutoOS PR for plangraph:BUS-PEER-DISCOVERY-ADOPT (public repo; fleet-bus relay listener tools/fleet_bus.py). Writer family: xiaomi (mimo). Full diff (tests included) follows, then the full post-change fleet_bus.py.
+ITEM: Listener takes its bind address from the keeper host registry (GET hosts, bearer token file), not a hardcoded/loopback default; per-host HMAC key files (inventory host -> key_file) replace the shared secret file; explicit --bind / --secret-file overrides stay for transition; fail closed with a clear error when the registry is unavailable; no site IP literal; secrets never printed; HMAC wire contract and 401/413 semantics unchanged; red test first.
+
+Review vectors; findings PER VECTOR with severity (BLOCKER/HIGH/MEDIUM/LOW) and quoted lines:
+V1 fail-closed: every registry failure path (unset url/token, unreachable, non-200, bad JSON, host unknown/unhealthy/null endpoint, empty host part) exits with a clear error and never binds anywhere (esp. never 0.0.0.0 or "").
+V2 per-host key verification: POST verified with the key of the envelope "from" host; can a sender use another host's key, can an unknown/missing from bypass, is the key-file read/permission check sound, any timing/length leak, any key content in output or logs?
+V3 contract unchanged: signature, ts window, nonce LRU, body cap, scrub, open-mode behaviour; any regression vs the removed code visible in the diff.
+V4 token/key hygiene and public-repo rules (no IP/host literals, tests use placeholders).
+V5 tests: are the new tests meaningful (would they fail on the old code), any gaps.
+End with exactly one line: VERDICT: APPROVE | REQUEST_CHANGES | BLOCK.

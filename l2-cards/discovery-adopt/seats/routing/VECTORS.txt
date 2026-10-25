@@ -1,0 +1,10 @@
+Review routing-repo PR for plangraph:BUS-PEER-DISCOVERY-ADOPT (poller bin/fleet-poll.py). Writer family: xiaomi (mimo). Full diff (tests included) follows, then the full post-change fleet-poll.py.
+ITEM: poller takes its peer endpoint from the keeper host registry (GET hosts, bearer token file), not a hardcoded BASE_URL; per-host HMAC key files (inventory host -> key_file) replace the shared secret file; explicit --base / env override stays for transition and default is discovery, never an IP; fail closed with a clear error when the registry read is unavailable; no site IP literal; secrets never printed; HMAC wire contract unchanged; red test first.
+
+Review vectors; findings PER VECTOR with severity (BLOCKER/HIGH/MEDIUM/LOW) and quoted lines:
+V1 fail-closed: every registry failure path (unset url/token, unreachable, non-200, bad JSON, host unknown/unhealthy/null endpoint) gives a clear one-line error, exit code per module docstring, never a fallback address, never a traceback.
+V2 per-host key: the key used to sign is the target/sender host's own file from the inventory; wrong host, missing inventory entry, unreadable/empty file, permission check; any key or token content in output/logs/errors?
+V3 contract unchanged: signature canonical form, probe/poll/send behaviour and exit codes (0 ok, 2 usage, 3 transport, 4 auth) vs the removed code; existing consumers (routerctl, router-poll-nudge) still parse output.
+V4 public/secret hygiene (no IP/host literals, tests use placeholders); redirect handling of keeper URL (does the bearer token follow a redirect to another host?).
+V5 tests: meaningful, would fail on old code, gaps.
+End with exactly one line: VERDICT: APPROVE | REQUEST_CHANGES | BLOCK.

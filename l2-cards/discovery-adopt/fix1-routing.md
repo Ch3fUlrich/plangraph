@@ -1,0 +1,5 @@
+# Fix round 1 (routing bin/fleet-poll.py), from seats qwen (ACCEPT) + Haiku (REQUEST_CHANGES). Same rules as writer-common.md (red test first, one commit, trailers).
+1. HIGH: keeper read via urllib follows redirects and re-sends the Bearer token to the redirect target. Use an opener whose redirect handler refuses redirects; 3xx -> fail closed with the module's transport/config exit code and a one-line error. Red test: keeper mock answers 302 to a second local server; the second server must see no request/Authorization header.
+2. A scheme-less or malformed keeper URL (e.g. "keeper.example.invalid:8765", unbalanced brackets) and any ValueError/http.client.HTTPException/UnicodeDecodeError in the keeper read, token read or inventory/key read must give a one-line error with the documented exit code, never a traceback. Red test for each.
+3. If the keeper entry carries key_id and the code does not use it, either verify nothing extra (leave) or document in the docstring that key selection is by host via the inventory; no behaviour change required.
+Nothing else. Run tests/test_fleet_poll_discovery.py; report sha + result.

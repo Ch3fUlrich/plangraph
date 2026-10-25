@@ -1,0 +1,6 @@
+# Fix round 3 (routing bin/fleet-poll.py). Same rules as writer-common.md (red test first, one commit, trailers). Nothing else.
+1. _request: response decode is strict; UnicodeDecodeError/ValueError escapes as a traceback. Catch ValueError -> one-line error, exit 3 (use errors="replace" is also fine). Red test: mock peer returns invalid UTF-8.
+2. _request uses bare urlopen, so a 3xx from the peer is followed and X-Fleet-Sig plus the signed POST body are re-sent to the redirect target. Use the same refuse-redirect opener as the keeper read for the bus leg; 3xx -> fail closed exit 3. Red test: peer 302 -> second local server sees no request.
+3. keeper_get/_request: build_opener keeps FileHandler/DataHandler/FTPHandler, so --keeper-url file:///... or data: is read locally as the discovery answer. Validate the keeper URL scheme is http or https at config time (exit 2 one-line error) and build the opener from only HTTP/HTTPS handlers. Red tests for file: and data: URLs.
+4. cmd_send treats only 401 as auth refusal; a 403 prints "sent ok" and exits 0. Map 401 and 403 to exit 4 for send; probe/poll 403 -> exit 4 too (not "bad probe payload"). Red tests.
+Run tests/test_fleet_poll_discovery.py; report sha + result.

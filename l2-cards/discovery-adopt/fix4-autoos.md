@@ -1,0 +1,2 @@
+# Fix round 4 (AutoOS tools/fleet_bus.py). Same rules as writer-common.md (red test first, one commit, trailers). Nothing else.
+is_wildcard_bind: socket.inet_aton(value) raises ValueError (not OSError) on an embedded NUL (e.g. keeper endpoint "http://0\u0000:58690"), escaping check_bind as a traceback. Treat ValueError as a refusal (fail closed, one-line error, exit code as other bad-bind errors) in is_wildcard_bind/check_bind and endpoint_host. Red test for a NUL in --bind and in a discovered endpoint. Run tests/test_fleet_bus.py; report sha + result.

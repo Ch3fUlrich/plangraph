@@ -1,0 +1,1183 @@
+You have NO tools and no repository access. Everything you need is below. Answer in plain text only.
+Any tool call you write will NOT run and makes your review void. Do not plan to read files; review only the text below.
+
+Review routing-repo PR for plangraph:BUS-PEER-DISCOVERY-ADOPT (poller bin/fleet-poll.py). Writer family: xiaomi (mimo). Full diff (tests included) follows, then the full post-change fleet-poll.py.
+ITEM: poller takes its peer endpoint from the keeper host registry (GET hosts, bearer token file), not a hardcoded BASE_URL; per-host HMAC key files (inventory host -> key_file) replace the shared secret file; explicit --base / env override stays for transition and default is discovery, never an IP; fail closed with a clear error when the registry read is unavailable; no site IP literal; secrets never printed; HMAC wire contract unchanged; red test first.
+
+Review vectors; findings PER VECTOR with severity (BLOCKER/HIGH/MEDIUM/LOW) and quoted lines:
+V1 fail-closed: every registry failure path (unset url/token, unreachable, non-200, bad JSON, host unknown/unhealthy/null endpoint) gives a clear one-line error, exit code per module docstring, never a fallback address, never a traceback.
+V2 per-host key: the key used to sign is the target/sender host's own file from the inventory; wrong host, missing inventory entry, unreadable/empty file, permission check; any key or token content in output/logs/errors?
+V3 contract unchanged: signature canonical form, probe/poll/send behaviour and exit codes (0 ok, 2 usage, 3 transport, 4 auth) vs the removed code; existing consumers (routerctl, router-poll-nudge) still parse output.
+V4 public/secret hygiene (no IP/host literals, tests use placeholders); redirect handling of keeper URL (does the bearer token follow a redirect to another host?).
+V5 tests: meaningful, would fail on old code, gaps.
+End with exactly one line: VERDICT: APPROVE | REQUEST_CHANGES | BLOCK.
+
+===== DIFF =====
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a57dc627..fb407bb8 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,9 +1,5 @@
+ # Changelog
+-- 2026-10-25 D-2715 incident: Harbor robot credential in a transcript -> OS-31 rotation batch.
+-- 2026-10-25 D-2713 gen writers fall through to mimo-pro; Q-GEN-REMOTE-PERSIST queued.
+-- 2026-10-25 D-2712 L2 bus-discovery-adopt launched b1957139.
+-- 2026-10-25 D-2711 #185 GO after 1 delta seat; LOWS leaf.
+-- 2026-10-25 D-2710 close 2 autoos p3 items; LOWS leaf.
++- 2026-10-25 BUS-PEER-DISCOVERY-ADOPT (D-2670): `bin/fleet-poll.py` drops the hardcoded BASE_URL and the shared `fleet-relay-secret` default. The peer is discovered from the keeper registry (`GET /v1/hosts`, healthy + non-null endpoint only; anything else fails closed with one line, exit 3, never an IP or loopback guess) via `--host`/`FLEET_BUS_HOST` + `--keeper-url`/`FLEET_KEEPER_URL` + `--keeper-token-file`/`FLEET_KEEPER_TOKEN_FILE` (0600, never printed); `--base`/`FLEET_BUS_BASE` stays the opt-in transition override. `send`/`poll` sign with the per-host key file from the inventory JSON (`--inventory`/`FLEET_BUS_INVENTORY`); the old shared secret file is only reachable through an explicit `--secret-file`. Tests `tests/test_fleet_poll_discovery.py` (22 cases, red-first 19 red; keeper + relay mocked with local http.server on 127.0.0.1).
+ - 2026-10-25 D-2709 CORTENDESK-PHP-CVE closed.
+ - 2026-10-25 D-2708 OS-210 holmes-pilot key done; scrub window live.
+ - 2026-10-25 D-2707 ROUTER-LIVENESS-WATCHDOG closed; alert-only timer live.
+diff --git a/QUESTIONS.md b/QUESTIONS.md
+index f287a89b..68d2eda5 100644
+--- a/QUESTIONS.md
++++ b/QUESTIONS.md
+@@ -4,7 +4,6 @@ Sorted by priority. Kind: ANSWER = a decision/answer from you; TASK = something
+ 
+ | Prio | ID | Kind | What it unblocks / why | Exact step | Where |
+ |---|---|---|---|---|---|
+-| 2 | Q-GEN-REMOTE-PERSIST | ANSWER | D-2713 (workst-L1-gen GEN-SRV-W6-W8): on the gen server, the compute endpoints PharmCAT, trio and single PRS persist nothing (IBD is a stub), so they answer 409 remotely and PharmCAT + trio results cannot be shown on the server (earlier F1 = no persistence). Nothing waits on it now: W7/W8 continue. | Choose: (a, default) keep it so: these stay local-only, server answers 409 with a clear message; (b) add server-side persistence for PharmCAT + trio results (new lane, privacy review since it stores genomic-derived results on the server). Default auto-accepts after 12 h (router policy, ~2026-10-25 19:00Z). Reversible. | answer routing |
+ | 3 | OS-SSH-OPERATOR | TASK | D-2258 (server-L1-main OP-CUTOVER-STEPS read-only audit via prox): next maintenance window (operator D-2559); operator-only access steps left after the access cutover. Bundle with MT-234/MT-005 (maintenance window question). | (7) Proxmox host home: PermitRootLogin yes + PasswordAuthentication yes -> key-only with a second session open, in the MT-005 window (apt timers masked, D-2261). (7b) OPNsense GUI: PermitRootLogin off, create the agent-ops user. (7c) ci-vm .165 unreachable on tcp/22: check the VM console. Tell routing which ones are done. | home / OPNsense / Proxmox console |
+ | 3 | OS-REBIN-H | TASK | (D-2585: agent deletes after you OK its list; list requested from workst-L1-basic-analysis) workst-basic-analysis:OP-REBIN-H-STAGING-DELETE (D-2159): re-binarize runbook step 12, operator-only; nothing waits on it. Keep the Z: backups (only copy of the 30 Hz arrays); Z: 20261017-before-compaction-swap stays until a fresh store backup exists on Z: (operator D-2166). | On the workstation delete the re-binarize staging dirs on H: per docs/superpowers/plans/2026-10-09-rebinarize-runbook.md step 12, then tell routing 'H: done' | workstation |
+ | 4 | OS-214 | TASK | (D-2584: agent creates what it can: prox creates the Semaphore-CI key for ciadmin under this OK after the freeze; the GitHub PAT admin:read + runner token stay yours) server:CI-VM-GH-RUNNER operator flags (server-L1-main): MT-237 Semaphore-CI key for ciadmin; MT-238 the read PAT needs admin:read scope (workst_online check); runner re-registration token = top-up per GO. | Ask server-L1-main for the exact steps; credentials are yours | GitHub / Semaphore |
+@@ -13,7 +12,7 @@ Sorted by priority. Kind: ANSWER = a decision/answer from you; TASK = something
+ | 2 | OS-111 (verify) | TASK | Open WebUI in-browser code execution (D-504), after prox deploys it | if prox reports no automation admin key: Admin → Settings → Code Execution → engine Pyodide (code execution + code interpreter); then in a chat run `print(1+1)` with code execution and tell any session it worked | Open WebUI |
+ | 2 | OS-99 | TASK | (D-2584: server-L1-main refused the router-relayed edit, correct per harness; the sentence is at CLAUDE.md:349, not 302) Server CLAUDE.md still says Dockhand is read-only (low; server-L1-main only edits CLAUDE.md on your words, D-478) | type in **server-L1-main**: `Replace the Dockhand sentence at CLAUDE.md:349 ("Dockhand is **read-only** (stats/logs), never a deployer.") with: "Dockhand is **never a deployer** and agents use it **read-only** (stats/logs); its own scheduled maintenance is limited to a daily prune of *dangling* images and notify-only update checks (operator 2026-10-03, D-475)."` | server-L1 session |
+ | 3 | Q-FRITZ-IPV6 | TASK | Fritzbox IPv6 inbound share (later, when you have Fritzbox access, D-207) | allow IPv6 TCP 80/443 to OPNsense (prox has the steps; TR-064 cannot set it). Until then the public AAAA stays and IPv6-first clients fall back to IPv4. | Fritzbox |
+-| 3 | OS-31 | TASK | (+ D-2715: Harbor robot credential from coding.vm ~/.docker/config.json was exposed in a prox helper transcript 2026-10-25, not written to a file; rotate it in this batch, or sooner if you prefer) Rotate provider keys (operator D-2581: NEXT MAINTENANCE WINDOW with OS-SSH-OPERATOR; earlier deferral D-216: no current danger; do it after the main OmniRoute work, together with server tier A) | (includes OS-133: revoke + replace the plaintext OpenRouter key in the workstation user OpenCode config, D-2559) rotate the provider keys in AutoOS `configuration/api-keys.yml` and the Server provider keys: create new keys in each provider console; agents verify by one probe each (names only) | provider consoles |
++| 3 | OS-31 | TASK | Rotate provider keys (operator D-2581: NEXT MAINTENANCE WINDOW with OS-SSH-OPERATOR; earlier deferral D-216: no current danger; do it after the main OmniRoute work, together with server tier A) | (includes OS-133: revoke + replace the plaintext OpenRouter key in the workstation user OpenCode config, D-2559) rotate the provider keys in AutoOS `configuration/api-keys.yml` and the Server provider keys: create new keys in each provider console; agents verify by one probe each (names only) | provider consoles |
+ | 3 | OS-53 | TASK | (D-2585 operator: keep BookLore; do the refresh later) ComicVine bulk refresh (BookLore, multi-day): leaves publisher/published date empty until done (MT-217) | ComicVine allows 200 requests per resource per hour, so ~8.5k comic/manga books need a per-library refresh over several days in the BookLore UI | BookLore UI |
+ | 3 | OS-71 | TASK | Home Assistant floor plan (picture-elements) needs your flat layout | (1) draw the flat as rooms in diagrams.net (or Inkscape) → File → Export as SVG (untick "include a copy of my diagram"), ~1000 px wide; (2) give it to prox to place at /home/s/apps/homeassistant/config/www/floorplan.svg (→ /local/floorplan.svg); (3) HA → Settings → Dashboards → edit → Add card → "Picture elements" → YAML editor → paste the skeleton from Server docs/setup/homeassistant.md; (4) one state-icon per light/switch: set its entity id and move it with top/left %; (5) check on the phone app; after changing the SVG use /local/floorplan.svg?v=2 | your PC + HA |
+ | 3 | OS-BOOKORBIT-EVAL | TASK | DEFERRED to 2027-04-24 (operator D-2585): keep BookLore; evaluate BookOrbit (BookLore's successor, has a BookLore importer; upstream lacks NFS support) in 6 months | router asks then | - |
+diff --git a/bin/fleet-poll.py b/bin/fleet-poll.py
+index d5f388f1..51178018 100644
+--- a/bin/fleet-poll.py
++++ b/bin/fleet-poll.py
+@@ -1,5 +1,5 @@
+ #!/usr/bin/env python3
+-"""Coding-side fleet-bus poller (pull mode, D-2024/D-2029).
++"""Coding-side fleet-bus poller (pull mode, D-2024/D-2029; peer discovery D-2670).
+ 
+ Outbound-only: coding.vm polls the workstation listener, so no inbound
+ firewall hole and no coding listener are needed. Mirrors the workstation
+@@ -9,11 +9,38 @@ firewall hole and no coding listener are needed. Mirrors the workstation
+                = hex HMAC-SHA256(secret, "ts|nonce|from|to|sha256(text)")
+   GET /outbox?since=<cursor> -> 200 {"cursor", "records"} (records carry text)
+ 
+-Secrets travel by NAME and FILE only, never in output: the HMAC secret is
+-read once from --secret-file (0600, owner-only) into memory and never
+-printed. `probe` needs no secret (open read, reachability only).
++The peer endpoint is DISCOVERED, never guessed (BUS-PEER-DISCOVERY-ADOPT):
+ 
+-Exit codes: 0 ok; 2 usage/config error; 3 transport error; 4 auth refused.
++  GET <keeper-url>/v1/hosts   header "Authorization: Bearer <token>"
++      -> 200 {"hosts":[{"host","endpoint","key_id","health","last_seen"}]}
++
++  The target host's endpoint is used only when health == "healthy" and
++  endpoint is non-null. Anything else (keeper URL/token unset, keeper
++  unreachable, non-200, bad JSON, host unknown, host unhealthy, endpoint
++  null) fails closed: one line on stderr, exit 3, no traceback, and never a
++  fallback IP or loopback guess. `--base URL` (env FLEET_BUS_BASE) is the
++  explicit transition override and skips discovery; it stays opt-in.
++
++Configuration (flag / env; no literal defaults anywhere):
++
++  --host NAME / FLEET_BUS_HOST                  peer to resolve (required
++                                                unless --base is given)
++  --base URL / FLEET_BUS_BASE                   explicit peer, skips discovery
++  --keeper-url URL / FLEET_KEEPER_URL           keeper base URL
++  --keeper-token-file PATH / FLEET_KEEPER_TOKEN_FILE
++                                                0600 bearer token file
++  --inventory PATH / FLEET_BUS_INVENTORY        per-host key inventory JSON
++                                                {"hosts":{"<host>":{"key_file":"<path>"}}}
++  --secret-file PATH                            explicit override only: the
++                                                legacy shared fleet-relay-secret
++
++Secrets travel by NAME and FILE only, never in output: `send`/`poll` sign with
++the per-host key file named by the inventory for --host (read once, first line,
++owner-only 0600); the old shared secret file is reachable only through an
++explicit --secret-file. `probe` needs no key (open read, reachability only).
++
++Exit codes: 0 ok; 2 usage/config error (host, inventory, key file);
++3 fail-closed (keeper/discovery/transport); 4 auth refused.
+ """
+ 
+ import argparse
+@@ -27,27 +54,35 @@ import urllib.error
+ import urllib.request
+ import uuid
+ 
+-BASE_URL = "http://<SITE-IP-REDACTED>:58690"
+ TIMEOUT_S = 10
+ TEXT_MAX = 2000
+-SECRET_FILE = os.path.expanduser("~/.config/autoos/fleet-relay-secret")
+ CURSOR_FILE = os.path.expanduser("~/.local/state/fleet/fleet-poll.cursor")
+ 
+ 
++def die(msg, code=2):
++    """One line on stderr, no traceback, then exit with `code`."""
++    sys.stderr.write("fleet-poll: error: %s\n" % msg)
++    raise SystemExit(code)
++
++
+ def scrub_text(text):
+     """One line, at most TEXT_MAX chars. Mirrors the listener."""
+     return " ".join(str(text).splitlines())[:TEXT_MAX]
+ 
+ 
+-def read_secret(path):
+-    """First line of the secret file. Names the failure, never the value."""
++def read_secret(path, what="secret file", code=2):
++    """First line of the secret file, owner-only (0600). Names the failure,
++    never the value."""
+     try:
++        mode = os.stat(path).st_mode
+         with open(path, encoding="utf-8-sig") as f:
+             value = f.readline().strip()
+     except OSError:
+-        raise SystemExit("fleet-poll: error: secret file unreadable: %s" % path)
++        die("%s unreadable: %s" % (what, path), code)
++    if mode & 0o077:
++        die("%s not owner-only (0600): %s" % (what, path), code)
+     if not value:
+-        raise SystemExit("fleet-poll: error: secret file empty: %s" % path)
++        die("%s empty: %s" % (what, path), code)
+     return value.encode("utf-8")
+ 
+ 
+@@ -59,6 +94,15 @@ def sign(secret, ts, nonce, frm, to, text):
+                     hashlib.sha256).hexdigest()
+ 
+ 
++def sig_headers(secret):
++    """Signed request headers for the open GET: same canonical form with the
++    empty message (from, to and text unset)."""
++    ts = int(time.time())
++    nonce = uuid.uuid4().hex
++    return {"X-Fleet-Ts": str(ts), "X-Fleet-Nonce": nonce,
++            "X-Fleet-Sig": sign(secret, ts, nonce, "", "", "")}
++
++
+ def _request(method, url, body=None, headers=None):
+     req = urllib.request.Request(url, data=body, headers=headers or {},
+                                  method=method)
+@@ -68,9 +112,89 @@ def _request(method, url, body=None, headers=None):
+     except urllib.error.HTTPError as e:
+         if e.code in (401, 403):
+             return e.code, ""
+-        raise SystemExit("fleet-poll: error: HTTP %s on %s" % (e.code, url))
++        die("HTTP %s on %s" % (e.code, url), 3)
+     except OSError as e:
+-        raise SystemExit("fleet-poll: error: transport: %s" % e)
++        die("transport: %s" % e, 3)
++
++
++def discover_endpoint(host, keeper_url, token_file):
++    """The host's endpoint from the keeper registry. Fails closed (exit 3)
++    unless the host is healthy and its endpoint is non-null."""
++    if not keeper_url:
++        die("keeper URL unset (--keeper-url / FLEET_KEEPER_URL)", 3)
++    if not token_file:
++        die("keeper token file unset "
++            "(--keeper-token-file / FLEET_KEEPER_TOKEN_FILE)", 3)
++    token = read_secret(token_file, "keeper token file", 3)
++    url = keeper_url.rstrip("/") + "/v1/hosts"
++    req = urllib.request.Request(
++        url, headers={"Authorization": "Bearer " + token.decode("utf-8")})
++    try:
++        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
++            payload = resp.read().decode("utf-8", "replace")
++    except urllib.error.HTTPError as e:
++        die("keeper HTTP %s on %s" % (e.code, url), 3)
++    except OSError:
++        die("keeper unreachable: %s" % keeper_url, 3)
++    try:
++        hosts = json.loads(payload)["hosts"]
++    except (ValueError, KeyError, TypeError):
++        die("bad keeper payload from %s" % url, 3)
++    if not isinstance(hosts, list):
++        die("bad keeper payload from %s" % url, 3)
++    for entry in hosts:
++        if not isinstance(entry, dict) or entry.get("host") != host:
++            continue
++        if entry.get("health") != "healthy":
++            die("host not healthy in keeper: %s (health=%s)"
++                % (host, entry.get("health")), 3)
++        endpoint = entry.get("endpoint")
++        if not endpoint:
++            die("no endpoint for host in keeper: %s" % host, 3)
++        return str(endpoint)
++    die("unknown host in keeper: %s" % host, 3)
++
++
++def resolve_base(args):
++    """--base (or FLEET_BUS_BASE) wins and skips discovery; otherwise the
++    peer comes from the keeper registry for --host (or FLEET_BUS_HOST)."""
++    base = getattr(args, "base", None) or os.environ.get("FLEET_BUS_BASE") or ""
++    if base:
++        return base.rstrip("/")
++    if not args.host:
++        die("--host (or FLEET_BUS_HOST) required unless --base "
++            "(or FLEET_BUS_BASE) is given", 2)
++    keeper_url = (getattr(args, "keeper_url", None)
++                  or os.environ.get("FLEET_KEEPER_URL") or "")
++    token_file = (getattr(args, "keeper_token_file", None)
++                  or os.environ.get("FLEET_KEEPER_TOKEN_FILE") or "")
++    return discover_endpoint(args.host, keeper_url, token_file).rstrip("/")
++
++
++def load_key(args):
++    """The signing key: explicit --secret-file override, else the per-host key
++    file named by the inventory for --host. Read once; every failure names the
++    path and host, never the contents."""
++    secret_file = getattr(args, "secret_file", None)
++    if secret_file:
++        return read_secret(secret_file, "secret file", 2)
++    if not args.host:
++        die("--host (or FLEET_BUS_HOST) required for key lookup", 2)
++    inv_path = (getattr(args, "inventory", None)
++                or os.environ.get("FLEET_BUS_INVENTORY") or "")
++    if not inv_path:
++        die("inventory unset (--inventory / FLEET_BUS_INVENTORY)", 2)
++    try:
++        with open(inv_path, encoding="utf-8") as f:
++            inv = json.load(f)
++    except (OSError, ValueError):
++        die("inventory unreadable or bad JSON: %s" % inv_path, 2)
++    hosts = inv.get("hosts") if isinstance(inv, dict) else None
++    entry = hosts.get(args.host) if isinstance(hosts, dict) else None
++    key_file = entry.get("key_file") if isinstance(entry, dict) else None
++    if not key_file:
++        die("no key_file for host %s in inventory %s" % (args.host, inv_path), 2)
++    return read_secret(key_file, "key file for host %s" % args.host, 2)
+ 
+ 
+ def cmd_probe(args):
+@@ -84,12 +208,14 @@ def cmd_probe(args):
+         print("fleet-poll: probe ok: cursor=%s records=%d"
+               % (data.get("cursor", "?"), len(data.get("records", []))))
+     except (ValueError, AttributeError):
+-        raise SystemExit("fleet-poll: error: bad probe payload")
++        die("bad probe payload", 2)
+     return 0
+ 
+ 
+ def cmd_poll(args):
+-    """Fetch records since the stored cursor, print them, advance the cursor."""
++    """Fetch records since the stored cursor, print them, advance the cursor.
++    Signed with the per-host key file (probe stays unsigned)."""
++    secret = load_key(args)
+     # The cursor file holds one cursor line; absent means fetch-all.
+     try:
+         with open(args.cursor_file, encoding="utf-8") as f:
+@@ -97,14 +223,15 @@ def cmd_poll(args):
+     except OSError:
+         cursor = ""
+     status, payload = _request(
+-        "GET", args.base + "/outbox?since=" + urllib.request.quote(cursor))
++        "GET", args.base + "/outbox?since=" + urllib.request.quote(cursor),
++        headers=sig_headers(secret))
+     if status == 401:
+         print("fleet-poll: poll refused (auth)")
+         return 4
+     try:
+         data = json.loads(payload)
+     except ValueError:
+-        raise SystemExit("fleet-poll: error: bad poll payload")
++        die("bad poll payload", 2)
+     for rec in data.get("records", []):
+         print(json.dumps({"id": rec.get("id"), "ts": rec.get("ts"),
+                           "from": rec.get("from"), "to": rec.get("to"),
+@@ -115,14 +242,13 @@ def cmd_poll(args):
+         with open(args.cursor_file, "w", encoding="utf-8") as f:
+             f.write(str(data.get("cursor", cursor)) + "\n")
+     except OSError:
+-        raise SystemExit("fleet-poll: error: cursor file unwritable: %s"
+-                         % args.cursor_file)
++        die("cursor file unwritable: %s" % args.cursor_file, 2)
+     return 0
+ 
+ 
+ def cmd_send(args):
+-    """POST one message to /inbox, signed with the secret file."""
+-    secret = read_secret(args.secret_file)
++    """POST one message to /inbox, signed with the per-host key file."""
++    secret = load_key(args)
+     ts = int(time.time())
+     nonce = uuid.uuid4().hex
+     text = scrub_text(args.text)
+@@ -139,18 +265,44 @@ def cmd_send(args):
+     return 0
+ 
+ 
++def _add_common(ap, hidden=False):
++    """Peer/discovery options on the main parser and on every subparser (so
++    `fleet-poll.py --host ws probe` and `fleet-poll.py probe --host ws` both
++    work); subparser copies are SUPPRESS so they never clobber the outer value."""
++    default = argparse.SUPPRESS if hidden else None
++    ap.add_argument("--base", default=default,
++                    help="explicit peer base URL; skips discovery "
++                         "(env FLEET_BUS_BASE)")
++    ap.add_argument("--host", default=default,
++                    help="peer host name to resolve in the keeper registry "
++                         "(env FLEET_BUS_HOST)")
++    ap.add_argument("--keeper-url", default=default,
++                    help="keeper base URL for GET /v1/hosts (env FLEET_KEEPER_URL)")
++    ap.add_argument("--keeper-token-file", default=default,
++                    help="0600 file holding the keeper bearer token "
++                         "(env FLEET_KEEPER_TOKEN_FILE)")
++    ap.add_argument("--inventory", default=default,
++                    help="per-host key inventory JSON (env FLEET_BUS_INVENTORY)")
++
++
+ def build_parser():
+     ap = argparse.ArgumentParser(prog="fleet-poll.py",
+                                  description="Coding-side fleet-bus poller.")
+-    ap.add_argument("--base", default=BASE_URL)
++    _add_common(ap)
+     sub = ap.add_subparsers(dest="cmd", required=True)
+     p = sub.add_parser("probe", help="reachability check, no secret")
++    _add_common(p, hidden=True)
+     p.set_defaults(func=cmd_probe)
+     p = sub.add_parser("poll", help="fetch new records, advance cursor")
++    _add_common(p, hidden=True)
+     p.add_argument("--cursor-file", default=CURSOR_FILE)
++    p.add_argument("--secret-file",
++                   help="explicit override: legacy shared secret file")
+     p.set_defaults(func=cmd_poll)
+     p = sub.add_parser("send", help="POST one signed message")
+-    p.add_argument("--secret-file", default=SECRET_FILE)
++    _add_common(p, hidden=True)
++    p.add_argument("--secret-file",
++                   help="explicit override: legacy shared secret file")
+     p.add_argument("--from", dest="frm", required=True)
+     p.add_argument("--to", required=True)
+     p.add_argument("--text", required=True)
+@@ -160,6 +312,10 @@ def build_parser():
+ 
+ def main(argv=None):
+     args = build_parser().parse_args(argv)
++    args.host = getattr(args, "host", None) or os.environ.get("FLEET_BUS_HOST") or ""
++    args.inventory = (getattr(args, "inventory", None)
++                      or os.environ.get("FLEET_BUS_INVENTORY") or "")
++    args.base = resolve_base(args)
+     return args.func(args)
+ 
+ 
+diff --git a/docs/decisions-log.md b/docs/decisions-log.md
+index 2a441b81..9460a237 100644
+--- a/docs/decisions-log.md
++++ b/docs/decisions-log.md
+@@ -60,13 +60,6 @@ questions from [`QUESTIONS.md`](../QUESTIONS.md) land here.
+ | D-2151 | server | server-L1-main (ae50408b) decided to stop the parked server-L2-sd-rollback-sha 040f9a44 (4 d old, no MERGE-READY, RAM D-1851); router stopped it, branch kept. SONARR-QUEUE-LOAD close evidence (prox 11:47Z: /api/v3/queue 200, 97 records, /queue/status 200 errors=false) does not yet cover 'queue page loads' + 'no importBlocked without reason'; item still open in the keeper, so server-L1-main claims and verdict-closes it after one more prox read-back. | routing-00 | server-L1-main report 2026-10-22. |
+ | D-2159 | basic-analysis | ACCEPT REBIN-CLOSE evidence (packet l1/plan-2026-10-22 98db6686 docs/plan/graph/evidence/REBIN-CLOSE.md; router checked: every done criterion met; 1fd34811 and d5b2896a are on basic-analysis main): spot-checks 3 of 3 with no 'no current partition', changelog via changelog_append, evidence README + census test, docs, Anja notice routed via ANJA-RERUN-POSTREBIN (operator choice), 4 Omnigraph Decisions. Runbook step 12 (H: staging dirs) is not a done criterion and is the operator's act: split off as workst-basic-analysis:OP-REBIN-H-STAGING-DELETE (operator task under PH-INFRA, gates no lane; Z: backups stay); queued as OS-REBIN-H in QUESTIONS.md. Decision evidence D-2159 attached; owner submits, reviewer verdict via its own run-bound token | routing-00 | workst-L1-basic-analysis EVIDENCE-READY 2026-10-22. |
+ | D-2290 | plangraph | JUDGE GO merge #120 plangraph:CI-COMMIT-GATE-HARDEN (HIGH, gate file) head 2209279d6faf231837c016de584be63497904c73: gh PR head match, CI run 39846321374 success 8/8 incl ci-gate, mergeable. Writer deepseek-flash (w24/w25 without TEST-GAMING line, disclosed); seats on this sha: qwen3.8-flash (alibaba) A+B VERDICT pass, glm-5.3-flash-free (zhipu) A+B VERDICT pass, TEST-GAMING 0 hits; prompts pA/pB name 2209279d and carry no rulings (router grep). build-L1 ran gate_wiring_check rc0 with Gate-Edit (agent claim). Follow-up plangraph:CI-COMMIT-GATE-EDGES (HIGH, prio 7, after HARDEN) under PH-FLEET-RULES, batch docs/plan/batches/2026-10-22-ci-commit-gate-edges.yaml@1531dfeaeaf3b871364b433025d5bd04d2d3422765078874d694d16797a59eaf (2/2). | routing-00 | build-L1 GO-REQ; gh pr view/run view; router read ~/.local/share/plangraph/seats/gate-harden/final-2209279d. |
+-| D-2716 | plangraph | (06:51Z) Heartbeat: build-L1 gen-29 975daff2 compacted 1x -> RECYCLE request at next checkpoint (after #184/#185 mergepaths); 7 agent-run processes on coding.vm vs D-2706 cap 4 writers -> no new writers here, rest to workst. MemAvailable 3968 MB. | router | routerctl status. |
+-| D-2715 | server, prox | (06:48Z) INCIDENT (prox report): Harbor robot credential (coding.vm ~/.docker/config.json) appeared in a prox helper transcript 2026-10-25, not written to any file. Rotation = operator (secrets) -> added to OS-31 rotation batch (D-203), operator may pull it forward. Router did not read the file. prox MERGE-READY to server-L1-main: staging-scrub-followup fec5bf96, chaptarr-mv1 1283421c (fork delta, non-Claude seats needed). | router | prox message. |
+-| D-2714 | plangraph | (06:33Z) #184 Haiku delta seat: HIGH (vacuous --within) + LOW fixed; new MED(a) existing-but-non-matching --within selects nothing = the D-2692-mandated 'no pg-affected tests' path with the within set fixed in tests.yml -> router agrees, refuted; MED(b) fixed by test-only Hand-Edit a8efa6d5 (3 assert lines). No objection: mergepath 184 at a8efa6d5 on green CI (standard), then evidence + submit TEST-SPEED-AFFECTED, RUN-EXIT-NOTIFY, PG-MODEL-ROUTE-HARDENING. #187 PG-L3-MAX-TOKENS r2 (HIGH truncated_empty still 200) running; #185 delta seat APPROVE -> mergepath (D-2711). | router | build-L1 status, D-2692. |
+-| D-2713 | workst-gen | (06:32Z) workst-L1-gen GEN-SRV-W6-W8: W6d-2b 289b446 + W6d-2a b81c6da on genw4/server-phase, affected 392 passed (L1 claim); handoff HANDOFF-2026-10-25b.md. Ruling: no retry loop on Gemini - the D-2683 writer order falls through: agy 429 (reset ~07:09Z), vertex 503, AI Studio 402 (credits = money, operator; not needed) -> W7a/W7b/W7c/W8 go to mimo/mimo-v2.6-pro now, then openrouter/free + opencode free, mimo-flash last; Gemini again when agy serves. Remote PharmCAT/trio persistence gap -> operator question Q-GEN-REMOTE-PERSIST (default a: stay local-only, 409 with clear message; auto-accept ~19:00Z). New kits via ingest job (kit id == kit_code): noted. | router | L1 message. |
+-| D-2712 | plangraph, autoos, routing | (06:31Z) L2-LAUNCH on build-L1-bus request: bus-discovery-adopt b1957139 (sonnet medium, cwd AutoOS-worktrees/bus-discovery-adopt, trust set after ~/.claude.json backup, prompt docs/plan/briefs/bus-discovery-adopt-prompt.txt) for BUS-PEER-DISCOVERY-ADOPT (high, D-2671; lanes routing + AutoOS; 2 seats per PR). Brief checked: no merge/push main, no crons, stop at DONE, no secrets read; missing 'stop on denial' added in the launch prompt. Routing-repo MERGE-READY comes to router (router merges routing main). FYI L1: phase/rt-p1-bus G1 merged #186 e30b2ae3. | router | fleet-launch output. |
+-| D-2711 | plangraph | (06:31Z) #185 REVIEW-METHOD-SETTING (high) head a7c6452a, PR CI green (L1). Writers openai (cx R1-R2) + google (agy R3-R5) + 1-line Claude Hand-Edit 3d91fa5e (settings.py, MED1 fix, D-1272 size). Seats qwen APPROVE + deepseek CHANGES: MED1 fixed by 3d91fa5e; MED2 (removed imports) router-verified refuted at a7c6452a: routing.py references none of fixer_threshold, SettingsError, project_of; no importer of them from routing in src, tests or tools (D-302). Ruling: the MED1 fix delta was never seated -> 1 non-Claude delta seat on 3d91fa5e (qwen or deepseek tool-less, prompt = the diff + MED1 text, no L1 rulings; D-2540), then mergepath on APPROVE without a new GO; on CHANGES back to routing. 5 LOWs -> leaf plangraph:REVIEW-METHOD-SETTING-LOWS (standard, no re-seat) + edge GOAL-PG-FLEET. | router | git show a7c6452a, git grep, apply_ops. |
+-| D-2710 | autoos | (06:30Z) autoos:OPENCODE-AUTH-LOWS + autoos:QODER-GW-INFRA-REMOVE merged AutoOS main a34f887d (router-verified ancestor of origin/main; lane e14dd6e4 inside; CI 40167733267 success on e14dd6e4). Writers cx/mimo/agy (openai, xiaomi, google), seat qwen r2 APPROVE (r1 REJECT fixed) = counts, standard. Follow-up leaf autoos:AO-P3-CLEANUP-LOWS (standard, p3, owner workst-L1-autoos, no re-seat) + edge into GOAL-PG-FLEET. agy individual 429 06:13Z (reset ~07:09Z) -> writers fall through to mimo-pro per D-2683 (L1 report). Closes: autoos:OPENCODE-AUTH-LOWS@a34f887d autoos:QODER-GW-INFRA-REMOVE@a34f887d | router | git merge-base, gh run view. |
+ | D-2709 | server | (06:15Z) CORTENDESK-PHP-CVE close (D-2700 fact delivered): backup-first per prox (agent claim, not router-read): task 185616 pre-update-backup 2026-10-24 05:09:29Z before dryrun 185617 + up 185620; artifacts on manage _backups/manage__rustdesk/20261024T050933Z/cortendesk-db.sql.gz 14132 B + MANIFEST. D-2503 conditions all met (3rd-family Haiku seat D-2700, backup-first, live green). Findings folded into CORTENDESK-WS-PORTS. Closes: server:CORTENDESK-PHP-CVE@d980252b | router | server-L1 + prox report. |
+ | D-2708 | server, prox | (06:15Z) OS-210 done by prox on operator direct GO: OmniRoute key holmes-pilot (no scopes, 1 USD per day, no RPM limit in this build), vaulted VW holmes-pilot/omniroute-key; router checked by stat only: coding.vm key file mode 400, 35 B, dir 700; doc on improve 9db52cef (router-verified). T6-HEAL may resume (server-L1). staging-scrub-window live on home: timers installed by hand (home is not in the homelab inventory), first run Mon 01:00 CET, zfs.conf tunables + update-initramfs on operator GO (prox report). | router | stat, git merge-base, server-L1 report. |
+ | D-2707 | plangraph, routing | (06:08Z) ROUTER-LIVENESS-WATCHDOG done: router-verified liveness-watchdog@router.timer enabled (last 06:08:29Z, next 06:18:30Z), test alert file has the ALERT line (separate test instance, real stamp untouched), routing lane 897a1d78 merged 0e3f3045 by router, plangraph 31331e80 CI green. Alert-only: stale router stamp > 45 min -> L0 inbox line (+ ROUTER_LIVENESS_PUSH_CMD if set). KEEP pinned checkout ~/code/plangraph-worktrees/live-liveness (31331e80; drop-in checkout.conf references it). Rollback: systemctl --user disable --now liveness-watchdog@router.timer. Next: KEEPER-WATCHDOG-ROLE (after #164, needs OS-WATCHDOG-TOKEN) for keeper writes; relaunch stays off. Closes: plangraph:ROUTER-LIVENESS-WATCHDOG@31331e80 | router | systemctl, evidence file. |
+diff --git a/docs/plan/briefs/bus-discovery-adopt-prompt.txt b/docs/plan/briefs/bus-discovery-adopt-prompt.txt
+deleted file mode 100644
+index 816bcd4f..00000000
+--- a/docs/plan/briefs/bus-discovery-adopt-prompt.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-You are bus-discovery-adopt, an L2 phase orchestrator launched by routing-00 on build-L1-bus's request (D-2712). Read your brief /home/s/code/plangraph-worktrees/build-L1-bus/l2-cards/discovery-adopt/brief.md and execute it exactly; report only to build-L1-bus via SendMessage (MERGE-READY for the routing repo also to routing). Added rule (router): a tool, hook or classifier denial stops that step; report it to build-L1-bus, never work around it. L3 max_tokens 128000 (D-2694). No recurring cron; stop at DONE (D-2442).
+diff --git a/ops/ws-outbox-setup.ps1 b/ops/ws-outbox-setup.ps1
+index 348df59c..e596ba2c 100644
+--- a/ops/ws-outbox-setup.ps1
++++ b/ops/ws-outbox-setup.ps1
+@@ -1,7 +1,7 @@
+ # ws-outbox-setup.ps1 - one paste on the workstation (pwsh). Asks for the coding.vm password ONCE (D-2221/D-2222).
+ # After this, agents pull secrets from coding.vm with no password: H:\fleet\bin\fleet-outbox-pull.ps1
+ $ErrorActionPreference = 'Stop'
+-$CodingVm = 'coding-vm'          # tailnet name; if it does not resolve use '<SITE-IP-REDACTED>'
++$CodingVm = 'coding-vm'          # tailnet name; if it does not resolve use the host's tailnet address from the keeper registry
+ $Key      = "$env:USERPROFILE\.ssh\id_ed25519_fleet_outbox"
+ $SshCfg   = "$env:USERPROFILE\.ssh\config"
+ New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh", 'H:\fleet\bin', 'H:\fleet\secrets\plangraph' | Out-Null
+diff --git a/status/routing-00.card.md b/status/routing-00.card.md
+index 1a55c200..cfd1d43c 100644
+--- a/status/routing-00.card.md
++++ b/status/routing-00.card.md
+@@ -1,11 +1,11 @@
+-# routing-00 state card — 2026-10-25 05:00Z · gen-45 handoff (job 4e896897 resumed) · last D-2716 (D-2717 next)
++# routing-00 state card — 2026-10-25 05:00Z · gen-45 handoff (job 4e896897 resumed) · last D-2709 (D-2710 next)
+ OPERATOR present ~05:00Z; operator-ready ON until 05:45Z (bin/operator-ready). Away -> QUESTIONS.md rows, never AskUserQuestion (D-2497/D-2486).
+ FIRST ACTION: CronList -> heartbeat `13,43 * * * *` + digest `57 5,10,16 * * *` (prompts HANDOFF §6). Router outage 01:00-04:35Z because crons are session-only (D-2677, L23) -> plangraph:ROUTER-LIVENESS-WATCHDOG (build-L1) = external timer.
+ TARGET = RETHINK (D-1834). KEEPER = GROUND TRUTH. FREEZE ENDED D-2657; plangraph = main project, max parallel lanes (D-2638), batch review only at end (D-2643/D-2644).
+ MODELS (D-2683/D-2684, DECISIONS 000z): cx/gpt-6.1-sol quota OUT ~134h (to ~2026-10-30). Writers: agy/gemini-3.8-flash -> mimo/mimo-v2.6-pro -> openrouter/free + opencode free (opencode limits reset ~2026-10-26 01Z) -> mimo-flash last (truncates on multi-file). deepseek: no top-up. Gemini+mimo OK on private repos w/o secrets (autoos:PRIVACY-GEMINI-MIMO-OK p10 workst lifts the spawner guard). agy seats pass --model, verify served id (L22).
+ 
+ ## Sessions
+-build-L1 975daff2 (gen-29) · build-L1-bus e34d4989 (gen-2) · server-L1-main 1c92f87e (gen-h) · workst-L1-autoos (gen 4c9e89) · workst-L1-gen (gen 6dcf44) · prox-L1-main · L2s: bus-discovery-adopt b1957139, build-L2-hardening cb077891, build-L2-pg-public ce88608e, server-L2-sablier-impl. qc-accepts = direct workst writers (L2 stopped, cx out).
++build-L1 975daff2 (gen-29) · build-L1-bus e34d4989 (gen-2) · server-L1-main 1c92f87e (gen-h) · workst-L1-autoos (gen 4c9e89) · workst-L1-gen (gen 6dcf44) · prox-L1-main · L2s: build-L2-review-method d3c8d22a, build-L2-hardening cb077891, build-L2-pg-public ce88608e, server-L2-sablier-impl. qc-accepts = direct workst writers (L2 stopped, cx out).
+ 
+ ## Waiting on (trigger -> action)
+ 1. PG cut: reversible steps done (D-2687); operator OS-PG-PUBLIC-PUSH (window, rename, new repo, push); lanes rebase after.
+diff --git a/tests/test_fleet_poll_discovery.py b/tests/test_fleet_poll_discovery.py
+new file mode 100644
+index 00000000..9f91ea1a
+--- /dev/null
++++ b/tests/test_fleet_poll_discovery.py
+@@ -0,0 +1,431 @@
++"""bin/fleet-poll.py -- peer discovery from the keeper hosts registry (BUS-PEER-DISCOVERY-ADOPT).
++
++Run: python3 -m pytest tests/test_fleet_poll_discovery.py -q
++
++The peer endpoint is discovered, never guessed: GET <keeper>/v1/hosts returns
++{"hosts":[{"host","endpoint","key_id","health","last_seen"}]} and the endpoint
++is used only when health == "healthy" and endpoint is non-null. Every other
++path fails closed (one line, exit 3, no traceback, no IP/loopback fallback).
++--base (or FLEET_BUS_BASE) stays the opt-in transition override.
++
++Signing keys are per host, from the inventory JSON; the old shared secret file
++is reachable only through an explicit --secret-file. Secrets are placeholders
++here (marked PLACEHOLDER) and are never printed by the tool.
++
++These tests are offline: the keeper and the bus relay are local http.server
++instances on 127.0.0.1 ephemeral ports, no real network.
++"""
++import hashlib
++import hmac
++import http.server
++import importlib.machinery
++import importlib.util
++import json
++import socket
++import threading
++from pathlib import Path
++
++import pytest
++
++BIN = Path(__file__).resolve().parent.parent / "bin"
++
++KEEPER_TOKEN = "keeper-token-PLACEHOLDER"
++HOST_KEY = "host-key-PLACEHOLDER"
++SHARED_KEY = "shared-key-PLACEHOLDER"
++
++CONFIG_VARS = ("FLEET_BUS_BASE", "FLEET_BUS_HOST", "FLEET_KEEPER_URL",
++               "FLEET_KEEPER_TOKEN_FILE", "FLEET_BUS_INVENTORY")
++
++
++@pytest.fixture(autouse=True)
++def clean_env(monkeypatch):
++    """Ambient operator env must never decide these tests."""
++    for var in CONFIG_VARS:
++        monkeypatch.delenv(var, raising=False)
++
++
++@pytest.fixture
++def fp():
++    loader = importlib.machinery.SourceFileLoader(
++        "fleet_poll_discovery", str(BIN / "fleet-poll.py"))
++    spec = importlib.util.spec_from_loader(loader.name, loader)
++    mod = importlib.util.module_from_spec(spec)
++    loader.exec_module(mod)
++    return mod
++
++
++def run(fp, argv):
++    """Run main() the way the CLI does; return the exit code."""
++    try:
++        return fp.main(argv)
++    except SystemExit as e:
++        return e.code if e.code is not None else 0
++
++
++@pytest.fixture
++def serve(request):
++    """Factory of local http.server instances on 127.0.0.1:0 (no real network).
++    serve(responder) -> (server, seen, base_url); responder(method, path,
++    headers, body) -> (status, content_type, payload bytes)."""
++    servers = []
++
++    def start(responder):
++        seen = []
++
++        class Handler(http.server.BaseHTTPRequestHandler):
++            def _handle(self):
++                length = int(self.headers.get("Content-Length") or 0)
++                body = self.rfile.read(length) if length else b""
++                seen.append((self.command, self.path, dict(self.headers), body))
++                status, ctype, payload = responder(self.command, self.path,
++                                                   self.headers, body)
++                self.send_response(status)
++                self.send_header("Content-Type", ctype)
++                self.send_header("Content-Length", str(len(payload)))
++                self.end_headers()
++                self.wfile.write(payload)
++
++            do_GET = do_POST = _handle
++
++            def log_message(self, *args):
++                pass
++
++        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
++        thread = threading.Thread(target=server.serve_forever, daemon=True)
++        thread.start()
++        servers.append(server)
++        url = "http://127.0.0.1:%d" % server.server_address[1]
++        return server, seen, url
++
++    yield start
++    for server in servers:
++        server.shutdown()
++        server.server_close()
++
++
++def bus_ok(method, path, headers, body):
++    if method == "POST":
++        return 200, "application/json", b"{}"
++    return 200, "application/json", json.dumps(
++        {"cursor": "c2", "records": [
++            {"id": "i1", "ts": 1, "from": "a", "to": "b", "text": "hi"}]}).encode()
++
++
++def keeper_body(hosts):
++    return (200, "application/json", json.dumps({"hosts": hosts}).encode())
++
++
++def owner_only(tmp_path, name, text):
++    path = tmp_path / name
++    path.write_text(text)
++    path.chmod(0o600)
++    return str(path)
++
++
++def inventory(tmp_path, hosts):
++    path = tmp_path / "inventory.json"
++    path.write_text(json.dumps({"hosts": hosts}))
++    return str(path)
++
++
++def keeper_argv(kurl, tmp_path, host="ws-1"):
++    token = owner_only(tmp_path, "keeper.token", KEEPER_TOKEN + "\n")
++    return ["--host", host, "--keeper-url", kurl, "--keeper-token-file", token]
++
++
++# --- 1. discovery resolves the peer ---------------------------------------
++
++def test_probe_resolves_the_peer_from_the_keeper(fp, serve, tmp_path, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    keeper, kseen, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": bus_url, "key_id": "k1",
++          "health": "healthy", "last_seen": 0}]))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    out = capsys.readouterr()
++    assert code == 0
++    assert "probe ok" in out.out
++    # the request landed on the keeper-resolved endpoint, not a guess
++    assert [m for m, _, _, _ in bus_seen] == ["GET"]
++    # the bearer token went to the keeper and never into output
++    assert kseen[0][2].get("Authorization") == "Bearer " + KEEPER_TOKEN
++    assert KEEPER_TOKEN not in out.out + out.err
++
++
++def test_env_vars_supply_host_keeper_and_token_file(fp, serve, tmp_path,
++                                                    monkeypatch, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": bus_url, "key_id": "k1",
++          "health": "healthy", "last_seen": 0}]))
++    token = owner_only(tmp_path, "keeper.token", KEEPER_TOKEN + "\n")
++    monkeypatch.setenv("FLEET_BUS_HOST", "ws-1")
++    monkeypatch.setenv("FLEET_KEEPER_URL", kurl)
++    monkeypatch.setenv("FLEET_KEEPER_TOKEN_FILE", token)
++    code = run(fp, ["probe"])
++    assert code == 0
++    assert "probe ok" in capsys.readouterr().out
++    assert bus_seen
++
++
++def test_probe_needs_no_key_at_all(fp, serve, tmp_path, capsys):
++    """probe is an open read: no inventory, no key file, no secret."""
++    bus, _, bus_url = serve(bus_ok)
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": bus_url, "key_id": "k1",
++          "health": "healthy", "last_seen": 0}]))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    assert code == 0
++    assert "probe ok" in capsys.readouterr().out
++
++
++# --- 2. fail closed, one line, exit 3, no fallback -------------------------
++
++def test_host_is_required_without_base(fp, capsys):
++    code = run(fp, ["probe"])
++    err = capsys.readouterr().err
++    assert code == 2
++    assert "--host" in err
++    assert len(err.strip().splitlines()) == 1
++    assert "Traceback" not in err
++
++
++def test_keeper_url_unset_fails_closed(fp, serve, tmp_path, capsys):
++    token = owner_only(tmp_path, "keeper.token", KEEPER_TOKEN + "\n")
++    code = run(fp, ["--host", "ws-1", "--keeper-token-file", token, "probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "keeper URL unset" in err
++    assert len(err.strip().splitlines()) == 1
++    assert "Traceback" not in err
++
++
++def test_keeper_token_file_unset_fails_closed(fp, serve, tmp_path, capsys):
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body([]))
++    code = run(fp, ["--host", "ws-1", "--keeper-url", kurl, "probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "keeper token file unset" in err
++    assert len(err.strip().splitlines()) == 1
++    assert "Traceback" not in err
++
++
++def test_keeper_unreachable_fails_closed(fp, tmp_path, capsys):
++    # an ephemeral port we hold closed: nothing ever listens there
++    probe_sock = socket.socket()
++    probe_sock.bind(("127.0.0.1", 0))
++    dead_port = probe_sock.getsockname()[1]
++    probe_sock.close()
++    token = owner_only(tmp_path, "keeper.token", KEEPER_TOKEN + "\n")
++    code = run(fp, ["--host", "ws-1", "--keeper-url",
++                    "http://127.0.0.1:%d" % dead_port,
++                    "--keeper-token-file", token, "probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "keeper unreachable" in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_keeper_non_200_fails_closed(fp, serve, tmp_path, capsys):
++    keeper, _, kurl = serve(lambda m, p, h, b: (500, "text/plain", b"boom"))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "keeper HTTP 500" in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_keeper_bad_json_fails_closed(fp, serve, tmp_path, capsys):
++    keeper, _, kurl = serve(lambda m, p, h, b: (200, "application/json",
++                                                b"not json"))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "bad keeper payload" in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_unknown_host_fails_closed(fp, serve, tmp_path, capsys):
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "other-1", "endpoint": "http://127.0.0.1:1",
++          "key_id": "k1", "health": "healthy", "last_seen": 0}]))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "unknown host" in err and "ws-1" in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_unhealthy_host_fails_closed_and_endpoint_is_unused(fp, serve,
++                                                            tmp_path, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": bus_url, "key_id": "k1",
++          "health": "degraded", "last_seen": 0}]))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "ws-1" in err and "degraded" in err
++    assert bus_seen == [], "an unhealthy endpoint must never be used"
++
++
++def test_null_endpoint_fails_closed_no_loopback_guess(fp, serve, tmp_path,
++                                                      capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": None, "key_id": "k1",
++          "health": "healthy", "last_seen": 0}]))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    err = capsys.readouterr().err
++    assert code == 3
++    assert "no endpoint" in err and "ws-1" in err
++    assert bus_seen == [], "no endpoint means no guess, no fallback"
++
++
++def test_fail_closed_output_never_contains_the_token(fp, serve, tmp_path,
++                                                     capsys):
++    keeper, _, kurl = serve(lambda m, p, h, b: (200, "application/json",
++                                                b"not json"))
++    code = run(fp, keeper_argv(kurl, tmp_path) + ["probe"])
++    out = capsys.readouterr()
++    assert code == 3
++    assert KEEPER_TOKEN not in out.out + out.err
++
++
++# --- 3. --base stays the opt-in transition override ------------------------
++
++def test_base_flag_skips_discovery_entirely(fp, serve, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    code = run(fp, ["--base", bus_url, "probe"])
++    assert code == 0
++    assert "probe ok" in capsys.readouterr().out
++    assert bus_seen
++
++
++def test_base_env_is_the_same_opt_in_override(fp, serve, monkeypatch, capsys):
++    bus, _, bus_url = serve(bus_ok)
++    monkeypatch.setenv("FLEET_BUS_BASE", bus_url)
++    code = run(fp, ["probe"])
++    assert code == 0
++    assert "probe ok" in capsys.readouterr().out
++
++
++# --- 4. per-host key files from the inventory ------------------------------
++
++def test_send_signs_with_the_per_host_key_file(fp, serve, tmp_path, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": bus_url, "key_id": "k1",
++          "health": "healthy", "last_seen": 0}]))
++    key_file = owner_only(tmp_path, "ws-1.key", HOST_KEY + "\n")
++    inv = inventory(tmp_path, {"ws-1": {"key_file": key_file}})
++    code = run(fp, keeper_argv(kurl, tmp_path)
++               + ["--inventory", inv, "send",
++                  "--from", "routing-00", "--to", "workst-1",
++                  "--text", "hello"])
++    out = capsys.readouterr()
++    assert code == 0
++    assert "sent ok" in out.out
++    method, path, headers, body = bus_seen[0]
++    assert method == "POST" and path == "/inbox"
++    rec = json.loads(body)
++    digest = hashlib.sha256(b"hello").hexdigest()
++    canonical = "%s|%s|%s|%s|%s" % (rec["ts"], rec["nonce"], rec["from"],
++                                    rec["to"], digest)
++    expected = hmac.new(HOST_KEY.encode(), canonical.encode(),
++                        hashlib.sha256).hexdigest()
++    assert headers.get("X-Fleet-Sig") == expected
++    assert HOST_KEY not in out.out + out.err
++
++
++def test_poll_signs_with_the_per_host_key_file(fp, serve, tmp_path, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    keeper, _, kurl = serve(lambda m, p, h, b: keeper_body(
++        [{"host": "ws-1", "endpoint": bus_url, "key_id": "k1",
++          "health": "healthy", "last_seen": 0}]))
++    key_file = owner_only(tmp_path, "ws-1.key", HOST_KEY + "\n")
++    inv = inventory(tmp_path, {"ws-1": {"key_file": key_file}})
++    cursor = tmp_path / "cursor"
++    code = run(fp, keeper_argv(kurl, tmp_path)
++               + ["--inventory", inv, "poll", "--cursor-file", str(cursor)])
++    out = capsys.readouterr()
++    assert code == 0
++    assert "hi" in out.out
++    assert cursor.read_text().strip() == "c2"
++    method, path, headers, body = bus_seen[0]
++    assert method == "GET" and path.startswith("/outbox")
++    ts, nonce = headers.get("X-Fleet-Ts"), headers.get("X-Fleet-Nonce")
++    assert ts and nonce
++    canonical = "%s|%s|||%s" % (ts, nonce, hashlib.sha256(b"").hexdigest())
++    expected = hmac.new(HOST_KEY.encode(), canonical.encode(),
++                        hashlib.sha256).hexdigest()
++    assert headers.get("X-Fleet-Sig") == expected
++
++
++def test_send_with_base_and_no_host_signs_from_the_shared_override(
++        fp, serve, tmp_path, capsys):
++    bus, bus_seen, bus_url = serve(bus_ok)
++    secret_file = owner_only(tmp_path, "shared.secret", SHARED_KEY + "\n")
++    code = run(fp, ["--base", bus_url, "send", "--secret-file", secret_file,
++                    "--from", "routing-00", "--to", "workst-1", "--text", "hi"])
++    out = capsys.readouterr()
++    assert code == 0
++    assert "sent ok" in out.out
++    headers = bus_seen[0][2]
++    rec = json.loads(bus_seen[0][3])
++    digest = hashlib.sha256(b"hi").hexdigest()
++    canonical = "%s|%s|%s|%s|%s" % (rec["ts"], rec["nonce"], rec["from"],
++                                    rec["to"], digest)
++    expected = hmac.new(SHARED_KEY.encode(), canonical.encode(),
++                        hashlib.sha256).hexdigest()
++    assert headers.get("X-Fleet-Sig") == expected
++
++
++def test_inventory_unset_fails_closed(fp, serve, capsys):
++    bus, _, bus_url = serve(bus_ok)
++    code = run(fp, ["--base", bus_url, "--host", "ws-1", "send",
++                    "--from", "routing-00", "--to", "workst-1", "--text", "hi"])
++    err = capsys.readouterr().err
++    assert code == 2
++    assert "inventory" in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_host_needed_for_key_lookup_without_secret_override(fp, serve, capsys):
++    bus, _, bus_url = serve(bus_ok)
++    code = run(fp, ["--base", bus_url, "send",
++                    "--from", "routing-00", "--to", "workst-1", "--text", "hi"])
++    err = capsys.readouterr().err
++    assert code == 2
++    assert "--host" in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_missing_inventory_entry_names_host_never_contents(fp, serve, tmp_path,
++                                                           capsys):
++    bus, _, bus_url = serve(bus_ok)
++    key_file = owner_only(tmp_path, "other.key", HOST_KEY + "\n")
++    inv = inventory(tmp_path, {"other-1": {"key_file": key_file}})
++    code = run(fp, ["--base", bus_url, "--host", "ws-1", "--inventory", inv,
++                    "send", "--from", "routing-00", "--to", "workst-1",
++                    "--text", "hi"])
++    err = capsys.readouterr().err
++    assert code == 2
++    assert "ws-1" in err
++    assert HOST_KEY not in err
++    assert len(err.strip().splitlines()) == 1
++
++
++def test_key_file_must_be_owner_only(fp, serve, tmp_path, capsys):
++    bus, _, bus_url = serve(bus_ok)
++    key_file = tmp_path / "ws-1.key"
++    key_file.write_text(HOST_KEY + "\n")
++    key_file.chmod(0o644)  # group-readable: refused
++    inv = inventory(tmp_path, {"ws-1": {"key_file": str(key_file)}})
++    code = run(fp, ["--base", bus_url, "--host", "ws-1", "--inventory", inv,
++                    "send", "--from", "routing-00", "--to", "workst-1",
++                    "--text", "hi"])
++    err = capsys.readouterr().err
++    assert code == 2
++    assert str(key_file) in err
++    assert HOST_KEY not in err
++    assert len(err.strip().splitlines()) == 1
+===== POST-CHANGE bin/fleet-poll.py =====
+#!/usr/bin/env python3
+"""Coding-side fleet-bus poller (pull mode, D-2024/D-2029; peer discovery D-2670).
+
+Outbound-only: coding.vm polls the workstation listener, so no inbound
+firewall hole and no coding listener are needed. Mirrors the workstation
+`tools/fleet_bus.py` contract exactly:
+
+  POST /inbox  JSON {"from","to","ts","nonce","text"} + header X-Fleet-Sig
+               = hex HMAC-SHA256(secret, "ts|nonce|from|to|sha256(text)")
+  GET /outbox?since=<cursor> -> 200 {"cursor", "records"} (records carry text)
+
+The peer endpoint is DISCOVERED, never guessed (BUS-PEER-DISCOVERY-ADOPT):
+
+  GET <keeper-url>/v1/hosts   header "Authorization: Bearer <token>"
+      -> 200 {"hosts":[{"host","endpoint","key_id","health","last_seen"}]}
+
+  The target host's endpoint is used only when health == "healthy" and
+  endpoint is non-null. Anything else (keeper URL/token unset, keeper
+  unreachable, non-200, bad JSON, host unknown, host unhealthy, endpoint
+  null) fails closed: one line on stderr, exit 3, no traceback, and never a
+  fallback IP or loopback guess. `--base URL` (env FLEET_BUS_BASE) is the
+  explicit transition override and skips discovery; it stays opt-in.
+
+Configuration (flag / env; no literal defaults anywhere):
+
+  --host NAME / FLEET_BUS_HOST                  peer to resolve (required
+                                                unless --base is given)
+  --base URL / FLEET_BUS_BASE                   explicit peer, skips discovery
+  --keeper-url URL / FLEET_KEEPER_URL           keeper base URL
+  --keeper-token-file PATH / FLEET_KEEPER_TOKEN_FILE
+                                                0600 bearer token file
+  --inventory PATH / FLEET_BUS_INVENTORY        per-host key inventory JSON
+                                                {"hosts":{"<host>":{"key_file":"<path>"}}}
+  --secret-file PATH                            explicit override only: the
+                                                legacy shared fleet-relay-secret
+
+Secrets travel by NAME and FILE only, never in output: `send`/`poll` sign with
+the per-host key file named by the inventory for --host (read once, first line,
+owner-only 0600); the old shared secret file is reachable only through an
+explicit --secret-file. `probe` needs no key (open read, reachability only).
+
+Exit codes: 0 ok; 2 usage/config error (host, inventory, key file);
+3 fail-closed (keeper/discovery/transport); 4 auth refused.
+"""
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+TIMEOUT_S = 10
+TEXT_MAX = 2000
+CURSOR_FILE = os.path.expanduser("~/.local/state/fleet/fleet-poll.cursor")
+
+
+def die(msg, code=2):
+    """One line on stderr, no traceback, then exit with `code`."""
+    sys.stderr.write("fleet-poll: error: %s\n" % msg)
+    raise SystemExit(code)
+
+
+def scrub_text(text):
+    """One line, at most TEXT_MAX chars. Mirrors the listener."""
+    return " ".join(str(text).splitlines())[:TEXT_MAX]
+
+
+def read_secret(path, what="secret file", code=2):
+    """First line of the secret file, owner-only (0600). Names the failure,
+    never the value."""
+    try:
+        mode = os.stat(path).st_mode
+        with open(path, encoding="utf-8-sig") as f:
+            value = f.readline().strip()
+    except OSError:
+        die("%s unreadable: %s" % (what, path), code)
+    if mode & 0o077:
+        die("%s not owner-only (0600): %s" % (what, path), code)
+    if not value:
+        die("%s empty: %s" % (what, path), code)
+    return value.encode("utf-8")
+
+
+def sign(secret, ts, nonce, frm, to, text):
+    """Hex HMAC-SHA256 over ts|nonce|from|to|sha256(text). Secret stays bytes."""
+    digest = hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+    canonical = "%s|%s|%s|%s|%s" % (ts, nonce, frm, to, digest)
+    return hmac.new(secret, canonical.encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+def sig_headers(secret):
+    """Signed request headers for the open GET: same canonical form with the
+    empty message (from, to and text unset)."""
+    ts = int(time.time())
+    nonce = uuid.uuid4().hex
+    return {"X-Fleet-Ts": str(ts), "X-Fleet-Nonce": nonce,
+            "X-Fleet-Sig": sign(secret, ts, nonce, "", "", "")}
+
+
+def _request(method, url, body=None, headers=None):
+    req = urllib.request.Request(url, data=body, headers=headers or {},
+                                 method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+            return resp.status, resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return e.code, ""
+        die("HTTP %s on %s" % (e.code, url), 3)
+    except OSError as e:
+        die("transport: %s" % e, 3)
+
+
+def discover_endpoint(host, keeper_url, token_file):
+    """The host's endpoint from the keeper registry. Fails closed (exit 3)
+    unless the host is healthy and its endpoint is non-null."""
+    if not keeper_url:
+        die("keeper URL unset (--keeper-url / FLEET_KEEPER_URL)", 3)
+    if not token_file:
+        die("keeper token file unset "
+            "(--keeper-token-file / FLEET_KEEPER_TOKEN_FILE)", 3)
+    token = read_secret(token_file, "keeper token file", 3)
+    url = keeper_url.rstrip("/") + "/v1/hosts"
+    req = urllib.request.Request(
+        url, headers={"Authorization": "Bearer " + token.decode("utf-8")})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
+            payload = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        die("keeper HTTP %s on %s" % (e.code, url), 3)
+    except OSError:
+        die("keeper unreachable: %s" % keeper_url, 3)
+    try:
+        hosts = json.loads(payload)["hosts"]
+    except (ValueError, KeyError, TypeError):
+        die("bad keeper payload from %s" % url, 3)
+    if not isinstance(hosts, list):
+        die("bad keeper payload from %s" % url, 3)
+    for entry in hosts:
+        if not isinstance(entry, dict) or entry.get("host") != host:
+            continue
+        if entry.get("health") != "healthy":
+            die("host not healthy in keeper: %s (health=%s)"
+                % (host, entry.get("health")), 3)
+        endpoint = entry.get("endpoint")
+        if not endpoint:
+            die("no endpoint for host in keeper: %s" % host, 3)
+        return str(endpoint)
+    die("unknown host in keeper: %s" % host, 3)
+
+
+def resolve_base(args):
+    """--base (or FLEET_BUS_BASE) wins and skips discovery; otherwise the
+    peer comes from the keeper registry for --host (or FLEET_BUS_HOST)."""
+    base = getattr(args, "base", None) or os.environ.get("FLEET_BUS_BASE") or ""
+    if base:
+        return base.rstrip("/")
+    if not args.host:
+        die("--host (or FLEET_BUS_HOST) required unless --base "
+            "(or FLEET_BUS_BASE) is given", 2)
+    keeper_url = (getattr(args, "keeper_url", None)
+                  or os.environ.get("FLEET_KEEPER_URL") or "")
+    token_file = (getattr(args, "keeper_token_file", None)
+                  or os.environ.get("FLEET_KEEPER_TOKEN_FILE") or "")
+    return discover_endpoint(args.host, keeper_url, token_file).rstrip("/")
+
+
+def load_key(args):
+    """The signing key: explicit --secret-file override, else the per-host key
+    file named by the inventory for --host. Read once; every failure names the
+    path and host, never the contents."""
+    secret_file = getattr(args, "secret_file", None)
+    if secret_file:
+        return read_secret(secret_file, "secret file", 2)
+    if not args.host:
+        die("--host (or FLEET_BUS_HOST) required for key lookup", 2)
+    inv_path = (getattr(args, "inventory", None)
+                or os.environ.get("FLEET_BUS_INVENTORY") or "")
+    if not inv_path:
+        die("inventory unset (--inventory / FLEET_BUS_INVENTORY)", 2)
+    try:
+        with open(inv_path, encoding="utf-8") as f:
+            inv = json.load(f)
+    except (OSError, ValueError):
+        die("inventory unreadable or bad JSON: %s" % inv_path, 2)
+    hosts = inv.get("hosts") if isinstance(inv, dict) else None
+    entry = hosts.get(args.host) if isinstance(hosts, dict) else None
+    key_file = entry.get("key_file") if isinstance(entry, dict) else None
+    if not key_file:
+        die("no key_file for host %s in inventory %s" % (args.host, inv_path), 2)
+    return read_secret(key_file, "key file for host %s" % args.host, 2)
+
+
+def cmd_probe(args):
+    """Reachability only: GET /outbox?since= (no secret). Prints one line."""
+    status, payload = _request("GET", args.base + "/outbox?since=")
+    if status == 401:
+        print("fleet-poll: probe refused (auth)")
+        return 4
+    try:
+        data = json.loads(payload)
+        print("fleet-poll: probe ok: cursor=%s records=%d"
+              % (data.get("cursor", "?"), len(data.get("records", []))))
+    except (ValueError, AttributeError):
+        die("bad probe payload", 2)
+    return 0
+
+
+def cmd_poll(args):
+    """Fetch records since the stored cursor, print them, advance the cursor.
+    Signed with the per-host key file (probe stays unsigned)."""
+    secret = load_key(args)
+    # The cursor file holds one cursor line; absent means fetch-all.
+    try:
+        with open(args.cursor_file, encoding="utf-8") as f:
+            cursor = f.readline().strip()
+    except OSError:
+        cursor = ""
+    status, payload = _request(
+        "GET", args.base + "/outbox?since=" + urllib.request.quote(cursor),
+        headers=sig_headers(secret))
+    if status == 401:
+        print("fleet-poll: poll refused (auth)")
+        return 4
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        die("bad poll payload", 2)
+    for rec in data.get("records", []):
+        print(json.dumps({"id": rec.get("id"), "ts": rec.get("ts"),
+                          "from": rec.get("from"), "to": rec.get("to"),
+                          "text": scrub_text(rec.get("text", ""))},
+                         ensure_ascii=False))
+    try:
+        os.makedirs(os.path.dirname(args.cursor_file), exist_ok=True)
+        with open(args.cursor_file, "w", encoding="utf-8") as f:
+            f.write(str(data.get("cursor", cursor)) + "\n")
+    except OSError:
+        die("cursor file unwritable: %s" % args.cursor_file, 2)
+    return 0
+
+
+def cmd_send(args):
+    """POST one message to /inbox, signed with the per-host key file."""
+    secret = load_key(args)
+    ts = int(time.time())
+    nonce = uuid.uuid4().hex
+    text = scrub_text(args.text)
+    body = json.dumps({"from": args.frm, "to": args.to, "ts": ts,
+                       "nonce": nonce, "text": text}).encode("utf-8")
+    sig = sign(secret, ts, nonce, args.frm, args.to, text)
+    status, _ = _request("POST", args.base + "/inbox", body=body,
+                         headers={"Content-Type": "application/json",
+                                  "X-Fleet-Sig": sig})
+    if status == 401:
+        print("fleet-poll: send refused (bad signature, skew or replay)")
+        return 4
+    print("fleet-poll: sent ok: ts=%d nonce=%.8s..." % (ts, nonce))
+    return 0
+
+
+def _add_common(ap, hidden=False):
+    """Peer/discovery options on the main parser and on every subparser (so
+    `fleet-poll.py --host ws probe` and `fleet-poll.py probe --host ws` both
+    work); subparser copies are SUPPRESS so they never clobber the outer value."""
+    default = argparse.SUPPRESS if hidden else None
+    ap.add_argument("--base", default=default,
+                    help="explicit peer base URL; skips discovery "
+                         "(env FLEET_BUS_BASE)")
+    ap.add_argument("--host", default=default,
+                    help="peer host name to resolve in the keeper registry "
+                         "(env FLEET_BUS_HOST)")
+    ap.add_argument("--keeper-url", default=default,
+                    help="keeper base URL for GET /v1/hosts (env FLEET_KEEPER_URL)")
+    ap.add_argument("--keeper-token-file", default=default,
+                    help="0600 file holding the keeper bearer token "
+                         "(env FLEET_KEEPER_TOKEN_FILE)")
+    ap.add_argument("--inventory", default=default,
+                    help="per-host key inventory JSON (env FLEET_BUS_INVENTORY)")
+
+
+def build_parser():
+    ap = argparse.ArgumentParser(prog="fleet-poll.py",
+                                 description="Coding-side fleet-bus poller.")
+    _add_common(ap)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("probe", help="reachability check, no secret")
+    _add_common(p, hidden=True)
+    p.set_defaults(func=cmd_probe)
+    p = sub.add_parser("poll", help="fetch new records, advance cursor")
+    _add_common(p, hidden=True)
+    p.add_argument("--cursor-file", default=CURSOR_FILE)
+    p.add_argument("--secret-file",
+                   help="explicit override: legacy shared secret file")
+    p.set_defaults(func=cmd_poll)
+    p = sub.add_parser("send", help="POST one signed message")
+    _add_common(p, hidden=True)
+    p.add_argument("--secret-file",
+                   help="explicit override: legacy shared secret file")
+    p.add_argument("--from", dest="frm", required=True)
+    p.add_argument("--to", required=True)
+    p.add_argument("--text", required=True)
+    p.set_defaults(func=cmd_send)
+    return ap
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    args.host = getattr(args, "host", None) or os.environ.get("FLEET_BUS_HOST") or ""
+    args.inventory = (getattr(args, "inventory", None)
+                      or os.environ.get("FLEET_BUS_INVENTORY") or "")
+    args.base = resolve_base(args)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
