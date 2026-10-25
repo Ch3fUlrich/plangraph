@@ -21,7 +21,7 @@ from .schema import ROLES
 __all__ = ["Principal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
            "OVERSIGHT_PREFIX", "add_principal", "add_oversight_principal",
            "authenticate", "revoke", "get_principal", "list_principals",
-           "hash_token", "norm_family", "validate_family", "set_clock"]
+           "hash_token", "norm_family", "validate_family"]
 
 
 @dataclass
@@ -75,11 +75,6 @@ class OversightPrincipal(Principal):
 def hash_token(token: str) -> str:
     """The only form of a token this system ever stores."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
-
-
-def set_clock(clock) -> None:
-    """Deprecated: no process-global clock; authenticate defaults to time.time()."""
-    pass
 
 
 def _now(now):

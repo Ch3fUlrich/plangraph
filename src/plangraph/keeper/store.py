@@ -80,10 +80,6 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                  batch_roots=None):
         self.conn = conn
         self.clock = clock or (lambda: datetime.now(timezone.utc).timestamp())
-        # Token expiry must be judged by the clock the store stamps rows with
-        # (auth's default clock, see ``auth.set_clock``): a TTL written from
-        # an injected clock is read back by that same clock.
-        auth.set_clock(self.clock)
         # Default to the real registry; tests inject fakes.  ``ctx`` supplies the
         # adapters the verifiers read through (``default_context`` in production).
         self.verifiers = dict(evidence.VERIFIERS if verifiers is None else verifiers)
