@@ -18,20 +18,20 @@ Rules new this gen:
 - Writer trailer: the brief says the literal RUNID. Fill it with filter-branch over ONLY the writer commits, before merging main.
 - Post seats from a main checkout: `$J/postm.sh` uses ~/code/plangraph-worktrees/post-main (detached main 7bbd11a6; `git -C .. checkout --detach origin/main` first).
 
-## In flight (owner build-L1 unless stated)
+## In flight (owner build-L1 unless stated); each bg job below writes its log in $J and survives this session
 1. **#210 SPAWN-WIN-PARITY S1 (HIGH).**
-   - Fix r1b run-eb06bed7 (mimo-pro, tag swp-s1f1c, brief $J/brief-swp-s1-fix1c.md F2-F6+LOWs, log $J/swp-s1f1c.log), worktree spawn-win-parity.
-   - The local F1 hand-edit f5f2f027 is NOT pushed.
-   - On done: check each finding, RUNID-fill over f5f2f027..HEAD, push, CI, delta seats qwen + Haiku (fixer xiaomi, writer google), GO-REQ per sha. Then spawn S2 (design §4 "### S2 brief"; prompt via stdin/file).
-2. **hecap50 (OEE interim, D-2853).** Spawn right after the S1 fix:
-   `bash $J/gspawn2.sh ~/code/plangraph-worktrees/hand-edit-cap-50 $J/brief-hecap50.md hecap50 "D-2853 interim hand-edit cap 10->50" mimo-v2.6-pro`
-   - HIGH: 2 seats from different families including a non-Claude one, then GO-REQ with sha + CI run.
+   - Fix r1b is done (run-eb06bed7, 8 commits F2-F6 + LOWs + sweep, RUNID filled). Merged main once; head 7b8b3e33 pushed; 411 tests passed; gate rc 0; I6 is still in src (opencode_render.py:16).
+   - PR CI: check `gh pr checks 210`.
+   - qwen delta seat: running `$J/seatswps1d.sh` (log $J/seatswps1d.log, dir $J/seat-swps1d-qwen; delta 0d3a7d99..0518aaf3, vectors $J/swp-s1d.vec).
+   - The second seat is BLOCKED. Writer families are google + xiaomi + anthropic (F1 Hand-Edit f5f2f027), so Haiku is refused (D-2855) and glm is at its free limit. Sent to routing.
+   - Then GO-REQ per sha and spawn S2 (design §4 "### S2 brief"; prompt via stdin/file).
+2. **#215 hecap50 (OEE interim, D-2853/D-2856).** Head 30679bb7 (writer run-a57cee93; trailers Gate-Edit + Test-Removal D-2853), gate rc 0, 107 passed.
+   - Seats: Haiku + qwen running `$J/seathecap.sh` (log $J/seathecap.log).
+   - Then GO-REQ with the exact head + CI run, then merge with the sha, then full-sha evidence on OEE.
 3. **#213 S3.**
-   - Haiku seat: fix, 2 MED.
-   - qwen seat queued ($J/seatswps3.sh, bg).
-   - Then ONE mimo-pro fix round: $J/brief-swp-s3-fix1.md. Replace the QWEN_FINDINGS line with qwen's findings verbatim; Test-Removal D-2851 is already in it. Design §3 line 92 is already updated.
-   - Then delta seats qwen + Haiku and judge GO.
-4. **rvpc** (parser widening: REQUEST_CHANGES / ACCEPT / approved / "|" cell): queued, worktree review-verdict-parse-c, brief $J/brief-rvp-c.md.
+   - Fix r1 is running (`$J/gspawn2.sh` tag swps3f1, log $J/swps3f1.log, brief $J/brief-swp-s3-fix1.md: Haiku + qwen findings verbatim; Test-Removal D-2851).
+   - On done: RUNID fill over 33d65068..HEAD, merge main once, push, CI, delta seats qwen + Haiku (writer google, fixer xiaomi, no Claude edits), judge GO.
+4. **rvpc** (parser widening: REQUEST_CHANGES / ACCEPT / approved / "|" cell): queued (`$J/gspawn2.sh` tag rvpc), worktree review-verdict-parse-c, brief $J/brief-rvp-c.md.
    - REVIEW-VERDICT-PARSE is DONE, so ask routing which item owns it before the PR.
 5. **KEEPER-PG-RECONNECT S2:** worktree keeper-pg-reconnect-s2 is ready; brief $J/brief-pgr-s2.md (agy). Spawn after the OEE slices (D-2835 order). A live keeper redeploy needs its own GO.
 6. **ORCH-EFFICIENCY-ENFORCE (prio 10, claimed epoch 2).** #214 merged 7bbd11a6, evidence ok. E-slices follow build-L1-efficiency's design (D-2837); spec d97b5fb3 forwarded.
@@ -42,7 +42,7 @@ Rules new this gen:
 - **REVIEW-METHOD-SETTING in_review 13.1h** -> BLOCKED on a seat family.
   - Posting the Haiku LOW-only seat (parser now PASS) gets keeper 409 `same_family`, because build-L1's Claude Hand-Edits (D-2798, D-2817) make anthropic a writer family.
   - Writer families: google, xiaomi, openai, anthropic. alibaba (qwen) has already posted.
-  - Next: ONE delta seat from a new family (opencode free glm-5.3-flash-free) or a router ruling. Sent to routing.
+  - D-2855/D-2856: the glm seat failed at 20:15Z on "Free usage limit reached" (run-b7122767); reset time unknown. Retry ONCE after the reset (try about 24 h later, or when an `opencode run -m opencode/glm-5.3-flash-free` smoke stops printing the limit); no swap, no paid path. Command: `$J/glmseat.sh $J/seat-rms-glm rmsglm`, log $J/rmsglm.log, neutral prompt. On done: `bash $J/postm.sh $J/seat-rms-glm plangraph:REVIEW-METHOD-SETTING "google --writer-family xiaomi --writer-family openai --writer-family anthropic"`.
 - **RT-P1-EXEC-OWNERSHIP in_review 39.6h** -> waits on its fix item SQ12 (D-2703, 4 findings).
   - SQ12 branch lane/exec-own-sq12 f308086f = WIP from a truncated mimo writer (45+/9-, finding 1 only).
   - Next: a mimo-pro continuation writer on coding.vm (keeper/* = AUTH_DOOR, writer only) for findings 2-4, then 2 seats and GO.
@@ -52,4 +52,5 @@ Rules new this gen:
 ## Gaps for routing / LESSONS
 - **Direct edits vs seat families:** each Claude Hand-Edit adds anthropic to the item's writer families, so a Haiku seat is then refused (same_family). With direct edits now preferred, Haiku stops being a usable seat. The seat algorithm needs a rule, for example counting Hand-Edits of <= N lines as non-authoring or always requiring 2 non-Claude seats.
 - **ci_commit_gate cannot be edited by the orchestrator** (AUTH_DOOR + no Claude Writer). That is correct, but every gate tweak costs a writer run.
+- **`spawner route --role review` names qwen's family `qwen`**, while the keeper calls it `alibaba`, so `--writer-family alibaba` does not exclude it. The families need one shared name table.
 - **Run records have no token counts:** the cost model can't be measured until they do (OEE pt 10).
