@@ -50,16 +50,17 @@ def test_policy_flip_context(tmp_path, monkeypatch):
     from plangraph.settings import enforce_review_scope
     path = tmp_path / 'policy.json'
     monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
-    card = {'project': 'demo', 'phase': 'demo:P', 'repo_root': str(tmp_path),
-            'review_scope': 'per-fixer'}
+    # Layers come from the trusted keeper item (R2); root from root= (R1).
+    item = {'key': 'demo:C', 'phase': 'demo:P'}
+    card = {'review_scope': 'per-fixer'}
     path.write_text('{"phases":{"demo:P":{"review_method":{"mode":"per-item"}}}}')
-    enforce_review_scope(card, 'review', None)
+    enforce_review_scope(card, 'review', None, item=item, root=tmp_path)
     path.write_text('{"review_method":{"mode":"batch"}}')
     with pytest.raises(SpawnRefused):
-        enforce_review_scope(card, 'review', None)
+        enforce_review_scope(card, 'review', None, item=item, root=tmp_path)
     card['review_scope'] = 'batch'
     path.write_text('{"review_method":{"mode":"per-item"}}')
-    enforce_review_scope(card, 'review', None)
+    enforce_review_scope(card, 'review', None, item=item, root=tmp_path)
 
 
 def test_safe_decode(tmp_path, monkeypatch):
@@ -388,9 +389,9 @@ def test_finding_5_fixer_threshold(tmp_path, monkeypatch):
     monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
     # Default without context
     assert fixer_threshold() == 10
-    assert fixer_threshold({}) == 10
+    assert fixer_threshold(item={}) == 10
 
-    # With card project/phase override
+    # With keeper item project/phase override (R2: card fields never select)
     path = tmp_path / 'policy.json'
     path.write_text(json.dumps({
         'review_method': {'fixer_split_threshold': 12},
@@ -398,10 +399,10 @@ def test_finding_5_fixer_threshold(tmp_path, monkeypatch):
         'phases': {'demo:special': {'review_method': {'fixer_split_threshold': 2}}}
     }))
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
-    assert fixer_threshold({'key': 'other:1'}) == 12
-    assert fixer_threshold({'key': 'demo:1'}) == 5
-    assert fixer_threshold({'project': 'demo', 'key': '1'}) == 5
-    assert fixer_threshold({'key': 'demo:1', 'phase': 'demo:special'}) == 2
+    assert fixer_threshold(item={'key': 'other:1'}) == 12
+    assert fixer_threshold(item={'key': 'demo:1'}) == 5
+    assert fixer_threshold(item={'key': 'demo:1', 'track': 'demo:special'}) == 2
+    assert fixer_threshold(item={'key': 'demo:1', 'phase': 'demo:special'}) == 2
 
 
 def test_finding_7_runner_spawn_keyword_and_single_guard(tmp_path, monkeypatch):
@@ -534,15 +535,53 @@ def test_finding_4_routing_plan_spawn_settings_error(tmp_path, monkeypatch):
     assert 'secret_broken_json' not in str(exc.value)
 
 
-def test_finding_3_enforce_review_scope_accepts_card_repo_root(tmp_path, monkeypatch):
-    from plangraph.settings import enforce_review_scope
-    monkeypatch.delenv('PLANGRAPH_REPO_ROOT', raising=False)
+def test_finding_3_card_repo_root_policy_file_ignored(tmp_path, monkeypatch):
+    """R1 (flipped): a card repo_root pointing at a per-item policy is IGNORED.
+
+    The trusted root holds batch policy, so the per-fixer seat is still refused
+    under the global policy and the fixer threshold stays global.
+    """
+    from plangraph.settings import enforce_review_scope, fixer_threshold
+    hostile = tmp_path / 'hostile'
+    hostile.mkdir()
+    (hostile / 'policy.json').write_text(
+        '{"review_method": {"mode": "per-item", "fixer_split_threshold": 2}}')
+    trusted = tmp_path / 'trusted'
+    trusted.mkdir()
+    (trusted / 'policy.json').write_text(
+        '{"review_method": {"mode": "batch", "fixer_split_threshold": 12}}')
     monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
-    # Under tmp_path, policy is per-item
-    (tmp_path / 'policy.json').write_text('{"review_method": {"mode": "per-item"}}')
-    card = {'key': 'demo:C', 'phase': 'demo:P', 'repo_root': str(tmp_path)}
-    # If card['repo_root'] is respected, per-fixer scope is accepted
-    enforce_review_scope(card, 'review', 'per-fixer')
+    monkeypatch.setenv('PLANGRAPH_REPO_ROOT', str(trusted))
+    card = {'key': 'demo:C', 'phase': 'demo:P', 'repo_root': str(hostile)}
+    with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+        enforce_review_scope(card, 'review', 'per-fixer')
+    assert fixer_threshold() == 12
+    # fixer_threshold no longer accepts a card at all
+    with pytest.raises(TypeError):
+        fixer_threshold(card)
+
+
+def test_card_phase_key_project_spoof_cannot_admit_per_fixer(tmp_path, monkeypatch):
+    """R2: card 'phase'/'project'/'key' never select a per-item layer; item= does."""
+    from plangraph.settings import enforce_review_scope
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'batch'},
+        'projects': {'demo': {'review_method': {'mode': 'per-item'}}},
+        'phases': {'demo:P': {'review_method': {'mode': 'per-item'}}}
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    # Each card shape names a per-item phase/project override and must be ignored.
+    for card in ({'key': 'demo:C', 'phase': 'demo:P'},
+                 {'key': 'demo:C', 'project': 'demo'},
+                 {'key': 'demo:P'}):
+        with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+            enforce_review_scope(card, 'review', 'per-fixer')
+    # The same overrides passed via a trusted keeper item do admit.
+    enforce_review_scope({'key': 'demo:C'}, 'review', 'per-fixer',
+                         item={'key': 'demo:C', 'phase': 'demo:P'})
+    enforce_review_scope({'key': 'demo:C'}, 'review', 'per-fixer',
+                         item={'key': 'demo:C'})
 
 
 def test_finding_2_project_of_helper_colon_free(tmp_path, monkeypatch):
@@ -562,7 +601,7 @@ def test_finding_2_project_of_helper_colon_free(tmp_path, monkeypatch):
         'projects': {'myproject': {'review_method': {'fixer_split_threshold': 4}}}
     }))
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
-    assert fixer_threshold({'key': 'myproject'}) == 4
+    assert fixer_threshold(item={'key': 'myproject'}) == 4
 
 
 def test_finding_3_phase_key_with_slash(tmp_path, monkeypatch):
@@ -643,7 +682,7 @@ def test_finding_1_unused_imports_and_single_helper():
             assert 'project_of' not in imported_names
 
 
-def test_finding_2_phase_fallback_to_card_key(tmp_path, monkeypatch):
+def test_finding_2_phase_fallback_to_item_key(tmp_path, monkeypatch):
     from plangraph.settings import enforce_review_scope, fixer_threshold
     path = tmp_path / 'policy.json'
     path.write_text(json.dumps({
@@ -656,14 +695,14 @@ def test_finding_2_phase_fallback_to_card_key(tmp_path, monkeypatch):
     }))
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
 
-    # card has only 'key', no 'phase'
-    card = {'key': 'demo:C'}
+    # item has only 'key', no 'phase'; the item key falls back as the phase
+    item = {'key': 'demo:C'}
 
     # 1. fixer_threshold must honor phases['demo:C'] override
-    assert fixer_threshold(card) == 4
+    assert fixer_threshold(item=item) == 4
 
     # 2. enforce_review_scope must honor mode='per-item' override and allow per-fixer
-    enforce_review_scope(card, 'review', 'per-fixer')
+    enforce_review_scope({'key': 'demo:C'}, 'review', 'per-fixer', item=item)
 
 
 def test_finding_3_plan_phase_settings_error_sanitized_and_prefix(tmp_path, monkeypatch):
@@ -821,3 +860,15 @@ def test_plan_phase_empty_settings_error_keeps_colon_prefix(tmp_path, monkeypatc
         assert 'review_method_invalid:' in str(exc.value)
     finally:
         world.close()
+
+
+def test_r5_doc_states_r1_r2_and_finding_3_by_design():
+    text = (Path(__file__).parent.parent / 'docs' / 'REVIEW-METHOD.md').read_text(encoding='utf-8')
+    # R1: the settings root is never taken from the card.
+    assert 'never taken from the card' in text
+    # R2: per-item layers come only from a trusted keeper item; card fields never.
+    assert 'trusted keeper' in text
+    assert 'card is trusted caller input' not in text
+    # Finding 3 named: a no-scope review spawn in batch is admitted by design.
+    assert 'no explicit scope is admitted' in text
+    assert 'by design' in text
