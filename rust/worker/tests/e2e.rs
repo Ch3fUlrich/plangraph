@@ -2694,3 +2694,73 @@ async fn transient_observe_failure_is_retried_not_degraded() {
     })
     .await;
 }
+
+/// D2/D3/D4 (I3b): a park the keeper refuses 409 (`exec_stale_state`, the state
+/// CAS missed) is the one failure a fresh observation can repair, so the
+/// workflow re-observes and parks again -- at most twice. A refusal the
+/// re-observe repairs lands the park on the first re-observe; a keeper that
+/// refuses every park fails the workflow after exactly 2 re-observes, with the
+/// last cause in the failure message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_state_refusal_reobserves_at_most_twice() {
+    in_local(async {
+        let Some(env) = env_or_skip("stale-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+
+        // One refused park: the re-observe repairs it and the park lands.
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_park_refuse_times(1);
+        let claim = env.claim("e2e-stale-park", &["out.txt"], "true");
+        let id = format!("e2e-stale-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let out = finish("stale_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+        // I3b: lands on re-observe 1: the initial observe plus exactly one more.
+        assert_eq!(scheduled_activities(&handle, "observe").await, 2);
+        assert_eq!(
+            scheduled_activities(&handle, "CardActivities::park").await,
+            2
+        );
+        assert_eq!(env.keeper.parked().len(), 1);
+        // I3b: the landing park presents the re-observed state, not a stale one.
+        let park = env
+            .keeper
+            .execs()
+            .into_iter()
+            .filter(|e| e.expected_state.is_some())
+            .last()
+            .expect("park exec");
+        assert_eq!(park.expected_state, Some(vec!["waiting".to_string()]));
+
+        // A keeper that refuses every park: bounded at 2 re-observes, then fail.
+        env.keeper.set_park_refuse_times(3);
+        let claim = env.claim("e2e-stale-park-fail", &["out.txt"], "true");
+        let id = format!("e2e-stale-park-fail-{}", unique());
+        let handle = env.start(&id, claim).await;
+        let err = tokio::time::timeout(
+            RESULT_TIMEOUT,
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("card result within 120s")
+        .expect_err("a park that can never land fails the workflow");
+        let temporalio_client::errors::WorkflowGetResultError::Failed(failure) = err else {
+            panic!("expected a failed workflow, got: {err:?}");
+        };
+        let msg = &failure.failure().message;
+        assert!(msg.contains("after 2 re-observes"), "{msg}");
+        assert!(msg.contains("409"), "the last cause must ride in: {msg}");
+        // I3b: initial observe + exactly 2 re-observes, and no park landed.
+        assert_eq!(scheduled_activities(&handle, "observe").await, 3);
+        assert_eq!(
+            scheduled_activities(&handle, "CardActivities::park").await,
+            3
+        );
+        assert!(env.keeper.parked().is_empty());
+
+        env.stop();
+    })
+    .await;
+}

@@ -151,6 +151,12 @@ pub struct Fence {
     pub owner: String,
 }
 
+/// The `ApplicationFailure` type the worker raises when the keeper refuses a
+/// park with 409 -- the state CAS missed, `exec_stale_state`. The park activity
+/// types its failure with it and the workflow's re-observe loop keys on it, so
+/// both sides name it here.
+pub const STALE_STATE_FAILURE: &str = "exec_stale_state";
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum KeeperError {
     #[error("keeper request failed: {0}")]
@@ -586,12 +592,20 @@ struct StubState {
     card_state_fail_times: usize,
     /// When set, `park` panics with this message.
     park_panic: Option<String>,
+    /// Number of `park` calls refused 409 without recording the park (the
+    /// state-CAS miss, `exec_stale_state`), so the re-observe loop is drivable.
+    park_refuse_times: usize,
 }
 
 impl StubKeeper {
     /// When set, `park` panics with `msg`.
     pub fn set_park_panic(&self, msg: Option<&str>) {
         self.lock().park_panic = msg.map(str::to_owned);
+    }
+
+    /// Make the next `times` `park` calls refuse 409 (stale state), unrecorded.
+    pub fn set_park_refuse_times(&self, times: usize) {
+        self.lock().park_refuse_times = times;
     }
 
     /// Number of card_state calls that should fail with `Status(500)`.
@@ -828,6 +842,10 @@ impl Keeper for StubKeeper {
             panic!("{msg}");
         }
         s.execs.push(exec.clone());
+        if s.park_refuse_times > 0 {
+            s.park_refuse_times -= 1;
+            return Err(KeeperError::Status(409));
+        }
         // The keeper's state CAS, stub-equivalent (EXEC-OBSERVED-STATE): an
         // expectation that misses the state the stub holds is refused 409, so a
         // park that presents a stale observation can be tested without a server.

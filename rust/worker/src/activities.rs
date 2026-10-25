@@ -543,6 +543,17 @@ fn join_error(e: tokio::task::JoinError) -> ActivityError {
 
 fn keeper_park_error(e: KeeperError) -> ActivityError {
     if classify(&e) == Failure::Refused {
+        if matches!(e, KeeperError::Status(409)) {
+            // D2: a 409 is the park state-CAS miss (exec_stale_state): typed,
+            // so the workflow can tell it apart and re-observe, and
+            // non-retryable so Temporal never replays a stale park.
+            return ActivityError::application(
+                temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(e.to_string()))
+                    .type_name(crate::keeper::STALE_STATE_FAILURE.to_owned())
+                    .non_retryable(true)
+                    .build(),
+            );
+        }
         ActivityError::application(temporalio_sdk::ApplicationFailure::non_retryable(
             e.to_string(),
         ))
@@ -1760,6 +1771,32 @@ mod tests {
             format!("{err:?}").contains("keeper exploded in park"),
             "JoinError must retain the panic cause, got: {err:?}"
         );
+    }
+
+    /// D2/D3: a park refused 409 is the state-CAS miss -- typed
+    /// `exec_stale_state` so the workflow can re-observe, and non-retryable so
+    /// Temporal never replays a stale park. The other refusals stay
+    /// non-retryable but untyped, and a transient 5xx keeps the retry policy's
+    /// default (retryable).
+    #[test]
+    fn only_a_stale_park_refusal_is_typed_and_a_5xx_stays_retryable() {
+        for code in [401, 403, 422] {
+            let ActivityError::Application(f) = keeper_park_error(KeeperError::Status(code)) else {
+                panic!("a refused park must be an application failure");
+            };
+            assert!(f.is_non_retryable(), "{code}");
+            assert_eq!(f.type_name(), None, "{code}");
+        }
+        let ActivityError::Application(f) = keeper_park_error(KeeperError::Status(409)) else {
+            panic!("a stale park must be an application failure");
+        };
+        assert!(f.is_non_retryable());
+        assert_eq!(f.type_name(), Some(crate::keeper::STALE_STATE_FAILURE));
+        let ActivityError::Application(f) = keeper_park_error(KeeperError::Status(500)) else {
+            panic!("a transient park failure must be an application failure");
+        };
+        assert!(!f.is_non_retryable());
+        assert_eq!(f.type_name(), None);
     }
 
     /// G3-3: an ask keeps the any-of live-set CAS the ADR documents -- it is
