@@ -73,6 +73,9 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
+    state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
+    monkeypatch.setenv('XDG_STATE_HOME', str(state))
+    monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
     # Credential scrubbing below also removes GIT_CONFIG_KEY_*; do not leave
     # an inherited count pointing at missing key/value pairs in subprocesses.
     for name in list(os.environ):
