@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import urllib.request
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -66,7 +67,7 @@ def bus(tmp_path):
     same key files and ``key_id`` values, so a round trip proves the client
     signs exactly what the keeper verifies.
     """
-    w = World(tmp_path, backend="sqlite")
+    w = World(tmp_path)
     w.clock.t = time.time()   # the keeper's skew gate must agree with wall time
     keys = tmp_path / "keys"
     keys.mkdir()
@@ -79,8 +80,11 @@ def bus(tmp_path):
     registry = discovery.Registry(
         [discovery.Host(host=name, node_id=f"node-{name}", key_id=f"kid-{name}",
                         key_file=keys / f"{name}.key") for name in HOSTS],
-        port=port)
+        port=port,
+        on_refresh=srv._persist_bus_hosts)
+    srv._restore_bus_hosts(registry)
     srv.bus_registry = registry
+    srv.store.bus_registry = registry
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
     root = tmp_path / "client"
@@ -97,8 +101,8 @@ def bus(tmp_path):
                        for name in HOSTS}}
     (root / "status.json").write_text(json.dumps(status), encoding="utf-8")
     for name in HOSTS:
-        if name in w.tokens:            # only router/l1/worker/... are principals
-            (root / f"token-{name}.txt").write_text(w.tok(name), encoding="utf-8")
+        tok = w.tokens[name] if name in w.tokens else w.tok("router")
+        (root / f"token-{name}.txt").write_text(tok, encoding="utf-8")
 
     url = f"http://127.0.0.1:{port}"
 
@@ -123,6 +127,7 @@ def bus(tmp_path):
         token=lambda name: w.tok(name), cfg=cfg)
     srv.shutdown()
     srv.server_close()
+    w.close()
 
 
 RUNNER = (
@@ -161,11 +166,11 @@ def _capture_posts(monkeypatch):
     captured = {}
     real_request = HttpTransport.request
 
-    def spy(self, url, *, method="GET", payload=None, query=None):
+    def spy(self, url, *, method="GET", payload=None, query=None, **kwargs):
         if payload is not None:
             captured["payload"] = payload
         return real_request(self, url, method=method, payload=payload,
-                            query=query)
+                            query=query, **kwargs)
 
     monkeypatch.setattr("plangraph.fleet_bus.client.HttpTransport.request",
                         spy)
@@ -182,7 +187,7 @@ def test_send_roundtrip_through_real_keeper(bus):
     assert result["queued"] is False
     rows = bus.fetch_rows("router")
     row = next(r for r in rows if r["msg_id"] == result["msg_id"])
-    assert row["body"] == "hello over the real bus"
+    assert row["body"] == {"text": "hello over the real bus"}
     assert row["to"] == "worker"
 
 
@@ -200,12 +205,12 @@ def test_envelope_is_the_keeper_accepted_canonical_form(bus, monkeypatch):
     assert result["queued"] is False
     row = next(r for r in bus.fetch_rows("router")
                if r["msg_id"] == result["msg_id"])
-    assert row["body"] == "canonical check"
+    assert row["body"] == {"text": "canonical check"}
     envelope = capture["payload"]["envelope"]
     signed = {"from": envelope["host"], "to": capture["payload"]["to"],
               "ts": envelope["ts"], "nonce": envelope["nonce"],
               "msg_id": envelope["msg_id"], "kid": "kid-router",
-              "text": _wire_text(capture["payload"]["body"])}
+              "text": _wire_text(capture["payload"]["body"]["text"])}
     canonical = contract.canonical_post(signed)
     assert contract.sign(_secret("router"), canonical) == envelope["sig"]
     # and the server-side registry accepts the very same signature
@@ -222,6 +227,8 @@ def test_read_shows_own_messages_from_real_keeper(bus):
     rows = client.read()                      # no args: since=0 default
     assert isinstance(rows, list)
     assert result["msg_id"] in [row["msg_id"] for row in rows]
+    row = next(r for r in rows if r["msg_id"] == result["msg_id"])
+    assert row["body"] == {"text": "read me back"}
 
 
 def test_call_tool_send_and_read_hit_real_keeper(bus):
@@ -251,14 +258,14 @@ def test_send_to_unknown_agent_is_refused_and_nothing_queues(bus):
 
 
 # --------------------------------------------------------------------------
-# V6-6: --json wire shape, and string bodies sign the original raw text
+# EXTRA: --json flag serializes JSON to text string; G1-1: body == {"text": <str>}
 # --------------------------------------------------------------------------
 
-def test_json_flag_sends_wrapped_structured_body(bus):
+def test_json_flag_serializes_json_text(bus):
     sent = run_cli(bus, ["send", "worker", '{"a": 1}', "--json"])
     assert sent.returncode == 0, sent.stderr
     row = bus.fetch_rows("router")[-1]
-    assert row["body"] == {"type": "message", "body": {"a": 1}}
+    assert row["body"] == {"text": '{"a":1}'}
 
 
 def test_json_flag_invalid_json_is_refused(bus):
@@ -276,7 +283,7 @@ def test_string_body_signs_the_original_raw_text(bus, monkeypatch):
     result = client.send("worker", raw)
     row = next(r for r in bus.fetch_rows("router")
                if r["msg_id"] == result["msg_id"])
-    assert row["body"] == raw
+    assert row["body"] == {"text": raw}
     envelope = capture["payload"]["envelope"]
 
     def sig_for(text):
@@ -290,19 +297,69 @@ def test_string_body_signs_the_original_raw_text(bus, monkeypatch):
     assert sig_for('{"a":1}') != envelope["sig"]           # not re-encoded
 
 
-def test_structured_body_signs_its_canonical_json(bus, monkeypatch):
+def test_envelope_ts_computed_after_drain(bus, monkeypatch):
+    """V6-6: the envelope ts is computed after the spool drain."""
+    drain_time = None
+    original_drain = BusClient.drain
+
+    def instrumented_drain(self):
+        nonlocal drain_time
+        res = original_drain(self)
+        drain_time = int(self.clock())
+        return res
+
+    monkeypatch.setattr(BusClient, "drain", instrumented_drain)
     capture = _capture_posts(monkeypatch)
-    body = {"type": "message", "body": {"a": 1, "b": 2}}
     client = build_client(bus.env())
-    result = client.send("worker", json.dumps(body), body=body)
+    result = client.send("worker", "drain test")
     assert result["queued"] is False
     envelope = capture["payload"]["envelope"]
-    signed = {"from": envelope["host"], "to": capture["payload"]["to"],
-              "ts": envelope["ts"], "nonce": envelope["nonce"],
-              "msg_id": envelope["msg_id"], "kid": "kid-router",
-              "text": '{"body":{"a":1,"b":2},"type":"message"}'}
-    assert contract.sign(_secret("router"),
-                         contract.canonical_post(signed)) == envelope["sig"]
+    assert drain_time is not None
+    assert envelope["ts"] >= drain_time
+
+
+def test_retry_with_same_msg_id_is_idempotent(bus):
+    """G2-1: retrying with the same msg_id against real keeper succeeds idempotently."""
+    client = build_client(bus.env())
+    res1 = client.send("worker", "idempotent message")
+    assert res1["queued"] is False
+    entry = {"msg_id": res1["msg_id"], "host": client.cfg.host,
+             "to": "worker", "text": "idempotent message",
+             "created": int(client.clock()), "attempts": 1}
+    endpoint = client.resolve("worker")
+    payload = client._payload(entry)
+    res2 = client._attempt(entry, endpoint, payload)
+    assert res2["queued"] is False
+    assert res2["msg_id"] == res1["msg_id"]
+    assert res2["seq"] == res1["seq"]
+
+
+def test_replay_with_same_nonce_is_refused(bus):
+    """G2-1: replaying an envelope with the same nonce is rejected by the real keeper."""
+    client = build_client(bus.env())
+    entry = {"msg_id": uuid.uuid4().hex, "host": client.cfg.host,
+             "to": "worker", "text": "nonce replay test",
+             "created": int(client.clock()), "attempts": 0}
+    endpoint = client.resolve("worker")
+    payload = client._payload(entry)
+    res = client._attempt(entry, endpoint, payload)
+    assert res["queued"] is False
+    with pytest.raises(Refused, match="replayed_nonce"):
+        client.transport.request(endpoint.rstrip("/") + "/v1/post_message",
+                                 method="POST", payload=payload)
+
+
+def test_body_cap_refused_against_real_keeper(bus):
+    """G2-1: message body exceeding BODY_MAX is refused by the real keeper."""
+    client = build_client(bus.env())
+    endpoint = client.resolve("worker")
+    raw_payload = {
+        "from": "router", "to": "worker",
+        "body": {"text": "x" * (contract.BODY_MAX + 1)},
+    }
+    with pytest.raises(Refused, match="too_large"):
+        client.transport.request(endpoint.rstrip("/") + "/v1/post_message",
+                                 method="POST", payload=raw_payload)
 
 
 # --------------------------------------------------------------------------
@@ -352,6 +409,23 @@ def test_spool_corrupt_entry_is_quarantined_never_silently_dropped(tmp_path):
     assert any("corrupt" in message for message in logs)
 
 
+def test_spool_corrupt_created_is_quarantined_and_does_not_crash(tmp_path):
+    """V6-8: a corrupt `created` goes to quarantine and does not crash."""
+    spool = Spool(tmp_path / "spool")
+    spool._mkdir()
+    bad_entry = {"msg_id": "b" * 32, "host": "router", "to": "worker",
+                 "text": "corrupt created", "created": "yesterday"}
+    (tmp_path / "spool" / ("b" * 32 + ".json")).write_text(
+        json.dumps(bad_entry), encoding="utf-8")
+    spool.add(_entry("a" * 32))
+    logs = []
+    spool = Spool(tmp_path / "spool", log=logs.append)
+    assert [e["msg_id"] for e in spool.entries()] == ["a" * 32]
+    quarantined = tmp_path / "spool" / "corrupt" / ("b" * 32 + ".json")
+    assert quarantined.exists()
+    assert any("corrupt" in message for message in logs)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes only")
 def test_spool_file_modes_are_0700_and_0600(tmp_path):
     spool = Spool(tmp_path / "spool")
@@ -394,8 +468,8 @@ def test_oversize_text_is_refused(bus):
 
 def test_oversize_body_is_refused_before_queueing(bus):
     client = build_client(bus.env())
-    with pytest.raises(Refused, match="body exceeds"):
-        client.send("worker", "small text", body={"k": "v" * contract.BODY_MAX})
+    with pytest.raises(Refused, match="bus cap"):
+        client.send("worker", "\U0001F600" * 1500)
     assert bus.fetch_rows("router") == []
     assert list((bus.root / "spool-router").glob("*.json")) == []
 
@@ -438,6 +512,32 @@ def test_health_claim_foreign_is_never_healthy():
     transport = FakeTransport({"status": "ok", "key_id": "someone-elses"})
     assert _health("http://peer:1", _cfg(), transport,
                    expected={"router": "kid-router"}) is False
+
+
+def test_health_foreign_service_without_ok_status_is_never_healthy():
+    """A 2xx from another service (e.g. nginx or other API) is not healthy."""
+    transport = FakeTransport({"message": "welcome to foreign api"})
+    assert _health("http://peer:1", _cfg(), transport,
+                   expected={"router": "kid-router"}) is False
+
+
+def test_health_probe_sends_no_bearer_token(bus, monkeypatch):
+    """G2-6: the health probe sends no bearer token."""
+    captured_auth = []
+    real_open = urllib.request.OpenerDirector.open
+
+    def spy_open(self, req, *args, **kwargs):
+        if "/v1/health" in req.full_url:
+            captured_auth.append(req.headers.get("Authorization"))
+        return real_open(self, req, *args, **kwargs)
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", spy_open)
+    cfg = load_config(bus.env())
+    # cfg has token_file set, but health probe must not send Authorization header
+    healthy = _health(bus.url, cfg, expected={"router": "kid-router"})
+    assert healthy is True
+    assert len(captured_auth) >= 1
+    assert all(h is None for h in captured_auth)
 
 
 def test_health_claim_map_is_checked_per_host():
@@ -549,6 +649,37 @@ def test_unconfigured_wake_logs_once_and_never_per_row(bus):
     client.send("worker", "two")
     wake_logs = [m for m in logs if "wake" in m.lower()]
     assert len(wake_logs) == 1, logs     # one construction, one log, not per row
+
+
+def test_send_to_configured_target_triggers_sink(bus, monkeypatch):
+    """G2-8: send to a configured wake target triggers the sink."""
+    from plangraph.fleet_bus import wake_http
+    prompts = []
+
+    def fake_post(url, body, timeout, headers):
+        prompts.append((url, body))
+        return 200, b'{"ok": true}'
+
+    wake_file = bus.root / "wake.json"
+    wake_file.write_text(json.dumps({
+        "sessions": {
+            "worker": {"session": "sess-worker", "base": "http://127.0.0.1:9876", "kind": "opencode"},
+        },
+        "state": str(bus.root / "wake-state.json"),
+    }))
+    env = dict(bus.env(host="l1"))
+    env["FLEET_MSG_WAKE"] = str(wake_file)
+
+    monkeypatch.setattr(wake_http, "_post", fake_post)
+    client = build_client(env)
+    assert client.wake is not None
+    client.wake.sink.post = fake_post
+
+    res = client.send("worker", "hello worker wake")
+    assert res["queued"] is False
+    assert len(prompts) == 1
+    url, body = prompts[0]
+    assert "sess-worker" in url
 
 
 # --------------------------------------------------------------------------

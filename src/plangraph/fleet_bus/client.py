@@ -187,9 +187,14 @@ def _identity_ok(data, expected):
     service cannot masquerade as a keeper.  A *missing* claim leaves identity
     unverified: older keepers predate the claim, so it is tolerated (the
     caller logs) rather than treated as hostile — the strict gate activates
-    with the keeper half that publishes ``key_id``.
+    with the keeper half that publishes ``key_id``.  A 2xx response from a
+    non-keeper service (missing status == 'ok') is never healthy.
     """
-    claim = data.get("key_id") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return False
+    if data.get("status") != "ok" and "key_id" not in data:
+        return False
+    claim = data.get("key_id")
     if isinstance(claim, str):
         return bool(expected) and all(kid == claim for kid in expected.values())
     if isinstance(claim, dict):
@@ -201,15 +206,13 @@ def _identity_ok(data, expected):
 def _health(endpoint, cfg, transport=None, expected=None):
     """Deadline-bound probe of the peer's open health route.
 
-    Health is a 2xx plus the registry identity claim when the keeper makes
-    one: ``expected`` maps the host names bound to this endpoint to the
-    ``key_id`` values the inventory provisions for them (see the module
-    docstring).  A keeper that predates the claim stays reachable; one that
-    claims a foreign identity never is.
+    The health probe sends no bearer token (open unauthenticated probe) and
+    verifies keeper identity via key_id: expected maps host names to key_ids.
+    A 2xx from another service is not healthy.
     """
     try:
-        data = (transport or HttpTransport(cfg)).request(
-            endpoint.rstrip("/") + "/v1/health")
+        t = transport or HttpTransport(replace(cfg, timeout=PROBE_TIMEOUT_S, token_file=""))
+        data = t.request(endpoint.rstrip("/") + "/v1/health", auth=False)
     except (Refused, TransportError):
         return False
     return _identity_ok(data, expected or {})
@@ -250,7 +253,7 @@ class _Prober:
 
     def __init__(self, cfg, expected):
         self.expected = dict(expected)
-        self._cfg = replace(cfg, timeout=PROBE_TIMEOUT_S)
+        self._cfg = replace(cfg, timeout=PROBE_TIMEOUT_S, token_file="")
         self._transport = HttpTransport(self._cfg)
         self._cache = {}
         self._lock = threading.Lock()
@@ -337,18 +340,11 @@ class Spool:
             self._quarantine(name)
             return None
         created = entry.get("created") if isinstance(entry, dict) else None
-        body_ok = False
-        if isinstance(entry, dict) and "body" in entry:
-            try:
-                json.dumps(entry["body"], allow_nan=False)
-                body_ok = True
-            except (TypeError, ValueError):
-                pass
+        text = entry.get("text") if isinstance(entry, dict) else None
         valid = (isinstance(entry, dict)
-                 and body_ok
+                 and isinstance(text, str)
                  and MSG_ID_RE.fullmatch(str(entry.get("msg_id") or ""))
                  and isinstance(entry.get("to"), str)
-                 and isinstance(entry.get("text"), str)
                  and (created is None
                       or (type(created) in (int, float) and math.isfinite(created))))
         if not valid:
@@ -404,9 +400,9 @@ class HttpTransport:
         self.cfg = cfg
         self._opener = opener or urllib.request.build_opener()
 
-    def _headers(self):
+    def _headers(self, auth=True):
         headers = {"Accept": "application/json"}
-        if self.cfg.token_file:
+        if auth and self.cfg.token_file:
             try:
                 token = Path(self.cfg.token_file).read_text(encoding="utf-8").strip()
             except (OSError, UnicodeError):
@@ -414,10 +410,10 @@ class HttpTransport:
             headers["Authorization"] = "Bearer " + token
         return headers
 
-    def request(self, url, *, method="GET", payload=None, query=None):
+    def request(self, url, *, method="GET", payload=None, query=None, auth=True):
         if query:
             url += ("&" if "?" in url else "?") + urllib.parse.urlencode(query)
-        headers = self._headers()
+        headers = self._headers(auth=auth)
         data = None
         if payload is not None:
             data = json.dumps(payload, sort_keys=True, separators=(",", ":"),
@@ -513,40 +509,42 @@ class BusClient:
     def _payload(self, entry):
         """Fresh nonce and timestamp, same ``msg_id``: one retry identity.
 
-        The signed ``text`` is the wire text the keeper derives from the
-        message body (G1 wire rule): a string body signs the string itself —
-        the original raw text, never a JSON re-encoding — and a structured
-        body signs its canonical JSON encoding (compact, sorted).
+        Per G1-1: signed envelope requires body == {"text": <str>} and verifies
+        against that str.  Never send a structured signed body.
         """
         ts = int(self.clock())
-        body = entry["body"]
+        text = entry["text"]
         envelope = {"from": self.cfg.host, "to": entry["to"], "ts": ts,
                     "nonce": self._nonce(), "msg_id": entry["msg_id"],
-                    "kid": self.cfg.key_id, "text": _wire_text(body)}
+                    "kid": self.cfg.key_id, "text": text}
         signature = sign(self._secret(), canonical_post(envelope))
         payload = {"from": envelope["from"], "to": envelope["to"],
-                   "body": body,
+                   "body": {"text": text},
                    "envelope": {"host": envelope["from"], "sig": signature,
                                 "nonce": envelope["nonce"], "ts": ts,
                                 "msg_id": entry["msg_id"]}}
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                             ensure_ascii=True).encode("utf-8")
-        if len(encoded) > BODY_MAX:
+        body_encoded = json.dumps({"text": text}, sort_keys=True, separators=(",", ":"),
+                                  ensure_ascii=True).encode("utf-8")
+        if len(body_encoded) > BODY_MAX:
             raise Refused(f"message body exceeds the {BODY_MAX}-byte bus cap")
         return payload
 
     def send(self, agent, text, *, body=None):
         """Queue and write one message; returns a ``msg_id`` receipt.
 
-        ``body`` is the message body: the raw ``text`` by default (signed as
-        the original text) or a structured value from ``--json`` (signed as
-        its canonical JSON encoding, per the wire rule).
+        Per G1-1: signed envelope requires body == {"text": <str>} and verifies
+        against that str.  If ``body`` is passed, it is converted to string
+        text (EXTRA).
         """
+        if body is not None:
+            if isinstance(body, str):
+                text = body
+            elif isinstance(body, (dict, list)):
+                text = json.dumps(body, sort_keys=True, separators=(",", ":"))
         self._check_text(text)
         endpoint = self.resolve(agent)         # refusal before anything queues
         entry = {"msg_id": uuid.uuid4().hex, "host": self.cfg.host,
                  "to": agent, "text": text,
-                 "body": text if body is None else body,
                  "created": int(self.clock()), "attempts": 0}
         self._payload(entry)                   # caps and key file: refuse first
         self.drain()                           # opportunistic backlog retry
@@ -724,8 +722,7 @@ def _parser():
     send.add_argument("agent", help="agent alias or host name (discovery)")
     send.add_argument("text", help="message text, or a JSON document with --json")
     send.add_argument("--json", dest="as_json", action="store_true",
-                      help="parse TEXT as JSON and send body"
-                           " {'type': 'message', 'body': <json>}")
+                      help="validate TEXT as JSON and serialize canonical JSON string as message text")
     read = commands.add_parser("read", help="fleet-msg read [--since <seq|time>]")
     read.add_argument("--since", default=None, metavar="SEQ|TIME",
                       help="sequence number, ISO timestamp or epoch seconds")
@@ -738,14 +735,14 @@ def main(argv=None, *, client=None):
     try:
         active = client if client is not None else build_client()
         if args.command == "send":
-            body = None
+            text = args.text
             if args.as_json:
                 try:
                     parsed = json.loads(args.text)
                 except ValueError:
                     raise Refused("--json text is not valid JSON") from None
-                body = {"type": "message", "body": parsed}
-            result = active.send(args.agent, args.text, body=body)
+                text = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
+            result = active.send(args.agent, text)
             if result["queued"]:
                 print(f"queued {result['msg_id']} (will retry)")
             else:
