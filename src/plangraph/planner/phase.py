@@ -97,7 +97,7 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         method = review_method(project_of(key), key, root=repo_root)
     except SettingsError as exc:
         detail = str(exc)
-        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
+        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid:'
         raise Refused("validation", msg) from None
     project = project_of(key)
     review_scope_value = "batch" if method.mode == "batch" else "per-fixer"

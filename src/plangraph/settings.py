@@ -13,7 +13,8 @@ except ImportError:  # JSON policies remain usable on older Python.
     tomllib = None
 from typing import Literal
 
-_LABEL_SANITIZE_RE = re.compile(r'[/\\\x00-\x1f\x7f]')
+_LABEL_SANITIZE_RE = re.compile(r'[/\\\x00-\x1f\x7f\x80-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]')
+_CONTROL_CHARS_RE = re.compile(r'[\x00-\x1f\x7f\x80-\x9f\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]')
 
 
 def _sanitize_label(key: str) -> str:
@@ -54,7 +55,7 @@ class ReviewMethod:
             raise SettingsError('source: expected nonempty string')
         if '/' in self.source or '\\' in self.source:
             raise SettingsError('source: path separators not allowed')
-        if any(ord(c) < 32 or ord(c) == 127 for c in self.source):
+        if _CONTROL_CHARS_RE.search(self.source):
             raise SettingsError('source: control characters not allowed')
 
 
