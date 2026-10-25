@@ -1,12 +1,13 @@
 # build-L1 card · gen-29 · 2026-10-25 05:3xZ · NO cron · hb loop = jobs/975daff2/tmp/hb.sh (3x8min, restart on exit) over ops/hb-keys.txt
 Rules: D-2643/2644 batch review at end; D-2534 phase-batch; D-2539 Haiku first w/o Claude writer; D-2540 first review 2 families, re-review 1; D-2511 seats != any writer family.
-Writers D-2683/2684: agy gemini > mimo-pro > OR free/opencode free (~01Z) > mimo-flash; never Claude; cx out ~10-30. agy -p never a seat (L24). D-2686: no run here while MemAvailable < 4000 MB (incl. projected RSS; qwen seat ~880 MB) -> workst-L1-autoos.
+Writers D-2683/2684: agy gemini > mimo-pro > OR free/opencode free (~01Z) > mimo-flash; never Claude; cx out ~10-30. agy -p never a seat (L24). D-2706: floor MemAvailable 2000 MB (incl. projected RSS), max 4 writers here, rest -> workst-L1-autoos. One compaction = recycle (new session from handoff).
 Spawn: python3 ~/code/AutoOS/tools/autoos-agent.py run --isolate --client agy --model gemini-3.8-flash | --client opencode --model mimo/mimo-v2.6-pro --card '{"complexity":"standard","privacy":"public","role":"implement"}' --item-key K --title T "$(cat brief)" (cwd = lane worktree). Briefs/seats: ~/code/plangraph-worktrees/briefs/lanes-d2657{,/seats}.
 Handoff = status/build-L1.handoff.md. Control repo local only: git push control build-L1.
 | Item | State / next |
 |---|---|
 | #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r9 88bc89d4: Haiku+dsfree delta FAIL. r10 = ROUND 3/3 brief scope-r10.md (group A store_oversight/auth/store, group B db.py) queued on workst-L1-autoos (lane/keeper-scope-r10a, -r10b from 88bc89d4; behind its 3-writer cap). Next: merge both into r6, keeper tests, delta seat (Haiku + non-Claude), pass -> GO-REQ round 3; fail -> replan |
-| #183 ROUTER-LIVENESS-WATCHDOG | MERGED 31331e80 (main green, evidence). Item OPEN until install evidence; GO-REQ install + leaf LIVENESS-WATCHDOG-LOWS JSON sent routing 06:0xZ |
+| #183 ROUTER-LIVENESS-WATCHDOG | MERGED 31331e80. Install (D-2705): units+drop-in (ExecStart -> pinned ~/code/plangraph-worktrees/live-liveness 31331e80) + ~/.config/plangraph/liveness/router.toml; test alert ok (seats/liveness-install-test-alert.txt). Routing lane 897a1d78 pushed -> routing merges -> after first real stamp: systemctl --user enable --now liveness-watchdog@router.timer -> request close |
+| LIVENESS-WATCHDOG-LOWS (D-2705) | claimed e1; lane/liveness-lows; writer mimo-pro local (bg be32gwwi9, seats/liveness-lows.run.txt); no re-seat -> CI -> mergepath |
 | #184 HARDENING (3 keys) | acf975ea Haiku seat fail: HIGH --within vacuous + LOW loadgroup accepted, 2 MED refuted -> r2 writer on workst (L3-REQ #3); triage sent routing. Then mergepath, evidence, submit 3 |
 | RT-P1-EXEC-OWNERSHIP (HIGH) | workst Haiku seat FAIL (exec-own.seat-haiku.out 773c8e6f): 2 REAL HIGH (fence cap 16, park skips forward table), reap partly refuted. Proposed leaf RT-P1-EXEC-OWNERSHIP-SQ12 to routing; await ruling |
 | PG-L3-MAX-TOKENS (D-2694/2695) | claimed e1; writer queued workst (C:\fleet\wt\pg-l3mt, agy); then 1 seat -> mergepath |
