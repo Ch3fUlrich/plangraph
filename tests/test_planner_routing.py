@@ -347,8 +347,47 @@ def test_writer_order_d2683_review_order_unchanged():
 
 
 def test_writer_order_d2683_writer_family_exclusion():
-    # (d) writer-family exclusion still applies (exclude gemini -> mimo-v2.6-pro first)
+    # (d) writer-family exclusion still applies for review; exclude_families applies for implement
     c = {"estimate_tokens": 20000, "risk_tags": []}
-    plan = plan_spawn(c, role="implement", writer_families=("gemini",))
-    assert plan.first_leg.id == "mimo-v2.6-pro"
+    plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
+    assert plan_rev.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
+    assert plan_imp.first_leg.id == "mimo-v2.6-pro"
+    # F2: writer_families does not exclude implement legs
+    plan_wf = plan_spawn(c, role="implement", writer_families=("gemini",))
+    assert plan_wf.first_leg.id == "agy-gemini-3.8-flash"
+
+
+def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
+    # F1 new test: implement plan_spawn with benchmark rows that score cx-gpt-6.1-sol
+    # highest still returns legs in WRITER_ORDER (first leg agy-gemini-3.8-flash),
+    # and a limited leg is still skipped.
+    rows = {
+        "omniroute/cx-gpt-6.1-sol": {"model_id": "omniroute/cx-gpt-6.1-sol", "aa_intelligence": 999, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+        "gemini-3.8-flash": {"model_id": "gemini-3.8-flash", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+        "mimo/mimo-v2.6-pro": {"model_id": "mimo/mimo-v2.6-pro", "aa_intelligence": 1, "cost_per_task_usd": 0, "pool_burn_weight": 0},
+    }
+    def reader(model, **kwargs):
+        if model == "mimo/mimo-v2.6-pro":
+            return {"state": "limited", "evidence": {"status": 429}}
+        return {"state": "available", "evidence": None}
+
+    c = {"estimate_tokens": 20000, "risk_tags": []}
+    plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader)
+    assert plan.first_leg.id == "agy-gemini-3.8-flash"
+    assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
+    assert any(s["leg"] == "mimo-v2.6-pro" and s["reason"] == "limited" for s in plan.skipped)
+    from plangraph.planner.legs import WRITER_ORDER
+    expected_writers = [w for w in WRITER_ORDER if w != "mimo-v2.6-pro"]
+    assert [l.id for l in plan.legs[:len(expected_writers)]] == expected_writers
+
+
+def test_no_implement_plan_leg_has_claude_family():
+    # F5: no implement-plan leg has claude_family True
+    for estimate in (1000, 20000, 100000):
+        plan = plan_spawn({"estimate_tokens": estimate}, role="implement")
+        assert plan.legs
+        assert not any(leg.claude_family for leg in plan.legs)
+        assert all(leg.claude_family is False for leg in plan.legs)
+
 

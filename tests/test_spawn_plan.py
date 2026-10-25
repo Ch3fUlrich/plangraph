@@ -70,9 +70,11 @@ def test_benchmark_within_tier_only():
     rows = {l.model: {"aa_intelligence": 40 + i * 10, "cost_per_task_usd": 0,
                       "pool_burn_weight": 0} for i, l in enumerate(writer)}
     p = plan_spawn(CARD, role="implement", benchmark=rows)
-    assert p.first_leg.family == "mimo"
-    assert p.legs[-1].tier == "paid" and p.p_source == "benchmark"
+    assert p.first_leg.family == "gemini"
+    assert p.legs[-1].tier == "paid" and p.p_source == "operator-order"
     assert "no benchmark p" in plan_spawn(CARD, role="implement").reasons
+    p_rev = plan_spawn(CARD, role="review", benchmark=rows)
+    assert p_rev.p_source == "benchmark"
 
 
 @pytest.mark.parametrize("status,body", [(500, "outage"), (200, "ok"), (429, "")])

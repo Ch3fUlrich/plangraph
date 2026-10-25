@@ -356,7 +356,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
-    excluded = set(writer_families) | set(exclude_families) | set(card.get("exclude_families") or ())
+    excluded = (set(writer_families) if role == "review" else set()) | set(exclude_families) | set(card.get("exclude_families") or ())
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if st["state"] != "limited" and "/" not in leg_obj.model:
@@ -404,7 +404,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ordered = list(route.legs)
     reasons = [*route.reasons, *bench_reasons]
     source = "operator-order"
-    if benchmark is not None:
+    if benchmark is not None and role != "implement":
         from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:
             tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]

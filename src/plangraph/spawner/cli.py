@@ -93,24 +93,7 @@ def _supervise():
 
 
 def _card(value):
-    if value.startswith('@'):
-        return json.loads(Path(value[1:]).read_text(encoding='utf-8'))
-    try:
-        return json.loads(value)
-    except Exception:
-        if ':' in value:
-            out = {}
-            for item in value.split(','):
-                k, sep, v = item.partition(':')
-                k = k.strip()
-                v = v.strip()
-                try:
-                    v = json.loads(v)
-                except Exception:
-                    pass
-                out[k] = v
-            return out
-        raise
+    return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
 
 
 def main(argv=None):

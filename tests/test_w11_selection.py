@@ -20,7 +20,7 @@ def rows():
 def test_tier_first_and_swap():
     data = rows()
     plan = plan_spawn(CARD, role='implement', benchmark=data)
-    assert plan.first_leg == WRITERS[6]
+    assert plan.first_leg == WRITERS[4]
     assert plan.legs[-1] == WRITERS[-1]
     data[WRITERS[4].model], data[WRITERS[6].model] = data[WRITERS[6].model], data[WRITERS[4].model]
     assert plan_spawn(CARD, role='implement', benchmark=data).first_leg == WRITERS[4]
@@ -34,7 +34,8 @@ def test_candidate_json_and_limit():
     data = rows()
     del data[WRITERS[0].model]
     plan = plan_spawn(CARD, role='implement', benchmark=data, leg_reader=reader)
-    assert plan.first_leg == WRITERS[5]
+    assert plan.first_leg == WRITERS[4]
+    assert WRITERS[6] not in plan.legs
     candidates = {c['leg']: c for c in plan.to_dict()['candidates']}
     assert candidates[WRITERS[0].id]['u_core'] is None
     assert candidates[WRITERS[0].id]['p_source'] == 'prior'
@@ -56,7 +57,7 @@ def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
     cli = json.loads(capsys.readouterr().out)
     mcp = asyncio.run(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_route', {'card': CARD}))
     for result in (cli, mcp):
-        assert result['first_leg']['id'] == WRITERS[6].id
-        assert result['p_source'] == 'benchmark'
+        assert result['first_leg']['id'] == WRITERS[4].id
+        assert result['p_source'] == 'operator-order'
         assert all(c['p_source'] == 'measured' and isinstance(c['u_core'], float)
                    for c in result['candidates'])
