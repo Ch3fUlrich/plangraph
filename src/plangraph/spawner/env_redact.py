@@ -5,6 +5,17 @@ import re
 IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
 
 
+def _is_numeric(value):
+    """True for optionally signed decimal digits only: "-1", "+8080", "8080".
+
+    Such values are configuration (sentinel, port, limit), never credential
+    material, so a configured provider env name may expose them. Every other
+    literal form stays redacted: "1_000" (digit grouping), "0x1F", "1.5" and
+    friends can carry a secret payload.
+    """
+    return re.fullmatch(r'[+-]?\d+', value) is not None
+
+
 def unavailable_reason(exit_code, stdout, stderr):
     """Failed harness evidence, in stderr-first order; never task prose on success."""
     if exit_code == 0:
@@ -53,8 +64,12 @@ def redact_env_values(text, env):
         names.update(re.findall(r'\{env:([A-Za-z_][A-Za-z0-9_]*)\}', json.dumps(providers)))
     except (ValueError, TypeError, AttributeError):
         pass
+    # Numeric carve-out: a configured provider env name (names) is redacted
+    # unless its value is optionally signed decimal digits ("-1", "+8080");
+    # "1_000" and every other non-decimal form stay redacted. Secret-shaped
+    # key names are redacted regardless of the value's shape.
     values = {v for k, v in env.items() if isinstance(v, str) and v
-              and (k in names or (len(v) >= 8 and not re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', v)
+              and ((k in names and not (_is_numeric(v) and not re.search(r'(?i)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', k))) or (len(v) >= 8 and not re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?', v)
                    and v.lower() not in {'true', 'false', 'yes', 'no', 'on', 'off'}
                    and re.search(r'(?i)(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', k)))}
     values.update(line for value in tuple(values) if '\n' in value

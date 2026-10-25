@@ -148,7 +148,9 @@ def test_mid_fallthrough_bench_refusal(tmp_path, monkeypatch):
         assert record['refusal'] == 'BenchRequired'
         assert record['exit_code'] == 3
         assert record['evidence'] == [{'leg': plan.legs[1].id}]
-        assert len(record['attempts']) == 1
+        assert len([a for a in record['attempts'] if a['status'] != 'skipped']) == 1
+        assert all(a['skip_reason'] == 'run_terminated_before_leg'
+                   for a in record['attempts'] if a['status'] == 'skipped')
         assert record['attempts'][0]['skip_reason'] == 'provider_stop'
         assert record['ended'] is not None
         assert service.result(record['run_id']) == record

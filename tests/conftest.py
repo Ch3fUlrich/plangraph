@@ -73,6 +73,11 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
+    # Credential scrubbing below also removes GIT_CONFIG_KEY_*; do not leave
+    # an inherited count pointing at missing key/value pairs in subprocesses.
+    for name in list(os.environ):
+        if name == 'GIT_CONFIG_COUNT' or name.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_')):
+            monkeypatch.delenv(name)
     for name in list(os.environ):
         if re.search(r'(KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|BEARER)', name, re.I) or name.upper().startswith(('AUTOOS_', 'OMNIROUTE', 'OPENROUTER', 'MIMO', 'DEEPSEEK',
                                     'ANTHROPIC', 'OPENAI', 'GEMINI', 'QODER')) and name != 'AUTOOS_ROOT':

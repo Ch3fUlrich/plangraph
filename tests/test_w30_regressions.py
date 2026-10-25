@@ -31,7 +31,10 @@ def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, expli
     result = asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
                                        wait_seconds=None, no_fallthrough=explicit))
     assert result['status'] == ('failed' if explicit else 'completed')
-    assert len(result['attempts']) == (1 if explicit else 2)
+    assert len(result['attempts']) == 2
+    assert len([a for a in result['attempts'] if a['status'] != 'skipped']) == (1 if explicit else 2)
+    if explicit:
+        assert result['attempts'][1]['skip_reason'] == 'run_terminated_before_leg'
     assert 'opaque-test-SECRET123' not in service._path(result['run_id']).read_text() + caplog.text
     assert service.runner._child_envs == {}
 
