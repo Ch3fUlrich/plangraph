@@ -118,10 +118,12 @@ def _run_part(leg: family.Leg, i: int, text: str, multi: bool, spec: SeatSpec,
     judged = verdict.judge(body, finish, material=text)
     failed = finish in _BAD_FINISH
     error: str | None = None
-    if leg.kind == "gateway" and getattr(result, "status", None) != 200:
-        failed = True
-        error = getattr(result, "error", None) or "status %r" % (
-            getattr(result, "status", None),)
+    truncated = getattr(result, "truncated_empty", False)
+    status = getattr(result, "status", None)
+    if leg.kind == "gateway" and (status != 200 or truncated):
+        failed = True  # truncated_empty is a failed seat, never a verdict
+        error = getattr(result, "error", None) or (
+            "truncated_empty" if truncated else "status %r" % (status,))
     retry = _retriable(result, leg)
     if failed:
         error = error or getattr(result, "error", None) or "finish_reason %r" % (finish,)
