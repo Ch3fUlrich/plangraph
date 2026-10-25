@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import threading
 import urllib.parse
@@ -40,7 +41,7 @@ from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing
 from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
-from .errors import Refused
+from .errors import ConnectionLost, Refused
 
 __all__ = ["MAX_BODY", "KeeperHTTPServer", "KeeperHandler", "Reaper",
            "make_server", "write_snapshot"]
@@ -64,10 +65,23 @@ class KeeperHandler(BaseHTTPRequestHandler):
         """Never log a request line: it can carry a query and must stay quiet."""
     # ---------------------------------------------------------------- verbs
     def do_GET(self):  # noqa: N802 - stdlib signature
-        self._handle("GET")
+        try:
+            self._handle("GET")
+        except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
+            self._escape(exc)
 
     def do_POST(self):  # noqa: N802 - stdlib signature
-        self._handle("POST")
+        try:
+            self._handle("POST")
+        except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
+            self._escape(exc)
+
+    def _escape(self, exc):
+        """Last resort when something escaped ``_handle``: one 500, never a dropped socket."""
+        if not getattr(self, "_sent", False):
+            self._fail_line(exc)
+            with suppress(Exception):
+                self._json(500, {"error": "internal", "msg": "internal server error"})
 
     def _handle(self, method):
         parsed = urllib.parse.urlsplit(self.path)
@@ -84,7 +98,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(parsed.query)
 
         if name == "health":
-            self._json(200, {"status": "ok"})
+            conn = getattr(self.server.store, "conn", None)
+            if getattr(conn, "lost", False) or getattr(self.server, "fatal_reason", None):
+                self._json(503, {"status": "unavailable"})   # I11: flag only, no IO, no lock
+            else:
+                self._json(200, {"status": "ok"})
             return
 
         allowed = _READ_VERBS if method == "GET" else _WRITE_VERBS
@@ -108,14 +126,14 @@ class KeeperHandler(BaseHTTPRequestHandler):
         server = self.server
         with server.lock:
             try:
-                principal = auth.authenticate(server.store.conn, self._token())
-            except Refused as exc:
-                audit = getattr(server.store, "audit_auth_failure", None)
-                with suppress(Exception):  # absent or broken: still a 401
-                    audit and audit(exc.msg or exc.code)
-                self._json(401, {"error": exc.code, "msg": exc.msg})
-                return
-            try:
+                try:
+                    principal = auth.authenticate(server.store.conn, self._token())
+                except Refused as exc:
+                    audit = getattr(server.store, "audit_auth_failure", None)
+                    with suppress(Exception):  # absent or broken: still a 401
+                        audit and audit(exc.msg or exc.code)
+                    self._json(401, {"error": exc.code, "msg": exc.msg})
+                    return
                 api_routes.run_gate(principal, name)
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
@@ -134,11 +152,22 @@ class KeeperHandler(BaseHTTPRequestHandler):
             except Refused as exc:
                 self._json(_STATUS.get(exc.code, 400),
                            {"error": exc.code, "msg": exc.msg})
-            except Exception:  # noqa: BLE001 - never leak internals
+            except ConnectionLost as exc:  # I1/I4: fail loud, never a silent close
+                self._fail_line(exc)
+                msg = ("keeper database lost at commit; outcome unknown"
+                       if exc.phase == "commit" else "keeper database unavailable")
+                self._json(503, {"error": "unavailable", "msg": msg})
+            except Exception as exc:  # noqa: BLE001 - never leak internals
+                self._fail_line(exc)
                 self._json(500, {"error": "internal",
                                  "msg": "internal server error"})
 
     # ------------------------------------------------------------- plumbing
+    @staticmethod
+    def _fail_line(exc):
+        """One stderr line per failed request: the type only (I10), never ``str(exc)``."""
+        print(f"keeper: request failed: {type(exc).__name__}", file=sys.stderr)
+
     def _token(self):
         header = self.headers.get("Authorization", "")
         if header.startswith("Bearer "):
@@ -194,6 +223,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
 
     def _empty(self, status):
         """No body, no Content-Length/Content-Type (HTTP 204 must not carry one)."""
+        self._sent = True
         self.send_response(status)
         self.end_headers()
 
@@ -203,6 +233,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
                    inbox.routes.PAGE_HEADERS)
 
     def _send(self, status, body, ctype, headers=()):
+        self._sent = True                     # a status line is going out (I1)
         if status == 413:
             self.close_connection = True
         self.send_response(status)
