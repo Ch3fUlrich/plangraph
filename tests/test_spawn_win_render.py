@@ -150,6 +150,13 @@ def test_render_never_imports_host_keys_or_opens_api_keys(tmp_path, monkeypatch)
     assert reason is None
     render_mod = sys.modules["plangraph.routing_support.opencode_render"]
     assert "host_keys" not in render_mod.__dict__
+    # Meaningful pin (I2): the module source names none of the key entry points.
+    import inspect
+    source = inspect.getsource(render_mod)
+    assert "host_keys" not in source
+    assert "api-keys" not in source
+    assert "_gateway_key" not in source
+    assert "_zen_key" not in source
 
 
 @pytest.mark.parametrize(
@@ -159,6 +166,8 @@ def test_render_never_imports_host_keys_or_opens_api_keys(tmp_path, monkeypatch)
         "http://gw/?k=1",
         "file:///x",
         "http://gw#frag",
+        "http://gw?",
+        "http://gw#",
     ],
 )
 def test_render_url_validation_rejections(bad_url, tmp_path, monkeypatch):
@@ -267,6 +276,22 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
             assert sentinel not in record_file.read_text()
 
     asyncio.run(run())
+
+
+def test_root_base_url_normalized_in_fallback(tmp_path, monkeypatch):
+    """LOW: the /v1 rule applies to a root-supplied baseURL like to an override."""
+    fake_root = tmp_path / "fake-autoos"
+    fake_root.mkdir()
+    (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
+        "package": "@opencode/ai/providers/openai-compatible",
+        "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://root:20128"},
+        "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
+    }}}))
+    monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
+    env = overlay_env(build_child_env())
+    assert render_gateway_providers(env, "mimo/mimo-v2.6-pro") is None
+    cfg = json.loads(env["OPENCODE_CONFIG_CONTENT"])
+    assert cfg["providers"]["mimo"]["settings"]["baseURL"] == "http://root:20128/v1"
 
 
 def test_render_null_env_treated_as_absent():

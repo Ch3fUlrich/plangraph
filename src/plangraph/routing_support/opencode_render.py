@@ -37,8 +37,13 @@ def _env_names(provider: dict[str, Any]) -> list[Any]:
 def _is_valid_url(url: str) -> bool:
     if not isinstance(url, str) or not url.strip():
         return False
+    raw = url.strip()
+    # A bare trailing '?' or '#' yields an empty query/fragment in urlsplit;
+    # refuse any raw query or fragment delimiter outright (I5).
+    if "?" in raw or "#" in raw:
+        return False
     try:
-        p = urllib.parse.urlsplit(url.strip())
+        p = urllib.parse.urlsplit(raw)
     except ValueError:
         return False
     if p.scheme.lower() not in ("http", "https") or not p.netloc:
@@ -134,6 +139,8 @@ def render_gateway_providers(
         if not (isinstance(existing, str) and existing.strip()
                 and "{env:" not in existing and _is_valid_url(existing)):
             return REFUSAL_UNRESOLVED
+        # The /v1 rule applies to a root-supplied URL exactly as to an override.
+        active_block["settings"]["baseURL"] = _normalize_gateway_url(existing)
 
     rendered = json.dumps(config)
     env["OPENCODE_CONFIG_CONTENT"] = rendered
