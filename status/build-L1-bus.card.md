@@ -11,7 +11,7 @@ UNPARKED D-2657 ~23:2xZ. Phase @aded8d82 (main 4608fd3f + EOS + DISCOVERY + KEEP
 | EXEC-OBSERVED-STATE (HIGH p5) | IN PHASE: #165 merged 12a182f9 (head 73a24850 incl Hand-Edit fmt), CI 40087453166 green; awaits phase review |
 | BUS-WATCHER-TRACKED (p7) | claimed; HELD (D-2564), close superseded when BUS-WAKE lands |
 | RT-P1-BUS-WAKE (p7) | IN PHASE: #179 merged 66d3cad6 (head 66c80ccc, CI 40150820122, writer mimo). routing#3 head 864abc10 (cx) ready, merge HELD until wake daemon live; seat at merge time; host steps in PR body |
-| RT-QC-ACCEPTS (HIGH p1) | L2 build-L2-qc-accepts ses_e8fd201b9ffeOBldPtSE9uA5my (workst oc_l2, cx; reports via workst inbox relay) |
+| RT-QC-ACCEPTS (HIGH p1) | L2 ses_e8fd201b STOPPED, no lane pushed (cx out). Relaunched 05:0xZ as DIRECT workst writers A-E (D-2683): B/C/E on free slot, A after G1, D needs Gate-Edit GO-REQ. Brief l2-cards/qc-accepts/brief.md |
 | BUS-WAKE-STOPGAP-2 | claimed; D-2539 hold, close superseded when BUS-WAKE lands |
 | RT-P1-BUS-RUST (p6) | deps CI-WORKST-RUNNER(in_review), OCGO-BUS-INBOUND(open) |
 | RT-P1-BUS-DISCOVERY (p6) | IN PHASE: #168 merged 5c741554 (head e6bd35f1, CI 40141473514 green, writer cx) |
