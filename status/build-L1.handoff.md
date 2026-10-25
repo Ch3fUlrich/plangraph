@@ -12,7 +12,7 @@ Claimed keys (ops/hb-keys.txt): RT-OVERSIGHT-KEEPER-SCOPE (epoch 4), TEST-SPEED-
 
 ## Lanes
 1. #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH). Branch lane/keeper-scope-r6 pushed, head = r8m pick of 26bbbb59 (mimo). Keeper tests 2706 pass, gates 0. Writers openai/xiaomi/qwen.
-   - D-2688 seats over delta HEAD~1..HEAD (prompt briefs/lanes-d2657/seats/scope-r8.delta.txt): seat 1 Haiku tool-less, running at handoff (bg task b1ib62gfy, output seats/scope-r8.haiku.txt); seat 2 deepseek-direct-flash is 402 -> opencode free glm or deepseek-v4.1-flash-free at ~01Z reset.
+   - D-2688 seats over delta HEAD~1..HEAD (prompt briefs/lanes-d2657/seats/scope-r8.delta.txt): seat 1 Haiku DONE: VERDICT fail (all 12 earlier findings fixed/refuted-ok; NEW MEDIUMs: auth set_clock process-global clock, expired-token refusal writes no oversight_ops row vs docstring, db._upgrade drop+create guard window not atomic, + residual mint race N4) -> output seats/scope-r8.haiku.txt; NEXT: r9 fix brief with ALL Haiku new findings (writer per D-2684, <=3 files each), then delta re-seat (Haiku + opencode free at ~01Z); seat 2 deepseek-direct-flash is 402 -> opencode free glm or deepseek-v4.1-flash-free at ~01Z reset.
    - Next: on pass -> judge GO via routing -> new PR from lane/keeper-scope-r6 (old #164 is on lane/keeper-scope-repair: close it pointing to the new PR) -> mergepath plangraph:RT-OVERSIGHT-KEEPER-SCOPE. Schema: #164 keeps OVERSIGHT_SCHEMA_VERSION 14; build-L1-bus renumbers after.
    - On fail -> one fix brief with all findings (D-2458), keeper/schema multi-file = split <=3 files per writer.
 2. #166 KEEPER-PG-RECONNECT: open, idle 18h, unclaimed. Serialized after #164 (same keeper files). Next: after #164 merges, claim, brief, writer per D-2684.
