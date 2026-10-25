@@ -139,8 +139,10 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     privacy = card.get("privacy")
     if privacy not in (None, "public", "private", "sensitive"):
         raise ValueError("privacy must be public, private or sensitive")
-    # D-2749 gap 3: a sensitive card never reaches a leg that trains on its data.
-    no_train = bool(_NO_TRAIN_TAGS.intersection(tags)) or privacy == "sensitive"
+    # D-2683/D-2760 gap 3: a sensitive card reaches only the marked models.
+    from plangraph.gates.privacy import sensitive_leg_ok
+    sensitive = privacy == "sensitive"
+    no_train = bool(_NO_TRAIN_TAGS.intersection(tags)) or sensitive
     window_fits = _fits(effective, window_class)
     dropped: dict[str, int] = {}
     eligible: list[tuple[int, int, Leg]] = []
@@ -151,6 +153,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "excluded_family"
         elif no_train and leg.trains_on_data:
             why = "trains_on_data"
+        elif sensitive and not sensitive_leg_ok(leg):
+            why = "privacy_sensitive (D-2683)"
         elif window_class not in leg.windows:
             why = "window_class"
         elif not window_fits:
@@ -314,6 +318,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     """
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
         raise SpawnRefused("card required")
+    from plangraph.gates.privacy import admit_card
+    admit_card(card)  # first: a sensitive card's refusal names D-2683
     for field in ('paths', 'write_set', 'risk_tags'):
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):

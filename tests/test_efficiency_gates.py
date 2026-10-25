@@ -424,18 +424,108 @@ def test_no_bare_python_invocation():
     assert hits == []
 
 
+def _sensitive_world(tmp_path, monkeypatch, private=True):
+    """A git run tree + a repo registry marking ``demo`` private (or public)."""
+    from plangraph.gates import privacy
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    subprocess.run(["git", "init", "-q", str(tree)], check=True)
+    (tree / "a.py").write_text("x = 1\n")
+    registry = tmp_path / "repos.json"
+    registry.write_text(json.dumps({"repos": {"demo": {"private": private}}}))
+    monkeypatch.setenv(privacy.REGISTRY_ENV, str(registry))
+    return tree
+
+
+SENSITIVE = {"estimate_tokens": 20000, "privacy": "sensitive", "key": "demo:X", "paths": ["src/a.py"]}
+
+
+@pytest.mark.parametrize("path, secret", [
+    ("vault/prod-api-key.json", True), ("config/.env", True), (".env.local", True),
+    ("keys/server.pem", True), ("x/id_rsa", True), ("db.kdbx", True), ("ci/service-account-ci.json", True),
+    ("secrets/x.txt", True), ("a/credentials.json", True), ("api_keys.yml", True), ("app.p8", True),
+    ("store.jks", True), ("C:\\fleet\\vault\\x.json", True), ("tools/my_apikey.txt", True),
+    ("src/a.py", False), ("docs/keys.md", False), ("environment.py", False), ("pemberton.txt", False),
+    ("src/envelope.py", False), ("keyboard.py", False),
+])
+def test_secret_path_matcher(path, secret):
+    # D-2760 F1: one matcher, wider set, near-misses stay clean.
+    from plangraph.gates.privacy import secret_path
+    assert secret_path(path) is secret
+
+
 @pytest.mark.parametrize("role", ["implement", "review"])
-def test_sensitive_card_never_reaches_training_leg(role):
-    # D-2749 gap 3: privacy=sensitive keeps the card off legs that train on its data.
+def test_sensitive_card_reaches_only_marked_models(tmp_path, monkeypatch, role):
+    # D-2683 / D-2760 F4: the route marker keeps a sensitive card on gemini (agy) / mimo only.
+    from plangraph.gates.privacy import sensitive_leg_ok
     from plangraph.planner import routing
-    from plangraph.planner.legs import DEFAULT_LEGS
-    trains = {leg.id for leg in DEFAULT_LEGS if leg.trains_on_data}
-    open_plan = routing.plan_spawn({"estimate_tokens": 20000}, role=role)
-    plan = routing.plan_spawn({"estimate_tokens": 20000, "privacy": "sensitive"}, role=role)
-    assert plan.legs and not trains.intersection(leg.id for leg in plan.legs)
-    assert trains.intersection(leg.id for leg in open_plan.legs)
+    _sensitive_world(tmp_path, monkeypatch)
+    plan = routing.plan_spawn(dict(SENSITIVE), role=role)
+    assert plan.legs and all(sensitive_leg_ok(leg) for leg in plan.legs)
+    assert {leg.id for leg in plan.legs} <= {"agy-gemini-3.8-flash", "mimo-v2.6-flash", "mimo-v2.6-pro"}
+    assert not all(sensitive_leg_ok(leg) for leg in routing.plan_spawn({"estimate_tokens": 20000}, role=role).legs)
     with pytest.raises(ValueError):
         routing.plan_spawn({"estimate_tokens": 20000, "privacy": "secret"}, role=role)
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"paths": ["vault/prod-api-key.json"]}, "secret path"),
+    ({"risk_tags": ["secrets"]}, "risk tag secrets"),
+    ({"paths": "src/a.py"}, "unknown scope|must be a list"),
+    ({"paths": None}, "unknown scope"),
+    ({"key": "other:X"}, "registry marks private"),
+    ({"key": None, "repo": None}, "unknown repo"),
+])
+def test_sensitive_card_refusals(tmp_path, monkeypatch, change, why):
+    # D-2683 / D-2738 / D-2760 F2/F3: refuse, naming D-2683, failing closed.
+    from plangraph.planner import routing
+    _sensitive_world(tmp_path, monkeypatch)
+    card = {k: v for k, v in {**SENSITIVE, **change}.items() if v is not None}
+    with pytest.raises(SpawnRefused, match=why) as err:
+        routing.plan_spawn(card, role="implement")
+    assert "D-2683" in str(err.value)
+
+
+def test_sensitive_card_public_or_missing_registry_refused(tmp_path, monkeypatch):
+    from plangraph.gates import privacy
+    from plangraph.planner import routing
+    _sensitive_world(tmp_path, monkeypatch, private=False)
+    with pytest.raises(SpawnRefused, match="D-2683"):
+        routing.plan_spawn(dict(SENSITIVE), role="implement")
+    monkeypatch.setenv(privacy.REGISTRY_ENV, str(tmp_path / "absent.json"))
+    with pytest.raises(SpawnRefused, match="D-2683"):
+        routing.plan_spawn(dict(SENSITIVE), role="implement")
+
+
+def test_sensitive_spawn_end_to_end(tmp_path, monkeypatch):
+    # D-2760 F2/F5: admit + refuse through SpawnService (route, override, run tree).
+    from plangraph.spawner.runner import SpawnerRunner
+    from plangraph.spawner.service import SpawnService
+    tree = _sensitive_world(tmp_path, monkeypatch)
+    service = SpawnService(runner=SpawnerRunner(default_cwd=str(tree)), state=tmp_path / "state")
+
+    async def run():
+        record = await service.spawn(card=dict(SENSITIVE), prompt="t", dry_run=True)
+        assert record["plan"]["first_leg"]["id"] in ("agy-gemini-3.8-flash", "mimo-v2.6-pro", "mimo-v2.6-flash")
+        with pytest.raises(SpawnRefused, match="marked model"):
+            await service.spawn(card=dict(SENSITIVE), prompt="t", dry_run=True,
+                                leg="cx-gpt-6.1-sol", override_reason="test override leg")
+        (tree / ".env").write_text("A=1\n")
+        with pytest.raises(SpawnRefused, match="run tree"):
+            await service.spawn(card=dict(SENSITIVE), prompt="t", dry_run=True)
+        (tree / ".env").unlink()
+        (tree / "vault").mkdir()
+        (tree / "vault" / "x.json").write_text("{}")
+        with pytest.raises(SpawnRefused, match="run tree"):
+            await service.spawn(card=dict(SENSITIVE), prompt="t", dry_run=True)
+    asyncio.run(run())
+
+
+def test_sensitive_run_tree_not_git_fails_closed(tmp_path):
+    from plangraph.gates.privacy import admit_run_tree
+    with pytest.raises(SpawnRefused, match="not a readable git tree"):
+        admit_run_tree(dict(SENSITIVE), tmp_path)
+    admit_run_tree({"privacy": "private"}, tmp_path)
 
 
 def test_opencode_command_runs_standalone():

@@ -136,6 +136,12 @@ class SpawnService:
         from dataclasses import replace as _replace
         from plangraph.gates.admission import filter_fixer_legs
         from plangraph.gates.models import retired
+        from plangraph.gates.privacy import is_sensitive, sensitive_leg_ok
+        from plangraph.routing_errors import SpawnRefused
+        if is_sensitive(card) and plan.legs and not all(sensitive_leg_ok(leg) for leg in plan.legs):
+            # an override leg skips route_card's marker; refuse it here (D-2683).
+            raise SpawnRefused('privacy=sensitive: leg is not a marked model (D-2683): '
+                               + ', '.join(leg.id for leg in plan.legs if not sensitive_leg_ok(leg)))
         gone = [leg for leg in plan.legs if retired(leg.model, getattr(leg, 'family', None))]
         live = [leg for leg in plan.legs if leg not in gone]
         kept, dropped = filter_fixer_legs(live, card or {}, role)
@@ -289,6 +295,8 @@ class SpawnService:
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
             raise SpawnRefused(plan.error or 'no eligible leg')
+        from plangraph.gates.privacy import admit_run_tree
+        admit_run_tree(card, getattr(self.runner, 'default_cwd', os.getcwd()))
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run else None, served_model=None,
