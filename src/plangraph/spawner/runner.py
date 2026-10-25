@@ -135,6 +135,7 @@ class SpawnerRunner:
         self._nonces = {}
         self._adapter_tokens = {}
         self._child_envs = {}
+        self._reaped_jobs = set()
 
     def served_witness(self, job_id, model, *, adapter_token):
         """Record transport telemetry authenticated by an in-process adapter.
@@ -363,6 +364,26 @@ class SpawnerRunner:
             if job_id not in self._tasks:
                 self._child_envs.pop(job_id, None)
 
+    async def _reap_process(self, job_id: str, proc: Any) -> None:
+        reaped = getattr(self, '_reaped_jobs', None)
+        if reaped is None:
+            self._reaped_jobs = set()
+            reaped = self._reaped_jobs
+        if job_id in reaped:
+            return
+        reaped.add(job_id)
+        pid = getattr(proc, 'pid', None)
+        if pid is None:
+            return
+        try:
+            res = self.tree_killer(pid)
+            if asyncio.iscoroutine(res):
+                await res
+        except (ProcessLookupError, PermissionError):
+            pass
+        except Exception:
+            pass
+
     async def _monitor_process(
         self,
         job_id: str,
@@ -379,7 +400,7 @@ class SpawnerRunner:
                         raise ValueError('invalid run timeout')
                     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), seconds)
                 except (asyncio.TimeoutError, ValueError):
-                    await self.tree_killer(proc.pid)
+                    await self._reap_process(job_id, proc)
                     stdout_bytes, stderr_bytes = await proc.communicate()
                     self.jobs[job_id].events.append({'event': 'run_timeout'})
                     self.jobs[job_id].exit_code = 124
@@ -436,10 +457,15 @@ class SpawnerRunner:
             job.events.append({'event': 'monitor_failed', 'error': type(exc).__name__})
             logging.getLogger(__name__).exception('monitor_failed: %s', type(exc).__name__)
         finally:
+            try:
+                await self._reap_process(job_id, proc)
+            except Exception:
+                pass
             self._child_envs.pop(job_id, None)
             self._adapter_tokens.pop(job_id, None)
             self._nonces.pop(job_id, None)
             self._processes.pop(job_id, None)
+            getattr(self, '_reaped_jobs', set()).discard(job_id)
 
     async def status(self, job_id: str | None = None) -> Any:
         """Query status of a specific job or all jobs."""
@@ -492,10 +518,7 @@ class SpawnerRunner:
 
         proc = self._processes.get(job_id)
         if proc:
-            try:
-                await self.tree_killer(proc.pid)
-            except ProcessLookupError:
-                pass
+            await self._reap_process(job_id, proc)
 
         task = self._tasks.get(job_id)
         if task and not task.done():
