@@ -56,7 +56,7 @@ Goal: the §0 rules that broke in practice become code, so no L1 has to remember
 | 2 | decisions in the keeper (D-2746 (10)): rule items, rule tree, generated DECISIONS.md | 600 |
 | 3 | legs from properties x live OmniRoute availability (D-2758 (5)) | 450 |
 | 4 | slice 4a run liveness plumbing: limits reader, exit vocabulary + liveness field, run result + I13 refusal, output on disk, cancel class (D-2814, D103; est. 150 code + 200 tests) | 400 |
-| 5 | slice 4b polling monitor + stall rule (D-2814) | 300 |
+| 5 | slice 4b polling monitor + stall rule, with the ORCH-EFFICIENCY-ENFORCE E2 role split (D-2814, D-2840) | 400 |
 | 6 | slice 4c scope launcher, OOM/memguard class, host admission (D-2814, build-L1 conditions 1-5) | 400 |
 | 7 | slice 4a2 fall-through/terminal, wall cap with shared clock and continuation deadline (D-2814, D103; est. 140 code + 160 tests) | 400 |
 | 8 | slice 4a3 detectors: truncation, provider_protocol, detector order, LegStateStore size limit, spawning principal (D-2814, D103 split again; est. 150 code + 180 tests) | 400 |
@@ -137,7 +137,7 @@ Design reviews: seat A r1 (qwen run-050c742b @ecf5bd5d) D20-D25, r2 (qwen run-03
 
 4a3 tests: truncation as the last plain line and as a last JSON error line of a failed run (stdout and stderr), not as a mid-reply quote, not on exit 0; provider_protocol: the exact run-cc3989f7 line on stderr with exit 1 -> `provider_protocol` + next leg, the same line as the last stderr line with exit 0 -> `provider_protocol` and refused, the same line earlier in stderr followed by a normal end with exit 0 -> no value (recovered), the same text only in stdout -> no value; detector order (exit 124 with a truncation last line -> `attempt_timeout`, `also: [truncated]`); LegStateStore size limit; principal on spawn, continuation and refusal records, fallback via a fake `parent_info`.
 
-### Slice 4b (Plan-Slice #5, budget 300)
+### Slice 4b (Plan-Slice #5, budget 400; amended by ORCH-EFFICIENCY-ENFORCE E2)
 
 | piece | where | behaviour |
 |---|---|---|
