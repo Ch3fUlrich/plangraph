@@ -6,11 +6,18 @@ from dataclasses import asdict, dataclass, field
 import json
 import os
 from pathlib import Path
+import re
 try:
     import tomllib
 except ImportError:  # JSON policies remain usable on older Python.
     tomllib = None
 from typing import Literal
+
+_LABEL_SANITIZE_RE = re.compile(r'[/\\\x00-\x1f\x7f]')
+
+
+def _sanitize_label(key: str) -> str:
+    return _LABEL_SANITIZE_RE.sub('_', key)
 
 
 class SettingsError(ValueError):
@@ -47,6 +54,8 @@ class ReviewMethod:
             raise SettingsError('source: expected nonempty string')
         if '/' in self.source or '\\' in self.source:
             raise SettingsError('source: path separators not allowed')
+        if any(ord(c) < 32 or ord(c) == 127 for c in self.source):
+            raise SettingsError('source: control characters not allowed')
 
 
 def project_of(card_or_key) -> str | None:
@@ -100,16 +109,16 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
     for section, key in (('projects', project), ('phases', phase)):
         table = data.get(section, {})
         if not isinstance(table, dict):
-            raise SettingsError(f'{section}: expected table')
+            raise SettingsError('expected table')
         if key is not None:
-            safe_key = key.replace('/', '_').replace('\\', '_')
+            safe_key = _sanitize_label(key)
             layers.append((f'{section}:{safe_key}', table.get(key, {})))
     for label, table in layers:
         if not isinstance(table, dict):
-            raise SettingsError(f'{label}: expected table')
+            raise SettingsError('expected table')
         override = table.get('review_method', {})
         if not isinstance(override, dict):
-            raise SettingsError(f'{label}.review_method: expected table')
+            raise SettingsError('review_method: expected table')
         for name, value in override.items():
             if name not in ReviewMethod.__dataclass_fields__ or name == 'source':
                 raise SettingsError(f'{name}: unknown review_method setting')

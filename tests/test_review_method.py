@@ -688,6 +688,55 @@ def test_finding_3_plan_phase_settings_error_sanitized_and_prefix(tmp_path, monk
         world.close()
 
 
+def test_finding_4_no_path_or_layer_in_error_and_control_char_sanitization(tmp_path, monkeypatch):
+    from plangraph.settings import SettingsError
+
+    # 1. No path in error message on missing file or syntax error
+    missing_path = tmp_path / 'subdir' / 'policy.json'
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(missing_path))
+    with pytest.raises(SettingsError) as exc_missing:
+        review_method()
+    assert '/' not in str(exc_missing.value)
+    assert 'subdir' not in str(exc_missing.value)
+    assert str(exc_missing.value) == 'file: FileNotFoundError'
+
+    # 2. Layer name not included in SettingsError for invalid table
+    bad_table_path = tmp_path / 'bad_layer.json'
+    bad_table_path.write_text(json.dumps({'projects': {'demo_proj': 'not-a-dict'}}))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(bad_table_path))
+    with pytest.raises(SettingsError) as exc_layer:
+        review_method(project='demo_proj')
+    assert 'projects:demo_proj' not in str(exc_layer.value)
+    assert '/' not in str(exc_layer.value)
+
+    bad_override_path = tmp_path / 'bad_override.json'
+    bad_override_path.write_text(json.dumps({'projects': {'demo_proj': {'review_method': 'not-a-dict'}}}))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(bad_override_path))
+    with pytest.raises(SettingsError) as exc_override:
+        review_method(project='demo_proj')
+    assert 'projects:demo_proj' not in str(exc_override.value)
+    assert '/' not in str(exc_override.value)
+
+    # 3. Source/label sanitization replaces ALL control chars (\n, \t, \0) and path separators
+    phase_key = "demo:PH/1\\2\n3\t4\x00"
+    control_path = tmp_path / 'control.json'
+    control_path.write_text(json.dumps({
+        'phases': {
+            phase_key: {'review_method': {'max_rounds': 8}}
+        }
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(control_path))
+    method = review_method(phase=phase_key)
+    assert method.max_rounds == 8
+    assert method.source == 'phases:demo:PH_1_2_3_4_'
+    assert '\n' not in method.source
+    assert '\t' not in method.source
+    assert '\x00' not in method.source
+    assert '/' not in method.source
+    assert '\\' not in method.source
+
+
+
 
 
 
