@@ -43,7 +43,7 @@ Overlap with `PG-EFFICIENCY-GATES` slice 4 (same lane family; that design is in 
 | 8 | E8 live-state command (crit 8) | 300 |
 | 9 | E9 claim heartbeat from the run supervisor (crit 9) | 250 |
 | 10 | E10 tokens per merged change + claim-to-merge metrics (crit 10) | 300 |
-| 11 | E4b writer/seat slots, queue-first admission, cross-project order (crit 4, part 2) | 300 |
+| 11 | E4b writer/seat slots, queue-first admission, cross-project order, queue sweeper (crit 4, part 2) | 400 |
 | 12 | E11 wake budget: `watch --block --batch` with decision-only wake classes and one digest | 250 |
 | 13 | E7b per-owner completion inbox, one run identity key, claim epoch on events, `watch --owner` (crit 7, part 2) | 300 |
 
@@ -64,14 +64,16 @@ Build order with slice 4 (one task loop, routing D-2837, D-2840):
 
 | piece | where | behaviour |
 |---|---|---|
-| cap | `tools/ci_commit_gate.py` `HAND_EDIT_MAX_LINES = 30` | added + deleted lines per Hand-Edit commit, measured as today (`_changed_lines`, numstat); binary files are refused as today; the malformed-trailer check is unchanged |
+| cap | `tools/ci_commit_gate.py` `HAND_EDIT_MAX_LINES = 30` | added + deleted lines per Hand-Edit commit, measured as today (`_changed_lines`, numstat); binary files are refused as today; the malformed-trailer check is unchanged. Range cap (delta2 seat H12): the gate also sums the lines of all Hand-Edit commits in the checked range (`BASE..HEAD`) per `Plan-Item:` value (no trailer = one bucket) and refuses when a bucket is over 30 (`hand-edit total over cap for <item>`), so an understated card cannot land as ten 30-line Hand-Edits |
 | secret paths in the gate (seat r1 E4) | `tools/ci_commit_gate.py` gains `SECRET_NAME_PATTERNS`, `SECRET_DIRS` (copied from `gates/privacy.py`) and `_secret_path(path)` with the same logic as `privacy.secret_path` | a Hand-Edit touching a secret-shaped path is refused (`hand-edit touches secret-shaped path`), next to the existing door refusal, so IE1 holds at the gate, not only in route |
-| shared lists | new `src/plangraph/gates/doors.py`: `AUTH_DOOR_PATHS` (same tuple), `HAND_EDIT_MAX_LINES = 30`, `door_path(path)` (fnmatchcase over the tuple), `blocked_path(path) -> "door" or "secret" or None` | `ci_commit_gate.py` stays self-contained, because CI runs the BASE copy from `$RUNNER_TEMP` (`.github/workflows/tests.yml`, `git show $BASE:tools/ci_commit_gate.py`) and cannot import `src`. Drift test (seat r1 E11): the tuples, caps and secret lists are equal, AND a shared fixture of about 40 paths (doors, secrets, near misses such as `docs/keys.md` and `src/plangraph/authoring.md`) gives the same answer from the gate's own loop and from `doors.blocked_path` |
+| shared lists | new `src/plangraph/gates/doors.py`: `AUTH_DOOR_PATHS` (same tuple), `HAND_EDIT_MAX_LINES = 30`, `canon_path(path)` (backslash -> `/`, leading `./` dropped, `posixpath.normpath`; absolute paths and any `..` segment -> `None`, which callers treat as blocked), `door_path(path)` (fnmatchcase over the tuple, on the canonical path), `blocked_path(path) -> "door" or "secret" or "malformed" or None` (delta2 seat H9: `./src/plangraph/keeper/x.py` and `src\plangraph\keeper\x.py` are doors). The gate copies `canon_path` too | `ci_commit_gate.py` stays self-contained, because CI runs the BASE copy from `$RUNNER_TEMP` (`.github/workflows/tests.yml`, `git show $BASE:tools/ci_commit_gate.py`) and cannot import `src`. Drift test (seat r1 E11): the tuples, caps and secret lists are equal, AND a shared fixture of about 40 rows `(path, gate_verdict, route_verdict)` pins the expected answer per path, not only agreement (delta2 seat H17): doors, secrets, `./` and backslash forms, gate-blocked paths such as `src/plangraph/authoring.md` (matches `src/plangraph/*auth*`, so `door`), gate-pass but route-writer paths such as `docs/tokens.md`, `docs/oauth.md`, `tools/token_count.py`, and true near misses such as `docs/keys.md`; the gate's own loop and `doors.blocked_path` must both give `gate_verdict`, and E3's `decide` must give `route_verdict` |
 | bootstrap | `Gate-Edit: D-2835` (`GATE_PATHS` includes `tools/ci_commit_gate.py`) | the BASE copy judges the commit that raises the cap, so that commit is a writer commit (Writer trailer), never a Hand-Edit; the new cap and secret check bind only the commits after the merge. A PR that adds a door to both copies is judged by the old BASE list for its own commits; that is the accepted bootstrap window, and the drift test catches a door added to only one copy |
 
 E1 tests:
 - Hand-Edits of 30 lines (pass), 31 lines (refused), and 30 lines touching `tools/seat_verdict.py` (door, refused);
 - Hand-Edits touching `vault/x.json` and `config/.env` (secret, refused);
+- `./src/plangraph/keeper/x.py`, a backslash door path and a `..` path (refused);
+- two 20-line Hand-Edits for one Plan-Item in one range (refused), and for two items (pass);
 - the drift test with the shared fixture;
 - the existing gate suite stays green.
 
@@ -81,9 +83,10 @@ E1 tests:
 
 | role class (4a `spawn_limits` map) | stalled when, for `stall_min` (15) | why |
 |---|---|---|
-| writer (`implement`, `fix`, `writer`) | no worktree work (below) AND process-group CPU < `stall_cpu_pct` (2) AND no descendant process other than the harness's own (e.g. a pytest child) | crit (3) as written. New stdout bytes do not count as work for writers: run-ae0dcb3c streamed nothing useful for 58 min. A running test child keeps the run alive (seat r1 E8: an I/O-bound or sleeping suite has low CPU and no writes); a hung test is then bounded by the wall cap (4a2), not by the stall rule |
-| worktree work | a commit on the run branch whose tree differs from its parent's (an empty commit is not work, seat r1 E9), or a file under cwd (outside `.git/` and `limits.ignore[harness]`) whose content hash has not been seen before for that path in this run | the probe keeps every hash per path up to 256; past that, the path gives no work signal, so a cycling loop over any number of contents is stalled (replaces 4b's "last 8 hashes", seat r1 E9) |
-| seat (`review`) | no new stdout/stderr bytes AND CPU < 2% | a seat writes no files. Whether qodercli `-p`, `opencode run` and agy `-p` stream output before they end is not verified (F1). The seat rule ships only for harnesses in `spawn_limits.streams` (default empty); every other seat is bounded by its 45 min wall cap. Per D-2839, F1 is checked on the first E2 test run, not a separate one |
+| writer (`implement`, `fix`, `writer`) | no worktree work (below) AND process-group CPU < `stall_cpu_pct` (2) AND no work child (delta2 seat H6: a descendant counts as a work child only when it is not a zombie, its executable basename is not in `spawn_limits.helpers[harness]` (the harness's own MCP servers, LSPs and watchers; default lists per harness from the measured trees, e.g. opencode's serena/graphify/context7/omnigraph/playwright), and it used CPU time during the window (> 0 ticks); a detached worker that left the process group is not seen and does not keep the run alive) | crit (3) as written. New stdout bytes do not count as work for writers: run-ae0dcb3c streamed nothing useful for 58 min. A running test child keeps the run alive (seat r1 E8: an I/O-bound or sleeping suite has low CPU and no writes); a hung test is then bounded by the wall cap (4a2), not by the stall rule |
+| worktree work | a commit on the run branch whose tree differs from its parent's (an empty commit is not work, seat r1 E9), or a file under cwd (outside `.git/` and `limits.ignore[harness]`) whose content hash has not been seen before for that path in this run | hashes are kept in one run-wide set (not per path, delta2 seat H5), up to 4096 entries, oldest evicted first: content already seen anywhere in the run is not work, so a loop that cycles contents over one path, round-robins them over many paths or copies them into fresh files is stalled; a path revised many times keeps its signal as long as each content is new. Accepted gap: a loop that writes ever-new content (e.g. a counter) looks like work and is bounded by the wall cap (4a2), not by the stall rule (replaces 4b's "last 8 hashes", seat r1 E9) |
+| probe failure | `liveness.check` | an unreadable CPU, child list or worktree (no `/proc`, permission error, probe raises) reads as alive, never as 0% or none (delta2 seat H7, same direction as E4a's registry rule): the run is then bounded by the wall cap only, and the record gets `liveness_probe: unavailable` once |
+| seat (`review`) | no new stdout/stderr bytes AND CPU < 2% | a seat writes no files. Whether qodercli `-p`, `opencode run` and agy `-p` stream output before they end is not verified (F1). The seat rule ships only for harnesses in `spawn_limits.streams` (default empty); every other seat is bounded by its 45 min wall cap. E2's tests are hermetic and cannot verify F1 (delta2 seat H8), so a harness is added to `streams` only by a later config change whose PR records one real seat run of that harness showing stdout bytes before exit (D-2839: that run is the first real seat after E2 merges, not a separate probe run). E2 itself merges with `streams` empty |
 | default | as writer | |
 
 - Per-leg window (routing D-2843; build-L1-bus saw mimo-pro work in single turns of 4-20 min, and run-c3b5a522 and run-8cba759a were cancelled under a flat 15 min rule, at least one mid-turn). `spawn_limits.stall_min_by_leg` (map leg id -> minutes) overrides `stall_min` per leg. The default is set from F5: `mimo-v2.6-pro` 45, `mimo-v2.6-flash` 20, `opencode` free legs 20, and every leg without measurements 45. A leg's window is never below its measured max turn gap, rounded up to 5 min.
@@ -101,7 +104,10 @@ E2 tests add to 4b's:
 - a writer streaming output with no writes, 0.5% CPU, 15 min -> stalled;
 - a writer with a live pytest child, no writes, 0.5% CPU -> alive;
 - an empty-commit loop -> stalled;
-- a 12-content cycle on one file -> stalled;
+- a 12-content cycle on one file, the same contents round-robin over 5 paths, and copies into fresh files -> stalled;
+- a file revised 300 times with new content each time -> alive;
+- an idle MCP helper child and a zombie child -> no work child; a test child using CPU -> work child;
+- an unreadable CPU probe, child list or worktree -> alive, `liveness_probe: unavailable`;
 - a seat on a non-streaming harness, silent for 40 min -> alive until the cap;
 - a seat on a harness in `streams`, silent with low CPU -> stalled;
 - after a kill, the runner holds no running job and `result.json` has `exit_class=stall`, `liveness=stalled`.
@@ -110,21 +116,22 @@ E2 tests add to 4b's:
 
 | piece | where | behaviour |
 |---|---|---|
-| decision | pure `gates.direct_edit.decide(card, role, limits) -> (mode, reason)`, called from `SpawnService._route` AND from the leg/model override branch of `_spawn` (seat r1 E13), so every plan carries a mode | `mode = "direct_edit"` only when ALL of these hold: `role == "implement"`; not a fix card (`admission.is_fix` false: fix rounds keep the 0.2d writer path); `card.est_lines` passes `routing._is_int` (bool excluded, seat r1 E7) and is 1..`direct_edit_max_lines` (30); the scope list (`card.paths` and `card.write_set` together, the same pair `plan_spawn` and `privacy.admit_card` read, seat r1 E7) is non-empty, every entry is a repo-relative string, and none is `doors.blocked_path` or matches the route-only patterns `*auth*`, `*secret*`, `*credential*`, `*token*` anywhere in the path (route is stricter than the gate, seat r1 E6); `card.risk_tags` (the keeper's `RISK_TAGS` vocabulary) has none of `auth`, `secrets`, `access`, `privacy` (3.13: these lanes always go to a spawned writer; replaces the undefined `lane_class`, seat r1 E6); the card is not `privacy=sensitive`. Anything else, a missing or malformed field included -> `"writer"`, with a reason naming the failed condition |
+| decision | pure `gates.direct_edit.decide(card, role, limits) -> (mode, reason)`, called from `SpawnService._route` AND from the leg/model override branch of `_spawn` (seat r1 E13), so every plan carries a mode | `mode = "direct_edit"` only when ALL of these hold: `role == "implement"`; not a fix card (`admission.is_fix` false: fix rounds keep the 0.2d writer path); `card.est_lines` passes `routing._is_int` (bool excluded, seat r1 E7) and is 1..`direct_edit_max_lines` (30); the scope list (`card.paths` and `card.write_set` together, the same pair `plan_spawn` and `privacy.admit_card` read, seat r1 E7) is non-empty, every entry is a string whose `doors.canon_path` is not `None` (delta2 seat H9), and no canonical entry is `doors.blocked_path` or matches the route-only patterns `*auth*`, `*secret*`, `*credential*`, `*token*` anywhere in the path (route is stricter than the gate, seat r1 E6); `card.risk_tags` is empty (delta2 seat H10: `access`/`privacy` are not in the keeper `RISK_TAGS` = auth, secrets, money, migration, public-contract, live-step, and every one of those six marks a lane that 3.13 sends to a spawned writer; replaces the undefined `lane_class`, seat r1 E6); the card is not `privacy=sensitive`. Anything else, a missing or malformed field included -> `"writer"`, with a reason naming the failed condition |
 | plan field | `SpawnPlan.mode` (`"writer"` default) + `mode_reason`; `to_dict` includes both | `route --json` shows them; legs are still listed (they are the fallback when the orchestrator overrides) |
-| spawn refusal | `SpawnService.spawn`, after the plan, before launch | `mode == "direct_edit"` -> `SpawnRefused("direct_edit: ...; make it a Hand-Edit commit (DECISIONS 3.13)")`; `save_refusal` gains a `refusal_code` field (`direct_edit`) and the card's `key` (seat r1 E13); `--override-reason` lets the run proceed and the record keeps `mode`, `mode_reason` and the override text |
+| spawn refusal | `SpawnService.spawn`, after the plan, before launch | `mode == "direct_edit"` -> `SpawnRefused("direct_edit: ...; make it a Hand-Edit commit (DECISIONS 3.13)")`; `save_refusal` gains a `refusal_code` field (`direct_edit`) and the card's `key` (seat r1 E13); `--override-reason` lets the run proceed and the record keeps `mode`, `mode_reason` and the override text. The leg/model override branch already requires `--override-reason` (`routing.hand_picked`), so there the refusal never fires (delta2 seat H11): `decide` still runs and the record carries `mode=direct_edit`, `mode_reason` and the override text, so the bypass is visible in metrics |
 | limits | `spawn_limits.direct_edit_max_lines` (default 30, int 0..30; 0 turns direct edit off) | never above `doors.HAND_EDIT_MAX_LINES`; validation refuses higher values |
 
-- The orchestrator writes `est_lines` and the scope list on the card. A card that understates them gets a direct edit that the E1 gate still refuses above 30 lines or on door and secret paths.
+- The orchestrator writes `est_lines` and the scope list on the card. A card that understates them gets a direct edit that the E1 gate still refuses above 30 lines per commit and per item in the range, or on door and secret paths.
 - A missing `est_lines` routes to a writer and does not refuse, so older cards keep working.
 
 E3 tests:
 - the decision table: each condition failing alone -> writer with its reason; all holding -> direct_edit;
 - scope entries `src/plangraph/keeper/x.py`, `.github/workflows/a.yml`, `vault/k.json`, `rust/src/auth.rs`, and a door hidden only in `write_set` -> writer;
 - `est_lines: true` -> writer;
-- `risk_tags: ["auth"]` -> writer;
+- `risk_tags: ["auth"]` and `["money"]` -> writer;
+- `./`-prefixed, backslash and `..` scope entries -> writer;
 - a cap above 30 refused;
-- the refusal on both the routed path and the override branch, and proceeding with an override (record fields checked);
+- the refusal on the routed path, proceeding with `--override-reason` there, and the leg override branch recording `mode=direct_edit` without a refusal (record fields checked);
 - `route --json` carries `mode`.
 
 ### E4 host admission + per-project slots (crit 4)
@@ -139,8 +146,8 @@ The 4c host admission row moves to E4a unchanged: dedup keys, pid + start-time m
 | atomic admit | E4a | `host_load.admit_host(probe, limits, entry)` under an exclusive lock on `host/lock` (`fcntl.flock`; `msvcrt.locking` on Windows) | count, decide and register in one critical section. If the lock cannot be taken within 10 s, or the lock call raises (no locking support, read-only dir), admission refuses with `host_lock`: fail closed, never unlocked (seat r1 E10). The probe (meminfo, `/proc`, start times) is injected; a host where it is unavailable gets the `unknown` path above |
 | writer and seat slots | E4b | `spawn_limits.max_runs` (4) stays the total; new `max_seat_runs` (2) | seats (`role_class=seat`) count against `max_seat_runs` and never take a writer slot; writer/default runs count against `max_runs - max_seat_runs`. Client processes with no registry entry count as unattributed writer-slot users. The memory floor covers all runs together |
 | queue first, then admit | E4b | every spawn writes its `queue/` entry under the lock BEFORE the first admission check | queued work is visible from the first moment, so no fresh spawn bypasses waiting projects (seat r1 E5) |
-| order | E4b | same critical section | among the live queue entries of the caller's slot class, the next to be admitted is the entry with the smallest key `(running runs of its project in that class, created)`. The caller is admitted iff a slot is free AND its entry has that smallest key. A project with no running run therefore always comes before one that has a run, and ties go to the oldest entry across projects. With a finite number of projects, every entry eventually has the smallest key, so the order is starvation-free. Nobody holds the lock while waiting, so it is deadlock-free |
-| queue wait | E4b | `spawn` polls `admit_host` every `queue_tick` (`spawn_limits`, default 5 s, injected sleep) for up to `queue_wait_min` (default 60; 0 = one check, as today) | a free slot idles at most one tick. Expiry -> `host_full` refusal. The entry is removed on admit, expiry, refusal or exit. The L1 shell loops (`hostgate.sh`) are no longer needed |
+| order | E4b | same critical section | among the live queue entries of the caller's slot class, the next to be admitted is the entry with the smallest key `(running runs of its project in that class, created, run_id)`; `run_id` makes the order total, so a `created` tie never leaves two entries each believing they are first (delta2 seat H13). The caller is admitted iff a slot is free AND its entry has that smallest key. A project with no running run therefore always comes before one that has a run, and ties go to the oldest entry across projects. With a finite number of projects, every entry eventually has the smallest key, so the order is starvation-free. Nobody holds the lock while waiting, so it is deadlock-free |
+| queue wait | E4b | `spawn` polls `admit_host` every `queue_tick` (`spawn_limits`, default 5 s, injected sleep) for up to `queue_wait_min` (default 60; 0 = one check, as today) | each poll refreshes the entry's `polled_at`. Sweeper (delta2 seat H13): every `admit_host` call, inside the lock, first drops queue entries whose owner pid + start time is dead or whose `polled_at` is older than `3 * queue_tick`, so a wedged or killed owner holding the smallest key idles a free slot for at most three ticks, not until the `max_cap_min + 30` age rule. Expiry -> `host_full` refusal. The entry is removed on admit, expiry, refusal or exit. The L1 shell loops (`hostgate.sh`) are no longer needed |
 
 E4 invariants:
 - I-E4a: among waiting entries of a class, a project with no running run in that class is admitted before any project with one; ties go to the oldest entry.
@@ -153,7 +160,8 @@ E4a tests:
 - a lock that raises -> `host_lock`;
 - an unreadable start time with a live pid -> counted;
 - an old entry -> stale;
-- two admit calls racing under the lock -> one admitted.
+- two admit calls racing under the lock -> one admitted;
+- a run ended by a stall kill (fake runner) leaves no `runs/<run>.json` entry.
 
 E4b tests:
 - project A holds both writer slots while B is queued -> B is admitted first when a slot frees;
@@ -161,27 +169,36 @@ E4b tests:
 - three projects -> round-robin order;
 - seats admitted while the writer slots are full;
 - an unattributed client process takes a writer slot;
-- queue expiry -> `host_full`.
+- queue expiry -> `host_full`;
+- a smallest entry whose owner is dead or stopped polling -> swept within three ticks, the next entry admitted;
+- two entries with equal `created` -> exactly one is first (by `run_id`);
+- a writer never takes a seat slot when writer slots are full and a seat slot is free (I-E4b);
+- cross-row (delta2 seat H18): an E2 stall kill removes the run's host registry entry and frees its slot (IE3 with I-E4c), tested in E4a once the registry exists.
 
 ### E5 seat parsers (crit 5, DECISIONS 3.4)
 
 | piece | where | behaviour |
 |---|---|---|
-| one verdict extractor | `gates/findings.parse_seat_verdict` is the single extractor. `tools/seat_verdict.parse_verdict` calls it and maps the result to its `(ok, idx)` shape and exit codes (seat_verdict already imports `src`, seat r1 E12) | the line and word rules are unified: colon optional, and the fix words are the union of both sets plus the review-API words (`fix`, `halt`, `change(s)`, `changes_requested`, `request_changes`/`REQUEST_CHANGES`, `reject(ed)`, `fail(ed)`, `blocked`); pass words add `accept(ed)`/`ACCEPT` and `approve(d)` (D-2844). A shared fixture table covers the seat's reproduced mismatches: `VERDICT fix - LOW only:`, `VERDICT: failed - LOW only:`, `VERDICT: changes_requested`, plus `VERDICT REQUEST_CHANGES`, `VERDICT: ACCEPT`, `Verdict accept` (colon-less) |
-| LOW-only variants | `findings.low_only(verdict_line, body)` | the VERDICT line has a fix word followed, on the same line, by `LOW only` / `LOWs only` / `only LOW(s)` (case-insensitive, any punctuation between, e.g. "fix - LOW only:"). It counts as pass-with-lows only when the body has no line carrying a HIGH or MED severity token, by a strict scan that ignores `_CLOSED` (a line such as "MED: the FIXED-flag check ..." blocks the grant, seat r1 E3). Otherwise it is changes (0.2c). `seat_verdict` posts `ok=true`, reason prefix `pass-with-lows` and the LOW lines |
-| refutation held by the keeper | keeper `log_item` gains kind `refute`, router principal only (`store_fixlog.py`; the other kinds stay router/l1) with body `{decision: "D-<n>", seat: <run id or seat dir>, lines: [{id, path, line, reason}]}`. `tools/seat_verdict.py --refutations-from-keeper` reads the item's `refute` log entries through the keeper API | binding to the router's keeper principal replaces the markdown decisions-log check (seat r1 E1: an L1 could write its own log file). A refutation counts only when ALL hold: the entry's principal is the router (a keeper fact, not a file); it names this seat's run id or seat dir; it covers every id that the strict scan (above) finds as HIGH/MED in the seat body; each `path` exists at `--head` (`git cat-file -e`) and `line` is within that file. Then `ok=true`, reason `pass-with-lows: refuted per D-<n> (keeper log <event id>): <ids>`. A missing keeper, no entry, or any failed check -> exit 2 (refused), nothing posted. D-2839's `Refutes: <project:ID>` token moves into the router's keeper entry as `decision` + `seat` |
+| one verdict extractor | `gates/findings.parse_seat_verdict` is the single extractor. `tools/seat_verdict.parse_verdict` calls it and maps the result to its `(ok, idx)` shape and exit codes (seat_verdict already imports `src`, seat r1 E12) | the line and word rules are unified: colon optional, and the fix words are the exact union of `seat_verdict.FIX_WORDS` and `findings._CHANGE_WORDS` (so `block`, `request_changes` and `request-changes` stay, delta2 seat H4) plus `changes_requested`; the fixture table is generated from both old sets, so a word dropped from either fails the test; pass words add `accept(ed)`/`ACCEPT` and `approve(d)` (D-2844). A shared fixture table covers the seat's reproduced mismatches: `VERDICT fix - LOW only:`, `VERDICT: failed - LOW only:`, `VERDICT: changes_requested`, plus `VERDICT REQUEST_CHANGES`, `VERDICT: ACCEPT`, `Verdict accept` (colon-less) |
+| LOW-only variants | `findings.low_only(verdict_line, body)` | the VERDICT line has a fix word followed, on the same line, by `LOW only` / `LOWs only` / `only LOW(s)` (case-insensitive, any punctuation between, e.g. "fix - LOW only:"). It counts as pass-with-lows only when the body has no line carrying any `findings.BLOCKING` severity token (`HIGH`, `MED`, `CRITICAL`, `BLOCKER`, `MAJOR`; delta2 seat H1: a "CRITICAL:" line must never ride a LOW-only verdict), by a strict scan that ignores `_CLOSED` (a line such as "MED: the FIXED-flag check ..." blocks the grant, seat r1 E3). Otherwise it is changes (0.2c). `seat_verdict` posts `ok=true`, reason prefix `pass-with-lows` and the LOW lines. The same `low_only` is applied in `findings.seat_outcome` before its fix-word mapping, so `first_review` and the round gate grant the same pass-with-lows (delta2 seat H2) |
+| one seat decision | `findings.seat_decision(output) -> (outcome, reason)` | the refusal rules both sides use today are merged into this one function (delta2 seat H3): failed/billing/fence output, the `_FAILED` short-body rule, `status`/`is_error`, `finish_reason` other than a normal stop, and `test_gaming`; then the verdict line, `low_only` and refutations. `seat_verdict` (exit codes) and `seat_outcome`/`first_review` (round gate) are thin adapters over it, so one seat output cannot be a pass in one and a re-run in the other |
+| refutation held by the keeper | keeper `log_item` gains kind `refute`, router principal only (`store_fixlog.py`; the other kinds stay router/l1) with body `{decision: "D-<n>", seat: "run-<32hex>", lines: [{id, path, line, reason}]}`. Shape (delta2 seat H15): `normalise_entry` gets its own `refute` branch: `decision` matches `D-[0-9]+`, `seat` matches the run-id format, 1..50 `lines`, `id` <= 16 chars, `path` <= 300 chars repo-relative, `line` int >= 1, `reason` <= 500 chars; anything else 400. A `refute` entry changes no state, hands nothing back from `in_review`, and moves no round (`rounds.count_rounds` ignores it on purpose, stated in code and pinned by a test). Seat binding (delta2 seat H16): `seat` is a run id only, never a seat dir, and it must be a `review` run recorded on this item by the completion sink (keeper run events, a keeper fact); `seat_verdict --run-id` must equal it, and evidence.json or `--seat-dir` names are not trusted for the binding. `tools/seat_verdict.py --refutations-from-keeper` reads the item's `refute` log entries through the keeper API | binding to the router's keeper principal replaces the markdown decisions-log check (seat r1 E1: an L1 could write its own log file). A refutation counts only when ALL hold: the entry's principal is the router (a keeper fact, not a file); it names this seat's run id or seat dir; it covers every id that the strict scan (above) finds with a `BLOCKING` severity in the seat body; each `path` exists at `--head` (`git cat-file -e`) and `line` is within that file. Then `ok=true`, reason `pass-with-lows: refuted per D-<n> (keeper log <event id>): <ids>`. A missing keeper, no entry, or any failed check -> exit 2 (refused), nothing posted. D-2839's `Refutes: <project:ID>` token moves into the router's keeper entry as `decision` + `seat` |
 | round gate | `findings.apply_refutations(outputs, refutations)`, used by `first_review` and `seat_outcome`; `tools/lane_gates.py seats --refutations-from-keeper` | the same refutation rule turns a refuted seat into pass-with-lows in the round gate too (seat r1 E2), so `first_review` and `seat_verdict` agree by construction |
 | no re-run | unchanged | the seat's text is never edited, and the refutation is a separate keeper entry; 3.4's "never re-run a seat with rulings in its prompt" is untouched |
 
 E5 tests:
 - the shared fixture table: both entry points give the same answer on every row, the three reproduced mismatches included;
-- `fix - LOW only:` with LOW lines -> pass-with-lows;
+- `fix - LOW only:` with LOW lines -> pass-with-lows in `seat_verdict` AND `seat_outcome`/`first_review`;
+- `fix - LOW only:` with a "CRITICAL:" or "MAJOR:" line -> changes;
+- `VERDICT: request_changes`, `VERDICT: block` -> changes;
+- `VERDICT: pass` + "quota exceeded" short body, and a `test_gaming="yes"` seat -> the same refusal from both adapters;
 - the same with "MED: the FIXED-flag check ..." -> changes;
 - `VERDICT: FIX` with LOWs and no "only" -> changes;
 - a router `refute` entry that covers every id -> pass-with-lows in both `seat_verdict` and `first_review`;
 - refused cases:
   - an `l1` principal writing `refute` -> 403 at the keeper;
-  - an entry for another seat run;
+  - an entry for another seat run, a seat dir instead of a run id, and a run id not recorded as a review run on this item;
+  - a malformed `refute` body (bad D-id, 51 lines, non-int line) -> 400; a `refute` entry leaves state and round count unchanged;
   - an uncovered id;
   - a missing path;
   - a line past the end of the file;
@@ -285,11 +302,11 @@ E10 tests:
 
 | id | invariant |
 |---|---|
-| IE1 | No Hand-Edit (gate) and no `direct_edit` route ever touches `AUTH_DOOR_PATHS` or a secret-shaped path; route also refuses auth/secret/credential/token names anywhere and auth/secrets/access/privacy risk tags; route's line cap is never above the gate's. |
+| IE1 | No Hand-Edit (gate) and no `direct_edit` route ever touches `AUTH_DOOR_PATHS` or a secret-shaped path; route also refuses auth/secret/credential/token names anywhere, any risk tag, and any path that does not canonicalise; route's line cap is never above the gate's. |
 | IE2 | Route mode is a pure function of (card, role, limits); a missing or malformed input yields `writer`, never `direct_edit`. |
 | IE3 | A stall kill always leaves `exit_class=stall`, `liveness=stalled` in the record and `result.json`, and no runner job in `running`. |
 | IE4 | Host admission is atomic under one host-wide lock, and stale registry and queue entries never count (I-E4a..d). |
-| IE5 | A pass-with-lows needs either a VERDICT line that says LOW only with no HIGH/MED line in the body (strict scan), or a router-principal keeper `refute` entry for this seat that covers every strict-scan HIGH/MED id with a valid path:line; `seat_verdict` and `first_review` apply the same rule. |
+| IE5 | A pass-with-lows needs either a VERDICT line that says LOW only with no HIGH/MED line in the body (strict scan), or a router-principal keeper `refute` entry bound to this seat's recorded review run that covers every strict-scan `BLOCKING` id with a valid path:line; `seat_verdict` and `first_review` call the same `seat_decision`. |
 | IE7 | A run's result and completion event never depend on the spawning session staying alive; every completion reaches its owner's inbox exactly once (deduped on `run_id`), and `watch` shows it until acked; a run whose supervisor died ends as `lost` with one completion; a result under a stale claim epoch never lands on the item. |
 | IE8 | Only the supervisor of a live run heartbeats its claim; a lost claim stops the heartbeat and is reported, never silently retried into a new epoch. |
 | IE9 | Boot files contain only live rules for their level, are byte-stable for one export, and stay under their CI cap. |
