@@ -125,7 +125,8 @@ def fixer_threshold(card=None) -> int:
     """Resolve fixer split threshold for card context."""
     card = card or {}
     project = project_of(card)
-    method = review_method(project, card.get('phase'), root=card.get('repo_root'))
+    phase = card.get('phase') or card.get('key')
+    method = review_method(project, phase, root=card.get('repo_root'))
     return method.fixer_split_threshold
 
 
@@ -138,8 +139,9 @@ def enforce_review_scope(card, role, review_scope, *, root=None):
     if role != 'review' and (review_scope is not None or card.get('review_scope') is not None):
         raise SettingsError('review_scope only valid for role=review')
     project = project_of(card)
+    phase = card.get('phase') or card.get('key')
     method = review_method(project,
-                           card.get('phase'), root=root or card.get('repo_root'))
+                           phase, root=root or card.get('repo_root'))
     if method.mode == 'batch' and (review_scope == 'per-fixer' or
             (review_scope is None and card.get('review_scope') == 'per-fixer')):
         from plangraph.routing_errors import SpawnRefused

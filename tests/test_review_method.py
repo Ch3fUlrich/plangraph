@@ -641,6 +641,30 @@ def test_finding_1_unused_imports_and_single_helper():
             assert 'project_of' not in imported_names
 
 
+def test_finding_2_phase_fallback_to_card_key(tmp_path, monkeypatch):
+    from plangraph.settings import enforce_review_scope, fixer_threshold
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'mode': 'batch', 'fixer_split_threshold': 10},
+        'phases': {
+            'demo:C': {
+                'review_method': {'mode': 'per-item', 'fixer_split_threshold': 4}
+            }
+        }
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+
+    # card has only 'key', no 'phase'
+    card = {'key': 'demo:C'}
+
+    # 1. fixer_threshold must honor phases['demo:C'] override
+    assert fixer_threshold(card) == 4
+
+    # 2. enforce_review_scope must honor mode='per-item' override and allow per-fixer
+    enforce_review_scope(card, 'review', 'per-fixer')
+
+
+
 
 
 
