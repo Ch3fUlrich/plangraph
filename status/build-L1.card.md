@@ -1,6 +1,7 @@
 # build-L1 card · gen-28 · 2026-10-24 10:5xZ · NO cron · hb loop = jobs/6931599d/tmp/hb.sh (3x8min, exits -> restart) over ops/hb-keys.txt
 D-2534 PHASE-BATCH: new phase work = all tasks merged onto phase/<key> (green CI, no per-task seats), ONE review round over phase diff (HIGH=2 families), one fixer brief, <=3 rounds, one phase PR + GO-REQ; in-flight seated items keep seats. Cheapest capable models.
 D-2643 BATCH REVIEW (supersedes per-W seats): writers in parallel by file group, gate = affected tests + CI only; ONE review over the whole collected delta at the end. D-2626 affected tests only, full suite at main merge; >10 findings split by file. D-2539/2540 seat families still apply to the final review.
+INCIDENT 03:52Z: cx quota exhausted all codex accounts (reset ~134h); writers -> mimo (D-2665); routing+L2s told. Lesson: hung cx writer silent 2.5h, needs quota detect.
 Handoff = status/build-L1.handoff.md (gen-27 -> gen-28). Control repo LOCAL ONLY (D-1751): `git push control build-L1`. Rules D-2458 + D-2472 + D-2459.
 Writers (D-2569): cx/gpt-6.1-sol on workst (inline briefs); cx 429/cooldown -> agy/gemini-3.8-flash > mimo/mimo-v2.6-flash; probe first, record skips; gemini writer = no google seat (NEVER omniroute/mimo, operator 10-23). Never Claude writers. D-2442 close idle own sessions.
 Seats ONLY via spawner AutoOS main>=5ce05dd9 (workst C:\fleet\wt\ao-lessons-b1\tools\autoos-agent.py), never C:\fleet\clones\AutoOS or bare opencode run (D-2552). qodercli Efficient = qwen (D-1714). deepseek-direct 402 on workst.
@@ -9,7 +10,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | Item | Owner | State / next |
 |---|---|---|
 | KG-LINK-REPAIR | L1 | #178 MERGED 4608fd3f, in_review |
-| KEEPER-SEAT-FAMILY-WRITER (HIGH) | L1 cx | r2 b0d855c6 pushed (2546 pass); delta seats qwen+glm running; then judge GO |
+| KEEPER-SEAT-FAMILY-WRITER (HIGH) | L1 mimo | r2 763c1f57 pushed; qwen delta HIGH (accept seat by writer family) -> r3 (cx hung on quota) respawned mimo; seats exclude openai+xiaomi |
 | BUS cluster, EXEC-OBSERVED-STATE, EXEC-PHASE-LEASE, RT-QC-ACCEPTS + L2s bus-keeper/qc-accepts | build-L1-bus (D-2534) | released + handed over 07:1xZ; never claim |
 | RT-P1-PHASE-RUNNER (HIGH) | DONE | #163 a6587b14 + #167 S4 09f67846 (GO D-2571), keeper done 2/2 (alibaba+google seats/phase-runner-s4). L2 stopped. Follow-up PHASE-HOLDER-EXEC-GATE-ONCE p3 (gates HARDEN) |
 | PG-PUBLIC-READY #162 (HIGH) | L1 | MERGED 5bb75e5f (D-2577), main CI green, commit+ci attached; NOT submitted: D-2579 rewrite AFTER PH-MODEL-ROUTE, one announced window + private bundle of old history, then submit + qwen(r8)/gemini(r9,r10) verdicts |
@@ -22,7 +23,7 @@ Merge: ~/.local/share/plangraph/tools-l1/job-tmp/mergepath.sh PR HEAD40 KEY TITL
 | WAIT-GUARD #158 | L1 | MERGED 27082207, evidence, in_review; LOWs leaf KEEPER-WAIT-GUARD-PRECISION asked. B1-KEEPER lane/lessons-b1-keeper (HIGH) in flight |
 | SEAT-VERDICT-QODER-ALIAS p9 | L1 | #161 MERGED f8e5f051, main CI green, evidence, in_review; agy APPROVE .out 3b8217c6 (prompt afd766bb); verdict = agy re-run via GW-QODER-401 adapter. D-2515 re-seats after GW-QODER-401 adapter: RT-P1-WORKER-CODE (1 fix part) + RT-P1-KEEPER-PG-CODE (HIGH, 2 fix parts), fresh qoder on original findings at main; qseat.py --adjudication retired. OLD: D-2495 claimed; writer queued workst after sq10 -> 1 dsfree seat |
 | CARD-CHECKS #157 / WF-VERSIONING | build-L2-rt-cards | WFV lane 3 r3 off 7e53f0d1: legs A-F go, Gate-Edit D-n asked router (H1-H4 tests.yml + ci_select); HIGH -> 2 seats + GO. D-2506: standard closes on 1 verdict; tier-check fwd to B1. CARD-CHECKS DONE: merged 7e53f0d1, main CI green, keeper done 2/2 (alibaba). Next lane 3 WF-VERSIONING GO-REQ (Gate-Edit). OLD: 2b b9fc8a7f CI green, qwen delta FIX -> (a) writer F2+F3+sweep -> re-seat -> MERGE-READY |
-| RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | L1 cx | lane/keeper-scope-r6 r7 ee38f7ac-pick pushed, keeper 2670 pass, gates 0; seats glm+gemini running; then judge GO + new PR | OS-OVERSIGHT-TIMER D-2562: units DISABLED until LIVE-SYNC-9.
+| RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | L1 mimo | r7 pushed; ds+glm seats fail (3 HIGH) -> r8 brief briefs/lanes-d2657/scope-r8.md on mimo (cx quota); bus fence: #164 keeps schema v14, bus renumbers | OS-OVERSIGHT-TIMER D-2562: units DISABLED until LIVE-SYNC-9.
 | RT-P1-BUS-CONTRACT | DONE | #153 merged 432c5377, keeper done (mimo + deepseek r2) |
 | KEEPER-OPCLAIM-CLOSE #127 | DONE | LIVE-SYNC-9 after SPAWNER-ITEM-KEY + mint smoke (HIGH GO) |
 | KEEPER-LEGACY-HUMAN-FAMILY | L1 queue | D-2348, bundle w/ LIVE-SYNC-9 |
