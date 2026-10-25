@@ -5,10 +5,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-sys.path = [str(ROOT / "src")] + [p for p in sys.path if p != str(ROOT / "src") and not p.endswith("/tmp/spawn4a/src")]
-for _m in [m for m in sys.modules if m == "plangraph" or m.startswith("plangraph.")]: del sys.modules[_m]
-
 import pytest
 
 from keeper_util import World, defn, seed, to_claimed, to_in_review
@@ -20,6 +16,8 @@ from plangraph.keeper.events import verify_integrity
 from plangraph.keeper.stall import stall_alarms
 from plangraph.review.verdict import judge
 from plangraph.routing_errors import SpawnRefused
+
+ROOT = Path(__file__).resolve().parent.parent
 
 FIX = {"kind": "fix", "note": "seat round findings", "findings": ["F1", "F2"]}
 DESIGN = {"kind": "design", "ref": "docs/design/X.md@abc", "author_model": "claude-opus-5-5",
@@ -427,6 +425,14 @@ def test_no_bare_python_invocation():
             continue
         hits += [f"{name}: {m.group(0).strip()}" for m in bare.finditer(text)]
     assert hits == []
+
+
+def test_no_import_time_sys_mutation():
+    """haiku-C10/qwen-C7: no module-level interpreter-state rewrite; plangraph comes from this checkout."""
+    here = (ROOT / "tests" / "test_efficiency_gates.py").read_text("utf-8")
+    assert ("sys." + "path") not in here and ("sys." + "modules") not in here
+    import plangraph
+    assert str(Path(plangraph.__file__).resolve()).startswith(str(ROOT / "src"))
 
 
 def _sensitive_world(tmp_path, monkeypatch, private=True):
