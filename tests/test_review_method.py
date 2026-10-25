@@ -107,13 +107,99 @@ def test_non_review_batch_rejected(monkeypatch):
         enforce_review_scope({}, 'implement', 'batch')
 
 
-def test_documented_advisory_and_batch_boundaries():
+def test_documented_advisory_and_batch_boundaries(tmp_path, monkeypatch):
     from pathlib import Path
+    from plangraph.settings import enforce_review_scope
     text = Path('docs/REVIEW-METHOD.md').read_text()
-    assert 'but advisory' in text
-    assert 'does not synthesize' in text
-    assert 'retains multiple existing review cards' in text
-    assert 'read per call' in text
+    # Finding 13 doc-line refutations
+    assert 'guard reading the policy file twice (potential TOCTOU) and per-call re-read are intended' in text
+    assert 'Cross-project card key spoofing is not guarded at admission: card is trusted caller input' in text
+    assert 'ADVISORY' in text
+    assert '"per-fixer seat" is a review spawn with' in text
+
+    # Behavioral test 1: advisory fields (seats, max_rounds, distinct_families, family_source)
+    # do not prevent admission or alter enforce_review_scope
+    path = tmp_path / 'advisory.json'
+    path.write_text(json.dumps({
+        'review_method': {
+            'seats': {'standard': 10, 'high': 20},
+            'max_rounds': 99,
+            'distinct_families': False,
+            'family_source': 'custom'
+        }
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    # Admission is unaffected by advisory fields
+    enforce_review_scope({'key': 'demo:C'}, 'review', 'batch')
+
+    # Behavioral test 2: policy file is dynamically re-read per call without caching
+    path.write_text(json.dumps({'review_method': {'max_rounds': 5}}))
+    assert review_method().max_rounds == 5
+    path.write_text(json.dumps({'review_method': {'max_rounds': 42}}))
+    assert review_method().max_rounds == 42
+
+
+def test_finding_9_mcp_review_scope_passthrough(tmp_path, monkeypatch):
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    from plangraph.routing_errors import SpawnRefused
+    server = MCPSpawnerServer(state=tmp_path)
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    # 1. MCP passes review_scope='per-fixer' to spawn, which refuses under batch mode
+    with pytest.raises(SpawnRefused, match='review_method_batch_per_fixer'):
+        asyncio.run(server.call_tool('plangraph_agent_spawn', {
+            'card': {'key': 'demo:C', 'estimate_tokens': 1000},
+            'prompt': 'review task',
+            'role': 'review',
+            'review_scope': 'per-fixer',
+            'model_or_combo': 'mimo/mimo-v2.6-flash',
+            'override_reason': 'explicit test override',
+            'dry_run': True
+        }))
+    # 2. MCP passes review_scope='batch' to spawn, which is admitted
+    res = asyncio.run(server.call_tool('plangraph_agent_spawn', {
+        'card': {'key': 'demo:C', 'estimate_tokens': 1000},
+        'prompt': 'review task',
+        'role': 'review',
+        'review_scope': 'batch',
+        'model_or_combo': 'mimo/mimo-v2.6-flash',
+        'override_reason': 'explicit test override',
+        'dry_run': True
+    }))
+    assert res['status'] == 'dry_run'
+
+
+def test_finding_9_cli_spawn_refused_audited(tmp_path, monkeypatch, capsys):
+    from plangraph.spawner.cli import main
+    from plangraph.routing_errors import SpawnRefused
+    state_dir = tmp_path / 'spawner_state'
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    saved_records = []
+    orig_save = SpawnService.save_refusal
+    def mock_save(self, exc, role):
+        rec = orig_save(self, exc, role)
+        saved_records.append((exc, role, rec))
+        return rec
+    monkeypatch.setattr(SpawnService, 'save_refusal', mock_save)
+
+    code = main(['--state', str(state_dir), 'spawn', 'task',
+                 '--card', '{"key":"demo:C"}',
+                 '--role', 'review', '--review-scope', 'per-fixer', '--dry-run'])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert 'review_method_batch_per_fixer' in err
+    assert len(saved_records) == 1
+    exc, role, rec = saved_records[0]
+    assert isinstance(exc, SpawnRefused)
+    assert exc.reason == 'review_method_batch_per_fixer'
+    assert role == 'review'
+    # Verify refusal record was actually written to state runs
+    persisted = SpawnService(state=state_dir).result(rec['run_id'])
+    assert persisted['error'] == 'review_method_batch_per_fixer'
+    assert persisted['role'] == 'review'
+    assert persisted['status'] == 'refused'
+
+
+
 
 
 def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):

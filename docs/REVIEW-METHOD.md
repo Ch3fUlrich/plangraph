@@ -30,37 +30,48 @@ Inspect the effective value and its most specific contributing source:
 python -m plangraph.settings show --project demo --phase demo:PHASE
 ```
 
-The output is JSON. Phase plans also include `review_method`. Review cards carry
-`review_scope = "batch"` in batch mode, or `"per-fixer"` in per-item mode.
-Spawn CLI `--review-scope` and MCP `review_scope` accept these same scope values.
+The output is JSON. Phase plans publish top-level `review_method` and `review_scope`
+(`"batch"` in batch mode, or `"per-fixer"` in per-item mode). Review cards carry
+`review_scope` only when `role == "review"`. The orchestrator passes the plan's
+`review_scope` as `--review-scope` / `review_scope` on `role=review` spawns.
+Spawn CLI `--review-scope` (on `spawn` only) and MCP `review_scope` accept these same scope values.
 A review spawn requesting `per-fixer` under batch policy raises `SpawnRefused`
 with reason/code `review_method_batch_per_fixer`, including audited overrides.
 Per-item policy allows that scope. Include the card's `key` (project prefix) and
-`phase` to resolve overrides at admission.
+`phase` to resolve overrides at admission. A "per-fixer seat" is a review spawn with
+`review_scope=per-fixer`.
 
 ## Enforcement boundaries
 
 `source` is the most-specific contributing layer label (not a filename), not
 per-field provenance. It never exposes an absolute settings path.
 Policies are deliberately read per call: edits take effect without restart.
+The guard reading the policy file twice (potential TOCTOU) and per-call re-read are intended:
+policy changes take effect dynamically without daemon restarts.
+Cross-project card key spoofing is not guarded at admission: card is trusted caller input,
+with the same trust boundary as role.
+
+Admission callers must set `PLANGRAPH_REPO_ROOT` or pass `root` (or include
+`card["repo_root"]` when present); phase plans do not publish `repo_root`.
+`enforce_review_scope` accepts `card["repo_root"]` when present.
 Explicit roots (phase planner `repo_root`, admission card `repo_root`) take
 precedence over `PLANGRAPH_REPO_ROOT`. Otherwise the nearest `.git` ancestor of
 cwd is used; without `.git`, cwd itself is the documented fallback.
 
-Mode/scope admission and contextual fixer splitting are enforced. `seats`,
-`max_rounds`, `distinct_families`, and `family_source` are validated and shown
-but advisory: they do not configure routing seats, enforce family diversity,
+Only per-fixer refusal and fixer threshold are enforced.
+`seats`, `max_rounds`, `distinct_families`, `family_source`, and ONE-review count are ADVISORY
+(published in plan, not enforced): they do not configure routing seats, enforce family diversity,
 limit rounds, or trigger replanning. No seat-count admission API is provided.
 The sample `max_rounds` override above changes displayed policy only.
 
-Batch ONE-review is a plan-time orchestration convention, not an admission
+Batch ONE-review is an advisory plan-time orchestration convention, not an admission
 guarantee: admission has no batch count. The phase planner currently cannot
 guarantee one review card: it reports existing keeper cards, does not synthesize
 missing review cards, and retains multiple existing review cards. Consumers
 must schedule one batch review per phase. Scope admission alone is not a count
 check. This limitation is intentional pending orchestration support.
 
-Explicit scope on a non-review spawn is rejected, including model/leg overrides;
-explicit per-fixer is refused under batch policy regardless of default role.
-Both stamped and explicit scopes are validated before choosing the effective
+Explicit scope on a non-review spawn is rejected as `SettingsError`, including model/leg overrides;
+any review_scope given when `role != "review"` raises `SettingsError('review_scope only valid for role=review')`
+before policy refusal. Both stamped and explicit scopes are validated before choosing the effective
 scope. Stamped scopes are evaluated against current project/phase policy.
