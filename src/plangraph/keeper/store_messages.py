@@ -1,14 +1,19 @@
 """Durable bus rows; notifications are hints, never the source of truth."""
 import hashlib
 import json
+import re
+from pathlib import Path
 
-from ..fleet_bus.contract import BusError, canonical_post, new_state
+from ..fleet_bus.contract import BODY_MAX, BusError, canonical_post, new_state
 from .errors import Refused
+
+_AGENT_TO_RE = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$')
 
 
 class MessagesMixin:
-    def post_message(self, principal, registry=None, **fields):
+    def post_message(self, principal, registry=None, fields=None, **extra_fields):
         """Commit a hash-linked message before returning its receipt."""
+        fields = dict(fields) if fields is not None else dict(extra_fields)
         registry = registry or fields.pop("registry", None) or getattr(self, "bus_registry", None)
 
         def work(now):
@@ -21,7 +26,7 @@ class MessagesMixin:
             for name in ("from", "to", "body"):
                 if name not in row:
                     raise Refused("validation", "missing message field")
-            if row["to"] not in {"keeper", "relay", "router", "worker", "l1", "a", "b"}:
+            if not isinstance(row["to"], str) or not _AGENT_TO_RE.fullmatch(row["to"]):
                 raise Refused("validation", "unknown recipient")
             for name in ("from", "to", "trace_id", "key", "run_id"):
                 row.setdefault(name, "")
@@ -36,12 +41,18 @@ class MessagesMixin:
             if row["ack_state"] not in {"pending", "delivered", "failed"}:
                 raise Refused("validation", "invalid delivery state")
             try:
-                json.dumps(row["body"], allow_nan=False)
+                body_str = json.dumps(row["body"], allow_nan=False)
             except (ValueError, TypeError):
                 raise Refused("validation", "message body must be JSON serializable") from None
+            if len(body_str.encode("utf-8")) > BODY_MAX:
+                raise Refused("too_large", f"message body exceeds {BODY_MAX} bytes")
 
             envelope = fields.get("envelope")
             msg_id = fields.get("msg_id")
+
+            if msg_id is not None:
+                if not isinstance(msg_id, str):
+                    raise Refused("bad_request", "msg_id must be a string")
 
             if envelope is not None:
                 if not isinstance(envelope, dict):
@@ -49,15 +60,21 @@ class MessagesMixin:
                 for req in ("host", "sig", "nonce", "ts", "msg_id"):
                     if req not in envelope:
                         raise Refused("bad_request", f"envelope missing field {req!r}")
-                    if not isinstance(envelope[req], (str, int, float)):
+                    if req in ("host", "sig", "nonce", "msg_id") and not isinstance(envelope[req], str):
+                        raise Refused("bad_request", f"invalid type for envelope field {req!r}")
+                    if req == "ts" and not isinstance(envelope[req], (int, float, str)):
                         raise Refused("bad_request", f"invalid type for envelope field {req!r}")
                 if msg_id and msg_id != envelope["msg_id"]:
                     raise Refused("bad_request", "envelope msg_id mismatch")
                 msg_id = str(envelope["msg_id"])
 
-                # 'from' must equal Bearer principal or signed host
-                if row["from"] != envelope["host"] and row["from"] != principal.name:
-                    raise Refused("forbidden", "from does not match Bearer principal or signed host")
+                # G1-1: Signed envelope requires body == {"text": <str>} and verifies against that str.
+                if not isinstance(row["body"], dict) or list(row["body"].keys()) != ["text"] or not isinstance(row["body"]["text"], str):
+                    raise Refused("validation", "signed envelope requires body {'text': <str>}")
+
+                # V2-3: 'from' must equal signed host
+                if row["from"] != envelope["host"]:
+                    raise Refused("forbidden", "from does not match signed host")
 
                 if registry is None:
                     raise Refused("unknown_kid", f"no registry configured for host {envelope['host']!r}")
@@ -65,15 +82,18 @@ class MessagesMixin:
                 if host is None:
                     raise Refused("unknown_kid", f"unknown host {envelope['host']!r}")
 
-                wire_text = row["body"] if isinstance(row["body"], str) else json.dumps(row["body"], sort_keys=True, separators=(",", ":"))
+                # V2-7: refuse an envelope whose kid differs from host key id; do not take it from envelope
+                if "kid" in envelope and envelope["kid"] is not None and envelope["kid"] != host.key_id:
+                    raise Refused("unknown_kid", "envelope kid does not match host key id")
+
                 wire = {
                     "from": envelope["host"],
                     "to": row["to"],
                     "ts": envelope["ts"],
                     "nonce": envelope["nonce"],
                     "msg_id": envelope["msg_id"],
-                    "kid": envelope.get("kid", host.key_id),
-                    "text": wire_text,
+                    "kid": host.key_id,
+                    "text": row["body"]["text"],
                 }
                 if row.get("attempt_n"):
                     wire["attempt_n"] = row["attempt_n"]
@@ -87,10 +107,20 @@ class MessagesMixin:
                 except BusError as exc:
                     raise Refused(exc.code, str(exc)) from exc
             else:
-                # Unsigned post: 'from' must equal Bearer principal (or router/system role)
-                if row["from"] != principal.name and principal.role not in ("router", "system"):
-                    raise Refused("forbidden", "from does not match Bearer principal")
+                # G1-6: Unsigned post: router/system may set 'from' only to their own name or a registered host
+                if principal.role in ("router", "system"):
+                    is_self = (row["from"] == principal.name)
+                    is_host = bool(registry and row["from"] in registry.hosts)
+                    is_relay = (row["from"] == "relay")
+                    if not (is_self or is_host or is_relay):
+                        raise Refused("forbidden", "from must be own name or a registered host")
+                else:
+                    if row["from"] != principal.name:
+                        raise Refused("forbidden", "from does not match Bearer principal")
 
+            # Envelope cryptographic validation is deliberately performed before acquiring self._write()
+            # so that CPU-bound HMAC verification does not hold the database write lock.
+            # Nonce uniqueness, idempotency, and row insertion are then executed atomically inside the write lock.
             with self._write():
                 if envelope is not None:
                     seen = self.conn.execute("SELECT nonce FROM message_nonces WHERE nonce = ?", (envelope["nonce"],)).fetchone()
@@ -112,14 +142,29 @@ class MessagesMixin:
                     existing = self.conn.execute("SELECT seq, body_hash FROM message_envelopes WHERE msg_id = ?", (msg_id,)).fetchone()
                     if existing:
                         if existing["body_hash"] == body_hash:
+                            # V2-4: record nonce on idempotent retry path too
+                            if envelope is not None:
+                                self.conn.execute(
+                                    'INSERT INTO message_nonces (nonce, host, ts) VALUES (?, ?, ?)',
+                                    (envelope["nonce"], envelope["host"], int(now * 1000)),
+                                )
                             msg_row = self.conn.execute("SELECT * FROM messages WHERE seq = ?", (existing["seq"],)).fetchone()
                             ret = dict(msg_row)
                             ret["body"] = json.loads(ret["body"])
                             ret["msg_id"] = msg_id
                             return ret
+                        # V2-4: record nonce on conflict path too before raising
+                        if envelope is not None:
+                            self.conn.execute(
+                                'INSERT INTO message_nonces (nonce, host, ts) VALUES (?, ?, ?)',
+                                (envelope["nonce"], envelope["host"], int(now * 1000)),
+                            )
+                            self.conn.execute("COMMIT")
+                            self.conn.execute("BEGIN IMMEDIATE")
                         raise Refused("conflict", "msg_id reused with different content")
 
                 msg_fields = {k: v for k, v in row.items() if k not in ("envelope", "msg_id")}
+                msg_fields["posted_by"] = principal.name
                 inserted = self._insert_message(**msg_fields)
 
                 if msg_id:
@@ -136,9 +181,25 @@ class MessagesMixin:
                         (envelope["nonce"], envelope["host"], int(now * 1000)),
                     )
 
+                self._write_outbox_metadata(inserted)
                 return inserted
 
         return self._run(principal, "post_message", fields.get("key"), work)
+
+    def _write_outbox_metadata(self, inserted):
+        try:
+            db_file = None
+            for row in self.conn.execute("PRAGMA database_list").fetchall():
+                if row[1] == "main" and row[2]:
+                    db_file = Path(row[2])
+                    break
+            if db_file:
+                outbox_path = db_file.parent / "outbox.jsonl"
+                meta = {k: v for k, v in inserted.items() if k != "body"}
+                with open(outbox_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(meta, sort_keys=True) + "\n")
+        except Exception:
+            pass
 
     def _insert_message(self, **row):
         last = self.conn.execute('SELECT seq,hash FROM messages ORDER BY seq DESC LIMIT 1').fetchone()
