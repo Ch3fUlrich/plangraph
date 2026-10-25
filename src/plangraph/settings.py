@@ -121,7 +121,7 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
             raise SettingsError('review_method: expected table')
         for name, value in override.items():
             if name not in ReviewMethod.__dataclass_fields__ or name == 'source':
-                raise SettingsError(f'{name}: unknown review_method setting')
+                raise SettingsError(f'{_sanitize_label(str(name))}: unknown review_method setting')
             values[name] = ({**values.get(name, ReviewMethod().seats), **value}
                             if name == 'seats' and isinstance(value, dict) else value)
         if override:
