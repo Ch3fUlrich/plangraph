@@ -148,9 +148,9 @@ def main(argv=None):
                 leg=args.leg, override_reason=args.override_reason, dry_run=args.dry_run,
                 no_fallthrough=args.no_fallthrough, **options)
             # Validate before detaching so refusals are reported synchronously.
-            from plangraph.settings import enforce_review_scope
+            from plangraph.settings import admit_review_scope
             try:
-                enforce_review_scope(args.card, args.role, args.review_scope)
+                admit_review_scope(args.card, args.role, args.review_scope)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise

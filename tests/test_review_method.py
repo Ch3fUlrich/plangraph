@@ -200,16 +200,51 @@ def test_finding_9_cli_spawn_refused_audited(tmp_path, monkeypatch, capsys):
 
 
 def test_cli_settings_errors_not_audited(tmp_path, monkeypatch):
+    """Settings problems are audited as review_method_invalid: one record, no double-record."""
     from plangraph.spawner.cli import main
-    from plangraph.settings import SettingsError
     path = tmp_path / 'policy.json'
     path.write_text('{')
     monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
     calls = []
-    monkeypatch.setattr(SpawnService, 'save_refusal', lambda *a: calls.append(a))
-    main(['--state', str(tmp_path / 'state'), 'spawn', 'task', '--card', '{"key":"demo:C"}',
-          '--role', 'review', '--review-scope', 'batch', '--dry-run'])
-    assert calls == []
+    monkeypatch.setattr(SpawnService, 'save_refusal', lambda self, exc, role: calls.append((exc, role)))
+    rc = main(['--state', str(tmp_path / 'state'), 'spawn', 'task', '--card', '{"key":"demo:C"}',
+               '--role', 'review', '--review-scope', 'batch', '--dry-run'])
+    assert rc == 2
+    assert len(calls) == 1
+    exc, role = calls[0]
+    assert isinstance(exc, SpawnRefused)
+    assert exc.reason == 'review_method_invalid'
+    assert '{' not in str(exc)
+
+
+def test_finding_1_spawner_paths_convert_settings_errors(tmp_path, monkeypatch):
+    """service._spawn, spawn fixer dispatch, and runner non-delegating path convert SettingsError."""
+    import plangraph.spawner.runner as runner_mod
+    path = tmp_path / 'policy.json'
+    path.write_text('{bad-json')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+
+    # 1. service._spawn converts SettingsError to SpawnRefused('review_method_invalid')
+    service = SpawnService(runner=object(), state=tmp_path)
+    with pytest.raises(SpawnRefused) as exc_spawn:
+        asyncio.run(service._spawn(card={'key': 'demo:C'}, role='review', review_scope='batch'))
+    assert exc_spawn.value.reason == 'review_method_invalid'
+    assert 'bad-json' not in str(exc_spawn.value)
+
+    # 2. SpawnService.spawn fixer dispatch converts SettingsError
+    card_findings = {'key': 'demo:C', 'findings': [{'text': 'gap1'}, {'text': 'gap2'}]}
+    with pytest.raises(SpawnRefused) as exc_fixer:
+        asyncio.run(service.spawn(card=card_findings, role='implement', prompt='fix stuff'))
+    assert exc_fixer.value.reason == 'review_method_invalid'
+    assert 'bad-json' not in str(exc_fixer.value)
+
+    # 3. runner non-delegating path converts SettingsError
+    runner_service = runner_mod.spawn_service(runner=object(), state=tmp_path)
+    with pytest.raises(SpawnRefused) as exc_runner:
+        asyncio.run(runner_service._spawn(card={'key': 'demo:C'}, role='review', review_scope='batch'))
+    assert exc_runner.value.reason == 'review_method_invalid'
+    assert 'bad-json' not in str(exc_runner.value)
+
 
 
 def test_layer_label_cli(tmp_path, monkeypatch):

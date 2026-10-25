@@ -583,8 +583,8 @@ def spawn_service(*args, **kwargs):
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=True,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
                 )
-            from plangraph.settings import enforce_review_scope
-            enforce_review_scope(card, role, review_scope)
+            from plangraph.settings import admit_review_scope
+            admit_review_scope(card, role, review_scope)
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
             from .resolver import plan_for_launch_async
             if hasattr(plan, '__dataclass_fields__'):

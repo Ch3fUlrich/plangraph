@@ -148,6 +148,50 @@ def enforce_review_scope(card, role, review_scope, *, root=None):
         raise exc
 
 
+def admit_settings(func):
+    """Decorator/wrapper converting SettingsError to SpawnRefused('review_method_invalid')."""
+    import functools
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except SettingsError as exc:
+            from plangraph.routing_errors import SpawnRefused
+            detail = str(exc)
+            msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
+            err = SpawnRefused(msg)
+            err.reason = err.code = 'review_method_invalid'
+            raise err from None
+    return wrapper
+
+
+def admit_review_scope(card, role, review_scope, *, root=None):
+    """Validate review scope for admission, converting SettingsError to SpawnRefused."""
+    try:
+        return enforce_review_scope(card, role, review_scope, root=root)
+    except SettingsError as exc:
+        from plangraph.routing_errors import SpawnRefused
+        detail = str(exc)
+        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
+        err = SpawnRefused(msg)
+        err.reason = err.code = 'review_method_invalid'
+        raise err from None
+
+
+def admit_fixer_threshold(card=None) -> int:
+    """Resolve fixer split threshold for admission, converting SettingsError to SpawnRefused."""
+    try:
+        return fixer_threshold(card)
+    except SettingsError as exc:
+        from plangraph.routing_errors import SpawnRefused
+        detail = str(exc)
+        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
+        err = SpawnRefused(msg)
+        err.reason = err.code = 'review_method_invalid'
+        raise err from None
+
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=['show'])
