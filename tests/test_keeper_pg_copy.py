@@ -110,7 +110,7 @@ def test_dry_run_flags_a_tampered_messages_chain(source, cfg_path, tmp_path, cap
     dst = sqlite3.connect(bad)
     src.backup(dst)
     src.close()
-    conn = kdb.open_db(bad)
+    conn = kdb.open_db(bad, backend="sqlite")  # the copy tool's SOURCE is always SQLite
     from keeper_util import Clock
     from plangraph.keeper import auth
     from plangraph.keeper.store import Store
