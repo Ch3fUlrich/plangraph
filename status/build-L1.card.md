@@ -8,7 +8,7 @@ D-2719 done: AutoOS ff d386df2e->282abaab.
 | Item | State / next |
 |---|---|
 | DONE gen-30 | #188 0c4e8913, #187 532c95e3, #184 0de64eb5 (3 keys), #190 318f95ce; D-2721 closed 5; #183 DONE |
-| STALL-WATCHDOG (claimed e2) | D-2722: timer ENABLED code, pinned live-stall f0e8a4a2 (#191 keeper-skip merged); env ~/.config/plangraph/watchdog.env; bridge ~/.local/share/plangraph/stall-bridge.sh -> routing L0 inbox; W12 replay pass. Open: routing decisions re-alert + parent_session gap; workst task (brief sent); token Q-STALL-WD-TOKEN operator. Rollback: systemctl --user disable --now plangraph-stall-watchdog.timer |
+| STALL-WATCHDOG | SUBMITTED in_review: #191 f0e8a4a2 + #192 9b5ba588; timer code pinned live-stall 9b5ba588; workst task f0e8a4a2 enabled. Asked routing: leaf STALL-WD-WIN-WORKDIR, workst bridge target. Rollback: systemctl --user disable --now plangraph-stall-watchdog.timer; schtasks /DISABLE |
 | MODEL-ROUTE-SPAWN (claimed e1) | prod run: code host 3 real spawns (run-667e9a9e, run-b8917744, run-80542f93, qwen leg); workst spawns asked; then 2 non-Claude seats != writer family |
 | #164 RT-OVERSIGHT-KEEPER-SCOPE (HIGH) | r9 88bc89d4: Haiku+dsfree delta FAIL. r10 = ROUND 3/3 brief scope-r10.md (group A store_oversight/auth/store, group B db.py) queued on workst (order sq12, r10a, r10b; cap full 08:3xZ). Next: merge both into r6, keeper tests, delta seat (Haiku + non-Claude), pass -> GO-REQ round 3; fail -> replan |
 | RT-P1-EXEC-OWNERSHIP-SQ12 (HIGH, D-2703) | writer workst lane/exec-own-sq12; then 2 seats, GO-REQ; parent stays in_review |
