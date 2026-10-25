@@ -5,19 +5,25 @@ The event is the long-poll return, never a timer.  Each DONE behaviour and each
 attack vector has its own test:
 
 * router-authored row -> wakes nothing,
-* a real report wakes the router within 60 s (fake clock + fake long-poll),
+* a real report wakes the router within 60 s (real keeper server, real
+  `KeeperMessagesPoll` long-poll, real clock -- no self-advanced time),
 * duplicate NOTIFY -> one wake,
+* a crash between the wake and the save -> at most one duplicate wake,
 * cursor lost on restart -> no replay storm and no loss,
 * unknown session -> refused and logged, no crash,
-* wake storm -> debounced,
+* wake storm -> one wake per burst (two events 5 s apart -> one wake),
 * busy target -> retried later, never dropped (including across a restart).
 """
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 
+from door_util import Doors
+from keeper_util import World
 from plangraph.fleet_bus.wake import (
     DEFAULT_DEBOUNCE_S,
     DEFAULT_RETRY_S,
@@ -28,6 +34,7 @@ from plangraph.fleet_bus.wake import (
     WakeRefused,
     WakeState,
 )
+from plangraph.fleet_bus.wake_http import KeeperMessagesPoll
 
 EPOCH = 1_700_000_000.0
 
@@ -114,26 +121,49 @@ def make(session_map, wake_sink, clock, state=None, log=None, **kw):
 
 # ------------------------------------------------------------- event: the poll
 
-def test_report_wakes_router_within_60s_on_the_long_poll(sessions, sink, clock):
-    """A real report wakes the router within 60 s: the fake long-poll returns
-    the row and the fake clock only moves while the poll blocks.  No timer
-    anywhere: the loop never waits on an interval."""
-    hook = make(sessions, sink, clock)
-    stop, waits = Stop(), []
+def test_report_wakes_router_within_60s_on_the_long_poll(tmp_path, sessions):
+    """V7-4: report -> wake inside 60 s across the real stack: a real keeper
+    server on a temp DB, the real `KeeperMessagesPoll` long-poll client and
+    real wall-clock time (no fake clock advances the bound).  The report is
+    committed only after the poll is already blocked on the keeper, so the
+    wake rides the long-poll return, never a timer or an interval."""
+    world = World(tmp_path)
+    doors = Doors(world, tmp_path)
+    sink, log, hooked = Sink(), [], threading.Event()
+    hook = WakeHook(sessions, sink, WakeState(tmp_path / "wake.state"),
+                    log=log.append)          # default clock: time.time
+    keeper_poll = KeeperMessagesPoll(doors.url, world.tok("router"))
 
     def poll(since, wait_ms):
-        waits.append((since, wait_ms))
-        clock.advance(45)                     # the poll blocked on the event
-        stop.stop()
-        return [row(1, sender="worker")]
+        hooked.set()
+        return keeper_poll(since, wait_ms)
 
-    hook.run(poll, stop, wait_ms=30000)
-
-    assert waits == [(0, 30000)]
-    assert sink.sessions == ["ses_r1"]
-    assert sink.calls[0][1] == DEFAULT_TEXT
-    assert clock.now - EPOCH <= 60            # report -> wake inside 60 s
-    assert stop.waits == []                   # no sleep, no interval, no timer
+    stop = threading.Event()
+    thread = threading.Thread(
+        target=lambda: hook.run(poll, stop, wait_ms=2000), daemon=True)
+    thread.start()
+    try:
+        assert hooked.wait(timeout=10), "the long-poll never started"
+        time.sleep(0.1)                      # let the poll block on the keeper
+        posted = time.monotonic()
+        status, out = doors.http(
+            "workerA", "POST", "/v1/post_message",
+            {"from": "workerA", "to": "router", "body": {"op": "report"}})
+        assert status == 200, out            # the report row is committed
+        deadline = time.monotonic() + 60
+        while not sink.calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+        elapsed = time.monotonic() - posted
+    finally:
+        stop.set()
+        thread.join(timeout=15)
+        doors.close()
+        world.close()
+    assert sink.calls, f"no wake within 60 s of the report; log={log}"
+    assert sink.calls == [("ses_r1", DEFAULT_TEXT)]
+    assert hook.cursor >= 1                  # the row was consumed, not lost
+    assert elapsed <= 60, elapsed            # report -> wake inside 60 s
+    assert not thread.is_alive()
 
 
 def test_run_survives_a_poll_failure_and_keeps_waking(sessions, clock):
@@ -218,6 +248,30 @@ def test_duplicate_notify_wakes_once(sessions, sink, clock):
     assert hook.feed([row(2)]) == ["woken"]
     assert hook.feed([row(2)]) == ["duplicate"]               # redelivered after the wake
     assert sink.sessions == ["ses_r1", "ses_r1"]              # two events, two wakes
+
+
+def test_a_crash_between_wake_and_save_costs_at_most_one_duplicate_wake(
+        tmp_path, sessions, clock):
+    """G3-6: the sink is called before `WakeState.save` persists the cursor
+    (save runs at the end of every public call), so a crash inside that window
+    replays the row on restart -- at most one duplicate wake per woken row,
+    because the replay's own save closes the window."""
+    path = tmp_path / "wake.state"
+    crashed = make(sessions, Sink(), clock, state=WakeState(path))
+    crashed.state.save = lambda: None        # the process dies right after the wake
+    assert crashed.feed([row(1)]) == ["woken"]
+    assert not path.exists()                 # nothing persisted after the wake
+
+    replay_sink = Sink()
+    replay = make(sessions, replay_sink, clock, state=WakeState(path))
+    assert replay.cursor == 0                # the pre-crash cursor stands
+    assert replay.feed([row(1)]) == ["woken"]     # the one duplicate wake
+    assert len(replay_sink.calls) == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["cursor"] == 1  # window closed
+
+    reopened = make(sessions, replay_sink, clock, state=WakeState(path))
+    assert reopened.feed([row(1)]) == ["duplicate"]
+    assert len(replay_sink.calls) == 1       # no second duplicate, ever
 
 
 def test_restart_resumes_from_the_persisted_cursor(tmp_path, sessions, sink, clock):
@@ -315,6 +369,20 @@ def test_wake_storm_is_debounced_to_one_wake(sessions, sink, clock):
     hook.tick()
     assert len(sink.calls) == 2                               # exactly one follow-up
     assert sink.sessions == ["ses_r1", "ses_r1"]
+
+
+def test_two_events_five_seconds_apart_are_one_wake_per_burst(sessions, sink, clock):
+    """G3-8: the 20 s debounce (`DEFAULT_DEBOUNCE_S`) is one wake per burst:
+    two events 5 s apart are the same burst, so only the first posts while the
+    window is open -- no second wake per event."""
+    assert DEFAULT_DEBOUNCE_S == 20.0
+    hook = make(sessions, sink, clock)
+    assert hook.feed([row(1)]) == ["woken"]
+    clock.advance(5)
+    assert hook.feed([row(2)]) == ["deferred"]  # inside the same burst's window
+    clock.advance(5)                            # 10 s in, still one burst
+    assert hook.tick() == []
+    assert len(sink.calls) == 1                 # one wake per burst
 
 
 def test_storms_of_two_sessions_stay_independent(sessions, sink, clock):

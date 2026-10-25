@@ -28,6 +28,7 @@ use crate::question::Question;
 use pg_worker_core::exit_class::ExitClass;
 use pg_worker_core::packet::ParkPacket;
 use serde::{Deserialize, Serialize};
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -81,8 +82,8 @@ pub struct Alarm {
 
 /// The fallback `expected_state` a worker park and question ask sends when the
 /// run observed nothing: the states a card may be in while this run still owns
-/// it (`activities.rs` replaces it with the state it just read whenever
-/// [`Keeper::card_state`] hands one over -- EXEC-OBSERVED-STATE).
+/// it (`workflow.rs` replaces it with the state its `observe` activity captured
+/// at decision time whenever that answered one -- EXEC-OBSERVED-STATE).
 ///
 /// Worker-run writes may precede state projection. The run/attempt fence rejects
 /// stale retries; this CAS preserves newer actor states and excludes the agent
@@ -98,12 +99,13 @@ pub struct Alarm {
 ///
 /// The keeper still refuses this fallback on a `waiting`/`needs_input` card a
 /// projector event wrote while the run was away: it only says "I observed
-/// nothing", and a park closes the card. An observing run sends what it read
-/// instead ([`expected_state_for`]).
+/// nothing", and a park closes the card. An observing run sends what it
+/// captured instead ([`expected_state_for`]).
 pub const WORKER_LIVE_STATES: &[&str] = &["open", "ready", "running", "waiting", "needs_input"];
 
 /// The `expected_state` a park or ask sends (EXEC-OBSERVED-STATE): the state the
-/// worker observed when it could read one the keeper's CAS accepts, otherwise
+/// workflow observed when it decided to park or ask (the `observe` activity's
+/// answer, carried in the activity input), otherwise
 /// the live-set `fallback` the workflow handed over.
 ///
 /// An observation is only usable while it names a live state: `claimed` is not
@@ -132,8 +134,9 @@ pub struct ExecId {
     pub workflow_id: Option<String>,
     pub run_id: Option<String>,
     pub attempt: Option<u32>,
-    /// The state this call expects: the one the calling activity just observed
-    /// on the keeper, or the live-set fallback when it observed nothing. Absent
+    /// The state this call expects: the observation the workflow captured when
+    /// it decided to park or ask (carried in the activity input), or the
+    /// live-set fallback when it observed nothing. Absent
     /// for legacy callers and alarms. Roll out keeper support before deploying
     /// this worker.
     pub expected_state: Option<Vec<String>>,
@@ -163,10 +166,13 @@ pub enum KeeperError {
 pub trait Keeper: Send + Sync {
     fn claim_next(&self, worker: &str) -> Result<Option<Claim>, KeeperError>;
     /// The card's state as the keeper holds it right now: the observation a
-    /// park or ask CAS must present (EXEC-OBSERVED-STATE). Best effort by
+    /// park CAS presents (EXEC-OBSERVED-STATE), read by the workflow's `observe`
+    /// activity at decision time and carried in the `park` input. Best effort by
     /// design -- `None` means "observed nothing" (an unreachable keeper, an
-    /// older keeper, an unreadable body), and the caller then falls back to
-    /// [`WORKER_LIVE_STATES`] instead of failing the call.
+    /// older keeper, an unreadable or oversized body (G3-5), a read past its
+    /// 5 s timeout (G3-4)), and the caller then falls back to
+    /// [`WORKER_LIVE_STATES`] instead of failing the call. Blocking (ureq): call
+    /// it from `spawn_blocking`, never on a tokio worker thread (G3-4).
     fn card_state(&self, card: &str) -> Option<String>;
     /// Claim one named card for the phase runner; `None` means the keeper has nothing for it (not ready / taken).
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError>;
@@ -342,6 +348,11 @@ impl HttpKeeper {
     }
 }
 
+/// Largest `GET /v1/show` body the worker buffers for a card-state observation
+/// (G3-5): the show JSON is a few hundred bytes, so anything past this cap is
+/// answered `None` ("observed nothing") instead of being read whole.
+const CARD_STATE_MAX_BODY: u64 = 64 * 1024;
+
 impl Keeper for HttpKeeper {
     fn card_state(&self, card: &str) -> Option<String> {
         // `fmt=json`: `show` defaults to its text form. Anything this read
@@ -351,7 +362,17 @@ impl Keeper for HttpKeeper {
             Ok(resp) if resp.status() == 200 => resp,
             Ok(_) | Err(_) => return None,
         };
-        let value: serde_json::Value = resp.into_json().ok()?;
+        // G3-5: buffer at most CARD_STATE_MAX_BODY + 1 bytes; a larger body is
+        // refused as unreadable instead of being buffered whole.
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .take(CARD_STATE_MAX_BODY + 1)
+            .read_to_end(&mut buf)
+            .ok()?;
+        if buf.len() as u64 > CARD_STATE_MAX_BODY {
+            return None;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&buf).ok()?;
         value
             .get("state")
             .and_then(|s| s.as_str())
@@ -526,6 +547,8 @@ struct StubState {
     card_state: Option<String>,
     /// The cards `card_state` was asked for, in order.
     card_state_calls: Vec<String>,
+    /// Make `card_state` hang that long first (G3-4: a stalled read).
+    card_state_delay: Option<Duration>,
 }
 
 impl StubKeeper {
@@ -537,6 +560,11 @@ impl StubKeeper {
     /// Cards `card_state` was asked for, in order.
     pub fn card_state_calls(&self) -> Vec<String> {
         self.lock().card_state_calls.clone()
+    }
+
+    /// Make `card_state` sleep that long before answering (a stalled read).
+    pub fn set_card_state_delay(&self, delay: Option<Duration>) {
+        self.lock().card_state_delay = delay;
     }
 
     pub fn push_card_claim(&self, c: Claim) {
@@ -661,9 +689,15 @@ impl StubKeeper {
 
 impl Keeper for StubKeeper {
     fn card_state(&self, card: &str) -> Option<String> {
-        let mut state = self.lock();
-        state.card_state_calls.push(card.to_string());
-        state.card_state.clone()
+        let delay = {
+            let mut state = self.lock();
+            state.card_state_calls.push(card.to_string());
+            state.card_state_delay
+        };
+        if let Some(delay) = delay {
+            std::thread::sleep(delay);
+        }
+        self.lock().card_state.clone()
     }
 
     fn claim_card(&self, worker: &str, card: &str) -> Result<Option<Claim>, KeeperError> {
@@ -733,6 +767,15 @@ impl Keeper for StubKeeper {
     fn park(&self, p: &ParkPacket, exec: &ExecId) -> Result<(), KeeperError> {
         let mut s = self.lock();
         s.execs.push(exec.clone());
+        // The keeper's state CAS, stub-equivalent (EXEC-OBSERVED-STATE): an
+        // expectation that misses the state the stub holds is refused 409, so a
+        // park that presents a stale observation can be tested without a server.
+        // No expectation (or no held state) keeps the unconditional stub park.
+        if let (Some(expected), Some(state)) = (&exec.expected_state, &s.card_state)
+            && !expected.iter().any(|e| e == state)
+        {
+            return Err(KeeperError::Status(409));
+        }
         s.parked.push(p.clone());
         Ok(())
     }
@@ -889,6 +932,46 @@ mod tests {
         let (base, server) = serve_once(200, "OK", r#"{"key":"c-1"}"#);
         assert_eq!(HttpKeeper::new(&base).card_state("c-1"), None);
         server.join().expect("server thread");
+    }
+
+    /// G3-5: a show body past the cap is answered "observed nothing" instead
+    /// of being buffered whole.
+    #[test]
+    fn http_card_state_oversized_body_is_no_observation() {
+        let pad = "x".repeat(super::CARD_STATE_MAX_BODY as usize + 1);
+        let body = format!(r#"{{"key":"c-1","state":"waiting","pad":"{pad}"}}"#);
+        let (base, server) = serve_once(200, "OK", &body);
+        assert_eq!(HttpKeeper::new(&base).card_state("c-1"), None);
+        server.join().expect("server thread");
+    }
+
+    /// G3-2: the wait-cap park after usage_limit/outage presents the
+    /// observation the workflow recorded when it decided, so it lands even
+    /// while `GET /v1/show` -- the read the old park path depended on -- fails.
+    #[test]
+    fn http_cap_park_lands_while_show_fails() {
+        let (base, server) = serve_n(2, |req| {
+            if req.method == "GET" {
+                (500, r#"{"error":"show is down"}"#.to_string())
+            } else {
+                (204, String::new())
+            }
+        });
+        let keeper = HttpKeeper::new(&base);
+        // Reading the card now fails: no observation could be made this way...
+        assert_eq!(keeper.card_state("c-1"), None);
+        // ...but the park carries the observation the workflow recorded, and
+        // the park path never retries the read.
+        let exec = ExecId {
+            expected_state: Some(vec!["waiting".to_string()]),
+            ..exec()
+        };
+        keeper.park(&park(), &exec).expect("cap-park lands");
+        let seen = server.join().expect("server thread");
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[1].method, "POST");
+        assert_eq!(seen[1].path, "/v1/park");
+        assert_eq!(body_of(&seen[1])["expected_state"], "waiting");
     }
 
     /// The stub observes nothing until a test says otherwise, so every stub
@@ -1131,6 +1214,39 @@ mod tests {
                 .expect("write response");
             stream.flush().expect("flush response");
             captured
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    /// A server that answers `n` requests by routing each one through `route`,
+    /// and yields every request it saw, in order (G3-2: an outage on one verb
+    /// while another still works).
+    fn serve_n(
+        n: usize,
+        route: impl Fn(&Captured) -> (u16, String) + Send + 'static,
+    ) -> (String, JoinHandle<Vec<Captured>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let addr = listener.local_addr().expect("read local addr");
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for _ in 0..n {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let captured = read_request(&mut stream);
+                let (status, body) = route(&captured);
+                let mut response = format!("HTTP/1.1 {status} Routed\r\n");
+                if status != 204 {
+                    response.push_str(&format!("Content-Length: {}\r\n", body.len()));
+                }
+                response
+                    .push_str("Content-Type: application/json\r\nConnection: close\r\n\r\n");
+                response.push_str(&body);
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+                seen.push(captured);
+            }
+            seen
         });
         (format!("http://{addr}"), handle)
     }
