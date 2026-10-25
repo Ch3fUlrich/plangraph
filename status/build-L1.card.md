@@ -17,5 +17,5 @@ Handoff = status/build-L1.handoff.md. Control repo local only: git push control 
 | KEEPER-WATCHDOG-ROLE (HIGH) | after #164; spec watchdog-principal.md; schema vs build-L1-bus |
 | PG public cut | OS-PG-PUBLIC-PUSH operator; re-cut on "push window now" (pg-public-cut-plan.md) |
 | LIVE-SYNC-9 | live 2d61e281; OS-KEEPER-LS9-MIGRATE operator, then z8 drop-in |
-| L2s | build-L2-review-method d3c8d22a running (watch MERGE-READY); build-L1-bus peer |
+| L2s | build-L2-review-method STOPPED (MERGE-READY). #185 REVIEW-METHOD-SETTING (HIGH) head a7c6452a CI green; GO-REQ sent routing 06:4xZ (ds5 5 LOWs -> leaf?). On GO: claim? (item owner) -> mergepath 185. build-L1-bus peer |
 Traps: zsh -> bash -c; mergepath needs claim, no submit; no xdist, affected tests only; never dump environ; Haiku seat = claude -p --model haiku --tools "" --strict-mcp-config --mcp-config jobs/975daff2/tmp/nomcp.json from tmp/empty (stdin).
