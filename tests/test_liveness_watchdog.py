@@ -385,6 +385,56 @@ def test_relaunch_skip_log_names_the_trigger(tmp_path, capsys):
     assert "stale age 80.0 min" in skipped["nocmd"]
 
 
+def test_dry_run_alive_only_trigger_reports_skipped_probe(tmp_path, capsys):
+    stamp = tmp_path / "stamp.json"
+    lw.write_stamp(stamp, now=NOW)  # fresh: only the alive probe can make relaunch due
+    alive_cmd, alive_marker = make_cmd(tmp_path, "alive", exit_code=3)
+    alert_cmd, _ = make_cmd(tmp_path, "alert")
+    relaunch_cmd, _ = make_cmd(tmp_path, "relaunch")
+    config = write_config(
+        tmp_path,
+        [
+            {
+                "name": "alertonly",
+                "stamp": str(stamp),
+                "relaunch_after_min": None,  # alert only
+                "alive_cmd": alive_cmd,
+                "alert_cmd": alert_cmd,
+                "relaunch_cmd": relaunch_cmd,
+            }
+        ],
+    )
+    assert lw.main(["--config", str(config)], now=NOW) == 0
+    assert not alive_marker.exists()  # a dry run runs no command at all
+    out = capsys.readouterr().out
+    assert "alertonly: alive probe skipped in dry-run" in out
+    assert "stale age 0.0 min" not in out  # never a fake age for a fresh stamp
+
+
+def test_dry_run_skipped_probe_replaces_fake_stale_age_zero_trigger(tmp_path, capsys):
+    stamp = tmp_path / "stamp.json"
+    lw.write_stamp(stamp, now=NOW - 1)  # one second old: "stale age 0.0 min" is a fake age
+    alive_cmd, _ = make_cmd(tmp_path, "alive", exit_code=3)
+    alert_cmd, _ = make_cmd(tmp_path, "alert")
+    config = write_config(
+        tmp_path,
+        [
+            {
+                "name": "alpha",
+                "stamp": str(stamp),
+                "alert_after_min": 0,
+                "relaunch_after_min": 0,
+                "alive_cmd": alive_cmd,
+                "alert_cmd": alert_cmd,
+            }
+        ],
+    )
+    assert lw.main(["--config", str(config)], now=NOW) == 0
+    out = capsys.readouterr().out
+    assert "alive probe skipped in dry-run" in out
+    assert "stale age 0.0 min" not in out
+
+
 def test_dry_run_reset_not_saved_and_apply_reset_rearms_alert(tmp_path, capsys):
     stamp = tmp_path / "stamp.json"
     lw.write_stamp(stamp, now=NOW - 50 * MINUTE)
@@ -481,6 +531,50 @@ def test_stale_forever_reports_distinct_reasons(tmp_path, capsys, monkeypatch):
     out = capsys.readouterr().out
     for reason in ("missing", "unreadable", "corrupt json", "no ts field"):
         assert f"stale forever ({reason})" in out
+
+
+def test_mtime_stamp_stat_file_not_found_is_missing(tmp_path, monkeypatch):
+    stamp = tmp_path / "beat.card"
+    stamp.write_text("heartbeat\n", encoding="utf-8")
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if Path(self) == stamp:
+            raise FileNotFoundError(2, "No such file or directory")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    assert lw.stamp_status(stamp, NOW) == (float("inf"), "missing")
+
+
+def test_mtime_stamp_stat_oserror_is_unreadable(tmp_path, monkeypatch):
+    stamp = tmp_path / "beat.card"
+    stamp.write_text("heartbeat\n", encoding="utf-8")
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if Path(self) == stamp:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    assert lw.stamp_status(stamp, NOW) == (float("inf"), "unreadable")
+
+
+def test_json_stamp_uses_ts_even_when_stat_fails(tmp_path, monkeypatch):
+    stamp = tmp_path / "stamp.json"
+    lw.write_stamp(stamp, now=NOW - 30 * MINUTE)
+    real_stat = Path.stat
+
+    def fake_stat(self, *args, **kwargs):
+        if Path(self) == stamp:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    age, reason = lw.stamp_status(stamp, NOW)
+    assert reason is None
+    assert age == 30 * MINUTE  # the ts counts; never a fresh-looking age of 0
 
 
 def test_toml_config_round_trip(tmp_path):
