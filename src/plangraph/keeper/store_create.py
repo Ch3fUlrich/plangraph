@@ -22,6 +22,7 @@ from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
     _TIER_FIELDS,
+    check_seat_clause_tier,
     default_review_tier,
     tier_needs_router,
     validated_decision_tier,
@@ -136,6 +137,8 @@ class CreateMixin:
                         raise Refused("forbidden",
                                       "cross-project dependency needs the router")
         if legacy:
+            # Import/replay/copy intentionally bypass the seat-clause gate:
+            # existing data must remain loadable, including standard-tier rows.
             self._require_role(principal, "router")
             for definition in defs:
                 if definition["state"] not in ("open", "claimed", "in_review"):
@@ -143,6 +146,8 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
+                check_seat_clause_tier(definition.get("done_criteria"),
+                                       definition["review_tier"])
                 definition["state"] = "open"
         keys = [d["key"] for d in defs]
         if len(set(keys)) != len(keys):
@@ -391,7 +396,8 @@ class CreateMixin:
                 raise Refused("forbidden", "only the router may lower review_tier")
         # X7b: the *resulting* (tier, evidence_kinds) pair must hold, so an edit
         # of either field alone cannot leave a `none` item with looser evidence.
-        resulting_tier = edit_fields.get("review_tier", item["review_tier"])
+        # Legacy row shapes missing review_tier use the standard default.
+        resulting_tier = edit_fields.get("review_tier", item.get("review_tier") or "standard")
         if tier_needs_router(resulting_tier):
             if (resulting_tier != item["review_tier"]
                     and principal.role != "router"):
@@ -460,6 +466,14 @@ class CreateMixin:
                    for value in renamed):
                 edit_fields["review_tier"] = "high"
                 me["review_tier"] = "high"
+        # Check after rename escalation, and leave unrelated legacy edits alone.
+        if any(field in edit_fields and edit_fields[field] != item.get(field)
+               for field in ("done_criteria", "review_tier")):
+            resulting_tier = edit_fields.get(
+                "review_tier", item.get("review_tier") or "standard")
+            check_seat_clause_tier(
+                edit_fields.get("done_criteria", item.get("done_criteria")),
+                resulting_tier)
         check_fix_limit(candidate, {key})
         self._validate_change(candidate, before, affected={key})
         assignments = [field for field in edit_fields if field != "depends_on"]
