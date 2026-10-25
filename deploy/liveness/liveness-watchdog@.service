@@ -1,0 +1,37 @@
+# Generic external liveness watchdog -- systemd user oneshot TEMPLATE.
+#
+# The instance name is the config name: liveness-watchdog@<name>.service reads
+#   %h/.config/plangraph/liveness/foo.toml
+# Every site-specific detail (paths, target names, commands, thresholds) lives in
+# that config, never in this unit and never in tools/liveness_watchdog.py.
+#
+# Install (user session, no root):
+#   1. cp deploy/liveness/liveness-watchdog@.service ~/.config/systemd/user/
+#      (and the matching timer, liveness-watchdog@.timer, next to it)
+#   2. write the config %h/.config/plangraph/liveness/<name>.toml
+#      (--config also accepts JSON; see tools/liveness_watchdog.py --help)
+#   3. systemctl --user daemon-reload
+#   4. systemctl --user enable --now liveness-watchdog@<name>.timer
+#   5. linger so the timer fires without a login session:
+#      loginctl enable-linger "$USER"
+#   6. verify:
+#      systemctl --user list-timers 'liveness-watchdog@*'
+#      systemctl --user start liveness-watchdog@<name>.service   # one pass now
+#      journalctl --user -u liveness-watchdog@<name>.service -n 20
+#   7. remove with:
+#      systemctl --user disable --now liveness-watchdog@<name>.timer
+#
+# The timer drives one pass every 10 minutes after the previous pass ends
+# (OnUnitInactiveSec=10min), so a stale episode is noticed within its
+# alert_after_min plus roughly one timer interval, whatever the agent session did.
+#
+# Exit status: 0 for every evaluated pass (a failing configured command is a log
+# line, not a failure); non-zero means the config file could not be read, parsed
+# or lacked state_dir/targets -- check the journal for the reason.
+
+[Unit]
+Description=Liveness watchdog pass (%i)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env python3 %h/code/plangraph/tools/liveness_watchdog.py --config %h/.config/plangraph/liveness/%i.toml --apply
