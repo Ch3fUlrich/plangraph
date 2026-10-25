@@ -1,4 +1,4 @@
-"""Append-only durable bus schema."""
+"""Durable bus schema: the append-only message tables plus the mutable host registry."""
 TABLE = '''
 CREATE TABLE IF NOT EXISTS messages (
     seq BIGINT PRIMARY KEY,
@@ -31,6 +31,15 @@ CREATE TABLE IF NOT EXISTS message_envelopes (
     ts BIGINT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_message_envelopes_msg_id ON message_envelopes(msg_id);
+CREATE TABLE IF NOT EXISTS bus_hosts (
+    host TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    key_id TEXT NOT NULL,
+    endpoint TEXT,
+    health TEXT NOT NULL CHECK (health IN ('offline','unhealthy','healthy')),
+    last_seen REAL,
+    updated_ts BIGINT NOT NULL
+);
 '''
 SQLITE = TABLE + '''
 CREATE TRIGGER IF NOT EXISTS trg_messages_no_update BEFORE UPDATE ON messages
@@ -78,6 +87,15 @@ CREATE TABLE message_envelopes (
     ts BIGINT NOT NULL
 );
 CREATE UNIQUE INDEX idx_message_envelopes_msg_id ON message_envelopes(msg_id);
+CREATE TABLE bus_hosts (
+    host TEXT COLLATE "C" PRIMARY KEY,
+    node_id TEXT COLLATE "C" NOT NULL,
+    key_id TEXT COLLATE "C" NOT NULL,
+    endpoint TEXT COLLATE "C",
+    health TEXT COLLATE "C" NOT NULL CHECK (health IN ('offline','unhealthy','healthy')),
+    last_seen DOUBLE PRECISION,
+    updated_ts BIGINT NOT NULL
+);
 CREATE FUNCTION messages_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'messages are append-only' USING ERRCODE = '23000'; END $$;
 CREATE TRIGGER trg_messages_no_update BEFORE UPDATE ON messages

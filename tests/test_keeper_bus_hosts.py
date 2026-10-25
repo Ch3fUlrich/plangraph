@@ -265,7 +265,7 @@ def test_get_hosts_serves_the_inventory_only(tmp_path, monkeypatch):
     srv.bus_thread.join(timeout=5)
     try:
         w.store.upsert_bus_hosts([row(), row("ghost-host", "node-9", "kg")])
-        assert [r["host"] for r in w.store.list_bus_hosts()] == ["host-a", "ghost-host"]
+        assert [r["host"] for r in w.store.list_bus_hosts()] == ["ghost-host", "host-a"]
         status, data, _ = get_hosts(srv, w.tok("router"))
         assert status == 200
         assert [h["host"] for h in data["hosts"]] == ["host-a"]   # ghost is not served
