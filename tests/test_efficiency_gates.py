@@ -772,18 +772,23 @@ def test_output_on_disk_under_and_over_2mb(tmp_path):
                 stdout_tail="ATTEMPT-ONE", stderr_tail="e1")
     serv._save(rec3)
     log = tmp_path / "runs" / "run-t" / "stdout.log"
-    assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # haiku-C3, qwen-C5: not just the last attempt
-    rec3["stdout"], rec3["stderr"] = rec3["stdout_tail"] + "ATTEMPT-TWO", "e1e2"
+    assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWO"  # haiku-C3, qwen-C5: every attempt's text, not just the live one
+    serv.runner.jobs["jA"] = SimpleNamespace(stdout="ATTEMPT-THREE", stderr="e3")
+    rec3["job_id"] = "jA"
     serv._save(rec3)
-    serv.runner.jobs.clear()
-    serv._save(serv.result("run-t"))  # job gone: never rewritten from the 4 KB tail
-    assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWO"
-    rec4 = dict(run_id="run-c", status="completed", exit_code=0, stdout="A" * 1100000, stderr="")
+    assert log.read_text() == "ATTEMPT-ONEATTEMPT-TWOATTEMPT-THREE"  # a fall-through attempt appends
+    serv.runner.jobs["jc"] = SimpleNamespace(stdout="A" * 1100000, stderr="")
+    rec4 = dict(run_id="run-c", status="completed", exit_code=0, job_id="jc")
     serv._save(rec4)
-    assert rec4["output_cut"] is False
-    rec4["stdout"] += "B" * 1100000
+    assert rec4["output_cut"] is False  # positive control: one attempt under 2 MB is kept whole
+    serv.runner.jobs["jd"] = SimpleNamespace(stdout="B" * 1100000, stderr="")
+    rec4["job_id"] = "jd"
     serv._save(rec4)
     assert rec4["output_cut"] is True  # I17: the cut measures the accumulated attempts
+    cut_log = (tmp_path / "runs" / "run-c" / "stdout.log").read_text()
+    serv.runner.jobs.clear()
+    serv._save(serv.result("run-c"))  # job gone: the log is never rewritten from the 4 KB tail
+    assert (tmp_path / "runs" / "run-c" / "stdout.log").read_text() == cut_log
 
 
 def test_cancel_with_class_racing_minus_9():
