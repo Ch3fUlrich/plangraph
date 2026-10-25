@@ -512,4 +512,25 @@ def test_finding_3_enforce_review_scope_accepts_card_repo_root(tmp_path, monkeyp
     enforce_review_scope(card, 'review', 'per-fixer')
 
 
+def test_finding_2_project_of_helper_colon_free(tmp_path, monkeypatch):
+    from plangraph.settings import project_of, fixer_threshold
+    assert project_of('demo') == 'demo'
+    assert project_of('demo:item') == 'demo'
+    assert project_of({'key': 'demo'}) == 'demo'
+    assert project_of({'key': 'demo:C'}) == 'demo'
+    assert project_of({'project': 'demo', 'key': 'C'}) == 'demo'
+    assert project_of(None) is None
+    assert project_of({}) is None
+
+    # Colon-free key resolves project in fixer_threshold (divergence fixed)
+    path = tmp_path / 'policy.json'
+    path.write_text(json.dumps({
+        'review_method': {'fixer_split_threshold': 10},
+        'projects': {'myproject': {'review_method': {'fixer_split_threshold': 4}}}
+    }))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    assert fixer_threshold({'key': 'myproject'}) == 4
+
+
+
 

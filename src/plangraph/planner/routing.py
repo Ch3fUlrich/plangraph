@@ -411,7 +411,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     order = {leg.id: i for i, leg in enumerate(ordered)}
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
     from plangraph.spawner.fixer import split_findings
-    from plangraph.settings import fixer_threshold, SettingsError
+    from plangraph.settings import fixer_threshold, SettingsError, project_of
     try:
         threshold = fixer_threshold(card)
     except SettingsError:

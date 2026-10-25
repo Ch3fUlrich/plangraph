@@ -92,12 +92,12 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         raise Refused("bad_state", f"{key} is {state}")
 
     from dataclasses import asdict
-    from plangraph.settings import review_method, SettingsError
+    from plangraph.settings import review_method, SettingsError, project_of
     try:
-        method = review_method(key.split(":", 1)[0], key, root=repo_root)
+        method = review_method(project_of(key), key, root=repo_root)
     except SettingsError as exc:
         raise Refused("validation", f"review_method: {exc}") from None
-    project = key.split(":", 1)[0]
+    project = project_of(key)
     review_scope_value = "batch" if method.mode == "batch" else "per-fixer"
     if now is None:
         now = datetime.now(timezone.utc)

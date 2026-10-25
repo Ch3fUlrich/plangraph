@@ -49,6 +49,25 @@ class ReviewMethod:
             raise SettingsError('source: path separators not allowed')
 
 
+def project_of(card_or_key) -> str | None:
+    """Derive project name from a card dictionary or string key/phase.
+
+    A colon-free key derives the whole key as project. Returns None if
+    card_or_key is empty or missing.
+    """
+    if isinstance(card_or_key, dict):
+        project = card_or_key.get('project')
+        if project:
+            return project
+        raw = card_or_key.get('key') or card_or_key.get('phase')
+        if not raw:
+            return None
+        return raw.split(':', 1)[0]
+    if isinstance(card_or_key, str) and card_or_key:
+        return card_or_key.split(':', 1)[0]
+    return None
+
+
 def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
     """Resolve global, project and phase tables from PLANGRAPH_SETTINGS.
 
@@ -73,8 +92,8 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
         raise SettingsError(f'file: {type(exc).__name__}{location}') from None
     if not isinstance(data, dict):
         raise SettingsError('file: expected settings table')
-    if project is None and phase and ':' in phase:
-        project = phase.split(':', 1)[0]
+    if project is None and phase:
+        project = project_of(phase)
     values = {}
     source = 'default'
     layers = [('global', data)]
@@ -104,8 +123,7 @@ def review_method(project=None, phase=None, *, root=None) -> ReviewMethod:
 def fixer_threshold(card=None) -> int:
     """Resolve fixer split threshold for card context."""
     card = card or {}
-    key = card.get('key', '')
-    project = card.get('project') or (key.split(':', 1)[0] if ':' in key else None)
+    project = project_of(card)
     method = review_method(project, card.get('phase'), root=card.get('repo_root'))
     return method.fixer_split_threshold
 
@@ -118,8 +136,8 @@ def enforce_review_scope(card, role, review_scope, *, root=None):
         raise SettingsError('review_scope: expected batch or per-fixer')
     if role != 'review' and (review_scope is not None or card.get('review_scope') is not None):
         raise SettingsError('review_scope only valid for role=review')
-    key = card.get('key', '')
-    method = review_method(card.get('project') or key.split(':', 1)[0] or None,
+    project = project_of(card)
+    method = review_method(project,
                            card.get('phase'), root=root or card.get('repo_root'))
     if method.mode == 'batch' and (review_scope == 'per-fixer' or
             (review_scope is None and card.get('review_scope') == 'per-fixer')):
