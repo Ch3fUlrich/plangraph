@@ -17,6 +17,10 @@ import time
 from xml.sax.saxutils import escape
 
 
+def _is_nt():
+    return os.name == 'nt'
+
+
 def tick(runs, claims, activity, *, now=None, deliver=None):
     now = time.time() if now is None else now
     findings = []
@@ -72,11 +76,11 @@ def status(findings):
 
 
 def read_runs(state):
-    from .private_io import atomic_write_private
+    from .private_io import atomic_write_private, read_text_retry
     runs, bad = [], []
     for path in sorted((Path(state) / 'runs').glob('run-*/record.json')):
         try:
-            record = json.loads(path.read_text(encoding='utf-8'))
+            record = json.loads(read_text_retry(path))
             if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
                 raise ValueError('invalid run record')
             completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}

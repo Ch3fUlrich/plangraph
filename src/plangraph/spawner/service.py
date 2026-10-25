@@ -12,6 +12,11 @@ import time
 import uuid
 
 from .runner import SpawnerRunner
+from .private_io import read_text_retry
+
+
+def _is_nt():
+    return os.name == 'nt'
 
 
 class SpawnService:
@@ -29,7 +34,7 @@ class SpawnService:
 
     def result(self, run_id):
         try:
-            return json.loads(self._path(run_id).read_text(encoding='utf-8'))
+            return json.loads(read_text_retry(self._path(run_id)))
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
