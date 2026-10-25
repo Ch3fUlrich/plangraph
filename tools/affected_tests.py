@@ -150,6 +150,7 @@ def select_tests(root, changed, within=None):
         if not hits:
             return fallback("no mapped tests")
         selected.update(hits)
+    selected = {t for t in selected if not t.startswith("tests/browser/")}  # own CI job (D-2821)
     return {"tests": filter_within(sorted(selected), within), "reason": "reverse imports and explicit file references"}
 
 
