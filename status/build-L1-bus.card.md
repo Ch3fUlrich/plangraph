@@ -4,13 +4,13 @@ Control branch build-L1-bus (local control.git only). Phase branch phase/rt-p1-b
 Review rule D-2534: lanes -> PR into phase branch, green CI, no per-task seats; then ONE HIGH review of phase diff vs main
 D-2539: Haiku 5.5 first + 1 non-Claude family != every writer (cx writers -> qwen | mimo/mimo-v2.6-flash | deepseek-direct-flash; luna only w/o openai writer; never sol). Haiku verdict refused by keeper until KEEPER-SEAT-FAMILY-WRITER: keep .out+sha256, post after. D-2540: 1st review = 2 seats (Haiku + 1 non-Claude); then ONE fixer brief -> re-review ONE seat (delta + touched files), loop <=3 rounds then replan; phase PR; GO-REQ to routing.
 D-2665 (cx cooldown): mimo > deepseek > agy; D-2569 base cx first; probe first, record skips. Phase writer families so far: xiaomi (EOS r1), openai (KEEPER r2, DISCOVERY), google (KEEPER r3 agy) -> seats Haiku + qwen (never gemini).
-UNPARKED D-2657 ~23:2xZ. Phase @a6a17c63 (main 748fe7f3 + EOS + DISCOVERY + KEEPER). Plan status/unpark-plan.md. D-2643 batch review.
+UNPARKED D-2657 ~23:2xZ. Phase @66d3cad6 (main 748fe7f3 + EOS + DISCOVERY + KEEPER + WAKE). Plan status/unpark-plan.md. D-2643 batch review.
 | Item | State / next |
 |---|---|
 | RT-P1-BUS-KEEPER (HIGH p8) | IN PHASE: #176 merged a6a17c63 (head b0648e54, CI 40146063397 green; r3 writer agy gemini; b0648e5 L1 1-line w/o Hand-Edit trailer, note in phase PR) |
 | EXEC-OBSERVED-STATE (HIGH p5) | IN PHASE: #165 merged 12a182f9 (head 73a24850 incl Hand-Edit fmt), CI 40087453166 green; awaits phase review |
 | BUS-WATCHER-TRACKED (p7) | claimed; HELD (D-2564), close superseded when BUS-WAKE lands |
-| RT-P1-BUS-WAKE (p7) | W1 running mimo (relaunch D-2665) lane/rt-p1-bus-wake; keeper claim refused (dep KEEPER not done until phase->main) |
+| RT-P1-BUS-WAKE (p7) | IN PHASE: #179 merged 66d3cad6 (head 66c80ccc, CI 40150820122, writer mimo). Routing timer-removal PR: writer queued, merge HELD until wake daemon live |
 | RT-QC-ACCEPTS (HIGH p1) | L2 build-L2-qc-accepts ses_e8fd201b9ffeOBldPtSE9uA5my (workst oc_l2, cx; reports via workst inbox relay) |
 | BUS-WAKE-STOPGAP-2 | claimed; D-2539 hold, close superseded when BUS-WAKE lands |
 | RT-P1-BUS-RUST (p6) | deps CI-WORKST-RUNNER(in_review), OCGO-BUS-INBOUND(open) |
