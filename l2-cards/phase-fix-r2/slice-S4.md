@@ -2,7 +2,7 @@
 You are the WRITER. cwd = git worktree on branch lane/phase-fix-r2a (earlier slices already committed). Edit files in place, run the checks, commit. Do NOT push.
 Scope: ONLY this slice, rust/worker/** only. No .github, no Python, no site IP. <= 150 changed lines (generated fixtures excluded). Edit only the needed hunks; never print whole files.
 Order: (1) write the red test named below and SAVE it to disk within 5 minutes; (2) run it, see it fail; (3) implement; (4) checks; (5) one commit.
-Checks: cd rust/worker && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test (whole crate) with a Temporal dev server running and PG_TEMPORAL_ADDR=http://127.0.0.1:17233 exported (start `temporal server start-dev --headless --port 17233` if none listens) so e2e tests run, not skip.
+Checks (run them in the FOREGROUND, never as a background shell; commit before you finish your turn): cd rust/worker && cargo fmt --check && cargo clippy --all-targets -- -D warnings && PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 PG_TEMPORAL_ADDR=http://127.0.0.1:17233 cargo test (whole crate, ~2 min) with a Temporal dev server running (start `temporal server start-dev --headless --port 17233` if none listens) so e2e tests run, not skip.
 Commit trailers exactly: 'Plan-Item: plangraph:RT-P1-BUS' and 'Writer: mimo/mimo-v2.6-pro <env PLANGRAPH_RUN_ID or plangraph-spawner>'.
 Final report: the exact test fn names you added (build-L1-bus greps them; a name that does not exist rejects the run), the invariant(s) they prove, and the check tails. Then stop.
 
