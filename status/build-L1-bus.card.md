@@ -12,7 +12,7 @@ D-2820: R2a flash = disclosed exception; r3 not clean -> Opus strong replan (des
 | Item | State / next |
 |---|---|
 | FIX r1 G1/G3/G2 | MERGED #186 c9d4bc38, #189 5feefbf5, #199 3ceaf974 (CI 40182839456; Hand-Edit scrub). Phase head ea21b539 (tree == CI head) |
-| DELTA r2 | R2a lane/phase-fix-r2a 59c1287e (agy flash run-d41eddf4, D-2820 exception) CI 40215641236 green, NOT merged. r3 qwen run-ea8a46e1 (seats/phase-r3-R2a-59c1287e): VERDICT pass but 2 MED (NEW-1 loop on any error, NEW-2 cited test absent) -> NOT clean. Opus REPLAN l2-cards/phase-fix-r2/replan-r3.md sent to routing; WAIT routing writer pick for R2a' (non-flash; mimo barred by D-2820). R2b after R2a' clean |
+| DELTA r2 | R2a 59c1287e (agy flash) r3 NOT clean -> replan 299b445f. D-2831: R2a' writer mimo-pro run-c3b5a52267324118913f9625577cc04a (prompt l2-cards/phase-fix-r2/r2a-prime-prompt.md, 1 run, fail/0 commits -> report routing, no retry). Then: grep cited tests -> r4 1 qwen seat (full output, not tail) -> not clean -> routing; clean -> PR+merge -> R2b mimo-pro. Spawner gaps sent build-L1 (D-2831) |
 | BUS-REGISTRY-PERSIST (HIGH p8) | MERGED phase #193 (9b2eb4db; writer mimo-pro run ...062933-...a2456f; Hand-Edit PRAGMA test; CI 40174828383). Gap: docs/FLEET-BUS.md paragraph -> delta finding. Claim refused till DISCOVERY done |
 | BUS-PEER-DISCOVERY-ADOPT (HIGH p8) | AutoOS MERGED main 2629d740 (D-2730). routing 46b7d6a1 HELD till phase on main + keeper deploy (routing sets env + merges). NO ff live AutoOS checkouts till /v1/hosts deployed. Evidence: l2-cards/discovery-adopt/evidence.md (post after claim allowed) |
 | RT-P1-BUS-KEEPER / DISCOVERY / WAKE / EXEC-OBSERVED-STATE / ANY-AGENT-CLI W2a+W2b | IN PHASE, await delta review + phase PR |
