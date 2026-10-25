@@ -92,9 +92,13 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
         raise Refused("bad_state", f"{key} is {state}")
 
     from dataclasses import asdict
-    from plangraph.settings import review_method
-    method = review_method(key.split(":", 1)[0], key, root=repo_root)
+    from plangraph.settings import review_method, SettingsError
+    try:
+        method = review_method(key.split(":", 1)[0], key, root=repo_root)
+    except SettingsError as exc:
+        raise Refused("validation", f"review_method: {exc}") from None
     project = key.split(":", 1)[0]
+    review_scope_value = "batch" if method.mode == "batch" else "per-fixer"
     if now is None:
         now = datetime.now(timezone.utc)
     source = source or policy.StaticSource()
@@ -167,7 +171,7 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
             running_write_sets=running, leg_max_request=leg_max)
 
         review_fields = ({"role": "review", "project": project, "phase": key, "review_scope":
-                          "batch" if method.mode == "batch" else "per-fixer"}
+                          review_scope_value}
                          if card.get("role") == "review" else {})
         cards.append({
             **review_fields,
@@ -215,6 +219,7 @@ def plan_phase(store: Any, principal: Any, key: str, *, repo_root: Path | str,
     return {
         "phase": key,
         "review_method": asdict(method),
+        "review_scope": review_scope_value,
         "ready": ready,
         "blocked": blocked,
         "cards": cards,

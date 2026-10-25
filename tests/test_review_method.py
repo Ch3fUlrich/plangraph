@@ -340,3 +340,90 @@ def test_finding_8_cli_review_scope_rejected_on_non_spawn(tmp_path, capsys):
     assert 'unrecognized arguments: --review-scope' in err
 
 
+def test_finding_1_top_level_review_scope_and_per_card(tmp_path, monkeypatch):
+    from keeper_util import World, defn
+    from plangraph.planner.phase import plan_phase
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    repo = tmp_path / 'repo'
+    (repo / 'src').mkdir(parents=True)
+    (repo / 'src' / 'a.py').write_text('A = 1\n')
+    world = World(tmp_path / 'keeper')
+    try:
+        world.store.create_items(world.p('router'), [
+            defn('C1'),
+            defn('P', ['C1'], kind='gate'),
+            defn('GOAL', ['P'], kind='goal'),
+        ])
+        card_data = {'outcome': 'done', 'write_set': ['src/a.py'], 'estimate_tokens': 1000}
+        world.store.put_card(world.p('router'), 'demo:C1', card_data)
+        # 1. Real keeper card (has NO role column)
+        plan = plan_phase(world.store, world.p('router'), 'demo:P', repo_root=repo)
+        assert 'review_scope' in plan
+        assert plan['review_scope'] == 'batch'
+        # Card should not have review_scope stamped since role is not review
+        card_entry = next(c for c in plan['cards'] if c['key'] == 'demo:C1')
+        assert 'review_scope' not in card_entry
+        assert 'role' not in card_entry
+
+        # 2. Monkeypatched store.get_card returning role='review'
+        orig_get_card = world.store.get_card
+        def mock_get_card(principal, key):
+            c = orig_get_card(principal, key)
+            return {**c, 'role': 'review'}
+        monkeypatch.setattr(world.store, 'get_card', mock_get_card)
+        plan_review = plan_phase(world.store, world.p('router'), 'demo:P', repo_root=repo)
+        assert plan_review['review_scope'] == 'batch'
+        rev_card = next(c for c in plan_review['cards'] if c['key'] == 'demo:C1')
+        assert rev_card['role'] == 'review'
+        assert rev_card['review_scope'] == 'batch'
+    finally:
+        world.close()
+
+
+def test_finding_4_plan_phase_settings_error(tmp_path, monkeypatch):
+    from keeper_util import World, defn
+    from plangraph.planner.phase import plan_phase
+    from plangraph.keeper.errors import Refused
+    path = tmp_path / 'bad_policy.json'
+    path.write_text('{invalid-json-content}')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    world = World(tmp_path / 'keeper')
+    try:
+        world.store.create_items(world.p('router'), [
+            defn('P', kind='gate'),
+            defn('GOAL', ['P'], kind='goal'),
+        ])
+        with pytest.raises(Refused) as exc:
+            plan_phase(world.store, world.p('router'), 'demo:P', repo_root=tmp_path)
+        assert getattr(exc.value, 'code', None) == 'validation' or exc.value.args[0].startswith('validation:')
+        assert 'review_method:' in str(exc.value)
+        assert 'invalid-json-content' not in str(exc.value)
+    finally:
+        world.close()
+
+
+def test_finding_4_routing_plan_spawn_settings_error(tmp_path, monkeypatch):
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_errors import SpawnRefused
+    path = tmp_path / 'bad_policy.json'
+    path.write_text('{secret_broken_json')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    card = {'estimate_tokens': 1000, 'findings': [{'files': ['a.py']}]}
+    with pytest.raises(SpawnRefused) as exc:
+        plan_spawn(card, role='implement')
+    assert exc.value.reason == 'review_method_invalid'
+    assert 'secret_broken_json' not in str(exc.value)
+
+
+def test_finding_3_enforce_review_scope_accepts_card_repo_root(tmp_path, monkeypatch):
+    from plangraph.settings import enforce_review_scope
+    monkeypatch.delenv('PLANGRAPH_REPO_ROOT', raising=False)
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+    # Under tmp_path, policy is per-item
+    (tmp_path / 'policy.json').write_text('{"review_method": {"mode": "per-item"}}')
+    card = {'key': 'demo:C', 'phase': 'demo:P', 'repo_root': str(tmp_path)}
+    # If card['repo_root'] is respected, per-fixer scope is accepted
+    enforce_review_scope(card, 'review', 'per-fixer')
+
+
+

@@ -51,7 +51,7 @@ def make_phase(w):
 def code_of(exc):
     return getattr(exc, "code", None) or exc.args[0]
 
-PLAN_KEYS = {"review_method", "phase", "ready", "blocked", "cards",
+PLAN_KEYS = {"review_method", "review_scope", "phase", "ready", "blocked", "cards",
              "overlaps", "skipped", "busy"}
 CARD_KEYS = {"key", "state", "write_set", "ready", "findings",
              "start_allowed", "start_reason", "route",
