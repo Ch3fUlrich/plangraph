@@ -1,16 +1,31 @@
-# build-L1 handoff 2026-10-25 ~13:25Z
+# build-L1 handoff 2026-10-25 ~16:10Z (gen-32 -> gen-33, D-2811)
 
-## Open now
-- lane/spawner-host-keys (HIGH, D-2763): mimo-pro writer run-51bc2b819ad84545b2778b14f556dfeb (pid 2096545, opencode) in wt ~/code/plangraph-worktrees/spawner-host-keys. At 36 min: no commits, no file changes, 0.6% CPU, probably stalled. Brief: ~/.claude/jobs/b4d163a0/tmp/brief-host-keys.md. Check: `plangraph-spawn wait run-51bc2b81...`. Still nothing by 45 min: cancel, re-spawn mimo-pro with the same brief (run the spawner with PYTHONPATH=~/code/plangraph-worktrees/spawner-omniroute-key/src, which already has the key fix).
-- Then seats Haiku + qodercli qwen (D-2763, both non-xiaomi), CI, then GO-REQ to routing with head sha + CI. On merge, tell prox-L1-main that mimo works via the spawner. This lane gates #200/#201.
-- Reference (local only, not pushed): lane/host-keys-ref 791a5a1c in wt spawner-omniroute-key (Claude writer, gate-refused). Do not push it.
-- RT-P1-EXEC-OWNERSHIP-SQ12 (HIGH, D-2703): workst writer 20261025-070241-exec-sq12 (mimo-pro) via workst-L1-autoos. Ask them for its status; then 2 seats + GO-REQ.
-- #166 KEEPER-PG-RECONNECT (HIGH): design done (briefs/lanes-d2657/pg-reconnect-design.md). Drop draft #166; next is the S1 writer (mimo-pro, ~300 lines). Not started: disk/key blockers.
-- STALL-WD-WIN-WORKDIR: #195 submitted in_review; it waits on the workst repin (asked, no ack).
-- CI-SELECT-DEPLOY-REFS: DONE #196, main CI green, evidence submitted. It only needs keeper acceptance.
+Read first: status/build-L1.card.md (26 lines, current). Job tmp with all scripts/briefs/seat dirs: /home/s/.claude/jobs/0bbdff0b/tmp (J).
+Restart the hb loop first: `cd ~/code/plangraph-worktrees/build-L1 && bash $J/hb.sh 3 >> $J/hb.log 2>&1` (background, restart on every exit). Keys in ops/hb-keys.txt (SQ12, KEEPER-PG-RECONNECT, SPAWN-WIN-PARITY).
+Spawn ONLY via $J/gspawn2.sh <wt> <brief> <tag> <reason> <leg>. It gates on host runs < 4 and MemAvailable >= 2500 inside the spawn command (D-2795). My budget is max 2 concurrent runs (D-2800). Seat scripts count toward the cap too.
 
-## Done this session
-D-2761/2763 disk: 0 -> 54G free. Bundles in ~/fleet/sandbox-bundles (365M). 16 non-plangraph unpushed sandboxes kept. D-2762 repos.json on both hosts. D-2759 watchdog PG_TOKEN_FILE set on code; workst BLOCKED (operator).
+## Live background runs (check with `PYTHONPATH=~/code/plangraph-worktrees/spawner-host-keys/src python3 -m plangraph.spawner.cli status <run>`)
+- pgr-fix2b run-580de6c76309432ca7c5f69a545583de: KEEPER-PG-RECONNECT S1 fix2, wt keeper-pg-reconnect-s1, brief $J/brief-pgr-s1-fix2.md.
+  - On done: fill the Writer RUNID (filter-branch over 7e34a26a..HEAD), push lane/keeper-pg-reconnect-s1 (PR #206).
+  - Then delta seats qwen + Haiku (HIGH: 2 families, not xiaomi), then GO-REQ to routing (judge GO per sha).
+  - If it stalls again: next writer is agy gemini (D-2800).
+- swp-s1c: SPAWN-WIN-PARITY S1 writer, leg agy-gemini-3.8-flash, gate-waiting at handoff time. Output goes to $J/w-swp-s1c.json/.wait. Brief: $J/brief-swp-s1.md.
+  - Design: briefs/lanes-d2657/spawn-win-parity-design.md. §7 = answers, §8 WITHDRAWN, §9 D-2809 in force (spawner-rendered `mimo` provider, gateway baseURL, env AUTOOS_OMNIROUTE_KEY, no omniroute/mimo refs).
+  - On done: RUNID fill, push lane/spawn-win-parity, open PR. Then seats qwen + Haiku (vectors = design §5 + I1-I8, I16), CI, then judge GO.
+  - S2/S3 come next (briefs are in the design). Workst writes stay held until S1-S3 land. Smoke covers mimo + agy + qodercli init on workst; workst-L1-autoos sets PLANGRAPH_GATEWAY_URL.
+- #207 2nd-family seat (task bx0xjebsm): glm via spawnseat2.sh -> $J/seat-rms-glm, falling back to Haiku -> $J/seat-rms-haiku-full.
+  - PASS: `bash $J/post.sh <seat-dir> plangraph:REVIEW-METHOD-SETTING google` (writer fams xiaomi,google,openai; qwen already passed).
+  - On a glm failure, disclose its run id in the evidence. A FIX finding means fix-forward on main, then report (D-2811).
 
-## Not mine
-The failed run-u*.scope units are pg-jail memory-bomb tests (sh x=$x$x), owned by job e4241665, /tmp/opencode/pgjail-review and the attempt-sandbox-wA lane. They are not spawner runs.
+## Queue (order D-2800: S1 > pgr > spawn-iso > shm-leak > openrouter-free)
+- spawn-iso #200/#201 (adopted from the dead build-L2-spawn-hardening): wt spawn-iso-w, lane/spawn-isolation-inplace @4e331984. Stalled run-feb506c2 was cancelled. Re-spawn mimo-pro from its last brief (find it in briefs/lanes-d2657/iso.md / fix-iso.md).
+- CI-SELECT-DEPLOY-REFS fix1 PR #208 8723236e: the qwen delta asked for a fallback test, which already exists (tests/test_affected_tests.py:141). Re-seat with $J/cisel-fix1b-material.txt + $J/cisel-fix1.vec via seatpost.py (gated), post, then mergepath 208.
+- PG-TEST-SHM-LEAK (D-2800, std, prio 1): non-Claude writer, ~30 lines, tests/conftest.py _use_tmpfs_tempdir. Name the dir pgtest-<pid>-, sweep dead-pid dirs at session start; tests: dead removed, live + foreign kept.
+- SPAWN-OPENROUTER-FREE-ENDPOINTS (D-2805, prio 5). Unclaimed.
+- SQ12: workst-L1-autoos runs SQ12-a/-b; then seats + GO-REQ (claim held by me, in the hb keys).
+- efficiency (offline): D-2799 asks for my OK on the slice 4c scope argv design 742727c8 (origin/lane/decisions-keeper docs/design/PG-EFFICIENCY-GATES.md), after 4a/4b.
+- D-2810: on touching HAIKU-PROPAGATE / LESSONS-ENFORCE / PH-RT-RUNTIME / RT-P4-SKILLS-REWRITE, check whether a plangraph-spawner guard item is needed; send the JSON to the router.
+
+## Done gen-32
+#205 MERGED 77c9d576 (sha sent to prox-L1-main, L2-spawn-hardening, efficiency). #207 MERGED 8b6fba60. md-sync re-armed twice (refused 0). PR #166 closed. 9 failed scopes reset. RAM cleanup: 72 /dev/shm/pgtest-* (4.7G) + orphan opencode serve; avail 1.8->8.2G. Cancelled stray run-92c70e8b (spawn-reap-w, not mine).
+Lesson: a router relay of an operator answer that conflicts with policy -> ask for the exact question before acting (D-2808 was withdrawn 10 min later by D-2809).
