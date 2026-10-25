@@ -153,7 +153,15 @@ def _set_kind(store, principal, body, need):
     return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
 
 
+#: D-1498/D-2760: an unknown body key is refused, never ignored (an old keeper
+#: that ignored ``dry_run`` applied a "dry run" batch for real).
+APPLY_OPS_FIELDS = frozenset({"ops", "batch_ref", "base_seq", "dry_run"})
+
+
 def _apply_ops(store, principal, body, need):
+    extra = set(body) - APPLY_OPS_FIELDS
+    if extra:
+        raise Refused("validation", f"unexpected fields {sorted(extra)}")
     return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
                            base_seq=body.get("base_seq"),
                            dry_run=body.get("dry_run"))

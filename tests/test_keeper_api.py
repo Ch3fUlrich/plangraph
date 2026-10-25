@@ -201,3 +201,12 @@ def test_auth_failure_is_audited_never_token(srv, w, monkeypatch):
     assert status == 401
     assert calls[-1] == "missing token"
     assert all(token not in reason for reason in calls)
+
+
+def test_apply_ops_refuses_unknown_body_keys_and_advertises_dry_run(srv, w):
+    # D-1498/D-2760: an ignored body key once turned a dry run into a real apply.
+    status, _, raw = call(srv, "/v1/apply_ops", method="POST",
+                          body={"ops": [], "dryrun": True}, token=w.tok("router"))
+    assert status == 400 and "dryrun" in raw.decode()
+    status, _, raw = call(srv, "/v1/whoami", token=w.tok("router"))
+    assert "apply_ops.dry_run" in jbody(raw)["features"]
