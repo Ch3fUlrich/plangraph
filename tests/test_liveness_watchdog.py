@@ -341,6 +341,148 @@ def test_unusable_config_exits_two(tmp_path, capsys):
     assert out.count("config error") == 2
 
 
+def test_relaunch_skip_log_names_the_trigger(tmp_path, capsys):
+    stamp = tmp_path / "stamp.json"
+    lw.write_stamp(stamp, now=NOW)  # fresh: only the alive probe can make relaunch due
+    alive_cmd, _ = make_cmd(tmp_path, "alive", exit_code=3)
+    alert_cmd, _ = make_cmd(tmp_path, "alert")
+    relaunch_cmd, relaunch_marker = make_cmd(tmp_path, "relaunch")
+    stale = tmp_path / "stale.card"
+    stale.write_text("beat\n", encoding="utf-8")
+    os.utime(stale, (NOW - 80 * MINUTE, NOW - 80 * MINUTE))
+    config = write_config(
+        tmp_path,
+        [
+            {
+                "name": "alertonly",
+                "stamp": str(stamp),
+                "relaunch_after_min": None,  # alert only
+                "alive_cmd": alive_cmd,
+                "alert_cmd": alert_cmd,
+                "relaunch_cmd": relaunch_cmd,
+            },
+            {
+                "name": "nocmd",
+                "stamp": str(stale),
+                "alert_cmd": alert_cmd,
+            },
+        ],
+    )
+    assert lw.main(["--config", str(config), "--apply"], now=NOW) == 0
+    assert not relaunch_marker.exists()
+    out = capsys.readouterr().out
+    skipped = {
+        name: line
+        for name in ("alertonly", "nocmd")
+        for line in out.splitlines()
+        if "relaunch due but skipped" in line and f": {name}:" in line
+    }
+    assert "alertonly" in skipped["alertonly"]
+    assert "alert-only" in skipped["alertonly"]
+    assert "alive probe rc=3" in skipped["alertonly"]
+    assert "alert-only" in skipped["nocmd"]
+    assert "no relaunch_cmd configured" in skipped["nocmd"]
+    assert "stale age 80.0 min" in skipped["nocmd"]
+
+
+def test_dry_run_reset_not_saved_and_apply_reset_rearms_alert(tmp_path, capsys):
+    stamp = tmp_path / "stamp.json"
+    lw.write_stamp(stamp, now=NOW - 50 * MINUTE)
+    alert_cmd, alert_marker = make_cmd(tmp_path, "alert")
+    config = write_config(
+        tmp_path, [{"name": "alpha", "stamp": str(stamp), "alert_cmd": alert_cmd}]
+    )
+    # 1. stale --apply: the episode alerts once and records it.
+    assert lw.main(["--config", str(config), "--apply"], now=NOW) == 0
+    assert len(lines(alert_marker)) == 1
+    assert read_state(tmp_path, "alpha")["alerted"] is True
+
+    # 2. a dry run while fresh admits it cannot reset: nothing is saved.
+    lw.write_stamp(stamp, now=NOW)  # producer beat again -> the episode is over
+    assert lw.main(["--config", str(config)], now=NOW) == 0
+    out = capsys.readouterr().out
+    assert "would reset (not saved)" in out
+    assert "episode reset" not in out
+    assert read_state(tmp_path, "alpha")["alerted"] is True  # dry run wrote nothing
+
+    # 3. --apply while fresh resets the episode on its own run.
+    assert lw.main(["--config", str(config), "--apply"], now=NOW) == 0
+    assert read_state(tmp_path, "alpha") == {
+        "alerted": False,
+        "relaunched": False,
+        "noted": False,
+    }
+    assert len(lines(alert_marker)) == 1
+
+    # ... so the second stale --apply alerts again.
+    lw.write_stamp(stamp, now=NOW - 50 * MINUTE)
+    assert lw.main(["--config", str(config), "--apply"], now=NOW) == 0
+    assert len(lines(alert_marker)) == 2
+
+
+def test_load_state_error_names_the_oserror_subclass(tmp_path, capsys, monkeypatch):
+    stamp = tmp_path / "stamp.json"
+    lw.write_stamp(stamp, now=NOW - 50 * MINUTE)
+    alert_cmd, _ = make_cmd(tmp_path, "alert")
+    config = write_config(
+        tmp_path, [{"name": "alpha", "stamp": str(stamp), "alert_cmd": alert_cmd}]
+    )
+    state = state_file(tmp_path, "alpha")
+    state.parent.mkdir(parents=True)
+    state.write_text('{"alerted": true}\n', encoding="utf-8")
+    real_read_text = Path.read_text
+
+    def fake_read_text(self, *args, **kwargs):
+        if Path(self) == state:
+            raise PermissionError(13, "Permission denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    assert lw.main(["--config", str(config), "--apply"], now=NOW) == 0
+    out = capsys.readouterr().out
+    assert "state unreadable (PermissionError); starting clean" in out
+
+
+def test_stale_forever_reports_distinct_reasons(tmp_path, capsys, monkeypatch):
+    alert_cmd, alert_marker = make_cmd(tmp_path, "alert")
+
+    unreadable = tmp_path / "unreadable.json"
+    unreadable.write_text('{"ts": 1}\n', encoding="utf-8")
+    corrupt = tmp_path / "corrupt.json"
+    corrupt.write_text('{"ts": ', encoding="utf-8")  # truncated JSON
+    nots = tmp_path / "nots.json"
+    nots.write_text('{"iso": "x"}\n', encoding="utf-8")  # valid JSON, no ts field
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self, *args, **kwargs):
+        if Path(self) == unreadable:
+            raise PermissionError(13, "Permission denied")
+        return real_read_bytes(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_bytes", fake_read_bytes)
+    config = write_config(
+        tmp_path,
+        [
+            {
+                "name": reason,
+                "stamp": str(stamp),
+                "alert_cmd": alert_cmd,
+            }
+            for reason, stamp in (
+                ("missing", tmp_path / "absent.json"),
+                ("unreadable", unreadable),
+                ("corrupt", corrupt),
+                ("nots", nots),
+            )
+        ],
+    )
+    assert lw.main(["--config", str(config), "--apply"], now=NOW) == 0
+    assert len(lines(alert_marker)) == 4
+    out = capsys.readouterr().out
+    for reason in ("missing", "unreadable", "corrupt json", "no ts field"):
+        assert f"stale forever ({reason})" in out
+
+
 def test_toml_config_round_trip(tmp_path):
     stamp = tmp_path / "stamp.json"
     lw.write_stamp(stamp, now=NOW - 50 * MINUTE)

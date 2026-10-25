@@ -28,15 +28,21 @@ Config shape (TOML shown; JSON is the same structure)::
 Semantics
 ---------
 * ``age = now - stamp ts``.  A stamp that is missing, unreadable or corrupt is
-  stale forever.  Content that looks like JSON (it starts with ``{``) must parse
-  to an object with a numeric ``ts``; anything else is corrupt.  Content that is
-  not JSON at all is an mtime stamp and its modification time counts.
+  stale forever, reported as ``stale forever (missing | unreadable |
+  corrupt json | no ts field)``.  Content that looks like JSON (it starts with
+  ``{``) must parse to an object with a numeric ``ts``; anything else is
+  corrupt.  Content that is not JSON at all is an mtime stamp and its
+  modification time counts.
 * ``age > alert_after_min`` -> alert ONCE per stale episode.
 * ``age > relaunch_after_min`` OR ``alive_cmd`` exiting non-zero -> relaunch
   ONCE per episode.  ``relaunch_after_min = null`` (or a missing
-  ``relaunch_cmd``) makes the target alert only.
+  ``relaunch_cmd``) makes the target alert only; a due-but-skipped relaunch is
+  logged once per episode with its trigger (``stale age N min`` or
+  ``alive probe rc=X``).
 * An episode ends when the stamp is fresh again and ``alive_cmd`` (if any)
-  exits 0; the next stale episode alerts again.
+  exits 0; the next stale episode alerts again.  A dry run only reports
+  ``would reset (not saved)``: the episode state is reset and saved by the
+  ``--apply`` run that finds the stamp fresh.
 * Commands are argv lists taken verbatim from the config -- no shell, no
   ``shlex`` re-parsing -- each with a 120 s timeout.  A command that cannot be
   started or exits non-zero becomes one log line (at most a 200-char tail of
@@ -147,33 +153,42 @@ def write_stamp(path, now: float | None = None) -> dict:
     return payload
 
 
-def stamp_age_seconds(path, now: float) -> float:
-    """``now - stamp ts`` in seconds; ``inf`` when the stamp is stale forever.
+def stamp_status(path, now: float) -> tuple[float, str | None]:
+    """``(age_seconds, stale_reason)`` for the stamp at *path*.
 
-    Missing, unreadable or corrupt -> ``inf``.  Content starting with ``{`` is
-    meant to be a JSON stamp and must carry a numeric ``ts``; anything else is
-    read as an mtime stamp.
+    ``stale_reason`` is ``None`` while the stamp is usable and one of
+    ``missing``, ``unreadable``, ``corrupt json`` or ``no ts field`` when the
+    stamp is stale forever.  Content starting with ``{`` is meant to be a JSON
+    stamp and must carry a numeric ``ts``; anything else is read as an mtime
+    stamp.
     """
     target = Path(path)
     try:
         raw = target.read_bytes()
+    except FileNotFoundError:
+        return float("inf"), "missing"
     except OSError:
-        return float("inf")
+        return float("inf"), "unreadable"
     stripped = raw.strip()
     if stripped.startswith(b"{"):
         try:
             parsed = json.loads(stripped.decode("utf-8"))
         except (ValueError, UnicodeError):
-            return float("inf")
+            return float("inf"), "corrupt json"
         ts = parsed.get("ts") if isinstance(parsed, dict) else None
         if isinstance(ts, bool) or not isinstance(ts, (int, float)):
-            return float("inf")
-        return max(0.0, now - float(ts))
+            return float("inf"), "no ts field"
+        return max(0.0, now - float(ts)), None
     try:
         mtime = target.stat().st_mtime
     except OSError:
-        return float("inf")
-    return max(0.0, now - mtime)
+        return float("inf"), "unreadable"
+    return max(0.0, now - mtime), None
+
+
+def stamp_age_seconds(path, now: float) -> float:
+    """``now - stamp ts`` in seconds; ``inf`` when the stamp is stale forever."""
+    return stamp_status(path, now)[0]
 
 
 def load_config(path) -> dict:
@@ -318,8 +333,8 @@ def load_state(path, out) -> dict:
         raw = Path(path).read_text(encoding="utf-8")
     except FileNotFoundError:
         return flags
-    except OSError:
-        log(f"state unreadable ({type(OSError).__name__}); starting clean", out)
+    except OSError as exc:
+        log(f"state unreadable ({type(exc).__name__}); starting clean", out)
         return flags
     try:
         parsed = json.loads(raw)
@@ -352,13 +367,15 @@ def append_inbox(inbox, line: str, out) -> None:
 def check_target(target: dict, state_dir, inbox, apply: bool, now: float, out) -> None:
     """Evaluate one target: alert and/or relaunch at most once per episode."""
     name = target["name"]
-    age = stamp_age_seconds(target["stamp"], now)
+    age, stale_reason = stamp_status(target["stamp"], now)
     age_min = age / MINUTE
     stale = age > target["alert_after_min"] * MINUTE
 
     alive_ok = True
+    alive_rc: int | None = None
     if apply and target["alive_cmd"] is not None:
-        alive_ok = run_command(target["alive_cmd"], None, out, f"{name}: alive") == 0
+        alive_rc = run_command(target["alive_cmd"], None, out, f"{name}: alive")
+        alive_ok = alive_rc == 0
         if not alive_ok:
             log(f"{name}: alive command reports not alive", out)
 
@@ -367,15 +384,30 @@ def check_target(target: dict, state_dir, inbox, apply: bool, now: float, out) -
 
     if not stale and alive_ok:
         if any(flags.values()):
-            log(f"{name}: healthy again (age {age_min:.1f} min); episode reset", out)
             if apply:
+                log(f"{name}: healthy again (age {age_min:.1f} min); episode reset", out)
                 save_state(
                     state,
                     {"alerted": False, "relaunched": False, "noted": False},
                 )
+            else:
+                log(
+                    f"{name}: healthy again (age {age_min:.1f} min); "
+                    "would reset (not saved)",
+                    out,
+                )
         return
 
-    age_text = "stale forever" if age == float("inf") else f"{age_min:.1f} min old"
+    if stale_reason is not None:
+        age_text = f"stale forever ({stale_reason})"
+    else:
+        age_text = f"{age_min:.1f} min old"
+    if alive_ok:
+        trigger = f"stale age {age_min:.1f} min"
+    elif alive_rc is not None:
+        trigger = f"alive probe rc={alive_rc}"
+    else:
+        trigger = "alive probe could not run"
     changed = False
 
     if stale and not flags["alerted"]:
@@ -428,9 +460,9 @@ def check_target(target: dict, state_dir, inbox, apply: bool, now: float, out) -
             reason = (
                 "alert-only target (relaunch_after_min is null)"
                 if target["relaunch_after_min"] is None
-                else "no relaunch_cmd configured"
+                else "alert-only target (no relaunch_cmd configured)"
             )
-            log(f"{name}: relaunch due but skipped ({reason})", out)
+            log(f"{name}: relaunch due but skipped ({reason}); trigger {trigger}", out)
             flags["noted"] = True
             changed = True
 
