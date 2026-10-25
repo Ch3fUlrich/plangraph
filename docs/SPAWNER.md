@@ -497,6 +497,8 @@ reports — while `effective_gateway_base_url()` resolves the environment source
 | environment (provider-level override, wins when set) | `OMNIROUTE_BASE_URL` |
 | environment (gateway default) | `PLANGRAPH_GATEWAY_URL` |
 
+On hosts without a root config (such as Windows workst), launch the spawner CLI with `PLANGRAPH_GATEWAY_URL=http://127.0.0.1:20128/v1` to point to the local gateway.
+
 `gateway_url()` also takes a config mapping and reads its `gateway_url` key, but no
 production caller passes one today: that argument exists for callers that do pass it
 (the tests exercise it).

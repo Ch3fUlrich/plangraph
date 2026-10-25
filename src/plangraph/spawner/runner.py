@@ -260,9 +260,12 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        render_reason = None
         if cmd[0] == 'opencode':
             from .opencode_overlay import overlay_env
             child_env = overlay_env(child_env)
+            from plangraph.routing_support.opencode_render import render_gateway_providers
+            render_reason = render_gateway_providers(child_env, model_or_combo)
             # Overlay only copies an env name through when the parent already
             # holds it; hand the child the host keys from the AutoOS keys file
             # so mimo and opencode/*-free runs can authenticate (D-2759).
@@ -305,6 +308,8 @@ class SpawnerRunner:
                     dry_run=True,
                     cwd=work_dir,
                 )
+                if render_reason:
+                    job.events.append({'event': 'render_refused', 'reason': render_reason})
                 self.jobs[job_id] = job
                 return job
 
@@ -320,6 +325,13 @@ class SpawnerRunner:
                 cwd=work_dir,
             )
             self.jobs[job_id] = job
+
+            if render_reason:
+                job.status = 'failed'
+                job.exit_code = 1
+                job.stderr = render_reason
+                job.end_time = time.time()
+                return job
 
             from .resolver import host_skip_reason_async
             unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)

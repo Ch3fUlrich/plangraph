@@ -66,7 +66,11 @@ def test_render_unresolved_base_url_fails_closed(tmp_path, monkeypatch):
 
     async def run():
         record = await service.spawn(
-            model="mimo/mimo-v2.6-pro", prompt="test", wait_seconds=0.1
+            card={"estimate_tokens": 1000},
+            model="mimo/mimo-v2.6-pro",
+            override_reason="testing manual model override",
+            prompt="test",
+            wait_seconds=0.1,
         )
         assert factory.call_count == 0
         assert record["status"] == "failed"
@@ -79,22 +83,11 @@ def test_render_linux_root_fixture_parity(tmp_path, monkeypatch):
     """(c) AutoOS-root fixture + no env gives provider blocks equal to today's overlay (I7)."""
     fake_root = tmp_path / "fake-autoos"
     fake_root.mkdir()
-    (fake_root / "opencode.jsonc").write_text(
-        json.dumps({
-            "providers": {
-                "mimo": {
-                    "package": "@opencode/ai/providers/openai-compatible",
-                    "name": "MiMo direct gateway legs",
-                    "env": ["AUTOOS_OMNIROUTE_KEY"],
-                    "settings": {"baseURL": "http://127.0.0.1:20128/v1"},
-                    "models": {
-                        "mimo-v2.6-flash": {"modelID": "mimo/mimo-v2.6-flash"},
-                        "mimo-v2.6-pro": {"modelID": "mimo/mimo-v2.6-pro"},
-                    },
-                }
-            }
-        })
-    )
+    (fake_root / "opencode.jsonc").write_text(json.dumps({"providers": {"mimo": {
+        "package": "@opencode/ai/providers/openai-compatible", "name": "MiMo direct gateway legs",
+        "env": ["AUTOOS_OMNIROUTE_KEY"], "settings": {"baseURL": "http://127.0.0.1:20128/v1"},
+        "models": {m.split("/", 1)[1]: {"modelID": m} for m in ACCEPTED_MIMO_IDS},
+    }}}))
     monkeypatch.setenv("AUTOOS_ROOT", str(fake_root))
 
     child_env = build_child_env()
@@ -120,24 +113,23 @@ def test_sentinel_key_never_leaks(tmp_path, monkeypatch):
 
     async def run():
         record = await service.spawn(
-            model="mimo/mimo-v2.6-pro", prompt="task", dry_run=True
+            card={"estimate_tokens": 1000},
+            model="mimo/mimo-v2.6-pro",
+            override_reason="testing manual model override",
+            prompt="task",
+            dry_run=True,
         )
         job = list(runner.jobs.values())[-1]
         child_env = runner._child_envs.get(job.job_id, {})
         assert sentinel not in child_env.get("OPENCODE_CONFIG_CONTENT", "")
         assert sentinel not in " ".join(job.command)
-
-        # Check record JSON and stdout/stderr tails
-        record_json = json.dumps(record)
-        assert sentinel not in record_json
+        assert sentinel not in json.dumps(record)
         assert sentinel not in record.get("stdout_tail", "")
         assert sentinel not in record.get("stderr_tail", "")
 
-        # Check all files under tmp_path
         for dirpath, _, filenames in os.walk(tmp_path):
             for fn in filenames:
-                content = (tmp_path / dirpath / fn).read_text(errors="ignore")
-                assert sentinel not in content
+                assert sentinel not in (tmp_path / dirpath / fn).read_text(errors="ignore")
 
     asyncio.run(run())
 
@@ -195,7 +187,6 @@ def test_add_host_keys_receives_needs_gateway_for_mimo_without_root(tmp_path, mo
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
     captured = {}
-
     orig_add_host_keys = host_keys.add_host_keys
 
     def spy_add_host_keys(env, model, *, needs_gateway):
@@ -223,24 +214,36 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:20128/v1")
     monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path / "absent-root"))
 
-    runner = SpawnerRunner()
+    captured_env = {}
+
+    async def fake_factory(exe, *args, **kwargs):
+        captured_env.update(kwargs.get("env") or {})
+        proc = AsyncMock()
+        proc.communicate = AsyncMock(return_value=(b"ok", b""))
+        proc.returncode = 0
+        proc.pid = 999
+        return proc
+
+    runner = SpawnerRunner(process_factory=fake_factory)
     service = spawn_service(runner, tmp_path)
 
     async def run():
         record = await service.spawn(
-            model="mimo/mimo-v2.6-pro", prompt="task", dry_run=True
+            card={"estimate_tokens": 1000},
+            model="mimo/mimo-v2.6-pro",
+            override_reason="testing manual model override",
+            prompt="task",
+            wait_seconds=None,
         )
         job = list(runner.jobs.values())[-1]
-        child_env = runner._child_envs.get(job.job_id, {})
-
-        # Key reaches child env (not stripped)
-        assert child_env.get("AUTOOS_OMNIROUTE_KEY") == sentinel
-
-        # Value never appears in argv, log, record.json or OPENCODE_CONFIG_CONTENT
-        assert sentinel not in child_env.get("OPENCODE_CONFIG_CONTENT", "")
+        assert captured_env.get("AUTOOS_OMNIROUTE_KEY") == sentinel
+        assert sentinel not in captured_env.get("OPENCODE_CONFIG_CONTENT", "")
         assert sentinel not in " ".join(job.command)
         assert sentinel not in json.dumps(record)
         assert sentinel not in record.get("stdout_tail", "")
         assert sentinel not in record.get("stderr_tail", "")
+        record_file = service._path(record["run_id"])
+        if record_file.exists():
+            assert sentinel not in record_file.read_text()
 
     asyncio.run(run())
