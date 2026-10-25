@@ -433,6 +433,9 @@ def test_leaks_allowlist_only_names_test_paths():
         ((r"^tests/test_md_sync_parse\.py$",), generic, frozenset({r"^Zx81kQ92LmPq77Vb$"})),
         ((r"^tests/test_md_sync_parse\.py$",), generic, frozenset({r"^AbCd1234Efgh$"})),
         ((r"^tests/test_md_sync_plan\.py$",), generic, frozenset({r"^Zx81kQ92LmPq77Vb$"})),
+        ((r"^tests/test_w28_regressions\.py$",), generic, frozenset({r"^opaque-testsecret$"})),
+        ((r"^tests/test_w30_regressions\.py$",), generic, frozenset({r"^opaque-test-SECRET123$"})),
+        ((r"^tests/test_w30_regressions\.py$",), generic, frozenset({r"^sk-test-SECRET123$"})),
         ((r"^rust/worker-core/src/sandbox_env\.rs$",), generic,
          frozenset({r"^sentinel-wf8-opkey$"})),
         ((r"^rust/worker/tests/fixtures/phase_defer\.json$",
@@ -444,7 +447,7 @@ def test_leaks_allowlist_only_names_test_paths():
     }
     actual = {(tuple(sorted(al["paths"])), tuple(al["targetRules"]),
                frozenset(al["regexes"])) for al in lists}
-    assert len(lists) == len(expected) == 14, f"{len(lists)} allowlist entries, 14 pinned"
+    assert len(lists) == len(expected) == 17, f"{len(lists)} allowlist entries, 17 pinned"
     missing, unexpected = expected - actual, actual - expected
     assert not missing and not unexpected, (
         f"missing pinned entries: {sorted(map(repr, missing))}; "

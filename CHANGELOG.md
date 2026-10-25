@@ -4,6 +4,9 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 
 ## Unreleased
 
+- Exclude proven CHANGELOG.md-only Hand-Edit commits from keeper writer families; path inspection failures refuse writer resolution.
+
+- **KEEPER-SEAT-FAMILY-WRITER:** isolate reviewer families from verified current-epoch commit writers, then writer_model, retaining fail-closed legacy claimant/delegate fallback.
 - **KG export health:** report every export failure and missing-token misconfiguration without leaking credentials; add freshness and failure checks with optional alert inbox and systemd examples targeting the live Omnigraph URL.
 
 - Install gitleaks 8.30.1 in the CI pytest job from the pinned GitHub release (tarball plus checksums file fetched with `curl -fsSL`, the asset's own line grepped out of the downloaded checksums file and checked with `sha256sum -c`, fail-closed on mismatch or missing line), extract the single binary to `~/.local/bin`, and require `gitleaks version` to print `8.30.1` before pytest runs.
@@ -185,3 +188,15 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Preserve owners on projector resumes, audit owner changes in the event chain,
   bound retired runs to 16, and explicitly reject removed `new_run` takeover.
 - Repair Postgres fence setup and Rust worker formatting.
+# D-2458 keeper writer-family review corrections
+
+- Fail closed with `writer_unknown` when verified commit evidence resolves to no
+  writers, including an entirely exempt CHANGELOG Hand-Edit chain.
+- Restore closing-seat coverage refusals and allow writer-family change requests;
+  direct family-gate callers remain strict and accept an optional context.
+- CHANGELOG Hand-Edit exemption requires a proven non-merge addition/modification
+  of root `CHANGELOG.md`. Missing adapter capability counts the hand; deletions
+  and merges are never exempt. Leaf commit identity is used for path/status checks.
+- Known gap: merge-conflict-only authorship detection is not implemented by the
+  merge writer traversal (which enumerates branch leaves). A Hand-Edit merge that
+  reaches the resolver is counted as anthropic, never CHANGELOG-exempt.
