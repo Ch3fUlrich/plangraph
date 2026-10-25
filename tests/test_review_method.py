@@ -615,6 +615,33 @@ def test_finding_7_doc_distinguishes_policy_refusal_and_malformed_input():
     assert 'Malformed input' in text
 
 
+def test_finding_1_unused_imports_and_single_helper():
+    import ast
+    import plangraph.settings as settings
+
+    # admit_settings dead code decorator must be deleted
+    assert not hasattr(settings, 'admit_settings'), 'admit_settings decorator should be deleted'
+
+    # Single conversion helper exists and converts SettingsError to SpawnRefused
+    assert hasattr(settings, 'as_spawn_refused'), 'as_spawn_refused helper should exist'
+    err = settings.as_spawn_refused(settings.SettingsError('test detail'))
+    assert isinstance(err, SpawnRefused)
+    assert err.reason == 'review_method_invalid'
+    assert err.code == 'review_method_invalid'
+    assert 'test detail' in str(err)
+
+    # routing.py plan_spawn must not import unused fixer_threshold, SettingsError, project_of
+    routing_path = Path(__file__).parent.parent / 'src' / 'plangraph' / 'planner' / 'routing.py'
+    tree = ast.parse(routing_path.read_text(encoding='utf-8'))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == 'plangraph.settings':
+            imported_names = {alias.name for alias in node.names}
+            assert 'fixer_threshold' not in imported_names
+            assert 'SettingsError' not in imported_names
+            assert 'project_of' not in imported_names
+
+
+
 
 
 

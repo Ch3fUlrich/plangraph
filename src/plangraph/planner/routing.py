@@ -10,7 +10,6 @@ no I/O.
 """
 from __future__ import annotations
 
-import math
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import asdict
@@ -411,7 +410,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     order = {leg.id: i for i, leg in enumerate(ordered)}
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
     from plangraph.spawner.fixer import split_findings
-    from plangraph.settings import admit_fixer_threshold, fixer_threshold, SettingsError, project_of
+    from plangraph.settings import admit_fixer_threshold
     threshold = admit_fixer_threshold(card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,

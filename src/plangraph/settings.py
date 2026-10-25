@@ -148,21 +148,14 @@ def enforce_review_scope(card, role, review_scope, *, root=None):
         raise exc
 
 
-def admit_settings(func):
-    """Decorator/wrapper converting SettingsError to SpawnRefused('review_method_invalid')."""
-    import functools
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except SettingsError as exc:
-            from plangraph.routing_errors import SpawnRefused
-            detail = str(exc)
-            msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
-            err = SpawnRefused(msg)
-            err.reason = err.code = 'review_method_invalid'
-            raise err from None
-    return wrapper
+def as_spawn_refused(exc: SettingsError):
+    """Convert SettingsError to SpawnRefused('review_method_invalid')."""
+    from plangraph.routing_errors import SpawnRefused
+    detail = str(exc)
+    msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
+    err = SpawnRefused(msg)
+    err.reason = err.code = 'review_method_invalid'
+    return err
 
 
 def admit_review_scope(card, role, review_scope, *, root=None):
@@ -170,12 +163,7 @@ def admit_review_scope(card, role, review_scope, *, root=None):
     try:
         return enforce_review_scope(card, role, review_scope, root=root)
     except SettingsError as exc:
-        from plangraph.routing_errors import SpawnRefused
-        detail = str(exc)
-        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
-        err = SpawnRefused(msg)
-        err.reason = err.code = 'review_method_invalid'
-        raise err from None
+        raise as_spawn_refused(exc) from None
 
 
 def admit_fixer_threshold(card=None) -> int:
@@ -183,12 +171,7 @@ def admit_fixer_threshold(card=None) -> int:
     try:
         return fixer_threshold(card)
     except SettingsError as exc:
-        from plangraph.routing_errors import SpawnRefused
-        detail = str(exc)
-        msg = f'review_method_invalid: {detail}' if detail else 'review_method_invalid'
-        err = SpawnRefused(msg)
-        err.reason = err.code = 'review_method_invalid'
-        raise err from None
+        raise as_spawn_refused(exc) from None
 
 
 
