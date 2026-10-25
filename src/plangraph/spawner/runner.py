@@ -32,7 +32,6 @@ _SELECTED_FAMILY_RE = re.compile(r"(?i)X-OmniRoute-Selected-Family:\s*([^\r\n]+)
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
 _keeper_unconfigured_last_warned = None
-_keeper_unconfigured_warned_at = None
 
 
 from .env_redact import unavailable_reason
@@ -565,12 +564,11 @@ def spawn_service(*args, **kwargs):
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'delivered\n')
                     except KeeperNotConfigured:
-                        global _keeper_unconfigured_last_warned, _keeper_unconfigured_warned_at
+                        global _keeper_unconfigured_last_warned
                         now = time.monotonic()
-                        last = _keeper_unconfigured_last_warned if _keeper_unconfigured_last_warned is not None else _keeper_unconfigured_warned_at
+                        last = _keeper_unconfigured_last_warned
                         if last is None or (now - last) >= _KEEPER_UNCONFIGURED_WARN_S:
                             _keeper_unconfigured_last_warned = now
-                            _keeper_unconfigured_warned_at = now
                             logging.getLogger(__name__).warning('completion delivery skipped: keeper not configured (queued)')
                     except Exception:
                         logging.getLogger(__name__).exception('completion delivery failed: %s', recipient)
