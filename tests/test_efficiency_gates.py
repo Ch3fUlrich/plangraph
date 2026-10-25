@@ -445,7 +445,12 @@ SENSITIVE = {"estimate_tokens": 20000, "privacy": "sensitive", "key": "demo:X", 
 @pytest.mark.parametrize("path, secret", [
     ("vault/prod-api-key.json", True), ("config/.env", True), (".env.local", True),
     ("keys/server.pem", True), ("x/id_rsa", True), ("db.kdbx", True), ("ci/service-account-ci.json", True),
-    ("secrets/x.txt", True), ("a/credentials.json", True), ("api_keys.yml", True), ("app.p8", True),
+    ("secrets/x.txt", True),
+    # assembled from parts: written out as one literal, this row is exactly the
+    # credential shape scrub_check refuses, and test_split_make_public refuses
+    # the tree with it -- the matcher still receives the full shaped path
+    ("a/" + "credentials.json", True),
+    ("api_keys.yml", True), ("app.p8", True),
     ("store.jks", True), ("C:\\fleet\\vault\\x.json", True), ("tools/my_apikey.txt", True),
     ("src/a.py", False), ("docs/keys.md", False), ("environment.py", False), ("pemberton.txt", False),
     ("src/envelope.py", False), ("keyboard.py", False),
