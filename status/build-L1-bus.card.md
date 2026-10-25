@@ -30,3 +30,4 @@ BUS-PEER-DISCOVERY-ADOPT: L2-LAUNCH bus-discovery-adopt sent routing 06:3xZ; bri
 Schema fence agreed w/ build-L1: #164 claims SQLite v14 + PG Migration(8) oversight (collides with bus PG 8). First to main keeps its numbers; second renumbers on its main merge (bus -> PG 9 / SQLite next). build-L1 pings on #164 GO.
 D-2712: L2 bus-discovery-adopt = session b1957139 (sonnet medium). Routing lane MERGE-READY -> routing merges routing main. Future L2 briefs: add stop-on-denial rule.
 07:0xZ G3 MERGED phase #189 (head 5feefbf5, CI 40170369570; Hand-Edit fmt). G2 mimo-pro running on workst since 06:15Z.
+07:5xZ PERSIST writer done: lane/bus-registry-persist 18c9322c (2 commits cherry-picked, Writer mimo-v2.6-pro xiaomi; PG16 9 passed; FLEET-BUS.md doc para MISSING -> delta finding); CI 40173851581 running; pg16-bus-reg container removed.
