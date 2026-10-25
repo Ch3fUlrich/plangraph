@@ -133,8 +133,8 @@ def test_s1_rollback_on_lost_is_noop_commit_raises():
     conn.rollback()                                 # I4: no-op, no IO on the dead session
     assert raw.calls == calls
     with pytest.raises(ConnectionLost) as exc:
-        conn.commit()
-    assert exc.value.phase == "commit" and raw.calls == calls
+        conn.commit()                               # lost BEFORE this COMMIT: ...
+    assert exc.value.phase == "statement" and raw.calls == calls   # ... nothing was committed (F3)
 
 
 def test_s1_lock_timeout_not_lost():
@@ -196,6 +196,57 @@ def test_s1_one_line_no_dsn(tmp_path, capsys):
     assert "postgres" not in err and "host=" not in err          # never driver text
 
 
+def test_s1_escape_after_status_is_one_line_no_second_status(tmp_path, monkeypatch, capsys):
+    w = World(tmp_path)
+    doors = Doors(w, tmp_path)
+    sent = []
+    real_send_response = api.KeeperHandler.send_response
+
+    def count_status(self, code, *args, **kwargs):
+        sent.append(code)                           # one entry per status line
+        return real_send_response(self, code, *args, **kwargs)
+
+    def send_then_boom(self, method):               # noqa: ARG001
+        self._json(200, {"status": "ok"})           # the status line is out ...
+        raise RuntimeError("after the status line")  # ... then it escapes _handle
+
+    try:
+        monkeypatch.setattr(api.KeeperHandler, "send_response", count_status)
+        monkeypatch.setattr(api.KeeperHandler, "_handle", send_then_boom)
+        status, body = doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert (status, body) == (200, {"status": "ok"})
+    assert sent == [200]                            # I1: never a second status line
+    err = capsys.readouterr().err
+    assert [ln for ln in err.splitlines() if ln.startswith("keeper:")] \
+        == ["keeper: request failed: RuntimeError"]  # V4: the line comes even after _sent
+
+
+def test_s1_escape_after_log_is_one_line_total(tmp_path, monkeypatch, capsys):
+    w = World(tmp_path)
+    w.store.conn = ConnProxy(w.store.conn, fail=ConnectionLost("statement"))
+    doors = Doors(w, tmp_path)
+    real_json = api.KeeperHandler._json
+
+    def json_boom(self, status, payload):
+        if status == 503:
+            raise RuntimeError("answer failed")     # the 503 answer itself fails
+        return real_json(self, status, payload)
+
+    try:
+        monkeypatch.setattr(api.KeeperHandler, "_json", json_boom)
+        status, _ = doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert status == 500                            # the last-resort answer still goes out
+    err = capsys.readouterr().err
+    assert [ln for ln in err.splitlines() if ln.startswith("keeper:")] \
+        == ["keeper: request failed: ConnectionLost"]   # the escape never logs a 2nd line
+
+
 def test_s1_health_503_when_lost(tmp_path):
     w = World(tmp_path)
     doors = Doors(w, tmp_path)
@@ -207,6 +258,38 @@ def test_s1_health_503_when_lost(tmp_path):
         doors.close()
         w.close()
     assert status == 503 and body == {"status": "unavailable"}
+
+
+def test_s1_lost_before_commit_unavailable_commit_loss_unknown(tmp_path):
+    raw = FakeRaw(status=2)                         # inside a transaction
+    conn = db_pg.PgConnection(raw, "k_x")
+    raw.fail, raw.broken = FakeDbError("gone"), True
+    with pytest.raises(ConnectionLost):
+        conn.execute("INSERT INTO audit_log(ts) VALUES(?)", ("t",))
+    with pytest.raises(ConnectionLost) as exc:
+        conn.execute("COMMIT")                      # lost BEFORE the COMMIT ...
+    assert exc.value.phase == "statement"           # ... nothing was committed (F3)
+    raw2 = FakeRaw(status=2)
+    conn2 = db_pg.PgConnection(raw2, "k_x")
+    raw2.fail, raw2.broken = FakeDbError("gone"), True
+    with pytest.raises(ConnectionLost) as exc2:
+        conn2.commit()                              # the COMMIT statement itself loses it
+    assert exc2.value.phase == "commit"             # only then is the outcome unknown
+    w = World(tmp_path)
+    w.store.conn = ConnProxy(w.store.conn, fail=exc.value)
+    doors = Doors(w, tmp_path)
+    try:
+        status, body = doors.http("reader", "GET", "/v1/whoami")
+        w.store.conn.fail = exc2.value
+        status2, body2 = doors.http("reader", "GET", "/v1/whoami")
+    finally:
+        doors.close()
+        w.close()
+    assert (status, body) == (503, {"error": "unavailable",
+                                    "msg": "keeper database unavailable"})
+    assert (status2, body2) == (
+        503, {"error": "unavailable",
+              "msg": "keeper database lost at commit; outcome unknown"})
 
 
 # ------------------------------------------------------- live Postgres (CI job)
@@ -261,8 +344,8 @@ def test_s1_mid_txn_kill_commits_nothing(tmp_path):
                                   "s1b", None, 0, None, None))
         conn.execute("ROLLBACK")                    # no-op on the lost session
         with pytest.raises(ConnectionLost) as exc:
-            conn.commit()
-        assert exc.value.phase == "commit"
+            conn.commit()                           # lost BEFORE this COMMIT: ...
+        assert exc.value.phase == "statement"       # ... nothing was committed (F3)
         assert _audit_count(admin, conn.schema) == before   # I4: zero rows of the txn
     finally:
         admin.close()
