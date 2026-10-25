@@ -111,11 +111,12 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
 
+    ``role`` falls back to ``card["role"]``; implement sorts by WRITER_ORDER.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     effective_role = role if role is not None else card.get("role")
-    exclude_fams = set(exclude_families) | set(card.get("exclude_families") or ())
+    exclude_fams = set(exclude_families)
     legs = tuple(legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
@@ -301,6 +302,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                 legs=DEFAULT_LEGS, benchmark=None, strict=False) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
 
+    The implement role ignores benchmark permutation (operator order D-2683).
+    ``exclude_families`` excludes the specified family names from candidate legs.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     """
@@ -356,10 +359,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
-    excluded = (set(writer_families) if role == "review" else set()) | set(exclude_families) | set(card.get("exclude_families") or ())
+    excluded = (set(writer_families) if role == "review" else set()) | set(exclude_families)
     def _leg_status(leg_obj):
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-        if st["state"] != "limited" and "/" not in leg_obj.model:
+        if leg_obj.harness == "agy" and st["state"] != "limited" and "/" not in leg_obj.model:
             alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
             if alt["state"] == "limited":
                 return alt
@@ -490,7 +493,7 @@ def next_leg_after_provider_stop(plan, leg_id, status, body, headers, caller, *,
     start = list(by_id).index(leg_id) + 1
     for leg in plan.legs[start:]:
         st = state.leg_status(leg.model, now=now, account=account, combo=combo)
-        if st["state"] != "limited" and "/" not in leg.model:
+        if leg.harness == "agy" and st["state"] != "limited" and "/" not in leg.model:
             alt = state.leg_status("agy/" + leg.model, now=now, account=account, combo=combo)
             if alt["state"] == "limited":
                 continue
