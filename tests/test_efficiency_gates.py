@@ -823,3 +823,67 @@ def test_cancel_with_class_racing_minus_9():
     asyncio.run(run())
 
 
+def test_attempt_classification_reset_and_plain_failures(tmp_path, monkeypatch):
+    # haiku-C4: each attempt resets liveness/exit_class (the last attempt wins, never stale);
+    # qwen-C3: both execute() paths classify every attempt, plain failures included (I13).
+    from types import SimpleNamespace
+    from plangraph.planner.legs import Leg
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import SpawnerRunner, spawn_service
+    from plangraph.spawner.service import SpawnService
+    monkeypatch.setattr("plangraph.spawner.resolver.plan_for_launch_async", lambda plan, dry_run=False: plan)
+
+    def leg(i):
+        return Leg(f"leg{i}", "paid", "opencode", f"model{i}", "fam", (), 200000, True, roles=("implement",))
+
+    def job(jid, status, liveness=None, exit_class=None):
+        return SimpleNamespace(job_id=jid, status=status, liveness=liveness, exit_class=exit_class,
+                               exit_code=0 if status in ("completed", "dry_run") else 1,
+                               stdout="out", stderr="", served_model="m", served_family="f",
+                               served_witness_reason=None, events=[], cwd=None)
+
+    async def no_writer(*a, **k):
+        pass
+
+    async def drive(service, jobs, legs):
+        service._route = lambda *a, **k: SpawnPlan(tuple(legs), (), "route", (), ())
+        service._continue_writer = no_writer
+        todo = iter(jobs)
+        async def fake_spawn(**kw):
+            j = next(todo)
+            if j.liveness:
+                service.runner.provider_responses[j.job_id] = {"stop": True}  # force fall-through to the next leg
+            return j
+        service.runner.spawn = fake_spawn
+        return await service._spawn(card={"privacy": "private"}, prompt="t", role="implement", wait_seconds=None)
+
+    makers = (
+        ("SpawnService", lambda: SpawnService(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path / "s1")),
+        ("DispatchService", lambda: spawn_service(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path / "s2")),
+    )
+    for name, make in makers:
+        service = make()
+        rec = asyncio.run(drive(service, [job("a1", "failed", "truncated", "worker_crash"), job("a2", "completed")], [leg(1), leg(2)]))
+        assert (rec["liveness"], rec["exit_class"]) == (None, "ok"), name  # haiku-C4: a completed attempt resets, never stale 'truncated'
+        assert rec["status"] == "completed" and len(rec["attempts"]) == 2, name
+        rec2 = asyncio.run(drive(service, [job("b1", "failed")], [leg(3)]))
+        assert (rec2["liveness"], rec2.get("exit_class")) == (None, "check_fail"), name  # qwen-C3: plain failures too, never null
+        res = json.loads((Path(service.state) / "runs" / rec2["run_id"] / "result.json").read_text())
+        assert res["exit_class"] == "check_fail", name  # qwen-C3: result.json on the CLI/MCP path carries the class
+
+
+def test_cancel_liveness_validated():
+    from plangraph.routing_errors import ParameterRefused
+    from plangraph.spawner.runner import SpawnerRunner
+    runner = SpawnerRunner()
+    async def run():
+        job = await runner.spawn("t", model_or_combo="omniroute/cx-gpt-6.1-sol", dry_run=True)
+        job.status = "running"; runner.jobs[job.job_id] = job
+        with pytest.raises(ParameterRefused):
+            await runner.cancel(job.job_id, liveness="bogus")  # haiku-C8, qwen-C4: unknown liveness refused
+        assert (job.liveness, job.exit_class) == (None, None)  # nothing classified outside EXIT_CLASSES (I13)
+        await runner.cancel(job.job_id, liveness="capped")  # positive control: a known liveness is accepted
+        assert (job.liveness, job.exit_class) == ("capped", "timeout")
+    asyncio.run(run())
+
+
