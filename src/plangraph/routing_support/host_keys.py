@@ -7,7 +7,7 @@ own environment never carries the file-managed keys -- so an opencode child
 These helpers resolve the keys from the AutoOS keys file at spawn time.
 
 Contract: every failure -- a missing file, a helper that raises or exits on
-import or at call time, a non-dict keys mapping, a non-str or blank key --
+import or at call time, a non-Mapping keys result, a non-str or blank key --
 means "no key" (None); KeyboardInterrupt still propagates. Nothing here logs,
 prints, or raises with a key value, so a lookup failure can never crash the
 supervisor or leave a key unredacted in the startup tail.
@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 GATEWAY_KEY_ENV = "AUTOOS_OMNIROUTE_KEY"
@@ -80,7 +81,7 @@ def _zen_key(env):
         if not callable(read_keys):
             return None
         keys = read_keys(keys_path)
-        key = keys.get("zen") if isinstance(keys, dict) else None
+        key = keys.get("zen") if isinstance(keys, Mapping) else None
         return key if isinstance(key, str) and key.strip() else None
     except (Exception, SystemExit):  # ANY helper failure is "no key", never a crash
         return None
@@ -119,15 +120,29 @@ def add_host_keys(env, model, *, needs_gateway):
 
 
 def redaction_env(base):
-    """Copy of `base` plus both resolvable keys where absent -- redaction only."""
-    env = {}
+    """Copy of `base` plus both resolvable keys where absent -- redaction only.
+
+    Never raises, never returns fewer names than it could (D-2776).
+    """
     try:
         env = dict(base)
-        for name, resolve in ((GATEWAY_KEY_ENV, _gateway_key), (ZEN_KEY_ENV, _zen_key)):
+    except (Exception, SystemExit):
+        env = {}
+        try:
+            names = list(base.keys())
+        except (Exception, SystemExit):
+            names = ()  # unenumerable base: the resolvable keys still land
+        for name in names:
+            try:
+                env[name] = base[name]
+            except (Exception, SystemExit):
+                continue  # drop only the item whose read raises
+    for name, resolve in ((GATEWAY_KEY_ENV, _gateway_key), (ZEN_KEY_ENV, _zen_key)):
+        try:
             if _absent(env, name):
                 key = resolve(env)
                 if key:
                     env[name] = key
-    except (Exception, SystemExit):
-        pass  # H5: degraded redaction beats a crash; never carries a key outward
+        except (Exception, SystemExit):
+            pass  # one failing resolver never skips the other
     return env

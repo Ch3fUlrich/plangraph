@@ -6,6 +6,7 @@ Hermetic: every case points AUTOOS_ROOT at a tmp_path fake root whose
 """
 import pytest
 
+from plangraph.routing_support import host_keys
 from plangraph.routing_support.host_keys import (
     GATEWAY_KEY_ENV,
     ZEN_KEY_ENV,
@@ -173,14 +174,23 @@ class _BrokenEnv(dict):
         raise RuntimeError('broken get')
 
 
-class _ExplodingBase:
-    """Mapping-shaped base whose copy raises -- redaction_env must survive it."""
+class _PartiallyBrokenBase:
+    """Mapping whose dict() copy raises; the readable items must survive."""
+
+    def keys(self):
+        return ['PATH', 'BROKEN', 'HOME']
+
+    def __getitem__(self, key):
+        if key == 'BROKEN':
+            raise RuntimeError('broken getitem')
+        return {'PATH': '/bin', 'HOME': '/home/x'}[key]
+
+
+class _ExplodingBase(_PartiallyBrokenBase):
+    """Copy raises before any item: nothing enumerable, even item by item."""
 
     def keys(self):
         raise RuntimeError('broken keys')
-
-    def __getitem__(self, key):
-        raise RuntimeError('broken getitem')
 
 
 def _assert_only_other_helper_resolves(helper_name):
@@ -293,9 +303,42 @@ def test_failures_never_raise_or_leak_key_values(fake_autoos, capsys):
     assert ZEN_FAKE not in captured.out + captured.err
 
 
-def test_entry_points_never_raise_on_broken_env(fake_autoos):
-    # H5: add_host_keys and redaction_env never raise, whatever env does.
+def test_add_host_keys_never_raises_on_broken_env(fake_autoos):
+    # H5: add_host_keys never raises, whatever env does.
     env = _BrokenEnv()
     add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True)
     assert dict(env) == {}
-    assert redaction_env(_ExplodingBase()) == {}
+
+
+# --- round 2 (router D-2776): redaction_env never drops a name it could carry ---
+
+ZEN_MAPPING_STUB = 'from types import MappingProxyType\ndef read_keys(path):\n    return MappingProxyType({"zen": %r})\n' % ZEN_FAKE
+
+
+def test_redaction_env_keeps_every_name_when_base_copy_raises(fake_autoos):
+    # D-2776: dict(base) raising must NOT return {} -- base items are copied
+    # one by one (only the item whose read raises is skipped) and BOTH fake
+    # keys are in the result.
+    env = redaction_env(_PartiallyBrokenBase())
+    assert env == {'PATH': '/bin', 'HOME': '/home/x',
+                   GATEWAY_KEY_ENV: GATEWAY_FAKE, ZEN_KEY_ENV: ZEN_FAKE}
+    # Nothing enumerable at all: the resolvable keys are still carried.
+    assert redaction_env(_ExplodingBase()) == {
+        GATEWAY_KEY_ENV: GATEWAY_FAKE, ZEN_KEY_ENV: ZEN_FAKE}
+
+
+def test_one_failing_resolver_never_skips_the_other(fake_autoos, monkeypatch):
+    # D-2776: each key resolution runs in its own try (_BrokenEnv.get raises
+    # on any call: stand-in for a failing resolver).
+    monkeypatch.setattr(host_keys, '_gateway_key', _BrokenEnv().get)
+    assert redaction_env({'PATH': '/bin'}) == {'PATH': '/bin', ZEN_KEY_ENV: ZEN_FAKE}
+
+
+def test_read_keys_returning_any_mapping_resolves_zen(fake_autoos):
+    # D-2776: read_keys may return any Mapping, not only a dict (a
+    # non-Mapping stays "no key": round 1's list case).
+    _write_helper(fake_autoos, 'keys_file', ZEN_MAPPING_STUB)
+    env = {}
+    add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=False)
+    assert env == {ZEN_KEY_ENV: ZEN_FAKE}
+    assert redaction_env({})[ZEN_KEY_ENV] == ZEN_FAKE
