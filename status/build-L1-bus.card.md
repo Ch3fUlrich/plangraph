@@ -9,7 +9,7 @@ D-2749: ALL writer/seat/researcher runs via PLANGRAPH spawner (PYTHONPATH=src py
 | Item | State / next |
 |---|---|
 | FIX r1 G1/G3/G2 | MERGED #186 c9d4bc38, #189 5feefbf5, #199 3ceaf974 (CI 40182839456; Hand-Edit scrub). Phase head ea21b539 (tree == CI head) |
-| DELTA r2 | qwen A (py) PASS, B (rust+wake) FIX (seats build-L1-bus-seats/phase-r2-ea21b539{A,B}, phase-r2-SHA256SUMS; whole-prompt 546KB try = no verdict). FIX r2 brief l2-cards/phase-fix-r2/brief.md sent workst inline 11:xxZ (1 writer, lane/phase-fix-r2). Next: re-review delta r3 = 1 qwen seat on part B files |
+| DELTA r2 | qwen A (py) PASS, B (rust+wake) FIX (seats build-L1-bus-seats/phase-r2-ea21b539{A,B}, phase-r2-SHA256SUMS; whole-prompt 546KB try = no verdict). FIX r2 brief l2-cards/phase-fix-r2/brief.md sent workst inline 11:xxZ (1 writer, lane/phase-fix-r2). Next: re-review delta r3 = 1 qwen seat on part B files | | 11:5xZ: mimo-pro AutoOS run 20261025-103823-pfr2-3185c3 TRUNCATED 0 commits; workst successor relaunches via plangraph spawner as slices R2a (Rust, I1-I4) + R2b (wake+docs, I5-I9), BLOCKED if pin impossible
 | BUS-REGISTRY-PERSIST (HIGH p8) | MERGED phase #193 (9b2eb4db; writer mimo-pro run ...062933-...a2456f; Hand-Edit PRAGMA test; CI 40174828383). Gap: docs/FLEET-BUS.md paragraph -> delta finding. Claim refused till DISCOVERY done |
 | BUS-PEER-DISCOVERY-ADOPT (HIGH p8) | AutoOS MERGED main 2629d740 (D-2730). routing 46b7d6a1 HELD till phase on main + keeper deploy (routing sets env + merges). NO ff live AutoOS checkouts till /v1/hosts deployed. Evidence: l2-cards/discovery-adopt/evidence.md (post after claim allowed) |
 | RT-P1-BUS-KEEPER / DISCOVERY / WAKE / EXEC-OBSERVED-STATE / ANY-AGENT-CLI W2a+W2b | IN PHASE, await delta review + phase PR |
