@@ -272,7 +272,7 @@ class SpawnerRunner:
                 # so mimo and opencode/*-free runs can authenticate (D-2759).
                 from plangraph.routing_support.host_keys import GATEWAY_KEY_ENV, add_host_keys
                 add_host_keys(child_env, model_or_combo,
-                    needs_gateway=GATEWAY_KEY_ENV in child_env.get('OPENCODE_CONFIG_CONTENT', ''))
+                    needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
