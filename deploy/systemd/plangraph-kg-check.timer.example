@@ -1,0 +1,11 @@
+# Example only: install this and the matching service without .example, then enable the timer.
+[Unit]
+Description=Periodically check knowledge graph export freshness
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Unit=plangraph-kg-check.service
+
+[Install]
+WantedBy=timers.target
