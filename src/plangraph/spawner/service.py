@@ -1,5 +1,6 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
+from plangraph.routing_errors import ParameterRefused
 
 import asyncio
 from dataclasses import asdict, replace
@@ -36,6 +37,32 @@ class SpawnService:
         from .private_io import atomic_write_private
         from .runner import redact
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
+        record.setdefault('served_model', 'unwitnessed')
+        record.setdefault('served_family', 'unwitnessed')
+        for target in [record, *record.get('attempts', [])]:
+            if not target.get('served_model') or not target.get('served_family'):
+                target['served_model'] = target.get('served_model') or 'unwitnessed'
+                target['served_family'] = target.get('served_family') or 'unwitnessed'
+            if target['served_model'] == 'unwitnessed':
+                target.setdefault('served_witness_reason', 'no authenticated harness telemetry; skipped or unobserved leg')
+        if record.get('ended') is not None:
+            attempted = {a['leg'].get('id') if isinstance(a.get('leg'), dict) else a.get('leg')
+                         for a in record.get('attempts', [])}
+            plan = record.get('plan') or {}
+            for candidate in plan.get('skipped', []):
+                leg = candidate.get('leg')
+                if leg not in attempted:
+                    record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
+                        skip_reason=candidate.get('skip_reason') or candidate.get('reason'),
+                        served_model='unwitnessed', served_family='unwitnessed',
+                        served_witness_reason='leg skipped before launch'))
+                    attempted.add(leg)
+            for leg in plan.get('legs', []):
+                if leg['id'] not in attempted:
+                    record.setdefault('attempts', []).append(dict(leg=leg, status='skipped',
+                        skip_reason='earlier_leg_succeeded' if record.get('status') in ('completed', 'dry_run') else 'run_terminated_before_leg',
+                        served_model='unwitnessed', served_family='unwitnessed',
+                        served_witness_reason='leg not launched'))
         env = dict(os.environ)
         env.update(getattr(self.runner, '_child_envs', {}).get(record.get('job_id'), {}))
         def clean(value):
@@ -171,8 +198,8 @@ class SpawnService:
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import DEFAULT_LEGS
         if not card:
-            raise SpawnRefused('spawn by card; card required')
-        if model or leg or not card:
+            raise ParameterRefused('spawn by card; card required')
+        if model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
             plan_spawn(card, role=role, legs=())
@@ -181,7 +208,7 @@ class SpawnService:
                 raise SpawnRefused('unknown leg')
             if model and chosen and model != chosen.model:
                 raise SpawnRefused('model and leg disagree')
-            target = model or (chosen.model if chosen else None)
+            target = model if model is not None else (chosen.model if chosen else None)
             if not target:
                 raise SpawnRefused('spawn by card; explicit model required for override')
             hand_picked(target, card, override_reason,
@@ -245,12 +272,15 @@ class SpawnService:
                         (job.stderr.strip().splitlines()[0] if job.stderr.strip() else f'harness exit code {job.exit_code}')
                         if job.status in ('failed', 'skipped') else None)
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
+                        served_model=job.served_model, served_family=job.served_family,
+                        served_witness_reason=job.served_witness_reason,
                         skip_reason=reason, provider_response=stop,
                         stdout_tail=job.stdout, stderr_tail=job.stderr))
                     if job.status in ('completed', 'dry_run') and not unavailable and not stop:
                         record['chosen_leg'] = asdict(chosen)
                     record.update(status=job.status, exit_code=job.exit_code if job.exit_code is not None else (0 if job.status == 'dry_run' else 1), served_model=job.served_model,
-                        served_family=job.served_family, writer_family=job.served_family or chosen.family,
+                        served_family=job.served_family, served_witness_reason=job.served_witness_reason,
+                        writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     self._save(record)

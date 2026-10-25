@@ -10,9 +10,23 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
+import urllib.error
+import urllib.request
 from contextlib import contextmanager
 
 from .private_io import atomic_write_private
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: a 3xx answer is a failed delivery, not an ack.
+
+    urlopen would otherwise turn an unacknowledged POST into a GET that ends
+    on some 200 page and record keeper.delivered for an answer the keeper
+    never gave. Raising here hands the 3xx to the caller as a failure.
+    """
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code,
+            'keeper redirected: not an acknowledgement', headers, fp)
 
 
 @contextmanager
@@ -64,6 +78,34 @@ class CommandSink:
     def deliver(self, recipient, event):
         subprocess.run(self.command + [recipient], input=json.dumps(event) + '\n',
                        text=True, check=True, timeout=10, stdout=subprocess.DEVNULL)
+
+
+class KeeperSink:
+    """Deliver through the keeper's idempotent run_recorded item-event API.
+
+    The keeper deduplicates (item, run_id, phase), including after a local
+    marker-write failure. Requires a spawner-role token; never logs its value.
+    """
+    def __init__(self, url=None, token_file=None):
+        self.url = os.environ.get('PG_URL', '') if url is None else url
+        self.token_file = os.environ.get('PG_TOKEN_FILE', '') if token_file is None else token_file
+
+    def deliver(self, recipient, event):
+        if not self.url or not self.token_file:
+            raise ValueError('live keeper delivery requires PG_URL and PG_TOKEN_FILE (spawner identity)')
+        if not event.get('item'):
+            raise ValueError('live keeper delivery requires PLANGRAPH_SPAWN_ITEM or record item')
+        token = Path(self.token_file).read_text(encoding='utf-8').strip()
+        payload = {'key': event['item'], 'run': {
+            'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}}
+        request = urllib.request.Request(self.url.rstrip('/') + '/v1/record_run',
+            data=json.dumps(payload).encode(), method='POST',
+            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        with opener.open(request, timeout=10) as response:
+            if not 200 <= response.status < 300:
+                raise RuntimeError('keeper did not acknowledge run completion')
+            response.read()
 
 
 def completion_event(record, cwd):

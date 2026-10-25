@@ -20,11 +20,15 @@ from plangraph.planner.routing import BenchmarkError, SpawnRefused
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
     from .env_redact import redact_env_values
+    import codecs
+    decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
     def clean(data):
-        return redact(redact_env_values(data.decode('utf-8', errors='replace'), os.environ)).encode()
+        if isinstance(data, bytes):
+            data = data.decode('utf-8')
+        return redact(redact_env_values(data, os.environ)).encode()
     pending = b''
     for chunk in chunks:
-        pending += chunk
+        pending += decoder.decode(chunk).encode('utf-8')
         observe(len(pending))
         while b'\n' in pending:
             line, pending = pending.split(b'\n', 1)
@@ -33,10 +37,14 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
             # Redact before choosing the boundary, so a known secret spanning
             # that boundary cannot leave either half in the output.
             safe = clean(pending)
-            write(safe[:-4096] + b' [truncated chunk]\n')
-            pending = safe[-4096:]
+            boundary = len(safe) - 4096
+            while boundary > 0 and safe[boundary] & 0xc0 == 0x80:
+                boundary -= 1
+            write(safe[:boundary] + b' [truncated chunk]\n')
+            pending = safe[boundary:]
+    pending += decoder.decode(b'', final=True).encode('utf-8')
     if pending:
-        write(clean(pending))
+        write(clean(pending.decode('utf-8')))
 
 
 def _prune_supervisor_logs(state):
@@ -130,7 +138,7 @@ def main(argv=None):
         if args.verb == 'route':
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
         elif args.verb == 'spawn':
-            if args.model:
+            if args.model is not None:
                 from plangraph.planner.routing import validate_model
                 try:
                     validate_model(args.model)
@@ -301,6 +309,18 @@ raise SystemExit(code)
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:
             result = service.result(args.run_id)
+        if isinstance(result, dict):
+            seen = set()
+            for skipped in list(result.get('skipped', [])) + list(result.get('attempts', [])):
+                reason = skipped.get('skip_reason') or skipped.get('reason')
+                if not reason:
+                    continue
+                leg = skipped.get('leg')
+                name = leg.get('id', leg.get('model')) if isinstance(leg, dict) else leg
+                line = f'skip {name}: {reason}'
+                if line not in seen:
+                    print(line, file=sys.stderr)
+                    seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
             if 'status' not in result:

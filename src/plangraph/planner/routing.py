@@ -312,21 +312,26 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         raise SpawnRefused('risk_tags has invalid value')
     if role not in ("implement", "review"):
         raise ValueError("role must be implement|review")
-    from plangraph.spawner.risk import evaluate_risk
+    from plangraph.routing_support.risk import evaluate_risk
     assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
                                bucket=card.get('bucket', 'S1'),
                                has_tests=card.get('has_tests', True),
                                risk_tags=card.get('risk_tags', ()),
                                is_pure_doc=card.get('is_pure_doc', False))
+    bands = ('low', 'normal', 'high', 'critical')
+    requested_risk = card.get('risk', 'normal')
+    if requested_risk not in bands:
+        raise SpawnRefused('risk has invalid value')
+    ranking_risk = max((assessment.risk, requested_risk), key=bands.index)
     if (assessment.risk in ('high', 'critical') or card.get('risk') in ('high', 'critical')) and card.get('reviewer_count', 2) < 2:
         raise SpawnRefused('high/critical changes require two reviewers')
     if card.get('reviewer_count') == 0 and (
             not assessment.review_exempt or card.get('risk', 'normal') in ('high', 'critical')
             ):
         raise SpawnRefused('zero reviewers requires low/normal review_exempt')
-    from plangraph.spawner.leg_state import leg_status
+    from plangraph.routing_support.leg_state import leg_status
     reader = getattr(leg_reader, "leg_status", leg_reader) or leg_status
-    from plangraph.spawner.resolver import OPERATOR_REMOVED_MODELS
+    from plangraph.routing_support.resolver import OPERATOR_REMOVED_MODELS
     legs = tuple(l for l in legs if l.model not in OPERATOR_REMOVED_MODELS)
     for candidate in legs:
         validate_model(candidate.model)
@@ -345,7 +350,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
                             combo=card.get("combo")) for l in candidates}
     limited = {key for key, state in states.items() if state["state"] == "limited"}
     skipped = []
-    from plangraph.spawner.resolver import score_model
+    from plangraph.routing_support.resolver import score_model
     candidate_details = []
     # Route each leg through the same canonical eligibility rules to retain
     # individual exclusion reasons even when there is no eligible route.
@@ -366,7 +371,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
                             "evidence": states[leg.id]["evidence"]})
         row = rows.get(leg.model, rows.get(leg.id))
         detail = {"leg": leg.id, "tier": leg.tier,
-                  "u_core": score_model(dict(row, tier=leg.tier), role=role,
+                  "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
         if reason:
@@ -382,7 +387,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
     reasons = [*route.reasons, *bench_reasons]
     source = "operator-order"
     if benchmark is not None:
-        from plangraph.spawner.resolver import rank_candidates
+        from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:
             tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]
             positions = [i for i in tier_positions
@@ -390,7 +395,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
             missing = [ordered[i] for i in tier_positions if i not in positions]
             measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
                              model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
-            ranked = rank_candidates(measured, role=role, need_tokens=card["estimate_tokens"])
+            ranked = rank_candidates(measured, role=role, risk=ranking_risk, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}
             for i, leg in zip(tier_positions, [by_id[row["model_id"]] for row in ranked] + missing):
                 ordered[i] = leg
@@ -410,7 +415,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
         reasons.append(error)
     order = {leg.id: i for i, leg in enumerate(ordered)}
     candidate_details.sort(key=lambda c: order.get(c['leg'], len(order)))
-    from plangraph.spawner.fixer import split_findings
+    from plangraph.routing_support.fixer import split_findings
     groups = split_findings(card.get('findings', ())) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
                      tuple(candidate_details), groups)
@@ -418,7 +423,7 @@ def plan_spawn(card, *, role, writer_families=(), leg_reader=None, now=None,
 
 def validate_model(model):
     """The resolver catalog and registered legs are the exact admission door."""
-    from plangraph.spawner.resolver import (get_catalog_models, catalog_row_admitted,
+    from plangraph.routing_support.resolver import (get_catalog_models, catalog_row_admitted,
                                            OPERATOR_REMOVED_MODELS)
     from plangraph.mimo_policy import check_mimo_path
     from .legs import DEFAULT_LEGS
@@ -442,7 +447,7 @@ def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller
     path = Path(log_path) if log_path is not None else Path(
         os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "plangraph/spawn-overrides.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
-    from plangraph.spawner.private_io import append_private
+    from plangraph.routing_support.private_io import append_private
     append_private(path, json.dumps({"ts": time.time(), "model": model,
                     "reason": override_reason, "caller": caller or "planner"}) + "\n")
     return model
@@ -451,9 +456,11 @@ def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller
 def next_leg_after_provider_stop(plan, leg_id, status, body, headers, caller, *,
                                  store=None, now=None, account=None, combo=None):
     """Consume an actual provider stop; unrelated failures never suppress a leg."""
-    from plangraph.spawner import leg_state
+    from plangraph.routing_support import leg_state
     state = store or leg_state
     by_id = {leg.id: leg for leg in plan.legs}
+    if not isinstance(leg_id, str):
+        raise SpawnRefused('leg id must be a string')
     if leg_id not in by_id:
         raise ValueError("leg not in plan")
     if type(status) is not int or status not in (429, 402) or not isinstance(body, str) or not body.strip():

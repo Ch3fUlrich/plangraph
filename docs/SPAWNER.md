@@ -29,16 +29,15 @@ chosen leg, served model/family, writer family, status, started/ended timestamps
 attempts with provider stop details, job id, pid, and stdout tail.
 These records are the only source for `--review-of`; unknown ids refuse.
 
-On terminal save the supervisor publishes exactly one completion per run to
-`inbox/parent.jsonl` and `inbox/keeper.jsonl` under the state directory. Events
+On terminal save the supervisor publishes a completion per run to
+`inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events
 include stable `event_id`, DONE/FAILED, run_id, rc, head_sha, take_cmd and
 discard_cmd. `PLANGRAPH_SPAWN_PARENT_SESSION` and `PLANGRAPH_SPAWN_ITEM` identify
-the destination session and keeper item. These are private durable outboxes;
-they do not by themselves inject a message into an agent session.
-The pluggable `deliver(recipient, event)` sink can bridge a fleet bus. Keeper's
-authenticated evidence API requires a principal/claim epoch, which the spawner
-does not own: the default keeper sink is an item-event outbox stub for an
-authorized consumer, not a bypass of that API and not automatic item closure.
+the destination session and keeper item. The private parent inbox does not by
+itself inject a message into an agent session. Terminal run records are the
+durable retry journal. The pluggable `deliver(recipient, event)` sink can bridge
+a fleet bus. The default keeper sink uses the spawner-role `record_run` API;
+it does not close items or bypass the keeper's authorization checks.
 `PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell);
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
@@ -660,3 +659,43 @@ has `continuation_run_id`. A continuation cannot continue again. Clean reports,
 nonzero exit codes, review runs, and continuation-limit refusals record their
 reason in `continuation_reason`. Dry runs never continue. Live execution proof
 belongs to L2/L1; unit tests use synthetic processes.
+# Live completion delivery identity
+
+The spawner's keeper completion sink posts `phase=finished` to
+`POST /v1/record_run`. Set `PG_URL` to the keeper API base URL and
+`PG_TOKEN_FILE` to a file containing a **spawner-role** bearer token. Set
+`PLANGRAPH_SPAWN_ITEM` to the claimed/in-review item key. A successful live
+acknowledgement precedes `runs/<id>/keeper.delivered`; a local inbox alone is
+not keeper delivery. The keeper deduplicates by item, run ID and phase, so
+retrying after marker-write failure does not append a second item event.
+Missing identity leaves delivery pending with an error naming `PG_URL` and
+`PG_TOKEN_FILE`; do not print or copy token contents into diagnostics.
+
+The watchdog also requires `PG_URL` and `PG_TOKEN_FILE` for its keeper
+identity. Provision these in its service environment, not an interactive
+shell; use the least-privilege identity authorized for the watchdog verbs.
+Host availability probes are cached for 300 seconds: newly served models
+may not be noticed until that TTL expires.
+This is a cache freshness bound, not a five-minute completion or delivery SLA:
+child runtime, polling, outages and pending keeper retries can take longer.
+
+### Build-L1 live RUN-EXIT-NOTIFY smoke
+
+Build-L1 runs `bash tools/smoke-run-exit-notify.sh` from the checkout with
+`PG_URL`, `PG_TOKEN_FILE` (spawner-role identity authorized for `record_run`
+and `show` in the item's project), and `PLANGRAPH_SPAWN_ITEM` set to a real
+claimed/in-review item key, for example `plangraph:RUN-EXIT-NOTIFY` if claimed.
+Provision the token out of band; never paste it into a brief or command line.
+The script uses the permitted cheap local harness alternative: a real Python
+child printing OK, supervised through the normal spawn service, without an LLM
+request or `--dry-run`. Only command construction is replaced, not monitoring,
+record persistence, completion delivery, or the live keeper client.
+
+Success requires rc 0, `runs/<id>/keeper.delivered`, and the same run ID in
+`GET /v1/show?key=...`'s `run_ids`, a projection of `run_recorded` item events.
+Any missing proof or HTTP/authentication failure exits nonzero. Private state
+is retained in `.notify-smoke-*` beneath the checkout for build-L1 inspection.
+The writer must not run this against the live keeper; build-L1 owns live proof.
+The local marker follows acknowledgement: writing it before sending would lose
+events on crash. Exactly-once visibility across marker failure instead relies
+on the keeper's atomic `(item, run_id, phase)` idempotency key.
