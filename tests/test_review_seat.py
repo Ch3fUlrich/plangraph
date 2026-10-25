@@ -23,7 +23,7 @@ def read(name):
 
 
 def gw_result(text, finish="stop", served="ovh/gpt-oss-120b", status=200,
-              error=None):
+              error=None, truncated_empty=False):
     """Gateway CallResult with the given reply shape."""
     return gateway.CallResult(
         status=status, text=text, finish_reason=finish,
@@ -31,7 +31,8 @@ def gw_result(text, finish="stop", served="ovh/gpt-oss-120b", status=200,
         correlation_id="corr-1", response_header_names=[],
         tokens={}, prompt_sha256="ab" * 32,
         started="2026-01-01T00:00:00Z", finished="2026-01-01T00:00:01Z",
-        error=error, session_tag="review/t", run_id="r")
+        error=error, session_tag="review/t", run_id="r",
+        truncated_empty=truncated_empty)
 
 
 def qo_result(text, finish="stop"):
@@ -205,6 +206,25 @@ def test_length_empty_not_zero(tmp_path, capsys):
     assert outcomes[0].pass_allowed is False
     code, _ = dry_run(outcomes[0].dir, tmp_path, capsys=capsys)
     assert code in (3, 4) and code != 0
+
+
+def test_truncated_empty_is_failed_seat(tmp_path):
+    """A truncated_empty gateway result is a failed seat, never a verdict."""
+    def fake_gateway(model, prompt, title=None):
+        return gw_result(read("ok_pass.txt"), finish="length",
+                         truncated_empty=True)
+
+    outcomes = seat.run_seat(spec_for(tmp_path, "alibaba", down=ONLY_OPENAI),
+                             gateway_call=fake_gateway,
+                             qoder_run=lambda *a, **k: None)
+    assert len(outcomes) == 1
+    item = outcomes[0]
+    assert item.verdict.verdict is None
+    assert item.pass_allowed is False
+    assert item.error == "truncated_empty"
+    assert seat.overall(outcomes) == {"openai": "incomplete"}
+    err = json.loads((item.dir / "error.json").read_text())
+    assert err["error"] == "truncated_empty"
 
 
 def test_qoder_tool_call_never_passes(tmp_path, capsys):

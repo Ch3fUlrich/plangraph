@@ -37,8 +37,8 @@ Semantics
 * ``age > relaunch_after_min`` OR ``alive_cmd`` exiting non-zero -> relaunch
   ONCE per episode.  ``relaunch_after_min = null`` (or a missing
   ``relaunch_cmd``) makes the target alert only; a due-but-skipped relaunch is
-  logged once per episode with its trigger (``stale age N min`` or
-  ``alive probe rc=X``).
+  logged once per episode with its trigger (``stale age N min``,
+  ``alive probe rc=X``, or ``alive probe skipped in dry-run``).
 * An episode ends when the stamp is fresh again and ``alive_cmd`` (if any)
   exits 0; the next stale episode alerts again.  A dry run only reports
   ``would reset (not saved)``: the episode state is reset and saved by the
@@ -50,7 +50,9 @@ Semantics
 * Without ``--apply`` the run is a dry run: planned actions are printed, no
   command is executed and nothing at all is written (no state, no inbox, no
   ``state_dir``).  A dry run judges staleness only; it cannot probe
-  ``alive_cmd`` without running a command.
+  ``alive_cmd`` without running a command.  Where that skipped probe alone
+  could make the target due, the run reports ``alive probe skipped in
+  dry-run`` instead of a stale age the stamp does not support.
 * Nothing from the environment is echoed, and no command output beyond that
   200-char tail is ever printed.
 
@@ -158,9 +160,12 @@ def stamp_status(path, now: float) -> tuple[float, str | None]:
 
     ``stale_reason`` is ``None`` while the stamp is usable and one of
     ``missing``, ``unreadable``, ``corrupt json`` or ``no ts field`` when the
-    stamp is stale forever.  Content starting with ``{`` is meant to be a JSON
-    stamp and must carry a numeric ``ts``; anything else is read as an mtime
-    stamp.
+    stamp is stale forever.  A ``stat()`` failure is classified like a read
+    failure: ``FileNotFoundError`` is ``missing``, any other ``OSError`` is
+    ``unreadable``.  Content starting with ``{`` is meant to be a JSON stamp
+    and must carry a numeric ``ts``; anything else is read as an mtime stamp.
+    A JSON stamp whose ``ts`` parses keeps that ``ts`` no matter what
+    ``stat()`` does -- it never reads as a fresh age of 0.
     """
     target = Path(path)
     try:
@@ -181,6 +186,8 @@ def stamp_status(path, now: float) -> tuple[float, str | None]:
         return max(0.0, now - float(ts)), None
     try:
         mtime = target.stat().st_mtime
+    except FileNotFoundError:
+        return float("inf"), "missing"
     except OSError:
         return float("inf"), "unreadable"
     return max(0.0, now - mtime), None
@@ -373,16 +380,31 @@ def check_target(target: dict, state_dir, inbox, apply: bool, now: float, out) -
 
     alive_ok = True
     alive_rc: int | None = None
+    alive_skipped = not apply and target["alive_cmd"] is not None
     if apply and target["alive_cmd"] is not None:
         alive_rc = run_command(target["alive_cmd"], None, out, f"{name}: alive")
         alive_ok = alive_rc == 0
         if not alive_ok:
             log(f"{name}: alive command reports not alive", out)
 
+    over_age = (
+        target["relaunch_after_min"] is not None
+        and age > target["relaunch_after_min"] * MINUTE
+    )
+    # A stamp age only triggers when it reads as more than "0.0 min": a
+    # just-beaten stamp at a zero-ish threshold is a fake age, and then only
+    # the alive probe could make this target due -- a probe a dry run never
+    # runs, so the dry run must say so instead of inventing a stale age.
+    age_triggers = over_age and age_min >= 0.05
+    only_alive_could_trigger = alive_skipped and not age_triggers
+
     state = state_path(state_dir, name)
     flags = load_state(state, out)
 
     if not stale and alive_ok:
+        if only_alive_could_trigger:
+            log(f"{name}: alive probe skipped in dry-run", out)
+            return
         if any(flags.values()):
             if apply:
                 log(f"{name}: healthy again (age {age_min:.1f} min); episode reset", out)
@@ -402,12 +424,16 @@ def check_target(target: dict, state_dir, inbox, apply: bool, now: float, out) -
         age_text = f"stale forever ({stale_reason})"
     else:
         age_text = f"{age_min:.1f} min old"
-    if alive_ok:
+    if alive_ok and not only_alive_could_trigger:
         trigger = f"stale age {age_min:.1f} min"
     elif alive_rc is not None:
         trigger = f"alive probe rc={alive_rc}"
+    elif alive_skipped:
+        trigger = "alive probe skipped in dry-run"
     else:
         trigger = "alive probe could not run"
+    if only_alive_could_trigger:
+        log(f"{name}: alive probe skipped in dry-run", out)
     changed = False
 
     if stale and not flags["alerted"]:
@@ -429,17 +455,10 @@ def check_target(target: dict, state_dir, inbox, apply: bool, now: float, out) -
         target["relaunch_after_min"] is not None
         and target["relaunch_cmd"] is not None
     )
-    want_relaunch = (
-        target["relaunch_after_min"] is not None
-        and age > target["relaunch_after_min"] * MINUTE
-    ) or not alive_ok
+    want_relaunch = over_age or not alive_ok
 
     if want_relaunch and not flags["relaunched"]:
         if relaunch_allowed:
-            over_age = (
-                target["relaunch_after_min"] is not None
-                and age > target["relaunch_after_min"] * MINUTE
-            )
             reason = (
                 f"stamp is {age_text} "
                 f"(relaunch_after_min {target['relaunch_after_min']:g})"
