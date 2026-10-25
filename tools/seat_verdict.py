@@ -13,7 +13,8 @@ so a string such as ``"false"`` would be read as true.
 Exit codes: 0 sent (2xx), 1 I/O or keeper error, 2 refused (unknown model
 family, empty writer-family list, a Claude seat over a writer list that is
 unknown or contains anthropic, or a seat whose family covers no listed writer),
-3 no parseable verdict, 4 pass refused.  A Claude (anthropic) seat is accepted
+3 no parseable verdict, 4 pass refused.  A PASS line over a body that carries a
+HIGH/MED finding is sent as a change request (D-2739 §0.2c).  A Claude (anthropic) seat is accepted
 only over a known non-anthropic writer list.  coverage() computes which writer
 families the recorded seats cover.  A PASS is sent only when finish_reason is
 "stop" or "end_turn" AND test_gaming is "no" (case-insensitive); missing, "unsure", "yes" or
@@ -80,6 +81,15 @@ def parse_verdict(text):
             return False, idx
         return None, idx
     return None, -1
+
+
+def body_blocking(text):
+    """Ids of HIGH/MED findings in the reply body (D-2739 §0.2c: they beat a PASS line)."""
+    src = str(Path(__file__).resolve().parent.parent / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from plangraph.gates.findings import blocking, parse_findings
+    return [f["id"] for f in blocking(parse_findings(text, "seat"))]
 
 
 def findings(text, idx, limit=600):
@@ -190,6 +200,12 @@ def main(argv=None):
     if ok is None:
         print("seat_verdict: no parseable VERDICT line", file=sys.stderr)
         return EXIT_NO_VERDICT
+    if ok:
+        hard = body_blocking(text)
+        if hard:
+            print(f"seat_verdict: PASS line overridden, HIGH/MED in body: {', '.join(hard)}",
+                  file=sys.stderr)
+            ok = False
     gaming = evidence.get("test_gaming")
     if ok and (evidence.get("finish_reason") not in ("stop", "end_turn") or not isinstance(gaming, str)
                or gaming.strip().lower() != "no"):

@@ -167,6 +167,11 @@ class ReadMixin:
         if rows:
             info["jev_shadow"] = [jev_report.row_view(r) for r in rows]
             info["jev_agreement"] = jev_report.agreement_report(rows)["overall"]
+        # PG-EFFICIENCY-GATES: review rounds, fix log, design -- only when there
+        # is any, so an item without them keeps its exact previous show output.
+        gates = self.gates_summary(key)
+        if gates["rounds"] or gates["fix_log"]:
+            info["gates"] = gates
         info.update(self._run_derived(key, item))
         return info
 

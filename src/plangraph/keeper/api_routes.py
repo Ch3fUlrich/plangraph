@@ -35,7 +35,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                # worker_claim is POST transport: it returns a Claim to a worker
                "worker_claim",
                "attempts", "park", "complete", "alarms", "locks",
-               "jev_shadow", "jev_outcome"}
+               "jev_shadow", "jev_outcome", "log_item"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
@@ -266,4 +266,7 @@ ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,
                       "phase_finish": _phase_finish,
-                      "worker_claim": _worker_claim}
+                      "worker_claim": _worker_claim,
+                      # PG-EFFICIENCY-GATES: router or the project L1 (store checks)
+                      "log_item": lambda store, principal, body, need: store.log_item(
+                          principal, need(body, "key"), body.get("entry"))}

@@ -15,6 +15,7 @@ import re
 from .auth import validate_family
 from .errors import Refused
 from .credential_guard import guard
+from ..gates.followup import check_new_items
 from .item_fixes import check_fix_limit
 from .item_fields import MODEL_FIELDS, SMALL_FIELDS, check_choices, check_kg_refs, check_model_fields
 from .note_fold import fold_checked
@@ -166,6 +167,15 @@ class CreateMixin:
             if gate is not None:
                 attach.append((definition, gate))
         before = self._all_items()
+        if not legacy:
+            # D-2739 §0.1 one task loops: a finding is fixed inside its item
+            # (``log_item``), never in a new follow-up item.
+            refused = check_new_items(principal.role, defs,
+                                      {item["key"]: item for item in before})
+            if refused:
+                raise Refused("validation",
+                              f"followup_item: {refused[0]}: {refused[1]}; log the fix on the existing"
+                              " item (log_item kind=fix), D-2739 one task loops")
         check_fix_limit(before + defs, set(keys))
         # Validate the graph the writes would leave behind: every gate gains the
         # new item as a dependency, so cycles and reachability are caught here,

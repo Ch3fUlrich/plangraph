@@ -189,6 +189,11 @@ def judge(text: str, finish_reason: str | None,
                        test_gaming="missing", test_gaming_quote=None,
                        empty=True)
     verdict = parse_verdict(text or "")
+    if verdict == "pass":
+        # D-2739 §0.2c: a HIGH/MED finding in the body beats the VERDICT line.
+        from plangraph.gates.findings import blocking, parse_findings
+        if blocking(parse_findings(text or "")):
+            verdict = "fix"
     gaming, quote = parse_test_gaming(text or "", material or "")
     return Verdict(verdict=verdict, finish_reason=finish_reason,
                    test_gaming=gaming, test_gaming_quote=quote, empty=False)

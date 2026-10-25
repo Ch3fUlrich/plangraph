@@ -74,6 +74,10 @@ TOOLS = (
     _tool("withdraw_review", "Router: take a decision-closable item out of review (decision names it in Closes:).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"}},
           ("key", "decision_id")),
+    _tool("log_item", "Router/L1 (D-2739 one task loops): append a fix/design/replan entry to an item's log; "
+          "a fix on an in_review item hands it back to its claimant. entry: {kind, note, findings[], seat_runs[], "
+          "ref, author_model, reviewed_by, invariants, slices[{n,scope,max_lines}]}.",
+          {"key": {"type": "string"}, "entry": {"type": "object"}}, ("key", "entry")),
     _tool("reopen", "Router: take an in_review item back to its claimant at epoch+1 (reason + recorded decision; never closes).",
           {"key": {"type": "string"}, "decision_id": {"type": "string"},
            "reason": {"type": "string"}}, ("key", "decision_id", "reason")),
@@ -155,6 +159,7 @@ _ROUTES = {
     "digest": ("GET", "digest"), "whoami": ("GET", "whoami"),
     "create": ("POST", "create_items"), "edit": ("POST", "edit_definition"),
     "record_run": ("POST", "record_run"),
+    "log_item": ("POST", "log_item"),
     "mint_run_token": ("POST", "mint_run_token"),
 }
 

@@ -1,6 +1,6 @@
 """Computed stall alarms for ``GET /v1/alarms`` — evaluated on every read.
 
-Two kinds, shaped like ``projector_alarms`` rows but with ``id`` and
+Three kinds, shaped like ``projector_alarms`` rows but with ``id`` and
 ``workflow_id`` set to ``None`` (nothing to acknowledge):
 
 * ``stall_no_event`` — an item in ``claimed`` whose newest ``events`` row (or,
@@ -8,6 +8,8 @@ Two kinds, shaped like ``projector_alarms`` rows but with ``id`` and
   :data:`STALL_S`.
 * ``merged_open`` — an open (not ``done``/``closed``) item whose key appears as
   a ``Plan-Item`` trailer on a commit of its project's configured repo main.
+* ``review_round_cap`` -- an open item at >= 3 review rounds since its last
+  replan (PG-EFFICIENCY-GATES, D-2739 §0.2e).
 
 The git side is injectable via ``git``: a callable ``(repo, ref) ->
 [(sha, value)]``, an object with a ``repos`` mapping (a config), or ``None``,
@@ -96,6 +98,35 @@ def _trailers(git, entry, ref=_UNSET):
         return []
 
 
+def round_cap_alarms(conn, open_keys, now):
+    """``review_round_cap`` rows: open items at >= ROUND_CAP rounds since replan (D-2739 §0.2e)."""
+    import json
+    from ..gates.rounds import ROUND_CAP, count_rounds
+    by_key = {}
+    for row in conn.execute(
+            "SELECT key, type, ts, payload FROM events WHERE type IN"
+            " ('changes_requested', 'item_logged') ORDER BY seq"):
+        if row["key"] not in open_keys:
+            continue
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        by_key.setdefault(row["key"], []).append(
+            {"type": row["type"], "ts": row["ts"], "payload": payload})
+    rows = []
+    for key, events in by_key.items():
+        summary = count_rounds(events)
+        if summary["since_replan"] >= ROUND_CAP:
+            rows.append({"id": None, "key": key, "kind": "review_round_cap",
+                         "workflow_id": None,
+                         "detail": (f"{summary['since_replan']} review rounds since replan"
+                                    f" (total {summary['rounds']}); writer/fixer spawns refused"
+                                    " until a strong-model replan is logged"),
+                         "raised_at": iso(now)})
+    return rows
+
+
 def stall_alarms(conn, now, git=None):
     """``stall_no_event`` + ``merged_open`` rows over *conn* at epoch *now*."""
     events_last = _events_last(conn)
@@ -118,6 +149,7 @@ def stall_alarms(conn, now, git=None):
                          "workflow_id": None,
                          "detail": f"claimed, no event for {age}s (last {int(age // 3600)}h)",
                          "raised_at": ref_stamp})
+    rows.extend(round_cap_alarms(conn, open_keys, now))
     if open_keys:
         entries = ([(None, git)] if callable(git)
                    else list(_repos_of(git).items()))

@@ -376,6 +376,14 @@ def cmd_withdraw(args, session):
                  lambda r: f"{r.get('key')} withdrawn from review -> {r.get('state')}")
 
 
+def cmd_log(args, session):
+    """PG-EFFICIENCY-GATES: append a fix/design/replan entry (JSON file) to an item."""
+    entry = json.loads(Path(args.file).read_text(encoding="utf-8"))
+    return write(session, "log_item", {"key": args.key, "entry": entry},
+                 lambda r: (f"{r.get('key')} {r.get('kind')} logged -> {r.get('state')};"
+                            f" rounds {r.get('rounds')} (since replan {r.get('since_replan')})"))
+
+
 def cmd_reopen(args, session):
     return write(session, "reopen",
                  {"key": args.key, "decision_id": args.decision_id,
