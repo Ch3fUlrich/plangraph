@@ -548,6 +548,34 @@ def test_finding_3_phase_key_with_slash(tmp_path, monkeypatch):
     assert '\\' not in method.source
 
 
+def test_finding_4_settings_cli_root_and_env(tmp_path, monkeypatch):
+    custom_root = tmp_path / 'custom_root'
+    custom_root.mkdir()
+    path = custom_root / 'policy.json'
+    path.write_text(json.dumps({'review_method': {'max_rounds': 9}}))
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', 'policy.json')
+
+    # Test 1: --root PATH
+    res = subprocess.run(
+        [sys.executable, '-m', 'plangraph.settings', 'show', '--root', str(custom_root)],
+        capture_output=True, text=True, check=True,
+        env={**os.environ, 'PYTHONPATH': 'src'}
+    )
+    data = json.loads(res.stdout)
+    assert data['max_rounds'] == 9
+
+    # Test 2: PLANGRAPH_REPO_ROOT honored when --root not provided
+    monkeypatch.setenv('PLANGRAPH_REPO_ROOT', str(custom_root))
+    res2 = subprocess.run(
+        [sys.executable, '-m', 'plangraph.settings', 'show'],
+        capture_output=True, text=True, check=True,
+        env={**os.environ, 'PLANGRAPH_REPO_ROOT': str(custom_root), 'PYTHONPATH': 'src'}
+    )
+    data2 = json.loads(res2.stdout)
+    assert data2['max_rounds'] == 9
+
+
+
 
 
 

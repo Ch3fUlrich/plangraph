@@ -153,8 +153,9 @@ def main():
     parser.add_argument('command', choices=['show'])
     parser.add_argument('--project')
     parser.add_argument('--phase')
+    parser.add_argument('--root')
     args = parser.parse_args()
-    print(json.dumps(asdict(review_method(args.project, args.phase)), sort_keys=True))
+    print(json.dumps(asdict(review_method(args.project, args.phase, root=args.root)), sort_keys=True))
 
 
 if __name__ == '__main__':
