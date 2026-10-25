@@ -18,7 +18,7 @@ Q10 each design rule has a test. Q12 secrets never enter durable logs/history. Q
 - Every lane branches off origin/phase/rt-p1-bus (NOT main) and opens its PR INTO phase/rt-p1-bus.
 - D-2643: no seat per writer/fixer; fix rounds run all fix writers in parallel by file group, gated by affected tests + CI, then ONE review.
 - CI: tests.yml runs only on PR->main, so dispatch `gh workflow run tests.yml --ref <lane>` and quote the run id.
-- Writer order D-2683 (operator): agy/gemini-3.8-flash > mimo/mimo-v2.6-pro > mimo/mimo-v2.6-flash (small, commit early); probe first, record skips; name the writer model in PHASE-READY.
+- Writer order D-2684: agy/gemini-3.8-flash > mimo/mimo-v2.6-pro > openrouter/free + opencode free > mimo/mimo-v2.6-flash (small, commit early); probe first, record skips; name the writer model in PHASE-READY.
 - File-disjoint vs build-L1 (it holds keeper/db.py, store.py, schema_pg.py, api_routes.py, trailer/evidence parsing, define/edit validation, spawner/resolver+stall_watchdog): a lane needing those files says BLOCKED first.
 - NO per-task seats. Lane is done when its PR CI is green: send `PHASE-READY <KEY> PR#<n> head <sha> CI <run ids>` to build-L1-bus; build-L1-bus merges into the phase branch.
 - After all phase tasks land, build-L1-bus runs ONE HIGH review of the whole phase diff vs main; the findings come back to you as ONE fixer brief (D-2458).
