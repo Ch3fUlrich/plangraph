@@ -14,10 +14,11 @@ KEY_ENV = "PLANGRAPH_REVIEW_KEY"
 
 
 def make_server(capture, *, status=200, payload=None, payloads=None,
-                headers=None, echo_key=False):
+                headers=None, echo_key=False, statuses=None):
     """Serve canned JSON replies on 127.0.0.1, recording every request.
 
-    ``payloads`` serves one reply per request (the last one repeats).
+    ``payloads`` serves one reply per request (the last one repeats);
+    ``statuses`` likewise serves one HTTP status per request.
     """
     headers = headers or {}
 
@@ -51,7 +52,9 @@ def make_server(capture, *, status=200, payload=None, payloads=None,
                     "usage": {"prompt_tokens": 1},
                 })
             data = json.dumps(reply).encode("utf-8")
-            self.send_response(status)
+            code = (statuses[min(capture["count"] - 1, len(statuses) - 1)]
+                    if statuses is not None else status)
+            self.send_response(code)
             for k, v in headers.items():
                 self.send_header(k, v)
             self.send_header("Content-Type", "application/json")
@@ -188,6 +191,36 @@ def test_clamps_max_tokens_to_catalog_ceiling(monkeypatch):
         server.shutdown(); server.server_close()
 
 
+def test_broken_catalog_entry_falls_back_to_min_128k_requested(monkeypatch):
+    """A known entry with missing/invalid max_output_tokens falls back
+    to min(DEFAULT_MAX_TOKENS, requested), never a bare 128000."""
+    monkeypatch.setattr(g, "SEED_MODELS", [
+        {"model_id": "known-missing"},
+        {"model_id": "known-invalid", "max_output_tokens": "big"},
+        {"model_id": "known-zero", "max_output_tokens": 0},
+        {"model_id": "known-bool", "max_output_tokens": True},
+        {"model_id": "known-good", "max_output_tokens": 65536},
+    ])
+    assert g.model_ceiling("known-missing", 4000) == 4000
+    assert g.model_ceiling("known-missing", 200000) == 128000
+    assert g.model_ceiling("known-invalid", 4000) == 4000
+    assert g.model_ceiling("known-zero", 4000) == 4000
+    assert g.model_ceiling("known-bool", 4000) == 4000
+    assert g.model_ceiling("known-missing") == 128000
+    assert g.model_ceiling("known-good", 4000) == 65536
+    assert g.clamp_max_tokens("known-missing", 4000) == 4000
+    assert g.clamp_max_tokens("known-invalid", 200000) == 128000
+    cap = {}
+    server = make_server(cap, payload={"model": "s", "choices": [
+        {"message": {"content": ""}, "finish_reason": "length"}]})
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        g.call("known-invalid", "p", url=base_of(server), max_tokens=4000)
+    finally:
+        server.shutdown(); server.server_close()
+    assert [b["max_tokens"] for b in cap["bodies"]] == [4000, 4000]
+
+
 def test_length_empty_retries_once_then_truncated_empty(monkeypatch, tmp_path):
     """length+empty retries once at the ceiling, then is truncated_empty."""
     cap = {}
@@ -210,6 +243,26 @@ def test_length_empty_retries_once_then_truncated_empty(monkeypatch, tmp_path):
     assert [a["attempt"] for a in doc["attempts"]] == [1, 2]
 
 
+def test_truncated_empty_writes_error_json(monkeypatch, tmp_path):
+    """A truncated_empty 200 result writes error.json: never a normal review."""
+    cap = {}
+    payload = {"model": "s", "choices": [
+        {"message": {"content": ""}, "finish_reason": "length"}]}
+    server = make_server(cap, payload=payload)
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        res = g.call("m", "p", url=base_of(server))
+        g.write_seat_dir(tmp_path, res)
+    finally:
+        server.shutdown(); server.server_close()
+    assert res.status == 200 and res.truncated_empty is True
+    assert (tmp_path / "review.txt").read_text() == ""
+    err = json.loads((tmp_path / "error.json").read_text())
+    assert err["error"] == "truncated_empty"
+    assert err["status"] == 200
+    assert [a["attempt"] for a in err["attempts"]] == [1, 2]
+
+
 def test_length_empty_retry_recovers_with_text(monkeypatch):
     """A retry that returns text is the result, not truncated_empty."""
     cap = {}
@@ -226,6 +279,24 @@ def test_length_empty_retry_recovers_with_text(monkeypatch):
     assert cap["count"] == 2
     assert res.text == "late answer" and res.truncated_empty is False
     assert len(res.attempts) == 2
+
+
+def test_length_empty_retry_http_error_not_truncated_empty(monkeypatch):
+    """A failed retry keeps its own error; truncated_empty needs a 200 retry."""
+    cap = {}
+    empty = {"model": "s", "choices": [
+        {"message": {"content": ""}, "finish_reason": "length"}]}
+    server = make_server(cap, payloads=[empty], statuses=[200, 500])
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        res = g.call("m", "p", url=base_of(server), max_tokens=4000)
+    finally:
+        server.shutdown(); server.server_close()
+    assert cap["count"] == 2
+    assert res.status == 500
+    assert res.truncated_empty is False
+    assert res.error and res.error.startswith("HTTP 500")
+    assert [a["attempt"] for a in res.attempts] == [1, 2]
 
 
 def test_length_with_text_is_not_retried(monkeypatch):

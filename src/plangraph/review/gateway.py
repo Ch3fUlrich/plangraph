@@ -74,18 +74,30 @@ def mask_key(text: str, key: str) -> str:
     return text.replace(key, "[redacted]") if key and text else text
 
 
-def model_ceiling(model: str) -> int:
-    """Catalog max_output_tokens for a known model id; else DEFAULT_MAX_TOKENS."""
+def model_ceiling(model: str, requested: int = DEFAULT_MAX_TOKENS) -> int:
+    """Catalog max_output_tokens for a known model id; else DEFAULT_MAX_TOKENS.
+
+    A known entry with a missing or invalid ``max_output_tokens`` falls back
+    to min(DEFAULT_MAX_TOKENS, requested) -- never a bare 128000 when the
+    caller asked for less. An unknown model id caps at DEFAULT_MAX_TOKENS.
+    """
     for entry in SEED_MODELS:
         if entry.get("model_id") == model:
             value = entry.get("max_output_tokens")
-            return value if isinstance(value, int) and value > 0 else DEFAULT_MAX_TOKENS
+            if (isinstance(value, int) and not isinstance(value, bool)
+                    and value > 0):
+                return value
+            return min(DEFAULT_MAX_TOKENS, int(requested))
     return DEFAULT_MAX_TOKENS
 
 
 def clamp_max_tokens(model: str, max_tokens: int) -> int:
-    """min(requested, model ceiling); unknown models cap at DEFAULT_MAX_TOKENS."""
-    return min(int(max_tokens), model_ceiling(model))
+    """min(requested, model ceiling); unknown models cap at DEFAULT_MAX_TOKENS.
+
+    A known entry with a missing or invalid ``max_output_tokens`` falls back
+    to min(DEFAULT_MAX_TOKENS, requested).
+    """
+    return min(int(max_tokens), model_ceiling(model, int(max_tokens)))
 
 
 def request_body(model: str, prompt: str, max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -245,10 +257,14 @@ def call(model: str, prompt: str, *, url: str | None = None,
     """POST one tool-less completion; HTTP/network errors become values.
 
     ``max_tokens`` is clamped to the model's catalog ``max_output_tokens``
-    (a DEFAULT_MAX_TOKENS ceiling for an unknown model). A reply with
-    ``finish_reason == "length"`` and empty text retries ONCE at that ceiling;
-    if the retry is still empty the result is marked ``truncated_empty`` (never
-    ok, never skipped). Every attempt is recorded in ``CallResult.attempts``.
+    (a DEFAULT_MAX_TOKENS ceiling for an unknown model; a known entry with
+    a missing or invalid ``max_output_tokens`` falls back to
+    min(DEFAULT_MAX_TOKENS, requested)). A reply with
+    ``finish_reason == "length"`` and empty text retries ONCE at that
+    ceiling; the result is marked ``truncated_empty`` (never ok, never
+    skipped) only when the retry itself returned status 200 with
+    ``finish_reason == "length"`` and empty text -- otherwise the retry's
+    own error stands. Every attempt is recorded in ``CallResult.attempts``.
     """
     source = env if env is not None else os.environ
     key = (source.get(key_env) or "").strip() if source is not None else ""
@@ -261,7 +277,7 @@ def call(model: str, prompt: str, *, url: str | None = None,
     digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     tag = session_tag(title, digest)
     run_id = mint_run_id(slugify(title or "review"))
-    ceiling = model_ceiling(model)
+    ceiling = model_ceiling(model, int(max_tokens))
     attempts: list[dict] = []
     sent = clamp_max_tokens(model, max_tokens)
     result = _post(model, prompt, base, key, tag, run_id, digest, sent, timeout)
@@ -269,14 +285,20 @@ def call(model: str, prompt: str, *, url: str | None = None,
     if result.finish_reason == "length" and not (result.text or "").strip():
         result = _post(model, prompt, base, key, tag, run_id, digest, ceiling, timeout)
         attempts.append(_attempt_record(2, ceiling, result))
-        if not (result.text or "").strip():
+        if (result.status == 200 and result.finish_reason == "length"
+                and not (result.text or "").strip()):
             result.truncated_empty = True
     result.attempts = attempts
     return result
 
 
 def write_seat_dir(out_dir: Path, result: CallResult, extra: dict | None = None) -> None:
-    """Write review.txt + evidence.json (plus error.json when not 200)."""
+    """Write review.txt + evidence.json, plus error.json when not 200 or truncated_empty.
+
+    A ``truncated_empty`` result is never a normal review: error.json is
+    always written for it with ``error: "truncated_empty"`` and the attempt
+    list, even at status 200.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "review.txt").write_text(result.text, encoding="utf-8", newline="\n")
@@ -285,12 +307,15 @@ def write_seat_dir(out_dir: Path, result: CallResult, extra: dict | None = None)
         evidence.update(extra)
     (out / "evidence.json").write_text(json.dumps(evidence, indent=2) + "\n",
                                        encoding="utf-8", newline="\n")
-    if result.status != 200:
-        doc = {"status": result.status, "error": result.error,
+    if result.status != 200 or result.truncated_empty:
+        doc = {"status": result.status,
+               "error": ("truncated_empty" if result.truncated_empty
+                         else result.error),
                "requested_model": result.requested_model,
                "response_header_names": list(result.response_header_names),
                "session_tag": result.session_tag, "run_id": result.run_id,
                "prompt_sha256": result.prompt_sha256, "started": result.started,
-               "finished": result.finished}
+               "finished": result.finished,
+               "attempts": [dict(a) for a in result.attempts]}
         (out / "error.json").write_text(json.dumps(doc, indent=2) + "\n",
                                         encoding="utf-8", newline="\n")
