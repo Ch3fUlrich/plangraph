@@ -6,9 +6,11 @@ own environment never carries the file-managed keys -- so an opencode child
 (mimo runs, ``opencode/*-free`` models) fails with "Authentication required".
 These helpers resolve the keys from the AutoOS keys file at spawn time.
 
-Contract: a missing file, a helper that raises on import, or
-KeyError/OSError/ValueError from the call all mean "no key" (None). Nothing
-here logs, prints, or returns a key value to any caller that writes output.
+Contract: every failure -- a missing file, a helper that raises or exits on
+import or at call time, a non-dict keys mapping, a non-str or blank key --
+means "no key" (None); KeyboardInterrupt still propagates. Nothing here logs,
+prints, or raises with a key value, so a lookup failure can never crash the
+supervisor or leave a key unredacted in the startup tail.
 """
 from __future__ import annotations
 
@@ -34,7 +36,8 @@ def _keys_path(env):
 def _load_helper(root, name):
     """Import <root>/tools/<name>.py by file location (never sys.path).
 
-    None when the file is missing, unimportable, or raises at import time.
+    None when the file is missing, unimportable, or raises or exits at import
+    time (KeyboardInterrupt still propagates).
     """
     path = Path(root) / "tools" / (name + ".py")
     try:
@@ -46,40 +49,41 @@ def _load_helper(root, name):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
-    except Exception:  # a helper that raises on import is "no key"
+    except (Exception, SystemExit):  # a helper that raises or exits on import is "no key"
         return None
 
 
 def _gateway_key(env):
     """AutoOS gateway client key from the keys file; None when unresolvable."""
-    keys_path = _keys_path(env)
-    if not keys_path.is_file():
-        return None
-    helper = _load_helper(keys_path.parent.parent, "autoos_gateway_key")
-    resolve = getattr(helper, "resolve_client_key", None)
-    if not callable(resolve):
-        return None
     try:
+        keys_path = _keys_path(env)
+        if not keys_path.is_file():
+            return None
+        helper = _load_helper(keys_path.parent.parent, "autoos_gateway_key")
+        resolve = getattr(helper, "resolve_client_key", None)
+        if not callable(resolve):
+            return None
         key = resolve(dict(env), keys_path)
-    except (KeyError, OSError, ValueError):
+        return key if isinstance(key, str) and key.strip() else None
+    except (Exception, SystemExit):  # ANY helper failure is "no key", never a crash
         return None
-    return key if isinstance(key, str) and key.strip() else None
 
 
 def _zen_key(env):
     """Zen (opencode/*-free) key from the keys file; None when unresolvable."""
-    keys_path = _keys_path(env)
-    if not keys_path.is_file():
-        return None
-    helper = _load_helper(keys_path.parent.parent, "keys_file")
-    read_keys = getattr(helper, "read_keys", None)
-    if not callable(read_keys):
-        return None
     try:
-        key = read_keys(keys_path).get("zen")
-    except (KeyError, OSError, ValueError):
+        keys_path = _keys_path(env)
+        if not keys_path.is_file():
+            return None
+        helper = _load_helper(keys_path.parent.parent, "keys_file")
+        read_keys = getattr(helper, "read_keys", None)
+        if not callable(read_keys):
+            return None
+        keys = read_keys(keys_path)
+        key = keys.get("zen") if isinstance(keys, dict) else None
+        return key if isinstance(key, str) and key.strip() else None
+    except (Exception, SystemExit):  # ANY helper failure is "no key", never a crash
         return None
-    return key if isinstance(key, str) and key.strip() else None
 
 
 def _absent(env, name):
@@ -98,24 +102,32 @@ def add_host_keys(env, model, *, needs_gateway):
 
     The gateway key goes in when `needs_gateway` and env has none; the Zen key
     only for an ``opencode/<id>-free`` model and only when env has none. An
-    existing env value always wins.
+    existing env value always wins. Never raises (H5): a broken env or helper
+    degrades to "no key", never a supervisor crash or a key in an exception.
     """
-    if needs_gateway and _absent(env, GATEWAY_KEY_ENV):
-        key = _gateway_key(env)
-        if key:
-            env[GATEWAY_KEY_ENV] = key
-    if _is_zen_free_model(model) and _absent(env, ZEN_KEY_ENV):
-        key = _zen_key(env)
-        if key:
-            env[ZEN_KEY_ENV] = key
+    try:
+        if needs_gateway and _absent(env, GATEWAY_KEY_ENV):
+            key = _gateway_key(env)
+            if key:
+                env[GATEWAY_KEY_ENV] = key
+        if _is_zen_free_model(model) and _absent(env, ZEN_KEY_ENV):
+            key = _zen_key(env)
+            if key:
+                env[ZEN_KEY_ENV] = key
+    except (Exception, SystemExit):
+        pass  # H5: never raise, never carry a key value outward
 
 
 def redaction_env(base):
     """Copy of `base` plus both resolvable keys where absent -- redaction only."""
-    env = dict(base)
-    for name, resolve in ((GATEWAY_KEY_ENV, _gateway_key), (ZEN_KEY_ENV, _zen_key)):
-        if _absent(env, name):
-            key = resolve(env)
-            if key:
-                env[name] = key
+    env = {}
+    try:
+        env = dict(base)
+        for name, resolve in ((GATEWAY_KEY_ENV, _gateway_key), (ZEN_KEY_ENV, _zen_key)):
+            if _absent(env, name):
+                key = resolve(env)
+                if key:
+                    env[name] = key
+    except (Exception, SystemExit):
+        pass  # H5: degraded redaction beats a crash; never carries a key outward
     return env
