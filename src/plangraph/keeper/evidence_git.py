@@ -451,6 +451,23 @@ class GitAdapter:
             raise RuntimeError("cannot read commit paths")
         return [path for path in proc.stdout.split("\0") if path]
 
+    def changelog_only_edit(self, repo: str, sha: str) -> bool:
+        """Prove a non-merge addition/modification of the root changelog."""
+        if not valid_commit_ref(sha):
+            raise ValueError("invalid commit")
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1",
+                                   "--end-of-options", sha])
+        if parents.returncode != 0:
+            raise RuntimeError("cannot read commit parents")
+        if len(parents.stdout.split()) > 2:
+            return False
+        proc = self._run(repo, ["diff-tree", "--root", "--no-commit-id",
+                                "--name-status", "--no-renames", "-r", "-z",
+                                "--end-of-options", sha])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read commit status")
+        return proc.stdout.split("\0") == ["M", "CHANGELOG.md", ""] or proc.stdout.split("\0") == ["A", "CHANGELOG.md", ""]
+
     def _writer_trailer(self, repo, sha):
         trailers = self.trailers(repo, sha)
         if trailers.get("Hand-Edit") and not trailers.get("Writer"):

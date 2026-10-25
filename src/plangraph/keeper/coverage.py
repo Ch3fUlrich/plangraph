@@ -94,10 +94,17 @@ def writer_families(store, item, ctx):
                                   f"unknown writer model {model!r}")
             elif trailer.get("Hand-Edit"):
                 try:
-                    paths = git.changed_paths(repo, trailer.get("_writer_commit", commit))
+                    leaf = trailer.get("_writer_commit", commit)
+                    changed_paths = getattr(git, "changed_paths", None)
+                    paths = changed_paths(repo, leaf) if changed_paths else []
+                    exempt = getattr(git, "changelog_only_edit", None)
+                    # Old adapters cannot prove status or non-merge identity.
+                    # Missing capability counts the hand, rather than wedging it.
+                    is_exempt = (paths and set(paths) == {"CHANGELOG.md"}
+                                 and exempt is not None and exempt(repo, leaf))
                 except Exception as exc:  # noqa: BLE001 - fail closed
                     raise Refused("writer_unknown", "cannot read hand-edit paths") from exc
-                if paths and set(paths) == {"CHANGELOG.md"}:
+                if is_exempt:
                     continue
                 family = "anthropic"
             else:
@@ -105,4 +112,6 @@ def writer_families(store, item, ctx):
                     "writer_unknown",
                     f"commit behind {commit} has neither Writer nor Hand-Edit")
             families.append(family)
+    if not families:
+        raise Refused("writer_unknown", "commit evidence has no resolved writers")
     return families

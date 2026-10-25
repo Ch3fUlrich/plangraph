@@ -187,3 +187,15 @@ Merged and pushed changes only (D-630, D-653). Newest first.
 - Preserve owners on projector resumes, audit owner changes in the event chain,
   bound retired runs to 16, and explicitly reject removed `new_run` takeover.
 - Repair Postgres fence setup and Rust worker formatting.
+# D-2458 keeper writer-family review corrections
+
+- Fail closed with `writer_unknown` when verified commit evidence resolves to no
+  writers, including an entirely exempt CHANGELOG Hand-Edit chain.
+- Restore closing-seat coverage refusals and allow writer-family change requests;
+  direct family-gate callers remain strict and accept an optional context.
+- CHANGELOG Hand-Edit exemption requires a proven non-merge addition/modification
+  of root `CHANGELOG.md`. Missing adapter capability counts the hand; deletions
+  and merges are never exempt. Leaf commit identity is used for path/status checks.
+- Known gap: merge-conflict-only authorship detection is not implemented by the
+  merge writer traversal (which enumerates branch leaves). A Hand-Edit merge that
+  reaches the resolver is counted as anthropic, never CHANGELOG-exempt.

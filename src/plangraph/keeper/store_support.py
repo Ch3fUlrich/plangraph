@@ -277,7 +277,7 @@ class SupportMixin:
         if unverified:
             raise Refused("evidence_unverified", f"unverified evidence: {unverified}")
 
-    def _reviewer_family_ok(self, principal, item, ctx):
+    def _reviewer_family_ok(self, principal, item, ctx=None, *, coverage_seat=False):
         """Refuse reviewers matching any authoritative writer family.
 
         A legacy import claims by an ``owner`` string that need not be a
@@ -298,7 +298,11 @@ class SupportMixin:
                           for e in self._evidence(item["key"]))
         if has_commits:
             from .coverage import writer_families
+            if ctx is None:
+                ctx = self.ctx
             peers.extend(writer_families(self, item, ctx))
+            if not peers:
+                raise Refused("writer_unknown", "commit evidence has no resolved writers")
         elif item.get("writer_model"):
             from ..review.family import model_family
             family = model_family(item["writer_model"])
@@ -306,6 +310,8 @@ class SupportMixin:
                 raise Refused("family_unknown", "writer model family unknown")
             peers.append(family)
         else:
+            if item["claimed_by"] == "system":
+                raise Refused("writer_unknown", "system claim has no verified commit writers")
             claimer = auth.get_principal(self.conn, item["claimed_by"])
             claimant_family = (claimer.family if claimer is not None
                                else item.get("owner_family"))
@@ -320,7 +326,10 @@ class SupportMixin:
             if delegate_family is None:
                 raise Refused("family_unknown", "delegate family unknown")
             peers.append(delegate_family)
-        if reviewer_family in peers:
+        # Verdict seats use the closing coverage gate for commit writers. This
+        # preserves change requests and non-closing HIGH seats, while direct
+        # callers retain the strict writer-family isolation check.
+        if reviewer_family in peers and not (has_commits and coverage_seat):
             raise Refused("same_family", f"reviewer shares item family {reviewer_family}")
 
     def _reverify_all(self, item, now):

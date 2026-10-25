@@ -177,7 +177,7 @@ class ReviewMixin:
         if principal.name in (item["claimed_by"], item["delegate"]):
             raise Refused("same_principal", "reviewer is the claimant")
         self._require_project(principal, item["project"])
-        self._reviewer_family_ok(principal, item, self._ctx(item, now))
+        self._reviewer_family_ok(principal, item, self._ctx(item, now), coverage_seat=True)
         if not ok:
             return self._verdict_changes(principal, key, reason, item, now)
         self._require_evidence(item)
@@ -208,7 +208,7 @@ class ReviewMixin:
                 raise Refused("conflict",
                               f"{key} evidence changed under the transaction")
             self._require_project(principal, fresh["project"])
-            self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now))
+            self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now), coverage_seat=True)
             prior = self._round_verdicts(fresh)
             if any(v.get("reviewer") == principal.name for v in prior):
                 raise Refused("same_principal",
@@ -317,7 +317,7 @@ class ReviewMixin:
             if principal.name in (fresh["claimed_by"], fresh["delegate"]):
                 raise Refused("same_principal", "reviewer is the claimant")
             self._require_project(principal, fresh["project"])
-            self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now))
+            self._reviewer_family_ok(principal, fresh, self._ctx(fresh, now), coverage_seat=True)
             prior = self._epoch_change_streak(fresh)
             second = prior >= 1
             state = "open" if second else "claimed"
