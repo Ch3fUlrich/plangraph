@@ -37,3 +37,8 @@ Helper scripts to copy from /home/s/.claude/jobs/2f3882a9/tmp: hb.sh, spawnfix.s
 - ci_commit_gate: one trailer block Plan-Item + Writer, or `Hand-Edit: <who> D-2240 <reason>` (<=10 lines).
 - No `python` binary locally; no xdist.
 - ~/code/plangraph = control repo. Control push: git push control build-L1 only. Never dump environ.
+
+## gen-31 update 11:58Z (card rows supersede)
+Done: #198 c08badc2 (evidence after ISOLATION, D-2732 opt b), #196 11421fc4 submitted, #164 7be789f3 submitted (D-2747).
+Open: PR #204 D-2756 fix; #166 slices per pg-reconnect-design.md; build-L2-spawn-hardening (249a3221) reports MERGE-READY; SQ12 writer done on workst, successor pushes lane/exec-own-sq12.
+Rules added: D-2735, D-2739, D-2744, D-2749 (plangraph spawner only), D-2754 (pin --leg mimo-v2.6-pro; in place OK w/ .git/config diff; no agy in place).
