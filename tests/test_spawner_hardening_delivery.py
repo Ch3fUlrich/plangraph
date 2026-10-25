@@ -162,7 +162,9 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
 
     monkeypatch.delenv('PG_URL', raising=False)
     monkeypatch.delenv('PG_TOKEN_FILE', raising=False)
-    monkeypatch.setattr(runner, '_keeper_unconfigured_warned', False)
+    clock = [1000.0]
+    monkeypatch.setattr(runner.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(runner, '_keeper_unconfigured_last_warned', None)
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(tmp_path))
     caplog.set_level(logging.WARNING)
 
@@ -187,11 +189,23 @@ def test_unconfigured_keeper_delivery_quiet_and_retry(tmp_path, monkeypatch, cap
         assert not (run_dir / 'keeper.delivered').exists()
 
     # Retry or watchdog tick re-checks pending records without logging new warnings or tracebacks
+    # Second pass 10 s later -> 0 new warnings
+    clock[0] += 10.0
     monkeypatch.setattr(w, 'read_claims', lambda: [])
     monkeypatch.setattr(w, 'read_activity', lambda state, s: None)
     w.main(['tick'])
     warnings = [r for r in caplog.records if r.levelname == 'WARNING']
     assert len(warnings) == 1
+    assert not any(r.exc_info for r in caplog.records)
+    for run_id in run_ids:
+        assert not (tmp_path / 'runs' / run_id / 'keeper.delivered').exists()
+
+    # Pass 601 s later -> 1 new warning
+    clock[0] += 601.0
+    w.main(['tick'])
+    warnings = [r for r in caplog.records if r.levelname == 'WARNING']
+    assert len(warnings) == 2
+    assert 'completion delivery skipped: keeper not configured (queued)' in warnings[1].message
     assert not any(r.exc_info for r in caplog.records)
     for run_id in run_ids:
         assert not (tmp_path / 'runs' / run_id / 'keeper.delivered').exists()
