@@ -179,7 +179,10 @@ class PgCursor:
 
 # --------------------------------------------------------------- connection
 class PgConnection:
-    """One psycopg connection (autocommit; the store issues its own BEGIN/COMMIT)."""
+    """One psycopg connection (autocommit; the store issues its own BEGIN/COMMIT).
+
+    S1: lost is permanent for this connection; S2 exits, S3 reconnects at the request boundary.
+    """
 
     backend = "postgres"
 
@@ -195,7 +198,7 @@ class PgConnection:
         if self._lost:                                     # I3: nothing runs again on a lost session
             if control == "rollback":
                 return PgCursor([], 0)                     # I4: a lost transaction needs no rollback
-            raise ConnectionLost("commit" if control == "commit" else "statement")
+            raise ConnectionLost("statement")              # lost before this statement: the txn is gone (F3)
         with self._classify("commit" if control == "commit" else "statement"):
             if control is not None:
                 return self._control(control)
@@ -255,7 +258,10 @@ class PgConnection:
     def commit(self):
         """``sqlite3.Connection.commit``: end an open transaction, else nothing."""
         if self._lost:
-            raise ConnectionLost("commit")      # the open transaction's outcome is unknown
+            # Lost BEFORE this COMMIT: the transaction died with the session and
+            # nothing was committed (F3).  Only a loss raised BY the COMMIT
+            # statement itself leaves the outcome unknown.
+            raise ConnectionLost("statement")
         if self.in_transaction:
             with self._classify("commit"):
                 self._raw.execute("COMMIT")

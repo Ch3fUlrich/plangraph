@@ -65,21 +65,23 @@ class KeeperHandler(BaseHTTPRequestHandler):
         """Never log a request line: it can carry a query and must stay quiet."""
     # ---------------------------------------------------------------- verbs
     def do_GET(self):  # noqa: N802 - stdlib signature
-        try:
-            self._handle("GET")
-        except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
-            self._escape(exc)
+        self._request("GET")
 
     def do_POST(self):  # noqa: N802 - stdlib signature
+        self._request("POST")
+
+    def _request(self, method):
+        """Start of every request: at most one fail line and one status line (I1, V4)."""
+        self._logged = False                    # the one-line rule is per request
         try:
-            self._handle("POST")
+            self._handle(method)
         except Exception as exc:  # noqa: BLE001 - I1: a request never dies silently
             self._escape(exc)
 
     def _escape(self, exc):
-        """Last resort when something escaped ``_handle``: one 500, never a dropped socket."""
+        """Last resort when something escaped ``_handle``: one fail line; one 500 if nothing was sent."""
+        self._fail_line(exc)                    # V4: the failed request gets its line even after ``_sent``
         if not getattr(self, "_sent", False):
-            self._fail_line(exc)
             with suppress(Exception):
                 self._json(500, {"error": "internal", "msg": "internal server error"})
 
@@ -163,10 +165,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
                                  "msg": "internal server error"})
 
     # ------------------------------------------------------------- plumbing
-    @staticmethod
-    def _fail_line(exc):
+    def _fail_line(self, exc):
         """One stderr line per failed request: the type only (I10), never ``str(exc)``."""
-        print(f"keeper: request failed: {type(exc).__name__}", file=sys.stderr)
+        if getattr(self, "_logged", False):
+            return                          # the request path already logged this request (V4)
+        self._logged = True
+        with suppress(Exception):           # stderr trouble must not mask the response (V4)
+            print(f"keeper: request failed: {type(exc).__name__}", file=sys.stderr)
 
     def _token(self):
         header = self.headers.get("Authorization", "")
