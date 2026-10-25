@@ -1,0 +1,13 @@
+# Example only. Replace executable/output paths and configure the same PG_KG_STATUS_FILE
+# override as the renderer, if used. AUTOOS_ALERT_INBOX is optional (append-only alerts).
+[Unit]
+Description=Check last knowledge graph export
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/plangraph/kg-check.env
+ExecStart=/usr/bin/python3 -m plangraph.kg_export --check %h/public_html/plan --max-age 2h
+
+# Alternatively add this to the render service's [Service] section:
+# ExecStartPost=python3 -m plangraph.kg_export --check %h/public_html/plan --max-age 2h
+# A failed ExecStartPost marks the unit failed, but does not undo the rendered page.
