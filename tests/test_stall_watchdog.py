@@ -104,6 +104,9 @@ def test_scheduler_installation(tmp_path, host):
     else:
         assert '<Interval>PT2M</Interval>' in content
         assert calls[0][:2] == ['schtasks', '/Create']
+        import re
+        workdir = re.search(r'<WorkingDirectory>(.*)</WorkingDirectory>', content).group(1)
+        assert (Path(workdir.replace('\\', '/')) / 'plangraph/spawner/stall_watchdog.py').is_file()
     bootstrap = Path('deploy/bootstrap.' + ('sh' if host == 'linux' else 'ps1')).read_text()
     assert 'plangraph.spawner.stall_watchdog' in bootstrap
     assert 'install' in bootstrap
