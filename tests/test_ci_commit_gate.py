@@ -977,13 +977,13 @@ def test_hand_edit_auth_path_rename_refused(repo):
     assert f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py' in violations
 
 
-def test_hand_edit_ten_changed_lines_passes(repo):
+def test_hand_edit_fifty_changed_lines_passes(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
-    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 10})
+    sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 50})
     assert check(base, sha, cwd=repo) == []
 
 
-def test_hand_edit_eleven_changed_lines_refused(repo):
+def test_hand_edit_fifty_one_changed_lines_refused(repo):
     base = _commit(repo, 'base\n\nWriter: mimo-v2.6-flash run-1\n', {'README.md': 'base\n'})
     sha = _commit(repo, 'docs: add\n\nHand-Edit: add\n', {'docs/x.md': 'l\n' * 401})
     violations = check(base, sha, cwd=repo)

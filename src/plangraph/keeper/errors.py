@@ -1,7 +1,7 @@
 """Keeper exceptions shared by every module."""
 from __future__ import annotations
 
-__all__ = ["Refused", "KeeperLocked"]
+__all__ = ["Refused", "KeeperLocked", "ConnectionLost"]
 
 
 class Refused(Exception):
@@ -19,3 +19,17 @@ class Refused(Exception):
 
 class KeeperLocked(RuntimeError):
     """Another keeper process holds the singleton ``lock_keeper`` lock."""
+
+
+class ConnectionLost(Exception):
+    """The Postgres session was lost; the request cannot continue (I3, fail-loud).
+
+    ``phase`` is ``"statement"`` (a statement failed on a dead session) or
+    ``"commit"`` (the open transaction's outcome is unknown).  The message is
+    fixed text: driver errors can carry a host or DSN, so only the type name is
+    ever logged (I10).
+    """
+
+    def __init__(self, phase: str = "statement"):
+        super().__init__("keeper database connection lost")
+        self.phase = phase

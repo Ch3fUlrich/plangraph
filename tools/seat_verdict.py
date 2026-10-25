@@ -46,6 +46,14 @@ FAMILIES = (
 KNOWN_FAMILIES = frozenset(family for _, family in FAMILIES)
 PASS_WORDS = frozenset({"pass", "approve"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+_LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
+# [*_`]* before/after the word: markdown-bold labels like **MED**: or
+# _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
+# A blocking word before a dash ("HIGH - y") counts too: the relaxation fails closed.
+_BLOCKING_LABEL = re.compile(
+    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*(?:[:(]|[-–—]\s)", re.I)
+_LOW_LABEL = re.compile(
+    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 # first word, ended by end/space/punctuation and NOT followed by "|" or "/"
 # (that would be an echoed "pass | fix | halt" template, not a decision)
@@ -68,15 +76,22 @@ def parse_verdict(text):
     Only that line decides.  A template echo such as ``VERDICT: pass | fix`` or
     an unknown first word yields no verdict; earlier lines are never consulted.
     """
-    lines = text.splitlines()
+    lines = (text or "").splitlines()
     for idx in range(len(lines) - 1, -1, -1):
         match = _VERDICT_LINE.match(lines[idx])
         if not match:
             continue
-        word = _FIRST_WORD.match(match.group(1).strip())
-        word = word.group(1).lower() if word else ""
+        stripped = match.group(1).strip()
+        word_m = _FIRST_WORD.match(stripped)
+        word = word_m.group(1).lower() if word_m else ""
         if word in PASS_WORDS:
             return True, idx
+        # halt/reject are excluded from _LOW_ONLY_WORDS on purpose: they fall through to FIX_WORDS -> False, like verdict.py's halt check
+        if word in _LOW_ONLY_WORDS:
+            remainder = stripped[word_m.end():]
+            if _LOW_LABEL.search(remainder) and not _BLOCKING_LABEL.search(remainder):
+                return True, idx
+            return False, idx
         if word in FIX_WORDS:
             return False, idx
         return None, idx
