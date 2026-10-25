@@ -96,15 +96,15 @@ denied after its rollback — a **denied `dry_run`** writes no *applied* row but
 does record its denial) and a denial also raises one open `projector_alarms`
 row (`kind='oversight_denied'`, `workflow_id='oversight-guard'`, keyed by the
 **principal**: one open row per principal however the op's `finding` ids
-rotate — the finding rides in the detail). A refusal at the
+rotate — the initial finding is preserved in detail on conflict). A refusal at the
 verb seam **after** the token row was resolved — a denied verb/unknown verb, or
 a revoked/expired/rotated/scope-drifted token — is audited the same way, naming
 the attempted verb and key with `finding_id=''` (no op carried a finding), and
-counts toward the denied budget. Only requests that fail *authentication* (no
-principal is resolved at all: unknown/revoked-at-auth hash, inactive principal
-row, role drift, and an **expired `pgo1_` token**, which is refused at
-`authenticate` as well) remain unauditable in `oversight_ops`; they still write
-the `audit_log` authentication row. Applied/denied per-hour caps are derived
+counts toward the denied budget. When an active oversight token has expired at
+`authenticate`, its denial is audited and counted toward the hourly budget before
+refusing; only requests where no principal is resolved at all (unknown token hash,
+revoked-at-auth hash, inactive principal row, role drift) remain unaudited in
+`oversight_ops`; they still write the `audit_log` authentication row. Applied/denied per-hour caps are derived
 from `oversight_ops` and **every writer consults them before it inserts**, so a
 breach is `403 oversight:rate_limited` — its denied row (when the cap still
 allows one) carries a human-readable reason — and alarm-only: only an explicit

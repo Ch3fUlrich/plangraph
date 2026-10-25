@@ -77,21 +77,13 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-#: The clock :func:`authenticate` judges token expiry against when the caller
-#: passes no ``now``.  Wall time by default; ``Store.__init__`` publishes the
-#: store's own clock here, so an ``expires_at`` the store stamped is read back
-#: by the very same clock (an injected test clock travels with it).
-_CLOCK = time.time
-
-
 def set_clock(clock) -> None:
-    """Publish the clock token expiry is judged against (the keeper store does)."""
-    global _CLOCK
-    _CLOCK = clock
+    """Deprecated: no process-global clock; authenticate defaults to time.time()."""
+    pass
 
 
 def _now(now):
-    return float(_CLOCK()) if now is None else float(now)
+    return time.time() if now is None else float(now)
 
 
 def norm_family(value):
@@ -226,8 +218,7 @@ def authenticate(conn, token, *, now=None) -> Principal:
     is consulted first, so a prefixless principal token whose random bytes
     happen to start with ``pgo1_`` still resolves to its own row instead of
     being misrouted to (and refused by) the oversight lookup.  *now* is the
-    clock an expiry is judged against; the default is the clock the keeper
-    store published (:func:`set_clock`, wall time until one is built).
+    clock an expiry is judged against; the default is wall time (time.time()).
     """
     if not token:
         raise Refused("forbidden", "missing token")
@@ -253,11 +244,11 @@ def _expired(value, now) -> bool:
 
 
 def _authenticate_oversight(conn, token, *, now=None) -> OversightPrincipal:
-    """Resolve a ``pgo1_`` token; an unknown/revoked/expired row is refused here.
+    """Resolve a ``pgo1_`` token; an unknown or revoked row is refused here.
 
-    The TTL is enforced at authentication as well as at every use: a caller
-    that trusts ``authenticate`` alone never sees an expired token as live (the
-    store's own per-use check re-reads the row and audits the refusal).
+    Unknown tokens stay unaudited. When the token row resolves to an active
+    oversight principal, an expired token is audited (code oversight:token_expired)
+    through the denied budget and alarm path before refusing.
     """
     row = conn.execute(
         "SELECT o.id,o.principal,o.generation,o.scope,o.revoked_at,o.expires_at,"
@@ -271,6 +262,10 @@ def _authenticate_oversight(conn, token, *, now=None) -> OversightPrincipal:
     if row["role"] != "oversight":
         raise Refused("forbidden", "oversight principal role drifted")
     if _expired(row["expires_at"], now):
+        cur_now = _now(now)
+        from . import store_oversight
+        store_oversight.audit_oversight_expired_auth(
+            conn, row["principal"], row["id"], row["generation"], cur_now)
         raise Refused("forbidden", "oversight:token_expired token has expired")
     try:
         projects = json.loads(row["projects"] or "[]")

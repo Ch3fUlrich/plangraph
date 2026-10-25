@@ -295,3 +295,32 @@ def test_open_without_create_still_refuses_a_non_keeper_file(tmp_path):
     sqlite3.connect(str(path)).close()
     with pytest.raises(RuntimeError):
         kdb.open_db(path)
+
+
+def test_upgrade_oversight_triggers_atomic_transaction(tmp_path, monkeypatch):
+    """db.py Finding 3: guard drop loop and trigger create run in one BEGIN IMMEDIATE transaction."""
+    path = tmp_path / "upgrade_atomic.db"
+    conn = kdb.open_db(path, create=True)
+    conn.close()
+
+    executed_statements = []
+    real_connect = sqlite3.connect
+
+    class TrackingConnection(sqlite3.Connection):
+        def execute(self, sql, *a, **kw):
+            executed_statements.append((sql.strip(), self.in_transaction))
+            return super().execute(sql, *a, **kw)
+
+    def wrapped_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", wrapped_connect)
+    conn = kdb.open_db(path, create=False)
+    conn.close()
+
+    drop_calls = [item for item in executed_statements if item[0].startswith("DROP TRIGGER IF EXISTS trg_oversight")]
+    assert len(drop_calls) == 4
+    for stmt, in_tx in drop_calls:
+        assert in_tx is True, f"Statement {stmt} was executed outside of a transaction!"
+

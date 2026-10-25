@@ -22,9 +22,11 @@ Audit rows are written by the store: applied rows inside the batch transaction
 (so an audit row exists iff the mutation exists) and denied rows after the
 rollback (so a denial survives the batch) -- a denied ``dry_run`` batch audits
 its denial too (only *applied* rows are dry-run-proof).  *Every* refusal an
-oversight principal earns is audited -- the policy's own ``oversight:<reason>``
-verdict and any refusal the shared store machinery raises later (cycle,
-bad_state, validation, conflict, ...) -- so the denied budget counts them all.
+oversight principal earns is audited (including an expired token whose row
+resolves to a principal); unknown tokens stay unaudited -- the policy's own
+``oversight:<reason>`` verdict and any refusal the shared store machinery
+raises later (cycle, bad_state, validation, conflict, ...) -- so the denied
+budget counts them all.
 Every writer consults that budget before inserting, so past the cap the answer
 is ``oversight:rate_limited`` and the append-only table stops growing.
 Crossing the derived hourly caps is alarm-only; only an explicit ``pg admin
@@ -101,6 +103,46 @@ def _peek_prepared(digest):
 
 def _forget_prepared(digest) -> None:
     _PREPARED.pop(digest, None)
+
+
+def audit_oversight_expired_auth(conn, principal_name, token_id, generation, now):
+    """Audit an expired oversight token at authenticate; unknown tokens stay unaudited.
+
+    Consults the hourly denied budget first: past the cap this raises
+    ``oversight:rate_limited`` and writes nothing to the append-only table.
+    """
+    from datetime import datetime, timezone
+    from . import oversight_policy as policy
+
+    since_iso = datetime.fromtimestamp(now - 3600, timezone.utc).isoformat()
+    count = conn.execute(
+        "SELECT COUNT(*) FROM oversight_ops WHERE principal=?"
+        " AND outcome='denied' AND ts>?", (principal_name, since_iso)
+    ).fetchone()[0]
+    if count >= policy.OVERSIGHT_DENIED_PER_HOUR:
+        raise Refused("forbidden",
+                      "oversight:rate_limited denied budget for this hour"
+                      " is exhausted")
+    now_iso = datetime.fromtimestamp(now, timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO oversight_ops(id,ts,token_id,principal,generation,"
+        "batch_ref,op_index,op,key,finding_id,reason,outcome,code,event_seq)"
+        " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM oversight_ops),"
+        "?,?,?,?,?,?,?,?,?,?,'denied',?,NULL)",
+        (now_iso, token_id, principal_name, generation, "", 1,
+         "authenticate", None, "",
+         "oversight:token_expired token has expired",
+         "oversight:token_expired"))
+    detail = (f"oversight:token_expired principal={principal_name}"
+              f" gen={generation} op=authenticate"
+              f" finding=")
+    conn.execute(
+        "INSERT INTO projector_alarms(id,kind,workflow_id,key,detail,raised_at)"
+        " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM projector_alarms),"
+        "'oversight_denied','oversight-guard',?,?,?)"
+        " ON CONFLICT (kind, workflow_id, key) WHERE cleared_at IS NULL"
+        " DO NOTHING",
+        (principal_name, detail, now_iso))
 
 
 def grants(conn, decision_id, scope=GRANT_SCOPE, decisions=None) -> bool:
@@ -208,28 +250,28 @@ class OversightMixin:
         if os.environ.get("PG_OVERSIGHT_LIVE") != "1":
             raise Refused("forbidden",
                           "oversight:not_live PG_OVERSIGHT_LIVE is not set on this host")
-        decisions = getattr(self.ctx, "decisions", None)
-        if not isinstance(go_decision, str) or not grants(self.conn, go_decision,
-                                                          GRANT_SCOPE, decisions):
-            raise Refused(
-                "forbidden",
-                f"oversight:go_required {go_decision!r} is not an operator"
-                f" decision granting {GRANT_SCOPE}")
-        remembered = _peek_prepared(digest)
-        if remembered is None or any(
-                remembered.get(field) != value for field, value in (
-                    ("name", name), ("token_sha", auth.hash_token(token)),
-                    ("expires", expires), ("go_decision", go_decision),
-                    ("reason", reason))):
-            raise Refused("forbidden",
-                          "oversight:prepared_denied prepared mint does not match"
-                          " a prepare made by this process")
-        now = self.now()
-        if not now < expires <= now + float(self.oversight_token_ttl):
-            raise Refused("forbidden",
-                          "oversight:token_invalid prepared expiry is outside"
-                          " OVERSIGHT_TOKEN_TTL_S")
         with self._write():
+            decisions = getattr(self.ctx, "decisions", None)
+            if not isinstance(go_decision, str) or not grants(self.conn, go_decision,
+                                                              GRANT_SCOPE, decisions):
+                raise Refused(
+                    "forbidden",
+                    f"oversight:go_required {go_decision!r} is not an operator"
+                    f" decision granting {GRANT_SCOPE}")
+            remembered = _peek_prepared(digest)
+            if remembered is None or any(
+                    remembered.get(field) != value for field, value in (
+                        ("name", name), ("token_sha", auth.hash_token(token)),
+                        ("expires", expires), ("go_decision", go_decision),
+                        ("reason", reason))):
+                raise Refused("forbidden",
+                              "oversight:prepared_denied prepared mint does not match"
+                              " a prepare made by this process")
+            now = self.now()
+            if not now < expires <= now + float(self.oversight_token_ttl):
+                raise Refused("forbidden",
+                              "oversight:token_invalid prepared expiry is outside"
+                              " OVERSIGHT_TOKEN_TTL_S")
             fresh = self.conn.execute(
                 "SELECT role,projects,active FROM principals WHERE name=?",
                 (name,)).fetchone()
@@ -237,7 +279,7 @@ class OversightMixin:
                 raise Refused("forbidden",
                               f"oversight:principal_denied {name!r} is not an active"
                               " oversight principal")
-            # Consumed exactly once: a second commit of the same dict mints nothing.
+            # Consumed exactly once: check + forget inside the write lock (D-2458)
             _forget_prepared(digest)
             generation = self.conn.execute(
                 "SELECT COALESCE(MAX(generation), 0) + 1 FROM oversight_tokens"
@@ -461,7 +503,8 @@ class OversightMixin:
         The key is the principal, never the op-supplied ``finding``: the
         contract promises ONE open ``projector_alarms`` row, and rotating
         finding ids must not mint unbounded open alarms (routing-00 routes one
-        card).  The finding still rides in the detail of the open row.
+        card).  ON CONFLICT DO NOTHING preserves the initial finding in detail
+        so the opening cause remains visible.
         """
         detail = (f"oversight:{reason} principal={principal.name}"
                   f" gen={principal.generation} op={action}"

@@ -147,6 +147,22 @@ def _upgrade_lock_triggers(conn):
     conn.executescript(script)
 
 
+def _split_statements(sql: str) -> list[str]:
+    """Split a SQL script into individual statements using sqlite3.complete_statement."""
+    statements = []
+    buffer = ""
+    for line in sql.splitlines(keepends=True):
+        buffer += line
+        if sqlite3.complete_statement(buffer):
+            stmt = buffer.strip()
+            if stmt:
+                statements.append(stmt)
+            buffer = ""
+    if buffer.strip():
+        statements.append(buffer.strip())
+    return statements
+
+
 def _upgrade(conn):
     """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
@@ -163,12 +179,19 @@ def _upgrade(conn):
     conn.executescript(JEV_DDL)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
     # for the TABLES, and a REPAIR for the guard triggers: ``CREATE TRIGGER IF
-    # NOT EXISTS`` would keep a weakened or outdated body, so every open drops
-    # them first and ``OVERSIGHT_DDL`` recreates the current one (idempotent:
-    # a correct guard is replaced by itself).
-    for trigger in _OVERSIGHT_TRIGGERS:
-        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
-    conn.executescript(OVERSIGHT_DDL)
+    # NOT EXISTS`` would keep a weakened or outdated body. Drop + create run in
+    # one BEGIN IMMEDIATE transaction (no executescript) so guards are never absent
+    # between them (D-2458).
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        for trigger in _OVERSIGHT_TRIGGERS:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        for stmt in _split_statements(OVERSIGHT_DDL):
+            conn.execute(stmt)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
 

@@ -2408,3 +2408,115 @@ def test_principal_token_never_dispatches_to_the_oversight_lookup(w, monkeypatch
     fresh_token = auth.add_principal(w.conn, "misfire2", "reader", [])
     assert fresh_token == "zzzz" + "q" * 40
     assert auth.authenticate(w.conn, fresh_token).name == "misfire2"
+
+
+def test_authenticate_clock_is_not_process_global(w, monkeypatch):
+    """auth.py Finding 1: no process-global clock; authenticate defaults to time.time()."""
+    from plangraph.keeper.store import Store
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    store_zero = Store(w.conn, clock=lambda: 0.0)
+    tok = store_zero.mint_oversight_token(OPP, go_decision=GO, reason="test")["token"]
+    store_wall = Store(w.conn)
+    p = auth.authenticate(w.conn, tok, now=10.0)
+    assert p.name == OPP
+    # Rebuilding store_zero must not cause authenticate() without now to accept
+    # an expired token (expires at 3600, wall clock is ~1.7e9)
+    Store(w.conn, clock=lambda: 0.0)
+    with pytest.raises(Refused) as exc:
+        auth.authenticate(w.conn, tok)
+    assert "token_expired" in exc.value.msg
+
+
+def test_expired_oversight_token_authenticate_audited_and_capped(w, monkeypatch):
+    """auth.py Finding 2: expired pgo1_ token audits denial and is rate-limited at cap."""
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    out = mint(w)
+    tok = out["token"]
+    past = w.clock() + 4000.0
+    for _ in range(10):
+        with pytest.raises(Refused) as exc:
+            auth.authenticate(w.conn, tok, now=past)
+        assert "token_expired" in exc.value.msg
+
+    with pytest.raises(Refused) as exc:
+        auth.authenticate(w.conn, tok, now=past)
+    assert "rate_limited" in exc.value.msg
+
+    rows = _denied_rows(w)
+    assert len(rows) == 10
+    assert rows[0]["code"] == "oversight:token_expired"
+    assert rows[0]["op"] == "authenticate"
+    assert rows[0]["principal"] == OPP
+
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert alarms[0]["key"] == OPP
+
+    unknown_tok = "pgo1_" + "X" * 40
+    with pytest.raises(Refused) as exc:
+        auth.authenticate(w.conn, unknown_tok, now=past)
+    assert "unknown or revoked" in exc.value.msg
+    assert len(_denied_rows(w)) == 10
+
+
+def test_concurrent_commit_oversight_token_two_threads(w, monkeypatch):
+    """store_oversight.py Finding 4: two concurrent commits cannot both mint."""
+    import threading
+    from plangraph.keeper import db as kdb
+    from plangraph.keeper.store import Store
+    monkeypatch.setenv("PG_OVERSIGHT_LIVE", "1")
+    grant_go(w)
+    add_oversight(w)
+    prepared = w.store.prepare_oversight_token(OPP, go_decision=GO, reason="test")
+
+    results = []
+    errors = []
+    lock = threading.Lock()
+    barrier = threading.Barrier(2)
+
+    def run_commit():
+        conn = kdb.open_db(w.path)
+        try:
+            store = Store(conn, clock=w.clock)
+            barrier.wait()
+            try:
+                res = store.commit_oversight_token(prepared)
+                with lock:
+                    results.append(res)
+            except Exception as ex:
+                with lock:
+                    errors.append(ex)
+        finally:
+            conn.close()
+
+    threads = [threading.Thread(target=run_commit) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(results) == 1
+    assert len(errors) == 1
+    assert "oversight:prepared_denied" in str(errors[0])
+
+
+def test_oversight_guard_alarm_preserves_initial_finding_on_conflict(w, monkeypatch):
+    """store_oversight.py Finding 5: ON CONFLICT DO NOTHING preserves initial finding."""
+    _, principal = live(w, monkeypatch)
+    err1 = refusal(apply, w, principal, [op(
+        "edit", key="plangraph:OTHER", fields={"done_criteria": "no 0"},
+        finding="F-0000")])
+    assert has("field_denied", err1.msg)
+    err2 = refusal(apply, w, principal, [op(
+        "edit", key="plangraph:OTHER", fields={"done_criteria": "no 1"},
+        finding="F-0001")])
+    assert has("field_denied", err2.msg)
+
+    alarms = _open_guard_alarms(w)
+    assert len(alarms) == 1
+    assert "F-0000" in alarms[0]["detail"]
+
