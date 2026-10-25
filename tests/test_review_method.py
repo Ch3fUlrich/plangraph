@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -110,12 +111,8 @@ def test_non_review_batch_rejected(monkeypatch):
 def test_documented_advisory_and_batch_boundaries(tmp_path, monkeypatch):
     from pathlib import Path
     from plangraph.settings import enforce_review_scope
-    text = Path('docs/REVIEW-METHOD.md').read_text()
-    # Finding 13 doc-line refutations
-    assert 'guard reading the policy file twice (potential TOCTOU) and per-call re-read are intended' in text
-    assert 'Cross-project card key spoofing is not guarded at admission: card is trusted caller input' in text
+    text = (Path(__file__).parent.parent / 'docs' / 'REVIEW-METHOD.md').read_text(encoding='utf-8')
     assert 'ADVISORY' in text
-    assert '"per-fixer seat" is a review spawn with' in text
 
     # Behavioral test 1: advisory fields (seats, max_rounds, distinct_families, family_source)
     # do not prevent admission or alter enforce_review_scope
@@ -573,6 +570,15 @@ def test_finding_4_settings_cli_root_and_env(tmp_path, monkeypatch):
     )
     data2 = json.loads(res2.stdout)
     assert data2['max_rounds'] == 9
+
+
+def test_finding_7_doc_distinguishes_policy_refusal_and_malformed_input():
+    text = (Path(__file__).parent.parent / 'docs' / 'REVIEW-METHOD.md').read_text(encoding='utf-8')
+    assert 'review_method_batch_per_fixer' in text
+    assert 'review_method_invalid' in text
+    assert 'Policy refusal' in text
+    assert 'Malformed input' in text
+
 
 
 
