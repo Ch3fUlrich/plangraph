@@ -47,6 +47,15 @@ def test_selection(tmp_path, changed, expected):
     assert selector().select_tests(tmp_path, changed)["tests"] == expected
 
 
+def test_browser_tests_never_selected(tmp_path):
+    # D-2821: tests/browser runs in its own CI job; an explicit path would collect it in pytest.
+    for name, text in {"src/pkg/__init__.py": "", "src/pkg/core.py": "VALUE = 1",
+                       "tests/test_api.py": "from pkg import core", "tests/browser/test_ui.py": "from pkg import core"}.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
+    assert selector().select_tests(tmp_path, ["src/pkg/core.py"])["tests"] == ["tests/test_api.py"]
+
+
 def test_changed_files_includes_worktree_and_untracked(tmp_path):
     import subprocess
 
