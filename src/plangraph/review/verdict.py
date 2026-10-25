@@ -26,6 +26,14 @@ VERDICTS = ("pass", "fix", "halt")
 
 PASS_WORDS = frozenset({"pass", "approve"})
 FIX_WORDS = frozenset({"fix", "halt", "change", "changes", "reject"})
+_LOW_ONLY_WORDS = frozenset({"fix", "change", "changes"})
+# [*_`]* before/after the word: markdown-bold labels like **MED**: or
+# _Medium_ (b) must count, or a bold blocking label reads as low-only pass.
+# A blocking word before a dash ("HIGH - y") counts too: the relaxation fails closed.
+_BLOCKING_LABEL = re.compile(
+    r"\b[*_`]*(?:critical|high|med|medium|major|blocker)[*_`]*\s*(?:[:(]|[-–—]\s)", re.I)
+_LOW_LABEL = re.compile(
+    r"\b[*_`]*(?:low|lows|nit|nits|minor)[*_`]*(?:\s+only[*_`]*)?\s*[:(]", re.I)
 _VERDICT_LINE = re.compile(r"^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*)$", re.I)
 _FIRST_WORD = re.compile(r"([a-z]+)(?=$|[\s.,;:!)(*_`—–-])(?!\s*[|/])", re.I)
 
@@ -54,27 +62,37 @@ def _indent_columns(line: str) -> int:
     return col
 
 
+def _scan_verdict(text: str) -> tuple[str | None, bool]:
+    lines = (text or "").splitlines()
+    for idx in range(len(lines) - 1, -1, -1):
+        match = _VERDICT_LINE.match(lines[idx])
+        if not match:
+            continue
+        stripped = match.group(1).strip()
+        word_m = _FIRST_WORD.match(stripped)
+        word = word_m.group(1).lower() if word_m else ""
+        if word in PASS_WORDS:
+            return "pass", False
+        if word == "halt":
+            return "halt", False
+        if word in _LOW_ONLY_WORDS:
+            remainder = stripped[word_m.end():]
+            if _LOW_LABEL.search(remainder) and not _BLOCKING_LABEL.search(remainder):
+                return "pass", True
+            return "fix", False
+        if word in FIX_WORDS:
+            return "fix", False
+        return None, False
+    return None, False
+
+
 def parse_verdict(text: str) -> str | None:
     """Last ``VERDICT:`` line mapped to pass/fix/halt, or None.
 
     Identical to ``tools/seat_verdict.py``: scan from the end, the
     first matching line decides; the first word maps to the verdict.
     """
-    lines = (text or "").splitlines()
-    for idx in range(len(lines) - 1, -1, -1):
-        match = _VERDICT_LINE.match(lines[idx])
-        if not match:
-            continue
-        word = _FIRST_WORD.match(match.group(1).strip())
-        word = word.group(1).lower() if word else ""
-        if word in PASS_WORDS:
-            return "pass"
-        if word == "halt":
-            return "halt"
-        if word in FIX_WORDS:
-            return "fix"
-        return None
-    return None
+    return _scan_verdict(text)[0]
 
 
 def _standing_outcome(match: re.Match, material: str) -> tuple[str, str | None]:
@@ -161,6 +179,7 @@ class Verdict:
     test_gaming: str
     test_gaming_quote: str | None
     empty: bool
+    low_only: bool = False
 
     @property
     def pass_allowed(self) -> bool:
@@ -177,6 +196,8 @@ class Verdict:
         }
         if self.test_gaming in ("yes", "yes_unverified_quote"):
             doc["test_gaming_quote"] = self.test_gaming_quote
+        if self.low_only:
+            doc["low_only"] = True
         return doc
 
 
@@ -188,12 +209,13 @@ def judge(text: str, finish_reason: str | None,
         return Verdict(verdict=None, finish_reason=finish_reason,
                        test_gaming="missing", test_gaming_quote=None,
                        empty=True)
-    verdict = parse_verdict(text or "")
+    verdict, low_only = _scan_verdict(text or "")
     if verdict == "pass":
         # D-2739 §0.2c: a HIGH/MED finding in the body beats the VERDICT line.
         from plangraph.gates.findings import blocking, parse_findings
         if blocking(parse_findings(text or "")):
-            verdict = "fix"
+            verdict, low_only = "fix", False
     gaming, quote = parse_test_gaming(text or "", material or "")
     return Verdict(verdict=verdict, finish_reason=finish_reason,
-                   test_gaming=gaming, test_gaming_quote=quote, empty=False)
+                   test_gaming=gaming, test_gaming_quote=quote, empty=False,
+                   low_only=low_only)

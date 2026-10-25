@@ -118,6 +118,8 @@ MALFORMED_WRITER = 'malformed Writer trailer'
 MALFORMED_HAND_EDIT = 'malformed Hand-Edit trailer'
 GATE_EDIT_VIOLATION = 'gate edit without Gate-Edit trailer'
 #: A Hand-Edit commit may change at most this many lines (added + deleted).
+#: Per-commit ceiling (ORCH-EFFICIENCY-ENFORCE E1a); above ROUTE_DECISION_LINES a
+#: Route-Decision trailer is required, so 50 stays the interim cap until E3c.
 HAND_EDIT_MAX_LINES = 400
 
 #: Matcher for secret-shaped file names (lower-cased basename), copied from gates/privacy.py.
