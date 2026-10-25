@@ -82,6 +82,7 @@ scope. Stamped scopes are evaluated against current project/phase policy.
 |---|---|---|---|
 | Policy refusal | Batch policy in effect and `review_scope="per-fixer"` | `SpawnRefused` (exit code 2) | `review_method_batch_per_fixer` |
 | Policy refusal | Settings file missing, unreadable, or invalid JSON/TOML | `SpawnRefused` (exit code 2) | `review_method_invalid` |
+| Policy refusal | Settings file missing, unreadable, or invalid JSON/TOML (phase runner) | `Refused` | `validation` (message prefix `review_method_invalid:`) |
 | Malformed input | Unsupported `review_scope` value (not `batch` or `per-fixer`) | `SettingsError` / `ValueError` | `review_scope: expected batch or per-fixer` |
 | Malformed input | `review_scope` provided when `role != "review"` | `SettingsError` / `ValueError` | `review_scope only valid for role=review` |
 | Malformed input | Unknown field name in settings override | `SettingsError` / `ValueError` | `<name>: unknown review_method setting` |

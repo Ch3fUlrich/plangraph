@@ -514,7 +514,7 @@ def test_finding_4_plan_phase_settings_error(tmp_path, monkeypatch):
         with pytest.raises(Refused) as exc:
             plan_phase(world.store, world.p('router'), 'demo:P', repo_root=tmp_path)
         assert getattr(exc.value, 'code', None) == 'validation' or exc.value.args[0].startswith('validation:')
-        assert 'review_method:' in str(exc.value)
+        assert 'review_method_invalid:' in str(exc.value)
         assert 'invalid-json-content' not in str(exc.value)
     finally:
         world.close()
@@ -613,6 +613,7 @@ def test_finding_7_doc_distinguishes_policy_refusal_and_malformed_input():
     assert 'review_method_invalid' in text
     assert 'Policy refusal' in text
     assert 'Malformed input' in text
+    assert '`validation` (message prefix `review_method_invalid:`)' in text
 
 
 def test_finding_1_unused_imports_and_single_helper():
@@ -662,6 +663,30 @@ def test_finding_2_phase_fallback_to_card_key(tmp_path, monkeypatch):
 
     # 2. enforce_review_scope must honor mode='per-item' override and allow per-fixer
     enforce_review_scope(card, 'review', 'per-fixer')
+
+
+def test_finding_3_plan_phase_settings_error_sanitized_and_prefix(tmp_path, monkeypatch):
+    from keeper_util import World, defn
+    from plangraph.planner.phase import plan_phase
+    from plangraph.keeper.errors import Refused
+    path = tmp_path / 'bad_policy.json'
+    path.write_text('{invalid-json-content}')
+    monkeypatch.setenv('PLANGRAPH_SETTINGS', str(path))
+    world = World(tmp_path / 'keeper')
+    try:
+        world.store.create_items(world.p('router'), [
+            defn('P', kind='gate'),
+            defn('GOAL', ['P'], kind='goal'),
+        ])
+        with pytest.raises(Refused) as exc:
+            plan_phase(world.store, world.p('router'), 'demo:P', repo_root=tmp_path)
+        assert exc.value.code == 'validation'
+        assert exc.value.msg.startswith('review_method_invalid:')
+        assert 'invalid-json-content' not in str(exc.value)
+        assert str(path) not in str(exc.value)
+    finally:
+        world.close()
+
 
 
 
